@@ -5,7 +5,8 @@
 //! sequence and the same in-process memo (thread-local, validated by the
 //! entry directory's `st_mtime_ns`). Every method that is not moved yet
 //! returns [`Error::Unsupported`] naming the plan step that moves it
-//! (`reverse_dependents`, `owners` S1.3/S1.4, merge writes S1.4, unmerge
+//! (`reverse_dependents` stays above this crate on `files`, see the module
+//! doc item 19; `owners` S1.4, merge writes S1.4, unmerge
 //! and W4 S1.5, world S1.6).
 
 use std::cell::RefCell;
@@ -480,7 +481,10 @@ impl InstalledDb for FilesDb {
     }
 
     fn reverse_dependents(&self, _cp: &str, _classes: &[DepClass]) -> Result<Vec<DepRecord>> {
-        todo_step("reverse_dependents", "S1.3")
+        todo_step(
+            "reverse_dependents",
+            "S2: on files the scan stays in portage-repo over aux_get, S1.3",
+        )
     }
 
     fn owners(&self, _paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {

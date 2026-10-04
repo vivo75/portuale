@@ -5757,7 +5757,7 @@ fn installed_parent_use_state(
     let PretendOutcome::AlreadyInstalled { version } = &parent_entry.outcome else {
         return None;
     };
-    if !vdb_pkg_dir(root, &owner.0, &owner.1, version).is_dir() {
+    if !vdb_entry_is_dir(root, &owner.0, &owner.1, version) {
         return None;
     }
     let candidates = list_candidates(repos, &owner.0, &owner.1).ok()?;
@@ -6662,7 +6662,7 @@ fn installed_candidates_uncached(
             let version = version.to_string();
             // #109 S3: the same `vdb_aux_get` seam the other vdb readers
             // use, so a validated consolidated snapshot serves `SLOT`
-            // too. `vdb_pkg_dir` resolves this same entry path back from
+            // too. `resolve_vdb_entry` resolves this same entry back from
             // `(src_cat, src_pkg, version)`, so the value is unchanged on
             // the fallback path (the old read `.trim()`ed, the helper
             // normalises).
@@ -6890,7 +6890,14 @@ pub fn installed_contents_files(
     package: &str,
     version: &str,
 ) -> Vec<String> {
-    let text = fs::read_to_string(vdb_pkg_dir(root, category, package, version).join("CONTENTS"))
+    let key = resolve_vdb_entry(root, category, package, version);
+    // `read_to_string` of old: invalid UTF-8 reads as empty, like a
+    // missing file.
+    let text = portage_vdb::for_root(root)
+        .read_file(&key, "CONTENTS")
+        .ok()
+        .flatten()
+        .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     text.lines()
         .filter_map(|line| {
@@ -7221,7 +7228,7 @@ fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &
     let db = portage_vdb::for_root(root);
     let pf = format!("{package}-{version}");
     if !in_metadata_file(key) {
-        // Resolve the entry like `vdb_pkg_dir` (one `statx` per
+        // Resolve the entry like `resolve_vdb_entry` (one `statx` per
         // candidate, the unresolved direct name when none is a
         // directory), then one `open` of the raw file.
         let direct = portage_vdb::EntryKey::new(category, pf.as_str());
@@ -7419,47 +7426,41 @@ pub fn candidate_effective_use_flags(
     sorted
 }
 
-/// The on-disk vdb directory for `<category>/<package>-<version>`. Real
+/// The vdb entry for `<category>/<package>-<version>`. Real
 /// global-updates renames a moved package's vdb dir; portuale never
-/// writes, so when the direct path is absent it falls back to every
+/// writes, so when the direct entry is absent it falls back to every
 /// `installed_cp_sources` name (the pre-`move` locations that map onto
-/// this `cat/pkg`). Returns the direct path unchanged when nothing
+/// this `cat/pkg`), one `has_entry` (`statx`) per candidate, the first
+/// real directory wins. Returns the direct key unchanged when nothing
 /// matches, so a genuinely-missing entry still reads as empty/absent.
-fn vdb_pkg_dir(root: &Path, category: &str, package: &str, version: &str) -> PathBuf {
-    vdb_pkg_dir_meta(root, category, package, version).0
-}
-
-/// [`vdb_pkg_dir`] plus the `Metadata` the resolution already stat'ed
-/// (`Some` only when the returned path is a real directory). Backlog
-/// `#112`: `vdb_aux_get` needs the directory's `is_dir()` and its
-/// `st_mtime_ns`, so resolving the path and then stat'ing it again paid
-/// two `statx` per lookup (~126 k `statx`/run on the reference workload).
-/// `fs::metadata` follows symlinks exactly like the `is_dir()` it
-/// replaces, and `None` means the unresolved direct path -- absent, a
-/// file, or a broken symlink -- which every caller already treats as an
-/// absent entry.
-fn vdb_pkg_dir_meta(
+/// (feat#157 S1.3: was `vdb_pkg_dir`/`vdb_pkg_dir_meta`, which returned
+/// the path; the disk access is `FilesDb::has_entry` now, same `statx`.)
+fn resolve_vdb_entry(
     root: &Path,
     category: &str,
     package: &str,
     version: &str,
-) -> (PathBuf, Option<std::fs::Metadata>) {
-    let pkgdir = root.join("var/db/pkg");
-    let direct = pkgdir.join(category).join(format!("{package}-{version}"));
-    match fs::metadata(&direct) {
-        Ok(st) if st.is_dir() => return (direct, Some(st)),
-        _ if global_package_updates().is_empty() => return (direct, None),
-        _ => {}
+) -> portage_vdb::EntryKey {
+    let db = portage_vdb::for_root(root);
+    let direct = portage_vdb::EntryKey::new(category, format!("{package}-{version}"));
+    if db.has_entry(&direct).unwrap_or(false) || global_package_updates().is_empty() {
+        return direct;
     }
     for (c, p) in installed_cp_sources(category, package) {
-        let cand = pkgdir.join(&c).join(format!("{p}-{version}"));
-        if let Ok(st) = fs::metadata(&cand)
-            && st.is_dir()
-        {
-            return (cand, Some(st));
+        let cand = portage_vdb::EntryKey::new(c, format!("{p}-{version}"));
+        if db.has_entry(&cand).unwrap_or(false) {
+            return cand;
         }
     }
-    (direct, None)
+    direct
+}
+
+/// `vdb_pkg_dir(..).is_dir()` of old: resolve the entry, then test the
+/// resolved entry again (two `statx` when the direct entry exists, as
+/// before).
+fn vdb_entry_is_dir(root: &Path, category: &str, package: &str, version: &str) -> bool {
+    let key = resolve_vdb_entry(root, category, package, version);
+    portage_vdb::for_root(root).has_entry(&key).unwrap_or(false)
 }
 
 /// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
@@ -7605,36 +7606,27 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
 
 fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {
     let mut out = Vec::new();
-    let vdb = root.join("var/db/pkg");
-    let Ok(cats) = portage_util::read_dir_entries(&vdb) else {
+    // `FilesDb::entries` (feat#157 S1.3): the category/package directory
+    // walk that used to be here, `-MERGING-` entries already skipped.
+    let Ok(keys) = portage_vdb::for_root(root).entries() else {
         return out;
     };
-    for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
-        let category = cat.file_name().to_string_lossy().to_string();
-        let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
-            continue;
-        };
-        for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
-            let dirname = pkg.file_name().to_string_lossy().to_string();
-            // Real `vardbapi._excluded_dirs`: an in-progress
-            // `-MERGING-<pf>` entry is never an installed package
-            // (`split_pf` would otherwise mis-split it into a bogus
-            // `-MERGING-<pn>`/`version` row).
-            if portage_util::is_merging_vdb_entry(&dirname) {
-                continue;
-            }
+    for key in keys {
+        let category = key.category;
+        let dirname = key.pf;
+        {
             let Some((name, version)) = split_pf(&dirname) else {
                 continue;
             };
             // #109 S3: through the shared `vdb_aux_get` seam, so a valid
             // consolidated snapshot serves `SLOT` without the per-entry
-            // `open()`. `vdb_pkg_dir` resolves the entry being scanned
+            // `open()`. `resolve_vdb_entry` resolves the entry being scanned
             // back from `(category, name, version)`.
             let (slot, sub) = split_slot(&vdb_aux_get(root, &category, &name, &version, "SLOT"));
             // Real `profiles/updates/` package moves: present each vdb
             // entry under its post-`move`/`slotmove` identity, the way
             // real global-updates rewrites the vdb on sync (portuale
-            // never writes -- see `vdb_pkg_dir` for the read-back side).
+            // never writes -- see `resolve_vdb_entry` for the read-back side).
             let (category, name) = apply_updates_to_cp(&category, &name);
             let (slot, _sub) = apply_updates_to_slot(&category, &name, &slot, &sub);
             out.push(InstalledPackage {
@@ -11242,7 +11234,7 @@ fn chain_node_usedep_suffix(
     // The node's own enabled set: effective USE merge-bound, recorded
     // vdb USE installed.
     let enabled: HashSet<String> = if installed {
-        if !vdb_pkg_dir(root, &node.category, &node.package, version).is_dir() {
+        if !vdb_entry_is_dir(root, &node.category, &node.package, version) {
             return String::new();
         }
         read_vdb_flag_set(root, &node.category, &node.package, version, "USE")
@@ -12819,8 +12811,8 @@ pub fn read_vdb_env_vars(
     wanted: &[&str],
 ) -> HashMap<String, String> {
     use std::io::Read as _;
-    let Ok(compressed) =
-        fs::read(vdb_pkg_dir(root, category, package, version).join("environment.bz2"))
+    let key = resolve_vdb_entry(root, category, package, version);
+    let Ok(Some(compressed)) = portage_vdb::for_root(root).read_file(&key, "environment.bz2")
     else {
         return HashMap::new();
     };
@@ -38744,33 +38736,27 @@ mod tests {
         );
     }
 
-    /// #112: the resolution helper hands back the `Metadata` it already
-    /// stat'ed, so `vdb_aux_get` does not pay a second `statx` for the
-    /// validity/mtime check.
+    /// `resolve_vdb_entry` returns the direct key for an existing entry,
+    /// and the direct key unchanged for a file or an absent entry.
     #[test]
-    fn vdb_pkg_dir_meta_returns_the_stat_it_used() {
+    fn resolve_vdb_entry_returns_the_direct_key() {
         let root = tmp_vdb("dev-libs", "statmeta-1.0", &[]);
-        let dir = root.join("var/db/pkg/dev-libs/statmeta-1.0");
-        let (got, st) = vdb_pkg_dir_meta(&root, "dev-libs", "statmeta", "1.0");
-        assert_eq!(got, dir);
-        let st = st.expect("an existing directory must carry its stat");
-        use std::os::unix::fs::MetadataExt as _;
-        assert!(st.is_dir());
-        assert_eq!(
-            st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128,
-            dir_mtime_ns(&dir)
-        );
-        // A *file* at the entry path is not a directory: no stat served.
+        let got = resolve_vdb_entry(&root, "dev-libs", "statmeta", "1.0");
+        assert_eq!(got, portage_vdb::EntryKey::new("dev-libs", "statmeta-1.0"));
+        assert!(vdb_entry_is_dir(&root, "dev-libs", "statmeta", "1.0"));
+        // A *file* at the entry path is not a directory.
         let file_root = tmp_vdb("dev-libs", "statmeta-2.0", &[]);
         let file_dir = file_root.join("var/db/pkg/dev-libs/statmeta-2.0");
         std::fs::remove_dir_all(&file_dir).unwrap();
         std::fs::write(&file_dir, b"not a dir").unwrap();
-        let (_, st) = vdb_pkg_dir_meta(&file_root, "dev-libs", "statmeta", "2.0");
-        assert!(st.is_none(), "a non-directory must not be served as a stat");
-        // An absent entry: the unresolved direct path, no stat.
-        let (missing, st) = vdb_pkg_dir_meta(&root, "dev-libs", "absent", "1.0");
-        assert_eq!(missing, root.join("var/db/pkg/dev-libs/absent-1.0"));
-        assert!(st.is_none());
+        assert!(!vdb_entry_is_dir(&file_root, "dev-libs", "statmeta", "2.0"));
+        // An absent entry: the unresolved direct key.
+        let missing = resolve_vdb_entry(&root, "dev-libs", "absent", "1.0");
+        assert_eq!(
+            missing,
+            portage_vdb::EntryKey::new("dev-libs", "absent-1.0")
+        );
+        assert!(!vdb_entry_is_dir(&root, "dev-libs", "absent", "1.0"));
     }
 
     /// Bump a package dir's mtime without changing what it holds (create

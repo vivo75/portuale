@@ -135,6 +135,24 @@
 //!     [`InstalledDb::category_generation`] is one `statx` of the
 //!     category directory. [`InstalledDb::snapshot`] stays unimplemented
 //!     until S3.2 (nothing on `files` uses it).
+//! 19. **S1.3: `FilesDb` does not implement `reverse_dependents`; the
+//!     scan stays in `portage-repo` on top of the S1.2 reads.** Today's
+//!     `installed_reverse_dependents` is not a directory scan of its own:
+//!     it walks the memoised `all_installed_packages` set and reads `USE`
+//!     and the four `*DEPEND` keys of each entry through `vdb_aux_get`,
+//!     which is already [`InstalledDb::aux_get`] (memo, `metadata`
+//!     snapshot, package-move fallback). Reproducing that inside `FilesDb`
+//!     would need the move-remapped, memoised installed set (which lives
+//!     above this crate) or an uncached [`InstalledDb::entries`] walk (extra
+//!     `statx`). So on `files` the reverse-dependent scan keeps its exact
+//!     syscall pattern by calling `aux_get`; `FilesDb::reverse_dependents`
+//!     stays [`Error::Unsupported`] until a database backend needs it
+//!     (S2). The raw-record shape of item 8 is unchanged. The same step
+//!     moved: `FilesDb::entries` now serves `all_installed_packages`'
+//!     uncached walk; `has_entry` serves the entry-exists tests and the
+//!     move-fallback resolution (`resolve_vdb_entry`); `read_file` serves
+//!     `installed_contents_files` (whole-file UTF-8 check stays with the
+//!     caller) and `read_vdb_env_vars`.
 //!
 //! **Rejected from N1–N16:** N10 `cpv_for_path` (the caller prints the
 //! canonical VDB directory in its errors, so it needs
