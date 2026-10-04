@@ -1345,12 +1345,13 @@ conformance_suite!(
     files,
     |root| Arc::new(FilesDb::new(root)),
     Caps {
-        // Module doc items 11, 12, 19 and `files.rs`: the stubs name "S2.6".
-        set_counter: Some("S2.6"),
+        // S2.6: `entry_image`, `insert_entry` and `set_counter` are
+        // implemented on files too.
+        set_counter: None,
         reverse_dependents: Some("reverse_dependents"),
         snapshot: Some("S3.2"),
         read_file_at: Some("S7.2"),
-        entry_image: Some("S2.6"),
+        entry_image: None,
         seal_stores_metadata_file: true,
     }
 );
@@ -1416,7 +1417,7 @@ fn preserved_libs_format_and_parse_round_trip() {
 mod files_only {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::MetadataExt as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     fn files_ctx(tag: &str) -> Ctx {
         Ctx::new(|root| Arc::new(FilesDb::new(root)), tag)
@@ -1705,5 +1706,430 @@ mod files_only {
             Err(Error::Unsupported(_))
         ));
         assert!(matches!(txn.next_counter(), Err(Error::Unsupported(_))));
+    }
+
+    // ---------------------------------------------- S2.6: whole entries
+
+    fn mtime_ns(p: &Path) -> i128 {
+        let st = fs::metadata(p).unwrap();
+        st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128
+    }
+
+    fn set_times(p: &Path, ns: i128) {
+        let t = std::time::UNIX_EPOCH + Duration::from_nanos(ns as u64);
+        fs::File::open(p)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_accessed(t).set_modified(t))
+            .unwrap();
+    }
+
+    fn mode(p: &Path) -> u32 {
+        fs::metadata(p).unwrap().mode() & 0o7777
+    }
+
+    /// The facts the `insert_entry` write order relies on, measured.
+    #[test]
+    fn which_operations_change_a_directorys_mtime() {
+        let ctx = files_ctx("fmtimefacts");
+        let parent = ctx.root.join("p");
+        let dir = parent.join("d");
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("f");
+        fs::write(&f, b"x").unwrap();
+        let t = 1_700_000_000_123_456_789i128;
+        set_times(&dir, t);
+        assert_eq!(mtime_ns(&dir), t, "futimens sets the directory exactly");
+        let same = |what: &str| assert_eq!(mtime_ns(&dir), t, "{what} changed the dir mtime");
+        // Unchanged:
+        set_times(&f, 5_000_000_001);
+        same("utimens of a file inside");
+        fs::set_permissions(&f, fs::Permissions::from_mode(0o640)).unwrap();
+        same("chmod of a file inside");
+        fs::write(&f, b"longer content").unwrap();
+        same("in-place truncate+write of an existing file");
+        {
+            use std::io::Write as _;
+            let mut h = fs::OpenOptions::new().append(true).open(&f).unwrap();
+            h.write_all(b"more").unwrap();
+        }
+        same("append to an existing file");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o750)).unwrap();
+        same("chmod of the dir itself");
+        let moved = parent.join("d2");
+        fs::rename(&dir, &moved).unwrap();
+        assert_eq!(mtime_ns(&moved), t, "rename within the parent");
+        let dir = moved;
+        // Changed:
+        std::thread::sleep(Duration::from_millis(5));
+        fs::write(dir.join("new"), b"").unwrap();
+        assert_ne!(mtime_ns(&dir), t, "creating a file");
+        set_times(&dir, t);
+        fs::rename(dir.join("new"), dir.join("new2")).unwrap();
+        assert_ne!(mtime_ns(&dir), t, "renaming a file inside");
+        set_times(&dir, t);
+        fs::remove_file(dir.join("new2")).unwrap();
+        assert_ne!(mtime_ns(&dir), t, "removing a file");
+    }
+
+    const T_DIR: i128 = 1_650_000_000_111_222_333;
+    const T_META: i128 = 1_650_000_001_000_000_007;
+    const T_A: i128 = 1_650_000_002_000_000_011;
+    const T_B: i128 = 1_650_000_003_999_999_999;
+
+    /// A fixture-like entry in a fresh files database, with odd modes and
+    /// mtimes, invalid UTF-8, an empty file, and a `metadata` file whose
+    /// stamp is Valid (`stale == false`) or made stale by touching the
+    /// directory afterwards. `SLOT` differs between the snapshot (`0`) and
+    /// the field file (`9`, rewritten in place) so `aux_get` shows which
+    /// one is served.
+    fn fixture(tag: &str, k: &EntryKey, stale: bool, metadata: bool) -> (Ctx, EntryImage) {
+        let ctx = files_ctx(tag);
+        put(
+            &ctx,
+            k,
+            &[
+                ("SLOT", b"0\n"),
+                ("RDEPEND", b" a  b\n"),
+                ("CONTENTS", b"obj /x\n"),
+                ("EMPTY", b""),
+                ("environment.bz2", BAD_UTF8),
+            ],
+            metadata,
+        );
+        let dir = vdb(&ctx).join(&k.category).join(&k.pf);
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.replace_file(k, "SLOT", b"9\n").unwrap();
+        txn.commit().unwrap();
+        set_times(&dir.join("CONTENTS"), T_A);
+        fs::set_permissions(dir.join("CONTENTS"), fs::Permissions::from_mode(0o600)).unwrap();
+        set_times(&dir.join("EMPTY"), T_B);
+        fs::set_permissions(dir.join("EMPTY"), fs::Permissions::from_mode(0o444)).unwrap();
+        if metadata {
+            set_times(&dir.join("metadata"), T_META);
+            fs::set_permissions(dir.join("metadata"), fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        if stale {
+            std::thread::sleep(Duration::from_millis(5));
+            fs::write(dir.join("touch"), b"").unwrap();
+            fs::remove_file(dir.join("touch")).unwrap();
+        }
+        set_times(&dir, if stale { T_DIR + 7 } else { mtime_ns(&dir) });
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o750)).unwrap();
+        let img = ctx.db.entry_image(k).unwrap().unwrap();
+        (ctx, img)
+    }
+
+    fn assert_same_image(a: &EntryImage, b: &EntryImage) {
+        assert_eq!(a.dir_mtime_ns, b.dir_mtime_ns, "dir mtime");
+        assert_eq!(a.dir_mode & 0o7777, b.dir_mode & 0o7777, "dir mode");
+        assert_eq!(a.metadata_stamp, b.metadata_stamp, "stamp state");
+        assert_eq!(a.files.len(), b.files.len());
+        for (x, y) in a.files.iter().zip(&b.files) {
+            assert_eq!(x.meta.name, y.meta.name);
+            assert_eq!(x.data, y.data, "{}", x.meta.name);
+            assert_eq!(
+                x.meta.mode & 0o7777,
+                y.meta.mode & 0o7777,
+                "{}",
+                x.meta.name
+            );
+            assert_eq!(x.meta.mtime_ns, y.meta.mtime_ns, "{}", x.meta.name);
+        }
+    }
+
+    #[test]
+    fn entry_image_reports_the_three_stamp_states() {
+        let k = key("dev-libs", "a-1");
+        let (_c1, valid) = fixture("fimg-valid", &k, false, true);
+        assert_eq!(valid.metadata_stamp, MetadataStamp::Valid);
+        let (_c2, stale) = fixture("fimg-stale", &k, true, true);
+        assert_eq!(stale.metadata_stamp, MetadataStamp::Stale);
+        let (_c3, absent) = fixture("fimg-absent", &k, false, false);
+        assert_eq!(absent.metadata_stamp, MetadataStamp::Absent);
+        assert_eq!(valid.dir_mode & 0o7777, 0o750);
+        let names: Vec<_> = valid.files.iter().map(|f| f.meta.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "CONTENTS",
+                "EMPTY",
+                "RDEPEND",
+                "SLOT",
+                "environment.bz2",
+                "metadata"
+            ]
+        );
+        let c = valid
+            .files
+            .iter()
+            .find(|f| f.meta.name == "CONTENTS")
+            .unwrap();
+        assert_eq!((c.meta.mode & 0o7777, c.meta.mtime_ns), (0o600, T_A));
+        assert!(
+            valid
+                .files
+                .iter()
+                .find(|f| f.meta.name == "environment.bz2")
+                .unwrap()
+                .data
+                == BAD_UTF8
+        );
+    }
+
+    #[test]
+    fn insert_entry_valid_stays_valid_and_the_reader_serves_the_snapshot() {
+        let k = key("dev-libs", "a-1");
+        let (src, img) = fixture("fins-valid-src", &k, false, true);
+        assert_eq!(aux(&src, &k, "SLOT").as_deref(), Some("0"), "snapshot");
+        let dst = files_ctx("fins-valid-dst");
+        let mut txn = dst.db.begin_write().unwrap();
+        txn.insert_entry(&img).unwrap();
+        txn.commit().unwrap();
+        let dir = vdb(&dst).join("dev-libs/a-1");
+        assert_eq!(mtime_ns(&dir), img.dir_mtime_ns, "dir mtime preserved");
+        assert_eq!(mode(&dir), 0o750);
+        // The stamp is the directory's mtime, by the raw bytes.
+        let meta = String::from_utf8(fs::read(dir.join("metadata")).unwrap()).unwrap();
+        assert!(
+            meta.ends_with(&format!("#dir_mtime={}\n", img.dir_mtime_ns)),
+            "{meta}"
+        );
+        assert_eq!(meta.matches("#dir_mtime=").count(), 1);
+        // A fresh handle: reader rule accepts, snapshot is served.
+        let fresh = FilesDb::new(&dst.root);
+        assert_eq!(
+            fresh.aux_get(&k, "SLOT").unwrap().as_deref(),
+            Some("0"),
+            "snapshot served (the SLOT field file says 9)"
+        );
+        assert_eq!(read(&dst, &k, "SLOT").as_deref(), Some(&b"9\n"[..]));
+        let back = fresh.entry_image(&k).unwrap().unwrap();
+        assert_eq!(back.metadata_stamp, MetadataStamp::Valid);
+        assert_same_image(&img, &back);
+        // No pending directory is left behind.
+        assert!(!dst.db.has_entry(&key("dev-libs", "-MERGING-a-1")).unwrap());
+        assert!(!vdb(&dst).join("dev-libs/-MERGING-a-1").exists());
+    }
+
+    /// A Valid image whose stored stamp is old (another backend kept the
+    /// bytes of the source host) gets the new directory's value.
+    #[test]
+    fn insert_entry_valid_replaces_an_old_stamp() {
+        let k = key("dev-libs", "a-1");
+        let (_src, mut img) = fixture("fins-oldstamp-src", &k, false, true);
+        img.dir_mtime_ns = T_DIR;
+        let meta = img
+            .files
+            .iter_mut()
+            .find(|f| f.meta.name == "metadata")
+            .unwrap();
+        meta.data = String::from_utf8(meta.data.clone())
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with("#dir_mtime="))
+            .map(|l| format!("{l}\n"))
+            .collect::<String>()
+            .replace("SLOT=0\n", "SLOT=0\n#dir_mtime=12345\n")
+            .into_bytes();
+        let dst = files_ctx("fins-oldstamp-dst");
+        let mut txn = dst.db.begin_write().unwrap();
+        txn.insert_entry(&img).unwrap();
+        txn.commit().unwrap();
+        let text = String::from_utf8(read(&dst, &k, "metadata").unwrap()).unwrap();
+        assert_eq!(text.matches("#dir_mtime=").count(), 1, "{text}");
+        assert!(text.ends_with(&format!("#dir_mtime={T_DIR}\n")), "{text}");
+        assert_eq!(
+            FilesDb::new(&dst.root)
+                .aux_get(&k, "SLOT")
+                .unwrap()
+                .as_deref(),
+            Some("0")
+        );
+    }
+
+    #[test]
+    fn insert_entry_stale_stays_stale_with_the_stored_bytes() {
+        let k = key("dev-libs", "a-1");
+        let (_src, img) = fixture("fins-stale-src", &k, true, true);
+        assert_eq!(img.metadata_stamp, MetadataStamp::Stale);
+        let stored = img
+            .files
+            .iter()
+            .find(|f| f.meta.name == "metadata")
+            .unwrap();
+        let dst = files_ctx("fins-stale-dst");
+        let mut txn = dst.db.begin_write().unwrap();
+        txn.insert_entry(&img).unwrap();
+        txn.commit().unwrap();
+        assert_eq!(
+            read(&dst, &k, "metadata").as_deref(),
+            Some(&stored.data[..])
+        );
+        let fresh = FilesDb::new(&dst.root);
+        assert_eq!(
+            fresh.aux_get(&k, "SLOT").unwrap().as_deref(),
+            Some("9"),
+            "stale snapshot is ignored; the field file is read"
+        );
+        let back = fresh.entry_image(&k).unwrap().unwrap();
+        assert_eq!(back.metadata_stamp, MetadataStamp::Stale);
+        assert_same_image(&img, &back);
+    }
+
+    /// An image that says Stale but whose stamp equals the directory mtime
+    /// (a foreign producer) is made stale by moving the stamp by one.
+    #[test]
+    fn insert_entry_stale_never_matches_even_when_the_stored_stamp_equals_the_dir_mtime() {
+        let k = key("dev-libs", "a-1");
+        let (_src, mut img) = fixture("fins-stale-eq-src", &k, true, true);
+        img.dir_mtime_ns = T_DIR;
+        let meta = img
+            .files
+            .iter_mut()
+            .find(|f| f.meta.name == "metadata")
+            .unwrap();
+        let text = String::from_utf8(meta.data.clone()).unwrap();
+        let body: String = text
+            .lines()
+            .filter(|l| !l.starts_with("#dir_mtime="))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        meta.data = format!("{body}#dir_mtime={T_DIR}\n").into_bytes();
+        let dst = files_ctx("fins-stale-eq-dst");
+        let mut txn = dst.db.begin_write().unwrap();
+        txn.insert_entry(&img).unwrap();
+        txn.commit().unwrap();
+        let back = dst.db.entry_image(&k).unwrap().unwrap();
+        assert_eq!(back.metadata_stamp, MetadataStamp::Stale);
+        let text = String::from_utf8(read(&dst, &k, "metadata").unwrap()).unwrap();
+        assert!(
+            text.ends_with(&format!("#dir_mtime={}\n", T_DIR - 1)),
+            "{text}"
+        );
+        assert_eq!(
+            FilesDb::new(&dst.root)
+                .aux_get(&k, "SLOT")
+                .unwrap()
+                .as_deref(),
+            Some("9")
+        );
+    }
+
+    #[test]
+    fn insert_entry_absent_adds_no_metadata_file_and_keeps_modes_and_times() {
+        let k = key("dev-libs", "a-1");
+        let (_src, img) = fixture("fins-absent-src", &k, false, false);
+        let dst = files_ctx("fins-absent-dst");
+        let mut txn = dst.db.begin_write().unwrap();
+        txn.insert_entry(&img).unwrap();
+        txn.commit().unwrap();
+        let dir = vdb(&dst).join("dev-libs/a-1");
+        assert!(!dir.join("metadata").exists());
+        assert_eq!(mode(&dir.join("EMPTY")), 0o444);
+        assert_eq!(mtime_ns(&dir.join("EMPTY")), T_B);
+        assert_eq!(mtime_ns(&dir.join("CONTENTS")), T_A);
+        assert_eq!(mode(&dir.join("CONTENTS")), 0o600);
+        assert_eq!(fs::read(dir.join("environment.bz2")).unwrap(), BAD_UTF8);
+        assert_eq!(mtime_ns(&dir), img.dir_mtime_ns);
+        assert_same_image(&img, &dst.db.entry_image(&k).unwrap().unwrap());
+    }
+
+    #[test]
+    fn insert_entry_replaces_a_live_entry_and_leaves_no_pending_dir() {
+        let k = key("dev-libs", "a-1");
+        let (_src, img) = fixture("fins-repl-src", &k, false, true);
+        let dst = files_ctx("fins-repl-dst");
+        put(&dst, &k, &[("OLD", b"old"), ("SLOT", b"1\n")], false);
+        let mut txn = dst.db.begin_write().unwrap();
+        txn.insert_entry(&img).unwrap();
+        txn.commit().unwrap();
+        assert_eq!(read(&dst, &k, "OLD"), None);
+        assert_same_image(&img, &dst.db.entry_image(&k).unwrap().unwrap());
+        let names: Vec<_> = fs::read_dir(vdb(&dst).join("dev-libs"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["a-1"]);
+    }
+
+    #[test]
+    fn insert_entry_rejects_inconsistent_images_and_bad_names() {
+        let k = key("dev-libs", "a-1");
+        let (_c, img) = fixture("fins-bad", &k, false, true);
+        let dst = files_ctx("fins-bad-dst");
+        let mut bad = img.clone();
+        bad.metadata_stamp = MetadataStamp::Absent;
+        let mut txn = dst.db.begin_write().unwrap();
+        assert!(matches!(txn.insert_entry(&bad), Err(Error::Invalid(_))));
+        let mut bad = img.clone();
+        bad.files.retain(|f| f.meta.name != "metadata");
+        assert!(matches!(txn.insert_entry(&bad), Err(Error::Invalid(_))));
+        let mut bad = img.clone();
+        bad.files[0].meta.name = "../x".into();
+        assert!(matches!(txn.insert_entry(&bad), Err(Error::Invalid(_))));
+        assert!(!dst.db.has_entry(&k).unwrap());
+        assert!(!vdb(&dst).join("dev-libs/-MERGING-a-1").exists());
+    }
+
+    #[test]
+    fn set_counter_writes_the_bare_integer() {
+        let ctx = files_ctx("fsetcounter");
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.set_counter(Counter(12345)).unwrap();
+        txn.commit().unwrap();
+        assert_eq!(
+            fs::read(ctx.root.join("var/cache/edb/counter")).unwrap(),
+            b"12345"
+        );
+        assert_eq!(ctx.db.counter().unwrap(), Some(Counter(12345)));
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    fn tree(dir: &Path) -> Vec<(String, Vec<u8>, u32, i128)> {
+        let mut v = vec![(".".to_string(), vec![], mode(dir), mtime_ns(dir))];
+        let mut names: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        names.sort();
+        for p in names {
+            v.push((
+                p.file_name().unwrap().to_str().unwrap().to_string(),
+                fs::read(&p).unwrap(),
+                mode(&p),
+                mtime_ns(&p),
+            ));
+        }
+        v
+    }
+
+    /// files -> sqlite -> files gives byte-identical trees (bytes, modes,
+    /// mtimes, directory mode and mtime) for each stamp state.
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn round_trip_files_sqlite_files_is_byte_identical() {
+        for (tag, stale, metadata) in [
+            ("valid", false, true),
+            ("stale", true, true),
+            ("absent", false, false),
+        ] {
+            let k = key("dev-libs", "a-1");
+            let (src, img) = fixture(&format!("frt-{tag}"), &k, stale, metadata);
+            let sq_root = files_ctx(&format!("frt-sq-{tag}"));
+            let sq = portage_vdb::SqliteDb::open(sq_root.root.join("vdb.sqlite")).unwrap();
+            let mut txn = sq.begin_write().unwrap();
+            txn.insert_entry(&img).unwrap();
+            txn.commit().unwrap();
+            let mid = sq.entry_image(&k).unwrap().unwrap();
+            let dst = files_ctx(&format!("frt-dst-{tag}"));
+            let mut txn = dst.db.begin_write().unwrap();
+            txn.insert_entry(&mid).unwrap();
+            txn.commit().unwrap();
+            assert_eq!(
+                tree(&vdb(&src).join("dev-libs/a-1")),
+                tree(&vdb(&dst).join("dev-libs/a-1")),
+                "{tag}"
+            );
+        }
     }
 }

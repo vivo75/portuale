@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 use crate::files_write::FilesTxn;
 use crate::{
-    BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryImage, EntryKey, Error, FileMeta,
-    InstalledDb, METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, PreservedLibs, Result,
-    Snapshot, World, WorldSets, WriteTxn, in_metadata_file,
+    BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFile, EntryImage, EntryKey,
+    Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION,
+    MetadataStamp, PreservedLibs, Result, Snapshot, World, WorldSets, WriteTxn, in_metadata_file,
 };
 
 /// The VDB directory under a root, joined without canonicalising (today's
@@ -575,8 +575,65 @@ impl InstalledDb for FilesDb {
         Ok(out)
     }
 
-    fn entry_image(&self, _key: &EntryKey) -> Result<Option<EntryImage>> {
-        todo_step("entry_image", "S2.6")
+    /// Every regular file of the live entry (sorted by name, like
+    /// `list_files`; a sub-directory is not part of an entry and is
+    /// skipped), exact bytes, `st_mode` and `st_mtime_ns`; the directory's
+    /// `st_mode` and `st_mtime_ns`; and the `metadata` stamp state by the
+    /// real reader rule ([`parse_metadata_text`] + equality with the
+    /// directory's `st_mtime_ns`). The directory is `stat`ed first; reads
+    /// do not change its mtime.
+    fn entry_image(&self, key: &EntryKey) -> Result<Option<EntryImage>> {
+        let dir = self.entry_dir(key);
+        let dst = match fs::metadata(&dir) {
+            Ok(st) if st.is_dir() => st,
+            Ok(_) => return Ok(None),
+            Err(e) if is_absent(&e) => return Ok(None),
+            Err(e) => return Err(Error::io(dir, e)),
+        };
+        let dir_mtime_ns = dst.mtime() as i128 * 1_000_000_000 + dst.mtime_nsec() as i128;
+        let entries =
+            portage_util::read_dir_entries(&dir).map_err(|e| Error::io(dir.clone(), e))?;
+        let mut files = Vec::new();
+        for e in entries {
+            let path = e.path();
+            let Some(name) = e.file_name().to_str().map(str::to_string) else {
+                return Err(Error::Invalid(format!(
+                    "{}: entry file name is not UTF-8",
+                    path.display()
+                )));
+            };
+            let st = fs::metadata(&path).map_err(|e| Error::io(path.clone(), e))?;
+            if !st.is_file() {
+                continue;
+            }
+            let data = fs::read(&path).map_err(|e| Error::io(path.clone(), e))?;
+            files.push(EntryFile {
+                meta: file_meta_of(name, &st),
+                data,
+            });
+        }
+        files.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
+        let metadata_stamp = match files.iter().find(|f| f.meta.name == "metadata") {
+            None => MetadataStamp::Absent,
+            Some(f) => {
+                let valid = std::str::from_utf8(&f.data)
+                    .ok()
+                    .and_then(parse_metadata_text)
+                    .is_some_and(|(_, stamp)| stamp == Some(dir_mtime_ns));
+                if valid {
+                    MetadataStamp::Valid
+                } else {
+                    MetadataStamp::Stale
+                }
+            }
+        };
+        Ok(Some(EntryImage {
+            key: key.clone(),
+            files,
+            dir_mode: dst.mode(),
+            dir_mtime_ns,
+            metadata_stamp,
+        }))
     }
 
     fn reverse_dependents(&self, _cp: &str, _classes: &[DepClass]) -> Result<Vec<DepRecord>> {

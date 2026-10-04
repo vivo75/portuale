@@ -19,14 +19,15 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
 
-use crate::files::{FilesDb, is_absent, todo_step};
+use crate::files::{FilesDb, is_absent, parse_metadata_text};
 use crate::{
     ConfigMemory, Counter, EntryImage, EntryKey, Error, METADATA_FILE_FIELDS,
-    METADATA_FILE_FORMAT_VERSION, PreservedLibs, PreservedLibsEntry, Result, World, WorldSets,
-    WriteTxn,
+    METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result, World,
+    WorldSets, WriteTxn,
 };
 
 /// Real `const.py` `CACHE_PATH` + `vartree.py:420`: the counter store
@@ -209,6 +210,129 @@ impl<'a> FilesTxn<'a> {
     }
 }
 
+/// `st_mtime_ns` of a `stat`.
+fn mtime_ns_of(st: &fs::Metadata) -> i128 {
+    st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128
+}
+
+/// Set the access and modification time of a file or directory to
+/// `ns` (nanoseconds since the epoch, signed) with `futimens` on a
+/// read-only descriptor (works on directories; the owner needs no write
+/// permission). Never touches the directory entry of `path` itself.
+fn set_mtime_ns(path: &Path, ns: i128) -> Result<()> {
+    let secs = ns.div_euclid(1_000_000_000);
+    let nanos = ns.rem_euclid(1_000_000_000) as u32;
+    let bad = || Error::Invalid(format!("{}: mtime {ns} out of range", path.display()));
+    let whole = u64::try_from(secs.unsigned_abs()).map_err(|_| bad())?;
+    let t = if secs >= 0 {
+        UNIX_EPOCH.checked_add(Duration::new(whole, nanos))
+    } else {
+        UNIX_EPOCH
+            .checked_sub(Duration::new(whole, 0))
+            .and_then(|t| t.checked_add(Duration::new(0, nanos)))
+    }
+    .ok_or_else(bad)?;
+    let f = fs::File::open(path).map_err(|e| Error::io(path, e))?;
+    f.set_times(fs::FileTimes::new().set_accessed(t).set_modified(t))
+        .map_err(|e| Error::io(path, e))
+}
+
+fn set_mode(path: &Path, mode: u32) -> Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o7777))
+        .map_err(|e| Error::io(path, e))
+}
+
+/// `body` with every `#dir_mtime=` line removed and a final newline.
+fn without_stamp(body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(body.len());
+    for line in body.split_inclusive(|&b| b == b'\n') {
+        if !line.starts_with(b"#dir_mtime=") {
+            out.extend_from_slice(line);
+        }
+    }
+    if !out.is_empty() && out.last() != Some(&b'\n') {
+        out.push(b'\n');
+    }
+    out
+}
+
+impl FilesTxn<'_> {
+    /// Steps 1-5 of [`WriteTxn::insert_entry`] inside the pending dir.
+    fn write_image(&self, pending: &Path, image: &EntryImage) -> Result<()> {
+        let key = &image.key;
+        let meta_path = pending.join("metadata");
+        // 1. bytes.
+        for f in &image.files {
+            let path = pending.join(&f.meta.name);
+            let body: Vec<u8>;
+            let data: &[u8] = if f.meta.name == "metadata"
+                && image.metadata_stamp == MetadataStamp::Valid
+            {
+                body = without_stamp(&f.data);
+                let fmt = format!("#format={METADATA_FILE_FORMAT_VERSION}");
+                if !body.split(|&b| b == b'\n').any(|l| l == fmt.as_bytes()) {
+                    return Err(Error::Invalid(format!(
+                        "{key}: Valid stamp but metadata has no #format={METADATA_FILE_FORMAT_VERSION}"
+                    )));
+                }
+                &body
+            } else {
+                &f.data
+            };
+            fs::write(&path, data).map_err(|e| Error::io(path, e))?;
+        }
+        // 2. file mtimes and modes (metadata later).
+        for f in image.files.iter().filter(|f| f.meta.name != "metadata") {
+            let path = pending.join(&f.meta.name);
+            set_mtime_ns(&path, f.meta.mtime_ns)?;
+            set_mode(&path, f.meta.mode)?;
+        }
+        // 3. directory mtime, before any stamp.
+        set_mtime_ns(pending, image.dir_mtime_ns)?;
+        // 4. the stamp, last.
+        if let Some(f) = image.files.iter().find(|f| f.meta.name == "metadata") {
+            set_mode(&meta_path, 0o600)?;
+            let st = fs::metadata(pending).map_err(|e| Error::io(pending, e))?;
+            let cur = mtime_ns_of(&st);
+            match image.metadata_stamp {
+                MetadataStamp::Valid => {
+                    use std::io::Write as _;
+                    let mut h = fs::OpenOptions::new()
+                        .append(true)
+                        .open(&meta_path)
+                        .map_err(|e| Error::io(&meta_path, e))?;
+                    writeln!(h, "#dir_mtime={cur}").map_err(|e| Error::io(&meta_path, e))?;
+                }
+                MetadataStamp::Stale => {
+                    let stored = std::str::from_utf8(&f.data)
+                        .ok()
+                        .and_then(parse_metadata_text)
+                        .and_then(|(_, stamp)| stamp);
+                    if stored == Some(cur) {
+                        let text = String::from_utf8_lossy(&f.data);
+                        let fixed: String = text
+                            .split_inclusive('\n')
+                            .map(|l| {
+                                if l.starts_with("#dir_mtime=") {
+                                    format!("#dir_mtime={}\n", cur - 1)
+                                } else {
+                                    l.to_string()
+                                }
+                            })
+                            .collect();
+                        fs::write(&meta_path, fixed).map_err(|e| Error::io(&meta_path, e))?;
+                    }
+                }
+                MetadataStamp::Absent => {}
+            }
+            set_mtime_ns(&meta_path, f.meta.mtime_ns)?;
+            set_mode(&meta_path, f.meta.mode)?;
+        }
+        // 5. directory mode.
+        set_mode(pending, image.dir_mode)
+    }
+}
+
 /// `std::fs::create_dir_all` of `path`'s parent, error on the parent.
 fn create_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -326,8 +450,54 @@ impl WriteTxn for FilesTxn<'_> {
         Ok(())
     }
 
-    fn insert_entry(&mut self, _image: &EntryImage) -> Result<()> {
-        todo_step("insert_entry", "S2.6")
+    /// Whole-entry write for converters (S2.6; plan 0.7: directory mtimes
+    /// before the stamp, stale stays stale, no `metadata` file is added).
+    /// Order, in the pending `-MERGING-<pf>` dir (`begin_entry`):
+    ///
+    /// 1. every file written with its bytes (`metadata`: Valid = stored
+    ///    bytes without any `#dir_mtime=` line; Stale = the stored bytes
+    ///    as they are);
+    /// 2. every non-`metadata` file: mtime, then mode;
+    /// 3. the directory's mtime = `image.dir_mtime_ns` (`futimens`);
+    /// 4. `metadata`: mode 0600 for the append; Valid: `stat` the
+    ///    directory, append `#dir_mtime=<st_mtime_ns>` (nothing creates a
+    ///    dirent now); Stale: if the stored stamp equals the directory's
+    ///    mtime, rewrite it in place as that value minus one; then its
+    ///    mtime and mode;
+    /// 5. the directory's mode (`chmod`, ctime only);
+    /// 6. `finish_entry` (remove a live same-`pf` entry, `rename`).
+    ///
+    /// Any failure removes the pending directory.
+    fn insert_entry(&mut self, image: &EntryImage) -> Result<()> {
+        let key = &image.key;
+        for f in &image.files {
+            let n = &f.meta.name;
+            if n.is_empty() || n == "." || n == ".." || n.contains(['/', '\0']) {
+                return Err(Error::Invalid(format!("{key}: bad file name {n:?}")));
+            }
+        }
+        let has_meta = image.files.iter().any(|f| f.meta.name == "metadata");
+        match (image.metadata_stamp, has_meta) {
+            (MetadataStamp::Absent, true) => {
+                return Err(Error::Invalid(format!(
+                    "{key}: stamp state Absent but the image holds a metadata file"
+                )));
+            }
+            (MetadataStamp::Valid, false) => {
+                return Err(Error::Invalid(format!(
+                    "{key}: stamp state Valid but the image holds no metadata file"
+                )));
+            }
+            _ => {}
+        }
+        self.begin_entry(key)?;
+        let pending = self.db.pending_dir(key);
+        let r = self.write_image(&pending, image);
+        let r = r.and_then(|()| self.finish_entry(key));
+        if r.is_err() {
+            let _ = fs::remove_dir_all(&pending);
+        }
+        r
     }
 
     /// Moved from `ebuild_unmerge::delete_vdb_dir` (real `dblink.delete()`):
@@ -404,8 +574,13 @@ impl WriteTxn for FilesTxn<'_> {
         fs::write(&path, text).map_err(|e| Error::io(path, e))
     }
 
-    fn set_counter(&mut self, _counter: Counter) -> Result<()> {
-        todo_step("set_counter", "S2.6")
+    /// The historic `counter` file: the bare integer, no newline, one
+    /// `std::fs::write` after `create_dir_all` of the parent, as
+    /// `next_counter` writes it. A plain store: it may lower the counter.
+    fn set_counter(&mut self, counter: Counter) -> Result<()> {
+        let path = self.db.store_path(COUNTER_PATH)?;
+        create_parent(&path)?;
+        fs::write(&path, counter.0.to_string()).map_err(|e| Error::io(path, e))
     }
 
     /// Nothing to do: every call above was applied when it was made.
