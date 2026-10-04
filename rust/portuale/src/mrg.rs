@@ -102,6 +102,7 @@
 
 use clap::builder::PossibleValuesParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
+use portage_vdb::InstalledDb;
 use std::process::ExitCode;
 
 /// How one emerge option is modelled. Drives the clap `Arg` build (in
@@ -1574,6 +1575,31 @@ fn open_vdb_backend(
     }
 }
 
+/// Check if the database backend is stale (the source files VDB changed since conversion).
+/// Returns a warning message if stale, `None` if not stale or if no import mark is set.
+fn stale_db_warning(mark: Option<(u64, String)>, files_gen: u64, db_path: &Path) -> Option<String> {
+    let (mark_gen, mark_src) = mark?;
+    // If import_mark is set but the files generation is 0, the source doesn't exist anymore
+    if files_gen == 0 {
+        return None;
+    }
+    // If the source generation differs from the mark, the database is stale
+    if files_gen != mark_gen {
+        let src_root = std::path::Path::new(&mark_src);
+        let vdb_path = portage_vdb::FilesDb::new(src_root)
+            .vdb_dir()
+            .unwrap_or_else(|| src_root.to_path_buf());
+        return Some(format!(
+            "!!! The installed-package database in {} changed since {} was converted from it; run: portuale vdb convert --force --from files:{} --to sqlite:{}",
+            vdb_path.display(),
+            db_path.display(),
+            mark_src,
+            db_path.display()
+        ));
+    }
+    None
+}
+
 #[cfg(feature = "vdb-sqlite")]
 fn open_sqlite_backend(
     path: &Path,
@@ -1595,7 +1621,18 @@ fn open_sqlite_backend(
         portage_vdb::SqliteDb::open(path)
     };
     match db {
-        Ok(db) => Ok(Some(std::sync::Arc::new(db))),
+        Ok(db) => {
+            // Check for stale database conversion
+            let import_mark = db.import_mark().ok().flatten();
+            if let Some((_, mark_src)) = &import_mark
+                && let Ok(files_gen) =
+                    portage_vdb::FilesDb::new(std::path::Path::new(mark_src)).generation()
+                && let Some(warning) = stale_db_warning(import_mark, files_gen, path)
+            {
+                eprintln!("{warning}");
+            }
+            Ok(Some(std::sync::Arc::new(db)))
+        }
         Err(e) => Err(format!(
             "mrg: cannot open the sqlite VDB {}: {e}",
             path.display()
@@ -2417,5 +2454,32 @@ mod tests {
         assert!(String::from_utf8_lossy(&out.stderr).contains("convert first"));
         assert!(!missing.exists());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_stale_db_warning() {
+        use std::path::PathBuf;
+        let db_path = PathBuf::from("/var/lib/portage/vdb.sqlite");
+        // No import mark -> None
+        assert_eq!(stale_db_warning(None, 100, &db_path), None);
+        // Same generation -> None
+        assert_eq!(
+            stale_db_warning(Some((100, "/root".to_string())), 100, &db_path),
+            None
+        );
+        // Files generation is 0 (doesn't exist) -> None
+        assert_eq!(
+            stale_db_warning(Some((100, "/root".to_string())), 0, &db_path),
+            None
+        );
+        // Different generation -> Some(warning)
+        let warning = stale_db_warning(Some((100, "/root".to_string())), 200, &db_path);
+        assert!(warning.is_some());
+        let w = warning.unwrap();
+        assert!(w.contains("!!!"));
+        assert!(w.contains("/root/var/db/pkg"));
+        assert!(w.contains("portuale vdb convert --force"));
+        assert!(w.contains("--from files:/root"));
+        assert!(w.contains("--to sqlite:"));
     }
 }

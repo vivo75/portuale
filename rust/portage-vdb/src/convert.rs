@@ -80,8 +80,21 @@ pub fn copy_all(src: &dyn InstalledDb, dst: &dyn InstalledDb, force: bool) -> Re
     libs.loaded = dst.preserved_libs()?.entries;
     let cfg: ConfigMemory = src.config_memory()?;
     let counter = src.counter()?;
+    let src_generation = src.generation()?;
+    let src_vdb_dir = src.vdb_dir();
 
     let mut txn = dst.begin_write()?;
+    // Record import mark when copying from a files backend to a non-files backend
+    if src.kind() == crate::BackendKind::Files
+        && dst.kind() != crate::BackendKind::Files
+        && let Some(vdb_path) = src_vdb_dir
+        && let Some(root) = vdb_path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+    {
+        txn.set_import_mark(src_generation, &root.to_string_lossy())?;
+    }
     for key in &dst_keys {
         if keys.binary_search(key).is_err() {
             txn.delete_entry(key)?;

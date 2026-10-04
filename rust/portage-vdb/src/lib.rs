@@ -360,7 +360,16 @@
 //!   `entry_file` (the truth, bytes), and the rebuildable `owner`,
 //!   `dep_atom`, `needed`, plus `preserved_lib`, `world`, `world_sets`,
 //!   `config_memory`. `meta` holds `schema_version`, `generation`,
-//!   `counter_hwm` (`-1` = none yet) and `created_at`.
+//!   `counter_hwm` (`-1` = none yet), `created_at`, and optionally
+//!   `imported_files_generation` and `imported_files_source` (the
+//!   source's `generation()` and root path when converted from a files
+//!   backend, used to detect stale conversions).
+//! - **Import mark** When `copy_all` converts from a files backend to a
+//!   database backend, it records the source's `generation()` value and
+//!   source path as `meta` keys `imported_files_generation` and
+//!   `imported_files_source`. This allows tools to warn when the source
+//!   files VDB has changed since the database was created and a re-conversion
+//!   is needed.
 //!
 //! **Rejected from N1–N16:** N10 `cpv_for_path` (the caller prints the
 //! canonical VDB directory in its errors, so it needs
@@ -596,6 +605,14 @@ pub trait InstalledDb: Send + Sync {
     /// Start a write transaction. Database backends take the write lock
     /// here (sqlite `BEGIN IMMEDIATE`).
     fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>>;
+
+    /// Get the import mark: the generation value and source path at the time
+    /// the database was converted from a files backend. `None` if the
+    /// database has never been converted from files, or it's a files backend.
+    /// Default: none.
+    fn import_mark(&self) -> Result<Option<(u64, String)>> {
+        Ok(None)
+    }
 }
 
 /// One write transaction.
@@ -673,6 +690,14 @@ pub trait WriteTxn {
     /// Set the counter store (converters; a merge uses
     /// [`WriteTxn::next_counter`]).
     fn set_counter(&mut self, counter: Counter) -> Result<()>;
+
+    /// Record the import mark when converting from a files backend: the
+    /// generation value of the source and the source root path. A no-op on
+    /// `files`; on database backends, stores `meta` keys `imported_files_generation`
+    /// and `imported_files_source`. Default: no-op.
+    fn set_import_mark(&mut self, _generation: u64, _source: &str) -> Result<()> {
+        Ok(())
+    }
 
     /// Make the transaction durable. A no-op on `files`.
     fn commit(self: Box<Self>) -> Result<()>;

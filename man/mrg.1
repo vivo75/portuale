@@ -21,6 +21,9 @@ reads one SQLite file.  \fBredb\fR is not implemented yet and is refused.
 The database file for \fBsqlite\fR.  The default is
 \fIROOT\fR\fB/var/lib/portage/vdb.sqlite\fR.  It is ignored, with a
 warning, when the backend is \fBfiles\fR.
+When the sqlite database was converted from the files backend, a warning
+is printed if the files VDB has changed since conversion; re-convert with
+\fBportuale vdb convert --force\fR(1) to update the database.
 .SH "SELECTION"
 The backend is chosen only when asked for; \fBmrg\fR never detects a
 database on its own.  The first of these that is set wins:

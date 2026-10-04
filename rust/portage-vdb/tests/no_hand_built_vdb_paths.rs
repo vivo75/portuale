@@ -11,7 +11,7 @@ fn matches_pattern(line: &str) -> bool {
     line.contains("var/db/pkg")
         || (line.contains(r#""db")"#) && line.contains(r#"join("pkg")"#))
         || line.contains("VDB_DIR")
-        || line.contains("vdb_dir(")
+        || (line.contains("vdb_dir(") && !line.contains(".vdb_dir()"))
         || (line.contains("var/lib/portage/world") && !line.contains("world_sets"))
         || line.contains(r#""world")"#)
         || line.contains("var/lib/portage/world_sets")

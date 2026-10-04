@@ -477,6 +477,30 @@ impl WriteTxn for SqliteTxn<'_> {
         Ok(())
     }
 
+    fn set_import_mark(&mut self, generation: u64, source: &str) -> Result<()> {
+        let p = self.db.path.clone();
+        let gen_str = generation.to_string();
+        // Delete existing entries first to avoid conflicts
+        self.conn
+            .execute("DELETE FROM meta WHERE key IN ('imported_files_generation', 'imported_files_source')", [])
+            .be(&p)?;
+        // Insert the new values
+        self.conn
+            .execute(
+                "INSERT INTO meta (key, value) VALUES ('imported_files_generation', ?1)",
+                [gen_str.as_str()],
+            )
+            .be(&p)?;
+        self.conn
+            .execute(
+                "INSERT INTO meta (key, value) VALUES ('imported_files_source', ?1)",
+                [source],
+            )
+            .be(&p)?;
+        self.dirty = true;
+        Ok(())
+    }
+
     /// Bumps `meta.generation` when anything was written, then `COMMIT`.
     /// On any failure the drop rolls back.
     fn commit(mut self: Box<Self>) -> Result<()> {

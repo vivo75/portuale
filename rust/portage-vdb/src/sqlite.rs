@@ -959,6 +959,23 @@ impl InstalledDb for SqliteDb {
         }
     }
 
+    /// Get the import mark: the generation value and source path from when
+    /// the database was converted from a files backend. `None` if not set.
+    fn import_mark(&self) -> Result<Option<(u64, String)>> {
+        let generation = self.meta_value("imported_files_generation")?;
+        let src = self.meta_value("imported_files_source")?;
+        match (generation, src) {
+            (Some(g), Some(s)) => match g.parse::<u64>() {
+                Ok(n) => Ok(Some((n, s))),
+                Err(_) => Err(Error::Corrupt(format!(
+                    "{}: meta.imported_files_generation is not a number",
+                    self.path.display()
+                ))),
+            },
+            _ => Ok(None),
+        }
+    }
+
     /// One SQLite transaction on its own connection, started with
     /// `BEGIN IMMEDIATE` (module doc, "Write transactions").
     fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>> {
@@ -2523,5 +2540,70 @@ bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
         assert_eq!(cached_view(&ro, &keys), cached_view(&fdb, &keys));
         merge(&other, &a, &files, true);
         assert!(ro.has_entry(&a).unwrap());
+    }
+
+    #[test]
+    fn import_mark_set_on_copy_from_files_to_sqlite() {
+        use crate::copy_all;
+
+        let t = Tmp::new();
+        let root = t.0.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let fdb = FilesDb::new(&root);
+        let sdb = SqliteDb::open(t.db()).unwrap();
+
+        // Add an entry to files backend
+        let a = EntryKey::new("dev-libs", "a-1");
+        let files = vec![("SLOT", b"1\n" as &[u8])];
+        put_files(&fdb, &a, &files, true);
+
+        let files_gen = fdb.generation().unwrap();
+        assert_ne!(
+            files_gen, 0,
+            "files backend should have non-zero generation"
+        );
+
+        // Copy from files to sqlite
+        let report = copy_all(&fdb, &sdb, false).unwrap();
+        assert_eq!(report.copied.len(), 1);
+
+        // Check that import mark was set
+        let mark = sdb.import_mark().unwrap();
+        assert!(
+            mark.is_some(),
+            "import_mark should be set after copy_all from files"
+        );
+        let (generation, src) = mark.unwrap();
+        assert_eq!(generation, files_gen);
+        assert_eq!(src, root.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn import_mark_not_set_on_copy_from_sqlite_to_files() {
+        use crate::copy_all;
+
+        let t = Tmp::new();
+        let root = t.0.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let _fdb = FilesDb::new(&root);
+        let sdb = SqliteDb::open(t.db()).unwrap();
+
+        // Add an entry to sqlite backend
+        let a = EntryKey::new("dev-libs", "a-1");
+        merge(&sdb, &a, &[("SLOT", b"1\n")], true);
+
+        // Copy from sqlite to files (using force=true to allow copy to non-empty)
+        std::fs::remove_dir_all(root.join("var/db/pkg")).unwrap();
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let fdb2 = FilesDb::new(&root);
+        let report = copy_all(&sdb, &fdb2, false).unwrap();
+        assert_eq!(report.copied.len(), 1);
+
+        // Check that import mark is not set (copying to files backend)
+        let mark = fdb2.import_mark().unwrap();
+        assert!(
+            mark.is_none(),
+            "import_mark should be None for files backend"
+        );
     }
 }
