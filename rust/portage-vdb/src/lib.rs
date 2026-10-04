@@ -289,6 +289,13 @@ pub use types::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// feat#157 (#305) S2.1: prove that rusqlite links in the vdb-sqlite feature.
+/// Returns the rusqlite version string.
+#[cfg(feature = "vdb-sqlite")]
+pub fn sqlite_version() -> &'static str {
+    rusqlite::version()
+}
+
 /// Real `_METADATA_FILE_FIELDS` (`vartree.py:78-104`): the 23 single-line
 /// fields of the consolidated `metadata` file, sorted. `CONTENTS` and
 /// `NEEDED*` are line-oriented and excluded. The set is part of the
@@ -543,4 +550,18 @@ pub trait WriteTxn {
 
     /// Make the transaction durable. A no-op on `files`.
     fn commit(self: Box<Self>) -> Result<()>;
+}
+
+#[cfg(all(test, feature = "vdb-sqlite"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sqlite_version() {
+        let version = sqlite_version();
+        // rusqlite::version() returns a version string like "3.x.y"
+        assert!(!version.is_empty());
+        // The version should contain at least one digit
+        assert!(version.chars().any(|c| c.is_ascii_digit()));
+    }
 }
