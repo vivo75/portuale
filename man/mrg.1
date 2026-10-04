@@ -1,0 +1,59 @@
+.TH "MRG" "1" "Oct 2026" "Portuale @VERSION@" "Portuale"
+.SH "NAME"
+mrg \- Portuale's command\-line front end to the emerge code path
+.SH "SYNOPSIS"
+.B portuale mrg
+[\fIemerge options\fR] [\fB\-\-vdb\-backend\fR=\fIBACKEND\fR]
+[\fB\-\-vdb\-path\fR=\fIPATH\fR] [\fIatom\fR ...]
+.SH "DESCRIPTION"
+\fBmrg\fR accepts emerge's own options, with the same spellings, and runs
+the same resolver and merge code as \fBemerge\fR(1).  Only the options
+described here are specific to \fBmrg\fR; see \fBportuale mrg \-\-help\fR
+for the full list, including the \fB\-\-remote\-*\fR options.
+.SH "OPTIONS"
+.TP
+\fB\-\-vdb\-backend\fR=\fIfiles\fR|\fIsqlite\fR|\fIredb\fR
+Where the installed\-package database (the VDB) lives.  \fBfiles\fR, the
+default, is the historic \fIROOT\fR\fB/var/db/pkg\fR tree.  \fBsqlite\fR
+reads one SQLite file.  \fBredb\fR is not implemented yet and is refused.
+.TP
+\fB\-\-vdb\-path\fR=\fIPATH\fR
+The database file for \fBsqlite\fR.  The default is
+\fIROOT\fR\fB/var/lib/portage/vdb.sqlite\fR.  It is ignored, with a
+warning, when the backend is \fBfiles\fR.
+.SH "SELECTION"
+The backend is chosen only when asked for; \fBmrg\fR never detects a
+database on its own.  The first of these that is set wins:
+.IP 1. 3
+\fB\-\-vdb\-backend\fR
+.IP 2. 3
+\fBPORTUALE_VDB_BACKEND\fR in the process environment
+.IP 3. 3
+\fBPORTUALE_VDB_BACKEND\fR in \fBmake.conf\fR(5)
+.IP 4. 3
+\fBfiles\fR
+.LP
+The path follows the same order with \fB\-\-vdb\-path\fR and
+\fBPORTUALE_VDB_PATH\fR, then the default above.
+.LP
+A database that does not exist is an error (exit status 1): \fBmrg\fR
+never creates an empty one.  Make it first with
+\fBportuale vdb convert \-\-from files:\fIROOT\fR \fB\-\-to sqlite:\fIPATH\fR
+(see \fBportuale\-vdb\fR(1)).  A \fB\-\-pretend\fR run opens the database
+read\-only.
+.LP
+The database serves the target \fBROOT\fR.  When \fBROOT\fR is not
+\fB/\fR, the running root keeps its \fB/var/db/pkg\fR tree.  When the
+backend is not \fBfiles\fR, \fBmrg\fR sets \fBPORTUALE_VDB_BACKEND\fR and
+\fBPORTUALE_VDB_PATH\fR in the environment of the programs it starts.
+.LP
+With \fB\-\-remote\-hostname\fR, a \fBclient:\fR VDB
+(\fB\-\-remote\-vdb\fR, the default) always stays a files tree, and
+combining it with \fB\-\-vdb\-backend\fR or \fB\-\-vdb\-path\fR is an
+error.
+.LP
+\fBemerge\fR has no such options and always uses the files tree.
+.SH "SEE ALSO"
+.BR emerge (1),
+.BR portuale\-vdb (1),
+.BR make.conf (5)

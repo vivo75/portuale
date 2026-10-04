@@ -1099,6 +1099,29 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "enforce that the client's ledger provenance matches the server's record for this hostname (abort on mismatch, before anything merges)",
     },
+    // mrg-only (feat#157, backlog #305 S3.1): which installed-package
+    // database backend the run reads. Never reaches `to_emerge_argv`
+    // (ids start with `vdb_`) and is not an `emerge` option.
+    Opt {
+        id: "vdb_backend",
+        long: "--vdb-backend",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &["files", "sqlite", "redb"],
+        missing: "",
+        help: "installed-package database backend: files (default, the classic VDB tree), sqlite or redb; also PORTUALE_VDB_BACKEND (environment, then make.conf)",
+    },
+    Opt {
+        id: "vdb_path",
+        long: "--vdb-path",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "database file for sqlite/redb (default <ROOT>/var/lib/portage/vdb.sqlite or vdb.redb); also PORTUALE_VDB_PATH; ignored with files",
+    },
 ];
 
 /// Builds the clap `Arg` for one `Opt` entry, keeping real emerge's
@@ -1249,6 +1272,11 @@ fn to_emerge_argv(matches: &ArgMatches) -> Vec<String> {
         // runs its own executor; `--pretend` drops them silently -- plan
         // docs/remote-merge.md says pretend ignores `--remote-*`).
         if opt.id.starts_with("remote_") {
+            continue;
+        }
+        // `--vdb-backend` / `--vdb-path` are mrg-only: `setup_vdb`
+        // consumes them before `pretend::run`, which never sees them.
+        if opt.id.starts_with("vdb_") {
             continue;
         }
         let long = opt.long;
@@ -1402,16 +1430,31 @@ pub fn run(args: &[String]) -> ExitCode {
     let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
     match command().try_get_matches_from(argv) {
         Ok(matches) => match crate::remote::check_remote(&matches) {
-            // `--pretend` stays local: the remote options drop out in
-            // `to_emerge_argv` and the shared plan prints as usual.
-            Ok(Some(_)) if matches.get_flag("pretend") => {
-                crate::pretend::run(&to_emerge_argv(&matches))
+            Ok(remote) => {
+                // A remote run whose VDB is `client:` (the default)
+                // keeps the files layout on the client; the backend
+                // options do not apply to it.
+                let client_vdb = matches!(&remote, Some(ctx)
+                    if !matches.get_flag("pretend")
+                        && matches!(ctx.vdb, crate::remote::ConfigPlacement::Client(_)));
+                if let Err((message, code)) = setup_vdb(&matches, client_vdb) {
+                    eprintln!("{message}");
+                    return ExitCode::from(code);
+                }
+                match remote {
+                    // `--pretend` stays local: the remote options drop
+                    // out in `to_emerge_argv` and the shared plan prints
+                    // as usual.
+                    Some(_) if matches.get_flag("pretend") => {
+                        crate::pretend::run(&to_emerge_argv(&matches))
+                    }
+                    Some(ctx) => {
+                        let argv = to_emerge_argv(&matches);
+                        crate::remote::run_remote_cli(&matches, ctx, argv)
+                    }
+                    None => crate::pretend::run(&to_emerge_argv(&matches)),
+                }
             }
-            Ok(Some(ctx)) => {
-                let argv = to_emerge_argv(&matches);
-                crate::remote::run_remote_cli(&matches, ctx, argv)
-            }
-            Ok(None) => crate::pretend::run(&to_emerge_argv(&matches)),
             Err(message) => {
                 eprintln!("{message}");
                 ExitCode::from(2)
@@ -1423,6 +1466,224 @@ pub fn run(args: &[String]) -> ExitCode {
             ExitCode::from(code)
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// VDB backend selection (feat#157, backlog #305 S3.1)
+// ---------------------------------------------------------------------
+
+use portage_vdb::BackendKind;
+use std::path::{Path, PathBuf};
+
+/// Environment / make.conf variable naming the backend.
+const VDB_BACKEND_VAR: &str = "PORTUALE_VDB_BACKEND";
+/// Environment / make.conf variable naming the database file.
+const VDB_PATH_VAR: &str = "PORTUALE_VDB_PATH";
+
+/// What `resolve_vdb_selection` decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VdbSelection {
+    backend: BackendKind,
+    /// The database file for `sqlite`/`redb` (absolute); `None` for
+    /// `files`.
+    path: Option<PathBuf>,
+}
+
+/// Default database file for `backend` under `root` (Q1):
+/// `${EROOT}/var/lib/portage/vdb.{sqlite,redb}`. portuale has no
+/// `EPREFIX`, so `EROOT` is `ROOT`.
+fn default_vdb_path(root: &Path, backend: BackendKind) -> PathBuf {
+    let name = match backend {
+        BackendKind::Redb => "vdb.redb",
+        // `files` has no database file; callers never ask.
+        BackendKind::Sqlite | BackendKind::Files => "vdb.sqlite",
+    };
+    root.join("var/lib/portage").join(name)
+}
+
+/// Pure precedence logic (Q2: explicit only, no auto-detect).
+/// Backend: `--vdb-backend` > `PORTUALE_VDB_BACKEND` in the process
+/// environment > the same variable in make.conf (`conf`, only called
+/// when needed) > `files`. Path: `--vdb-path` > `PORTUALE_VDB_PATH`
+/// (environment, then make.conf) > the per-backend default under `root`.
+/// An empty value counts as unset. Errors carry the exit code (2 for a
+/// bad value, a usage error).
+fn resolve_vdb_selection(
+    flag_backend: Option<&str>,
+    flag_path: Option<&str>,
+    env: &dyn Fn(&str) -> Option<String>,
+    conf: &mut dyn FnMut(&str) -> Option<String>,
+    root: &Path,
+) -> Result<VdbSelection, (String, u8)> {
+    let nonempty = |v: Option<String>| v.filter(|s| !s.is_empty());
+    let (raw_backend, origin) = if let Some(v) = flag_backend.filter(|s| !s.is_empty()) {
+        (Some(v.to_string()), "--vdb-backend")
+    } else if let Some(v) = nonempty(env(VDB_BACKEND_VAR)) {
+        (Some(v), "PORTUALE_VDB_BACKEND (environment)")
+    } else if let Some(v) = nonempty(conf(VDB_BACKEND_VAR)) {
+        (Some(v), "PORTUALE_VDB_BACKEND (make.conf)")
+    } else {
+        (None, "")
+    };
+    let backend = match raw_backend {
+        None => BackendKind::Files,
+        Some(v) => v.parse::<BackendKind>().map_err(|_| {
+            (
+                format!("mrg: {origin}: {v:?} is not one of files, sqlite, redb"),
+                2,
+            )
+        })?,
+    };
+    if backend == BackendKind::Files {
+        return Ok(VdbSelection {
+            backend,
+            path: None,
+        });
+    }
+    let raw_path = flag_path
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| nonempty(env(VDB_PATH_VAR)))
+        .or_else(|| nonempty(conf(VDB_PATH_VAR)));
+    let path = match raw_path {
+        Some(p) => std::path::absolute(&p).unwrap_or_else(|_| PathBuf::from(p)),
+        None => default_vdb_path(root, backend),
+    };
+    Ok(VdbSelection {
+        backend,
+        path: Some(path),
+    })
+}
+
+/// Open the selected backend. `readonly` (a `--pretend` run) opens a
+/// database without write access. Never creates a database.
+fn open_vdb_backend(
+    sel: &VdbSelection,
+    root: &Path,
+    readonly: bool,
+) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
+    let Some(path) = &sel.path else {
+        return Ok(None);
+    };
+    match sel.backend {
+        BackendKind::Files => Ok(None),
+        BackendKind::Redb => {
+            Err("mrg: the redb VDB backend is not built / not implemented yet (plan S5)".into())
+        }
+        BackendKind::Sqlite => open_sqlite_backend(path, root, readonly),
+    }
+}
+
+#[cfg(feature = "vdb-sqlite")]
+fn open_sqlite_backend(
+    path: &Path,
+    root: &Path,
+    readonly: bool,
+) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
+    if !path.exists() {
+        return Err(format!(
+            "mrg: the sqlite VDB {} does not exist (mrg never creates one implicitly); \
+             convert first: portuale vdb convert --from files:{} --to sqlite:{}",
+            path.display(),
+            root.display(),
+            path.display()
+        ));
+    }
+    let db = if readonly {
+        portage_vdb::SqliteDb::open_readonly(path)
+    } else {
+        portage_vdb::SqliteDb::open(path)
+    };
+    match db {
+        Ok(db) => Ok(Some(std::sync::Arc::new(db))),
+        Err(e) => Err(format!(
+            "mrg: cannot open the sqlite VDB {}: {e}",
+            path.display()
+        )),
+    }
+}
+
+#[cfg(not(feature = "vdb-sqlite"))]
+fn open_sqlite_backend(
+    _path: &Path,
+    _root: &Path,
+    _readonly: bool,
+) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
+    Err(
+        "mrg: the sqlite VDB backend is not available: this portuale was built without the \
+         vdb-sqlite feature"
+            .into(),
+    )
+}
+
+/// make.conf lookup for the backend variables, the same config stack
+/// `pretend::run` resolves (`load_repos_and_config`: make.globals,
+/// profile chain, make.conf under `PORTAGE_CONFIGROOT`, `other_vars`).
+/// It runs a second full config resolve, so it is only reached when the
+/// flag and the environment leave the choice open. A config that fails
+/// to load yields no value here; `pretend::run` reports that error
+/// itself.
+fn make_conf_lookup(root: &Path) -> impl FnMut(&str) -> Option<String> {
+    let mut loaded: Option<Option<portage_profile::Config>> = None;
+    let root = root.to_path_buf();
+    move |key: &str| {
+        let config = loaded.get_or_insert_with(|| {
+            crate::pretend::load_repos_and_config(&portage_repo::config_root_from_env(), &root)
+                .ok()
+                .map(|(_, config)| config)
+        });
+        config.as_ref()?.other_vars.get(key).cloned()
+    }
+}
+
+/// Select, open and register the VDB backend for the target ROOT, then
+/// export it to child processes. Runs before `pretend::run`.
+///
+/// Only the target ROOT is registered: the running root (`/`, consulted
+/// for `--root-deps`/BDEPEND style lookups when ROOT is not `/`) keeps
+/// the files layout. `client_vdb` is a remote run whose VDB is the
+/// client's own `client:` tree: it stays files, and the options are
+/// refused.
+fn setup_vdb(matches: &ArgMatches, client_vdb: bool) -> Result<(), (String, u8)> {
+    let flag_backend = matches.get_one::<String>("vdb_backend").map(String::as_str);
+    let flag_path = matches.get_one::<String>("vdb_path").map(String::as_str);
+    if client_vdb {
+        if flag_backend.is_some() || flag_path.is_some() {
+            return Err((
+                "mrg: --vdb-backend/--vdb-path cannot be combined with a client: VDB \
+                 (--remote-vdb=client:...): the client's VDB stays a files tree; \
+                 use --remote-vdb=server:<path> to select a backend for the server's copy"
+                    .to_string(),
+                2,
+            ));
+        }
+        return Ok(());
+    }
+    let root = portage_repo::root_from_env();
+    let sel = resolve_vdb_selection(
+        flag_backend,
+        flag_path,
+        &|k| std::env::var(k).ok(),
+        &mut make_conf_lookup(&root),
+        &root,
+    )?;
+    if sel.backend == BackendKind::Files {
+        if flag_path.is_some() {
+            eprintln!("mrg: warning: --vdb-path is ignored with the files backend");
+        }
+        return Ok(());
+    }
+    let db = open_vdb_backend(&sel, &root, matches.get_flag("pretend")).map_err(|m| (m, 1))?;
+    if let (Some(db), Some(path)) = (db, &sel.path) {
+        portage_vdb::register(&root, db);
+        // For the ebuild phases (and the native portageq, S6.2).
+        // Single-threaded here: nothing else reads the environment yet.
+        unsafe {
+            std::env::set_var(VDB_BACKEND_VAR, sel.backend.as_str());
+            std::env::set_var(VDB_PATH_VAR, path);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1854,5 +2115,288 @@ mod tests {
         assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
         let m = parse(&["--remote-ledger-dir", "/srv/ledgers"]).unwrap();
         assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+    }
+
+    // ---- VDB backend selection (feat#157 S3.1) ----
+
+    fn sel(
+        flag_backend: Option<&str>,
+        flag_path: Option<&str>,
+        env: &[(&str, &str)],
+        conf: &[(&str, &str)],
+    ) -> Result<VdbSelection, (String, u8)> {
+        let env: std::collections::HashMap<String, String> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let conf: std::collections::HashMap<String, String> = conf
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        resolve_vdb_selection(
+            flag_backend,
+            flag_path,
+            &|k| env.get(k).cloned(),
+            &mut |k| conf.get(k).cloned(),
+            Path::new("/r"),
+        )
+    }
+
+    #[test]
+    fn vdb_backend_precedence_flag_env_conf_default() {
+        let b = |s: Result<VdbSelection, _>| s.unwrap().backend;
+        assert_eq!(b(sel(None, None, &[], &[])), BackendKind::Files);
+        let conf = [("PORTUALE_VDB_BACKEND", "sqlite")];
+        let env = [("PORTUALE_VDB_BACKEND", "redb")];
+        assert_eq!(b(sel(None, None, &[], &conf)), BackendKind::Sqlite);
+        assert_eq!(b(sel(None, None, &env, &conf)), BackendKind::Redb);
+        assert_eq!(b(sel(Some("files"), None, &env, &conf)), BackendKind::Files);
+        assert_eq!(b(sel(Some("sqlite"), None, &env, &[])), BackendKind::Sqlite);
+        // An empty value is unset.
+        let empty = [("PORTUALE_VDB_BACKEND", "")];
+        assert_eq!(b(sel(None, None, &empty, &conf)), BackendKind::Sqlite);
+        // A bad value is a usage error naming its origin.
+        let (msg, code) = sel(None, None, &[("PORTUALE_VDB_BACKEND", "mysql")], &[]).unwrap_err();
+        assert_eq!(code, 2);
+        assert!(
+            msg.contains("environment") && msg.contains("mysql"),
+            "{msg}"
+        );
+        let (msg, _) = sel(None, None, &[], &[("PORTUALE_VDB_BACKEND", "x")]).unwrap_err();
+        assert!(msg.contains("make.conf"), "{msg}");
+    }
+
+    #[test]
+    fn make_conf_is_only_read_when_flag_and_env_leave_the_choice_open() {
+        let mut calls = 0;
+        let r = resolve_vdb_selection(
+            Some("sqlite"),
+            Some("/x/db"),
+            &|_| None,
+            &mut |_| {
+                calls += 1;
+                None
+            },
+            Path::new("/r"),
+        );
+        assert!(r.is_ok());
+        assert_eq!(calls, 0);
+        let mut calls = 0;
+        let _ = resolve_vdb_selection(
+            None,
+            None,
+            &|_| None,
+            &mut |_| {
+                calls += 1;
+                None
+            },
+            Path::new("/r"),
+        );
+        assert_eq!(
+            calls, 1,
+            "files default: one make.conf lookup, no path lookup"
+        );
+    }
+
+    #[test]
+    fn vdb_path_precedence_and_per_backend_default() {
+        let p = |s: Result<VdbSelection, _>| s.unwrap().path;
+        assert_eq!(
+            p(sel(Some("sqlite"), None, &[], &[])),
+            Some(PathBuf::from("/r/var/lib/portage/vdb.sqlite"))
+        );
+        assert_eq!(
+            p(sel(Some("redb"), None, &[], &[])),
+            Some(PathBuf::from("/r/var/lib/portage/vdb.redb"))
+        );
+        let conf = [("PORTUALE_VDB_PATH", "/conf/db")];
+        let env = [("PORTUALE_VDB_PATH", "/env/db")];
+        assert_eq!(
+            p(sel(Some("sqlite"), None, &[], &conf)),
+            Some(PathBuf::from("/conf/db"))
+        );
+        assert_eq!(
+            p(sel(Some("sqlite"), None, &env, &conf)),
+            Some(PathBuf::from("/env/db"))
+        );
+        assert_eq!(
+            p(sel(Some("sqlite"), Some("/flag/db"), &env, &conf)),
+            Some(PathBuf::from("/flag/db"))
+        );
+        // The backend can come from make.conf with the path from the env.
+        assert_eq!(
+            p(sel(None, None, &env, &[("PORTUALE_VDB_BACKEND", "sqlite")])),
+            Some(PathBuf::from("/env/db"))
+        );
+        // A relative path becomes absolute (children run elsewhere).
+        let rel = p(sel(Some("sqlite"), Some("rel/db"), &[], &[])).unwrap();
+        assert!(rel.is_absolute() && rel.ends_with("rel/db"), "{rel:?}");
+    }
+
+    #[test]
+    fn files_backend_ignores_the_path() {
+        let s = sel(Some("files"), Some("/flag/db"), &[], &[]).unwrap();
+        assert_eq!(s.backend, BackendKind::Files);
+        assert_eq!(s.path, None);
+        let s = sel(None, None, &[("PORTUALE_VDB_PATH", "/env/db")], &[]).unwrap();
+        assert_eq!(s.path, None);
+        let root = Path::new("/r");
+        assert_eq!(
+            open_vdb_backend(&s, root, false).unwrap().map(|_| ()),
+            None,
+            "files registers nothing"
+        );
+    }
+
+    #[test]
+    fn redb_is_refused_until_s5() {
+        let s = sel(Some("redb"), Some("/x/vdb.redb"), &[], &[]).unwrap();
+        let e = open_vdb_backend(&s, Path::new("/r"), false).err().unwrap();
+        assert!(e.contains("redb") && e.contains("not implemented"), "{e}");
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn a_missing_sqlite_file_is_refused_with_the_convert_hint_and_not_created() {
+        let dir = portage_util::TempDir::new("mrg_vdb_missing");
+        let path = dir.join("var/lib/portage/vdb.sqlite");
+        let s = sel(Some("sqlite"), Some(path.to_str().unwrap()), &[], &[]).unwrap();
+        let e = open_vdb_backend(&s, Path::new("/some/root"), false)
+            .err()
+            .unwrap();
+        assert!(
+            e.contains("convert first: portuale vdb convert --from files:/some/root --to sqlite:"),
+            "{e}"
+        );
+        assert!(e.contains(path.to_str().unwrap()), "{e}");
+        assert!(!path.exists(), "nothing may be created");
+        assert!(!dir.join("var").exists());
+    }
+
+    #[cfg(not(feature = "vdb-sqlite"))]
+    #[test]
+    fn sqlite_without_the_feature_is_refused() {
+        let s = sel(Some("sqlite"), Some("/x/db"), &[], &[]).unwrap();
+        let e = open_vdb_backend(&s, Path::new("/r"), false).err().unwrap();
+        assert!(e.contains("without the vdb-sqlite feature"), "{e}");
+    }
+
+    #[test]
+    fn vdb_options_never_reach_the_emerge_argv_or_emerge_itself() {
+        let plain = parse(&["--pretend", "--update", "--deep", "dev-libs/foo"]).unwrap();
+        let with = parse(&[
+            "--pretend",
+            "--vdb-backend=sqlite",
+            "--update",
+            "--vdb-path",
+            "/x/db",
+            "--deep",
+            "dev-libs/foo",
+        ])
+        .unwrap();
+        assert_eq!(to_emerge_argv(&plain), to_emerge_argv(&with));
+        assert!(!emerge_handles("--vdb-backend"));
+        assert!(!emerge_handles("--vdb-path"));
+        for (name, _) in crate::emerge_options::BOOLEAN_OPTIONS
+            .iter()
+            .chain(crate::emerge_options::VALUE_OPTIONS)
+            .chain(crate::emerge_options::ACTIONS)
+        {
+            assert!(!name.contains("vdb"), "emerge option table gained {name}");
+        }
+        assert!(crate::emerge_options::lookup("--vdb-backend").is_none());
+        assert!(crate::emerge_options::lookup("--vdb-path").is_none());
+        // Bad backend name is a clap usage error.
+        assert!(parse(&["--vdb-backend=mysql"]).is_err());
+        // mrg's help names the options and the default.
+        let help = command().render_long_help().to_string();
+        assert!(help.contains("--vdb-backend") && help.contains("files (default"));
+    }
+
+    #[test]
+    fn a_client_vdb_refuses_the_backend_options_but_stays_files_otherwise() {
+        let m = parse(&["--vdb-backend=sqlite"]).unwrap();
+        let (msg, code) = setup_vdb(&m, true).unwrap_err();
+        assert_eq!(code, 2);
+        assert!(msg.contains("client: VDB"), "{msg}");
+        let m = parse(&["--vdb-path=/x"]).unwrap();
+        assert!(setup_vdb(&m, true).is_err());
+        let m = parse(&["--pretend"]).unwrap();
+        assert!(setup_vdb(&m, true).is_ok());
+    }
+
+    /// End to end: the fixture VDB, converted to sqlite, gives the same
+    /// `mrg --pretend` plan as the files tree. The atoms depend on what
+    /// is installed (`--update --deep @world`, `--depclean`, a package
+    /// with dependencies). Needs the built `portuale` binary.
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn pretend_plan_is_identical_on_files_and_sqlite() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let tmp = portage_util::TempDir::new("mrg_vdb_parity").keep();
+        let db_path = tmp.join("vdb.sqlite");
+        {
+            let src = portage_vdb::FilesDb::new(&fixtures);
+            let dst = portage_vdb::SqliteDb::open(&db_path).unwrap();
+            portage_vdb::copy_all(&src, &dst, false).unwrap();
+        }
+        let mut bin = std::env::current_exe().unwrap();
+        bin.pop();
+        if bin.ends_with("deps") {
+            bin.pop();
+        }
+        bin.push("portuale");
+        let run = |extra: &[&str], atoms: &[&str]| {
+            let out = std::process::Command::new(&bin)
+                .arg("mrg")
+                .args(extra)
+                .args(atoms)
+                .stdin(std::process::Stdio::null())
+                .env("PORTAGE_CONFIGROOT", &fixtures)
+                .env("ROOT", &fixtures)
+                .env("DISTDIR", fixtures.join("distfiles"))
+                .env("PORTAGE_TMPDIR", tmp.join("pt"))
+                .env_remove("PORTUALE_VDB_BACKEND")
+                .env_remove("PORTUALE_VDB_PATH")
+                .output()
+                .expect("portuale mrg spawns");
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{atoms:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            (out.stdout, out.stderr)
+        };
+        let db = format!("--vdb-path={}", db_path.display());
+        for atoms in [
+            &["--pretend", "--update", "--deep", "@world"][..],
+            &["--pretend", "--depclean"][..],
+            &["--pretend", "--update", "--deep", "dev-libs/withdeps"][..],
+        ] {
+            let files = run(&["--vdb-backend=files"], atoms);
+            let sqlite = run(&["--vdb-backend=sqlite", &db], atoms);
+            assert!(!files.0.is_empty(), "{atoms:?} printed nothing");
+            assert_eq!(
+                String::from_utf8_lossy(&files.0),
+                String::from_utf8_lossy(&sqlite.0),
+                "{atoms:?}: files and sqlite plans differ"
+            );
+            assert_eq!(files.1, sqlite.1, "{atoms:?}: stderr differs");
+        }
+        // A missing database is refused (exit 1), not created.
+        let missing = tmp.join("missing.sqlite");
+        let out = std::process::Command::new(&bin)
+            .args(["mrg", "--pretend", "--vdb-backend=sqlite"])
+            .arg(format!("--vdb-path={}", missing.display()))
+            .arg("dev-libs/withdeps")
+            .env("PORTAGE_CONFIGROOT", &fixtures)
+            .env("ROOT", &fixtures)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("convert first"));
+        assert!(!missing.exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
