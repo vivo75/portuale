@@ -172,7 +172,42 @@ fn db_err(path: &Path, e: rusqlite::Error) -> Error {
 pub struct SqliteDb {
     path: PathBuf,
     conn: Mutex<Connection>,
+    /// The in-process read cache ([`CacheState`]); lock order: `conn`
+    /// first, then `cache`.
+    cache: Mutex<CacheState>,
     readonly: bool,
+}
+
+/// What the read cache holds for one `PRAGMA data_version` value.
+///
+/// `data_version` changes when **another connection** commits to the
+/// file (a second process, a second `SqliteDb`, or this handle's own
+/// [`SqliteTxn`], which runs on its own connection); it costs one read of
+/// the WAL index, no page I/O. Every cached read first compares it with
+/// the stored value and drops the cache on a difference. Writes that go
+/// through *this* connection (only the test seeders do) are not seen and
+/// call [`SqliteDb::invalidate`].
+///
+/// Consistency: each call is served from a state that was one committed
+/// generation of the database at validation time; a commit that lands
+/// after the check is seen by the next call. Within a resolve with no
+/// concurrent commit the data is stable and nothing is re-read.
+#[derive(Default)]
+struct CacheState {
+    /// `data_version` the rest was read under; `None` = nothing cached.
+    data_version: Option<i64>,
+    generation: Option<u64>,
+    full: Option<Arc<Full>>,
+}
+
+/// All live entries and their 23 normalised fields, loaded in one read
+/// transaction.
+struct Full {
+    snapshot: Arc<Snapshot>,
+    /// `pf` lists per category, in `pf` order.
+    by_category: HashMap<String, Vec<String>>,
+    /// Categories with a live entry, sorted.
+    categories: Vec<String>,
 }
 
 impl std::fmt::Debug for SqliteDb {
@@ -229,6 +264,7 @@ impl SqliteDb {
         Ok(SqliteDb {
             path,
             conn: Mutex::new(conn),
+            cache: Mutex::new(CacheState::default()),
             readonly: false,
         })
     }
@@ -253,6 +289,7 @@ impl SqliteDb {
         Ok(SqliteDb {
             path,
             conn: Mutex::new(conn),
+            cache: Mutex::new(CacheState::default()),
             readonly: true,
         })
     }
@@ -398,39 +435,112 @@ impl Loaded {
 }
 
 /// Every live entry in `(category, pf)` order, with the stored files named
-/// in `names` plus `metadata`.
+/// in `names` plus `metadata`: one `SELECT` over `entry` and one scan of
+/// `entry_file` restricted to those names, joined here by `entry_id`
+/// (a per-entry join does a B-tree seek per name and is 4x slower on a
+/// real VDB; the scan skips the large blobs' overflow pages).
 fn load_live(conn: &Connection, names: &[&str]) -> rusqlite::Result<Vec<Loaded>> {
+    let mut out: Vec<Loaded> = Vec::new();
+    let mut by_id: HashMap<i64, usize> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, category, pf, metadata_stamp FROM entry
+             WHERE state = 'installed' ORDER BY category, pf",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            by_id.insert(r.get(0)?, out.len());
+            out.push(Loaded {
+                key: EntryKey::new(r.get::<_, String>(1)?, r.get::<_, String>(2)?),
+                stamp: stamp_of(&r.get::<_, String>(3)?),
+                files: HashMap::new(),
+            });
+        }
+    }
     let list = names
         .iter()
         .chain(&["metadata"])
         .map(|n| format!("'{n}'"))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!(
-        "SELECT e.category, e.pf, e.metadata_stamp, f.name, f.data
-         FROM entry e LEFT JOIN entry_file f ON f.entry_id = e.id AND f.name IN ({list})
-         WHERE e.state = 'installed' ORDER BY e.category, e.pf"
-    );
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT entry_id, name, data FROM entry_file WHERE name IN ({list})"
+    ))?;
     let mut rows = stmt.query([])?;
-    let mut out: Vec<Loaded> = Vec::new();
     while let Some(r) = rows.next()? {
-        let key = EntryKey::new(r.get::<_, String>(0)?, r.get::<_, String>(1)?);
-        if out.last().is_none_or(|l| l.key != key) {
-            out.push(Loaded {
-                key,
-                stamp: stamp_of(&r.get::<_, String>(2)?),
-                files: HashMap::new(),
-            });
-        }
-        if let Some(name) = r.get::<_, Option<String>>(3)? {
-            let data: Vec<u8> = r.get(4)?;
-            if let Some(l) = out.last_mut() {
-                l.files.insert(name, data);
-            }
+        if let Some(&i) = by_id.get(&r.get::<_, i64>(0)?) {
+            out[i].files.insert(r.get(1)?, r.get(2)?);
         }
     }
     Ok(out)
+}
+
+fn data_version(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("PRAGMA data_version", [], |r| r.get(0))
+}
+
+fn no_generation(path: &Path) -> Error {
+    Error::Corrupt(format!(
+        "{}: meta.generation missing or not a number",
+        path.display()
+    ))
+}
+
+/// `meta.generation`; `None` when missing or not a number.
+fn generation_of(conn: &Connection) -> rusqlite::Result<Option<u64>> {
+    let g: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'generation'", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(g.and_then(|g| g.parse().ok()))
+}
+
+/// One read transaction: `data_version` (read inside it, so it matches
+/// the data), `generation` and every live entry with its normalised
+/// fields (one `SELECT` over `entry` joined to `entry_file` restricted to
+/// the 23 field names and `metadata`).
+fn load_full(conn: &Connection, path: &Path) -> Result<(i64, u64, Full)> {
+    let wrap = |e| db_err(path, e);
+    let (dv, generation, loaded) = (|| {
+        let tx = conn.unchecked_transaction()?;
+        let dv = data_version(&tx)?;
+        let generation = generation_of(&tx)?;
+        let loaded = load_live(&tx, METADATA_FILE_FIELDS)?;
+        Ok((dv, generation, loaded))
+    })()
+    .map_err(wrap)?;
+    let generation = generation.ok_or_else(|| no_generation(path))?;
+    let mut by_category: HashMap<String, Vec<String>> = HashMap::new();
+    let mut categories: Vec<String> = Vec::new();
+    let entries = loaded
+        .into_iter()
+        .map(|l| {
+            match by_category.get_mut(&l.key.category) {
+                Some(v) => v.push(l.key.pf.clone()),
+                None => {
+                    categories.push(l.key.category.clone());
+                    by_category.insert(l.key.category.clone(), vec![l.key.pf.clone()]);
+                }
+            }
+            let snap = l.snapshot();
+            let fields = EntryFields::from_pairs(
+                METADATA_FILE_FIELDS
+                    .iter()
+                    .map(|&f| (f, l.field(snap.as_ref(), f))),
+            );
+            (l.key, Arc::new(fields))
+        })
+        .collect();
+    Ok((
+        dv,
+        generation,
+        Full {
+            snapshot: Arc::new(Snapshot::new(generation, entries)),
+            by_category,
+            categories,
+        },
+    ))
 }
 
 fn file_meta_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FileMeta> {
@@ -454,6 +564,48 @@ impl SqliteDb {
         f(&conn).map_err(|e| db_err(&self.path, e))
     }
 
+    /// Drop the read cache (for writes made through `self.conn`, which
+    /// `data_version` cannot see).
+    #[cfg(test)]
+    fn invalidate(&self) {
+        *self.cache.lock().unwrap() = CacheState::default();
+    }
+
+    /// The validated cache: `(generation, full)`; `full` is loaded only
+    /// when `want_full`. See [`CacheState`] for the validation rule.
+    fn cached(&self, want_full: bool) -> Result<(u64, Option<Arc<Full>>)> {
+        let poisoned = || Error::Backend(format!("{}: cache mutex poisoned", self.path.display()));
+        let conn = self.conn.lock().map_err(|_| poisoned())?;
+        let mut st = self.cache.lock().map_err(|_| poisoned())?;
+        let wrap = |e| db_err(&self.path, e);
+        let dv = data_version(&conn).map_err(wrap)?;
+        if st.data_version != Some(dv) {
+            *st = CacheState::default();
+        }
+        if want_full && st.full.is_none() {
+            let (dv, generation, full) = load_full(&conn, &self.path)?;
+            *st = CacheState {
+                data_version: Some(dv),
+                generation: Some(generation),
+                full: Some(Arc::new(full)),
+            };
+        } else if st.generation.is_none() {
+            let g = generation_of(&conn).map_err(wrap)?;
+            let g = g.ok_or_else(|| no_generation(&self.path))?;
+            st.data_version = Some(dv);
+            st.generation = Some(g);
+        }
+        let generation = st.generation.unwrap_or_default();
+        Ok((generation, st.full.clone()))
+    }
+
+    fn full(&self) -> Result<Arc<Full>> {
+        match self.cached(true)? {
+            (_, Some(f)) => Ok(f),
+            (_, None) => Err(Error::Backend("read cache not loaded".into())),
+        }
+    }
+
     fn meta_value(&self, key: &str) -> Result<Option<String>> {
         self.with(|c| {
             c.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
@@ -473,15 +625,10 @@ impl InstalledDb for SqliteDb {
         None
     }
 
-    /// `meta.generation`: +1 on every committed write (S2.5).
+    /// `meta.generation`: +1 on every committed write (S2.5). Served
+    /// from the read cache (validated by `data_version`).
     fn generation(&self) -> Result<u64> {
-        let v = self.meta_value("generation")?;
-        v.as_deref().and_then(|v| v.parse().ok()).ok_or_else(|| {
-            Error::Corrupt(format!(
-                "{}: meta.generation missing or not a number",
-                self.path.display()
-            ))
-        })
+        Ok(self.cached(false)?.0)
     }
 
     /// The global generation, whatever the category: it changes on every
@@ -497,38 +644,28 @@ impl InstalledDb for SqliteDb {
     }
 
     fn entries(&self) -> Result<Vec<EntryKey>> {
-        self.with(|c| {
-            let mut stmt = c.prepare(
-                "SELECT category, pf FROM entry WHERE state = 'installed' ORDER BY category, pf",
-            )?;
-            stmt.query_map([], |r| {
-                Ok(EntryKey::new(
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                ))
-            })?
-            .collect()
-        })
+        Ok(self
+            .full()?
+            .snapshot
+            .entries
+            .iter()
+            .map(|(k, _)| k.clone())
+            .collect())
     }
 
     /// Categories that hold at least one live entry (`files` also lists a
     /// category directory that is empty or holds only a pending entry).
     fn categories(&self) -> Result<Vec<String>> {
-        self.with(|c| {
-            let mut stmt = c.prepare(
-                "SELECT DISTINCT category FROM entry WHERE state = 'installed' ORDER BY category",
-            )?;
-            stmt.query_map([], |r| r.get(0))?.collect()
-        })
+        Ok(self.full()?.categories.clone())
     }
 
     fn category_entries(&self, category: &str) -> Result<Vec<String>> {
-        self.with(|c| {
-            let mut stmt = c.prepare(
-                "SELECT pf FROM entry WHERE state = 'installed' AND category = ?1 ORDER BY pf",
-            )?;
-            stmt.query_map([category], |r| r.get(0))?.collect()
-        })
+        Ok(self
+            .full()?
+            .by_category
+            .get(category)
+            .cloned()
+            .unwrap_or_default())
     }
 
     fn pending_entries(&self) -> Result<Vec<EntryKey>> {
@@ -547,7 +684,7 @@ impl InstalledDb for SqliteDb {
     }
 
     fn has_entry(&self, key: &EntryKey) -> Result<bool> {
-        self.with(|c| Ok(installed_row(c, key)?.is_some()))
+        Ok(self.full()?.snapshot.get(key).is_some())
     }
 
     fn aux_get(&self, key: &EntryKey, field: &str) -> Result<Option<String>> {
@@ -556,63 +693,19 @@ impl InstalledDb for SqliteDb {
                 "aux_get key {field:?} is not one of the 23 metadata fields (use read_file)"
             )));
         }
-        self.with(|c| {
-            let Some((id, stamp)) = installed_row(c, key)? else {
-                return Ok(None);
-            };
-            let mut l = Loaded {
-                key: key.clone(),
-                stamp: stamp_of(&stamp),
-                files: HashMap::new(),
-            };
-            if l.stamp == MetadataStamp::Valid
-                && let Some(m) = blob(c, id, "metadata")?
-            {
-                l.files.insert("metadata".to_string(), m);
-            }
-            let snap = l.snapshot();
-            if snap.is_none()
-                && let Some(d) = blob(c, id, field)?
-            {
-                l.files.insert(field.to_string(), d);
-            }
-            Ok(Some(l.field(snap.as_ref(), field)))
-        })
+        Ok(self
+            .full()?
+            .snapshot
+            .get(key)
+            .and_then(|f| f.get(field))
+            .map(str::to_owned))
     }
 
-    /// Built from the stored field files under the `aux_get` rules (the
-    /// 23 normalised fields, snapshot rule per stored stamp), in one read
-    /// transaction together with `generation`.
+    /// The cached snapshot (the 23 normalised fields, snapshot rule per
+    /// stored stamp), taken in one read transaction together with
+    /// `generation`.
     fn snapshot(&self) -> Result<Arc<Snapshot>> {
-        let (generation, loaded) = self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            let generation: Option<String> = tx
-                .query_row("SELECT value FROM meta WHERE key = 'generation'", [], |r| {
-                    r.get(0)
-                })
-                .optional()?;
-            let loaded = load_live(&tx, METADATA_FILE_FIELDS)?;
-            Ok((generation, loaded))
-        })?;
-        let generation = generation.and_then(|g| g.parse().ok()).ok_or_else(|| {
-            Error::Corrupt(format!(
-                "{}: meta.generation missing or not a number",
-                self.path.display()
-            ))
-        })?;
-        let entries = loaded
-            .into_iter()
-            .map(|l| {
-                let snap = l.snapshot();
-                let fields = EntryFields::from_pairs(
-                    METADATA_FILE_FIELDS
-                        .iter()
-                        .map(|&f| (f, l.field(snap.as_ref(), f))),
-                );
-                (l.key, Arc::new(fields))
-            })
-            .collect();
-        Ok(Arc::new(Snapshot::new(generation, entries)))
+        Ok(Arc::clone(&self.full()?.snapshot))
     }
 
     fn list_files(&self, key: &EntryKey) -> Result<Option<Vec<FileMeta>>> {
@@ -1072,6 +1165,7 @@ mod tests {
             stamp: &str,
             files: &[(String, Vec<u8>, u32, i64)],
         ) {
+            self.invalidate();
             let conn = self.conn.lock().unwrap();
             conn.execute(
                 "INSERT INTO entry (category, pf, state, metadata_stamp, dir_mode, dir_mtime_ns)
@@ -1090,6 +1184,7 @@ mod tests {
         }
 
         fn seed_sql(&self, sql: &str, p: impl rusqlite::Params) {
+            self.invalidate();
             self.conn.lock().unwrap().execute(sql, p).unwrap();
         }
     }
@@ -2312,5 +2407,121 @@ bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
         ins("merging").unwrap();
         assert!(ins("merging").is_err());
         assert!(ins("installed").is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // S3.2: the read cache, validated by `PRAGMA data_version`.
+
+    /// What the cached reads show, for comparison with `FilesDb`.
+    fn cached_view(db: &impl InstalledDb, keys: &[EntryKey]) -> String {
+        let mut out = format!(
+            "{:?} {:?}\n",
+            db.entries().unwrap(),
+            db.categories().unwrap()
+        );
+        for k in keys {
+            out += &format!(
+                "{} {:?} {:?}\n",
+                db.has_entry(k).unwrap(),
+                db.category_entries(&k.category).unwrap(),
+                METADATA_FILE_FIELDS
+                    .iter()
+                    .map(|f| db.aux_get(k, f).unwrap())
+                    .collect::<Vec<_>>()
+            );
+        }
+        out
+    }
+
+    #[test]
+    fn read_cache_follows_commits_of_a_second_handle_and_of_own_txns() {
+        let t = Tmp::new();
+        let root = t.0.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let fdb = FilesDb::new(&root);
+        let reader = SqliteDb::open(t.db()).unwrap();
+        let other = SqliteDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        let b = EntryKey::new("dev-libs", "b-1");
+        let c = EntryKey::new("app-misc", "c-1");
+        let keys = [a.clone(), b.clone(), c.clone()];
+
+        // Empty; the cache is now loaded.
+        assert!(reader.entries().unwrap().is_empty());
+        assert!(!reader.has_entry(&a).unwrap());
+        let g0 = reader.generation().unwrap();
+        let snap0 = reader.snapshot().unwrap();
+        assert!(Arc::ptr_eq(&snap0, &reader.snapshot().unwrap()), "stable");
+
+        // A commit from another connection (a second handle).
+        let files = a_files();
+        merge(&other, &a, &files, true);
+        put_files(&fdb, &a, &files, true);
+        assert!(reader.has_entry(&a).unwrap());
+        assert_eq!(
+            reader.aux_get(&a, "SLOT").unwrap().as_deref(),
+            Some("2/3.4")
+        );
+        assert_eq!(reader.category_entries("dev-libs").unwrap(), ["a-1"]);
+        assert_eq!(reader.generation().unwrap(), g0 + 1);
+        assert_eq!(reader.category_generation("x").unwrap(), g0 + 1);
+        let snap1 = reader.snapshot().unwrap();
+        assert_eq!(snap1.generation, g0 + 1);
+        assert!(!Arc::ptr_eq(&snap0, &snap1));
+        assert_eq!(cached_view(&reader, &keys), cached_view(&fdb, &keys));
+
+        // Generation only loaded (no full snapshot), then a commit.
+        merge(
+            &other,
+            &b,
+            &[("SLOT", b"1\n"), ("DEPEND", b"x  y\n")],
+            false,
+        );
+        put_files(&fdb, &b, &[("SLOT", b"1\n"), ("DEPEND", b"x  y\n")], false);
+        assert_eq!(reader.generation().unwrap(), g0 + 2);
+        assert_eq!(cached_view(&reader, &keys), cached_view(&fdb, &keys));
+
+        // The reader's own write transaction.
+        {
+            let mut w = reader.begin_write().unwrap();
+            w.begin_entry(&c).unwrap();
+            w.put_entry_file(&c, "SLOT", b"7\n").unwrap();
+            w.finish_entry(&c).unwrap();
+            // Uncommitted: invisible, cache unchanged.
+            assert!(!reader.has_entry(&c).unwrap());
+            w.commit().unwrap();
+        }
+        put_files(&fdb, &c, &[("SLOT", b"7\n")], false);
+        assert!(reader.has_entry(&c).unwrap());
+        assert_eq!(reader.generation().unwrap(), g0 + 3);
+        assert_eq!(cached_view(&reader, &keys), cached_view(&fdb, &keys));
+
+        // A delete from the second handle, a rolled-back txn changes nothing.
+        {
+            let mut w = other.begin_write().unwrap();
+            w.delete_entry(&a).unwrap();
+            // dropped: rolled back
+        }
+        assert!(reader.has_entry(&a).unwrap());
+        assert_eq!(reader.generation().unwrap(), g0 + 3);
+        {
+            let mut w = other.begin_write().unwrap();
+            w.delete_entry(&a).unwrap();
+            w.commit().unwrap();
+        }
+        {
+            let mut w = fdb.begin_write().unwrap();
+            w.delete_entry(&a).unwrap();
+            w.commit().unwrap();
+        }
+        assert!(!reader.has_entry(&a).unwrap());
+        assert_eq!(reader.aux_get(&a, "SLOT").unwrap(), None);
+        assert_eq!(cached_view(&reader, &keys), cached_view(&fdb, &keys));
+
+        // A read-only handle follows too.
+        let ro = SqliteDb::open_readonly(t.db()).unwrap();
+        assert_eq!(cached_view(&ro, &keys), cached_view(&fdb, &keys));
+        merge(&other, &a, &files, true);
+        assert!(ro.has_entry(&a).unwrap());
     }
 }
