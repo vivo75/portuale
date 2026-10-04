@@ -36627,6 +36627,180 @@ mod tests {
         assert_eq!(out[0].source, CandidateSource::Ebuild);
     }
 
+    /// Backlog 2026-10 B1 (`docs/backlog-tasks-2026-10.md`): binpkg-multi-
+    /// instance builds of one `cpv` are told apart only by `BUILD_ID`.
+    /// Shared fixture for the three tests below, modelled on the real
+    /// `seed-desk` binhost's `app-text/libspectre-0.2.12` -6 (built
+    /// against ghostscript `0/10.06=`) and -7 (built against `0/10.08=`),
+    /// listed oldest first exactly like the live `Packages` index.
+    fn multi_instance_entry_1010(
+        build_id: &str,
+        build_time: i64,
+        rdepend: &str,
+    ) -> HashMap<String, String> {
+        HashMap::from([
+            ("CPV".to_string(), "dev-libs/spectre-0.2.12".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "gentoo".to_string()),
+            ("BUILD_ID".to_string(), build_id.to_string()),
+            ("BUILD_TIME".to_string(), build_time.to_string()),
+            ("RDEPEND".to_string(), rdepend.to_string()),
+            (
+                "PATH".to_string(),
+                format!("dev-libs/spectre/spectre-0.2.12-{build_id}.gpkg.tar"),
+            ),
+        ])
+    }
+
+    /// A binrepo whose `Packages` index lives only in the in-memory
+    /// override table (`set_remote_binary_index_override`), under a
+    /// pid+nanos-unique `sync_uri` so parallel tests never collide.
+    fn in_memory_binhost_1010(
+        tag: &str,
+        entries: Vec<HashMap<String, String>>,
+    ) -> portage_profile::BinRepo {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let binrepo = portage_profile::BinRepo {
+            name: format!("multiinst-{tag}"),
+            sync_uri: format!(
+                "https://binhost.invalid/{tag}-{}-{nanos}",
+                std::process::id()
+            ),
+            priority: 1,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+        };
+        set_remote_binary_index_override(
+            &binrepo.packages_dir(Path::new("/")),
+            Some(std::sync::Arc::new(BinaryIndex::from_entries(entries))),
+        );
+        binrepo
+    }
+
+    /// B1 bug 1: the dependency strings of a chosen binary instance are
+    /// read from the first `Packages` entry with the same `CPV`, not from
+    /// the instance that was actually selected. Here build 2 (newest)
+    /// wins `dedup_binary_instances`, but the walk follows build 1's
+    /// `RDEPEND` (`dev-libs/olddep`) -- in the field that is
+    /// `ghostscript-gpl:0/10.06=`, which forces a downgrade of the
+    /// installed 10.08. Expected value: real `_iter_match_pkgs` +
+    /// `pkg._metadata` of the selected instance (the `Packages` entry
+    /// carrying that `BUILD_ID`).
+    #[test]
+    fn multi_instance_walk_reads_the_selected_instances_own_deps() {
+        let dir = slotundo_temp_dir("1010-multiinst-deps");
+        let repo = dir.join("scratchrepo");
+        blocker_161_write_pkg(
+            &repo,
+            "dev-libs/spectre",
+            "0.2.12",
+            "0",
+            "",
+            "dev-libs/newdep",
+        );
+        for cp in ["dev-libs/olddep", "dev-libs/newdep"] {
+            blocker_161_write_pkg(&repo, cp, "1.0", "0", "", "");
+        }
+        let repos = vec![blocker_161_repo_config(repo)];
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![
+            multi_instance_entry_1010("1", 1000, "dev-libs/olddep"),
+            multi_instance_entry_1010("2", 2000, "dev-libs/newdep"),
+        ]);
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: vec!["dev-libs/spectre".to_string()],
+            usepkg: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let parent = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "spectre")
+            .expect("the parent merges");
+        assert_eq!(parent.build_id.as_deref(), Some("2"), "newest build wins");
+        let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+        assert!(
+            names.contains(&"newdep"),
+            "build 2's own RDEPEND must be walked, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"olddep"),
+            "build 1's RDEPEND must not leak into build 2's walk, got {names:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// B1 bug 2: a version already present in the local `$PKGDIR` hides
+    /// *every* remote build of that version, including a newer
+    /// `BUILD_ID`. Real `bintree.isremote` is per instance
+    /// (`cpv` + `build_id` under binpkg-multi-instance), so the newer
+    /// remote build must stay a candidate and the stale local one must
+    /// not shadow it.
+    #[test]
+    fn multi_instance_local_build_does_not_shadow_a_newer_remote_build() {
+        let binrepo = in_memory_binhost_1010(
+            "shadow",
+            vec![
+                multi_instance_entry_1010("6", 1000, "dev-libs/old"),
+                multi_instance_entry_1010("7", 2000, "dev-libs/new"),
+            ],
+        );
+        let local =
+            BinaryIndex::from_entries(vec![multi_instance_entry_1010("6", 1000, "dev-libs/old")]);
+        let cands = list_remote_binary_candidates(
+            &[binrepo],
+            Path::new("/"),
+            &local,
+            "dev-libs",
+            "spectre",
+        );
+        let ids: Vec<Option<&str>> = cands.iter().map(|c| c.build_id.as_deref()).collect();
+        assert!(
+            ids.contains(&Some("7")),
+            "remote build 7 must survive the local build 6, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&Some("6")),
+            "remote build 6 is the already-downloaded local one, got {ids:?}"
+        );
+    }
+
+    /// B1 bug 3: `find_remote_binpkg` (the download lookup) matches by
+    /// `CPV` only and returns the first `Packages` entry -- the oldest
+    /// build, listed first -- so `-7` is planned but `-6` is fetched into
+    /// `$PKGDIR` (which then triggers bug 2). With no `BUILD_ID` to ask
+    /// for, the lookup must at least return the newest build (highest
+    /// `BUILD_TIME`, real `_cmp_cpv` order); the fix adds a `build_id`
+    /// parameter and this stays the fallback.
+    #[test]
+    fn multi_instance_download_lookup_returns_the_newest_build() {
+        let binrepo = in_memory_binhost_1010(
+            "download",
+            vec![
+                multi_instance_entry_1010("6", 1000, "dev-libs/old"),
+                multi_instance_entry_1010("7", 2000, "dev-libs/new"),
+            ],
+        );
+        let binrepos = [binrepo];
+        let (_, record) =
+            find_remote_binpkg(&binrepos, Path::new("/"), "dev-libs", "spectre", "0.2.12")
+                .expect("the binhost lists dev-libs/spectre-0.2.12");
+        assert_eq!(
+            record.get("BUILD_ID").map(String::as_str),
+            Some("7"),
+            "the newest build must be downloaded, got PATH {:?}",
+            record.get("PATH")
+        );
+    }
+
     #[test]
     fn candidate_iuse_and_use_reads_a_binarys_own_baked_use() {
         // A binary candidate carries the flags it was built with
