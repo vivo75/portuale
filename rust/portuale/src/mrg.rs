@@ -2373,6 +2373,25 @@ mod tests {
             &["--pretend", "--update", "--deep", "@world"][..],
             &["--pretend", "--depclean"][..],
             &["--pretend", "--update", "--deep", "dev-libs/withdeps"][..],
+            &["--pretend", "--update", "--deep", "--newuse", "@world"][..],
+            &["--pretend", "--noreplace", "--update", "@world"][..],
+            &["--pretend", "--emptytree", "dev-libs/keeper"][..],
+            &["--pretend", "--tree", "--update", "@world"][..],
+            &["--pretend", "--verbose", "--update", "@world"][..],
+            &[
+                "--pretend",
+                "--update",
+                "--newuse",
+                "dev-libs/changedusepkg",
+            ][..],
+            &[
+                "--pretend",
+                "--update",
+                "--deep",
+                "--verbose",
+                "--newuse",
+                "@world",
+            ][..],
         ] {
             let files = run(&["--vdb-backend=files"], atoms);
             let sqlite = run(&["--vdb-backend=sqlite", &db], atoms);
