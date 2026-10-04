@@ -4,11 +4,11 @@ Status: **proposed 2026-09-25** (revised the same day: three backends,
 `mrg` first). Design only, no slice started.
 Design: [`vdb_to_db.md`](vdb_to_db.md). Read it first; this file holds
 only the slices, the gates and the open decisions.
-Backlog: [`backlog-tasks.md`](backlog-tasks.md) Tier 2 **#157** (to be
-filed; 157 was the next free number on 2026-09-25, re-check before
-filing).
-Branch: `backlog/157-vdb-backends` (open in **both** repos when S1
-starts).
+Backlog: [`backlog-tasks-2026-10.md`](backlog-tasks-2026-10.md) Tier 2
+**#305** (filed 2026-10-04; #157 was taken by then, so "feat#157" stays
+only as this design's label).
+Plan: [`02.305-vdb-backends.opus.md`](02.305-vdb-backends.opus.md).
+Branch: `backlog/305-vdb-backends` (in **both** repos).
 Merge-path gate: **yes** for S4 and S5 (glibc + bash test merge per
 `agent-context.md` "Merge-path safety gate", on each database backend
 as it lands). S1 is a refactor of the merge path too: gate it on

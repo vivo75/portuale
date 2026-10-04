@@ -58,6 +58,12 @@ live"). The Python mirror was removed 2026-09-15 —
 
 ---
 
+## Tier 2 — larger / needs design first
+
+305. **OPEN (filed 2026-10-04; design "feat#157", 2026-09-25) — swappable installed-package database: `files` / `sqlite` / `redb` backends behind one `InstalledDb` interface, selected by `mrg`.** The design calls itself "#157 (to be filed)", but backlog #157 is the `sys-apps/portage` keyword item (DONE 2026-09-27), so the feature is filed here as #305 and keeps the "feat#157" label. Design: [`feat-157-authoritative-vdb-database.md`](feat-157-authoritative-vdb-database.md) (authoritative) and [`vdb_to_db.md`](vdb_to_db.md) (reasoning). Execution plan: [`02.305-vdb-backends.opus.md`](02.305-vdb-backends.opus.md) (steps P0–Z, one commit each, with a difficulty grade and suggested model per step). Branch `backlog/305-vdb-backends` in both repos. portuale-only feature: no pmtest pins required; `emerge` output must stay byte-identical through S8.
+
+---
+
 ## Deliberate cuts — do NOT pick these
 
 - Fixing this by hiding old builds (filtering the binhost index to the newest `BUILD_ID` per `cpv` at load time) — it would make `--binpkg-respect-use` / `binpkg-changed-deps` fallbacks to an older, matching build impossible, which real Portage supports. The fix is to carry `BUILD_ID` through selection, download and metadata reads (#299–#301), not to drop instances. [A]
