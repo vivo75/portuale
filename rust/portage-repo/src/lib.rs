@@ -17320,10 +17320,27 @@ fn slot_operator_rebuild_scan(
         if let (Some(version), Some(slot), Some(sub_slot)) =
             (version, e.slot.clone(), e.sub_slot.clone())
         {
-            new_slot.insert(
-                (e.category.clone(), e.package.clone()),
-                (version.clone(), slot, sub_slot),
-            );
+            let cp = (e.category.clone(), e.package.clone());
+            // Backlog #303: under `--update`, a non-requested provider the
+            // pass *downgraded* was held back by an installed consumer's
+            // built `:=` pin (the pass picked the older sub-slot the
+            // consumer is bound to). Real's first pass does the same, then
+            // `_slot_operator_update_probe` (`depgraph.py:3131`) finds the
+            // installed instance as the missed update and backtracks to
+            // replace the consumer. Model the missed update by taking the
+            // slot/sub-slot of the version the downgrade replaces, so the
+            // same-slot arm below flags the consumer and the pin lifts.
+            let missed = match &e.outcome {
+                PretendOutcome::Downgrade { from, .. }
+                    if update && !top_level_cps.contains(&cp) =>
+                {
+                    let (from_slot, from_sub) = read_vdb_slot(root, &cp.0, &cp.1, from);
+                    (!from_slot.is_empty() && from_slot == slot && from_sub != sub_slot)
+                        .then_some((from.clone(), from_slot, from_sub))
+                }
+                _ => None,
+            };
+            new_slot.insert(cp, missed.unwrap_or((version.clone(), slot, sub_slot)));
         }
         if let PretendOutcome::New { version } = &e.outcome
             && let (Some(slot), Some(sub_slot)) = (e.slot.clone(), e.sub_slot.clone())
@@ -52510,6 +52527,82 @@ mod tests {
             .expect("child entry");
         assert!(matches!(child.outcome, PretendOutcome::NoVisibleCandidate));
         assert!(result.autounmask_use_changes.is_empty());
+    }
+
+    /// Backlog #303: under `--update` a provider the pass *downgraded*
+    /// (held back by an installed consumer's built `:=` pin) is a missed
+    /// update. Real's first pass makes the same downgrade, then
+    /// `_slot_operator_update_probe` (`depgraph.py:3131`) finds the
+    /// installed instance and backtracks to replace the consumer. The scan
+    /// therefore treats the downgrade's `from` slot/sub-slot as the
+    /// provider's new slot and flags the stale consumer. Expected value:
+    /// host real Portage on `-uDN sys-apps/systemd` (libfido2 `rRg`,
+    /// libcbor kept at the installed 0.14), see
+    /// `docs/backlog-tasks-2026-10.md` #303.
+    #[test]
+    fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update() {
+        let dir = TempDir::new("portage-repo-slotop-303").keep();
+        let mk = |name: &str, slot: &str, rdepend: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        // `bar` 2.0 is installed at sub-slot 2; `holder` was built
+        // against the older sub-slot 1 and pins it.
+        mk("bar-2.0", "0/2", "");
+        mk("holder-1.0", "0", "dev-libs/bar:0/1=");
+        let bar_downgrade = GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "bar".into(),
+            outcome: PretendOutcome::Downgrade {
+                from: "2.0".into(),
+                to: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("1".into()),
+            ..graph_entry("dev-libs", "bar", "1.0")
+        };
+        let reach: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "holder".to_string())]);
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let scan = |update: bool, top: &HashSet<(String, String)>| {
+            slot_operator_rebuild_scan(
+                &dir,
+                &[],
+                std::slice::from_ref(&bar_downgrade),
+                &reach,
+                &empty,
+                &empty,
+                true,
+                update,
+                top,
+                &HashSet::new(),
+                &[],
+                &test_config(),
+            )
+            .0
+        };
+        assert_eq!(
+            scan(true, &HashSet::new()),
+            BTreeSet::from([("dev-libs".to_string(), "holder".to_string())]),
+            "the pin-forced downgrade schedules the stale consumer's rebuild"
+        );
+        assert!(
+            scan(false, &HashSet::new()).is_empty(),
+            "without --update a downgrade is not a missed update"
+        );
+        let requested: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "bar".to_string())]);
+        assert!(
+            scan(true, &requested).is_empty(),
+            "an explicitly requested downgrade is not a missed update"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
