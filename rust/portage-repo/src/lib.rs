@@ -17271,6 +17271,88 @@ fn greedy_pin_survives_revision(
     !(hits(&h_blockers, &g_ref) || hits(&g_blockers, &h_ref))
 }
 
+/// Backlog #304: real `_slot_operator_update_probe`
+/// (`depgraph.py:2576`) only reports a new-slot update when some
+/// *replacement parent* -- another available package in the consumer's
+/// slot (`_iter_similar_available(dep.parent, dep.parent.slot_atom)`) --
+/// carries an atom on the provider that **accepts** the candidate
+/// (`replacement_candidates`/`all_candidate_pkgs`, `:2667-2760`; with no
+/// agreeing candidate the loop `continue`s and the probe returns `None`).
+/// A consumer whose current dependency atom is slot-pinned
+/// (`gcr:0/1=`) therefore never rebuilds just because the provider also
+/// exists at a higher slot (`gcr:4`).
+///
+/// Approximates the replacement parent with the consumer's available tree
+/// ebuilds in its slot, evaluated with their own effective USE (the same
+/// reading the slot-conflict probe's `accepts` uses).
+///
+/// Deliberate narrowing (documented cut): the candidate is refused only
+/// when some replacement ebuild **names the provider** and none of those
+/// atoms accepts it -- the `gcr:0/1=` vs `gcr:4` shape. A replacement that
+/// names the provider nowhere (real would also `continue`: no atom, no
+/// `replacement_candidates`) or one that cannot be read stays accepted, the
+/// pre-#304 behaviour, because the bare-ebuild unit fixtures and any tree
+/// whose metadata is incomplete would otherwise lose the probe entirely.
+fn replacement_parent_accepts(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    consumer: (&str, &str, &str),
+    dep_keys: &[&str],
+    provider: (&str, &str),
+    candidate: &str,
+) -> bool {
+    let (cat, pkg, slot) = consumer;
+    let Ok(cands) = list_candidates(repos, cat, pkg) else {
+        return true;
+    };
+    let mut names_provider = false;
+    for c in cands
+        .iter()
+        .filter(|c| c.source == CandidateSource::Ebuild && c.slot == slot)
+    {
+        let Ok(meta) = repo_aux_metadata(&c.repo_location, cat, &format!("{pkg}-{}", c.version))
+        else {
+            continue;
+        };
+        let cand_str = format!(
+            "{cat}/{pkg}-{}:{}/{}::{}",
+            c.version, c.slot, c.sub_slot, c.repo_name
+        );
+        let use_flags = effective_use_flags_uncached(
+            config,
+            meta.get("IUSE").map(String::as_str).unwrap_or_default(),
+            &c.keywords,
+            &cand_str,
+            cat,
+            pkg,
+        );
+        for tok in dep_keys
+            .iter()
+            .filter_map(|k| {
+                flat_dep_atoms(meta.get(*k).map(String::as_str).unwrap_or(""), &use_flags)
+            })
+            .flatten()
+        {
+            let Some(la) = portage_dep::parse_atom(&tok) else {
+                continue;
+            };
+            if la.blocker != portage_dep::Blocker::None
+                || la.category != provider.0
+                || la.package != provider.1
+            {
+                continue;
+            }
+            names_provider = true;
+            if portage_dep::match_from_list(portage_dep::without_use(&tok), &[candidate])
+                .is_some_and(|m| !m.is_empty())
+            {
+                return true;
+            }
+        }
+    }
+    !names_provider
+}
+
 // Ten parameters like its siblings below; the arity is the port, not
 // accident (`#[allow]` matches `slot_operator_rebuild_entries` etc.).
 #[allow(clippy::too_many_arguments)]
@@ -17685,6 +17767,18 @@ fn slot_operator_rebuild_scan(
                                 "{}/{}-{c_ver}:{c_slot}/{c_sub}",
                                 atom.category, atom.package
                             );
+                            // #304: a replacement parent whose own atom
+                            // accepts the new slot must exist.
+                            if !replacement_parent_accepts(
+                                repos,
+                                config,
+                                (&pkg.category, &pkg.package, &pkg.slot),
+                                dep_keys,
+                                (&atom.category, &atom.package),
+                                &cand,
+                            ) {
+                                continue;
+                            }
                             if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
                                 continue;
                             }
@@ -55110,6 +55204,109 @@ mod tests {
         assert!(
             abi.is_empty(),
             "the new-slot arm records the consumer alone: {abi:?}"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #304: the new-slot arm needs a replacement parent whose own
+    /// atom accepts the new slot (real `_slot_operator_update_probe`,
+    /// `depgraph.py:2667-2760`). `pinned`'s current ebuild says
+    /// `dev-libs/massm:0=`, so a slot-1 `massm` can never be pulled in by
+    /// rebuilding it (host: `gnome-keyring`'s `gcr:0/1=` vs the installed
+    /// `gcr:4`, expected value from real Portage -- no rebuild); `open`'s
+    /// says `dev-libs/massm:=` and does rebuild.
+    #[test]
+    fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = TempDir::new("portage-repo-slotop-304").keep();
+        for (name, slot, rdepend) in [
+            ("massm-1", "0", ""),
+            ("massm-2", "1", ""),
+            ("pinned-1", "0", "dev-libs/massm:0/1="),
+            ("open-1", "0", "dev-libs/massm:0/1="),
+        ] {
+            let d = base.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = base.join("repo");
+        for (pkg, rdepend) in [
+            ("pinned", "dev-libs/massm:0="),
+            ("open", "dev-libs/massm:="),
+        ] {
+            let dir = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body = format!(
+                "EAPI=8\nDESCRIPTION=\"304\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
+            );
+            std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=304\nEAPI=8\n".to_string();
+            writeln!(
+                entry,
+                "KEYWORDS=amd64\nRDEPEND={rdepend}\nSLOT=0\n_md5_={md5}"
+            )
+            .unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-1.0")), entry).unwrap();
+        }
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let upgrade = GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "2".into(),
+                to: "3.0".into(),
+            },
+            slot: Some("1".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massm", "3.0")
+        };
+        let walked_consumer = |package: &str| GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", package, "1.0")
+        };
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let (scheduled, ..) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &[upgrade, walked_consumer("pinned"), walked_consumer("open")],
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &test_config(),
+        );
+        assert_eq!(
+            scheduled,
+            BTreeSet::from([("dev-libs".to_string(), "open".to_string())]),
+            "only the consumer whose replacement atom accepts slot 1 rebuilds"
         );
         let _ = fs::remove_dir_all(&base);
     }
