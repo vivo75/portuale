@@ -1,0 +1,11 @@
+[package]
+name = "portage-vdb"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# feat#157 (#305): the installed-package database behind one interface.
+# Sits below `portage-repo` and has no dependencies on purpose: every
+# backend crate it will gain (rusqlite, redb, a FUSE crate) arrives
+# behind an optional feature (plan S2.1, S5.1, S7.1).
+[dependencies]
