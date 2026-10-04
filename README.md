@@ -112,8 +112,8 @@ Full pre-slice verification also runs `cargo fmt --check` and
 
 ## Run
 
-See [`docs/history/running-it.md`](docs/history/running-it.md) for
-live-verified per-slice examples (historical). Quick taste:
+Live-verified per-slice examples are in
+[`docs/what-this-proves.md`](docs/what-this-proves.md). Quick taste:
 
 ```sh
 rust/target/release/portuale emerge --pretend sys-apps/portage
@@ -128,7 +128,6 @@ rust/target/release/versions-harness vercmp 1.0-r1 1.0
 | [`docs/agent-context.md`](docs/agent-context.md) | The full context: goals, hard constraints, architecture decisions, the bash-backend investigation, current state, and the open backlog. |
 | [`docs/what-this-proves.md`](docs/what-this-proves.md) | The living, append-only per-slice record — every feature, with its real-portage source grounding. |
 | [`docs/scope-backlog.md`](docs/scope-backlog.md) | What real portage behaviour is *not* yet ported (either side), the standing non-goals, and the distance to a drop-in replacement. |
-| [`docs/history/running-it.md`](docs/history/running-it.md) | Runnable per-slice examples (historical). |
+| [`docs/lessons-of-backlog-ops-2026-10-03.md`](docs/lessons-of-backlog-ops-2026-10-03.md), [`docs/recap-of-backlog-ops-2026-10-03.md`](docs/recap-of-backlog-ops-2026-10-03.md) | How to work on backlog items (condensed lessons) and the per-item status/residue/cut index for the closed batches. |
 | [`docs/brush-pin.md`](docs/brush-pin.md) | The `brush` (embedded bash) dependency pin and its re-pin checklist. |
 | [`docs/diagrams/operation-diagrams.md`](docs/diagrams/operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code. |
-| [`docs/history/`](docs/history/) | Superseded planning documents (the original derivation) and pre-compaction snapshots of docs that get periodically purged (e.g. the scope-backlog's shipped-item narrative). |

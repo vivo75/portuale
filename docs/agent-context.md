@@ -3,8 +3,8 @@
 This file is the single entry point for (re)deriving where portuale
 stands and what to do next: goals, hard constraints, architecture
 decisions, the phase-execution/bash-backend findings, and pointers to the
-live state + open backlog. The original porting-strategy prompt is
-[`history/porting-strategy-prompt.md`](history/porting-strategy-prompt.md);
+live state + open backlog. The original porting-strategy prompt (`history/porting-strategy-prompt.md`)
+was deleted 2026-10-03 and is in git history;
 the session-to-session operating rhythm is [`../AGENTS.md`](../AGENTS.md).
 
 As with any settled decision below: if you disagree, say so explicitly
@@ -153,7 +153,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   reference (`python/emerge_pretend_reference.py`) mirrored every
   `emerge --pretend` slice and the contract suite asserted Rust == Python;
   it proved agreement with a portuale-authored copy, not with Portage,
-  and was removed ([`history/second_python_copy_removal.md`](history/second_python_copy_removal.md)).
+  and was removed (`history/second_python_copy_removal.md`, in git history).
   Expected `emerge` output now comes from real Portage (the differential
   beds, this host's `emerge`, upstream `lib/portage/tests/resolver/`
   cases). In its place: expectation-free output invariants and cross-mode
@@ -184,7 +184,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   minimal (`scratch`/busybox-level) container.
 - **Container-based real-system differential test bed**
   (`pmtest/differential-test-bed/`, see its own `README.md` and
-  [`history/real-world-testing.md`](history/real-world-testing.md)): runs portuale
+  `history/real-world-testing.md` (git history)): runs portuale
   *and* the real `emerge` against a pinned real Gentoo tree inside
   throwaway `podman` containers and diffs the results. **L0**
   (`differential-test-bed/run/l0-resolver.sh`) — `emerge -pv` for ~120 real atoms
@@ -234,30 +234,21 @@ at real-tree scale (pmtest's differential bed, L0: ~120 real atoms,
 For the authoritative, cited-source record of every shipped capability
 read **[`what-this-proves.md`](what-this-proves.md)** (the living
 per-slice ledger) and `git log`. The per-slice "current state" narrative
-that used to live here is snapshotted at
-[`history/agent-context-current-state-2026-09-10.md`](history/agent-context-current-state-2026-09-10.md).
+that used to live here is snapshotted in `history/agent-context-current-state-2026-09-10.md` (deleted
+2026-10-03; git history).
 
-**2026-09-30 close-out note:** `batch-2026-09-28.md` is **done**
-(Status header + §8 P-Z record): #256+#257, #254+#255, #249, #250,
-#251 shipped; #245 stays OPEN by owner decision; residues #276–#278
-filed (next free #279). The integration branch
-`backlog/259-260-test-hygiene` was merged into `main`; nothing pushed.
-The note below is the superseded mid-batch handoff.
-
-**2026-09-30 memory note:** `batch-2026-09-28.md` is the live batch and
-its **"Execution state (2026-09-30, post-rebase)"** section at the top
-is the handoff record: what is done (H0, Z0, Track C, Track D #246/#248/
-#247, Track R #252/#253), what is open (#256+#257, #254+#255, #249,
-#250, #251, #245, P-Z), the 2026-09-30 rebase onto `origin/main`
-`71f24e15` (paired-sha rewording, the #262–#266 → #271–#275 number
-remap forced by the parallel session's filings, pre-rebase objects on
-the local `backup/pre-rebase-0928` branches), the half-done rebase
-verification (pmtest suite + corpus re-bless + L0 re-baseline still
-owed), and the session's gotchas — including the **stale-artifact
-trap** (`cargo test` does not relink `target/release/portuale`, which
-the pty tests spawn; `cargo build --release -p portuale` first). Work
-continues on portuale branch `backlog/259-260-test-hygiene` (the
-integration branch, owner: left unmerged to `main`) and pmtest `main`.
+**2026-10-03 close-out note:** the per-batch plans (`batch-2026-09-21` …
+`batch-2026-10-02`), the per-phase plans and `docs/history/` were deleted
+and condensed into [`lessons-of-backlog-ops-2026-10-03.md`](lessons-of-backlog-ops-2026-10-03.md)
+(how to work: oracle method, gates, beds, numbering — **read it before any
+slice**) and [`recap-of-backlog-ops-2026-10-03.md`](recap-of-backlog-ops-2026-10-03.md)
+(per-item status/residue/cuts). No batch is live; everything in the
+09-21 → 10-02 batches shipped or was filed with a number in
+`backlog-tasks.md`. The runbook those batches shared (paired branches
+and worktrees, commit per slice, `--no-ff` merge, Z0 baselines, merge-path
+gate, bed queue) is summarised in the lessons file; the stale-artifact
+trap (`cargo test` does not relink `target/release/portuale`; run
+`cargo build --release -p portuale` first) is there too.
 
 **2026-09-12 memory note:** backlog #24 (slot-operator rebuild undo
 path, S1–S7) is **closed** — the rebuild is a walked graph node, the
@@ -265,8 +256,8 @@ path, S1–S7) is **closed** — the rebuild is a walked graph node, the
 detector are in, L0 is regression-free, and the v2 residue
 (`#24b`–`#24f`, `IUSE_EFFECTIVE`, `--rebuild-if-*` through the same
 path) is filed in `scope-backlog.md` §A with its upstream tests. The
-one open judgment call (G0.4's S4 acceptance bar, `docs/history/024-S4-review.md`
-D-1) is recorded in `docs/history/024-oracle.md` §"Verdict", awaiting the
+one open judgment call (G0.4's S4 acceptance bar, `024-S4-review.md` D-1, in git history)
+is recorded in `024-oracle.md` §"Verdict" (git history), awaiting the
 owner.
 
 **2026-09-13 memory note:** backlogs #37 (build-phase env completeness)
@@ -283,8 +274,8 @@ bytes; the only residue is real's own `setuid` link nondeterminism), and
 source and binary merge. L2 porttest is green from a
 clean run with the `l2-bpkgonly-env`, `l2-gpkg-dostrip-splitdebug` and
 `l2-gpkg-docompress` allowlists gone (evidence: `TEST/findings/l2.md`
-"#38 S0-S5"; plans: `docs/history/037_Build-phase-env-completeness.plan.md`,
-`docs/history/038_Packaging-transforms.plan.md`). The L2 real set's next
+"#38 S0-S5"; plans `037_Build-phase-env-completeness.plan.md` and
+`038_Packaging-transforms.plan.md`, in git history). The L2 real set's next
 blockers are **#39** (gpkg metadata/`Packages` index, incl. the
 install-time `*DEPEND` rewrite) and the test-bed GPG check
 (`l2-binpkg-gpg-check`, backlog #43) — not env or transform parity.
@@ -334,7 +325,7 @@ cache-less ebuilds stay cache-less, and the guard
 `test_committed_fixture_md5_cache_entries_match_their_ebuilds` keeps
 them valid. L2_STALECACHE=1, the #49 fixture-oracle stale case, the L0
 image audit (gentoo 0 stale) and L1 porttest are green. Detail:
-[`history/05.046-metadata_md5-cache.opus.md`](history/05.046-metadata_md5-cache.opus.md),
+`history/05.046-metadata_md5-cache.opus.md` (git history),
 `TEST/findings/l2.md` S0-S4, `docs/on-disk-caches.md` §2.
 
 **2026-09-15 (later) memory note:** backlog #55 (GLEP 82
@@ -353,7 +344,7 @@ reads from a valid `pms` cache; slower, not different). Container oracle:
 `TEST/findings/l2.md` "## #55 S0" (cells a-h, run
 `c55-20260915T172758Z`); L0 after the change is byte-identical to the
 pre-change baseline (clean 100 / parity 0.833). Detail and decisions:
-[`history/07.55-layout_conf_cache_formats.opus.md`](history/07.55-layout_conf_cache_formats.opus.md).
+`history/07.55-layout_conf_cache_formats.opus.md` (git history).
 
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see
@@ -388,7 +379,7 @@ Real eclass `inherit()`, real `SRC_URI` fetch (Manifest digests,
 to end. Per-feature cited-source detail + v1 cuts:
 `what-this-proves.md`; what is still missing: `scope-backlog.md` Part 2.
 The prior per-slice narrative of this section is in
-[`history/agent-context-current-state-2026-09-10.md`](history/agent-context-current-state-2026-09-10.md).
+`history/agent-context-current-state-2026-09-10.md` (git history).
 
 ### Merge-path safety gate (mandatory)
 
