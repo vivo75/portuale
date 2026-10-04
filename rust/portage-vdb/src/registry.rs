@@ -187,7 +187,15 @@ mod tests {
             db.reverse_dependents("a/b", &[]),
             Err(Error::Unsupported(_))
         ));
-        assert!(matches!(db.begin_write(), Err(Error::Unsupported(_))));
+        // S1.4: `begin_write` works (no I/O); unmoved writes still say
+        // which step moves them.
+        let mut txn = db.begin_write().unwrap();
+        let msg = txn
+            .set_world(&crate::World::default())
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("S1.6"), "{msg}");
+        drop(txn);
         let msg = db.world().unwrap_err().to_string();
         assert!(
             msg.contains("FilesDb::world") && msg.contains("S1.6"),

@@ -3,11 +3,13 @@
 //! The read side of per-entry and `aux` reads (S1.2) is today's
 //! `portage-repo` code, moved here unchanged: the same `openat`/`statx`
 //! sequence and the same in-process memo (thread-local, validated by the
-//! entry directory's `st_mtime_ns`). Every method that is not moved yet
+//! entry directory's `st_mtime_ns`). The merge's write side (S1.4: the
+//! pending entry, the counter, the preserved-libs registry and the config
+//! memory) is in `files_write.rs`. Every method that is not moved yet
 //! returns [`Error::Unsupported`] naming the plan step that moves it
 //! (`reverse_dependents` stays above this crate on `files`, see the module
-//! doc item 19; `owners` S1.4, merge writes S1.4, unmerge
-//! and W4 S1.5, world S1.6).
+//! doc item 19; `owners` and `read_file_all` S1.5 (unmerge and the
+//! preserve-libs linkage input), unmerge and W4 S1.5, world S1.6).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -18,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::files_write::FilesTxn;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryImage, EntryKey, Error, FileMeta,
     InstalledDb, METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, PreservedLibs, Result,
@@ -66,6 +69,11 @@ impl FilesDb {
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
+
+    /// `<root>/var/db/pkg` (or the bare VDB directory), no I/O.
+    pub(crate) fn vdb_path(&self) -> &Path {
+        &self.vdb
+    }
 }
 
 /// `st_mtime` of `p` in nanos, 0 when the path is missing or unreadable.
@@ -85,7 +93,7 @@ fn dir_mtime_nanos(p: &Path) -> u64 {
 }
 
 /// A read error that means "no such entry or file".
-fn is_absent(e: &io::Error) -> bool {
+pub(crate) fn is_absent(e: &io::Error) -> bool {
     matches!(
         e.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
@@ -328,7 +336,7 @@ impl FilesDb {
     }
 }
 
-fn todo_step<T>(what: &str, step: &str) -> Result<T> {
+pub(crate) fn todo_step<T>(what: &str, step: &str) -> Result<T> {
     Err(Error::Unsupported(format!(
         "FilesDb::{what} is not implemented yet (feat#157 {step})"
     )))
@@ -468,12 +476,12 @@ impl InstalledDb for FilesDb {
         todo_step("read_file_at", "S7.2")
     }
 
-    fn read_pending_file(&self, _key: &EntryKey, _name: &str) -> Result<Option<Vec<u8>>> {
-        todo_step("read_pending_file", "S1.4")
+    fn read_pending_file(&self, key: &EntryKey, name: &str) -> Result<Option<Vec<u8>>> {
+        self.read_pending(key, name)
     }
 
     fn read_file_all(&self, _name: &str) -> Result<Vec<(EntryKey, Option<Vec<u8>>)>> {
-        todo_step("read_file_all", "S1.4")
+        todo_step("read_file_all", "S1.5")
     }
 
     fn entry_image(&self, _key: &EntryKey) -> Result<Option<EntryImage>> {
@@ -488,7 +496,7 @@ impl InstalledDb for FilesDb {
     }
 
     fn owners(&self, _paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
-        todo_step("owners", "S1.4")
+        todo_step("owners", "S1.5")
     }
 
     fn world(&self) -> Result<World> {
@@ -500,19 +508,21 @@ impl InstalledDb for FilesDb {
     }
 
     fn preserved_libs(&self) -> Result<PreservedLibs> {
-        todo_step("preserved_libs", "S1.4")
+        Ok(self.read_preserved_libs())
     }
 
     fn config_memory(&self) -> Result<ConfigMemory> {
-        todo_step("config_memory", "S1.4")
+        Ok(self.read_config_memory())
     }
 
     fn counter(&self) -> Result<Option<Counter>> {
-        todo_step("counter", "S1.4")
+        Ok(self.read_counter())
     }
 
+    /// No I/O and no lock: the `files` transaction applies each call when it is made
+    /// (crate doc item 20).
     fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>> {
-        todo_step("begin_write", "S1.4")
+        Ok(Box::new(FilesTxn { db: self }))
     }
 }
 

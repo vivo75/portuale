@@ -16,8 +16,9 @@
 //! - [`FilesDb`] is that layout. S1.2 moved the per-entry and `aux` reads
 //!   behind it (`generation`, `category_generation`, `entries`,
 //!   `category_entries`, `has_entry`, `aux_get`, `file_meta`,
-//!   `list_files`, `read_file`); the other methods still return
-//!   [`Error::Unsupported`] until S1.3–S1.6 move today's code.
+//!   `list_files`, `read_file`); S1.4 moved the merge's writes
+//!   (item 20); the other methods still return [`Error::Unsupported`]
+//!   until S1.5–S1.6 (and S2+) move today's code.
 //!
 //! This crate sits **below** `portage-repo` and depends only on
 //! `portage-util`. Atom
@@ -153,6 +154,48 @@
 //!     move-fallback resolution (`resolve_vdb_entry`); `read_file` serves
 //!     `installed_contents_files` (whole-file UTF-8 check stays with the
 //!     caller) and `read_vdb_env_vars`.
+//! 20. **S1.4: how `FilesDb` realises the merge's writes (no interface
+//!     change).** `ebuild_merge`'s five VDB steps call the trait in
+//!     today's order, each step opening and committing its own
+//!     transaction (the pending entry outlives a transaction, item 3):
+//!     `create_vdb_tmp` → [`WriteTxn::begin_entry`] (`stat`,
+//!     `remove_dir_all` of a stale `-MERGING-<pf>`, `create_dir_all`);
+//!     `populate_vdb_tmp` → [`WriteTxn::copy_entry_file`] per build-info
+//!     file (`std::fs::copy`), [`WriteTxn::next_counter`], then
+//!     [`WriteTxn::put_entry_file`] for `CATEGORY`, `SLOT`, `repository`
+//!     and `COUNTER`; `write_vdb_tmp_contents` → `put_entry_file`
+//!     (`CONTENTS`) then [`WriteTxn::seal_entry`] (the former
+//!     `write_consolidated_metadata_file`: body, `stat`, stamp appended
+//!     last); `publish_vdb_tmp` → [`WriteTxn::finish_entry`] (`stat`,
+//!     `remove_dir_all` of a live same-`pf` entry, `rename`). The
+//!     replaced same-slot entries are still deleted by
+//!     `ebuild_unmerge::delete_vdb_dir` between the last two steps (S1.5
+//!     routes it to [`WriteTxn::delete_entry`]), so the replace order of
+//!     item 4 holds. **`files` makes no write atomic and takes no lock:
+//!     every call is applied when it is made, [`WriteTxn::commit`] is a
+//!     no-op ordering point, and a failure leaves what was written,
+//!     exactly as before S1.4.** [`InstalledDb::begin_write`] does no I/O.
+//!     The counter keeps portuale's rule (item 11: `counter` file only,
+//!     no lock, no max over entry `COUNTER`s, non-atomic write).
+//!     The preserved-libs registry and the config memory are read and
+//!     written through [`InstalledDb::preserved_libs`] /
+//!     [`WriteTxn::set_preserved_libs`] and
+//!     [`InstalledDb::config_memory`] / [`WriteTxn::set_config_memory`]
+//!     by every caller of `ebuild_merge`'s `read_plib_registry`,
+//!     `write_plib_registry`, `read_cfgfiledict` and `write_cfgfiledict`
+//!     (unmerge included, since the helpers are shared); the `files`
+//!     formats (real `json.dumps` registry, `"path md5"` lines) moved
+//!     here as [`parse_preserved_libs`] / [`format_preserved_libs`] and
+//!     the private config-memory reader/writer. `pruneNonExisting`
+//!     stays with the caller (N6). [`InstalledDb::read_pending_file`]
+//!     serves the merge's reads of the `-MERGING-` entry
+//!     (`replacement_needed_entries`, the `read_contents_pf` fallback),
+//!     and [`InstalledDb::entry_path`] gives `PORTAGE_UPDATE_ENV` its
+//!     `<entry>/environment.bz2` (N9). [`InstalledDb::counter`] reads the
+//!     store without ticking. `populate_vdb_tmp` rejects a build-info
+//!     file whose name is not UTF-8 (entry file names are `String`, see
+//!     "Text and bytes"); before S1.4 it was copied. No such name exists:
+//!     build-info names are fixed ASCII keys and `<PF>.ebuild`.
 //!
 //! **Rejected from N1–N16:** N10 `cpv_for_path` (the caller prints the
 //! canonical VDB directory in its errors, so it needs
@@ -180,11 +223,13 @@
 
 mod error;
 mod files;
+mod files_write;
 mod registry;
 mod types;
 
 pub use error::{Error, Result};
 pub use files::FilesDb;
+pub use files_write::{format_preserved_libs, parse_preserved_libs};
 pub use registry::{for_root, register, reset};
 pub use types::*;
 

@@ -8,6 +8,9 @@ rust-version.workspace = true
 portage-util = { path = "../portage-util" }
 portage-dep = { path = "../portage-dep" }
 portage-repo = { path = "../portage-repo" }
+# feat#157 (#305): the installed-package database interface; the merge
+# writes its VDB entry through `portage_vdb::for_root(root)` (S1.4).
+portage-vdb = { path = "../portage-vdb" }
 portage-profile = { path = "../portage-profile" }
 portage-fetch = { path = "../portage-fetch" }
 portage-use-reduce = { path = "../portage-use-reduce" }

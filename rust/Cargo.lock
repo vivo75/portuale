@@ -1635,6 +1635,7 @@ dependencies = [
  "portage-repo",
  "portage-use-reduce",
  "portage-util",
+ "portage-vdb",
  "portage-versions",
  "regex",
  "sha1",
