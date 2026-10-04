@@ -112,6 +112,53 @@ fn dedup_binary_instances_keeps_newest_build_time_per_group() {
     assert_eq!(out[0].source, CandidateSource::Ebuild);
 }
 
+/// A local `$PKGDIR` version hides only its own build, never a newer remote one.
+#[test]
+fn multi_instance_local_build_does_not_shadow_a_newer_remote_build() {
+    let binrepo = in_memory_binhost_1010(
+        "shadow",
+        vec![
+            multi_instance_entry_1010("6", 1000, "dev-libs/old"),
+            multi_instance_entry_1010("7", 2000, "dev-libs/new"),
+        ],
+    );
+    let local =
+        BinaryIndex::from_entries(vec![multi_instance_entry_1010("6", 1000, "dev-libs/old")]);
+    let cands =
+        list_remote_binary_candidates(&[binrepo], Path::new("/"), &local, "dev-libs", "spectre");
+    let ids: Vec<Option<&str>> = cands.iter().map(|c| c.build_id.as_deref()).collect();
+    assert!(
+        ids.contains(&Some("7")),
+        "remote build 7 must survive the local build 6, got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&Some("6")),
+        "remote build 6 is the already-downloaded local one, got {ids:?}"
+    );
+}
+
+/// The download lookup falls back to the newest build when no `BUILD_ID` is asked.
+#[test]
+fn multi_instance_download_lookup_returns_the_newest_build() {
+    let binrepo = in_memory_binhost_1010(
+        "download",
+        vec![
+            multi_instance_entry_1010("6", 1000, "dev-libs/old"),
+            multi_instance_entry_1010("7", 2000, "dev-libs/new"),
+        ],
+    );
+    let binrepos = [binrepo];
+    let (_, record) =
+        find_remote_binpkg(&binrepos, Path::new("/"), "dev-libs", "spectre", "0.2.12")
+            .expect("the binhost lists dev-libs/spectre-0.2.12");
+    assert_eq!(
+        record.get("BUILD_ID").map(String::as_str),
+        Some("7"),
+        "the newest build must be downloaded, got PATH {:?}",
+        record.get("PATH")
+    );
+}
+
 #[test]
 fn quickpkg_direct_index_entries_reads_the_source_root_vdb() {
     // One installed package with an RDEPEND on newpkg.
