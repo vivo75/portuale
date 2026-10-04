@@ -18,7 +18,7 @@
 //!   `category_entries`, `has_entry`, `aux_get`, `file_meta`,
 //!   `list_files`, `read_file`); S1.4 moved the merge's writes
 //!   (item 20); the other methods still return [`Error::Unsupported`]
-//!   until S1.5–S1.6 (and S2+) move today's code.
+//!   until S2+ move today's code.
 //!
 //! This crate sits **below** `portage-repo` and depends only on
 //! `portage-util`. Atom
@@ -228,6 +228,27 @@
 //!     directory, by `d_type` or `stat`). `unmerge_replaced_same_slot`
 //!     lists its category the same way, so a stray non-directory named
 //!     like a version is no longer taken for an installed instance.
+//!
+//! 22. **S1.6: `world` / `world_sets` / `set_world` / `set_world_sets`
+//!     on `files` (no interface change).** The readers are
+//!     `pretend::read_world_atoms` / `read_world_sets` moved unchanged:
+//!     one `read_to_string`, `NotFound` (and only it) is an empty store,
+//!     any other failure is [`Error::Io`] (the caller adds its own
+//!     `reading ` prefix), lines are trimmed and blank / `#` lines are
+//!     dropped (`world` also drops `@` lines, `world_sets` keeps only
+//!     them and strips every leading `@`). The writers are the three
+//!     rewrites of `pretend` (`update_world_file`, `deselect_from_world`,
+//!     `run_deselect`) moved unchanged: the caller sorts and
+//!     de-duplicates; `create_dir_all` of `var/lib/portage`, the lines
+//!     joined by `\n` plus a trailing `\n` (an empty list writes an empty
+//!     file), a plain `std::fs::write`: no temporary file, no lock, not
+//!     atomic. One transaction creates `var/lib/portage` once: a second
+//!     world write of the same transaction (`--deselect` rewrites both
+//!     files) skips the `create_dir_all`, as the old single `create_dir_all`
+//!     did. A transaction holding only `set_world` (or only
+//!     `set_world_sets`) is legal. The "Recording ... in world favorites
+//!     file" lines stay in `pretend`. On a bare VDB directory the reads
+//!     are empty and the writes are [`Error::Unsupported`].
 //!
 //! **Rejected from N1–N16:** N10 `cpv_for_path` (the caller prints the
 //! canonical VDB directory in its errors, so it needs

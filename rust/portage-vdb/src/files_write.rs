@@ -36,6 +36,10 @@ const COUNTER_PATH: &str = "var/cache/edb/counter";
 const PRESERVED_LIBS_PATH: &str = "var/lib/portage/preserved_libs_registry";
 /// Real `PRIVATE_PATH` + `CONFIG_MEMORY_FILE` (`vardbapi._conf_mem_file`).
 const CONFIG_MEMORY_PATH: &str = "var/lib/portage/config";
+/// Real `const.py` `WORLD_FILE` under a root.
+const WORLD_PATH: &str = "var/lib/portage/world";
+/// Real `const.py` `WORLD_SETS_FILE` under a root.
+const WORLD_SETS_PATH: &str = "var/lib/portage/world_sets";
 
 impl FilesDb {
     /// `<vdb>/<category>/-MERGING-<pf>`, no I/O.
@@ -87,6 +91,52 @@ impl FilesDb {
             .map(Counter)
     }
 
+    /// Moved from `pretend::read_world_atoms`: one `read_to_string` of
+    /// `<root>/var/lib/portage/world`; a missing file (`NotFound` only) is
+    /// an empty world, any other failure is [`Error::Io`]. Lines are
+    /// trimmed; blank, `#` and `@` lines are dropped.
+    pub(crate) fn read_world(&self) -> Result<World> {
+        let Some(path) = self.store_path_opt(WORLD_PATH) else {
+            return Ok(World::default());
+        };
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(World::default()),
+            Err(e) => return Err(Error::io(path, e)),
+        };
+        Ok(World {
+            atoms: text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@'))
+                .map(String::from)
+                .collect(),
+        })
+    }
+
+    /// Moved from `pretend::read_world_sets`: as [`FilesDb::read_world`],
+    /// keeping only `@` lines and stripping every leading `@`.
+    pub(crate) fn read_world_sets(&self) -> Result<WorldSets> {
+        let Some(path) = self.store_path_opt(WORLD_SETS_PATH) else {
+            return Ok(WorldSets::default());
+        };
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(WorldSets::default());
+            }
+            Err(e) => return Err(Error::io(path, e)),
+        };
+        Ok(WorldSets {
+            sets: text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#') && l.starts_with('@'))
+                .map(|l| l.trim_start_matches('@').to_string())
+                .collect(),
+        })
+    }
+
     /// The registry as read (moved from `ebuild_merge::read_plib_registry`):
     /// one read; a missing, unreadable, non-UTF-8 or unparsable file is an
     /// empty registry (real `load()`'s graceful degrade). Not pruned: the
@@ -127,6 +177,36 @@ impl FilesDb {
 /// transaction undoes nothing.
 pub(crate) struct FilesTxn<'a> {
     pub(crate) db: &'a FilesDb,
+    /// `var/lib/portage` was already created by an earlier world write of
+    /// this transaction, so the next one skips its `create_dir_all` (the
+    /// `emerge --deselect` rewrite of both files made it once).
+    portage_dir_made: bool,
+}
+
+impl<'a> FilesTxn<'a> {
+    pub(crate) fn new(db: &'a FilesDb) -> Self {
+        FilesTxn {
+            db,
+            portage_dir_made: false,
+        }
+    }
+
+    /// The shared body of `set_world` / `set_world_sets`, moved from
+    /// `pretend`: `create_dir_all` of the parent (once per transaction),
+    /// then the lines joined by `\n` with a trailing `\n` unless there
+    /// are none, one plain `std::fs::write`.
+    fn write_world_store(&mut self, rel: &str, lines: Vec<String>) -> Result<()> {
+        let path = self.db.store_path(rel)?;
+        if !self.portage_dir_made {
+            create_parent(&path)?;
+            self.portage_dir_made = true;
+        }
+        let mut body = lines.join("\n");
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        fs::write(&path, body).map_err(|e| Error::io(path, e))
+    }
 }
 
 /// `std::fs::create_dir_all` of `path`'s parent, error on the parent.
@@ -277,12 +357,22 @@ impl WriteTxn for FilesTxn<'_> {
         fs::write(&path, data).map_err(|e| Error::io(path, e))
     }
 
-    fn set_world(&mut self, _world: &World) -> Result<()> {
-        todo_step("set_world", "S1.6")
+    /// Moved from `pretend` (`update_world_file`, `deselect_from_world`,
+    /// `run_deselect`): the caller sorts and de-duplicates. `create_dir_all`
+    /// of `var/lib/portage` (skipped when this transaction already did
+    /// it), the atoms joined by newlines plus a trailing newline (an empty
+    /// list writes an empty file), a plain `std::fs::write`: no temporary
+    /// file, no lock.
+    fn set_world(&mut self, world: &World) -> Result<()> {
+        self.write_world_store(WORLD_PATH, world.atoms.clone())
     }
 
-    fn set_world_sets(&mut self, _sets: &WorldSets) -> Result<()> {
-        todo_step("set_world_sets", "S1.6")
+    /// As [`WriteTxn::set_world`], each name written as `@<name>`.
+    fn set_world_sets(&mut self, sets: &WorldSets) -> Result<()> {
+        self.write_world_store(
+            WORLD_SETS_PATH,
+            sets.sets.iter().map(|n| format!("@{n}")).collect(),
+        )
     }
 
     /// Moved from `ebuild_merge::write_plib_registry`: nothing at all
@@ -579,6 +669,45 @@ mod tests {
         txn.put_entry_file(&key, "CONTENTS", b"").unwrap();
         txn.seal_entry(&key).unwrap();
         assert_eq!(db.read_pending_file(&key, "metadata").unwrap(), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn world_stores_round_trip_alone_in_a_world_only_transaction() {
+        let root = scratch("world");
+        let db = FilesDb::new(&root);
+        assert_eq!(db.world().unwrap(), World::default());
+        assert_eq!(db.world_sets().unwrap(), WorldSets::default());
+        let mut txn = db.begin_write().unwrap();
+        txn.set_world(&World {
+            atoms: vec!["dev-libs/a".into(), "dev-libs/b:2".into()],
+        })
+        .unwrap();
+        txn.commit().unwrap();
+        let path = root.join("var/lib/portage/world");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "dev-libs/a\ndev-libs/b:2\n"
+        );
+        assert!(!root.join("var/lib/portage/world_sets").exists());
+        // Reading drops blanks, comments and `@` lines.
+        fs::write(&path, "# c\n\n @x \n dev-libs/a \n").unwrap();
+        assert_eq!(db.world().unwrap().atoms, vec!["dev-libs/a".to_string()]);
+        let mut txn = db.begin_write().unwrap();
+        txn.set_world_sets(&WorldSets {
+            sets: vec!["one".into(), "two".into()],
+        })
+        .unwrap();
+        txn.set_world(&World::default()).unwrap();
+        txn.commit().unwrap();
+        let sets = root.join("var/lib/portage/world_sets");
+        assert_eq!(fs::read_to_string(&sets).unwrap(), "@one\n@two\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        fs::write(&sets, "dev-libs/a\n# c\n@@one\n@two\n").unwrap();
+        assert_eq!(
+            db.world_sets().unwrap().sets,
+            vec!["one".to_string(), "two".to_string()]
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

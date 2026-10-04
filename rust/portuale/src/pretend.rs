@@ -3320,19 +3320,26 @@ See README.md and emerge(1) for the full picture.
 /// expansion -- `@some-set`, `@another-random-name`, etc. as a top-level
 /// target fall through to the normal atom-parsing path and get a clear
 /// "invalid atom" error, not a silent no-op.
+///
+/// Read through the root's installed-database backend
+/// ([`portage_vdb::InstalledDb::world`], feat#157 S1.6; on `files` the
+/// same one `read_to_string`).
 fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
-    let path = root.join("var/lib/portage/world");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("reading {}: {e}", path.display())),
-    };
-    Ok(text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@'))
-        .map(String::from)
-        .collect())
+    portage_vdb::for_root(root)
+        .world()
+        .map(|w| w.atoms)
+        .map_err(world_read_error)
+}
+
+/// The text the world readers always gave: `reading <path>: <io error>`
+/// for a store that could not be read.
+fn world_read_error(e: portage_vdb::Error) -> String {
+    match e {
+        portage_vdb::Error::Io { path, source } => {
+            format!("reading {}: {source}", path.display())
+        }
+        e => e.to_string(),
+    }
 }
 
 /// Real `@selected` (`WorldSelectedSet` -- `cnf/sets/portage.conf`): the
@@ -3563,13 +3570,11 @@ fn update_world_file(
     if !added.is_empty() {
         current.sort();
         current.dedup();
-        let path = root.join("var/lib/portage/world");
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-        }
-        let mut body = current.join("\n");
-        body.push('\n');
-        std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+        let db = portage_vdb::for_root(root);
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        txn.set_world(&portage_vdb::World { atoms: current })
+            .map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -3729,13 +3734,16 @@ fn update_world_sets_file(
     if !added.is_empty() {
         current.sort();
         current.dedup();
-        let path = root.join("var/lib/portage/world_sets");
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-        }
-        let mut body = current.join("\n");
-        body.push('\n');
-        std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+        let db = portage_vdb::for_root(root);
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        txn.set_world_sets(&portage_vdb::WorldSets {
+            sets: current
+                .into_iter()
+                .map(|l| l.strip_prefix('@').unwrap_or(&l).to_string())
+                .collect(),
+        })
+        .map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -3755,19 +3763,13 @@ fn update_world_sets_file(
 /// state" precedent the world file itself already established. Returns
 /// each name with its own leading `@` stripped, ready for
 /// `resolve_custom_set`.
+///
+/// Read through [`portage_vdb::InstalledDb::world_sets`] (S1.6).
 fn read_world_sets(root: &Path) -> Result<Vec<String>, String> {
-    let path = root.join("var/lib/portage/world_sets");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("reading {}: {e}", path.display())),
-    };
-    Ok(text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#') && l.starts_with('@'))
-        .map(|l| l.trim_start_matches('@').to_string())
-        .collect())
+    portage_vdb::for_root(root)
+        .world_sets()
+        .map(|w| w.sets)
+        .map_err(world_read_error)
 }
 
 /// Resolves one custom, file-based package set by `name` (no leading
@@ -4108,21 +4110,24 @@ fn run_deselect(
         remaining_sets.sort();
         remaining_sets.dedup();
 
-        let portage_dir = root.join("var/lib/portage");
-        if let Err(e) = std::fs::create_dir_all(&portage_dir) {
-            eprintln!("emerge: {}: {e}", portage_dir.display());
+        // One transaction: `var/lib/portage` is created once, then
+        // `world`, then `world_sets` are written (S1.6).
+        let db = portage_vdb::for_root(root);
+        let rewritten = db.begin_write().and_then(|mut txn| {
+            txn.set_world(&portage_vdb::World {
+                atoms: remaining_world,
+            })?;
+            txn.set_world_sets(&portage_vdb::WorldSets {
+                sets: remaining_sets
+                    .into_iter()
+                    .map(|s| s.strip_prefix('@').unwrap_or(&s).to_string())
+                    .collect(),
+            })?;
+            txn.commit()
+        });
+        if let Err(e) = rewritten {
+            eprintln!("emerge: {e}");
             return ExitCode::from(1);
-        }
-        for (name, lines) in [("world", &remaining_world), ("world_sets", &remaining_sets)] {
-            let mut body = lines.join("\n");
-            if !body.is_empty() {
-                body.push('\n');
-            }
-            let path = portage_dir.join(name);
-            if let Err(e) = std::fs::write(&path, body) {
-                eprintln!("emerge: {}: {e}", path.display());
-                return ExitCode::from(1);
-            }
         }
     }
     ExitCode::SUCCESS
@@ -4313,8 +4318,13 @@ fn resolve_vdb_path_arg(arg: &str, root: &Path) -> Result<Option<String>, ExitCo
         println!("!!! Not a valid db dir: {}", absx.display());
         return Err(ExitCode::from(1));
     }
-    let vdb =
-        std::fs::canonicalize(root.join("var/db/pkg")).unwrap_or_else(|_| root.join("var/db/pkg"));
+    // The directory-backed VDB's own path (`files`: `<root>/var/db/pkg`);
+    // a database backend has no directory a path argument could name.
+    let Some(vdb_dir) = portage_vdb::for_root(root).vdb_dir() else {
+        println!("\n!!! {arg} is not inside the installed-package database; aborting.\n");
+        return Err(ExitCode::from(1));
+    };
+    let vdb = std::fs::canonicalize(&vdb_dir).unwrap_or(vdb_dir);
     let Ok(rel) = absx.strip_prefix(&vdb) else {
         println!("\n!!! {arg} is not inside {}; aborting.\n", vdb.display());
         return Err(ExitCode::from(1));
@@ -5529,12 +5539,13 @@ fn entries_not_merged(
         let Some((kind, category, package, version)) = emerge_build::resume_cpv(e) else {
             continue;
         };
-        let contents = root
-            .join("var/db/pkg")
-            .join(&category)
-            .join(format!("{package}-{version}"))
-            .join("CONTENTS");
-        if !contents.is_file() {
+        // One `stat` of the entry's `CONTENTS` through the root's backend.
+        if !ebuild_merge::entry_file_is_regular(
+            root,
+            &category,
+            &format!("{package}-{version}"),
+            "CONTENTS",
+        ) {
             out.push((kind, category, package, version));
         }
     }
@@ -6061,16 +6072,11 @@ fn deselect_from_world(root: &Path, category: &str, package: &str) -> Result<(),
     }
     current.sort();
     current.dedup();
-    let path = root.join("var/lib/portage/world");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    let body = if current.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", current.join("\n"))
-    };
-    std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.set_world(&portage_vdb::World { atoms: current })
+        .map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -6107,34 +6113,24 @@ fn print_unmerge_row(label: &str, versions: &[String], color: &Colorizer) {
 /// `--unmerge`/`-C`'s own bare-name ("null category") resolution.
 fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
     let mut out = Vec::new();
-    let vdb = root.join("var/db/pkg");
-    let Ok(cats) = portage_util::read_dir_entries(&vdb) else {
+    // The backend's listing (`files`: the same walk, each category and
+    // entry directory tested with `is_dir`; `-MERGING-<pf>` entries, which
+    // are never a `--unmerge`/`-C` resolution candidate, are skipped).
+    let Ok(entries) = portage_vdb::for_root(root).entries() else {
         return out;
     };
-    for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
-        let category = cat.file_name().to_string_lossy().to_string();
-        let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
-            continue;
-        };
-        for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
-            let dirname = pkg.file_name().to_string_lossy().to_string();
-            // Real `vardbapi._excluded_dirs`: an in-progress
-            // `-MERGING-<pf>` entry is never a `--unmerge`/`-C`
-            // resolution candidate.
-            if portage_util::is_merging_vdb_entry(&dirname) {
-                continue;
-            }
-            if let Some((name, version)) = split_pf(&dirname) {
-                // #116: through the vdb seam; the main slot only, as
-                // before (an absent `SLOT` is `""`, like the old
-                // `unwrap_or_default`).
-                let slot = portage_repo::vdb_entry_slot(root, &category, &dirname)
-                    .split('/')
-                    .next()
-                    .unwrap_or("0")
-                    .to_string();
-                out.push((category.clone(), name, version, slot));
-            }
+    for key in entries {
+        let (category, dirname) = (key.category, key.pf);
+        if let Some((name, version)) = split_pf(&dirname) {
+            // #116: through the vdb seam; the main slot only, as
+            // before (an absent `SLOT` is `""`, like the old
+            // `unwrap_or_default`).
+            let slot = portage_repo::vdb_entry_slot(root, &category, &dirname)
+                .split('/')
+                .next()
+                .unwrap_or("0")
+                .to_string();
+            out.push((category, name, version, slot));
         }
     }
     out

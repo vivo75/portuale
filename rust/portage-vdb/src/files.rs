@@ -9,7 +9,7 @@
 //! returns [`Error::Unsupported`] naming the plan step that moves it
 //! (`reverse_dependents` stays above this crate on `files`, see the module
 //! doc item 19; S1.5 moved `owners`, `read_file_all`, `delete_entry`
-//! and `replace_file`; world is S1.6).
+//! `replace_file`; S1.6 moved `world` / `world_sets`).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -611,11 +611,11 @@ impl InstalledDb for FilesDb {
     }
 
     fn world(&self) -> Result<World> {
-        todo_step("world", "S1.6")
+        self.read_world()
     }
 
     fn world_sets(&self) -> Result<WorldSets> {
-        todo_step("world_sets", "S1.6")
+        self.read_world_sets()
     }
 
     fn preserved_libs(&self) -> Result<PreservedLibs> {
@@ -633,7 +633,7 @@ impl InstalledDb for FilesDb {
     /// No I/O and no lock: the `files` transaction applies each call when it is made
     /// (crate doc item 20).
     fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>> {
-        Ok(Box::new(FilesTxn { db: self }))
+        Ok(Box::new(FilesTxn::new(self)))
     }
 }
 

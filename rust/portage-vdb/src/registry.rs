@@ -190,16 +190,11 @@ mod tests {
         // S1.4: `begin_write` works (no I/O); unmoved writes still say
         // which step moves them.
         let mut txn = db.begin_write().unwrap();
-        let msg = txn
-            .set_world(&crate::World::default())
-            .unwrap_err()
-            .to_string();
-        assert!(msg.contains("S1.6"), "{msg}");
+        let msg = txn.set_counter(crate::Counter(1)).unwrap_err().to_string();
+        assert!(msg.contains("S2.2"), "{msg}");
         drop(txn);
-        let msg = db.world().unwrap_err().to_string();
-        assert!(
-            msg.contains("FilesDb::world") && msg.contains("S1.6"),
-            "{msg}"
-        );
+        // S1.6: a missing store reads as empty.
+        assert!(db.world().unwrap().atoms.is_empty());
+        assert!(db.world_sets().unwrap().sets.is_empty());
     }
 }

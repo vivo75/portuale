@@ -2834,7 +2834,7 @@ fn read_contents_pf(root: &Path, category: &str, pf: &str) -> Option<String> {
 /// `entry/<name>.is_file()` of old: one `stat` (following symlinks)
 /// through the root's [`portage_vdb::InstalledDb::file_meta`]; a missing
 /// entry or file, or any error, is `false`.
-fn entry_file_is_regular(root: &Path, category: &str, pf: &str, name: &str) -> bool {
+pub(crate) fn entry_file_is_regular(root: &Path, category: &str, pf: &str, name: &str) -> bool {
     portage_vdb::for_root(root)
         .file_meta(&portage_vdb::EntryKey::new(category, pf), name)
         .ok()
@@ -2847,7 +2847,7 @@ fn entry_file_is_regular(root: &Path, category: &str, pf: &str, name: &str) -> b
 /// of `var/db/pkg/<category>/<pf>/<name>`). `None` when the entry or the
 /// file is missing, unreadable or not UTF-8 -- every case today's
 /// `read_to_string(..).ok()` callers treated alike.
-fn read_entry_text(root: &Path, category: &str, pf: &str, name: &str) -> Option<String> {
+pub(crate) fn read_entry_text(root: &Path, category: &str, pf: &str, name: &str) -> Option<String> {
     portage_vdb::for_root(root)
         .read_file(&portage_vdb::EntryKey::new(category, pf), name)
         .ok()
