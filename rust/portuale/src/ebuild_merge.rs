@@ -10084,5 +10084,275 @@ mod tests {
             assert!(differing.is_empty(), "payload differs at {differing:?}");
             let _ = std::fs::remove_dir_all(&tmp);
         }
+
+        /// What a VDB holds after a sequence, with the run-dependent values
+        /// taken out (see [`a_merge_upgrade_unmerge_sequence_is_equivalent_on_sqlite_and_files`]).
+        #[derive(Debug, PartialEq)]
+        struct Snap {
+            /// key -> (files: name -> (mode, bytes), stamp state).
+            entries: BTreeMap<EntryKey, (Tree, portage_vdb::MetadataStamp)>,
+            world: portage_vdb::World,
+            world_sets: portage_vdb::WorldSets,
+            preserved_libs: BTreeMap<String, portage_vdb::PreservedLibsEntry>,
+            config_memory: portage_vdb::ConfigMemory,
+            counter: Option<portage_vdb::Counter>,
+        }
+
+        /// `CONTENTS` / `metadata` / `BUILD_TIME` reduced to their stable
+        /// parts; every other file is returned as stored.
+        fn stable_bytes(name: &str, data: Vec<u8>) -> Vec<u8> {
+            let lines = |data: &[u8], keep: &dyn Fn(&str) -> Option<String>| -> Vec<u8> {
+                String::from_utf8_lossy(data)
+                    .lines()
+                    .filter_map(keep)
+                    .map(|l| format!("{l}\n"))
+                    .collect::<String>()
+                    .into_bytes()
+            };
+            match name {
+                // The mtime is the last field of `obj` / `sym` lines.
+                "CONTENTS" => lines(&data, &|l| {
+                    Some(match l.split_whitespace().next() {
+                        Some("obj" | "sym") => l.rsplit_once(' ').map_or(l, |(a, _)| a).to_string(),
+                        _ => l.to_string(),
+                    })
+                }),
+                // The stamp line and the BUILD_TIME field; the other
+                // `metadata` lines are the stable fields.
+                "metadata" => lines(&data, &|l| {
+                    (!l.starts_with("#dir_mtime=") && !l.starts_with("BUILD_TIME="))
+                        .then(|| l.to_string())
+                }),
+                _ => data,
+            }
+        }
+
+        fn snapshot(db: &dyn InstalledDb) -> Snap {
+            let mut entries = BTreeMap::new();
+            for key in db.entries().unwrap() {
+                let image = db.entry_image(&key).unwrap().expect("live entry");
+                let files: Tree = image
+                    .files
+                    .into_iter()
+                    // A source build records its own build time.
+                    .filter(|f| f.meta.name != "BUILD_TIME")
+                    .map(|f| {
+                        let data = stable_bytes(&f.meta.name, f.data);
+                        // Group/other write bits depend on the process umask,
+                        // which another test may have changed.
+                        (f.meta.name, (f.meta.mode & 0o7755, data))
+                    })
+                    .collect();
+                entries.insert(key, (files, image.metadata_stamp));
+            }
+            Snap {
+                entries,
+                world: db.world().unwrap(),
+                world_sets: db.world_sets().unwrap(),
+                preserved_libs: db.preserved_libs().unwrap().entries,
+                config_memory: db.config_memory().unwrap(),
+                counter: db.counter().unwrap(),
+            }
+        }
+
+        /// feat#157 S4.4: the same sequence on a `files` ROOT and on a
+        /// sqlite ROOT ends in the same installed state. Sequence: (1) merge
+        /// binpkgrmpkg-1.0 (binary), (2) merge mergepkg (source), (3)
+        /// same-slot upgrade binpkgrmpkg 1.0 -> 2.0, (4) the soname bump
+        /// sonamebumplib 1.0 -> consumesonamebump -> sonamebumplib 2.0
+        /// (preserves the old soname), (5) unmerge consumesonamebump (prunes
+        /// the preserved library, W4), (6) unmerge mergepkg.
+        ///
+        /// Both runs use the same ROOT and PORTAGE_TMPDIR paths one after
+        /// the other, so `environment.bz2` (which records paths) is
+        /// comparable byte for byte. The sqlite result is also converted to
+        /// a temporary `files` root with `copy_all` and compared as well;
+        /// `verify` runs on that pair too.
+        ///
+        /// Compared per live entry: the file set, every file's bytes and
+        /// permission bits (group/other write masked, see below) and the
+        /// `metadata` stamp state; plus the same
+        /// live-entry set, `world`, `world_sets`, `preserved_libs`,
+        /// `config_memory`, counter, and the payload trees under ROOT
+        /// (paths, bytes, symlink targets; no modes, see below).
+        ///
+        /// Ignored, because they are run-dependent by nature (and `verify`
+        /// compares them, so its reported differences are only checked to
+        /// be among these, the modes only by the umask bits): all file mtimes and the entry directory mtime
+        /// (each run builds and writes its files at another instant); the
+        /// `#dir_mtime=` stamp line of `metadata` (derived from the entry
+        /// directory mtime; its Valid/Stale/Absent state is compared); the
+        /// mtime field of `obj` / `sym` lines of `CONTENTS` (the payload
+        /// files' mtimes); the `BUILD_TIME` file and the `BUILD_TIME=` line of
+        /// `metadata` (a source merge records the time of its build); the entry
+        /// directory's mode (`files` records the merge's `mkdir` under the
+        /// process umask, so 0o40755, or 0o40775 after another test changed
+        /// the umask; a sqlite merge stores the schema default 0o755 with no
+        /// type bits); the group and other write bits of entry file modes
+        /// (a file written under another umask: 0o664 vs 0o644); the modes
+        /// of the payload tree (the same umask race,
+        /// as `payload_bytes` notes). Nothing else is dropped: not
+        /// `environment.bz2`, not `COUNTER`, not the rest of `metadata`.
+        #[test]
+        fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_sqlite_and_files() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let ebuild = fixtures_root().join("repo/dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+            let sequence = || {
+                for dir in [&root, &ptmp] {
+                    let _ = std::fs::remove_dir_all(dir);
+                    std::fs::create_dir_all(dir).unwrap();
+                }
+                // As the S1.5 soname-bump test: `/usr/lib64` must be in the
+                // linker path for the consumer to be found.
+                std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+                std::fs::write(
+                    root.join("etc/env.d/99sonamebump"),
+                    "LDPATH=\"/usr/lib64\"\n",
+                )
+                .unwrap();
+            };
+            // Runs the steps on whatever backend `root` has.
+            let steps = || {
+                let opts = MergeOptions::default();
+                let binpkg_1 = binpkg("binpkgrmpkg-1.0.tbz2");
+                assert_eq!(merge_binpkg(&binpkg_1, &root, &ptmp, &opts).unwrap(), 0);
+                assert_eq!(run_merge(&ebuild, &root, &ptmp, &opts, None).unwrap(), 0);
+                assert_eq!(
+                    merge_binpkg(&binpkg("binpkgrmpkg-2.0.tbz2"), &root, &ptmp, &opts).unwrap(),
+                    0
+                );
+                for (pn, version) in [
+                    ("sonamebumplib", "1.0"),
+                    ("consumesonamebump", "1.0"),
+                    ("sonamebumplib", "2.0"),
+                ] {
+                    let fixture = versioned_fixture(pn, version);
+                    assert_eq!(run_merge(&fixture, &root, &ptmp, &opts, None).unwrap(), 0);
+                }
+                let preserved = portage_vdb::for_root(&root).preserved_libs().unwrap();
+                assert!(
+                    preserved.entries.contains_key("dev-libs/sonamebumplib:0"),
+                    "sanity: the old soname is preserved: {:?}",
+                    preserved.entries
+                );
+                unmerge_standalone(&root, &ptmp, "consumesonamebump-1.0", "consumesonamebump");
+                assert!(
+                    portage_vdb::for_root(&root)
+                        .preserved_libs()
+                        .unwrap()
+                        .entries
+                        .is_empty()
+                );
+                unmerge_standalone(&root, &ptmp, "mergepkg-1.0", "mergepkg");
+            };
+
+            // The files run; then its ROOT moves aside (rename keeps mtimes).
+            sequence();
+            steps();
+            let files_db = portage_vdb::FilesDb::new(&root);
+            let files_snap = snapshot(&files_db);
+            let files_payload = payload_tree(&root);
+            let files_final = tmp.join("files-final");
+            std::fs::rename(&root, &files_final).unwrap();
+
+            // The sqlite run, in the same paths.
+            sequence();
+            let db = use_sqlite(&root, &tmp.join("vdb.sqlite"));
+            steps();
+            let sqlite_snap = snapshot(db.as_ref());
+            let sqlite_payload = payload_tree(&root);
+            assert!(!root.join("var/db/pkg").exists());
+            assert!(db.pending_entries().unwrap().is_empty());
+
+            // Convert the sqlite result to a temporary files root.
+            let converted = tmp.join("converted");
+            std::fs::create_dir_all(&converted).unwrap();
+            let converted_db = portage_vdb::FilesDb::new(&converted);
+            portage_vdb::copy_all(db.as_ref(), &converted_db, false).unwrap();
+            let converted_snap = snapshot(&converted_db);
+
+            // The sequence left something to compare (1 + 2 + upgrade +
+            // soname bump - consumer - mergepkg).
+            let live: Vec<String> = files_snap.entries.keys().map(|k| k.to_string()).collect();
+            assert_eq!(
+                live,
+                ["dev-libs/binpkgrmpkg-2.0", "dev-libs/sonamebumplib-2.0"],
+                "unexpected end state"
+            );
+            assert!(files_snap.counter.is_some());
+
+            // Field by field, so a failure names what differs.
+            let same = |got: &Snap, what: &str| {
+                assert_eq!(
+                    got.entries.keys().collect::<Vec<_>>(),
+                    files_snap.entries.keys().collect::<Vec<_>>(),
+                    "{what}: live entries"
+                );
+                for (key, (files, stamp)) in &files_snap.entries {
+                    let (g_files, g_stamp) = &got.entries[key];
+                    assert_eq!(g_stamp, stamp, "{what}: {key} metadata stamp state");
+                    assert_eq!(
+                        g_files.keys().collect::<Vec<_>>(),
+                        files.keys().collect::<Vec<_>>(),
+                        "{what}: {key} file set"
+                    );
+                    for (name, (mode, data)) in files {
+                        let (g_mode, g_data) = &g_files[name];
+                        assert_eq!(g_mode, mode, "{what}: {key}/{name} mode");
+                        assert_eq!(
+                            String::from_utf8_lossy(g_data),
+                            String::from_utf8_lossy(data),
+                            "{what}: {key}/{name} bytes"
+                        );
+                    }
+                }
+                assert_eq!(got.world, files_snap.world, "{what}: world");
+                assert_eq!(got.world_sets, files_snap.world_sets, "{what}: world_sets");
+                assert_eq!(
+                    got.preserved_libs, files_snap.preserved_libs,
+                    "{what}: plibs"
+                );
+                assert_eq!(
+                    got.config_memory, files_snap.config_memory,
+                    "{what}: config"
+                );
+                assert_eq!(got.counter, files_snap.counter, "{what}: counter");
+            };
+            same(&sqlite_snap, "sqlite vs files");
+            same(&converted_snap, "converted vs files");
+            let bytes = |tree: Tree| -> BTreeMap<String, Vec<u8>> {
+                tree.into_iter().map(|(k, (_, data))| (k, data)).collect()
+            };
+            assert_eq!(bytes(sqlite_payload), bytes(files_payload), "payload tree");
+
+            // `verify` on the converted pair: every difference it reports
+            // must be one of the ignored, run-dependent kinds.
+            let rep = portage_vdb::verify(&portage_vdb::FilesDb::new(&files_final), &converted_db)
+                .unwrap();
+            assert_eq!(rep.entries_compared, 2);
+            for line in &rep.differences {
+                let (name, what) = line.split_once(": ").unwrap_or((line, ""));
+                let file = name.rsplit_once('/').map_or("", |(_, f)| f);
+                // "mode <a> != <b>" (octal): only the umask bits may differ.
+                let mode_ok = what.strip_prefix("mode ").is_some_and(|m| {
+                    let v: Vec<u32> = m
+                        .split(" != ")
+                        .filter_map(|x| u32::from_str_radix(x, 8).ok())
+                        .collect();
+                    v.len() == 2 && (v[0] ^ v[1]) & !0o022 == 0
+                });
+                let ok = what.starts_with("mtime")
+                    || what.starts_with("directory mtime")
+                    || what.starts_with("directory mode")
+                    || mode_ok
+                    || (what.starts_with("bytes differ")
+                        && ["CONTENTS", "metadata", "BUILD_TIME"].contains(&file));
+                assert!(ok, "verify reports a non-volatile difference: {line}");
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
     }
 }
