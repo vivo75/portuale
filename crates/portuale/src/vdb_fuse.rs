@@ -22,7 +22,7 @@ use fuser::{
 use portage_vdb::InstalledDb;
 
 use crate::vdb_rw::{Owner, SetAttr};
-use crate::vdb_view::{self, Kind, ViewError};
+use crate::vdb_view::{self, Attr, Kind, ViewError, WriteOp};
 
 /// Attribute and entry validity handed to the kernel. Short: a commit by
 /// another process is seen within this time.
@@ -33,6 +33,14 @@ const TTL: Duration = Duration::from_secs(1);
 pub struct RwOpts {
     pub scratch: PathBuf,
     pub root: PathBuf,
+}
+
+fn errno(e: &ViewError) -> Errno {
+    Errno::from_i32(e.errno())
+}
+
+fn denied(op: WriteOp) -> Errno {
+    errno(&vdb_view::deny(op))
 }
 
 fn ns_of(t: TimeOrNow) -> i128 {

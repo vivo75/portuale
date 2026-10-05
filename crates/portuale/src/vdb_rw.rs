@@ -24,7 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use portage_vdb::{Counter, EntryFile, EntryImage, EntryKey, FileMeta, InstalledDb, MetadataStamp};
 
-use crate::vdb_view::{DirEnt, Kind, ViewError};
+use crate::vdb_view::{Attr, DirEnt, Kind, Node, ROOT_INO, ViewError, open_wants_write};
 
 type Res<T> = Result<T, ViewError>;
 
@@ -199,8 +199,53 @@ fn mtime_of(md: &std::fs::Metadata) -> i128 {
     md.mtime() as i128 * 1_000_000_000 + md.mtime_nsec() as i128
 }
 
+/// The `metadata` stamp state of a staged entry whose directory shows
+/// `dir_mtime_ns`: a stamp is trusted only when it equals the directory's
+/// `st_mtime_ns`.
+// Portage: vartree.py, _read_metadata_file
+pub(crate) fn stamp_state(metadata: Option<&[u8]>, dir_mtime_ns: i128) -> MetadataStamp {
+    let Some(bytes) = metadata else {
+        return MetadataStamp::Absent;
+    };
+    let stamp = bytes
+        .split(|&b| b == b'\n')
+        .find_map(|l| l.strip_prefix(DIR_MTIME_PREFIX))
+        .and_then(|v| std::str::from_utf8(v).ok())
+        .and_then(|v| v.trim().parse::<i128>().ok());
+    if stamp == Some(dir_mtime_ns) {
+        MetadataStamp::Valid
+    } else {
+        MetadataStamp::Stale
+    }
+}
+
+const DIR_MTIME_PREFIX: &[u8] = b"#dir_mtime=";
+
 // The tests replay scripts on a database backend; without one there is
 // nothing to write to.
 #[cfg(all(test, any(feature = "vdb-sqlite", feature = "vdb-redb")))]
 #[path = "vdb_rw/ops.rs"]
 mod ops;
+
+#[cfg(all(test, any(feature = "vdb-sqlite", feature = "vdb-redb")))]
+mod tests {
+    use super::ops::Env;
+    use super::*;
+
+    #[test]
+    fn stamp_state_follows_the_portage_rule() {
+        assert_eq!(stamp_state(None, 5), MetadataStamp::Absent);
+        assert_eq!(
+            stamp_state(Some(b"#format=1\nSLOT=0\n#dir_mtime=5\n"), 5),
+            MetadataStamp::Valid
+        );
+        assert_eq!(
+            stamp_state(Some(b"#format=1\n#dir_mtime=4\n"), 5),
+            MetadataStamp::Stale
+        );
+        assert_eq!(
+            stamp_state(Some(b"#format=1\nSLOT=0\n"), 5),
+            MetadataStamp::Stale
+        );
+    }
+}

@@ -53,10 +53,32 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use portage_vdb::{EntryKey, EntryStat, FileMeta, InstalledDb, MetadataStamp};
 
+/// The root directory's inode (FUSE's fixed `FUSE_ROOT_ID`).
+pub const ROOT_INO: u64 = 1;
+
+/// Files up to this many bytes are read once at `open` and pinned.
+pub const DEFAULT_PIN_MAX: usize = 64 * 1024;
+
+const METADATA: &str = "metadata";
+const DIR_MTIME_PREFIX: &[u8] = b"#dir_mtime=";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Dir,
     File,
+}
+
+/// What `getattr` returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attr {
+    pub ino: u64,
+    pub kind: Kind,
+    /// Permission bits only (`0o7777` mask).
+    pub perm: u16,
+    pub size: u64,
+    pub nlink: u32,
+    /// Nanoseconds since the epoch.
+    pub mtime_ns: i128,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,8 +110,122 @@ pub enum ViewError {
     Io(String),
 }
 
+impl ViewError {
+    /// The errno the adapter replies with.
+    pub fn errno(&self) -> i32 {
+        match self {
+            ViewError::NoEnt => libc::ENOENT,
+            ViewError::NotDir => libc::ENOTDIR,
+            ViewError::IsDir => libc::EISDIR,
+            ViewError::BadHandle => libc::EBADF,
+            ViewError::Rofs => libc::EROFS,
+            ViewError::Stale => libc::ESTALE,
+            ViewError::Perm => libc::EPERM,
+            ViewError::NotEmpty => libc::ENOTEMPTY,
+            ViewError::Exists => libc::EEXIST,
+            ViewError::Io(_) => libc::EIO,
+        }
+    }
+}
+
 impl From<portage_vdb::Error> for ViewError {
     fn from(e: portage_vdb::Error) -> Self {
         ViewError::Io(e.to_string())
     }
+}
+
+type Res<T> = Result<T, ViewError>;
+
+/// The operations that would modify the tree. Each one is `EROFS`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteOp {
+    Create,
+    Mknod,
+    Mkdir,
+    Unlink,
+    Rmdir,
+    Rename,
+    Symlink,
+    Link,
+    Setattr,
+    Write,
+    Setxattr,
+    Removexattr,
+    Fallocate,
+    CopyFileRange,
+}
+
+/// The one decision for every write-class operation: refuse with `EROFS`.
+pub fn deny(_op: WriteOp) -> ViewError {
+    ViewError::Rofs
+}
+
+/// `open(2)` flags that ask for write access (`O_WRONLY`, `O_RDWR`,
+/// `O_TRUNC`, `O_APPEND`, `O_CREAT`).
+pub fn open_wants_write(flags: i32) -> bool {
+    flags & libc::O_ACCMODE != libc::O_RDONLY
+        || flags & (libc::O_TRUNC | libc::O_APPEND | libc::O_CREAT) != 0
+}
+
+/// Nanoseconds since the epoch as a `SystemTime` (negative: before it).
+pub fn system_time(ns: i128) -> SystemTime {
+    let secs = ns.div_euclid(1_000_000_000);
+    let nanos = ns.rem_euclid(1_000_000_000) as u32;
+    if secs >= 0 {
+        UNIX_EPOCH + Duration::new(secs as u64, nanos)
+    } else {
+        // `secs` is negative and `nanos` counts forward from it.
+        UNIX_EPOCH - Duration::new(secs.unsigned_abs() as u64, 0) + Duration::new(0, nanos)
+    }
+}
+
+/// `stored` with every `#dir_mtime=` line's value replaced by `shown_ns`
+/// (the line keeps its own line ending, or lack of one).
+pub fn rewrite_dir_mtime(stored: &[u8], shown_ns: i128) -> Vec<u8> {
+    let mut out = Vec::with_capacity(stored.len() + 8);
+    for line in stored.split_inclusive(|&b| b == b'\n') {
+        if line.starts_with(DIR_MTIME_PREFIX) {
+            out.extend_from_slice(DIR_MTIME_PREFIX);
+            out.extend_from_slice(shown_ns.to_string().as_bytes());
+            if line.ends_with(b"\n") {
+                out.push(b'\n');
+            }
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    out
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+// ---------------------------------------------------------------- inodes
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum Node {
+    Root,
+    Cat(String),
+    Entry(EntryKey),
+    File(EntryKey, String),
+    /// An object of the read-write layer (`vdb_rw`): a volatile
+    /// file, a staged directory or file. This view never serves it.
+    Obj(u64),
+}
+
+impl Node {
+    fn kind(&self) -> Kind {
+        match self {
+            Node::File(..) | Node::Obj(_) => Kind::File,
+            _ => Kind::Dir,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Inodes {
+    by_node: HashMap<Node, u64>,
+    /// `nodes[ino - 1]`.
+    nodes: Vec<Node>,
 }
