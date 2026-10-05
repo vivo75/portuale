@@ -18549,6 +18549,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The slave path of `master`, through the reentrant `ptsname_r`:
+    /// plain `ptsname` returns a pointer into one static buffer, so two
+    /// tests creating ptys on parallel threads could open each other's
+    /// slave -- crossed answers, `--ask should only be used in a
+    /// terminal`, EIO at `TIOCSCTTY`, hung prompts (#321).
+    #[cfg(unix)]
+    fn pty_slave_path(master: libc::c_int) -> std::ffi::CString {
+        let mut buf = [0 as libc::c_char; 128];
+        // SAFETY: `buf` is a valid writable buffer of the stated length.
+        let rc = unsafe { libc::ptsname_r(master, buf.as_mut_ptr(), buf.len()) };
+        assert_eq!(rc, 0, "ptsname_r failed");
+        // SAFETY: `ptsname_r` nul-terminated `buf` on success.
+        unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_owned()
+    }
+
     /// A pty pair without any external helper: the child answers `--ask`
     /// through the slave (its stdin), satisfying the up-front isatty
     /// gate, while the test writes the answer into the master. `libc`
@@ -18557,33 +18572,25 @@ mod tests {
     fn pty_pair() -> (std::fs::File, std::process::Stdio) {
         use std::os::fd::FromRawFd;
         unsafe {
-            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC);
             assert!(master >= 0, "posix_openpt failed");
             assert_eq!(libc::grantpt(master), 0, "grantpt failed");
             assert_eq!(libc::unlockpt(master), 0, "unlockpt failed");
-            let name_ptr = libc::ptsname(master);
-            assert!(!name_ptr.is_null(), "ptsname failed");
-            let name = std::ffi::CStr::from_ptr(name_ptr)
-                .to_str()
-                .expect("pty name is utf8")
-                .to_owned();
-            let cname = std::ffi::CString::new(name).expect("pty name has no nul");
-            let slave = libc::open(cname.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            let cname = pty_slave_path(master);
+            let slave = libc::open(
+                cname.as_ptr(),
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+            );
             assert!(slave >= 0, "pty slave open failed");
-            // Backlog #234: close-on-exec on both ends. Without it the
+            // Backlog #234 / #321: close-on-exec on both ends, set at open
+            // time (`O_CLOEXEC`), not by a later `fcntl`: a sibling test
+            // forking in that window keeps a private copy of the fd past its
+            // exec (a child's fd table is copied at fork), which under load
+            // holds this pty open. Without it the
             // spawned child inherits the master, so dropping the test's
             // `master` never delivers EOF to the child's slave read (the
             // EOF test hung on exactly this). The stdio dup onto fd 0
             // clears the flag on the dup, so the child's stdin survives.
-            for fd in [master, slave] {
-                let flags = libc::fcntl(fd, libc::F_GETFD);
-                assert!(flags >= 0, "fcntl F_GETFD failed");
-                assert_eq!(
-                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC),
-                    0,
-                    "fcntl F_SETFD failed"
-                );
-            }
             let master_file = std::fs::File::from_raw_fd(master);
             let slave_stdio = std::process::Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave));
             (master_file, slave_stdio)
@@ -18722,18 +18729,15 @@ mod tests {
         // A pty, not a pipe: the canonical line discipline is what
         // queues the second answer in the kernel in the real capture.
         unsafe {
-            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC);
             assert!(master >= 0, "posix_openpt");
             assert_eq!(libc::grantpt(master), 0, "grantpt");
             assert_eq!(libc::unlockpt(master), 0, "unlockpt");
-            let name_ptr = libc::ptsname(master);
-            assert!(!name_ptr.is_null(), "ptsname");
-            let name = std::ffi::CStr::from_ptr(name_ptr)
-                .to_str()
-                .expect("pty name is utf8")
-                .to_owned();
-            let cname = std::ffi::CString::new(name).expect("pty name has no nul");
-            let slave = libc::open(cname.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            let cname = pty_slave_path(master);
+            let slave = libc::open(
+                cname.as_ptr(),
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+            );
             assert!(slave >= 0, "pty slave open");
             assert_eq!(
                 libc::write(master, b"No\n".as_ptr() as *const libc::c_void, 3),
