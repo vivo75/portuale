@@ -344,6 +344,15 @@ impl RwView {
         }
     }
 
+    /// Whether the view (the database) has category `cat`.
+    fn base_has_cat(&self, cat: &str) -> Res<bool> {
+        match self.view.lookup(ROOT_INO, cat) {
+            Ok(_) => Ok(true),
+            Err(ViewError::NoEnt) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// The directory `ino` stands for, as a parent of this layer's names:
     /// a category (stored or volatile) or a staged directory.
     fn parent_of(&self, ino: u64) -> Res<Option<Parent>> {
@@ -370,6 +379,57 @@ impl RwView {
     /// of its files).
     fn removing(st: &RwState, key: &EntryKey) -> bool {
         st.hidden.get(key).is_some_and(|h| !h.is_empty())
+    }
+
+    // ------------------------------------------------------- read side
+
+    pub fn lookup(&self, parent: u64, name: &str) -> Res<Attr> {
+        match self.view.node_of(parent)? {
+            Node::Root => {
+                if let Some(&m) = lock(&self.st).vol_cats.get(name)
+                    && !self.base_has_cat(name)?
+                {
+                    return Ok(self.vol_cat_attr(name, m));
+                }
+                self.view.lookup(parent, name)
+            }
+            Node::Cat(cat) => {
+                {
+                    let st = lock(&self.st);
+                    if let Some(&id) = st.names.get(&(Parent::Cat(cat.clone()), name.to_string())) {
+                        return self.obj_attr(id, &st.objs[&id]);
+                    }
+                }
+                self.view.lookup(parent, name)
+            }
+            Node::Obj(dir) => {
+                let st = lock(&self.st);
+                match st.objs.get(&dir) {
+                    Some(Obj::StagedDir { .. }) => {}
+                    Some(_) => return Err(ViewError::NotDir),
+                    None => return Err(ViewError::NoEnt),
+                }
+                let id = *st
+                    .names
+                    .get(&(Parent::Staged(dir), name.to_string()))
+                    .ok_or(ViewError::NoEnt)?;
+                self.obj_attr(id, &st.objs[&id])
+            }
+            Node::Entry(key) => {
+                {
+                    let st = lock(&self.st);
+                    if let Some(&id) = st.names.get(&(Parent::Live(key.clone()), name.to_string()))
+                    {
+                        return self.obj_attr(id, &st.objs[&id]);
+                    }
+                    if st.hidden.get(&key).is_some_and(|h| h.contains(name)) {
+                        return Err(ViewError::NoEnt);
+                    }
+                }
+                self.view.lookup(parent, name)
+            }
+            _ => self.view.lookup(parent, name),
+        }
     }
 
     pub fn readdir(&self, fh: u64) -> Res<Arc<Vec<DirEnt>>> {
@@ -441,6 +501,150 @@ impl RwView {
             _ => return Err(ViewError::Stale),
         }
         Ok(bytes.len() as u32)
+    }
+
+    /// `unlink(parent, name)`.
+    pub fn unlink(&self, parent: u64, name: &str) -> Res<()> {
+        let Some(parent_key) = self.parent_of(parent)? else {
+            return Err(ViewError::Perm);
+        };
+        let mut st = lock(&self.st);
+        let key = (parent_key.clone(), name.to_string());
+        let Some(&id) = st.names.get(&key) else {
+            drop(st);
+            if let Parent::Staged(_) = parent_key {
+                return Err(ViewError::NoEnt);
+            }
+            if let Parent::Live(entry) = &parent_key {
+                // A stored file: hidden now, deleted with the entry at
+                // `rmdir` (Portage's `shutil.rmtree`).
+                self.lookup(parent, name)?;
+                lock(&self.st)
+                    .hidden
+                    .entry(entry.clone())
+                    .or_default()
+                    .insert(name.to_string());
+                return Ok(());
+            }
+            // A stored entry is a directory; anything else is not here.
+            return match self.view.lookup(parent, name) {
+                Ok(_) => Err(ViewError::IsDir),
+                Err(e) => Err(e),
+            };
+        };
+        match st.objs.get(&id) {
+            Some(Obj::StagedDir { .. }) => return Err(ViewError::IsDir),
+            Some(Obj::StagedFile { path }) => {
+                std::fs::remove_file(path).map_err(io_err)?;
+            }
+            _ => {}
+        }
+        st.names.remove(&key);
+        st.drop_name(id);
+        if let Parent::Staged(dir) = parent_key {
+            st.bump(dir);
+        }
+        Ok(())
+    }
+
+    /// `rename(parent, name, newparent, newname)`.
+    pub fn rename(&self, parent: u64, name: &str, newparent: u64, newname: &str) -> Res<()> {
+        let (Some(from), Some(to)) = (self.parent_of(parent)?, self.parent_of(newparent)?) else {
+            return Err(ViewError::Perm);
+        };
+        match (&from, &to) {
+            // Publish: `<cat>/-MERGING-<pf>` -> `<cat>/<pf>`.
+            (Parent::Cat(c1), Parent::Cat(c2))
+                if c1 == c2
+                    && name.strip_prefix(MERGING) == Some(newname)
+                    && !newname.is_empty() =>
+            {
+                self.publish(c1, name, newname)
+            }
+            (Parent::Cat(_), Parent::Cat(_))
+                if is_volatile_name(name) && is_volatile_name(newname) =>
+            {
+                self.move_name(from, name, to, newname)
+            }
+            // `write_atomic` inside a staged directory.
+            (Parent::Staged(a), Parent::Staged(b)) if a == b => {
+                self.move_name(from, name, to, newname)
+            }
+            // `write_atomic` inside a live entry (W4 `removeFromContents`,
+            // `aux_update`): the temp's bytes replace the stored file.
+            (Parent::Live(a), Parent::Live(b)) if a == b => {
+                let is_temp = lock(&self.st)
+                    .names
+                    .contains_key(&(Parent::Live(a.clone()), name.to_string()));
+                if is_temp {
+                    self.replace_from_temp(a, name, newname)
+                } else {
+                    self.rename_stored_file(a, name, newname)
+                }
+            }
+            // Portage: vartree.py, vardbapi.move_ent (the entry directory
+            // moves, possibly into another category).
+            (Parent::Cat(c1), Parent::Cat(c2))
+                if !name.starts_with(MERGING)
+                    && !newname.starts_with(MERGING)
+                    && !is_volatile_name(name)
+                    && !is_volatile_name(newname)
+                    && !newname.is_empty() =>
+            {
+                self.move_entry(c1, name, c2, newname)
+            }
+            // Other renames are unmapped.
+            _ => Err(ViewError::Perm),
+        }
+    }
+
+    /// `move_ent`'s `_movefile(origpath, newpath)`: one transaction that
+    /// deletes the live entry and inserts its image under the new key
+    /// (counters stay as they are). The category directory the move
+    /// leaves behind is Portage's to keep (or remove); like on disk, a
+    /// destination that exists is `ENOTEMPTY`. Inodes follow the rename.
+    fn move_entry(&self, cat: &str, pf: &str, new_cat: &str, new_pf: &str) -> Res<()> {
+        let old = EntryKey::new(cat, pf);
+        let new = EntryKey::new(new_cat, new_pf);
+        let mut st = lock(&self.st);
+        let cat_ino = self.view.ino_of(&Node::Cat(cat.to_string()));
+        self.view.lookup(cat_ino, pf)?;
+        let new_cat_ino = self.view.ino_of(&Node::Cat(new_cat.to_string()));
+        if self.view.lookup(new_cat_ino, new_pf).is_ok() {
+            return Err(ViewError::NotEmpty);
+        }
+        // Temps in the entry, or files Portage already unlinked (a removal
+        // in progress), have no meaning across a move.
+        if Self::removing(&st, &old)
+            || st
+                .names
+                .keys()
+                .any(|(p, _)| *p == Parent::Live(old.clone()))
+        {
+            return Err(ViewError::Perm);
+        }
+        let mut image = self.db.entry_image(&old)?.ok_or(ViewError::NoEnt)?;
+        let names: Vec<String> = image.files.iter().map(|f| f.meta.name.clone()).collect();
+        image.key = new.clone();
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.delete_entry(&old)?;
+            txn.insert_entry(&image)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        st.vol_cats.remove(new_cat);
+        drop(st);
+        // Every inode the kernel may hold follows the entry.
+        self.view.rebind(
+            self.view.ino_of(&Node::Entry(old.clone())),
+            Node::Entry(new.clone()),
+        );
+        for name in names {
+            let ino = self.view.ino_of(&Node::File(old.clone(), name.clone()));
+            self.view.rebind(ino, Node::File(new.clone(), name));
+        }
+        Ok(())
     }
 
     /// `os.rename(<old_pf>.ebuild, <new_pf>.ebuild)` inside a live entry
@@ -550,6 +754,72 @@ impl RwView {
             dir_mtime_ns: *mtime_ns,
             metadata_stamp,
         })
+    }
+
+    /// `rename(<cat>/-MERGING-<pf>, <cat>/<pf>)`: store the staged entry in
+    /// one transaction (replacing a live `<pf>`), raise the counter to its
+    /// `COUNTER`, then drop the scratch copy. The directory keeps its inode
+    /// under the new name. A failed transaction is `EIO` and leaves the
+    /// staged entry as it was.
+    fn publish(&self, cat: &str, staged: &str, pf: &str) -> Res<()> {
+        let mut st = lock(&self.st);
+        let dir = *st
+            .names
+            .get(&(Parent::Cat(cat.to_string()), staged.to_string()))
+            .ok_or(ViewError::NoEnt)?;
+        let key = EntryKey::new(cat, pf);
+        // A rename onto a non-empty directory fails on a filesystem;
+        // Portage's `dblink.treewalk` removes the live entry first.
+        let cat_ino = self.view.ino_of(&Node::Cat(cat.to_string()));
+        if self.view.lookup(cat_ino, pf).is_ok() {
+            return Err(ViewError::NotEmpty);
+        }
+        let image = self.staged_image(&st, dir, key.clone())?;
+        let counter = image
+            .files
+            .iter()
+            .find(|f| f.meta.name == "COUNTER")
+            .and_then(|f| {
+                std::str::from_utf8(&f.data)
+                    .ok()?
+                    .trim()
+                    .parse::<i64>()
+                    .ok()
+            });
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.insert_entry(&image)?;
+            if let Some(c) = counter
+                && self.db.counter()?.is_none_or(|cur| cur.0 < c)
+            {
+                txn.set_counter(Counter(c))?;
+            }
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        // A directory rename keeps every child's inode: the kernel still
+        // holds dentries for the files Portage just wrote, and
+        // `pkg_postinst` reopens `environment.bz2` through them.
+        let mut rebinds = Vec::new();
+        for (name, id) in st.children(&Parent::Staged(dir)) {
+            st.names.remove(&(Parent::Staged(dir), name.clone()));
+            st.objs.remove(&id);
+            rebinds.push((self.obj_ino(id), Node::File(key.clone(), name)));
+        }
+        st.names
+            .remove(&(Parent::Cat(cat.to_string()), staged.to_string()));
+        if let Some(Obj::StagedDir { path, .. }) = st.objs.remove(&dir) {
+            let _ = std::fs::remove_dir_all(path);
+        }
+        // The entry is now a stored category member; a volatile category
+        // record for it is no longer needed.
+        st.vol_cats.remove(cat);
+        drop(st);
+        self.view.rebind(self.obj_ino(dir), Node::Entry(key));
+        for (ino, node) in rebinds {
+            self.view.rebind(ino, node);
+        }
+        Ok(())
     }
 
     /// `rename(<entry>/<temp>, <entry>/<field>)` inside a live entry.
