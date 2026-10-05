@@ -1421,7 +1421,7 @@ mod ops;
 
 #[cfg(all(test, any(feature = "vdb-sqlite", feature = "vdb-redb")))]
 mod tests {
-    use super::ops::Env;
+    use super::ops::{Env, envs};
     use super::*;
 
     #[test]
