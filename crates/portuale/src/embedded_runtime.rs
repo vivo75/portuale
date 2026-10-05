@@ -73,3 +73,15 @@ pub(crate) fn extract(prefix: &str, dest: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    fn repo() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+}

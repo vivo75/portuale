@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::vdb_view::{self, Kind, ViewError};
 use fuser::{
     AccessFlags, BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType, Filesystem,
     FopenFlags, Generation, INodeNo, InitFlags, KernelConfig, LockOwner, MountOption, OpenFlags,
@@ -22,9 +21,41 @@ use fuser::{
 };
 use portage_vdb::InstalledDb;
 
+use crate::vdb_rw::{Owner, SetAttr};
+use crate::vdb_view::{self, Kind, ViewError};
+
 /// `--rw`: where staged entries live while Portage writes them, and
 /// the ROOT whose stores (world, counter, …) are imported at unmount.
 pub struct RwOpts {
     pub scratch: PathBuf,
     pub root: PathBuf,
+}
+
+fn ns_of(t: TimeOrNow) -> i128 {
+    let st = match t {
+        TimeOrNow::SpecificTime(st) => st,
+        TimeOrNow::Now => std::time::SystemTime::now(),
+    };
+    match st.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_nanos() as i128,
+        Err(e) => -(e.duration().as_nanos() as i128),
+    }
+}
+
+/// Arguments of [`serve`].
+pub struct ServeArgs<'a> {
+    pub db: Arc<dyn InstalledDb>,
+    pub mountpoint: &'a Path,
+    pub fsname: &'a str,
+    pub allow_other: bool,
+    pub rw: Option<&'a RwOpts>,
+}
+
+/// The unmount-report file of a `--rw` mount: the scratch directory's
+/// name plus `.log`, beside it (the scratch directory itself is emptied
+/// by the next mount).
+fn rw_log_path(scratch: &Path) -> PathBuf {
+    let mut name = scratch.as_os_str().to_os_string();
+    name.push(".log");
+    PathBuf::from(name)
 }

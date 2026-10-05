@@ -51,6 +51,41 @@ struct Spec {
     path: PathBuf,
 }
 
+/// The scratch directory of a `--rw` mount of `db`: named after the
+/// database file, so the next mount of the same database clears what a
+/// daemon that died left behind (`RwView::new` empties it).
+#[cfg(feature = "vdb-fuse")]
+fn rw_scratch(db: &Path) -> PathBuf {
+    use std::hash::{Hash as _, Hasher as _};
+    let abs = std::fs::canonicalize(db).unwrap_or_else(|_| db.to_path_buf());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    abs.hash(&mut h);
+    std::env::temp_dir().join(format!("portuale-vdb-rw-{:016x}", h.finish()))
+}
+
+/// What [`import_stores`] copied.
+pub(crate) struct StoresReport {
+    pub world: usize,
+    pub world_sets: usize,
+    pub preserved_libs: usize,
+    pub config_memory: usize,
+    pub counter: Option<i64>,
+}
+
+impl std::fmt::Display for StoresReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "world {} atoms, {} sets; preserved libs {}; config memory {}; counter {}",
+            self.world,
+            self.world_sets,
+            self.preserved_libs,
+            self.config_memory,
+            self.counter.map_or("none".to_string(), |c| c.to_string())
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

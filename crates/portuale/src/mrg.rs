@@ -1337,6 +1337,15 @@ fn join_optional_values(args: &[String]) -> Vec<String> {
 use portage_vdb::BackendKind;
 use std::path::{Path, PathBuf};
 
+/// What `resolve_vdb_selection` decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VdbSelection {
+    pub(crate) backend: BackendKind,
+    /// The database file for `sqlite`/`redb` (absolute); `None` for
+    /// `files`.
+    pub(crate) path: Option<PathBuf>,
+}
+
 /// Shared by the database backends: refuse a missing file (mrg never
 /// creates one), then, after the open, print the stale-import warning
 /// and one warning per entry an interrupted merge left behind.

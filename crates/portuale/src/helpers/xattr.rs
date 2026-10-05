@@ -26,3 +26,11 @@ fn read_stdin() -> Vec<u8> {
     let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf);
     buf
 }
+
+// ---------------------------------------------------------------------
+// `xattr-helper.py` argv (argparse)
+// ---------------------------------------------------------------------
+
+// Probed from Portage `xattr-helper.py --help` (80 columns, piped).
+// `xattr-helper.py` occurs in the usage line only.
+const XATTR_USAGE: &str = "usage: xattr-helper.py [-h] [--dump] [--restore] [paths ...]\n";
