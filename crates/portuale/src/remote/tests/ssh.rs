@@ -1,5 +1,27 @@
 use super::*;
 
+/// #313: a local-transport client script gets `PORTUALE_BIN` (the shim's
+/// target) and has the server's `PORTUALE_VDB_*` removed from its
+/// inherited environment (`get_envs` reports a removal as `None`).
+#[test]
+fn local_client_bash_exports_the_binary_and_scrubs_the_servers_vdb_selection() {
+    let cmd = local_client_bash();
+    let envs: std::collections::BTreeMap<_, _> = cmd.get_envs().collect();
+    let exe = std::env::current_exe().unwrap();
+    assert_eq!(
+        envs.get(std::ffi::OsStr::new("PORTUALE_BIN")),
+        Some(&Some(exe.as_os_str()))
+    );
+    for var in [
+        "PORTUALE_VDB_BACKEND",
+        "PORTUALE_VDB_PATH",
+        "PORTUALE_VDB_ROOT",
+        crate::vdb_ipc::IPC_VAR,
+    ] {
+        assert_eq!(envs.get(std::ffi::OsStr::new(var)), Some(&None), "{var}");
+    }
+}
+
 #[test]
 fn sh_quote_wraps_and_escapes() {
     assert_eq!(sh_quote("/"), "'/'");
