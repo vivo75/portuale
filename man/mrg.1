@@ -15,11 +15,11 @@ for the full list, including the \fB\-\-remote\-*\fR options.
 \fB\-\-vdb\-backend\fR=\fIfiles\fR|\fIsqlite\fR|\fIredb\fR
 Where the installed\-package database (the VDB) lives.  \fBfiles\fR, the
 default, is the historic \fIROOT\fR\fB/var/db/pkg\fR tree.  \fBsqlite\fR
-reads one SQLite file.  \fBredb\fR is not implemented yet and is refused.
+reads one SQLite file, \fBredb\fR one redb file.
 .TP
 \fB\-\-vdb\-path\fR=\fIPATH\fR
-The database file for \fBsqlite\fR.  The default is
-\fIROOT\fR\fB/var/lib/portage/vdb.sqlite\fR.  It is ignored, with a
+The database file for \fBsqlite\fR or \fBredb\fR.  The default is
+\fIROOT\fR\fB/var/lib/portage/vdb.sqlite\fR or \fBvdb.redb\fR.  It is ignored, with a
 warning, when the backend is \fBfiles\fR.
 When the sqlite database was converted from the files backend, a warning
 is printed if the files VDB has changed since conversion; re-convert with
@@ -53,8 +53,19 @@ read\-only.
 .LP
 The database serves the target \fBROOT\fR.  When \fBROOT\fR is not
 \fB/\fR, the running root keeps its \fB/var/db/pkg\fR tree.  When the
-backend is not \fBfiles\fR, \fBmrg\fR sets \fBPORTUALE_VDB_BACKEND\fR and
-\fBPORTUALE_VDB_PATH\fR in the environment of the programs it starts.
+backend is not \fBfiles\fR, \fBmrg\fR sets \fBPORTUALE_VDB_BACKEND\fR,
+\fBPORTUALE_VDB_PATH\fR and \fBPORTUALE_VDB_ROOT\fR in the environment of
+the programs it starts.
+.LP
+\fBredb\fR allows only one process to use the file at a time: a running
+\fBmrg\fR holds it, and any other process that opens it fails with a
+\fBbusy\fR error.  So that \fBhas_version\fR and \fBbest_version\fR still
+work in the ebuild phases, a merging (not \fB\-\-pretend\fR) \fBmrg\fR on
+\fBredb\fR answers those lookups itself over a Unix socket in a private
+directory under \fBTMPDIR\fR (\fB/tmp\fR when that path is too long), and
+exports its path as \fBPORTUALE_VDB_IPC\fR (see \fBportuale\-portageq\fR(1)).
+The socket is removed when \fBmrg\fR exits; one left by a killed \fBmrg\fR
+is removed by the next one.
 .LP
 With \fB\-\-remote\-hostname\fR, a \fBclient:\fR VDB
 (\fB\-\-remote\-vdb\fR, the default) always stays a files tree, and
@@ -64,5 +75,6 @@ error.
 \fBemerge\fR has no such options and always uses the files tree.
 .SH "SEE ALSO"
 .BR emerge (1),
+.BR portuale\-portageq (1),
 .BR portuale\-vdb (1),
 .BR make.conf (5)

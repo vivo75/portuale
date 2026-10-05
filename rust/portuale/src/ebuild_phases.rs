@@ -3151,11 +3151,14 @@ fn phase_env_vars(
     // database selection `mrg` exported for its children
     // (`PORTUALE_VDB_*`, see `portageq.rs`) must be forwarded explicitly or
     // `has_version`/`best_version` would read the files tree even on a
-    // sqlite/redb ROOT.
+    // sqlite/redb ROOT. `PORTUALE_VDB_IPC` is the parent pipe of a redb run
+    // (S6.3, `vdb_ipc.rs`). `bin/phase-functions.sh` keeps all of them out
+    // of the saved environment (`PORTUALE_.*`).
     for k in [
         "PORTUALE_VDB_BACKEND",
         "PORTUALE_VDB_PATH",
         "PORTUALE_VDB_ROOT",
+        crate::vdb_ipc::IPC_VAR,
     ] {
         if let Some(v) = std::env::var_os(k).filter(|v| !v.is_empty()) {
             vars.push((k.to_string(), v.to_string_lossy().into_owned()));

@@ -24,6 +24,24 @@
 // while ROOT is a chroot, and that other root keeps the files layout.
 // Without `PORTUALE_VDB_ROOT` the database is used for whatever <eroot>
 // is given (a hand-set environment names the backend explicitly).
+//
+// redb (S6.3, owner question Q5): redb allows one process per file, and a
+// merging `mrg` holds it read-write, so this helper cannot open it. `mrg`
+// then serves the lookups over a Unix socket and exports its path in
+// `PORTUALE_VDB_IPC` (`vdb_ipc.rs`, real Portage's `ebuild-ipc` pattern).
+// When the backend is redb, the <eroot> is the database's root and
+// `PORTUALE_VDB_IPC` is set, every installed-package lookup goes to the
+// parent: the match (`best_installed_match`) and `dep_expand`'s category
+// lookup. Everything else -- rules 1-10, the strict parse, the EAPI QA
+// notice, USE-conditional evaluation, the implicit IUSE from the config,
+// the output and exit codes -- stays here, in one place for every
+// backend. A pipe that cannot be reached, or an `err` reply, is exit 4
+// (never 1: that would read as "not installed"). The parent answers from
+// its last committed state: during `pkg_preinst` the old instance, until
+// the new one is published. Files and sqlite never use the pipe (they
+// open the database directly, read-only); redb without the variable
+// keeps S5.4's behaviour: read directly when nobody holds the file, exit
+// 4 naming the missing variable when somebody does.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -93,6 +111,9 @@ fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
     }
     let root = PathBuf::from(&rest[0]);
     let raw = rest[1].as_str();
+    // Where the installed packages are read; decided at the first lookup,
+    // so the argument and atom errors (rules 1, 4) never depend on it.
+    let mut lookup: Option<Lookup> = None;
 
     // Rule 3: strict iff EBUILD_PHASE is set; EAPI then decides.
     let strict = std::env::var_os("EBUILD_PHASE").is_some();
@@ -132,11 +153,14 @@ fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
         None => {
             // Rule 6: the raw string goes to `vardb.match()`, which runs
             // `dep_expand` over it.
-            if let Err(e) = setup_backend(&root) {
-                eprintln!("portageq: {e}");
-                return EX_INTERNAL;
-            }
-            match dep_expand(&root, raw) {
+            let source = match setup_backend(&root) {
+                Ok(s) => lookup.insert(s),
+                Err(e) => {
+                    eprintln!("portageq: {e}");
+                    return EX_INTERNAL;
+                }
+            };
+            match dep_expand(source, &root, raw) {
                 Ok(a) => (a, None),
                 Err(ExpandError::Invalid) => {
                     eprintln!("ERROR: Invalid atom: '{raw}'");
@@ -154,21 +178,51 @@ fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
                     eprintln!("ERROR: ambiguous package name '{raw}': {}", list.join(" "));
                     return 1;
                 }
+                Err(ExpandError::Internal(e)) => {
+                    eprintln!("portageq: {e}");
+                    return EX_INTERNAL;
+                }
             }
         }
     };
-    if let Err(e) = setup_backend(&root) {
-        eprintln!("portageq: {e}");
-        return EX_INTERNAL;
-    }
+    let source = match lookup {
+        Some(s) => s,
+        None => match setup_backend(&root) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("portageq: {e}");
+                return EX_INTERNAL;
+            }
+        },
+    };
 
-    // Rule 7: the resolver's own installed-package matcher.
+    // Rule 7: the resolver's own installed-package matcher, here or in the
+    // parent `mrg` (S6.3).
     let implicit = || -> HashSet<String> {
         crate::pretend::load_repos_and_config(&portage_repo::config_root_from_env(), &root)
             .map(|(_, config)| config.iuse_effective)
             .unwrap_or_default()
     };
-    let best = portage_repo::best_installed_match(&root, &atom, unevaluated.as_deref(), &implicit);
+    let best = match &source {
+        Lookup::Local => {
+            portage_repo::best_installed_match(&root, &atom, unevaluated.as_deref(), &implicit)
+        }
+        Lookup::Parent(socket) => {
+            match crate::vdb_ipc::query_match(
+                socket,
+                &root,
+                &atom,
+                unevaluated.as_deref(),
+                &implicit,
+            ) {
+                Ok(best) => best,
+                Err(e) => {
+                    eprintln!("portageq: {e}");
+                    return EX_INTERNAL;
+                }
+            }
+        }
+    };
     match cmd {
         // Rule 8.
         Cmd::HasVersion => u8::from(best.is_none()),
@@ -188,26 +242,43 @@ fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
 // Backend selection
 // ---------------------------------------------------------------------
 
-/// Register the database `mrg` exported for this root, if any. The
-/// default (files) needs nothing: `portage_vdb::for_root` falls back to it.
-fn setup_backend(eroot: &Path) -> Result<(), String> {
+/// Where this query reads the installed packages of its <eroot>.
+enum Lookup {
+    /// `portage_vdb::for_root(eroot)`: the files tree, or the database
+    /// registered by [`setup_backend`].
+    Local,
+    /// The parent `mrg`, over the socket named in `PORTUALE_VDB_IPC`
+    /// (redb only, Q5; see `vdb_ipc.rs`).
+    Parent(PathBuf),
+}
+
+/// Decide where the installed packages of `eroot` are read, registering
+/// the database `mrg` exported for this root, if any. The default (files)
+/// needs nothing: `portage_vdb::for_root` falls back to it.
+fn setup_backend(eroot: &Path) -> Result<Lookup, String> {
     let backend = std::env::var("PORTUALE_VDB_BACKEND")
         .ok()
         .filter(|v| !v.is_empty());
     let Some(backend) = backend else {
-        return Ok(());
+        return Ok(Lookup::Local);
     };
     let kind: BackendKind = backend.parse().map_err(|_| {
         format!("PORTUALE_VDB_BACKEND={backend:?} is not one of files, sqlite, redb")
     })?;
     if kind == BackendKind::Files {
-        return Ok(());
+        return Ok(Lookup::Local);
     }
     // Which root does the database belong to?
     if let Some(db_root) = std::env::var_os("PORTUALE_VDB_ROOT").filter(|v| !v.is_empty())
         && !same_root(Path::new(&db_root), eroot)
     {
-        return Ok(());
+        return Ok(Lookup::Local);
+    }
+    // S6.3, Q5: on redb the parent holds the file; ask it.
+    if kind == BackendKind::Redb
+        && let Some(socket) = std::env::var_os(crate::vdb_ipc::IPC_VAR).filter(|v| !v.is_empty())
+    {
+        return Ok(Lookup::Parent(PathBuf::from(socket)));
     }
     let path = std::env::var_os("PORTUALE_VDB_PATH")
         .filter(|v| !v.is_empty())
@@ -215,7 +286,7 @@ fn setup_backend(eroot: &Path) -> Result<(), String> {
         .ok_or_else(|| format!("PORTUALE_VDB_BACKEND={backend} needs PORTUALE_VDB_PATH"))?;
     let db = open_readonly(kind, &path)?;
     portage_vdb::register(eroot, db);
-    Ok(())
+    Ok(Lookup::Local)
 }
 
 type SharedDb = std::sync::Arc<dyn portage_vdb::InstalledDb>;
@@ -246,18 +317,19 @@ fn open_sqlite_readonly(_path: &Path) -> Result<SharedDb, String> {
 
 /// redb allows one process per file. A read-only open succeeds only when
 /// nobody holds the file read-write (a helper run by hand, outside `mrg`).
-/// Under a running `mrg` on redb the file is held, so the open is `Busy`
-/// and the query fails with exit 4 until the parent pipe exists (plan S6.3,
-/// `PORTUALE_VDB_IPC`).
+/// Under a running `mrg` on redb the file is held and the helper asks the
+/// parent over `PORTUALE_VDB_IPC` instead (S6.3, [`setup_backend`]); this
+/// open is reached only when that variable is missing, so a `Busy` says so.
 #[cfg(feature = "vdb-redb")]
 fn open_redb_readonly(path: &Path) -> Result<SharedDb, String> {
     match portage_vdb::RedbDb::open_readonly(path) {
         Ok(db) => Ok(std::sync::Arc::new(db) as SharedDb),
         Err(e @ portage_vdb::Error::Busy { .. }) => Err(format!(
             "cannot open the redb VDB {}: it is held open by another process (the mrg that \
-             started this helper): {e}; querying a redb VDB held by mrg needs the parent pipe, \
-             which arrives in plan step S6.3",
-            path.display()
+             started this helper): {e}; a helper under mrg asks it over the socket named in \
+             {}, which is not set here",
+            path.display(),
+            crate::vdb_ipc::IPC_VAR
         )),
         Err(e) => Err(format!("cannot open the redb VDB {}: {e}", path.display())),
     }
@@ -274,7 +346,7 @@ fn open_redb_readonly(_path: &Path) -> Result<SharedDb, String> {
 
 /// Lexical normalisation (`.` and repeated `/` dropped, trailing `/`
 /// ignored, `..` not resolved), then canonical comparison when both exist.
-fn same_root(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_root(a: &Path, b: &Path) -> bool {
     fn lex(p: &Path) -> Vec<std::path::Component<'_>> {
         p.components()
             .filter(|c| !matches!(c, std::path::Component::CurDir))
@@ -392,6 +464,20 @@ fn eqawarn(lines: &[String]) {
 enum ExpandError {
     Invalid,
     Ambiguous(Vec<String>),
+    /// The parent pipe failed (S6.3).
+    Internal(String),
+}
+
+/// The categories that have `pn` installed under `root` (the
+/// `cpv_expand` lookup of [`dep_expand`]). Also what the parent pipe
+/// answers to a `categories` request (`vdb_ipc.rs`).
+pub(crate) fn installed_categories_of(root: &Path, pn: &str) -> Vec<String> {
+    portage_vdb::for_root(root)
+        .categories()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| !portage_repo::installed_candidates(root, c, pn).is_empty())
+        .collect()
 }
 
 /// What `vardb.match()` does to a string the strict `Atom()` parse
@@ -399,7 +485,7 @@ enum ExpandError {
 /// without a category is expanded to the one category that has it
 /// installed (`cpv_expand`); none installed leaves `null/<pn>`, which
 /// matches nothing.
-fn dep_expand(root: &Path, raw: &str) -> Result<String, ExpandError> {
+fn dep_expand(source: &Lookup, root: &Path, raw: &str) -> Result<String, ExpandError> {
     let orig = raw.strip_prefix('*').unwrap_or(raw);
     if orig.is_empty() {
         return Err(ExpandError::Invalid);
@@ -424,13 +510,12 @@ fn dep_expand(root: &Path, raw: &str) -> Result<String, ExpandError> {
         return Ok(candidate);
     }
     let pn = atom.package;
-    let db = portage_vdb::for_root(root);
-    let cats: Vec<String> = db
-        .categories()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|c| !portage_repo::installed_candidates(root, c, &pn).is_empty())
-        .collect();
+    let cats = match source {
+        Lookup::Local => installed_categories_of(root, &pn),
+        Lookup::Parent(socket) => {
+            crate::vdb_ipc::query_categories(socket, root, &pn).map_err(ExpandError::Internal)?
+        }
+    };
     match cats.as_slice() {
         [] => Ok(orig_dep.replacen(&pn, &format!("null/{pn}"), 1)),
         [one] => Ok(orig_dep.replacen(&pn, &format!("{one}/{pn}"), 1)),
@@ -920,8 +1005,9 @@ mod tests {
     }
 
     /// S5.4: a redb database nobody holds is read directly (a helper run
-    /// outside `mrg`); one held by another process (the parent `mrg`) is a
-    /// clean exit 4 that points at the parent pipe of plan step S6.3.
+    /// outside `mrg`); one held by another process (the parent `mrg`)
+    /// without `PORTUALE_VDB_IPC` is a clean exit 4 that names the missing
+    /// variable (S6.3).
     #[cfg(feature = "vdb-redb")]
     #[test]
     fn redb_is_read_when_free_and_exit_4_when_held() {
@@ -948,12 +1034,12 @@ mod tests {
         // Free: the same answer as the files layout, for a hit and a miss.
         assert_eq!(ask("dev-libs/keeper"), files);
         assert_eq!(ask("dev-libs/not-installed-at-all").0, 1);
-        // Held (read-write, like mrg): exit 4 with the S6.3 message.
+        // Held (read-write, like mrg): exit 4 naming the pipe variable.
         let held = portage_vdb::RedbDb::open(&path).unwrap();
         let (rc, _, err) = ask("dev-libs/keeper");
         assert_eq!(rc, 4, "{err}");
         assert!(
-            err.contains("already open") && err.contains("S6.3"),
+            err.contains("already open") && err.contains("PORTUALE_VDB_IPC"),
             "{err}"
         );
         drop(held);

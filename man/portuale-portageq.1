@@ -40,6 +40,18 @@ database is then opened read\-only, and used for \fIEROOT\fR equal to
 \fBPORTUALE_VDB_ROOT\fR only; any other root (for example \fB/\fR for
 \fBhas_version \-b\fR in a chroot build) keeps the files tree.  Without
 \fBPORTUALE_VDB_ROOT\fR the database is used for any \fIEROOT\fR.
+.LP
+\fBredb\fR allows only one process to use the file at a time, and a merging
+\fBmrg\fR holds it.  \fBmrg\fR then answers the lookups itself over a Unix
+socket in a private directory and exports its path in
+\fBPORTUALE_VDB_IPC\fR.  With the \fBredb\fR backend, \fIEROOT\fR equal to
+\fBPORTUALE_VDB_ROOT\fR and \fBPORTUALE_VDB_IPC\fR set, every
+installed\-package lookup is sent to the parent; the atom rules above are
+still applied here.  The parent answers from the last committed state of
+the database: during \fBpkg_preinst\fR the instance being replaced is still
+installed and the new one is not.  Without \fBPORTUALE_VDB_IPC\fR a
+\fBredb\fR file is opened read\-only when no other process holds it.  The
+\fBfiles\fR and \fBsqlite\fR backends never use the socket.
 .SH "EXIT STATUS"
 .TP
 .B 0
@@ -58,7 +70,9 @@ Fewer than two arguments (\fBERROR: insufficient parameters!\fR on standard
 output).
 .TP
 .B 4
-The database could not be opened.
+The database could not be opened (for example a \fBredb\fR file held by
+another process with no \fBPORTUALE_VDB_IPC\fR), or the parent \fBmrg\fR
+could not be reached over \fBPORTUALE_VDB_IPC\fR or refused the query.
 .TP
 .B 64
 \fIEROOT\fR is not a directory.

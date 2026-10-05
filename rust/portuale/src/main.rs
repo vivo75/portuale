@@ -45,6 +45,7 @@ mod regen;
 mod remote;
 mod remote_bundle;
 mod vdb_cmd;
+mod vdb_ipc;
 
 use std::process::ExitCode;
 

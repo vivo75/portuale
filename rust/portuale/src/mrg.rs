@@ -1439,11 +1439,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 let client_vdb = matches!(&remote, Some(ctx)
                     if !matches.get_flag("pretend")
                         && matches!(ctx.vdb, crate::remote::ConfigPlacement::Client(_)));
-                if let Err((message, code)) = setup_vdb(&matches, client_vdb) {
-                    eprintln!("{message}");
-                    return ExitCode::from(code);
-                }
-                match remote {
+                // Held for the whole run: the redb parent pipe (S6.3)
+                // stops and its socket is removed when this drops.
+                let vdb_ipc = match setup_vdb(&matches, client_vdb) {
+                    Ok(server) => server,
+                    Err((message, code)) => {
+                        eprintln!("{message}");
+                        return ExitCode::from(code);
+                    }
+                };
+                let code = match remote {
                     // `--pretend` stays local: the remote options drop
                     // out in `to_emerge_argv` and the shared plan prints
                     // as usual.
@@ -1455,7 +1460,16 @@ pub fn run(args: &[String]) -> ExitCode {
                         crate::remote::run_remote_cli(&matches, ctx, argv)
                     }
                     None => crate::pretend::run(&to_emerge_argv(&matches)),
-                }
+                };
+                drop(vdb_ipc);
+                // Drop the registered backends: redb records a clean close
+                // only when its last handle drops, and the registry is a
+                // static that never would. Without this, the next
+                // read-only open (`--pretend`, `portuale vdb status`, a
+                // `portageq` outside mrg) refuses the file as "not closed
+                // cleanly" until a read-write open repairs it.
+                portage_vdb::reset();
+                code
             }
             Err(message) => {
                 eprintln!("{message}");
@@ -1773,12 +1787,22 @@ fn make_conf_lookup(root: &Path) -> impl FnMut(&str) -> Option<String> {
 /// Select, open and register the VDB backend for the target ROOT, then
 /// export it to child processes. Runs before `pretend::run`.
 ///
+/// redb (not `--pretend`): this process now holds the file, so the ebuild
+/// phases' `has_version` / `best_version` cannot open it. The parent pipe
+/// (S6.3, `vdb_ipc.rs`, Q5: redb only) is started here and its socket
+/// exported as `PORTUALE_VDB_IPC`; the returned guard keeps it running
+/// until `run` returns. Failing to start it is an error (exit 1) rather
+/// than a merge whose first `has_version` would fail half-way.
+///
 /// Only the target ROOT is registered: the running root (`/`, consulted
 /// for `--root-deps`/BDEPEND style lookups when ROOT is not `/`) keeps
 /// the files layout. `client_vdb` is a remote run whose VDB is the
 /// client's own `client:` tree: it stays files, and the options are
 /// refused.
-fn setup_vdb(matches: &ArgMatches, client_vdb: bool) -> Result<(), (String, u8)> {
+fn setup_vdb(
+    matches: &ArgMatches,
+    client_vdb: bool,
+) -> Result<Option<crate::vdb_ipc::Server>, (String, u8)> {
     let flag_backend = matches.get_one::<String>("vdb_backend").map(String::as_str);
     let flag_path = matches.get_one::<String>("vdb_path").map(String::as_str);
     if client_vdb {
@@ -1791,7 +1815,7 @@ fn setup_vdb(matches: &ArgMatches, client_vdb: bool) -> Result<(), (String, u8)>
                 2,
             ));
         }
-        return Ok(());
+        return Ok(None);
     }
     let root = portage_repo::root_from_env();
     let sel = resolve_vdb_selection(
@@ -1805,20 +1829,41 @@ fn setup_vdb(matches: &ArgMatches, client_vdb: bool) -> Result<(), (String, u8)>
         if flag_path.is_some() {
             eprintln!("mrg: warning: --vdb-path is ignored with the files backend");
         }
-        return Ok(());
+        return Ok(None);
     }
-    let db = open_vdb_backend(&sel, &root, matches.get_flag("pretend")).map_err(|m| (m, 1))?;
+    let pretend = matches.get_flag("pretend");
+    let db = open_vdb_backend(&sel, &root, pretend).map_err(|m| (m, 1))?;
+    let mut server = None;
     if let (Some(db), Some(path)) = (db, &sel.path) {
         portage_vdb::register(&root, db);
+        if sel.backend == BackendKind::Redb && !pretend {
+            server = Some(crate::vdb_ipc::Server::start(&root).map_err(|e| {
+                (
+                    format!(
+                        "mrg: cannot start the {} server the ebuild phases need on redb: {e}",
+                        crate::vdb_ipc::IPC_VAR
+                    ),
+                    1,
+                )
+            })?);
+        }
         // For the ebuild phases (and the native portageq, S6.2).
-        // Single-threaded here: nothing else reads the environment yet.
+        // Nothing else reads the environment yet: the only other thread
+        // is the pipe's accept thread, blocked in `accept` (nobody knows
+        // the socket before this export).
         unsafe {
             std::env::set_var(VDB_BACKEND_VAR, sel.backend.as_str());
             std::env::set_var(VDB_PATH_VAR, path);
             std::env::set_var(VDB_ROOT_VAR, &root);
+            // Never let a variable inherited from an outer run point the
+            // children at another process's pipe.
+            match &server {
+                Some(s) => std::env::set_var(crate::vdb_ipc::IPC_VAR, s.socket()),
+                None => std::env::remove_var(crate::vdb_ipc::IPC_VAR),
+            }
         }
     }
-    Ok(())
+    Ok(server)
 }
 
 #[cfg(test)]
@@ -2640,6 +2685,159 @@ mod tests {
             drop(held);
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// feat#157 S6.3, end to end: real `mrg --vdb-backend=redb` merges
+    /// (the binary, so the redb file is held read-write by the merging
+    /// process for the whole run) whose `pkg_preinst` / `pkg_postinst` call
+    /// `has_version` / `best_version`. The phases reach the parent over
+    /// `PORTUALE_VDB_IPC`; without it the helper would get `Busy` and exit
+    /// 4, failing the merge. ROOT has no `var/db/pkg` at all, so every hit
+    /// comes from the redb database. Upgrading 1.0 -> 2.0: `pkg_preinst`
+    /// sees the old instance (1.0 installed, 2.0 not yet, best = 1.0), and
+    /// `pkg_postinst` the new one (real `has_version` semantics: the new
+    /// instance is published between the two). The socket and its private
+    /// directory are gone after each run.
+    #[cfg(feature = "vdb-redb")]
+    #[test]
+    fn redb_merge_phases_query_the_parent_over_the_pipe() {
+        let tmp = portage_util::TempDir::new("vipc");
+        let cfg = tmp.join("cfg");
+        let repo = tmp.join("repo");
+        let root = tmp.join("root");
+        let ptmp = tmp.join("ptmp");
+        let sock = tmp.join("s");
+        for d in [
+            cfg.join("etc/portage"),
+            repo.join("dev-libs/hvpkg"),
+            repo.join("profiles/default"),
+            repo.join("metadata"),
+            root.join("var/lib/portage"),
+            ptmp.clone(),
+            sock.clone(),
+        ] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        // A one-package repository with its own minimal profile.
+        std::fs::write(
+            cfg.join("etc/portage/repos.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = hvrepo\n[hvrepo]\nlocation = {}\n",
+                repo.display()
+            ),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            repo.join("profiles/default"),
+            cfg.join("etc/portage/make.profile"),
+        )
+        .unwrap();
+        std::fs::write(repo.join("profiles/repo_name"), "hvrepo\n").unwrap();
+        std::fs::write(repo.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::write(
+            repo.join("profiles/default/make.defaults"),
+            "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("profiles/default/eapi"), "8\n").unwrap();
+        let ebuild = r#"EAPI=8
+SLOT="0"
+KEYWORDS="amd64"
+S="${WORKDIR}"
+src_install() { insinto /usr/share/hvpkg; newins - f <<<"${PV}"; }
+pkg_preinst() {
+	local o="${ROOT}/hv-${PV}.log"
+	echo "ipc=${PORTUALE_VDB_IPC}" >> "$o"
+	has_version "=dev-libs/hvpkg-1.0" && echo "pre old=yes" >> "$o" || echo "pre old=no" >> "$o"
+	has_version "=dev-libs/hvpkg-${PV}" && echo "pre self=yes" >> "$o" || echo "pre self=no" >> "$o"
+	echo "pre best=$(best_version dev-libs/hvpkg)" >> "$o"
+}
+pkg_postinst() {
+	local o="${ROOT}/hv-${PV}.log"
+	has_version "=dev-libs/hvpkg-${PV}" && echo "post self=yes" >> "$o" || echo "post self=no" >> "$o"
+	echo "post best=$(best_version dev-libs/hvpkg)" >> "$o"
+}
+"#;
+        for v in ["1.0", "2.0"] {
+            std::fs::write(
+                repo.join(format!("dev-libs/hvpkg/hvpkg-{v}.ebuild")),
+                ebuild,
+            )
+            .unwrap();
+        }
+        // An empty redb database for ROOT.
+        let db = root.join("var/lib/portage/vdb.redb");
+        drop(portage_vdb::RedbDb::open(&db).unwrap());
+
+        let mut bin = std::env::current_exe().unwrap();
+        bin.pop();
+        if bin.ends_with("deps") {
+            bin.pop();
+        }
+        bin.push("portuale");
+        let merge = |v: &str| -> String {
+            let out = std::process::Command::new(&bin)
+                .arg("mrg")
+                .arg("--vdb-backend=redb")
+                .arg(format!("=dev-libs/hvpkg-{v}"))
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", std::env::var("HOME").unwrap_or_default())
+                .env("TMPDIR", &sock)
+                .env("PORTAGE_CONFIGROOT", &cfg)
+                .env("ROOT", &root)
+                .env("PORTAGE_TMPDIR", &ptmp)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("portuale mrg spawns");
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "merge {v}:\n{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            std::fs::read_to_string(root.join(format!("hv-{v}.log"))).unwrap()
+        };
+        let check = |log: &str, expected: &str| {
+            let (ipc, rest) = log.split_once('\n').unwrap();
+            let socket = Path::new(ipc.strip_prefix("ipc=").unwrap());
+            assert!(socket.is_absolute(), "PORTUALE_VDB_IPC exported: {ipc}");
+            // Under TMPDIR when the path fits in a socket address
+            // (`<TMPDIR>/portuale-vdb-ipc-<pid>-<nanos>/s`), else `/tmp`.
+            if sock.as_os_str().len() <= 55 {
+                assert!(socket.starts_with(&sock), "{ipc}");
+            } else {
+                assert!(socket.starts_with("/tmp"), "{ipc}");
+            }
+            assert!(!socket.exists(), "socket removed after the run: {ipc}");
+            assert!(
+                !socket.parent().unwrap().exists(),
+                "directory removed: {ipc}"
+            );
+            assert_eq!(rest, expected);
+        };
+        check(
+            &merge("1.0"),
+            "pre old=no\npre self=no\npre best=\npost self=yes\npost best=dev-libs/hvpkg-1.0\n",
+        );
+        check(
+            &merge("2.0"),
+            "pre old=yes\npre self=no\npre best=dev-libs/hvpkg-1.0\n\
+             post self=yes\npost best=dev-libs/hvpkg-2.0\n",
+        );
+        // Every answer came from redb.
+        assert!(!root.join("var/db/pkg").exists());
+        let db = portage_vdb::RedbDb::open_readonly(&db).unwrap();
+        use portage_vdb::InstalledDb;
+        let live: Vec<String> = db
+            .entries()
+            .unwrap()
+            .iter()
+            .map(|k| k.to_string())
+            .collect();
+        assert_eq!(live, ["dev-libs/hvpkg-2.0"]);
+        assert_eq!(std::fs::read_dir(&sock).unwrap().count(), 0);
     }
 
     #[test]
