@@ -325,6 +325,57 @@ fn load_live(conn: &Connection, names: &[&str]) -> rusqlite::Result<Vec<Loaded>>
     Ok(out)
 }
 
+/// [`load_live`] for the entries `dep_atom` ties to `cp` (or to the unsure
+/// marker) in one of `classes`: the candidate ids come from the index, and
+/// each candidate's named files from a primary-key seek.
+fn load_dependents(
+    conn: &Connection,
+    names: &[&str],
+    cp: &str,
+    classes: &[DepClass],
+) -> rusqlite::Result<Vec<Loaded>> {
+    let class_list = classes
+        .iter()
+        .map(|c| format!("'{}'", c.field()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, category, pf, metadata_stamp FROM entry
+         WHERE state = 'installed' AND id IN
+           (SELECT entry_id FROM dep_atom
+            WHERE cp IN (?1, '{UNSURE_CP}') AND class IN ({class_list}))
+         ORDER BY category, pf"
+    ))?;
+    let mut cands: Vec<(i64, Loaded)> = Vec::new();
+    let mut rows = stmt.query([cp])?;
+    while let Some(r) = rows.next()? {
+        cands.push((
+            r.get(0)?,
+            Loaded {
+                key: EntryKey::new(r.get::<_, String>(1)?, r.get::<_, String>(2)?),
+                stamp: stamp_of(&r.get::<_, String>(3)?),
+                files: HashMap::new(),
+            },
+        ));
+    }
+    let list = names
+        .iter()
+        .chain(&["metadata"])
+        .map(|n| format!("'{n}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut files = conn.prepare(&format!(
+        "SELECT name, data FROM entry_file WHERE entry_id = ?1 AND name IN ({list})"
+    ))?;
+    for (id, l) in &mut cands {
+        let mut rows = files.query([*id])?;
+        while let Some(r) = rows.next()? {
+            l.files.insert(r.get(0)?, r.get(1)?);
+        }
+    }
+    Ok(cands.into_iter().map(|(_, l)| l).collect())
+}
+
 fn data_version(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row("PRAGMA data_version", [], |r| r.get(0))
 }

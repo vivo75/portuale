@@ -1291,6 +1291,110 @@ mod tests {
 
     type Rows = Vec<(String, Vec<u8>, u32, i64)>;
 
+    /// Raw table writers for the tests (bypassing the production writer).
+    impl RedbDb {
+        fn seed_entry(&self, key: &EntryKey, state: u8, stamp: MetadataStamp, files: &Rows) {
+            let txn = rw(self).begin_write().unwrap();
+            let id: u64;
+            {
+                let mut by_id = txn.open_table(ENTRY_BY_ID).unwrap();
+                id = by_id.last().unwrap().map_or(1, |(k, _)| k.value() + 1);
+                by_id
+                    .insert(id, (state, key.category.as_str(), key.pf.as_str()))
+                    .unwrap();
+                let rec = EntryRec {
+                    id,
+                    counter: None,
+                    stamp,
+                    dir_mode: 493,
+                    dir_mtime_ns: 1234,
+                    slot: String::new(),
+                    subslot: String::new(),
+                    repo: String::new(),
+                };
+                txn.open_table(ENTRY)
+                    .unwrap()
+                    .insert(
+                        (state, key.category.as_str(), key.pf.as_str()),
+                        rec.encode().as_slice(),
+                    )
+                    .unwrap();
+                let mut fmeta = txn.open_table(ENTRY_FILE_META).unwrap();
+                let mut chunks = txn.open_table(ENTRY_FILE_CHUNK).unwrap();
+                for (name, data, mode, mtime) in files {
+                    let frec = FileRec {
+                        len: data.len() as u64,
+                        mode: *mode,
+                        mtime_ns: *mtime,
+                    };
+                    fmeta
+                        .insert((id, name.as_str()), frec.encode().as_slice())
+                        .unwrap();
+                    for (i, c) in data.chunks(CHUNK).enumerate() {
+                        chunks.insert((id, name.as_str(), i as u32), c).unwrap();
+                    }
+                }
+            }
+            if state == INSTALLED {
+                // The owner / dep_atom rows of a live entry, as a production
+                // write fills them (the columns stay as seeded).
+                for (name, ..) in files {
+                    if matches!(name.as_str(), "CONTENTS")
+                        || write::DEP_CLASSES.iter().any(|d| d.field() == name)
+                    {
+                        write::index_file_for_test(&txn, key, id, name);
+                    }
+                }
+            }
+            txn.commit().unwrap();
+            self.invalidate();
+        }
+
+        fn seed_meta(&self, key: &str, v: &[u8]) {
+            let txn = rw(self).begin_write().unwrap();
+            txn.open_table(META).unwrap().insert(key, v).unwrap();
+            txn.commit().unwrap();
+            self.invalidate();
+        }
+
+        fn seed_list(&self, def: TableDefinition<u32, &str>, items: &[String]) {
+            let txn = rw(self).begin_write().unwrap();
+            {
+                let mut t = txn.open_table(def).unwrap();
+                for (i, s) in items.iter().enumerate() {
+                    t.insert(i as u32, s.as_str()).unwrap();
+                }
+            }
+            txn.commit().unwrap();
+        }
+
+        fn seed_plib(&self, key: &str, e: &PreservedLibsEntry) {
+            let mut enc = Enc::default()
+                .str(&e.cpv)
+                .str(&e.counter)
+                .u32(e.paths.len() as u32);
+            for p in &e.paths {
+                enc = enc.str(p);
+            }
+            let txn = rw(self).begin_write().unwrap();
+            txn.open_table(PRESERVED_LIB)
+                .unwrap()
+                .insert(key, enc.0.as_slice())
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        fn seed_config(&self, k: &str, v: &str) {
+            let txn = rw(self).begin_write().unwrap();
+            txn.open_table(CONFIG_MEMORY).unwrap().insert(k, v).unwrap();
+            txn.commit().unwrap();
+        }
+
+        fn meta_num(&self, key: &str) -> u64 {
+            meta_u64(&self.meta_get(key).unwrap().unwrap(), key).unwrap()
+        }
+    }
+
     // --- open, reopen, schema --------------------------------------
 
     /// Every row of the three index multimaps, as `(table, key, value)`
@@ -1399,6 +1503,89 @@ mod tests {
             (owners(b"/usr/bin/b"), owners(b"/etc/passwd"), rdeps()),
             (1, 0, 1)
         );
+    }
+
+    #[test]
+    fn fresh_database_has_meta_and_tables() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        assert_eq!(db.meta_num("schema_version"), u64::from(SCHEMA_VERSION));
+        assert_eq!(db.meta_num("generation"), 0);
+        assert_eq!(db.meta_num("counter_hwm") as i64, -1);
+        assert!(db.meta_num("created_at") > 0);
+        let txn = db.handle.begin_read().unwrap();
+        let mut names: Vec<String> = txn
+            .list_tables()
+            .unwrap()
+            .map(|h| redb::TableHandle::name(&h).to_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "config_memory",
+                "entry",
+                "entry_by_counter",
+                "entry_by_id",
+                "entry_file_chunk",
+                "entry_file_meta",
+                "meta",
+                "preserved_lib",
+                "world",
+                "world_sets"
+            ]
+        );
+        let mut multi: Vec<String> = txn
+            .list_multimap_tables()
+            .unwrap()
+            .map(|h| redb::MultimapTableHandle::name(&h).to_owned())
+            .collect();
+        multi.sort();
+        assert_eq!(multi, ["dep_atom", "needed", "owner"]);
+        drop(txn);
+        assert_eq!(db.kind(), BackendKind::Redb);
+        assert!(db.vdb_dir().is_none());
+        assert!(db.entry_path(&EntryKey::new("a", "b-1")).is_none());
+        assert!(db.entries().unwrap().is_empty());
+        assert_eq!(db.generation().unwrap(), 0);
+        assert_eq!(db.counter().unwrap(), None);
+    }
+
+    #[test]
+    fn reopen_keeps_data_and_readonly_reads_it() {
+        let t = Tmp::new();
+        {
+            let db = RedbDb::open(t.db()).unwrap();
+            db.seed_meta("generation", &7u64.to_le_bytes());
+        }
+        let db = RedbDb::open(t.db()).unwrap();
+        assert_eq!(db.generation().unwrap(), 7);
+        drop(db);
+        let ro = RedbDb::open_readonly(t.db()).unwrap();
+        assert!(ro.is_readonly());
+        assert_eq!(ro.generation().unwrap(), 7);
+        assert!(matches!(ro.begin_write(), Err(Error::Invalid(_))));
+        // Several read-only handles may coexist.
+        let ro2 = RedbDb::open_readonly(t.db()).unwrap();
+        assert_eq!(ro2.generation().unwrap(), 7);
+    }
+
+    #[test]
+    fn schema_version_mismatch_is_refused() {
+        let t = Tmp::new();
+        {
+            let db = RedbDb::open(t.db()).unwrap();
+            db.seed_meta("schema_version", &999u64.to_le_bytes());
+        }
+        for r in [RedbDb::open(t.db()), RedbDb::open_readonly(t.db())] {
+            match r {
+                Err(Error::Corrupt(m)) => {
+                    assert!(m.contains("schema_version 999"), "{m}");
+                    assert!(m.contains("supports 1"), "{m}");
+                }
+                other => panic!("expected Corrupt, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -1524,6 +1711,214 @@ mod tests {
         keys: Vec<EntryKey>,
     }
 
+    fn fixture() -> Fixture {
+        let t = Tmp::new();
+        let root = t.0.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let fdb = FilesDb::new(&root);
+        let rdb = RedbDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        let b = EntryKey::new("dev-libs", "b-1");
+        let c = EntryKey::new("app-misc", "c-1");
+        let d = EntryKey::new("app-misc", "d-1");
+        let z = EntryKey::new("sys-apps", "z-1");
+        let e = EntryKey::new("sys-apps", "e-1");
+        let p = EntryKey::new("dev-libs", "p-1");
+        let owned: &[u8] = b"dir /usr\nobj /usr/bin/x abc 1\nsym /usr/bin/y -> x 1\nfoo /usr/z\n";
+        // a: sealed (valid stamp); a non-UTF-8 field is dropped from the
+        // snapshot, so aux_get serves "".
+        put_files(
+            &fdb,
+            &a,
+            &[
+                ("SLOT", b"0/1.2\n"),
+                ("RDEPEND", b"x\n  y\n"),
+                ("DESCRIPTION", BAD),
+                ("USE", b"a  b\n"),
+                ("EAPI", b"8\n"),
+                ("repository", b"gentoo\n"),
+                ("EMPTY", b""),
+                ("NUL", b"a\0b"),
+                ("CONTENTS", owned),
+            ],
+            true,
+        );
+        // b: never sealed (stamp absent): lossy text; invalid SLOT -> "0".
+        put_files(
+            &fdb,
+            &b,
+            &[
+                ("SLOT", b"!bad\n"),
+                ("DESCRIPTION", BAD),
+                ("RDEPEND", b"q\n"),
+                ("BIN", BAD),
+                ("CONTENTS", b"obj /usr/bin/x def 2\n"),
+            ],
+            false,
+        );
+        // c: sealed, then changed: stale stamp; CONTENTS is not UTF-8.
+        {
+            let mut t = fdb.begin_write().unwrap();
+            t.begin_entry(&c).unwrap();
+            t.put_entry_file(&c, "SLOT", b"3\n").unwrap();
+            t.put_entry_file(&c, "RDEPEND", b"old\n").unwrap();
+            t.put_entry_file(&c, "CONTENTS", b"obj /usr/bin/x \xff\xfe\n")
+                .unwrap();
+            t.seal_entry(&c).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            t.put_entry_file(&c, "RDEPEND", b"new  value\n").unwrap();
+            t.put_entry_file(&c, "extra", b"e").unwrap();
+            t.finish_entry(&c).unwrap();
+            t.commit().unwrap();
+        }
+        assert_eq!(
+            fdb.aux_get(&c, "RDEPEND").unwrap().as_deref(),
+            Some("new value")
+        );
+        // d: no files at all. z: a SLOT with a subslot.
+        put_files(&fdb, &d, &[], false);
+        put_files(
+            &fdb,
+            &z,
+            &[("SLOT", b"2/3.4\n"), ("NEEDED.ELF.2", b"x\n")],
+            false,
+        );
+        // e: sealed with no field files: no metadata file at all.
+        put_files(&fdb, &e, &[("CONTENTS", b""), ("NEEDED.ELF.2", b"")], true);
+        // p: pending only, in a category that also has live entries.
+        {
+            let mut t = fdb.begin_write().unwrap();
+            t.begin_entry(&p).unwrap();
+            t.put_entry_file(&p, "CONTENTS", b"obj /usr/bin/x ghi 3\n")
+                .unwrap();
+            t.put_entry_file(&p, "SLOT", b"9\n").unwrap();
+            t.put_entry_file(&p, "NEEDED.ELF.2", b"p\n").unwrap();
+            t.commit().unwrap();
+        }
+        // D4 stores through the files writer.
+        let mut preserved = BTreeMap::new();
+        {
+            let mut t = fdb.begin_write().unwrap();
+            t.set_world(&World {
+                atoms: vec!["app-misc/c".into(), "dev-libs/a".into()],
+            })
+            .unwrap();
+            t.set_world_sets(&WorldSets {
+                sets: vec!["selected".into(), "system".into()],
+            })
+            .unwrap();
+            preserved.insert(
+                "dev-libs/a:0".to_string(),
+                PreservedLibsEntry {
+                    cpv: "dev-libs/a-1".into(),
+                    counter: "7".into(),
+                    paths: vec!["/usr/lib/z.so.1".into(), "/usr/lib/a.so.1".into()],
+                },
+            );
+            preserved.insert(
+                "sys-apps/z:2".to_string(),
+                PreservedLibsEntry {
+                    cpv: "sys-apps/z-1".into(),
+                    counter: "8".into(),
+                    paths: vec!["/lib/q.so".into()],
+                },
+            );
+            t.set_preserved_libs(&PreservedLibs {
+                entries: preserved,
+                loaded: BTreeMap::new(),
+            })
+            .unwrap();
+            let mut cm = BTreeMap::new();
+            cm.insert(
+                "/etc/a.conf".to_string(),
+                "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+            );
+            cm.insert(
+                "/etc/b.conf".to_string(),
+                "0cc175b9c0f1b6a831c399e269772661".to_string(),
+            );
+            t.set_config_memory(&ConfigMemory { entries: cm }).unwrap();
+            t.next_counter().unwrap();
+            t.next_counter().unwrap();
+            t.commit().unwrap();
+        }
+
+        // Seed the database with the same logical content.
+        for (k, stamp) in [
+            (&a, MetadataStamp::Valid),
+            (&b, MetadataStamp::Absent),
+            (&c, MetadataStamp::Stale),
+            (&d, MetadataStamp::Absent),
+            (&z, MetadataStamp::Absent),
+            (&e, MetadataStamp::Absent),
+        ] {
+            rdb.seed_entry(k, INSTALLED, stamp, &rows_of(&fdb, k, false));
+        }
+        rdb.seed_entry(&p, PENDING, MetadataStamp::Absent, &rows_of(&fdb, &p, true));
+        assert!(fdb.read_file(&a, "metadata").unwrap().is_some());
+        assert!(fdb.read_file(&e, "metadata").unwrap().is_none());
+        rdb.seed_list(WORLD, &fdb.world().unwrap().atoms);
+        rdb.seed_list(WORLD_SETS, &fdb.world_sets().unwrap().sets);
+        for (k, e) in fdb.preserved_libs().unwrap().entries {
+            rdb.seed_plib(&k, &e);
+        }
+        for (k, v) in fdb.config_memory().unwrap().entries {
+            rdb.seed_config(&k, &v);
+        }
+        let hwm = fdb.counter().unwrap().unwrap().0;
+        rdb.seed_meta("counter_hwm", &hwm.to_le_bytes());
+        Fixture {
+            _t: t,
+            fdb,
+            rdb,
+            keys: vec![a, b, c, d, z, e, p, EntryKey::new("dev-libs", "zz-9")],
+        }
+    }
+
+    #[test]
+    fn every_read_matches_filesdb() {
+        let f = fixture();
+        crate::test_support::assert_same_reads(&f.fdb, &f.rdb, &f.keys);
+        // The pending entry is invisible to live reads, visible to its own.
+        let p = &f.keys[6];
+        assert!(!f.rdb.has_entry(p).unwrap());
+        assert_eq!(f.rdb.read_file(p, "SLOT").unwrap(), None);
+        assert_eq!(f.rdb.aux_get(p, "SLOT").unwrap(), None);
+        assert_eq!(f.rdb.pending_entries().unwrap(), vec![p.clone()]);
+        assert_eq!(
+            f.rdb.read_pending_file(p, "SLOT").unwrap().as_deref(),
+            Some(&b"9\n"[..])
+        );
+        assert_eq!(f.rdb.read_pending_file(&f.keys[0], "SLOT").unwrap(), None);
+        let a = &f.keys[0];
+        assert_eq!(
+            f.rdb.read_file(a, "EMPTY").unwrap().as_deref(),
+            Some(&b""[..])
+        );
+        assert_eq!(
+            f.rdb.read_file(a, "NUL").unwrap().as_deref(),
+            Some(&b"a\0b"[..])
+        );
+        assert_eq!(
+            f.rdb.aux_get(a, "DESCRIPTION").unwrap().as_deref(),
+            Some("caf\u{fffd} x")
+        );
+        let b = &f.keys[1];
+        assert_eq!(
+            f.rdb.aux_get(b, "DESCRIPTION").unwrap().as_deref(),
+            Some("caf\u{fffd} x")
+        );
+        assert_eq!(f.rdb.aux_get(b, "SLOT").unwrap().as_deref(), Some("0"));
+        assert_eq!(f.rdb.read_file(b, "BIN").unwrap().as_deref(), Some(BAD));
+        assert_eq!(f.rdb.aux_get(&f.keys[7], "SLOT").unwrap(), None);
+        let got = f
+            .rdb
+            .owners(&[b"/usr/bin/x".as_slice(), b"/usr".as_slice()])
+            .unwrap();
+        assert_eq!(got.len(), 3);
+        assert_eq!(f.rdb.list_files(&f.keys[3]).unwrap(), Some(vec![]));
+    }
+
     #[test]
     fn empty_database_matches_an_empty_filesdb() {
         let t = Tmp::new();
@@ -1536,10 +1931,257 @@ mod tests {
         assert!(rdb.snapshot().unwrap().entries.is_empty());
     }
 
+    #[test]
+    fn a_readonly_handle_reads_the_same() {
+        let f = fixture();
+        let path = f.rdb.path().to_path_buf();
+        let Fixture { fdb, rdb, keys, _t } = f;
+        drop(rdb);
+        let ro = RedbDb::open_readonly(&path).unwrap();
+        crate::test_support::assert_same_reads(&fdb, &ro, &keys);
+    }
+
+    #[test]
+    fn snapshot_entry_image_and_reverse_dependents_follow_the_rows() {
+        let f = fixture();
+        f.rdb.seed_meta("generation", &5u64.to_le_bytes());
+        let snap = f.rdb.snapshot().unwrap();
+        assert_eq!(snap.generation, 5);
+        assert_eq!(snap.entries.len(), 6, "live entries only");
+        for (k, fields) in &snap.entries {
+            for field in FIELDS {
+                assert_eq!(
+                    fields.get(field).map(str::to_string),
+                    f.fdb.aux_get(k, field).unwrap(),
+                    "snapshot {k} {field}"
+                );
+            }
+        }
+        assert!(snap.get(&f.keys[6]).is_none());
+
+        let img = f.rdb.entry_image(&f.keys[2]).unwrap().unwrap();
+        assert_eq!(img.metadata_stamp, MetadataStamp::Stale);
+        assert_eq!((img.dir_mode, img.dir_mtime_ns), (493, 1234));
+        let want = f.fdb.list_files(&f.keys[2]).unwrap().unwrap();
+        assert_eq!(
+            img.files.iter().map(|x| x.meta.clone()).collect::<Vec<_>>(),
+            want
+        );
+        for file in &img.files {
+            assert_eq!(
+                f.fdb
+                    .read_file(&f.keys[2], &file.meta.name)
+                    .unwrap()
+                    .unwrap(),
+                file.data
+            );
+        }
+        assert_eq!(
+            f.rdb
+                .entry_image(&f.keys[0])
+                .unwrap()
+                .unwrap()
+                .metadata_stamp,
+            MetadataStamp::Valid
+        );
+        assert!(f.rdb.entry_image(&f.keys[6]).unwrap().is_none());
+        assert!(f.rdb.entry_image(&f.keys[7]).unwrap().is_none());
+
+        let recs = f
+            .rdb
+            .reverse_dependents("x/y", &[DepClass::Rdepend, DepClass::Depend])
+            .unwrap();
+        // Only the entries whose deps carry an unclassifiable token (the
+        // unsure marker) come back.
+        assert_eq!(recs.len(), 3);
+        let ra = recs.iter().find(|r| r.key == f.keys[0]).unwrap();
+        assert_eq!(ra.use_flags, "a b");
+        assert_eq!(
+            ra.deps,
+            vec![
+                (DepClass::Rdepend, "x y".to_string()),
+                (DepClass::Depend, String::new())
+            ]
+        );
+    }
+
+    // --- cache -------------------------------------------------------
+
+    #[test]
+    fn the_cache_follows_generation() {
+        let f = fixture();
+        let a = f.keys[0].clone();
+        assert_eq!(f.rdb.aux_get(&a, "SLOT").unwrap().as_deref(), Some("0/1.2"));
+        let before = f.rdb.snapshot().unwrap();
+        // Same generation: the very same snapshot is served again.
+        assert!(Arc::ptr_eq(&before, &f.rdb.snapshot().unwrap()));
+        assert!(Arc::ptr_eq(
+            &f.rdb.cached(false).unwrap().1,
+            &f.rdb.cached(true).unwrap().1
+        ));
+        // A commit that changes the data and bumps the generation is seen
+        // without any explicit invalidation: write raw, bypassing
+        // `seed_entry`'s invalidate.
+        let txn = rw(&f.rdb).begin_write().unwrap();
+        {
+            let mut t = txn.open_table(ENTRY).unwrap();
+            let rec = EntryRec::decode(
+                t.get((INSTALLED, "dev-libs", "a-1"))
+                    .unwrap()
+                    .unwrap()
+                    .value(),
+            )
+            .unwrap();
+            let mut gone = None;
+            if rec.id > 0 {
+                gone = t
+                    .remove((INSTALLED, "dev-libs", "a-1"))
+                    .unwrap()
+                    .map(|_| ());
+            }
+            assert!(gone.is_some());
+            txn.open_table(META)
+                .unwrap()
+                .insert("generation", 100u64.to_le_bytes().as_slice())
+                .unwrap();
+        }
+        txn.commit().unwrap();
+        assert_eq!(f.rdb.generation().unwrap(), 100);
+        assert!(!f.rdb.has_entry(&a).unwrap());
+        assert_eq!(f.rdb.aux_get(&a, "SLOT").unwrap(), None);
+        assert!(!f.rdb.entries().unwrap().contains(&a));
+        let after = f.rdb.snapshot().unwrap();
+        assert_eq!(after.generation, 100);
+        assert_eq!(after.entries.len(), 5);
+        assert!(!Arc::ptr_eq(&before, &after));
+    }
+
     // --- chunks ------------------------------------------------------
 
     fn big(n: usize) -> Vec<u8> {
         (0..n).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[test]
+    fn read_file_at_crosses_chunk_boundaries() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let k = EntryKey::new("dev-libs", "a-1");
+        let data = big(CHUNK * 3 + 1234);
+        let exact = big(CHUNK * 2);
+        db.seed_entry(
+            &k,
+            INSTALLED,
+            MetadataStamp::Absent,
+            &vec![
+                ("BIG".into(), data.clone(), 420, 0),
+                ("EXACT".into(), exact.clone(), 420, 0),
+                ("SMALL".into(), b"0123456789".to_vec(), 420, 0),
+                ("EMPTY".into(), vec![], 420, 0),
+            ],
+        );
+        assert_eq!(db.read_file(&k, "BIG").unwrap().unwrap(), data);
+        assert_eq!(db.read_file(&k, "EXACT").unwrap().unwrap(), exact);
+        assert_eq!(
+            db.file_meta(&k, "BIG").unwrap().unwrap().len,
+            data.len() as u64
+        );
+        let c = CHUNK as u64;
+        let cases: &[(u64, usize)] = &[
+            (0, 10),
+            (c - 5, 10),
+            (c, 1),
+            (c - 1, 2),
+            (c - 1, CHUNK + 2),
+            (2 * c + 7, 3 * CHUNK),
+            (3 * c, 1234),
+            (3 * c + 1200, 1000),
+            (data.len() as u64 - 1, 5),
+            (data.len() as u64, 5),
+            (data.len() as u64 + 1000, 5),
+            (5, 0),
+            (0, usize::MAX),
+            (u64::MAX, 4),
+        ];
+        for &(off, len) in cases {
+            let start = usize::try_from(off).unwrap_or(usize::MAX).min(data.len());
+            let end = start.saturating_add(len).min(data.len());
+            assert_eq!(
+                db.read_file_at(&k, "BIG", off, len).unwrap().as_deref(),
+                Some(&data[start..end]),
+                "BIG off {off} len {len}"
+            );
+        }
+        assert_eq!(
+            db.read_file_at(&k, "EXACT", c - 3, 6).unwrap().as_deref(),
+            Some(&exact[CHUNK - 3..CHUNK + 3])
+        );
+        assert_eq!(
+            db.read_file_at(&k, "EXACT", 2 * c, 4).unwrap().as_deref(),
+            Some(&b""[..])
+        );
+        assert_eq!(
+            db.read_file_at(&k, "SMALL", 8, 10).unwrap().as_deref(),
+            Some(&b"89"[..])
+        );
+        assert_eq!(
+            db.read_file_at(&k, "EMPTY", 0, 8).unwrap().as_deref(),
+            Some(&b""[..])
+        );
+        assert_eq!(db.read_file_at(&k, "NOPE", 0, 4).unwrap(), None);
+        assert_eq!(
+            db.read_file_at(&EntryKey::new("dev-libs", "zz-1"), "BIG", 0, 4)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn read_file_at_loads_only_the_chunks_it_needs() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let k = EntryKey::new("dev-libs", "a-1");
+        let data = big(CHUNK * 3 + 10);
+        db.seed_entry(
+            &k,
+            INSTALLED,
+            MetadataStamp::Absent,
+            &vec![("BIG".into(), data.clone(), 420, 0)],
+        );
+        // Break chunks 1 and 2: reads inside chunks 0 and 3 still work, any
+        // read that touches 1 or 2 (and the whole file) is Corrupt.
+        let id = {
+            let txn = db.handle.begin_read().unwrap();
+            let rec = Rd::new(&txn).unwrap().rec(INSTALLED, &k).unwrap().unwrap();
+            rec.id
+        };
+        let txn = rw(&db).begin_write().unwrap();
+        {
+            let mut ch = txn.open_table(ENTRY_FILE_CHUNK).unwrap();
+            ch.remove((id, "BIG", 1)).unwrap();
+            ch.remove((id, "BIG", 2)).unwrap();
+        }
+        txn.commit().unwrap();
+        let c = CHUNK as u64;
+        assert_eq!(
+            db.read_file_at(&k, "BIG", 10, 20).unwrap().as_deref(),
+            Some(&data[10..30])
+        );
+        assert_eq!(
+            db.read_file_at(&k, "BIG", 3 * c + 2, 100)
+                .unwrap()
+                .as_deref(),
+            Some(&data[3 * CHUNK + 2..])
+        );
+        assert!(matches!(
+            db.read_file_at(&k, "BIG", c - 1, 2),
+            Err(Error::Corrupt(_))
+        ));
+        assert!(matches!(
+            db.read_file_at(&k, "BIG", 2 * c, 1),
+            Err(Error::Corrupt(_))
+        ));
+        assert!(matches!(db.read_file(&k, "BIG"), Err(Error::Corrupt(_))));
     }
 
     // --- encodings ---------------------------------------------------

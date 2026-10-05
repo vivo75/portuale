@@ -814,6 +814,12 @@ fn index_file(t: &WriteTransaction, key: &EntryKey, id: u64, name: &str) -> Tx<(
     Ok(())
 }
 
+/// Test seeding: fill the derived rows of the stored file `name`.
+#[cfg(test)]
+pub(super) fn index_file_for_test(t: &WriteTransaction, key: &EntryKey, id: u64, name: &str) {
+    assert!(index_file(t, key, id, name).is_ok());
+}
+
 /// `slot`, `subslot`, `repo`, `counter` of the entry record from its
 /// `SLOT`, `repository` and `COUNTER` files (empty string / `None` when
 /// the file is missing or, for the counter, not a number), and the
