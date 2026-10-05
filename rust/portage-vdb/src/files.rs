@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::files_write::FilesTxn;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFile, EntryImage, EntryKey,
-    Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION,
+    EntryStat, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION,
     MetadataStamp, PreservedLibs, Result, Snapshot, World, WorldSets, WriteTxn, in_metadata_file,
 };
 
@@ -569,12 +569,36 @@ impl InstalledDb for FilesDb {
 
     fn read_file_at(
         &self,
-        _key: &EntryKey,
-        _name: &str,
-        _off: u64,
-        _len: usize,
+        key: &EntryKey,
+        name: &str,
+        off: u64,
+        len: usize,
     ) -> Result<Option<Vec<u8>>> {
-        todo_step("read_file_at", "S7.2")
+        use std::os::unix::fs::FileExt as _;
+        let path = self.entry_dir(key).join(name);
+        let file = match fs::File::open(&path) {
+            Ok(f) => f,
+            Err(e) if is_absent(&e) => return Ok(None),
+            Err(e) => return Err(Error::io(path, e)),
+        };
+        let st = file.metadata().map_err(|e| Error::io(path.clone(), e))?;
+        if !st.is_file() {
+            return Ok(None);
+        }
+        // Never allocate more than the file can still give.
+        let want = (len as u64).min(st.len().saturating_sub(off)) as usize;
+        let mut buf = vec![0u8; want];
+        let mut done = 0;
+        while done < want {
+            match file.read_at(&mut buf[done..], off + done as u64) {
+                Ok(0) => break,
+                Ok(n) => done += n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(Error::io(path, e)),
+            }
+        }
+        buf.truncate(done);
+        Ok(Some(buf))
     }
 
     fn read_pending_file(&self, key: &EntryKey, name: &str) -> Result<Option<Vec<u8>>> {
@@ -673,6 +697,43 @@ impl InstalledDb for FilesDb {
         };
         Ok(Some(EntryImage {
             key: key.clone(),
+            files,
+            dir_mode: dst.mode(),
+            dir_mtime_ns,
+            metadata_stamp,
+        }))
+    }
+
+    fn entry_stat(&self, key: &EntryKey) -> Result<Option<EntryStat>> {
+        let dir = self.entry_dir(key);
+        let dst = match fs::metadata(&dir) {
+            Ok(st) if st.is_dir() => st,
+            Ok(_) => return Ok(None),
+            Err(e) if is_absent(&e) => return Ok(None),
+            Err(e) => return Err(Error::io(dir, e)),
+        };
+        let dir_mtime_ns = dst.mtime() as i128 * 1_000_000_000 + dst.mtime_nsec() as i128;
+        let Some(mut files) = self.list_files(key)? else {
+            return Ok(None);
+        };
+        files.sort_by(|a, b| a.name.cmp(&b.name));
+        // Only the small `metadata` file is read, to judge its stamp.
+        let metadata_stamp = if files.iter().any(|f| f.name == "metadata") {
+            let path = dir.join("metadata");
+            let valid = fs::read(&path)
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+                .and_then(|t| parse_metadata_text(&t))
+                .is_some_and(|(_, stamp)| stamp == Some(dir_mtime_ns));
+            if valid {
+                MetadataStamp::Valid
+            } else {
+                MetadataStamp::Stale
+            }
+        } else {
+            MetadataStamp::Absent
+        };
+        Ok(Some(EntryStat {
             files,
             dir_mode: dst.mode(),
             dir_mtime_ns,

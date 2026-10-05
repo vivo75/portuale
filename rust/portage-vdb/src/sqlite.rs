@@ -25,8 +25,9 @@ use crate::files::claim_paths;
 use crate::loaded::Loaded;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryFile, EntryImage,
-    EntryKey, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, MetadataStamp, PreservedLibs,
-    PreservedLibsEntry, Result, Snapshot, World, WorldSets, WriteTxn, in_metadata_file,
+    EntryKey, EntryStat, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, MetadataStamp,
+    PreservedLibs, PreservedLibsEntry, Result, Snapshot, World, WorldSets, WriteTxn,
+    in_metadata_file,
 };
 
 /// The schema version this build reads and writes (`meta.schema_version`).
@@ -761,6 +762,42 @@ impl InstalledDb for SqliteDb {
                 ))
             })?
             .collect()
+        })
+    }
+
+    fn entry_stat(&self, key: &EntryKey) -> Result<Option<EntryStat>> {
+        self.with(|c| {
+            let row = c
+                .query_row(
+                    "SELECT id, metadata_stamp, dir_mode, dir_mtime_ns FROM entry
+                     WHERE category = ?1 AND pf = ?2 AND state = 'installed'",
+                    params![key.category, key.pf],
+                    |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, i64>(2)?,
+                            r.get::<_, i64>(3)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((id, stamp, dir_mode, dir_mtime_ns)) = row else {
+                return Ok(None);
+            };
+            let mut stmt = c.prepare(
+                "SELECT name, length(data), mode, mtime_ns FROM entry_file
+                 WHERE entry_id = ?1 ORDER BY name",
+            )?;
+            let files = stmt
+                .query_map([id], file_meta_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(Some(EntryStat {
+                files,
+                dir_mode: to_u32(dir_mode)?,
+                dir_mtime_ns: i128::from(dir_mtime_ns),
+                metadata_stamp: stamp_of(&stamp),
+            }))
         })
     }
 

@@ -330,6 +330,16 @@
 //!     calls [`WriteTxn::discard_pending`], which deletes only a pending
 //!     entry (an installed one of the same key is untouched; a key that is
 //!     not pending is [`Error::Invalid`]).
+//! 26. **S7.2: the read-only FUSE view (one interface addition).**
+//!     [`InstalledDb::entry_stat`] is [`InstalledDb::entry_image`] without
+//!     the bytes ([`EntryStat`]): the view needs every entry's directory
+//!     mtime for the category and root mtimes, and must not read every
+//!     blob to get it. Every backend overrides the default (sqlite and
+//!     redb read the metadata rows only; `files` lists the directory and
+//!     reads just the small `metadata` file to judge its stamp).
+//!     `FilesDb::read_file_at` is implemented (`pread`), so a mount of
+//!     `files` is a pass-through. The view itself is `portuale`'s
+//!     `vdb_view.rs`; `fuser` is not a dependency of this crate.
 //!
 //! # SqliteDb (feature `vdb-sqlite`)
 //!
@@ -729,6 +739,16 @@ pub trait InstalledDb: Send + Sync {
     /// mode and mtime, the directory's mode and mtime, and the
     /// `metadata` stamp state. `None` when the entry does not exist.
     fn entry_image(&self, key: &EntryKey) -> Result<Option<EntryImage>>;
+
+    /// [`InstalledDb::entry_image`] without the file bytes: names, sizes,
+    /// modes, mtimes, the directory's mode and mtime and the `metadata`
+    /// stamp state (S7: the read-only FUSE view stats every entry for the
+    /// category and root mtimes and must not read their blobs). `None`
+    /// when the entry does not exist. The default derives it from the
+    /// image; every backend overrides it with a read that skips the bytes.
+    fn entry_stat(&self, key: &EntryKey) -> Result<Option<EntryStat>> {
+        Ok(self.entry_image(key)?.map(EntryStat::from))
+    }
 
     /// Candidate reverse dependents of `cp` (R4): one [`DepRecord`] per
     /// entry with its `USE` and the `classes` asked for, in that order.

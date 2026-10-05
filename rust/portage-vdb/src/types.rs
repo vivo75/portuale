@@ -111,6 +111,34 @@ pub enum MetadataStamp {
     Stale,
 }
 
+/// An entry without its bytes ([`InstalledDb::entry_stat`]): what a
+/// read-only view (FUSE, S7) needs for `getattr` and `readdir`. The same
+/// facts as [`EntryImage`] minus the file contents.
+///
+/// [`InstalledDb::entry_stat`]: crate::InstalledDb::entry_stat
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryStat {
+    /// Every file, sorted by name.
+    pub files: Vec<FileMeta>,
+    /// The entry directory's mode.
+    pub dir_mode: u32,
+    /// The entry directory's mtime in nanoseconds.
+    pub dir_mtime_ns: i128,
+    /// The `metadata` stamp state.
+    pub metadata_stamp: MetadataStamp,
+}
+
+impl From<EntryImage> for EntryStat {
+    fn from(image: EntryImage) -> Self {
+        EntryStat {
+            files: image.files.into_iter().map(|f| f.meta).collect(),
+            dir_mode: image.dir_mode,
+            dir_mtime_ns: image.dir_mtime_ns,
+            metadata_stamp: image.metadata_stamp,
+        }
+    }
+}
+
 /// A whole entry, for converters ([`InstalledDb::entry_image`],
 /// [`WriteTxn::insert_entry`]).
 ///

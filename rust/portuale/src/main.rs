@@ -45,7 +45,11 @@ mod regen;
 mod remote;
 mod remote_bundle;
 mod vdb_cmd;
+#[cfg(feature = "vdb-fuse")]
+mod vdb_fuse;
 mod vdb_ipc;
+#[cfg(feature = "vdb-fuse")]
+mod vdb_view;
 
 use std::process::ExitCode;
 

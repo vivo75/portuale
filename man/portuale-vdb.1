@@ -15,6 +15,9 @@ portuale\-vdb \- Convert, verify or inspect the installed\-package database betw
 .B portuale vdb sweep
 (\fB\-\-remove\fR \fICAT/PF\fR)... | \fB\-\-all\fR \fIKIND:PATH\fR
 .TP
+.B portuale vdb mount
+[\fB\-\-foreground\fR] [\fB\-\-allow\-other\fR] \fIKIND:PATH\fR \fIMOUNTPOINT\fR
+.TP
 .B portuale vdb
 \fB\-\-help\fR
 .SH "DESCRIPTION"
@@ -50,6 +53,34 @@ reports the same entries at startup on a database backend.
 (\fB\-\-remove\fR, repeatable) or all of them (\fB\-\-all\fR).  A key that is
 not pending, in particular an installed entry, refuses the whole sweep and
 nothing is deleted.  Nothing is ever swept automatically.
+.LP
+\fBmount\fR serves the database read\-only at \fIMOUNTPOINT\fR, an existing
+directory, as the historic tree \fICAT\fR/\fIPF\fR/\fIfiles\fR, so tools
+that read \fB/var/db/pkg\fR (eix, qlist, equery, real \fBportageq\fR and
+\fBemerge \-p\fR) can use a database backend.  It uses FUSE through
+\fBfusermount3\fR and needs \fB/dev/fuse\fR; no libfuse is linked, and it
+exists only when portuale is built with the \fBvdb\-fuse\fR feature.
+The database is opened read\-only.  Every operation that would change the
+tree (create, write, unlink, rename, mkdir, symlink, link, chmod, truncate,
+extended attributes) fails with \fBEROFS\fR.  File modes, sizes and mtimes
+are the stored ones.  Directory mtimes follow real Portage (bug #290428):
+an entry directory shows its stored mtime, a category directory the latest
+mtime of its entries, and the root the latest of its categories.  The
+consolidated \fBmetadata\fR file is served with its \fB#dir_mtime=\fR
+stamp equal to the entry directory mtime shown, so real Portage accepts it;
+a stamp that was stale when stored stays stale, and an entry stored without
+a \fBmetadata\fR file has none.  Each directory listing and each open file
+serves the generation it was opened on: a tool never sees half a merge, and
+a file larger than 64 KiB that is rewritten while it is open reads as
+\fBESTALE\fR instead of mixing old and new bytes.  A new lookup sees the
+newest generation.  Without \fB\-\-foreground\fR the command detaches once the
+mount is ready; unmount with \fBfusermount3 \-u\fR \fIMOUNTPOINT\fR.  Over
+\fBsqlite\fR the mount can stay up while \fBmrg\fR runs.  A \fBredb\fR file is
+held by the mount (one process at a time), so there the mount is an
+offline view and \fBmrg\fR cannot run until it is unmounted.  A
+\fBfiles:\fR source is passed through unchanged, which is useful for
+testing.  Real \fBemerge\fR and \fBebuild\fR merges do not work on a mount:
+they must create lock files inside the tree.
 .SH "KIND:PATH"
 .TP
 \fBfiles:\fR\fIROOT\fR
@@ -85,6 +116,14 @@ A pending entry for \fBsweep\fR to delete.  May be repeated.
 .B \-\-all
 \fBsweep\fR every pending entry.
 .TP
+.B \-\-foreground, \-f
+Keep \fBmount\fR in the foreground.  SIGINT, SIGTERM and SIGHUP unmount
+and exit.
+.TP
+.B \-\-allow\-other
+Let other users, root in particular, read the mount.  Unless run by root
+it needs \fBuser_allow_other\fR in \fB/etc/fuse.conf\fR.
+.TP
 \fB\-\-against\fR
 Accepted before the two arguments of \fBverify\fR.  It changes nothing.
 .SH "EXIT STATUS"
@@ -106,6 +145,8 @@ portuale vdb verify \-\-against files:/ sqlite:/var/lib/portage/vdb.sqlite
 portuale vdb convert \-\-from sqlite:vdb.sqlite \-\-to files:/tmp/vdb\-export
 portuale vdb status sqlite:/var/lib/portage/vdb.sqlite
 portuale vdb sweep \-\-remove dev\-libs/foo\-1.0 sqlite:/var/lib/portage/vdb.sqlite
+portuale vdb mount \-\-allow\-other sqlite:/var/lib/portage/vdb.sqlite /mnt/vdb
+fusermount3 \-u /mnt/vdb
 .fi
 .SH "SEE ALSO"
 \fBemerge\fR(1), \fBebuild\fR(1)

@@ -111,8 +111,9 @@ use crate::files::claim_paths;
 use crate::loaded::Loaded;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryFile, EntryImage,
-    EntryKey, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, MetadataStamp, PreservedLibs,
-    PreservedLibsEntry, Result, Snapshot, World, WorldSets, WriteTxn, in_metadata_file,
+    EntryKey, EntryStat, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, MetadataStamp,
+    PreservedLibs, PreservedLibsEntry, Result, Snapshot, World, WorldSets, WriteTxn,
+    in_metadata_file,
 };
 
 /// The schema version this build reads and writes (`meta.schema_version`).
@@ -963,6 +964,25 @@ impl InstalledDb for RedbDb {
                 out.push((key, rd.file(rec.id, name)?));
             }
             Ok(out)
+        })
+    }
+
+    fn entry_stat(&self, key: &EntryKey) -> Result<Option<EntryStat>> {
+        self.read(|rd| {
+            let Some(rec) = rd.rec(INSTALLED, key)? else {
+                return Ok(None);
+            };
+            let files = rd
+                .file_metas(rec.id)?
+                .into_iter()
+                .map(|(name, frec)| file_meta_of(&name, frec))
+                .collect();
+            Ok(Some(EntryStat {
+                files,
+                dir_mode: rec.dir_mode,
+                dir_mtime_ns: i128::from(rec.dir_mtime_ns),
+                metadata_stamp: rec.stamp,
+            }))
         })
     }
 

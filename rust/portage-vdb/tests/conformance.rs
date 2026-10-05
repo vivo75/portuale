@@ -31,8 +31,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use portage_vdb::{
-    ConfigMemory, Counter, DepClass, EntryFile, EntryImage, EntryKey, Error, FileMeta, FilesDb,
-    InstalledDb, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result, World, WorldSets,
+    ConfigMemory, Counter, DepClass, EntryFile, EntryImage, EntryKey, EntryStat, Error, FileMeta,
+    FilesDb, InstalledDb, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result, World,
+    WorldSets,
 };
 
 /// One database per call, rooted at (or stored under) the given directory.
@@ -1147,8 +1148,8 @@ mod suite {
         let k = key("dev-libs", "a-1");
         put(&ctx, &k, &[("DATA", b"0123456789"), ("EMPTY", b"")], false);
         match caps.read_file_at {
-            // TODO(plan S7.2): FilesDb::read_file_at is Unsupported until
-            // the FUSE step; sqlite (S2.4) and redb must implement it.
+            // Every backend implements it now (files: S7.2); the arm stays
+            // for a future backend that names a step.
             Some(step) => {
                 assert_unsupported(ctx.db.read_file_at(&k, "DATA", 0, 4), step, "read_file_at")
             }
@@ -1303,6 +1304,30 @@ mod suite {
         }
     }
 
+    /// `entry_stat` is `entry_image` without the bytes, on every backend.
+    pub fn entry_stat_is_the_entry_image_without_bytes(f: Factory, caps: &Caps) {
+        if caps.entry_image.is_some() {
+            return;
+        }
+        let ctx = Ctx::new(f, "stat");
+        let k = key("dev-libs", "a-1");
+        put(
+            &ctx,
+            &k,
+            &[("CONTENTS", b"obj /x\n"), ("EMPTY", b""), ("SLOT", b"0\n")],
+            false,
+        );
+        let image = ctx.db.entry_image(&k).unwrap().expect("entry exists");
+        let stat = ctx.db.entry_stat(&k).unwrap().expect("entry exists");
+        assert_eq!(stat, EntryStat::from(image));
+        assert!(
+            ctx.db
+                .entry_stat(&key("dev-libs", "zz-1"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
     /// The registry is process-global: one test, serialised, resets
     /// around itself so no other test of this binary sees its state.
     pub fn registry_hands_out_the_registered_backend(f: Factory, _c: &Caps) {
@@ -1373,6 +1398,7 @@ macro_rules! conformance_suite {
                 read_file_at_is_supported_or_names_its_step
                 snapshot_is_supported_or_names_its_step
                 entry_image_and_insert_entry_are_supported_or_name_their_step
+                entry_stat_is_the_entry_image_without_bytes
                 registry_hands_out_the_registered_backend
             );
         }
@@ -1398,7 +1424,7 @@ conformance_suite!(
         set_counter: None,
         reverse_dependents: Some("reverse_dependents"),
         snapshot: Some("S3.2"),
-        read_file_at: Some("S7.2"),
+        read_file_at: None,
         entry_image: None,
         seal_stores_metadata_file: true,
     }

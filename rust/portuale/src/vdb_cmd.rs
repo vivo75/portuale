@@ -18,6 +18,11 @@
 // directory (entries only, no D4 stores); a bare directory is refused as
 // a destination.
 //
+//   portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT
+//
+// `mount` serves a read-only FUSE view of the database (S7; the view is
+// `vdb_view.rs`, the `fuser` adapter `vdb_fuse.rs`; feature `vdb-fuse`).
+//
 //   portuale vdb status  KIND:PATH
 //   portuale vdb sweep   (--remove CAT/PF)... | --all  KIND:PATH
 //
@@ -43,6 +48,7 @@ Usage:
    portuale vdb status KIND:PATH
    portuale vdb sweep (--remove CAT/PF)... KIND:PATH
    portuale vdb sweep --all KIND:PATH
+   portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT
    portuale vdb --help
 
 Copy the installed-package database (VDB) between backends, or compare two
@@ -84,6 +90,21 @@ sweep deletes pending entries (never installed ones) in one transaction:
    --all              every pending entry
 A key that is not pending refuses the whole sweep (nothing is deleted).
 
+mount serves the database read-only at MOUNTPOINT (an existing directory) as
+the historic tree CAT/PF/files, through FUSE (fusermount3; no libfuse needed):
+   --foreground, -f   stay in the foreground; SIGINT/SIGTERM unmount and exit
+   --allow-other      let other users (root, running emerge) read the mount;
+                      needs user_allow_other in /etc/fuse.conf unless root
+Without --foreground it detaches once the mount is ready. Unmount with
+`fusermount3 -u MOUNTPOINT`. The database is opened read-only. Every write is
+EROFS. Directory mtimes follow real Portage (an entry shows its stored
+mtime, a category the latest of its entries, the root the latest category)
+and the metadata file's stamp matches the entry directory mtime shown. Each
+directory listing and each open file serves the generation it was opened on.
+A redb file is held by the mount (one process at a time): over redb the mount
+is an offline view and mrg cannot run until it is unmounted. sqlite can be
+mounted while mrg runs. files:ROOT is a pass-through, for testing.
+
 Exit status: 0 done / equal / nothing pending, 1 verify found differences or
 status found pending entries, 2 usage or I/O error.";
 
@@ -118,8 +139,9 @@ fn dispatch(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result
         "verify" => verify(&args[1..], out),
         "status" => status(&args[1..], out),
         "sweep" => sweep(&args[1..], out),
+        "mount" => mount(&args[1..], out),
         other => Err(format!(
-            "unknown subcommand {other:?} (expected convert, verify, status or sweep); see `portuale vdb --help`"
+            "unknown subcommand {other:?} (expected convert, verify, status, sweep or mount); see `portuale vdb --help`"
         )),
     }
 }
@@ -307,6 +329,72 @@ fn open_existing(spec: &Spec, write: bool) -> Result<Box<dyn InstalledDb>, Strin
         return Err(format!("{}: no such database", spec.path.display()));
     }
     open(spec, write)
+}
+
+/// `portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT`.
+fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
+    let mut foreground = false;
+    let mut allow_other = false;
+    let mut pos: Vec<&str> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "-h" | "--help" => {
+                let _ = writeln!(out, "{USAGE}");
+                return Ok(0);
+            }
+            "-f" | "--foreground" => foreground = true,
+            "--allow-other" => allow_other = true,
+            s if s.starts_with('-') => return Err(format!("mount: unknown option {s:?}")),
+            s => pos.push(s),
+        }
+    }
+    let [spec, mountpoint] = pos[..] else {
+        return Err("mount: expected KIND:PATH and MOUNTPOINT".into());
+    };
+    let spec = parse_spec(spec)?;
+    let mountpoint = PathBuf::from(mountpoint);
+    if !mountpoint.is_dir() {
+        return Err(format!(
+            "{}: the mountpoint must be an existing directory",
+            mountpoint.display()
+        ));
+    }
+    mount_spec(spec, mountpoint, foreground, allow_other)
+}
+
+#[cfg(feature = "vdb-fuse")]
+fn mount_spec(
+    spec: Spec,
+    mountpoint: PathBuf,
+    foreground: bool,
+    allow_other: bool,
+) -> Result<u8, String> {
+    use std::sync::Arc;
+    let fsname = format!("{}:{}", spec.kind, spec.path.display());
+    let open_ro =
+        || -> Result<Arc<dyn InstalledDb>, String> { open_existing(&spec, false).map(Arc::from) };
+    // Open once here so a bad PATH, a busy redb or a missing feature is
+    // reported before anything forks; the handle is dropped again, the
+    // daemon opens its own.
+    drop(open_ro()?);
+    if foreground {
+        crate::vdb_fuse::serve(open_ro()?, &mountpoint, &fsname, allow_other, || {})
+            .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+    } else {
+        crate::vdb_fuse::serve_background(open_ro, &mountpoint, &fsname, allow_other)
+            .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+    }
+    Ok(0)
+}
+
+#[cfg(not(feature = "vdb-fuse"))]
+fn mount_spec(
+    _spec: Spec,
+    _mountpoint: PathBuf,
+    _foreground: bool,
+    _allow_other: bool,
+) -> Result<u8, String> {
+    Err("mount: this portuale was built without the vdb-fuse feature".into())
 }
 
 fn one_spec(cmd: &str, specs: Vec<Spec>) -> Result<Spec, String> {
@@ -668,6 +756,37 @@ mod tests {
         let (c, _, e) = cli(&["verify", "lmdb:/a", "files:/b"]);
         assert_eq!(c, 2);
         assert!(e.contains("unknown VDB backend"), "{e}");
+    }
+
+    #[test]
+    fn mount_usage_errors_exit_2_before_anything_is_mounted() {
+        let (c, o, _) = cli(&["mount", "--help"]);
+        assert_eq!(c, 0);
+        assert!(o.contains("vdb mount"), "{o}");
+        // Arguments: exactly KIND:PATH and MOUNTPOINT.
+        for args in [
+            &["mount"][..],
+            &["mount", "files:/x"],
+            &["mount", "files:/x", "/a", "/b"],
+            &["mount", "--bogus", "files:/x", "/a"],
+        ] {
+            let (c, _, e) = cli(args);
+            assert_eq!(c, 2, "{args:?}: {e}");
+            assert!(e.contains("mount:"), "{e}");
+        }
+        let (c, _, e) = cli(&["mount", "lmdb:/x", "/tmp"]);
+        assert_eq!(c, 2);
+        assert!(e.contains("unknown VDB backend"), "{e}");
+        // The mountpoint must be an existing directory.
+        let (c, _, e) = cli(&["mount", "files:/x", "/nonexistent/mountpoint"]);
+        assert_eq!(c, 2);
+        assert!(e.contains("existing directory"), "{e}");
+        // A database that does not exist is refused before any mount; the
+        // backend is opened read-only and never created.
+        let mp = scratch("mp");
+        let (c, _, e) = cli(&["mount", "sqlite:/nonexistent/vdb.sqlite", &s(&mp)]);
+        assert_eq!(c, 2, "{e}");
+        assert!(!Path::new("/nonexistent/vdb.sqlite").exists());
     }
 
     #[test]
