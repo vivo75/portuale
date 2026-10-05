@@ -323,3 +323,46 @@ impl fmt::Display for Counter {
         write!(f, "{}", self.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_kind_round_trips_its_spelling() {
+        for kind in [BackendKind::Files, BackendKind::Sqlite, BackendKind::Redb] {
+            assert_eq!(kind.as_str().parse::<BackendKind>().unwrap(), kind);
+            assert_eq!(kind.to_string(), kind.as_str());
+        }
+        assert!(matches!(
+            "lmdb".parse::<BackendKind>(),
+            Err(Error::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn entry_fields_cover_the_23_fields_only() {
+        let f = EntryFields::from_pairs([
+            ("SLOT", "0/1.2".to_string()),
+            ("repository", "gentoo".to_string()),
+            ("CONTENTS", "obj /x".to_string()),
+        ]);
+        assert_eq!(f.get("SLOT"), Some("0/1.2"));
+        assert_eq!(f.get("repository"), Some("gentoo"));
+        assert_eq!(f.get("USE"), Some(""));
+        assert_eq!(f.get("CONTENTS"), None);
+        let names: Vec<_> = f.iter().map(|(n, _)| n).collect();
+        assert_eq!(names, METADATA_FILE_FIELDS);
+    }
+
+    #[test]
+    fn snapshot_indexes_its_entries() {
+        let key = EntryKey::new("sys-libs", "glibc-2.41");
+        let fields = Arc::new(EntryFields::from_pairs([("SLOT", "2.2".to_string())]));
+        let snap = Snapshot::new(7, vec![(key.clone(), fields)]);
+        assert_eq!(snap.get(&key).and_then(|f| f.get("SLOT")), Some("2.2"));
+        assert!(snap.get(&EntryKey::new("sys-libs", "musl-1.2")).is_none());
+        assert_eq!(key.to_string(), "sys-libs/glibc-2.41");
+        assert_eq!(Counter(-1).to_string(), "-1");
+    }
+}
