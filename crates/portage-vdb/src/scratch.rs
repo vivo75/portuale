@@ -115,4 +115,77 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         Tmp(d)
     }
+
+    fn install(db: &SqliteDb, key: &EntryKey, files: &[(&str, &[u8])]) {
+        let mut txn = db.begin_write().unwrap();
+        txn.begin_entry(key).unwrap();
+        for (name, data) in files {
+            txn.put_entry_file(key, name, data).unwrap();
+        }
+        txn.finish_entry(key).unwrap();
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn materialize_then_absorb_round_trips_a_rewritten_file() {
+        let t = tmp("absorb");
+        let db = SqliteDb::open(t.0.join("vdb.sqlite")).unwrap();
+        let key = EntryKey::new("dev-libs", "a-1");
+        install(&db, &key, &[("environment.bz2", b"old"), ("SLOT", b"0\n")]);
+        let dir = t.0.join("scratch");
+        let n = materialize_files(&db, &key, &["environment.bz2", "missing"], &dir).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(std::fs::read(dir.join("environment.bz2")).unwrap(), b"old");
+        assert!(!dir.join("missing").exists());
+        // Unchanged content writes nothing.
+        let g = db.generation().unwrap();
+        assert!(!absorb_file(&db, &key, &dir, "environment.bz2").unwrap());
+        assert_eq!(db.generation().unwrap(), g);
+        std::fs::write(dir.join("environment.bz2"), b"new").unwrap();
+        assert!(absorb_file(&db, &key, &dir, "environment.bz2").unwrap());
+        assert_eq!(
+            db.read_file(&key, "environment.bz2").unwrap().as_deref(),
+            Some(&b"new"[..])
+        );
+        assert_eq!(db.generation().unwrap(), g + 1);
+
+        let whole = t.0.join("whole");
+        assert!(materialize_entry(&db, &key, &whole).unwrap());
+        let mut names: Vec<String> = std::fs::read_dir(&whole)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["SLOT", "environment.bz2"]);
+        assert!(!materialize_entry(&db, &EntryKey::new("x", "y-1"), &whole).unwrap());
+    }
+
+    /// Swaps the pending entry in for the live one in a single commit.
+    #[test]
+    fn finish_entry_replacing_swaps_in_one_commit() {
+        let t = tmp("replace");
+        let db = SqliteDb::open(t.0.join("vdb.sqlite")).unwrap();
+        let old = EntryKey::new("dev-libs", "a-1");
+        let new = EntryKey::new("dev-libs", "a-2");
+        install(&db, &old, &[("SLOT", b"0\n")]);
+        {
+            let mut txn = db.begin_write().unwrap();
+            txn.begin_entry(&new).unwrap();
+            txn.put_entry_file(&new, "SLOT", b"0\n").unwrap();
+            txn.commit().unwrap();
+        }
+        let g = db.generation().unwrap();
+        let mut txn = db.begin_write().unwrap();
+        txn.finish_entry_replacing(&new, std::slice::from_ref(&old))
+            .unwrap();
+        // Not committed yet: readers still see the old state.
+        assert!(db.has_entry(&old).unwrap());
+        assert!(!db.has_entry(&new).unwrap());
+        assert_eq!(db.pending_entries().unwrap(), vec![new.clone()]);
+        txn.commit().unwrap();
+        assert!(!db.has_entry(&old).unwrap());
+        assert!(db.has_entry(&new).unwrap());
+        assert!(db.pending_entries().unwrap().is_empty());
+        assert_eq!(db.generation().unwrap(), g + 1);
+    }
 }
