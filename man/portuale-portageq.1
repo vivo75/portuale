@@ -1,0 +1,68 @@
+.TH "PORTUALE\-PORTAGEQ" "1" "Oct 2026" "Portuale @VERSION@" "Portuale"
+.SH "NAME"
+portuale\-portageq \- Ask the installed\-package database whether a package is installed
+.SH "SYNOPSIS"
+.TP
+.B portuale portageq has_version
+\fIEROOT\fR \fIATOM\fR
+.TP
+.B portuale portageq best_version
+\fIEROOT\fR \fIATOM\fR
+.SH "DESCRIPTION"
+A native replacement for the two \fBportageq\fR commands that ebuilds reach
+through the \fBhas_version\fR and \fBbest_version\fR helpers.  It runs when
+the binary is invoked as \fBportageq\fR or as \fBportuale portageq\fR.  Any
+other \fBportageq\fR command is refused with
+\fBnot implemented by portuale portageq: \fR\fICMD\fR and exit status 1.
+.LP
+\fBhas_version\fR prints nothing and exits 0 if an installed package matches
+\fIATOM\fR, 1 if none does.  \fBbest_version\fR prints the highest matching
+installed \fBcategory/package\-version\fR, or an empty line when nothing
+matches, and exits 0.  Matching is the resolver's own: slot, sub\-slot,
+version operators, \fB::repo\fR, and USE dependencies checked against the
+installed package's recorded USE.
+.LP
+If the environment variable \fBUSE\fR is set, the USE conditionals of
+\fIATOM\fR (\fB[flag?]\fR, \fB[flag=]\fR, ...) are evaluated against it.
+If \fBEBUILD_PHASE\fR is set the atom is parsed strictly: an unparsable
+atom prints \fBERROR: Invalid atom\fR on standard error and exits 2; an
+atom that is invalid only for \fBEAPI\fR draws a \fBQA Notice\fR through
+\fBeqawarn\fR (from \fB$PORTAGE_BIN_PATH/isolated\-functions.sh\fR, else
+standard error) and is still matched; \fB::repo\fR is refused when
+\fBEAPI\fR names a real EAPI.  Without \fBEBUILD_PHASE\fR an unparsable atom
+is expanded like a bare package name (\fBglibc\fR finds \fBsys\-libs/glibc\fR);
+a malformed one makes \fBhas_version\fR exit 2 and \fBbest_version\fR exit 1.
+.SH "BACKEND"
+By default the classic tree \fIEROOT\fR\fB/var/db/pkg\fR is read.  When
+\fBmrg\fR runs with a database backend it exports \fBPORTUALE_VDB_BACKEND\fR,
+\fBPORTUALE_VDB_PATH\fR and \fBPORTUALE_VDB_ROOT\fR to its children.  The
+database is then opened read\-only, and used for \fIEROOT\fR equal to
+\fBPORTUALE_VDB_ROOT\fR only; any other root (for example \fB/\fR for
+\fBhas_version \-b\fR in a chroot build) keeps the files tree.  Without
+\fBPORTUALE_VDB_ROOT\fR the database is used for any \fIEROOT\fR.
+.SH "EXIT STATUS"
+.TP
+.B 0
+\fBhas_version\fR: installed.  \fBbest_version\fR: always, unless the atom is
+invalid.
+.TP
+.B 1
+\fBhas_version\fR: not installed.  Also an unknown command, and
+\fBbest_version\fR with a malformed atom.
+.TP
+.B 2
+Invalid atom.
+.TP
+.B 3
+Fewer than two arguments (\fBERROR: insufficient parameters!\fR on standard
+output).
+.TP
+.B 4
+The database could not be opened.
+.TP
+.B 64
+\fIEROOT\fR is not a directory.
+.SH "SEE ALSO"
+.BR mrg (1),
+.BR portuale\-vdb (1),
+.BR ebuild (5)

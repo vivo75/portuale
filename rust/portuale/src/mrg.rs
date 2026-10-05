@@ -1481,6 +1481,9 @@ use std::path::{Path, PathBuf};
 const VDB_BACKEND_VAR: &str = "PORTUALE_VDB_BACKEND";
 /// Environment / make.conf variable naming the database file.
 const VDB_PATH_VAR: &str = "PORTUALE_VDB_PATH";
+/// Exported (not read) by `mrg`: the ROOT the exported database belongs
+/// to, so the native `portageq` opens it only for that root.
+const VDB_ROOT_VAR: &str = "PORTUALE_VDB_ROOT";
 
 /// What `resolve_vdb_selection` decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1749,6 +1752,7 @@ fn setup_vdb(matches: &ArgMatches, client_vdb: bool) -> Result<(), (String, u8)>
         unsafe {
             std::env::set_var(VDB_BACKEND_VAR, sel.backend.as_str());
             std::env::set_var(VDB_PATH_VAR, path);
+            std::env::set_var(VDB_ROOT_VAR, &root);
         }
     }
     Ok(())

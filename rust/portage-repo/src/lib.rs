@@ -11513,6 +11513,31 @@ fn best_installed_matching(
     atom_str: &str,
     config: &portage_profile::Config,
 ) -> Option<String> {
+    best_installed_match(root, atom_str, None, &|| config.iuse_effective.clone())
+}
+
+/// [`best_installed_matching`] with the two inputs a caller outside the
+/// resolver supplies itself (feat#157 S6.2, the native `portageq`
+/// `has_version` / `best_version`, real `vardb.match()`):
+///
+/// - `unevaluated`: when `atom_str` is a USE-conditional-evaluated copy of
+///   an atom (real `Atom.evaluate_conditionals`), the original text.
+///   Real `_match_use` checks the IUSE membership of the *unevaluated*
+///   atom's `.required` flags, so a flag a dropped `[flag?]` names must
+///   still be in the installed `IUSE`; the dropped conditionals are fed to
+///   `use_deps_satisfied` as constraint-free entries for that check.
+/// - `implicit_iuse`: the profile's `IUSE_EFFECTIVE` (what
+///   `config.iuse_effective` is for the resolver). Called at most once and
+///   only when the atom has `[use]` deps, so a caller can load the config
+///   lazily.
+///
+/// Returns the highest matching installed version (the `PF` version part).
+pub fn best_installed_match(
+    root: &Path,
+    atom_str: &str,
+    unevaluated: Option<&str>,
+    implicit_iuse: &dyn Fn() -> HashSet<String>,
+) -> Option<String> {
     let atom = portage_dep::parse_atom(atom_str)?;
     let installed = installed_candidates(root, &atom.category, &atom.package);
     if installed.is_empty() {
@@ -11531,19 +11556,27 @@ fn best_installed_matching(
         .collect();
     let refs: Vec<&str> = cpv_strs.iter().map(String::as_str).collect();
     let matched = portage_dep::match_from_list(atom_str, &refs)?;
-    let use_deps = atom.use_deps.as_ref().filter(|d| !d.is_empty());
+    let mut all_deps: Vec<portage_dep::UseDep> = atom.use_deps.clone().unwrap_or_default();
+    if let Some(orig) = unevaluated.and_then(portage_dep::parse_atom)
+        && let Some(orig_deps) = orig.use_deps
+    {
+        all_deps.extend(orig_deps);
+    }
+    let use_deps = Some(all_deps).filter(|d| !d.is_empty());
     let by_str: HashMap<&str, &(String, String, String)> =
         refs.iter().copied().zip(installed.iter()).collect();
+    let implicit: std::cell::OnceCell<HashSet<String>> = std::cell::OnceCell::new();
     matched
         .into_iter()
         .filter_map(|m| by_str.get(m).map(|(version, _slot, _sub)| version.clone()))
         .filter(|version| {
-            let Some(use_deps) = use_deps else {
+            let Some(use_deps) = &use_deps else {
                 return true;
             };
             let vdb_iuse = read_vdb_flag_set(root, &atom.category, &atom.package, version, "IUSE");
             let vdb_use = read_vdb_flag_set(root, &atom.category, &atom.package, version, "USE");
-            let mut valid = valid_iuse(&vdb_iuse, config);
+            let mut valid = vdb_iuse;
+            valid.extend(implicit.get_or_init(implicit_iuse).iter().cloned());
             valid.extend(vdb_use.iter().cloned());
             portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
         })
