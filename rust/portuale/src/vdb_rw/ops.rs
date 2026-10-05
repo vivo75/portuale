@@ -13,9 +13,11 @@
 //! rename  FROM TO            link    FROM TO
 //! chmod   PATH MODE          chown   PATH UID GID  (-1 = unchanged)
 //! utime   PATH NS            sameino A B           (assert one inode)
+//! stamp   FILE DIR           append `#dir_mtime=<DIR's mtime ns>\n` to FILE
+//!                            (real `_stamp_metadata_file`)
 //! ```
 
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -38,6 +40,7 @@ pub enum Op {
     Chown(String, Option<u32>, Option<u32>),
     Utime(String, i128),
     SameIno(String, String),
+    Stamp(String, String),
 }
 
 fn unescape(s: &str) -> Vec<u8> {
@@ -101,6 +104,7 @@ pub fn parse(script: &str) -> Vec<Op> {
             "chown" => Op::Chown(a(0), id(1), id(2)),
             "utime" => Op::Utime(a(0), a(1).parse().expect("ns")),
             "sameino" => Op::SameIno(a(0), a(1)),
+            "stamp" => Op::Stamp(a(0), a(1)),
             other => panic!("line {}: unknown verb {other:?}", n + 1),
         });
     }
@@ -203,6 +207,10 @@ fn rw_one(v: &RwView, op: &Op) -> Result<(), ViewError> {
             assert_eq!(resolve(v, a)?, resolve(v, b)?, "sameino {a} {b}");
             Ok(())
         }
+        Op::Stamp(f, d) => {
+            let ns = v.getattr(resolve(v, d)?)?.mtime_ns;
+            rw_write(v, f, format!("#dir_mtime={ns}\n").as_bytes(), true)
+        }
     }
 }
 
@@ -234,13 +242,15 @@ fn fs_one(vdb: &Path, op: &Op) -> std::io::Result<()> {
             std::fs::create_dir(p(d))?;
             std::fs::set_permissions(p(d), std::fs::Permissions::from_mode(*m))
         }
-        Op::Create(f, m) => std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(*m)
-            .open(p(f))
-            .map(|_| ()),
+        Op::Create(f, m) => {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(p(f))?;
+            // Exactly MODE, whatever the process umask (#308).
+            std::fs::set_permissions(p(f), std::fs::Permissions::from_mode(*m))
+        }
         Op::Write(f, b) => std::fs::write(p(f), b),
         Op::Append(f, b) => {
             use std::io::Write as _;
@@ -271,6 +281,14 @@ fn fs_one(vdb: &Path, op: &Op) -> std::io::Result<()> {
                 std::fs::metadata(p(b))?.ino()
             );
             Ok(())
+        }
+        Op::Stamp(f, d) => {
+            let md = std::fs::metadata(p(d))?;
+            let ns = md.mtime() as i128 * 1_000_000_000 + md.mtime_nsec() as i128;
+            fs_one(
+                vdb,
+                &Op::Append(f.clone(), format!("#dir_mtime={ns}\n").into_bytes()),
+            )
         }
     }
 }
@@ -345,6 +363,9 @@ pub struct Env {
     /// The database the `RwView` writes to: a conversion of the twin's
     /// starting state.
     pub db: Arc<dyn InstalledDb>,
+    /// The database file (read by the sqlite-only failure tests).
+    #[cfg_attr(not(feature = "vdb-sqlite"), allow(dead_code))]
+    pub db_path: PathBuf,
     /// The `RwView`'s scratch directory.
     pub scratch: PathBuf,
     /// The one entry both start with.
@@ -414,6 +435,7 @@ pub fn envs(tag: &str) -> Vec<Env> {
             files_root,
             files_vdb,
             db,
+            db_path: path,
             scratch: dir.join("scratch"),
             seeded,
             dir,

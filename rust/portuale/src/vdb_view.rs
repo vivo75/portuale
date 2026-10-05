@@ -260,6 +260,20 @@ impl Inodes {
         let i = usize::try_from(ino.checked_sub(1)?).ok()?;
         self.nodes.get(i).cloned()
     }
+
+    /// Make `ino` stand for `node` (a rename that keeps the inode).
+    fn rebind(&mut self, ino: u64, node: Node) {
+        let Some(i) = ino.checked_sub(1).and_then(|i| usize::try_from(i).ok()) else {
+            return;
+        };
+        if let Some(old) = self.nodes.get(i).cloned() {
+            if self.by_node.get(&old) == Some(&ino) {
+                self.by_node.remove(&old);
+            }
+            self.nodes[i] = node.clone();
+            self.by_node.insert(node, ino);
+        }
+    }
 }
 
 // ----------------------------------------------------------- generations
@@ -377,6 +391,12 @@ impl View {
     /// The node an inode stands for.
     pub(crate) fn node_of(&self, ino: u64) -> Res<Node> {
         self.node(ino)
+    }
+
+    /// Make `ino` stand for `node` from now on (the read-write layer's
+    /// publish keeps the staged directory's inode, as a rename does).
+    pub(crate) fn rebind(&self, ino: u64, node: Node) {
+        lock(&self.inodes).rebind(ino, node);
     }
 
     /// Run `f` until the generation reads the same before and after (a

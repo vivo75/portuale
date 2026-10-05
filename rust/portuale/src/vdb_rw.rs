@@ -22,11 +22,12 @@
 // `vdb_fuse.rs` only translates types.
 
 use std::collections::{BTreeMap, HashMap};
+use std::os::unix::fs::{FileExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use portage_vdb::InstalledDb;
+use portage_vdb::{Counter, EntryFile, EntryImage, EntryKey, FileMeta, InstalledDb, MetadataStamp};
 
 use crate::vdb_view::{Attr, DirEnt, Kind, Node, ROOT_INO, View, ViewError, open_wants_write};
 
@@ -77,7 +78,13 @@ pub struct Owner {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Parent {
     Cat(String),
+    /// A staged `-MERGING-<pf>` directory (its object id).
+    Staged(u64),
 }
+
+/// The prefix real Portage gives an entry while it is being merged
+/// (`const.py` `MERGING_IDENTIFIER`).
+const MERGING: &str = "-MERGING-";
 
 enum Obj {
     /// A volatile file (lock files); `nlink` counts its names.
@@ -88,6 +95,18 @@ enum Obj {
         mtime_ns: i128,
         nlink: u32,
     },
+    /// A staged `<cat>/-MERGING-<pf>` directory, backed by `path` in the
+    /// scratch area. Its mtime follows real filesystem rules: a create,
+    /// unlink or rename inside it bumps it, a `utime` sets it.
+    StagedDir {
+        cat: String,
+        path: PathBuf,
+        mode: u32,
+        mtime_ns: i128,
+    },
+    /// A file inside a staged directory: the scratch file holds the bytes,
+    /// mode and mtime.
+    StagedFile { path: PathBuf },
 }
 
 enum Fh {
@@ -97,6 +116,8 @@ enum Fh {
     Dir(Arc<Vec<DirEnt>>),
     /// A volatile file.
     Vol(u64),
+    /// An open staged file.
+    Staged(std::fs::File),
 }
 
 struct RwState {
@@ -112,11 +133,83 @@ struct RwState {
     next_fh: u64,
 }
 
+impl RwState {
+    fn new_obj(&mut self, obj: Obj) -> u64 {
+        let id = self.next_obj;
+        self.next_obj += 1;
+        self.objs.insert(id, obj);
+        id
+    }
+
+    /// The children of `parent`, in name order.
+    fn children(&self, parent: &Parent) -> Vec<(String, u64)> {
+        self.names
+            .range((parent.clone(), String::new())..)
+            .take_while(|((p, _), _)| p == parent)
+            .map(|((_, n), id)| (n.clone(), *id))
+            .collect()
+    }
+
+    /// A create, unlink or rename inside staged directory `dir`.
+    fn bump(&mut self, dir: u64) {
+        if let Some(Obj::StagedDir { mtime_ns, .. }) = self.objs.get_mut(&dir) {
+            *mtime_ns = now_ns();
+        }
+    }
+
+    /// Drop one name of object `id`; the object goes with its last name.
+    fn drop_name(&mut self, id: u64) {
+        let gone = match self.objs.get_mut(&id) {
+            Some(Obj::Vol { nlink, .. }) => {
+                *nlink -= 1;
+                *nlink == 0
+            }
+            Some(_) => true,
+            None => false,
+        };
+        if gone {
+            self.objs.remove(&id);
+        }
+    }
+}
+
+fn io_err(e: std::io::Error) -> ViewError {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => ViewError::NoEnt,
+        std::io::ErrorKind::AlreadyExists => ViewError::Exists,
+        _ => ViewError::Io(e.to_string()),
+    }
+}
+
+fn mtime_of(md: &std::fs::Metadata) -> i128 {
+    md.mtime() as i128 * 1_000_000_000 + md.mtime_nsec() as i128
+}
+
+/// The `metadata` stamp state of a staged entry whose directory shows
+/// `dir_mtime_ns`: real `_read_metadata_file` (`vartree.py:157-185`) only
+/// trusts a file whose `#dir_mtime=` line equals the directory's
+/// `st_mtime_ns`.
+pub(crate) fn stamp_state(metadata: Option<&[u8]>, dir_mtime_ns: i128) -> MetadataStamp {
+    let Some(bytes) = metadata else {
+        return MetadataStamp::Absent;
+    };
+    let stamp = bytes
+        .split(|&b| b == b'\n')
+        .find_map(|l| l.strip_prefix(DIR_MTIME_PREFIX))
+        .and_then(|v| std::str::from_utf8(v).ok())
+        .and_then(|v| v.trim().parse::<i128>().ok());
+    if stamp == Some(dir_mtime_ns) {
+        MetadataStamp::Valid
+    } else {
+        MetadataStamp::Stale
+    }
+}
+
+const DIR_MTIME_PREFIX: &[u8] = b"#dir_mtime=";
+
 pub struct RwView {
     view: View,
-    #[allow(dead_code)] // used by the publish steps (S2, S3)
     db: Arc<dyn InstalledDb>,
-    #[allow(dead_code)] // staged entries live here (S2)
     scratch: PathBuf,
     owner: Owner,
     st: Mutex<RwState>,
@@ -155,7 +248,7 @@ impl RwView {
         let st = lock(&self.st);
         match self.obj_id(ino).and_then(|id| st.objs.get(&id)) {
             Some(Obj::Vol { owner, .. }) => *owner,
-            None => self.owner,
+            _ => self.owner,
         }
     }
 
@@ -177,8 +270,9 @@ impl RwView {
         fh
     }
 
-    fn obj_attr(&self, id: u64, obj: &Obj) -> Attr {
-        match obj {
+    fn obj_attr(&self, id: u64, obj: &Obj) -> Res<Attr> {
+        let ino = self.obj_ino(id);
+        Ok(match obj {
             Obj::Vol {
                 data,
                 mode,
@@ -186,14 +280,33 @@ impl RwView {
                 nlink,
                 ..
             } => Attr {
-                ino: self.obj_ino(id),
+                ino,
                 kind: Kind::File,
                 perm: (*mode & 0o7777) as u16,
                 size: data.len() as u64,
                 nlink: *nlink,
                 mtime_ns: *mtime_ns,
             },
-        }
+            Obj::StagedDir { mode, mtime_ns, .. } => Attr {
+                ino,
+                kind: Kind::Dir,
+                perm: (*mode & 0o7777) as u16,
+                size: 0,
+                nlink: 2,
+                mtime_ns: *mtime_ns,
+            },
+            Obj::StagedFile { path } => {
+                let md = std::fs::metadata(path).map_err(io_err)?;
+                Attr {
+                    ino,
+                    kind: Kind::File,
+                    perm: (md.mode() & 0o7777) as u16,
+                    size: md.len(),
+                    nlink: 1,
+                    mtime_ns: mtime_of(&md),
+                }
+            }
+        })
     }
 
     fn vol_cat_attr(&self, cat: &str, mtime_ns: i128) -> Attr {
@@ -216,11 +329,16 @@ impl RwView {
         }
     }
 
-    /// The category a directory inode stands for, if it is one (stored or
-    /// volatile).
-    fn cat_of(&self, ino: u64) -> Res<Option<String>> {
+    /// The directory `ino` stands for, as a parent of this layer's names:
+    /// a category (stored or volatile) or a staged directory.
+    fn parent_of(&self, ino: u64) -> Res<Option<Parent>> {
         Ok(match self.view.node_of(ino)? {
-            Node::Cat(c) => Some(c),
+            Node::Cat(c) => Some(Parent::Cat(c)),
+            Node::Obj(id) => match lock(&self.st).objs.get(&id) {
+                Some(Obj::StagedDir { .. }) => Some(Parent::Staged(id)),
+                Some(_) => return Err(ViewError::NotDir),
+                None => return Err(ViewError::NoEnt),
+            },
             _ => None,
         })
     }
@@ -241,12 +359,24 @@ impl RwView {
                 {
                     let st = lock(&self.st);
                     if let Some(&id) = st.names.get(&(Parent::Cat(cat.clone()), name.to_string())) {
-                        return Ok(self.obj_attr(id, &st.objs[&id]));
+                        return self.obj_attr(id, &st.objs[&id]);
                     }
                 }
                 self.view.lookup(parent, name)
             }
-            Node::Obj(_) => Err(ViewError::NotDir),
+            Node::Obj(dir) => {
+                let st = lock(&self.st);
+                match st.objs.get(&dir) {
+                    Some(Obj::StagedDir { .. }) => {}
+                    Some(_) => return Err(ViewError::NotDir),
+                    None => return Err(ViewError::NoEnt),
+                }
+                let id = *st
+                    .names
+                    .get(&(Parent::Staged(dir), name.to_string()))
+                    .ok_or(ViewError::NoEnt)?;
+                self.obj_attr(id, &st.objs[&id])
+            }
             _ => self.view.lookup(parent, name),
         }
     }
@@ -256,7 +386,7 @@ impl RwView {
             Node::Obj(id) => {
                 let st = lock(&self.st);
                 let obj = st.objs.get(&id).ok_or(ViewError::NoEnt)?;
-                Ok(self.obj_attr(id, obj))
+                self.obj_attr(id, obj)
             }
             Node::Cat(cat) => match self.view.getattr(ino) {
                 Err(ViewError::NoEnt) => {
@@ -285,32 +415,45 @@ impl RwView {
 
     pub fn opendir(&self, ino: u64) -> Res<u64> {
         let node = self.view.node_of(ino)?;
-        let mut listing: Vec<DirEnt> = match self.view.opendir(ino) {
-            Ok(vfh) => {
-                let l = self.view.readdir(vfh);
-                self.view.release(vfh);
-                l?.as_ref().clone()
-            }
-            Err(ViewError::NoEnt) => {
-                // A volatile category: `.` and `..` only, children below.
-                let a = self.getattr(ino)?;
-                vec![
-                    DirEnt {
-                        ino: a.ino,
-                        kind: Kind::Dir,
-                        name: ".".into(),
-                    },
-                    DirEnt {
-                        ino: ROOT_INO,
-                        kind: Kind::Dir,
-                        name: "..".into(),
-                    },
-                ]
-            }
-            Err(e) => return Err(e),
+        let me = self.getattr(ino)?;
+        if me.kind != Kind::Dir {
+            return Err(ViewError::NotDir);
+        }
+        let mut listing: Vec<DirEnt> = match &node {
+            Node::Obj(_) => Vec::new(),
+            _ => match self.view.opendir(ino) {
+                Ok(vfh) => {
+                    let l = self.view.readdir(vfh);
+                    self.view.release(vfh);
+                    l?.as_ref().clone()
+                }
+                Err(ViewError::NoEnt) => Vec::new(),
+                Err(e) => return Err(e),
+            },
         };
+        if listing.is_empty() {
+            let parent = match &node {
+                Node::Obj(id) => match lock(&self.st).objs.get(id) {
+                    Some(Obj::StagedDir { cat, .. }) => self.view.ino_of(&Node::Cat(cat.clone())),
+                    _ => ROOT_INO,
+                },
+                _ => ROOT_INO,
+            };
+            listing = vec![
+                DirEnt {
+                    ino: me.ino,
+                    kind: Kind::Dir,
+                    name: ".".into(),
+                },
+                DirEnt {
+                    ino: parent,
+                    kind: Kind::Dir,
+                    name: "..".into(),
+                },
+            ];
+        }
         let mut st = lock(&self.st);
-        match &node {
+        let parent = match &node {
             Node::Root => {
                 for cat in st.vol_cats.keys() {
                     if !listing.iter().any(|d| &d.name == cat) {
@@ -321,21 +464,24 @@ impl RwView {
                         });
                     }
                 }
+                None
             }
-            Node::Cat(cat) => {
-                let parent = Parent::Cat(cat.clone());
-                for ((p, name), id) in st.names.range((parent.clone(), String::new())..) {
-                    if p != &parent {
-                        break;
-                    }
-                    listing.push(DirEnt {
-                        ino: self.obj_ino(*id),
-                        kind: Kind::File,
-                        name: name.clone(),
-                    });
-                }
+            Node::Cat(cat) => Some(Parent::Cat(cat.clone())),
+            Node::Obj(id) => Some(Parent::Staged(*id)),
+            _ => None,
+        };
+        if let Some(parent) = parent {
+            for (name, id) in st.children(&parent) {
+                let kind = match st.objs.get(&id) {
+                    Some(Obj::StagedDir { .. }) => Kind::Dir,
+                    _ => Kind::File,
+                };
+                listing.push(DirEnt {
+                    ino: self.obj_ino(id),
+                    kind,
+                    name,
+                });
             }
-            _ => {}
         }
         Ok(Self::new_fh(&mut st, Fh::Dir(Arc::new(listing))))
     }
@@ -353,15 +499,26 @@ impl RwView {
         match self.view.node_of(ino)? {
             Node::Obj(id) => {
                 let mut st = lock(&self.st);
-                match st.objs.get_mut(&id).ok_or(ViewError::NoEnt)? {
+                let h = match st.objs.get_mut(&id).ok_or(ViewError::NoEnt)? {
                     Obj::Vol { data, mtime_ns, .. } => {
                         if flags & libc::O_TRUNC != 0 && open_wants_write(flags) {
                             data.clear();
                             *mtime_ns = now_ns();
                         }
+                        Fh::Vol(id)
                     }
-                }
-                Ok(Self::new_fh(&mut st, Fh::Vol(id)))
+                    Obj::StagedFile { path } => {
+                        let f = std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(open_wants_write(flags))
+                            .truncate(flags & libc::O_TRUNC != 0 && open_wants_write(flags))
+                            .open(&*path)
+                            .map_err(io_err)?;
+                        Fh::Staged(f)
+                    }
+                    Obj::StagedDir { .. } => return Err(ViewError::IsDir),
+                };
+                Ok(Self::new_fh(&mut st, h))
             }
             _ => {
                 if open_wants_write(flags) {
@@ -389,8 +546,14 @@ impl RwView {
                     let end = start.saturating_add(size).min(data.len());
                     Ok(data[start..end].to_vec())
                 }
-                None => Err(ViewError::Stale),
+                _ => Err(ViewError::Stale),
             },
+            Some(Fh::Staged(f)) => {
+                let mut buf = vec![0u8; size];
+                let n = f.read_at(&mut buf, off).map_err(io_err)?;
+                buf.truncate(n);
+                Ok(buf)
+            }
             Some(Fh::Dir(_)) => Err(ViewError::IsDir),
             None => Err(ViewError::BadHandle),
         }
@@ -409,36 +572,59 @@ impl RwView {
 
     /// `create(parent, name, mode, flags)`: a new file, opened.
     pub fn create(&self, parent: u64, name: &str, mode: u32, flags: i32) -> Res<(Attr, u64)> {
-        let Some(cat) = self.cat_of(parent)? else {
-            return Err(ViewError::Perm);
-        };
-        if !is_volatile_name(name) {
-            return Err(ViewError::Perm);
-        }
+        let parent_key = self.parent_of(parent)?.ok_or(ViewError::Perm)?;
         self.getattr(parent)?;
         let mut st = lock(&self.st);
-        let key = (Parent::Cat(cat), name.to_string());
+        let key = (parent_key.clone(), name.to_string());
         if let Some(&id) = st.names.get(&key) {
             if flags & libc::O_EXCL != 0 {
                 return Err(ViewError::Exists);
             }
             drop(st);
-            let fh = self.open(self.obj_ino(id), flags)?;
-            return Ok((self.getattr(self.obj_ino(id))?, fh));
+            let ino = self.obj_ino(id);
+            let fh = self.open(ino, flags)?;
+            return Ok((self.getattr(ino)?, fh));
         }
-        let id = st.next_obj;
-        st.next_obj += 1;
-        let obj = Obj::Vol {
-            data: Vec::new(),
-            mode: mode & 0o7777,
-            owner: self.owner,
-            mtime_ns: now_ns(),
-            nlink: 1,
+        let (obj, h) = match &parent_key {
+            Parent::Cat(_) if is_volatile_name(name) => (
+                Obj::Vol {
+                    data: Vec::new(),
+                    mode: mode & 0o7777,
+                    owner: self.owner,
+                    mtime_ns: now_ns(),
+                    nlink: 1,
+                },
+                None,
+            ),
+            Parent::Cat(_) => return Err(ViewError::Perm),
+            Parent::Staged(dir) => {
+                let Some(Obj::StagedDir { path, .. }) = st.objs.get(dir) else {
+                    return Err(ViewError::NoEnt);
+                };
+                let path = path.join(name);
+                let f = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .mode(mode & 0o7777)
+                    .open(&path)
+                    .map_err(io_err)?;
+                (Obj::StagedFile { path }, Some(f))
+            }
         };
-        let attr = self.obj_attr(id, &obj);
-        st.objs.insert(id, obj);
+        let id = st.new_obj(obj);
         st.names.insert(key, id);
-        let fh = Self::new_fh(&mut st, Fh::Vol(id));
+        if let Parent::Staged(dir) = parent_key {
+            st.bump(dir);
+        }
+        let attr = self.obj_attr(id, &st.objs[&id])?;
+        let fh = Self::new_fh(
+            &mut st,
+            match h {
+                Some(f) => Fh::Staged(f),
+                None => Fh::Vol(id),
+            },
+        );
         Ok((attr, fh))
     }
 
@@ -447,6 +633,10 @@ impl RwView {
         let mut st = lock(&self.st);
         let id = match st.handles.get(&fh) {
             Some(Fh::Vol(id)) => *id,
+            Some(Fh::Staged(f)) => {
+                f.write_all_at(bytes, off).map_err(io_err)?;
+                return Ok(bytes.len() as u32);
+            }
             Some(_) => return Err(ViewError::Perm),
             None => return Err(ViewError::BadHandle),
         };
@@ -459,12 +649,14 @@ impl RwView {
                 data[off..off + bytes.len()].copy_from_slice(bytes);
                 *mtime_ns = now_ns();
             }
+            _ => return Err(ViewError::Stale),
         }
         Ok(bytes.len() as u32)
     }
 
-    /// `mkdir(parent, name, mode)`: a category at the root.
-    pub fn mkdir(&self, parent: u64, name: &str, _mode: u32) -> Res<Attr> {
+    /// `mkdir(parent, name, mode)`: a category at the root, or a staged
+    /// `-MERGING-<pf>` directory in a category.
+    pub fn mkdir(&self, parent: u64, name: &str, mode: u32) -> Res<Attr> {
         match self.view.node_of(parent)? {
             Node::Root => {
                 if self.lookup(ROOT_INO, name).is_ok() {
@@ -477,40 +669,67 @@ impl RwView {
                 lock(&self.st).vol_cats.insert(name.to_string(), m);
                 Ok(self.vol_cat_attr(name, m))
             }
-            // Staged `-MERGING-<pf>` directories are S2.
+            Node::Cat(cat) => {
+                let pf = name.strip_prefix(MERGING).unwrap_or("");
+                if pf.is_empty() || pf.contains('/') {
+                    return Err(ViewError::Perm);
+                }
+                self.getattr(parent)?;
+                if self.lookup(parent, name).is_ok() {
+                    return Err(ViewError::Exists);
+                }
+                let mut st = lock(&self.st);
+                let id = st.next_obj;
+                let path = self.scratch.join(id.to_string());
+                std::fs::create_dir(&path).map_err(io_err)?;
+                let id = st.new_obj(Obj::StagedDir {
+                    cat: cat.clone(),
+                    path,
+                    mode: mode & 0o7777,
+                    mtime_ns: now_ns(),
+                });
+                st.names.insert((Parent::Cat(cat), name.to_string()), id);
+                self.obj_attr(id, &st.objs[&id])
+            }
             _ => Err(ViewError::Perm),
         }
     }
 
     /// `unlink(parent, name)`.
     pub fn unlink(&self, parent: u64, name: &str) -> Res<()> {
-        let Some(cat) = self.cat_of(parent)? else {
+        let Some(parent_key) = self.parent_of(parent)? else {
             return Err(ViewError::Perm);
         };
         let mut st = lock(&self.st);
-        let key = (Parent::Cat(cat), name.to_string());
-        let Some(id) = st.names.remove(&key) else {
+        let key = (parent_key.clone(), name.to_string());
+        let Some(&id) = st.names.get(&key) else {
             drop(st);
+            if let Parent::Staged(_) = parent_key {
+                return Err(ViewError::NoEnt);
+            }
             // A stored entry is a directory; anything else is not here.
             return match self.view.lookup(parent, name) {
                 Ok(_) => Err(ViewError::IsDir),
                 Err(e) => Err(e),
             };
         };
-        let gone = match st.objs.get_mut(&id) {
-            Some(Obj::Vol { nlink, .. }) => {
-                *nlink -= 1;
-                *nlink == 0
+        match st.objs.get(&id) {
+            Some(Obj::StagedDir { .. }) => return Err(ViewError::IsDir),
+            Some(Obj::StagedFile { path }) => {
+                std::fs::remove_file(path).map_err(io_err)?;
             }
-            None => true,
-        };
-        if gone {
-            st.objs.remove(&id);
+            _ => {}
+        }
+        st.names.remove(&key);
+        st.drop_name(id);
+        if let Parent::Staged(dir) = parent_key {
+            st.bump(dir);
         }
         Ok(())
     }
 
-    /// `rmdir(parent, name)`: an empty category.
+    /// `rmdir(parent, name)`: an empty category, or an emptied staged
+    /// directory (real removes a stale `-MERGING-<pf>` before it starts).
     pub fn rmdir(&self, parent: u64, name: &str) -> Res<()> {
         match self.view.node_of(parent)? {
             Node::Root => {
@@ -524,35 +743,195 @@ impl RwView {
                 lock(&self.st).vol_cats.remove(name);
                 Ok(())
             }
-            // Entries (S3) and staged directories (S2).
+            Node::Cat(cat) => {
+                let mut st = lock(&self.st);
+                let key = (Parent::Cat(cat), name.to_string());
+                match st.names.get(&key).copied() {
+                    Some(id) => {
+                        let Some(Obj::StagedDir { path, .. }) = st.objs.get(&id) else {
+                            return Err(ViewError::NotDir);
+                        };
+                        if !st.children(&Parent::Staged(id)).is_empty() {
+                            return Err(ViewError::NotEmpty);
+                        }
+                        let _ = std::fs::remove_dir(path);
+                        st.names.remove(&key);
+                        st.objs.remove(&id);
+                        Ok(())
+                    }
+                    // Live entries are S3.
+                    None => {
+                        drop(st);
+                        self.view.lookup(parent, name)?;
+                        Err(ViewError::Perm)
+                    }
+                }
+            }
             _ => Err(ViewError::Perm),
         }
     }
 
     /// `rename(parent, name, newparent, newname)`.
     pub fn rename(&self, parent: u64, name: &str, newparent: u64, newname: &str) -> Res<()> {
-        let (Some(cat), Some(newcat)) = (self.cat_of(parent)?, self.cat_of(newparent)?) else {
+        let (Some(from), Some(to)) = (self.parent_of(parent)?, self.parent_of(newparent)?) else {
             return Err(ViewError::Perm);
         };
-        if !(is_volatile_name(name) && is_volatile_name(newname)) {
-            // Staged publishes and live rewrites are S2 and S3.
-            return Err(ViewError::Perm);
-        }
-        let mut st = lock(&self.st);
-        let id = st
-            .names
-            .remove(&(Parent::Cat(cat), name.to_string()))
-            .ok_or(ViewError::NoEnt)?;
-        if let Some(old) = st
-            .names
-            .insert((Parent::Cat(newcat), newname.to_string()), id)
-            && old != id
-            && let Some(Obj::Vol { nlink, .. }) = st.objs.get_mut(&old)
-        {
-            *nlink -= 1;
-            if *nlink == 0 {
-                st.objs.remove(&old);
+        match (&from, &to) {
+            // Publish: `<cat>/-MERGING-<pf>` -> `<cat>/<pf>`.
+            (Parent::Cat(c1), Parent::Cat(c2))
+                if c1 == c2
+                    && name.strip_prefix(MERGING) == Some(newname)
+                    && !newname.is_empty() =>
+            {
+                self.publish(c1, name, newname)
             }
+            (Parent::Cat(_), Parent::Cat(_))
+                if is_volatile_name(name) && is_volatile_name(newname) =>
+            {
+                self.move_name(from, name, to, newname)
+            }
+            // `write_atomic` inside a staged directory.
+            (Parent::Staged(a), Parent::Staged(b)) if a == b => {
+                self.move_name(from, name, to, newname)
+            }
+            // Live-entry rewrites are S3.
+            _ => Err(ViewError::Perm),
+        }
+    }
+
+    /// Rename one of this layer's names (volatile files, staged files),
+    /// replacing whatever `newname` named.
+    fn move_name(&self, from: Parent, name: &str, to: Parent, newname: &str) -> Res<()> {
+        let mut st = lock(&self.st);
+        let id = *st
+            .names
+            .get(&(from.clone(), name.to_string()))
+            .ok_or(ViewError::NoEnt)?;
+        let new_path = match (&to, st.objs.get(&id)) {
+            (Parent::Staged(dir), Some(Obj::StagedFile { path })) => {
+                let Some(Obj::StagedDir { path: dpath, .. }) = st.objs.get(dir) else {
+                    return Err(ViewError::NoEnt);
+                };
+                let np = dpath.join(newname);
+                std::fs::rename(path, &np).map_err(io_err)?;
+                Some(np)
+            }
+            (Parent::Staged(_), _) => return Err(ViewError::Perm),
+            _ => None,
+        };
+        st.names.remove(&(from.clone(), name.to_string()));
+        if let Some(old) = st.names.insert((to.clone(), newname.to_string()), id)
+            && old != id
+        {
+            st.drop_name(old);
+        }
+        if let (Some(np), Some(Obj::StagedFile { path })) = (new_path, st.objs.get_mut(&id)) {
+            *path = np;
+        }
+        if let Parent::Staged(dir) = to {
+            st.bump(dir);
+        }
+        Ok(())
+    }
+
+    /// The image real Portage built in staged directory `dir`.
+    fn staged_image(&self, st: &RwState, dir: u64, key: EntryKey) -> Res<EntryImage> {
+        let Some(Obj::StagedDir { mode, mtime_ns, .. }) = st.objs.get(&dir) else {
+            return Err(ViewError::NoEnt);
+        };
+        let mut files = Vec::new();
+        for (name, id) in st.children(&Parent::Staged(dir)) {
+            let Some(Obj::StagedFile { path }) = st.objs.get(&id) else {
+                return Err(ViewError::Perm);
+            };
+            let md = std::fs::metadata(path).map_err(io_err)?;
+            let data = std::fs::read(path).map_err(io_err)?;
+            files.push(EntryFile {
+                meta: FileMeta {
+                    name,
+                    len: data.len() as u64,
+                    mode: md.mode(),
+                    mtime_ns: mtime_of(&md),
+                },
+                data,
+            });
+        }
+        let metadata = files
+            .iter()
+            .find(|f| f.meta.name == "metadata")
+            .map(|f| f.data.as_slice());
+        let metadata_stamp = stamp_state(metadata, *mtime_ns);
+        Ok(EntryImage {
+            key,
+            files,
+            dir_mode: *mode & 0o7777,
+            dir_mtime_ns: *mtime_ns,
+            metadata_stamp,
+        })
+    }
+
+    /// `rename(<cat>/-MERGING-<pf>, <cat>/<pf>)`: store the staged entry in
+    /// one transaction (replacing a live `<pf>`), raise the counter to its
+    /// `COUNTER`, then drop the scratch copy. The directory keeps its inode
+    /// under the new name. A failed transaction is `EIO` and leaves the
+    /// staged entry as it was.
+    fn publish(&self, cat: &str, staged: &str, pf: &str) -> Res<()> {
+        let mut st = lock(&self.st);
+        let dir = *st
+            .names
+            .get(&(Parent::Cat(cat.to_string()), staged.to_string()))
+            .ok_or(ViewError::NoEnt)?;
+        let key = EntryKey::new(cat, pf);
+        // A rename onto a non-empty directory fails on a real filesystem;
+        // real `dblink.treewalk` removes the live entry first.
+        let cat_ino = self.view.ino_of(&Node::Cat(cat.to_string()));
+        if self.view.lookup(cat_ino, pf).is_ok() {
+            return Err(ViewError::NotEmpty);
+        }
+        let image = self.staged_image(&st, dir, key.clone())?;
+        let counter = image
+            .files
+            .iter()
+            .find(|f| f.meta.name == "COUNTER")
+            .and_then(|f| {
+                std::str::from_utf8(&f.data)
+                    .ok()?
+                    .trim()
+                    .parse::<i64>()
+                    .ok()
+            });
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.insert_entry(&image)?;
+            if let Some(c) = counter
+                && self.db.counter()?.is_none_or(|cur| cur.0 < c)
+            {
+                txn.set_counter(Counter(c))?;
+            }
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        // A directory rename keeps every child's inode: the kernel still
+        // holds dentries for the files real Portage just wrote, and
+        // `pkg_postinst` reopens `environment.bz2` through them.
+        let mut rebinds = Vec::new();
+        for (name, id) in st.children(&Parent::Staged(dir)) {
+            st.names.remove(&(Parent::Staged(dir), name.clone()));
+            st.objs.remove(&id);
+            rebinds.push((self.obj_ino(id), Node::File(key.clone(), name)));
+        }
+        st.names
+            .remove(&(Parent::Cat(cat.to_string()), staged.to_string()));
+        if let Some(Obj::StagedDir { path, .. }) = st.objs.remove(&dir) {
+            let _ = std::fs::remove_dir_all(path);
+        }
+        // The entry is now a stored category member; a volatile category
+        // record for it is no longer needed.
+        st.vol_cats.remove(cat);
+        drop(st);
+        self.view.rebind(self.obj_ino(dir), Node::Entry(key));
+        for (ino, node) in rebinds {
+            self.view.rebind(ino, node);
         }
         Ok(())
     }
@@ -562,7 +941,9 @@ impl RwView {
     /// name and compares the inodes).
     pub fn link(&self, ino: u64, newparent: u64, newname: &str) -> Res<Attr> {
         let id = self.obj_id(ino).ok_or(ViewError::Perm)?;
-        let cat = self.cat_of(newparent)?.ok_or(ViewError::Perm)?;
+        let Some(Parent::Cat(cat)) = self.parent_of(newparent)? else {
+            return Err(ViewError::Perm);
+        };
         if !is_volatile_name(newname) {
             return Err(ViewError::Perm);
         }
@@ -573,9 +954,10 @@ impl RwView {
         }
         match st.objs.get_mut(&id).ok_or(ViewError::NoEnt)? {
             Obj::Vol { nlink, .. } => *nlink += 1,
+            _ => return Err(ViewError::Perm),
         }
         st.names.insert(key, id);
-        Ok(self.obj_attr(id, &st.objs[&id]))
+        self.obj_attr(id, &st.objs[&id])
     }
 
     /// `setattr(ino, …)`.
@@ -583,6 +965,7 @@ impl RwView {
         if let Some(id) = self.obj_id(ino) {
             {
                 let mut st = lock(&self.st);
+                let owner = self.owner;
                 match st.objs.get_mut(&id).ok_or(ViewError::NoEnt)? {
                     Obj::Vol {
                         data,
@@ -607,19 +990,60 @@ impl RwView {
                             *mtime_ns = t;
                         }
                     }
+                    Obj::StagedDir { mode, mtime_ns, .. } => {
+                        Self::check_owner(owner, s)?;
+                        if s.size.is_some() {
+                            return Err(ViewError::IsDir);
+                        }
+                        if let Some(m) = s.mode {
+                            *mode = m & 0o7777;
+                        }
+                        if let Some(t) = s.mtime_ns {
+                            *mtime_ns = t;
+                        }
+                    }
+                    Obj::StagedFile { path } => {
+                        Self::check_owner(owner, s)?;
+                        if let Some(m) = s.mode {
+                            std::fs::set_permissions(
+                                &*path,
+                                std::fs::Permissions::from_mode(m & 0o7777),
+                            )
+                            .map_err(io_err)?;
+                        }
+                        let f = std::fs::OpenOptions::new()
+                            .write(true)
+                            .open(&*path)
+                            .map_err(io_err)?;
+                        if let Some(n) = s.size {
+                            f.set_len(n).map_err(io_err)?;
+                        }
+                        if let Some(t) = s.mtime_ns {
+                            f.set_modified(crate::vdb_view::system_time(t))
+                                .map_err(io_err)?;
+                        }
+                    }
                 }
             }
             return self.getattr(ino);
         }
         let attr = self.getattr(ino)?;
-        let foreign = s.uid.is_some_and(|u| u != self.owner.uid)
-            || s.gid.is_some_and(|g| g != self.owner.gid);
-        if foreign || s.mode.is_some() || s.size.is_some() {
+        Self::check_owner(self.owner, s)?;
+        if s.mode.is_some() || s.size.is_some() {
             return Err(ViewError::Perm);
         }
         // `utime` on a category or the root (real `_bump_mtime`): accepted,
         // no lasting effect; the view derives those mtimes.
         Ok(attr)
+    }
+
+    /// The database stores no owner: a `chown` to the owner `getattr`
+    /// reports is a no-op, any other is `EPERM`.
+    fn check_owner(owner: Owner, s: &SetAttr) -> Res<()> {
+        if s.uid.is_some_and(|u| u != owner.uid) || s.gid.is_some_and(|g| g != owner.gid) {
+            return Err(ViewError::Perm);
+        }
+        Ok(())
     }
 }
 
@@ -631,7 +1055,7 @@ mod ops;
 
 #[cfg(all(test, any(feature = "vdb-sqlite", feature = "vdb-redb")))]
 mod tests {
-    use super::ops::{Env, apply_fs, apply_rw, assert_same, envs, parse};
+    use super::ops::{Env, apply_fs, apply_rw, assert_same, envs, parse, resolve};
     use super::*;
 
     fn rw(env: &Env) -> RwView {
@@ -756,6 +1180,189 @@ mod tests {
             assert!(names.contains(&env.seeded.pf), "{names:?}");
             assert!(names.contains(&".p:0.portage_lockfile".to_string()));
             assert_eq!(v.getattr(lf.ino).unwrap().kind, Kind::File);
+        }
+    }
+
+    fn script(name: &str) -> Vec<super::ops::Op> {
+        let text = match name {
+            "merge-new" => include_str!("vdb_rw/testdata/merge-new.ops"),
+            _ => unreachable!("{name}"),
+        };
+        parse(text)
+    }
+
+    #[test]
+    fn a_new_merge_through_the_view_equals_the_same_merge_on_files() {
+        for env in envs("mergenew") {
+            let ops = script("merge-new");
+            apply_fs(&env.files_vdb, &ops);
+            let v = rw(&env);
+            let g0 = env.db.generation().unwrap();
+            let (staging, publish) = ops.split_at(ops.len() - 1);
+            apply_rw(&v, staging);
+            assert_eq!(
+                env.db.generation().unwrap(),
+                g0,
+                "{}: nothing is stored before the rename",
+                env.label
+            );
+            apply_rw(&v, publish);
+            assert_same(&env.files_root, &*env.db);
+            let k = EntryKey::new("app-misc", "foo-1.0");
+            assert_eq!(
+                env.db.entry_stat(&k).unwrap().unwrap().metadata_stamp,
+                MetadataStamp::Valid,
+                "{}: the stamp real appended matches the staged dir mtime",
+                env.label
+            );
+            assert!(
+                std::fs::read_dir(&env.scratch).unwrap().next().is_none(),
+                "{}: the scratch copy is gone",
+                env.label
+            );
+        }
+    }
+
+    #[test]
+    fn the_published_entry_keeps_the_staged_inode_and_reads_back() {
+        for env in envs("inode") {
+            let ops = script("merge-new");
+            let v = rw(&env);
+            let (staging, publish) = ops.split_at(ops.len() - 1);
+            apply_rw(&v, staging);
+            let staged = resolve(&v, "app-misc/-MERGING-foo-1.0").unwrap();
+            let staged_slot = resolve(&v, "app-misc/-MERGING-foo-1.0/SLOT").unwrap();
+            apply_rw(&v, publish);
+            // The kernel keeps the inodes it learned before the rename.
+            assert_eq!(v.getattr(staged_slot).unwrap().size, 2);
+            assert_eq!(resolve(&v, "app-misc/foo-1.0").unwrap(), staged);
+            assert_eq!(
+                resolve(&v, "app-misc/-MERGING-foo-1.0"),
+                Err(ViewError::NoEnt)
+            );
+            let f = resolve(&v, "app-misc/foo-1.0/SLOT").unwrap();
+            assert_eq!(f, staged_slot, "the file keeps its inode");
+            let fh = v.open(f, libc::O_RDONLY).unwrap();
+            assert_eq!(v.read(fh, 0, 64).unwrap(), b"0\n");
+            v.release(fh).unwrap();
+        }
+    }
+
+    #[test]
+    fn stamp_state_follows_the_real_rule() {
+        assert_eq!(stamp_state(None, 5), MetadataStamp::Absent);
+        assert_eq!(
+            stamp_state(Some(b"#format=1\nSLOT=0\n#dir_mtime=5\n"), 5),
+            MetadataStamp::Valid
+        );
+        assert_eq!(
+            stamp_state(Some(b"#format=1\n#dir_mtime=4\n"), 5),
+            MetadataStamp::Stale
+        );
+        assert_eq!(
+            stamp_state(Some(b"#format=1\nSLOT=0\n"), 5),
+            MetadataStamp::Stale
+        );
+    }
+
+    #[test]
+    fn publishing_raises_the_counter_to_the_entry_counter() {
+        for env in envs("counter") {
+            let v = rw(&env);
+            apply_rw(&v, &script("merge-new"));
+            assert_eq!(
+                env.db.counter().unwrap(),
+                Some(portage_vdb::Counter(41)),
+                "{}",
+                env.label
+            );
+        }
+    }
+
+    #[test]
+    fn a_rename_onto_a_live_entry_is_enotempty() {
+        for env in envs("onto") {
+            let v = rw(&env);
+            apply_rw(
+                &v,
+                &parse(
+                    "mkdir dev-libs/-MERGING-seed-1 755\n\
+                     create dev-libs/-MERGING-seed-1/SLOT 644\n\
+                     write dev-libs/-MERGING-seed-1/SLOT 1\\n\n",
+                ),
+            );
+            let cat = resolve(&v, "dev-libs").unwrap();
+            assert_eq!(
+                v.rename(cat, "-MERGING-seed-1", cat, "seed-1"),
+                Err(ViewError::NotEmpty)
+            );
+            assert!(resolve(&v, "dev-libs/-MERGING-seed-1/SLOT").is_ok());
+        }
+    }
+
+    #[test]
+    fn a_stale_merging_dir_is_removable_and_a_new_view_clears_scratch() {
+        for env in envs("stale") {
+            let v = rw(&env);
+            apply_rw(
+                &v,
+                &parse(
+                    "mkdir dev-libs/-MERGING-x-1 755\n\
+                     create dev-libs/-MERGING-x-1/SLOT 644\n",
+                ),
+            );
+            let cat = resolve(&v, "dev-libs").unwrap();
+            assert_eq!(
+                v.rmdir(cat, "-MERGING-x-1"),
+                Err(ViewError::NotEmpty),
+                "rmdir before the rmtree emptied it"
+            );
+            apply_rw(
+                &v,
+                &parse("unlink dev-libs/-MERGING-x-1/SLOT\nrmdir dev-libs/-MERGING-x-1\n"),
+            );
+            assert_eq!(resolve(&v, "dev-libs/-MERGING-x-1"), Err(ViewError::NoEnt));
+            apply_rw(
+                &v,
+                &parse("mkdir dev-libs/-MERGING-y-1 755\ncreate dev-libs/-MERGING-y-1/SLOT 644\n"),
+            );
+            drop(v);
+            let v2 = rw(&env);
+            assert!(std::fs::read_dir(&env.scratch).unwrap().next().is_none());
+            assert_eq!(resolve(&v2, "dev-libs/-MERGING-y-1"), Err(ViewError::NoEnt));
+        }
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn a_failed_publish_is_eio_and_keeps_the_staged_entry() {
+        for env in envs("eio").into_iter().filter(|e| e.label == "sqlite") {
+            let ro: Arc<dyn InstalledDb> =
+                Arc::new(portage_vdb::SqliteDb::open_readonly(&env.db_path).unwrap());
+            let v = RwView::new(ro, env.scratch.clone(), Owner { uid: 0, gid: 0 }).unwrap();
+            let ops = script("merge-new");
+            let (staging, _) = ops.split_at(ops.len() - 1);
+            apply_rw(&v, staging);
+            let cat = resolve(&v, "app-misc").unwrap();
+            let r = v.rename(cat, "-MERGING-foo-1.0", cat, "foo-1.0");
+            assert!(matches!(r, Err(ViewError::Io(_))), "{r:?}");
+            assert_eq!(ViewError::Io(String::new()).errno(), libc::EIO);
+            assert!(resolve(&v, "app-misc/-MERGING-foo-1.0/CONTENTS").is_ok());
+        }
+    }
+
+    #[test]
+    fn names_inside_a_staged_dir_are_free_but_nested_dirs_are_eperm() {
+        for env in envs("nested") {
+            let v = rw(&env);
+            apply_rw(&v, &parse("mkdir dev-libs/-MERGING-z-1 755\n"));
+            let d = resolve(&v, "dev-libs/-MERGING-z-1").unwrap();
+            assert_eq!(v.mkdir(d, "sub", 0o755).err(), Some(ViewError::Perm));
+            let cat = resolve(&v, "dev-libs").unwrap();
+            assert_eq!(
+                v.mkdir(cat, "not-merging", 0o755).err(),
+                Some(ViewError::Perm)
+            );
         }
     }
 }
