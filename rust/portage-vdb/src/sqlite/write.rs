@@ -13,8 +13,9 @@ use super::{BUSY_TIMEOUT_MS, SqliteDb, blob, db_err, entry_row, installed_row};
 use crate::dep_cp::dep_index_key;
 use crate::files::{normalise_aux_bytes, translate_aux_slot};
 use crate::{
-    ConfigMemory, Counter, DepClass, EntryImage, EntryKey, Error, METADATA_FILE_FIELDS,
-    METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result, World, WorldSets, WriteTxn,
+    ConfigMemory, Counter, DepClass, EntryImage, EntryKey, Error, IndexCounts,
+    METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result,
+    World, WorldSets, WriteTxn,
 };
 
 /// `S_IFREG | 0644`: what `files` shows for a file written with the
@@ -517,6 +518,47 @@ impl WriteTxn for SqliteTxn<'_> {
             .be(&p)?;
         self.dirty = true;
         Ok(())
+    }
+
+    /// Empties the three index tables, then refills them from each
+    /// `installed` entry's stored files (pending entries have no rows).
+    /// Bumps the generation: an index reader's answers may change.
+    fn rebuild_index(&mut self) -> Result<IndexCounts> {
+        let p = self.db.path.clone();
+        self.conn
+            .execute_batch("DELETE FROM owner; DELETE FROM dep_atom; DELETE FROM needed;")
+            .be(&p)?;
+        let ids: Vec<i64> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM entry WHERE state = 'installed' ORDER BY id")
+                .be(&p)?;
+            stmt.query_map([], |r| r.get(0))
+                .be(&p)?
+                .collect::<rusqlite::Result<_>>()
+                .be(&p)?
+        };
+        for &id in &ids {
+            derive_owner(&self.conn, id).be(&p)?;
+            derive_needed(&self.conn, id).be(&p)?;
+            derive_dep_atom(&self.conn, id).be(&p)?;
+        }
+        let rows = |table: &str| -> Result<usize> {
+            self.conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .be(&p)
+                .map(|n| n as usize)
+        };
+        let counts = IndexCounts {
+            entries: ids.len(),
+            owner: rows("owner")?,
+            dep_atom: rows("dep_atom")?,
+            needed: rows("needed")?,
+        };
+        self.dirty = true;
+        Ok(counts)
     }
 
     /// Bumps `meta.generation` when anything was written, then `COMMIT`.

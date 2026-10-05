@@ -920,6 +920,18 @@ pub trait WriteTxn {
         Ok(())
     }
 
+    /// Throw away the derived index (`owner`, `dep_atom`, `needed`) and
+    /// recompute it from the stored files of every live entry, in this
+    /// transaction (S8.3, `portuale vdb rebuild-index`). Repairs rows a
+    /// bug or an older build wrote wrong or left out (residue R18: the
+    /// unsure `dep_atom` marker). The entry columns and the counter are
+    /// not touched. `files` has no derived index: [`Error::Unsupported`].
+    fn rebuild_index(&mut self) -> Result<IndexCounts> {
+        Err(Error::Unsupported(
+            "rebuild_index: this backend has no derived index (S8.3)".into(),
+        ))
+    }
+
     /// Make the transaction durable. A no-op on `files`.
     fn commit(self: Box<Self>) -> Result<()>;
 }

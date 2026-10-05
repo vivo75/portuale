@@ -32,8 +32,8 @@ use std::time::Duration;
 
 use portage_vdb::{
     ConfigMemory, Counter, DepClass, EntryFile, EntryImage, EntryKey, EntryStat, Error, FileMeta,
-    FilesDb, InstalledDb, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result, World,
-    WorldSets,
+    FilesDb, IndexCounts, InstalledDb, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result,
+    World, WorldSets,
 };
 
 /// One database per call, rooted at (or stored under) the given directory.
@@ -54,6 +54,8 @@ struct Caps {
     read_file_at: Option<&'static str>,
     /// `InstalledDb::entry_image` and `WriteTxn::insert_entry`.
     entry_image: Option<&'static str>,
+    /// `WriteTxn::rebuild_index` (only a backend with a derived index).
+    rebuild_index: Option<&'static str>,
     /// `seal_entry` stores a readable consolidated `metadata` file (files:
     /// yes; a database backend may keep the fields only in its tables).
     seal_stores_metadata_file: bool,
@@ -1312,6 +1314,104 @@ mod suite {
         assert!(!keys("dev-libs/lib", &all).contains(&none));
     }
 
+    /// S8.3: `rebuild_index` recomputes `owner`, `dep_atom` and `needed`
+    /// from the stored files of the live entries only; the queries that
+    /// read the index answer the same before and after, and a second
+    /// rebuild writes the same rows. Repairing a damaged row is tested per
+    /// backend (`sqlite.rs`, `redb_db.rs`), which can reach the rows.
+    pub fn rebuild_index_recomputes_the_same_index_or_names_its_step(f: Factory, caps: &Caps) {
+        let ctx = Ctx::new(f, "rebuild-index");
+        if let Some(step) = caps.rebuild_index {
+            let mut txn = ctx.db.begin_write().unwrap();
+            assert_unsupported(txn.rebuild_index(), step, "rebuild_index");
+            return;
+        }
+        let a = key("dev-libs", "a-1");
+        let b = key("app-misc", "b-1");
+        put(
+            &ctx,
+            &a,
+            &[
+                (
+                    "CONTENTS",
+                    b"dir /usr\nobj /usr/lib/liba.so.1 abc 1\nsym /usr/lib/liba.so -> liba.so.1 1\nfoo /x\n",
+                ),
+                (
+                    "NEEDED.ELF.2",
+                    b"X86_64;/usr/lib/liba.so.1;liba.so.1;  -  ;libc.so.6\nX86_64;/usr/bin/a;;  -  ;liba.so.1\nshort;line\n",
+                ),
+                ("RDEPEND", b"dev-libs/o dev-libs/* ssl? ( dev-libs/lib )\n"),
+            ],
+            false,
+        );
+        put(
+            &ctx,
+            &b,
+            &[
+                ("CONTENTS", b"obj /usr/bin/b def 2\n"),
+                ("DEPEND", b"dev-libs/o\n"),
+            ],
+            false,
+        );
+        // A pending entry gets no rows from a rebuild either.
+        let p = key("dev-libs", "pending-1");
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.begin_entry(&p).unwrap();
+        txn.put_entry_file(&p, "CONTENTS", b"obj /usr/bin/b ghi 3\n")
+            .unwrap();
+        txn.put_entry_file(&p, "RDEPEND", b"dev-libs/o\n").unwrap();
+        txn.commit().unwrap();
+
+        let all = [
+            DepClass::Depend,
+            DepClass::Rdepend,
+            DepClass::Bdepend,
+            DepClass::Pdepend,
+            DepClass::Idepend,
+        ];
+        let paths: [&[u8]; 4] = [b"/usr", b"/usr/lib/liba.so", b"/usr/bin/b", b"/x"];
+        let answers = || {
+            let owners = sorted(ctx.db.owners(&paths).unwrap());
+            let deps: Vec<Vec<EntryKey>> = ["dev-libs/o", "dev-libs/lib", "dev-libs/zz"]
+                .iter()
+                .map(|cp| {
+                    ctx.db
+                        .reverse_dependents(cp, &all)
+                        .unwrap()
+                        .into_iter()
+                        .map(|r| r.key)
+                        .collect()
+                })
+                .collect();
+            (owners, deps)
+        };
+        let before = answers();
+        assert_eq!(before.1[0], vec![b.clone(), a.clone()]);
+        assert_eq!(before.1[2], vec![a.clone()], "dev-libs/* is unsure");
+        let g0 = ctx.db.generation().unwrap();
+
+        let mut txn = ctx.db.begin_write().unwrap();
+        let counts = txn.rebuild_index().unwrap();
+        txn.commit().unwrap();
+        let want = IndexCounts {
+            entries: 2,
+            // a: dir, obj, sym (`foo` is no recorded kind); b: obj.
+            owner: 4,
+            // a: dev-libs/o, the unsure dev-libs/*, dev-libs/lib; b: dev-libs/o.
+            dep_atom: 4,
+            // a: two lines of five fields; the short one is skipped.
+            needed: 2,
+        };
+        assert_eq!(counts, want);
+        assert_eq!(answers(), before);
+        assert_ne!(ctx.db.generation().unwrap(), g0, "a rebuild is a write");
+
+        let mut txn = ctx.db.begin_write().unwrap();
+        assert_eq!(txn.rebuild_index().unwrap(), want, "idempotent");
+        drop(txn);
+        assert_eq!(answers(), before, "a dropped rebuild changes nothing");
+    }
+
     pub fn read_file_at_is_supported_or_names_its_step(f: Factory, caps: &Caps) {
         let ctx = Ctx::new(f, "at");
         let k = key("dev-libs", "a-1");
@@ -1571,6 +1671,7 @@ macro_rules! conformance_suite {
                 entry_image_and_insert_entry_are_supported_or_name_their_step
                 entry_stat_is_the_entry_image_without_bytes
                 registry_hands_out_the_registered_backend
+                rebuild_index_recomputes_the_same_index_or_names_its_step
             );
         }
     };
@@ -1597,6 +1698,7 @@ conformance_suite!(
         snapshot: Some("S3.2"),
         read_file_at: None,
         entry_image: None,
+        rebuild_index: Some("S8.3"),
         seal_stores_metadata_file: true,
     }
 );
@@ -1613,6 +1715,7 @@ conformance_suite!(
         snapshot: None,
         read_file_at: None,
         entry_image: None,
+        rebuild_index: None,
         seal_stores_metadata_file: true,
     }
 );
@@ -1652,6 +1755,7 @@ conformance_suite!(
         snapshot: None,
         read_file_at: None,
         entry_image: None,
+        rebuild_index: None,
         seal_stores_metadata_file: true,
     }
 );

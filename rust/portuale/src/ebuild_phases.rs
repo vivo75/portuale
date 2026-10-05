@@ -5238,6 +5238,8 @@ mod tests {
         }
         portuale_bin.push("portuale");
 
+        // Only the sqlite block below adds variants.
+        #[cfg_attr(not(feature = "vdb-sqlite"), allow(unused_mut))]
         let mut variants: Vec<Vec<(&str, String)>> = vec![vec![]];
         #[cfg(feature = "vdb-sqlite")]
         {

@@ -26,6 +26,11 @@
 //   portuale vdb status  KIND:PATH
 //   portuale vdb sweep   (--remove CAT/PF)... | --all  KIND:PATH
 //
+//   portuale vdb rebuild-index KIND:PATH
+//
+// `rebuild-index` (S8.3) recomputes a database's derived index (`owner`,
+// `dep_atom`, `needed`) from the stored entry files in one transaction.
+//
 // `status` lists the entries left mid-merge (S4.3, design §9.1): `merging`
 // rows on a database, `-MERGING-<pf>` directories on files. `sweep` deletes
 // the named ones in one write transaction; it refuses a key that is not
@@ -48,6 +53,7 @@ Usage:
    portuale vdb status KIND:PATH
    portuale vdb sweep (--remove CAT/PF)... KIND:PATH
    portuale vdb sweep --all KIND:PATH
+   portuale vdb rebuild-index KIND:PATH
    portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT
    portuale vdb --help
 
@@ -63,8 +69,8 @@ KIND:PATH
                   (entries only, no stores).
    sqlite:FILE    one SQLite file (created by convert when missing)
    redb:FILE      one redb file (created by convert when missing). redb allows one
-                  writer process at a time: a write (convert, sweep, a merging
-                  mrg) on a file held open by another process (a running mrg,
+                  writer process at a time: a write (convert, sweep,
+                  rebuild-index, a merging mrg) on a file held open by another process (a running mrg,
                   another vdb command, a FUSE mount) fails with the Busy
                   message (database is already open) (exit 2) instead of
                   waiting. Readers (verify, status, mrg --pretend, a FUSE
@@ -92,6 +98,12 @@ sweep deletes pending entries (never installed ones) in one transaction:
    --all              every pending entry
 A key that is not pending refuses the whole sweep (nothing is deleted).
 
+rebuild-index recomputes the index a sqlite or redb database derives from the
+stored entry files (file owners, dependency atoms, NEEDED.ELF.2 lines) for
+every installed entry, in one transaction, and prints the row counts. It
+repairs an index written wrong or incompletely by an older build. The files
+and the counter are not touched; files:ROOT has no index (exit 2).
+
 mount serves the database read-only at MOUNTPOINT (an existing directory) as
 the historic tree CAT/PF/files, through FUSE (fusermount3; no libfuse needed):
    --foreground, -f   stay in the foreground; SIGINT/SIGTERM unmount and exit
@@ -103,9 +115,10 @@ EROFS. Directory mtimes follow real Portage (an entry shows its stored
 mtime, a category the latest of its entries, the root the latest category)
 and the metadata file's stamp matches the entry directory mtime shown. Each
 directory listing and each open file serves the generation it was opened on.
-A redb file is held by the mount (one process at a time): over redb the mount
-is an offline view and mrg cannot run until it is unmounted. sqlite can be
-mounted while mrg runs. files:ROOT is a pass-through, for testing.
+Over redb the mount holds the file read-only: readers (mrg --pretend, verify,
+status) run beside it, writers (a merging mrg, convert, sweep, rebuild-index)
+get the Busy message until it is unmounted. sqlite can be mounted while mrg
+merges. files:ROOT is a pass-through, for testing.
 
 Exit status: 0 done / equal / nothing pending, 1 verify found differences or
 status found pending entries, 2 usage or I/O error.";
@@ -141,9 +154,10 @@ fn dispatch(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result
         "verify" => verify(&args[1..], out),
         "status" => status(&args[1..], out),
         "sweep" => sweep(&args[1..], out),
+        "rebuild-index" => rebuild_index(&args[1..], out),
         "mount" => mount(&args[1..], out),
         other => Err(format!(
-            "unknown subcommand {other:?} (expected convert, verify, status, sweep or mount); see `portuale vdb --help`"
+            "unknown subcommand {other:?} (expected convert, verify, status, sweep, rebuild-index or mount); see `portuale vdb --help`"
         )),
     }
 }
@@ -528,6 +542,36 @@ fn sweep(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
     Ok(0)
 }
 
+/// `portuale vdb rebuild-index KIND:PATH` (S8.3).
+fn rebuild_index(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
+    let mut specs = Vec::new();
+    for a in args {
+        if a == "-h" || a == "--help" {
+            let _ = writeln!(out, "{USAGE}");
+            return Ok(0);
+        } else if a.starts_with('-') && !a.contains(':') {
+            return Err(format!("rebuild-index: unknown option {a:?}"));
+        }
+        specs.push(parse_spec(a)?);
+    }
+    let spec = one_spec("rebuild-index", specs)?;
+    if spec.kind == BackendKind::Files {
+        return Err(
+            "rebuild-index: files:ROOT has no derived index (it is the files themselves)".into(),
+        );
+    }
+    let db = open_existing(&spec, true)?;
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    let n = txn.rebuild_index().map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())?;
+    let _ = writeln!(
+        out,
+        "rebuilt the index of {} installed entries: owner {} rows, dep_atom {}, needed {}",
+        n.entries, n.owner, n.dep_atom, n.needed
+    );
+    Ok(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -879,6 +923,42 @@ mod tests {
         let spec = format!("files:{}", s(&root));
         status_sweep_cycle(&spec, &format!("dev-libs/{installed}"));
         assert!(root.join("var/db/pkg/dev-libs").join(&installed).is_dir());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// S8.3: `rebuild-index` on a converted fixture VDB reports the same
+    /// row counts on sqlite and redb, leaves the entries equal to the
+    /// files source, and refuses files and a missing database.
+    #[cfg(all(feature = "vdb-sqlite", feature = "vdb-redb"))]
+    #[test]
+    fn rebuild_index_counts_agree_across_databases() {
+        let root = fixture_root("rebuildidx");
+        let files = format!("files:{}", s(&root));
+        let mut reports = Vec::new();
+        for spec in [
+            format!("sqlite:{}", s(&root.join("vdb.sqlite"))),
+            format!("redb:{}", s(&root.join("vdb.redb"))),
+        ] {
+            let (c, o, e) = cli(&["convert", "--from", &files, "--to", &spec]);
+            assert_eq!(c, 0, "{o}{e}");
+            let (c, o, e) = cli(&["rebuild-index", &spec]);
+            assert_eq!(c, 0, "{o}{e}");
+            assert!(o.starts_with("rebuilt the index of "), "{o}");
+            let (c, again, _) = cli(&["rebuild-index", &spec]);
+            assert_eq!((c, &again), (0, &o), "idempotent");
+            let (c, v, _) = cli(&["verify", &files, &spec]);
+            assert_eq!(c, 0, "{v}");
+            reports.push(o);
+        }
+        assert_eq!(reports[0], reports[1]);
+        assert!(!reports[0].contains(" 0 installed"), "{}", reports[0]);
+        let (c, _, e) = cli(&["rebuild-index", &files]);
+        assert_eq!(c, 2);
+        assert!(e.contains("no derived index"), "{e}");
+        let missing = format!("sqlite:{}", s(&root.join("none.sqlite")));
+        assert_eq!(cli(&["rebuild-index", &missing]).0, 2);
+        assert!(!root.join("none.sqlite").exists());
+        assert_eq!(cli(&["rebuild-index"]).0, 2);
         let _ = fs::remove_dir_all(&root);
     }
 

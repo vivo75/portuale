@@ -1370,6 +1370,116 @@ mod tests {
 
     // --- open, reopen, schema --------------------------------------
 
+    /// Every row of the three index multimaps, as `(table, key, value)`
+    /// bytes, sorted.
+    fn index_dump(db: &RedbDb) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+        let txn = rw(db).begin_read().unwrap();
+        let mut out = Vec::new();
+        for item in txn.open_multimap_table(OWNER).unwrap().iter().unwrap() {
+            let (k, vs) = item.unwrap();
+            for v in vs {
+                out.push(("owner", k.value().to_vec(), v.unwrap().value().to_vec()));
+            }
+        }
+        for item in txn.open_multimap_table(DEP_ATOM).unwrap().iter().unwrap() {
+            let (k, vs) = item.unwrap();
+            for v in vs {
+                let key = k.value().as_bytes().to_vec();
+                out.push(("dep_atom", key, v.unwrap().value().to_vec()));
+            }
+        }
+        for item in txn.open_multimap_table(NEEDED).unwrap().iter().unwrap() {
+            let (k, vs) = item.unwrap();
+            for v in vs {
+                let key = k.value().to_le_bytes().to_vec();
+                out.push(("needed", key, v.unwrap().value().to_vec()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// S8.3: damaged index rows (a missing owner, a foreign owner, the
+    /// unsure `dep_atom` marker an older build never wrote (R18), a junk
+    /// `needed` row) give wrong answers until `rebuild_index` restores
+    /// exactly the rows the merge wrote.
+    #[test]
+    fn rebuild_index_repairs_damaged_rows() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&a).unwrap();
+        tx.put_entry_file(
+            &a,
+            "CONTENTS",
+            b"obj /usr/bin/a abc 1\nobj /usr/bin/b def 2\n",
+        )
+        .unwrap();
+        tx.put_entry_file(&a, "RDEPEND", b"dev-libs/* dev-libs/o\n")
+            .unwrap();
+        tx.put_entry_file(&a, "NEEDED.ELF.2", b"X86_64;/usr/bin/a;;  -  ;libc.so.6\n")
+            .unwrap();
+        tx.finish_entry(&a).unwrap();
+        tx.commit().unwrap();
+        let good = index_dump(&db);
+        {
+            let txn = rw(&db).begin_write().unwrap();
+            {
+                let mut o = txn.open_multimap_table(OWNER).unwrap();
+                // A well-formed row of `a`, filed under a path it never owned.
+                let row = o
+                    .get(b"/usr/bin/a".as_slice())
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .unwrap()
+                    .value()
+                    .to_vec();
+                o.remove_all(b"/usr/bin/b".as_slice()).unwrap();
+                o.insert(b"/etc/passwd".as_slice(), row.as_slice()).unwrap();
+                txn.open_multimap_table(DEP_ATOM)
+                    .unwrap()
+                    .remove_all("")
+                    .unwrap();
+                txn.open_multimap_table(NEEDED)
+                    .unwrap()
+                    .insert(1, b"junk".as_slice())
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+            db.invalidate();
+        }
+        assert_ne!(index_dump(&db), good);
+        let owners = |p: &[u8]| db.owners(&[p]).unwrap().len();
+        let rdeps = || {
+            db.reverse_dependents("dev-libs/zz", &[DepClass::Rdepend])
+                .unwrap()
+                .len()
+        };
+        assert_eq!(
+            (owners(b"/usr/bin/b"), owners(b"/etc/passwd"), rdeps()),
+            (0, 1, 0)
+        );
+        let mut tx = db.begin_write().unwrap();
+        let counts = tx.rebuild_index().unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            counts,
+            crate::IndexCounts {
+                entries: 1,
+                owner: 2,
+                dep_atom: 2,
+                needed: 1
+            }
+        );
+        assert_eq!(index_dump(&db), good);
+        assert_eq!(
+            (owners(b"/usr/bin/b"), owners(b"/etc/passwd"), rdeps()),
+            (1, 0, 1)
+        );
+    }
+
     #[test]
     fn fresh_database_has_meta_and_tables() {
         let t = Tmp::new();

@@ -259,6 +259,16 @@ pub struct DepRecord {
     pub deps: Vec<(DepClass, String)>,
 }
 
+/// What [`WriteTxn::rebuild_index`](crate::WriteTxn::rebuild_index)
+/// rebuilt: the live entries it read and the rows it wrote per table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IndexCounts {
+    pub entries: usize,
+    pub owner: usize,
+    pub dep_atom: usize,
+    pub needed: usize,
+}
+
 /// The `world` store: selected atoms, one per line on `files`. Reading
 /// drops blank lines, `#` comments and `@` lines (`read_world_atoms`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

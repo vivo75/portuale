@@ -35,7 +35,7 @@ use std::path::Path;
 use std::thread::ThreadId;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use redb::{ReadableTable, WriteTransaction};
+use redb::{ReadableTable, ReadableTableMetadata, WriteTransaction};
 
 use super::{
     CHUNK, CONFIG_MEMORY, DEP_ATOM, ENTRY, ENTRY_BY_COUNTER, ENTRY_BY_ID, ENTRY_FILE_CHUNK,
@@ -45,8 +45,9 @@ use super::{
 use crate::dep_cp::dep_index_key;
 use crate::files::{normalise_aux_bytes, translate_aux_slot};
 use crate::{
-    ConfigMemory, Counter, DepClass, EntryImage, EntryKey, Error, METADATA_FILE_FIELDS,
-    METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result, World, WorldSets, WriteTxn,
+    ConfigMemory, Counter, DepClass, EntryImage, EntryKey, Error, IndexCounts,
+    METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result,
+    World, WorldSets, WriteTxn,
 };
 
 /// `S_IFREG | 0644`: what `files` shows for a file written with the
@@ -425,6 +426,40 @@ impl WriteTxn for RedbTxn<'_> {
         self.op(true, |t| {
             set_meta(t, "imported_files_generation", &generation.to_le_bytes())?;
             set_meta(t, "imported_files_source", source.as_bytes())
+        })
+    }
+
+    /// Drops the three multimaps (redb recreates them on open), then
+    /// refills them from each `installed` entry's stored files. Bumps the
+    /// generation: an index reader's answers may change.
+    fn rebuild_index(&mut self) -> Result<IndexCounts> {
+        self.op(true, |t| {
+            t.delete_multimap_table(OWNER)?;
+            t.delete_multimap_table(DEP_ATOM)?;
+            t.delete_multimap_table(NEEDED)?;
+            let mut live = Vec::new();
+            {
+                let e = t.open_table(ENTRY)?;
+                for item in e.range((INSTALLED, "", "")..(INSTALLED + 1, "", ""))? {
+                    let (k, v) = item?;
+                    let (_, category, pf) = k.value();
+                    live.push((EntryKey::new(category, pf), EntryRec::decode(v.value())?.id));
+                }
+            }
+            for (key, id) in &live {
+                for name in file_names(t, *id)? {
+                    if is_indexed_name(&name) {
+                        index_file(t, key, *id, &name)?;
+                    }
+                }
+            }
+            let count = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
+            Ok(IndexCounts {
+                entries: live.len(),
+                owner: count(t.open_multimap_table(OWNER)?.len()?),
+                dep_atom: count(t.open_multimap_table(DEP_ATOM)?.len()?),
+                needed: count(t.open_multimap_table(NEEDED)?.len()?),
+            })
         })
     }
 

@@ -2226,6 +2226,94 @@ bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
         );
     }
 
+    /// Every row of the three index tables, as text, sorted.
+    fn index_dump(db: &SqliteDb) -> Vec<String> {
+        let conn = db.conn.lock().unwrap();
+        let mut out = Vec::new();
+        for table in ["owner", "dep_atom", "needed"] {
+            let mut st = conn.prepare(&format!("SELECT * FROM {table}")).unwrap();
+            let n = st.column_count();
+            let rows = st
+                .query_map([], |r| {
+                    (0..n)
+                        .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap();
+            for r in rows {
+                out.push(format!("{table} {:?}", r.unwrap()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// S8.3: damaged index rows (a missing owner, a foreign owner, the
+    /// unsure `dep_atom` marker an older build never wrote (R18), a junk
+    /// `needed` row) give wrong answers until `rebuild_index` restores
+    /// exactly the rows the merge wrote.
+    #[test]
+    fn rebuild_index_repairs_damaged_rows() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&a).unwrap();
+        tx.put_entry_file(
+            &a,
+            "CONTENTS",
+            b"obj /usr/bin/a abc 1\nobj /usr/bin/b def 2\n",
+        )
+        .unwrap();
+        tx.put_entry_file(&a, "RDEPEND", b"dev-libs/* dev-libs/o\n")
+            .unwrap();
+        tx.put_entry_file(&a, "NEEDED.ELF.2", b"X86_64;/usr/bin/a;;  -  ;libc.so.6\n")
+            .unwrap();
+        tx.finish_entry(&a).unwrap();
+        tx.commit().unwrap();
+        let good = index_dump(&db);
+        let id = id_of(&db, &a, "installed").unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute_batch(&format!(
+                "DELETE FROM owner WHERE path = CAST('/usr/bin/b' AS BLOB);
+                 INSERT INTO owner (entry_id, seq, path, kind) VALUES ({id}, 9, CAST('/etc/passwd' AS BLOB), 'obj');
+                 DELETE FROM dep_atom WHERE cp = '';
+                 INSERT INTO needed (entry_id, arch, obj, soname, rpath, needed)
+                     VALUES ({id}, 'junk', x'00', '', '', '');
+                 UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'generation';"
+            ))
+            .unwrap();
+        }
+        let owners = |p: &[u8]| db.owners(&[p]).unwrap().len();
+        let rdeps = || {
+            db.reverse_dependents("dev-libs/zz", &[DepClass::Rdepend])
+                .unwrap()
+                .len()
+        };
+        assert_eq!(
+            (owners(b"/usr/bin/b"), owners(b"/etc/passwd"), rdeps()),
+            (0, 1, 0)
+        );
+        let mut tx = db.begin_write().unwrap();
+        let counts = tx.rebuild_index().unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            counts,
+            crate::IndexCounts {
+                entries: 1,
+                owner: 2,
+                dep_atom: 2,
+                needed: 1
+            }
+        );
+        assert_eq!(index_dump(&db), good);
+        assert_eq!(
+            (owners(b"/usr/bin/b"), owners(b"/etc/passwd"), rdeps()),
+            (1, 0, 1)
+        );
+    }
+
     #[test]
     fn replacing_in_a_slot_and_deleting_cascade_to_the_derived_tables() {
         let t = Tmp::new();
