@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use portage_vdb::{EntryKey, FilesDb, InstalledDb, MetadataStamp};
 
-use super::SetAttr;
+use super::{RwView, SetAttr};
 use crate::vdb_view::{ROOT_INO, ViewError, rewrite_dir_mtime};
 
 // ------------------------------------------------------------------ envs

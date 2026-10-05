@@ -221,6 +221,143 @@ pub(crate) fn stamp_state(metadata: Option<&[u8]>, dir_mtime_ns: i128) -> Metada
 
 const DIR_MTIME_PREFIX: &[u8] = b"#dir_mtime=";
 
+pub struct RwView {
+    view: View,
+    db: Arc<dyn InstalledDb>,
+    scratch: PathBuf,
+    owner: Owner,
+    st: Mutex<RwState>,
+}
+
+impl RwView {
+    fn new_fh(st: &mut RwState, h: Fh) -> u64 {
+        let fh = st.next_fh;
+        st.next_fh += 1;
+        st.handles.insert(fh, h);
+        fh
+    }
+
+    /// A scratch path for a file outside any staged directory.
+    fn scratch_file(&self, st: &mut RwState) -> PathBuf {
+        let n = st.next_scratch;
+        st.next_scratch += 1;
+        self.scratch.join(format!("live-{n}"))
+    }
+
+    /// Whether `key` is being removed (Portage's `rmtree` has unlinked some
+    /// of its files).
+    fn removing(st: &RwState, key: &EntryKey) -> bool {
+        st.hidden.get(key).is_some_and(|h| !h.is_empty())
+    }
+
+    /// `flush` (each `close`): store a written live file with one
+    /// `replace_file` transaction. A failure is `EIO`, which `close`
+    /// returns to the caller; the scratch copy stays for a later flush.
+    pub fn flush(&self, fh: u64) -> Res<()> {
+        let mut st = lock(&self.st);
+        let Some(Fh::Live {
+            key,
+            name,
+            path,
+            dirty,
+            ..
+        }) = st.handles.get_mut(&fh)
+        else {
+            return Ok(());
+        };
+        if !*dirty {
+            return Ok(());
+        }
+        let data = std::fs::read(&*path).map_err(io_err)?;
+        let (key, name) = (key.clone(), name.clone());
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.replace_file(&key, &name, &data)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        if let Some(Fh::Live { dirty, .. }) = st.handles.get_mut(&fh) {
+            *dirty = false;
+        }
+        Ok(())
+    }
+
+    /// `write(fh, offset, data)`: the bytes written.
+    pub fn write(&self, fh: u64, off: u64, bytes: &[u8]) -> Res<u32> {
+        let mut st = lock(&self.st);
+        let id = match st.handles.get_mut(&fh) {
+            Some(Fh::Vol(id)) => *id,
+            Some(Fh::Staged(f)) => {
+                f.write_all_at(bytes, off).map_err(io_err)?;
+                return Ok(bytes.len() as u32);
+            }
+            Some(Fh::Live { file, dirty, .. }) => {
+                file.write_all_at(bytes, off).map_err(io_err)?;
+                *dirty = true;
+                return Ok(bytes.len() as u32);
+            }
+            Some(_) => return Err(ViewError::Perm),
+            None => return Err(ViewError::BadHandle),
+        };
+        match st.objs.get_mut(&id).ok_or(ViewError::Stale)? {
+            Obj::Vol { data, mtime_ns, .. } => {
+                let off = usize::try_from(off).map_err(|_| ViewError::Perm)?;
+                if data.len() < off + bytes.len() {
+                    data.resize(off + bytes.len(), 0);
+                }
+                data[off..off + bytes.len()].copy_from_slice(bytes);
+                *mtime_ns = now_ns();
+            }
+            _ => return Err(ViewError::Stale),
+        }
+        Ok(bytes.len() as u32)
+    }
+
+    /// Rename one of this layer's names (volatile files, staged files),
+    /// replacing whatever `newname` named.
+    fn move_name(&self, from: Parent, name: &str, to: Parent, newname: &str) -> Res<()> {
+        let mut st = lock(&self.st);
+        let id = *st
+            .names
+            .get(&(from.clone(), name.to_string()))
+            .ok_or(ViewError::NoEnt)?;
+        let new_path = match (&to, st.objs.get(&id)) {
+            (Parent::Staged(dir), Some(Obj::StagedFile { path })) => {
+                let Some(Obj::StagedDir { path: dpath, .. }) = st.objs.get(dir) else {
+                    return Err(ViewError::NoEnt);
+                };
+                let np = dpath.join(newname);
+                std::fs::rename(path, &np).map_err(io_err)?;
+                Some(np)
+            }
+            (Parent::Staged(_), _) => return Err(ViewError::Perm),
+            _ => None,
+        };
+        st.names.remove(&(from.clone(), name.to_string()));
+        if let Some(old) = st.names.insert((to.clone(), newname.to_string()), id)
+            && old != id
+        {
+            st.drop_name(old);
+        }
+        if let (Some(np), Some(Obj::StagedFile { path })) = (new_path, st.objs.get_mut(&id)) {
+            *path = np;
+        }
+        if let Parent::Staged(dir) = to {
+            st.bump(dir);
+        }
+        Ok(())
+    }
+
+    /// The database stores no owner: a `chown` to the owner `getattr`
+    /// reports is a no-op, any other is `EPERM`.
+    fn check_owner(owner: Owner, s: &SetAttr) -> Res<()> {
+        if s.uid.is_some_and(|u| u != owner.uid) || s.gid.is_some_and(|g| g != owner.gid) {
+            return Err(ViewError::Perm);
+        }
+        Ok(())
+    }
+}
+
 // The tests replay scripts on a database backend; without one there is
 // nothing to write to.
 #[cfg(all(test, any(feature = "vdb-sqlite", feature = "vdb-redb")))]

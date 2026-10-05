@@ -352,3 +352,11 @@ pub struct View {
     next_fh: AtomicU64,
     pin_max: usize,
 }
+
+impl View {
+    /// Make `ino` stand for `node` from now on (the read-write layer's
+    /// publish keeps the staged directory's inode, as a rename does).
+    pub(crate) fn rebind(&self, ino: u64, node: Node) {
+        lock(&self.inodes).rebind(ino, node);
+    }
+}
