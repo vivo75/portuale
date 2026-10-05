@@ -250,6 +250,14 @@ impl RwView {
         st.hidden.get(key).is_some_and(|h| !h.is_empty())
     }
 
+    pub fn readdir(&self, fh: u64) -> Res<Arc<Vec<DirEnt>>> {
+        match lock(&self.st).handles.get(&fh) {
+            Some(Fh::Dir(l)) => Ok(l.clone()),
+            Some(_) => Err(ViewError::NotDir),
+            None => Err(ViewError::BadHandle),
+        }
+    }
+
     /// `flush` (each `close`): store a written live file with one
     /// `replace_file` transaction. A failure is `EIO`, which `close`
     /// returns to the caller; the scratch copy stays for a later flush.
@@ -346,6 +354,42 @@ impl RwView {
             st.bump(dir);
         }
         Ok(())
+    }
+
+    /// The image Portage built in staged directory `dir`.
+    fn staged_image(&self, st: &RwState, dir: u64, key: EntryKey) -> Res<EntryImage> {
+        let Some(Obj::StagedDir { mode, mtime_ns, .. }) = st.objs.get(&dir) else {
+            return Err(ViewError::NoEnt);
+        };
+        let mut files = Vec::new();
+        for (name, id) in st.children(&Parent::Staged(dir)) {
+            let Some(Obj::StagedFile { path }) = st.objs.get(&id) else {
+                return Err(ViewError::Perm);
+            };
+            let md = std::fs::metadata(path).map_err(io_err)?;
+            let data = std::fs::read(path).map_err(io_err)?;
+            files.push(EntryFile {
+                meta: FileMeta {
+                    name,
+                    len: data.len() as u64,
+                    mode: md.mode(),
+                    mtime_ns: mtime_of(&md),
+                },
+                data,
+            });
+        }
+        let metadata = files
+            .iter()
+            .find(|f| f.meta.name == "metadata")
+            .map(|f| f.data.as_slice());
+        let metadata_stamp = stamp_state(metadata, *mtime_ns);
+        Ok(EntryImage {
+            key,
+            files,
+            dir_mode: *mode & 0o7777,
+            dir_mtime_ns: *mtime_ns,
+            metadata_stamp,
+        })
     }
 
     /// The database stores no owner: a `chown` to the owner `getattr`

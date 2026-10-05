@@ -354,6 +354,21 @@ pub struct View {
 }
 
 impl View {
+    pub fn new(db: Arc<dyn InstalledDb>) -> Self {
+        View::with_pin_max(db, DEFAULT_PIN_MAX)
+    }
+
+    pub fn with_pin_max(db: Arc<dyn InstalledDb>, pin_max: usize) -> Self {
+        View {
+            db,
+            inodes: Mutex::new(Inodes::new()),
+            current: Mutex::new(None),
+            handles: Mutex::new(HashMap::new()),
+            next_fh: AtomicU64::new(1),
+            pin_max,
+        }
+    }
+
     /// Make `ino` stand for `node` from now on (the read-write layer's
     /// publish keeps the staged directory's inode, as a rename does).
     pub(crate) fn rebind(&self, ino: u64, node: Node) {
