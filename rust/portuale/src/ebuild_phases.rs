@@ -691,6 +691,12 @@ pub(crate) fn portage_checkout() -> PathBuf {
 /// `bin/` directly (the `.py`-helper phases then degrade the same way a
 /// missing binary already does).
 ///
+/// `portageq-wrapper` is deliberately vendored too (feat#157 S6, #151): the
+/// tracked `bin/portageq-wrapper` shim execs the native `portuale portageq`
+/// (via `$PORTUALE_BIN`), and because vendored entries are linked over the
+/// checkout's, the shim wins even when `3rdparty/portage` is present --
+/// `has_version`/`best_version` never need Python or the checkout.
+///
 /// Resolved once per process. `bin/ebuild.sh` only ever uses
 /// `${PORTAGE_BIN_PATH}` as a literal string prefix for `source`, never
 /// `realpath`s it, so a symlinked entry resolves to the vendored file.
@@ -2933,6 +2939,14 @@ fn eclass_locations_value(pkg_dir: &Path, config_root: &Path) -> String {
         .join(" ")
 }
 
+/// Absolute path of the running binary, exported as `PORTUALE_BIN` for
+/// the vendored `bin/portageq-wrapper` shim.
+fn portuale_bin_value() -> String {
+    std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "portuale".to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn phase_env_vars(
     env: &Environment,
@@ -3006,6 +3020,10 @@ fn phase_env_vars(
             "PORTAGE_BIN_PATH".to_string(),
             bin_dir.display().to_string(),
         ),
+        // feat#157 S6: the tracked `bin/portageq-wrapper` shim execs
+        // `$PORTUALE_BIN portageq ...`; an absolute path so the shim never
+        // depends on `PATH`.
+        ("PORTUALE_BIN".to_string(), portuale_bin_value()),
         (
             "PORTAGE_ECLASS_LOCATIONS".to_string(),
             eclass_locations_value(&env.pkg_dir, config_root),
@@ -3127,6 +3145,21 @@ fn phase_env_vars(
             "PORTAGE_PYM_PATH".to_string(),
             pym_path.display().to_string(),
         ));
+    }
+
+    // The phase process is spawned with a cleared environment, so the
+    // database selection `mrg` exported for its children
+    // (`PORTUALE_VDB_*`, see `portageq.rs`) must be forwarded explicitly or
+    // `has_version`/`best_version` would read the files tree even on a
+    // sqlite/redb ROOT.
+    for k in [
+        "PORTUALE_VDB_BACKEND",
+        "PORTUALE_VDB_PATH",
+        "PORTUALE_VDB_ROOT",
+    ] {
+        if let Some(v) = std::env::var_os(k).filter(|v| !v.is_empty()) {
+            vars.push((k.to_string(), v.to_string_lossy().into_owned()));
+        }
     }
 
     // `PATH` is consumed above as the base behind the helper dirs; a
@@ -5164,6 +5197,108 @@ mod tests {
 
         run("test");
         assert!(marker.exists(), "src_test did not run with FEATURES=test");
+    }
+
+    /// feat#157 S6 / #151: `has_version`/`best_version` in a real phase
+    /// go through the tracked `bin/portageq-wrapper` shim to the native
+    /// `portuale portageq`, on the files tree and (with the feature) on a
+    /// sqlite database, whether or not `3rdparty/portage` is present.
+    #[test]
+    fn phase_has_version_uses_native_portageq() {
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let fx = fx.canonicalize().unwrap();
+        let tmp = TempDir::new("ebuild-phases-test-native-portageq").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/hvpkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let out = tmp.join("out");
+        let ebuild = pkg_dir.join("hvpkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild,
+            format!(
+                "EAPI=8\nSLOT=\"0\"\npkg_pretend() {{\n\
+                 \thas_version -r dev-libs/samepkg && echo yes >> {o} || echo no >> {o}\n\
+                 \thas_version -r nonexistent/package && echo yes >> {o} || echo no >> {o}\n\
+                 \techo \"best=$(best_version -r dev-libs/samepkg)\" >> {o}\n\
+                 \techo \"bin=${{PORTUALE_BIN}}\" >> {o}\n}}\n",
+                o = out.display()
+            ),
+        )
+        .unwrap();
+        let root = fx.clone();
+        let portage_tmpdir = tmp.join("tmp");
+
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+
+        let mut variants: Vec<Vec<(&str, String)>> = vec![vec![]];
+        #[cfg(feature = "vdb-sqlite")]
+        {
+            let db = tmp.join("vdb.sqlite");
+            let src = portage_vdb::FilesDb::new(&fx);
+            let dst = portage_vdb::SqliteDb::open(&db).unwrap();
+            portage_vdb::copy_all(&src, &dst, false).unwrap();
+            // An empty ROOT-owned database: samepkg is only "installed" on
+            // the files tree, so a native helper reading the wrong backend
+            // would answer differently.
+            variants.push(vec![
+                ("PORTUALE_VDB_BACKEND", "sqlite".to_string()),
+                ("PORTUALE_VDB_PATH", db.display().to_string()),
+                ("PORTUALE_VDB_ROOT", fx.display().to_string()),
+            ]);
+            let empty = tmp.join("empty.sqlite");
+            drop(portage_vdb::SqliteDb::open(&empty).unwrap());
+            variants.push(vec![
+                ("PORTUALE_VDB_BACKEND", "sqlite".to_string()),
+                ("PORTUALE_VDB_PATH", empty.display().to_string()),
+                ("PORTUALE_VDB_ROOT", fx.display().to_string()),
+            ]);
+        }
+        for (i, vdb) in variants.iter().enumerate() {
+            let _ = std::fs::remove_file(&out);
+            // Fresh builddir per variant: a finished phase leaves its
+            // `.pretended` marker behind and is then skipped.
+            let portage_tmpdir = portage_tmpdir.join(i.to_string());
+            std::fs::create_dir_all(&portage_tmpdir).unwrap();
+            let mut c = std::process::Command::new(&portuale_bin);
+            c.env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", std::env::var("HOME").unwrap_or_default())
+                .env("ROOT", &root)
+                .env("PORTAGE_TMPDIR", &portage_tmpdir)
+                .args(["ebuild", ebuild.to_str().unwrap(), "pretend"]);
+            for (k, v) in vdb {
+                c.env(k, v);
+            }
+            let o = c.output().expect("portuale ebuild spawns");
+            assert!(
+                o.status.success(),
+                "variant {i}: {:?}\n{}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let got = std::fs::read_to_string(&out).unwrap_or_else(|e| {
+                panic!(
+                    "variant {i}: no output ({e})\n{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                )
+            });
+            let lines: Vec<&str> = got.lines().collect();
+            let empty_db = i == 2;
+            assert_eq!(lines[0], if empty_db { "no" } else { "yes" }, "{got}");
+            assert_eq!(lines[1], "no", "{got}");
+            if empty_db {
+                assert_eq!(lines[2], "best=", "{got}");
+            } else {
+                assert!(lines[2].starts_with("best=dev-libs/samepkg-"), "{got}");
+            }
+            assert_eq!(lines[3], format!("bin={}", portuale_bin.display()), "{got}");
+        }
     }
 
     #[test]
