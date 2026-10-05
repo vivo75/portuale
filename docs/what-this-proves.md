@@ -19296,3 +19296,17 @@ rm -rf $T
 # live 2026-10-05: converted 2130 entries ... counter 23336 (x2); equal: 2130 entries compared (x2);
 # same plan: 19 lines; rebuilt the index of 2130 installed entries: owner 753879 rows, dep_atom 27566, needed 13589
 ```
+
+**#317 — real Portage merges through `portuale vdb mount --rw` (branch `backlog/317-rw-fuse`, spec [`superpowers/specs/2026-10-05-rw-fuse-vdb-design.md`](superpowers/specs/2026-10-05-rw-fuse-vdb-design.md), plan [`02.317-rw-fuse.opus.md`](02.317-rw-fuse.opus.md), S0–S6).** The #305 FUSE view of a sqlite or redb database is now writable for the operations real Portage performs in `var/db/pkg`, pinned by an `strace` capture of real `ebuild` merges and unmerges (`docs/evidence/317-s0-capture.md`): slot lock files live in memory; a `-MERGING-<pf>` directory is staged on scratch disk and stored with one transaction at its rename, keeping real's `metadata` stamp valid and raising the counter; a rewrite inside a live entry (`pkg_postinst`'s `environment.bz2`, an atomic `CONTENTS` rewrite) is stored at close or rename; an `rmtree` deletes the entry in one transaction at the final `rmdir`; world, the counter and the other stores real writes under ROOT are imported at unmount (`portuale vdb import-stores` by hand). Proof: real Portage 3.0.82.2 `ebuild` new merge, same-pf replace, other-pf replace and unmerge give, after each step, the same VDB through the mount (sqlite and redb) as on disk (`317-s5-host.md`); and in the L1 bed real `emerge` re-merges glibc and bash through the mount over sqlite and over redb with 0 hard / 0 unexplained and the same 1415 mtime-only paths as on disk (`317-s6-gate.md`, pmtest `L1_PORTAGE_VDB_MOUNT`). Residues #319 (package moves rename a live entry: EPERM), #320 (a background mount's unmount report goes to /dev/null).
+
+```sh
+# from the repo root (portuale built; uses sudo for real ebuild and the mount; ~3 min)
+sh docs/evidence/317-s5-host.sh | grep -E '^==|compare|counter'
+# live 2026-10-05, both backends, four steps each:
+# == sqlite
+#     compare: equal (1 entries)      counter: files 0, sqlite 0
+#     compare: equal (1 entries)      counter: files 1, sqlite 1
+#     compare: equal (1 entries)      counter: files 2, sqlite 2
+#     compare: equal (0 entries)      counter: files 2, sqlite 2
+# == redb   (the same four lines with redb)
+```

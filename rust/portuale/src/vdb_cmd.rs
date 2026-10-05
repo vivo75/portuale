@@ -110,26 +110,37 @@ every installed entry, in one transaction, and prints the row counts. It
 repairs an index written wrong or incompletely by an older build. The files
 and the counter are not touched; files:ROOT has no index (exit 2).
 
-mount serves the database read-only at MOUNTPOINT (an existing directory) as
-the historic tree CAT/PF/files, through FUSE (fusermount3; no libfuse needed):
+mount serves the database at MOUNTPOINT (an existing directory) as the
+historic tree CAT/PF/files, through FUSE (fusermount3; no libfuse needed):
    --foreground, -f   stay in the foreground; SIGINT/SIGTERM unmount and exit
    --allow-other      let other users (root, running emerge) read the mount;
                       needs user_allow_other in /etc/fuse.conf unless root
-   --rw               read-write, sqlite and redb only (#317): real Portage can
-                      merge and unmerge through the mount; see below
+   --rw               read-write, sqlite and redb only: real Portage can merge,
+                      replace and unmerge through the mount; see below
    --root ROOT        with --rw: the ROOT whose world, world_sets,
                       preserved-libs, config-memory and counter files real
                       emerge writes (default /); imported at unmount
 Without --foreground it detaches once the mount is ready. Unmount with
-`fusermount3 -u MOUNTPOINT`. The database is opened read-only. Every write is
-EROFS. Directory mtimes follow real Portage (an entry shows its stored
-mtime, a category the latest of its entries, the root the latest category)
-and the metadata file's stamp matches the entry directory mtime shown. Each
+`fusermount3 -u MOUNTPOINT` (or umount as root). Without --rw the database is
+opened read-only and every write is EROFS. Directory mtimes follow real
+Portage (an entry shows its stored mtime, a category the latest of its
+entries, the root the latest category) and the metadata file's stamp
+matches the entry directory mtime shown. Each
 directory listing and each open file serves the generation it was opened on.
 Over redb the mount holds the file read-only: readers (mrg --pretend, verify,
 status) run beside it, writers (a merging mrg, convert, sweep, rebuild-index)
 get the Busy message until it is unmounted. sqlite can be mounted while mrg
 merges. files:ROOT is a pass-through, for testing.
+
+With --rw (mount it over real Portage's VDB directory) the writes real
+Portage makes are stored: a new <cat>/-MERGING-<pf> directory is staged on
+scratch disk ($TMPDIR/portuale-vdb-rw-*) and stored in one transaction when
+it is renamed to <cat>/<pf> (its metadata stamp kept valid, the counter
+raised to its COUNTER); a rewrite of a file in a live entry is stored at
+close; an entry is deleted in one transaction when real removes its last
+file and the directory. Lock files live in memory only. Any other write is
+EPERM. Over redb the --rw mount holds the file read-write, so mrg and other
+vdb commands get the Busy message until it is unmounted.
 
 Exit status: 0 done / equal / nothing pending, 1 verify found differences or
 status found pending entries, 2 usage or I/O error.";

@@ -68,8 +68,9 @@ real tree in the differential bed). At a capability level:
   `sqlite` and `redb` backends; `mrg --vdb-backend=` selects one (merge,
   unmerge, `--pretend`, ebuild-phase `has_version` / `best_version` via
   the native `portuale portageq`); `portuale vdb convert / verify /
-  status / sweep / rebuild-index`; a read-only FUSE view (`portuale vdb
-  mount`) that eix / q* / equery / real `emerge -p` read unchanged.
+  status / sweep / rebuild-index / import-stores`; a FUSE view (`portuale
+  vdb mount`) that eix / q* / equery / real `emerge -p` read unchanged,
+  and with `--rw` (#317) real `emerge` / `ebuild` merge into.
   `emerge` itself stays on `files`.
 - **Infra** — musl static build; edition 2024; the `err-*` per-crate
   error model; `mrg` applet (clap over the emerge codepath) + the

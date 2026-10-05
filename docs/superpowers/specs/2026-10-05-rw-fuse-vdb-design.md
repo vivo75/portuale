@@ -1,6 +1,14 @@
 # #317 — read-write FUSE view of the VDB database backends: design
 
-Status: **approved in conversation 2026-10-05, spec awaiting owner review.**
+Status: **implemented 2026-10-05** (plan `docs/02.317-rw-fuse.opus.md`,
+done). Deviations found while building it, all recorded in the slice
+commits: the scratch directory is named after the database file (not the
+pid) so the next mount of the same database clears a dead daemon's
+leftovers; publish and live renames keep every inode (the kernel's cached
+dentries); a live rewrite is stored at `flush` (the kernel ignores
+`release` errors) and the mount asks for `FUSE_ATOMIC_O_TRUNC`; a rename
+inside a live entry rewrites the whole entry so the temp's mode/mtime and
+the stale stamp match disk; volatile lock files accept `chown`.
 Backlog: [`backlog-tasks-2026-10.md`](../../backlog-tasks-2026-10.md) Tier 2 #317.
 Parent feature: #305 / feat#157 ([`feat-157-authoritative-vdb-database.md`](../../feat-157-authoritative-vdb-database.md),
 decision D2 "read-only FUSE first"). Builds on the read-only view
