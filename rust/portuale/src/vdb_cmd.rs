@@ -18,19 +18,31 @@
 // directory (entries only, no D4 stores); a bare directory is refused as
 // a destination.
 //
-// Exit codes: 0 success / verify equal, 1 verify found differences,
+//   portuale vdb status  KIND:PATH
+//   portuale vdb sweep   (--remove CAT/PF)... | --all  KIND:PATH
+//
+// `status` lists the entries left mid-merge (S4.3, design §9.1): `merging`
+// rows on a database, `-MERGING-<pf>` directories on files. `sweep` deletes
+// the named ones in one write transaction; it refuses a key that is not
+// pending, so an installed entry is never removed by it.
+//
+// Exit codes: 0 success / verify equal / status with nothing pending,
+// 1 verify found differences / status found pending entries,
 // 2 usage or I/O error.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use portage_vdb::{BackendKind, FilesDb, InstalledDb};
+use portage_vdb::{BackendKind, EntryKey, FilesDb, InstalledDb};
 
 const USAGE: &str = "\
 Usage:
    portuale vdb convert --from KIND:PATH --to KIND:PATH [--force]
    portuale vdb verify [--against] KIND:PATH KIND:PATH
+   portuale vdb status KIND:PATH
+   portuale vdb sweep (--remove CAT/PF)... KIND:PATH
+   portuale vdb sweep --all KIND:PATH
    portuale vdb --help
 
 Copy the installed-package database (VDB) between backends, or compare two
@@ -57,7 +69,18 @@ verify compares live entries (files, bytes, modes, mtimes, directory mode and
 mtime, metadata-stamp state), world, world_sets, preserved libs, config memory
 and the counter. Differences are listed, at most 100 lines.
 
-Exit status: 0 done / equal, 1 verify found differences, 2 usage or I/O error.";
+status prints the backend, path, number of installed entries, generation,
+counter, the import mark (a database converted from files) and the entries
+left mid-merge by an interrupted merge. Exit 0 when none are pending, 1 when
+some are.
+
+sweep deletes pending entries (never installed ones) in one transaction:
+   --remove CAT/PF    a pending entry to delete; repeatable
+   --all              every pending entry
+A key that is not pending refuses the whole sweep (nothing is deleted).
+
+Exit status: 0 done / equal / nothing pending, 1 verify found differences or
+status found pending entries, 2 usage or I/O error.";
 
 /// Entry point: `args` are the arguments after `vdb`.
 pub fn run(args: &[String]) -> ExitCode {
@@ -88,8 +111,10 @@ fn dispatch(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result
         }
         "convert" => convert(&args[1..], out, err),
         "verify" => verify(&args[1..], out),
+        "status" => status(&args[1..], out),
+        "sweep" => sweep(&args[1..], out),
         other => Err(format!(
-            "unknown subcommand {other:?} (expected convert or verify); see `portuale vdb --help`"
+            "unknown subcommand {other:?} (expected convert, verify, status or sweep); see `portuale vdb --help`"
         )),
     }
 }
@@ -252,6 +277,143 @@ fn verify(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
         );
     }
     Ok(1)
+}
+
+/// Open an existing database for `status` / `sweep`; never creates one.
+fn open_existing(spec: &Spec, write: bool) -> Result<Box<dyn InstalledDb>, String> {
+    if spec.kind == BackendKind::Sqlite && !spec.path.exists() {
+        return Err(format!("{}: no such database", spec.path.display()));
+    }
+    open(spec, write)
+}
+
+fn one_spec(cmd: &str, specs: Vec<Spec>) -> Result<Spec, String> {
+    let mut it = specs.into_iter();
+    match (it.next(), it.next()) {
+        (Some(s), None) => Ok(s),
+        _ => Err(format!("{cmd}: expected exactly one KIND:PATH argument")),
+    }
+}
+
+fn status(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
+    let mut specs = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "-h" | "--help" => {
+                let _ = writeln!(out, "{USAGE}");
+                return Ok(0);
+            }
+            s if s.starts_with('-') && !s.contains(':') => {
+                return Err(format!("status: unknown option {s:?}"));
+            }
+            s => specs.push(parse_spec(s)?),
+        }
+    }
+    let spec = one_spec("status", specs)?;
+    let db = open_existing(&spec, false)?;
+    let e = |e: portage_vdb::Error| e.to_string();
+    let installed = db.entries().map_err(e)?.len();
+    let _ = writeln!(out, "backend:    {}", spec.kind);
+    let _ = writeln!(out, "path:       {}", spec.path.display());
+    let _ = writeln!(out, "installed:  {installed}");
+    let _ = writeln!(out, "generation: {}", db.generation().map_err(e)?);
+    let _ = writeln!(
+        out,
+        "counter:    {}",
+        db.counter()
+            .map_err(e)?
+            .map_or("none".to_string(), |c| c.to_string())
+    );
+    if let Some((generation, source)) = db.import_mark().map_err(e)? {
+        let _ = writeln!(
+            out,
+            "imported:   from files:{source} at generation {generation}"
+        );
+    }
+    let pending = db.pending_entries().map_err(e)?;
+    if pending.is_empty() {
+        let _ = writeln!(out, "pending:    none");
+        return Ok(0);
+    }
+    let _ = writeln!(out, "pending:    {} (interrupted merges)", pending.len());
+    for k in &pending {
+        let _ = writeln!(out, "  {k}");
+    }
+    let _ = writeln!(
+        out,
+        "remove with: portuale vdb sweep --remove CAT/PF {}:{}",
+        spec.kind,
+        spec.path.display()
+    );
+    Ok(1)
+}
+
+fn sweep(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
+    let (mut remove, mut all, mut specs) = (Vec::<EntryKey>::new(), false, Vec::new());
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "-h" || a == "--help" {
+            let _ = writeln!(out, "{USAGE}");
+            return Ok(0);
+        } else if a == "--all" {
+            all = true;
+        } else if a == "--remove" || a.starts_with("--remove=") {
+            let v = match a.split_once('=') {
+                Some((_, v)) => v.to_string(),
+                None => {
+                    i += 1;
+                    args.get(i)
+                        .cloned()
+                        .ok_or("--remove needs a CAT/PF argument")?
+                }
+            };
+            let (cat, pf) = v
+                .split_once('/')
+                .filter(|(c, p)| !c.is_empty() && !p.is_empty() && !p.contains('/'))
+                .ok_or_else(|| format!("{v:?}: expected CAT/PF"))?;
+            remove.push(EntryKey::new(cat, pf));
+        } else if a.starts_with('-') && !a.contains(':') {
+            return Err(format!("sweep: unknown option {a:?}"));
+        } else {
+            specs.push(parse_spec(a)?);
+        }
+        i += 1;
+    }
+    if all == !remove.is_empty() {
+        return Err("sweep: give --all or at least one --remove CAT/PF (not both)".into());
+    }
+    let spec = one_spec("sweep", specs)?;
+    let db = open_existing(&spec, true)?;
+    let pending = db.pending_entries().map_err(|e| e.to_string())?;
+    if all {
+        remove = pending.clone();
+    }
+    // Refuse the whole sweep before deleting anything.
+    for k in &remove {
+        if !pending.contains(k) {
+            let why = if db.has_entry(k).map_err(|e| e.to_string())? {
+                "an installed entry, not an interrupted merge"
+            } else {
+                "not pending"
+            };
+            return Err(format!("sweep: {k} is {why}; nothing was removed"));
+        }
+    }
+    remove.sort();
+    remove.dedup();
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    for k in &remove {
+        txn.discard_pending(k).map_err(|e| e.to_string())?;
+    }
+    txn.commit().map_err(|e| e.to_string())?;
+    for k in &remove {
+        let _ = writeln!(out, "removed pending entry {k}");
+    }
+    if remove.is_empty() {
+        let _ = writeln!(out, "nothing pending");
+    }
+    Ok(0)
 }
 
 #[cfg(test)]
@@ -503,5 +665,116 @@ mod tests {
             Some(Path::new("."))
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Leave `cat/pf` pending (begin_entry, a file, no finish) through the
+    /// backend's own write path, as a merge killed between its commits does.
+    fn leave_pending(spec: &str, cat: &str, pf: &str) {
+        let db = open(&parse_spec(spec).unwrap(), true).unwrap();
+        let k = EntryKey::new(cat, pf);
+        let mut txn = db.begin_write().unwrap();
+        txn.begin_entry(&k).unwrap();
+        txn.put_entry_file(&k, "CONTENTS", b"half\n").unwrap();
+        txn.commit().unwrap();
+    }
+
+    fn status_sweep_cycle(spec: &str, keep: &str) {
+        let (c, o, e) = cli(&["status", spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(o.contains("pending:    none"), "{o}");
+        leave_pending(spec, "dev-libs", "halfdone-1");
+        let (c, o, e) = cli(&["status", spec]);
+        assert_eq!(c, 1, "{o}{e}");
+        assert!(o.contains("dev-libs/halfdone-1"), "{o}");
+        // An installed key is refused and nothing is removed.
+        let (c, _, e) = cli(&["sweep", "--remove", keep, spec]);
+        assert_eq!(c, 2);
+        assert!(e.contains("installed entry"), "{e}");
+        let (c, _, e) = cli(&[
+            "sweep",
+            "--remove",
+            "dev-libs/halfdone-1",
+            "--remove",
+            keep,
+            spec,
+        ]);
+        assert_eq!(c, 2, "{e}");
+        assert_eq!(
+            cli(&["status", spec]).0,
+            1,
+            "the orphan survives a refused sweep"
+        );
+        // A key that is neither is refused too.
+        assert_eq!(cli(&["sweep", "--remove", "x/y-1", spec]).0, 2);
+        let (c, o, e) = cli(&["sweep", "--remove", "dev-libs/halfdone-1", spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(
+            o.contains("removed pending entry dev-libs/halfdone-1"),
+            "{o}"
+        );
+        let (c, o, _) = cli(&["status", spec]);
+        assert_eq!(c, 0, "{o}");
+        // The installed entry is still there.
+        assert!(o.contains("installed:  "), "{o}");
+        leave_pending(spec, "dev-libs", "one-1");
+        leave_pending(spec, "dev-libs", "two-1");
+        let (c, o, e) = cli(&["sweep", "--all", spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(o.contains("one-1") && o.contains("two-1"), "{o}");
+        assert_eq!(cli(&["status", spec]).0, 0);
+    }
+
+    #[test]
+    fn status_and_sweep_on_files() {
+        let root = fixture_root("sweepfiles");
+        let installed = fs::read_dir(root.join("var/db/pkg/dev-libs"))
+            .unwrap()
+            .map(|d| d.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|n| !n.starts_with('-'))
+            .unwrap();
+        let spec = format!("files:{}", s(&root));
+        status_sweep_cycle(&spec, &format!("dev-libs/{installed}"));
+        assert!(root.join("var/db/pkg/dev-libs").join(&installed).is_dir());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn status_and_sweep_on_sqlite() {
+        let root = fixture_root("sweepsql");
+        let db = root.join("vdb.sqlite");
+        let spec = format!("sqlite:{}", s(&db));
+        let (c, o, e) = cli(&[
+            "convert",
+            "--from",
+            &format!("files:{}", s(&root)),
+            "--to",
+            &spec,
+        ]);
+        assert_eq!(c, 0, "{o}{e}");
+        let d = open(&parse_spec(&spec).unwrap(), false).unwrap();
+        let keep = d.entries().unwrap()[0].to_string();
+        drop(d);
+        let (_, o, _) = cli(&["status", &spec]);
+        assert!(o.contains("imported:"), "{o}");
+        status_sweep_cycle(&spec, &keep);
+        let d = open(&parse_spec(&spec).unwrap(), false).unwrap();
+        assert!(d.has_entry(&d.entries().unwrap()[0]).unwrap());
+        // A missing database is an error and is not created.
+        let missing = format!("sqlite:{}", s(&root.join("none.sqlite")));
+        assert_eq!(cli(&["status", &missing]).0, 2);
+        assert!(!root.join("none.sqlite").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn status_and_sweep_usage_errors_exit_2() {
+        assert_eq!(cli(&["status"]).0, 2);
+        assert_eq!(cli(&["sweep", "files:/x"]).0, 2);
+        assert_eq!(
+            cli(&["sweep", "--all", "--remove", "a/b-1", "files:/x"]).0,
+            2
+        );
+        assert_eq!(cli(&["sweep", "--remove", "nocat", "files:/x"]).0, 2);
     }
 }

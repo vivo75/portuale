@@ -535,6 +535,53 @@ mod suite {
         assert_eq!(ctx.db.entries().unwrap(), vec![k]);
     }
 
+    pub fn discard_pending_removes_an_orphan_and_never_an_installed_entry(f: Factory, _c: &Caps) {
+        let ctx = Ctx::new(f, "discard");
+        let k = key("dev-libs", "a-1.0");
+        let orphan = key("dev-libs", "b-1.0");
+        put(&ctx, &k, &[("CONTENTS", b"old\n")], false);
+        // A merge killed before finish_entry: the entry stays pending.
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.begin_entry(&orphan).unwrap();
+        txn.put_entry_file(&orphan, "CONTENTS", b"half\n").unwrap();
+        // The same key as the installed one, pending as well (a replace).
+        txn.begin_entry(&k).unwrap();
+        txn.put_entry_file(&k, "CONTENTS", b"new\n").unwrap();
+        txn.commit().unwrap();
+        assert_eq!(
+            sorted(ctx.db.pending_entries().unwrap()),
+            vec![k.clone(), orphan.clone()]
+        );
+
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.discard_pending(&orphan).unwrap();
+        // Not pending any more: refused, and nothing else is touched.
+        assert!(matches!(
+            txn.discard_pending(&orphan),
+            Err(portage_vdb::Error::Invalid(_))
+        ));
+        txn.commit().unwrap();
+        assert_eq!(ctx.db.pending_entries().unwrap(), vec![k.clone()]);
+        assert_eq!(ctx.db.read_pending_file(&orphan, "CONTENTS").unwrap(), None);
+
+        // Discarding the pending twin of an installed key keeps the install.
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.discard_pending(&k).unwrap();
+        txn.commit().unwrap();
+        assert!(ctx.db.pending_entries().unwrap().is_empty());
+        assert_eq!(ctx.db.entries().unwrap(), vec![k.clone()]);
+        assert_eq!(read(&ctx, &k, "CONTENTS").as_deref(), Some(&b"old\n"[..]));
+
+        // An installed entry with nothing pending is not discardable.
+        let mut txn = ctx.db.begin_write().unwrap();
+        assert!(matches!(
+            txn.discard_pending(&k),
+            Err(portage_vdb::Error::Invalid(_))
+        ));
+        drop(txn);
+        assert_eq!(read(&ctx, &k, "CONTENTS").as_deref(), Some(&b"old\n"[..]));
+    }
+
     pub fn replace_in_slot_leaves_only_the_new_entry(f: Factory, _c: &Caps) {
         let ctx = Ctx::new(f, "slot-replace");
         let old = key("dev-libs", "a-1.0");
@@ -1308,6 +1355,7 @@ macro_rules! conformance_suite {
                 pending_entry_is_invisible_until_finish
                 begin_entry_discards_a_stale_pending_entry
                 pending_replacement_leaves_the_live_entry_until_finish
+                discard_pending_removes_an_orphan_and_never_an_installed_entry
                 replace_in_slot_leaves_only_the_new_entry
                 delete_entry_removes_only_that_entry
                 replace_file_rewrites_one_file_and_leaves_the_others

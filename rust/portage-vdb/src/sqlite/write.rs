@@ -205,6 +205,23 @@ impl WriteTxn for SqliteTxn<'_> {
         Ok(())
     }
 
+    /// Deletes the `merging` row (its files cascade); an `installed` row
+    /// of the same key is left alone.
+    fn discard_pending(&mut self, key: &EntryKey) -> Result<()> {
+        let n = self
+            .conn
+            .execute(
+                "DELETE FROM entry WHERE category = ?1 AND pf = ?2 AND state = 'merging'",
+                params![key.category, key.pf],
+            )
+            .be(self.path())?;
+        if n == 0 {
+            return Err(Error::Invalid(format!("no pending entry for {key}")));
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
     fn put_entry_file(&mut self, key: &EntryKey, name: &str, data: &[u8]) -> Result<()> {
         self.put_pending(key, name, data, FILE_MODE)
     }

@@ -357,6 +357,20 @@ impl WriteTxn for FilesTxn<'_> {
         Ok(())
     }
 
+    /// `remove_dir_all` of the `-MERGING-<pf>` directory, then the category
+    /// directory if it is now empty (best effort). The live `<pf>` is left.
+    fn discard_pending(&mut self, key: &EntryKey) -> Result<()> {
+        let dir = self.db.pending_dir(key);
+        if !dir.is_dir() {
+            return Err(Error::Invalid(format!("no pending entry for {key}")));
+        }
+        fs::remove_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+        if let Some(cat_dir) = dir.parent() {
+            let _ = fs::remove_dir(cat_dir);
+        }
+        Ok(())
+    }
+
     /// `std::fs::write` into the pending dir (truncate in place, mode from
     /// the umask), as `populate_vdb_tmp` / `write_vdb_tmp_contents` did.
     fn put_entry_file(&mut self, key: &EntryKey, name: &str, data: &[u8]) -> Result<()> {

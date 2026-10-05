@@ -1602,6 +1602,26 @@ fn stale_db_warning(mark: Option<(u64, String)>, files_gen: u64, db_path: &Path)
     None
 }
 
+/// One `!!!` line per entry a crashed merge left in the `merging` state
+/// (design §9.1). Nothing is removed automatically. Called once, right
+/// after the database is opened and before any merge of this run, so the
+/// pending entry of mrg's own merge (legitimate while it runs) is never
+/// listed.
+#[cfg(feature = "vdb-sqlite")]
+fn pending_entries_warnings(pending: &[portage_vdb::EntryKey], db_path: &Path) -> Vec<String> {
+    pending
+        .iter()
+        .map(|k| {
+            format!(
+                "!!! {k} was left half-merged in {db} (an interrupted merge); inspect: \
+                 portuale vdb status sqlite:{db}; remove it: \
+                 portuale vdb sweep --remove {k} sqlite:{db}",
+                db = db_path.display()
+            )
+        })
+        .collect()
+}
+
 #[cfg(feature = "vdb-sqlite")]
 fn open_sqlite_backend(
     path: &Path,
@@ -1632,6 +1652,12 @@ fn open_sqlite_backend(
                 && let Some(warning) = stale_db_warning(import_mark, files_gen, path)
             {
                 eprintln!("{warning}");
+            }
+            // Orphans of an interrupted merge: report only.
+            if let Ok(pending) = db.pending_entries() {
+                for w in pending_entries_warnings(&pending, path) {
+                    eprintln!("{w}");
+                }
             }
             Ok(Some(std::sync::Arc::new(db)))
         }
@@ -2484,5 +2510,20 @@ mod tests {
         assert!(w.contains("portuale vdb convert --force"));
         assert!(w.contains("--from files:/root"));
         assert!(w.contains("--to sqlite:"));
+    }
+
+    #[test]
+    #[cfg(feature = "vdb-sqlite")]
+    fn test_pending_entries_warnings() {
+        use std::path::PathBuf;
+        let db = PathBuf::from("/var/lib/portage/vdb.sqlite");
+        assert!(pending_entries_warnings(&[], &db).is_empty());
+        let w = pending_entries_warnings(&[portage_vdb::EntryKey::new("dev-libs", "a-1.0")], &db);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].starts_with("!!! dev-libs/a-1.0 "), "{}", w[0]);
+        assert!(w[0].contains("portuale vdb status sqlite:/var/lib/portage/vdb.sqlite"));
+        assert!(w[0].contains(
+            "portuale vdb sweep --remove dev-libs/a-1.0 sqlite:/var/lib/portage/vdb.sqlite"
+        ));
     }
 }

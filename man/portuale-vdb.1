@@ -1,6 +1,6 @@
 .TH "PORTUALE\-VDB" "1" "Oct 2026" "Portuale @VERSION@" "Portuale"
 .SH "NAME"
-portuale\-vdb \- Convert or verify the installed\-package database between backends
+portuale\-vdb \- Convert, verify or inspect the installed\-package database between backends
 .SH "SYNOPSIS"
 .TP
 .B portuale vdb convert
@@ -8,6 +8,12 @@ portuale\-vdb \- Convert or verify the installed\-package database between backe
 .TP
 .B portuale vdb verify
 [\fB\-\-against\fR] \fIKIND:PATH\fR \fIKIND:PATH\fR
+.TP
+.B portuale vdb status
+\fIKIND:PATH\fR
+.TP
+.B portuale vdb sweep
+(\fB\-\-remove\fR \fICAT/PF\fR)... | \fB\-\-all\fR \fIKIND:PATH\fR
 .TP
 .B portuale vdb
 \fB\-\-help\fR
@@ -33,6 +39,17 @@ live entries; for each entry its files, bytes, modes, mtimes, directory
 mode and mtime, and whether the \fBmetadata\fR stamp is valid; then the
 world files, preserved libs, config memory and counter.  The differences
 are listed, at most 100 lines.
+.LP
+\fBstatus\fR prints the backend, the path, the number of installed entries,
+the generation, the counter, the import mark of a database converted from
+files, and the entries left mid\-merge by an interrupted merge (\fBmerging\fR
+rows on a database, \fB\-MERGING\-\fR directories on files).  \fBmrg\fR
+reports the same entries at startup on a database backend.
+.LP
+\fBsweep\fR deletes pending entries in one write transaction: the named ones
+(\fB\-\-remove\fR, repeatable) or all of them (\fB\-\-all\fR).  A key that is
+not pending, in particular an installed entry, refuses the whole sweep and
+nothing is deleted.  Nothing is ever swept automatically.
 .SH "KIND:PATH"
 .TP
 \fBfiles:\fR\fIROOT\fR
@@ -62,15 +79,22 @@ The destination of \fBconvert\fR.  It must hold no entries, unless
 Make the destination an exact copy of the source: replace entries with
 the same name and delete the ones the source does not have.
 .TP
+\fB\-\-remove\fR \fICAT/PF\fR
+A pending entry for \fBsweep\fR to delete.  May be repeated.
+.TP
+.B \-\-all
+\fBsweep\fR every pending entry.
+.TP
 \fB\-\-against\fR
 Accepted before the two arguments of \fBverify\fR.  It changes nothing.
 .SH "EXIT STATUS"
 .TP
 .B 0
-The conversion finished, or \fBverify\fR found no difference.
+The conversion finished, \fBverify\fR found no difference, \fBstatus\fR
+found nothing pending, or \fBsweep\fR finished.
 .TP
 .B 1
-\fBverify\fR found differences.
+\fBverify\fR found differences, or \fBstatus\fR found pending entries.
 .TP
 .B 2
 Usage error, or an I/O or database error (including a destination that
@@ -80,6 +104,8 @@ is not empty).
 portuale vdb convert \-\-from files:/ \-\-to sqlite:/var/lib/portage/vdb.sqlite
 portuale vdb verify \-\-against files:/ sqlite:/var/lib/portage/vdb.sqlite
 portuale vdb convert \-\-from sqlite:vdb.sqlite \-\-to files:/tmp/vdb\-export
+portuale vdb status sqlite:/var/lib/portage/vdb.sqlite
+portuale vdb sweep \-\-remove dev\-libs/foo\-1.0 sqlite:/var/lib/portage/vdb.sqlite
 .fi
 .SH "SEE ALSO"
 \fBemerge\fR(1), \fBebuild\fR(1)

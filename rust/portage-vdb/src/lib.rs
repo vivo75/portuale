@@ -321,6 +321,15 @@
 //!     write of `preserve_libs_on_unmerge` would already have landed).
 //!     **`files` is unchanged**: no collector exists there, and the same
 //!     calls run in the same order as in S1.5.
+//! 25. **S4.3: sweeping orphans (one interface addition).** A merge killed
+//!     between its two commits leaves a `merging` row (`files`: a
+//!     `-MERGING-<pf>` directory) that [`InstalledDb::pending_entries`]
+//!     lists. Nothing removes it automatically: `mrg` warns at startup on a
+//!     database backend (once, before its own merge, whose pending entry is
+//!     legitimate), `portuale vdb status` lists it and `portuale vdb sweep`
+//!     calls [`WriteTxn::discard_pending`], which deletes only a pending
+//!     entry (an installed one of the same key is untouched; a key that is
+//!     not pending is [`Error::Invalid`]).
 //!
 //! # SqliteDb (feature `vdb-sqlite`)
 //!
@@ -757,6 +766,13 @@ pub trait WriteTxn {
         }
         self.finish_entry(key)
     }
+
+    /// Delete the pending entry for `key` (a `-MERGING-<pf>` directory on
+    /// `files`, the `merging` row and its files on a database): the
+    /// sweep of an orphan a crashed merge left (design §9.1). A live
+    /// entry of the same key is never touched. [`Error::Invalid`] when
+    /// `key` is not pending.
+    fn discard_pending(&mut self, key: &EntryKey) -> Result<()>;
 
     /// Insert a whole live entry from an image (converters, W1 in one
     /// call). Counters are kept as they are. `files`: writes the files,

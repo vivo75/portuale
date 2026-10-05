@@ -24,6 +24,12 @@ warning, when the backend is \fBfiles\fR.
 When the sqlite database was converted from the files backend, a warning
 is printed if the files VDB has changed since conversion; re-convert with
 \fBportuale vdb convert --force\fR(1) to update the database.
+.br
+At startup, once, before any merge of the run, a warning
+(\fB!!! \fR\fIcategory/pf\fR\fB was left half\-merged in\fR ...) is printed for each entry an
+interrupted merge left in the \fBmerging\fR state in the database.  Nothing is removed
+automatically; use \fBportuale vdb status\fR and \fBportuale vdb sweep\fR
+(see \fBportuale\-vdb\fR(1)).  The \fBfiles\fR backend gives no such warning.
 .SH "SELECTION"
 The backend is chosen only when asked for; \fBmrg\fR never detects a
 database on its own.  The first of these that is set wins:
