@@ -9684,6 +9684,7 @@ mod tests {
         /// [`payload_tree`] without the permission bits: another test's
         /// `umask` change (process-wide) can alter the modes of files a run
         /// creates, which is not what the unmerge tests compare.
+        #[cfg(feature = "vdb-sqlite")]
         fn payload_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
             payload_tree(root)
                 .into_iter()
@@ -9870,7 +9871,9 @@ mod tests {
         /// Clears the thread-local publish hook when dropped, so a hook that
         /// panics (a simulated crash) cannot leak into later tests that reuse
         /// this thread.
+        #[cfg(feature = "vdb-sqlite")]
         struct HookGuard;
+        #[cfg(feature = "vdb-sqlite")]
         impl Drop for HookGuard {
             fn drop(&mut self) {
                 clear_hook();
@@ -9880,6 +9883,7 @@ mod tests {
         /// Run `f` (a merge or unmerge) with a hook that records the
         /// generation and then panics, i.e. "the process dies right before
         /// the final commit". Returns that generation; `f` must have panicked.
+        #[cfg(feature = "vdb-sqlite")]
         fn crash_before_commit(db: &Arc<portage_vdb::SqliteDb>, f: impl FnOnce()) -> u64 {
             let at: Rc<RefCell<Option<u64>>> = Rc::default();
             let _guard = HookGuard;
@@ -9897,6 +9901,7 @@ mod tests {
             generation.expect("the hook ran")
         }
 
+        #[cfg(feature = "vdb-sqlite")]
         fn vdb_cli(args: &[&str]) -> (u8, String) {
             let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             let (mut o, mut e) = (Vec::new(), Vec::new());

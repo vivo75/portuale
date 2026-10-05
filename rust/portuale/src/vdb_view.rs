@@ -783,7 +783,9 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use portage_vdb::{EntryFile, EntryImage, FilesDb};
+    use portage_vdb::FilesDb;
+    #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+    use portage_vdb::{EntryFile, EntryImage};
     use std::collections::BTreeSet;
     use std::fs;
     use std::os::unix::fs::MetadataExt as _;
@@ -858,6 +860,10 @@ mod tests {
         );
         let files = FilesDb::new(&root);
         add_stamped_entry(&files, &key("app-misc", "stamped-1.0"));
+        #[cfg_attr(
+            not(any(feature = "vdb-sqlite", feature = "vdb-redb")),
+            allow(unused_mut)
+        )]
         let mut out = vec![Env {
             label: "files",
             root: root.clone(),

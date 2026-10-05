@@ -1,6 +1,15 @@
 # #305 (feat#157) — residues collected during execution
 
-Working list for step Z.2, which files each one under a free backlog number. Collected by the coordinator; references are plan steps.
+Working list for step Z.2. Collected by the coordinator; references are plan steps.
+
+**Filed at Z.2 (2026-10-05):** R1 → #306; R12 → #307; R7, R8, R13 → #308;
+R5, R6 → #309; R9, R11 → #310; R2 → #311; R14, R15 → #312; R16 → #313;
+R19 → #314; R21 → #315; R17 → #316. Plus design D2 (read-write FUSE) →
+#317 and plan S9 (`emerge` selection) → #318. Not filed: R3 (closed by
+S4's scratch copies), R4 (same syscalls, reordered; no behaviour
+change), R10 (a counter gap after a crash is the documented rule: never
+reuse), R18 (closed by `vdb rebuild-index`, S8.3; the man page says to
+run it once on an older database), R20 (accepted: a one-off repair).
 
 - R1 (S1.4): files next_counter takes no lock, no max over entry COUNTERs, non-atomic write; real vartree.py:1304-1397 does all three.
 - R2 (S2.1): musl/smoke_test.sh fails at `COPY fixtures/` — fixtures/ is a symlink to ../pmtest/fixtures, outside the podman build context (pre-existing since fixtures moved to pmtest).

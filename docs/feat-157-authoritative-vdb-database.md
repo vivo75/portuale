@@ -1,7 +1,7 @@
 # #157 — swappable installed-package database (files / sqlite / redb)
 
 Status: **implemented 2026-10-05** on branch `backlog/305-vdb-backends`
-(slices S0–S8; S9, `emerge` selection, not done: optional, owner's call).
+(slices S0–S8; S9, `emerge` selection, not done: backlog #318; read-write FUSE, D2: #317).
 Proposed 2026-09-25 (revised the same day: three backends, `mrg` first).
 What shipped and how it was checked: [`what-this-proves.md`](what-this-proves.md)
 (#305 paragraph), evidence in `docs/evidence/305-*.md`.
