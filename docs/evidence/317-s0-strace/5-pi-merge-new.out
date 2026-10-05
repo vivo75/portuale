@@ -1,0 +1,46 @@
+!!! Section 'testrepo' in repos.conf has location attribute set to nonexistent directory: 'repo'
+!!! Section 'overlay' in repos.conf has location attribute set to nonexistent directory: 'overlay'
+!!! Section 'independentoverlay' in repos.conf has location attribute set to nonexistent directory: 'independentoverlay'
+!!! Section 'layoutmasteroverlay' in repos.conf has location attribute set to nonexistent directory: 'layoutmasteroverlay'
+!!! Section 'repnamesection' in repos.conf has location attribute set to nonexistent directory: 'repnamerepo'
+!!! Unable to parse profile: '/home/vivo/repo/PORTUALE/pmtest/fixtures/etc/portage/make.profile'
+!!! ParseError: Parent 'overlay:crossrepo-parent' not found: '/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/default/parent'
+!!! Section 'overlay' in repos.conf has location attribute set to nonexistent directory: 'overlay'
+!!! Section 'independentoverlay' in repos.conf has location attribute set to nonexistent directory: 'independentoverlay'
+!!! Section 'layoutmasteroverlay' in repos.conf has location attribute set to nonexistent directory: 'layoutmasteroverlay'
+!!! Section 'repnamesection' in repos.conf has location attribute set to nonexistent directory: 'repnamerepo'
+!!! Unable to parse profile: '/home/vivo/repo/PORTUALE/pmtest/fixtures/etc/portage/make.profile'
+!!! ParseError: Parent 'overlay:crossrepo-parent' not found: '/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/default/parent'
+--- Invalid atom in /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+--- Invalid atom in /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+
+
+!!! /home/vivo/repo/PORTUALE/pmtest/fixtures/etc/portage/make.profile is not a symlink and will probably prevent most merges.
+!!! It should point into a profile within /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/
+!!! (You can safely ignore this message when syncing. It's harmless.)
+
+
+Appending /home/vivo/repo/PORTUALE/pmtest/fixtures/repo to PORTDIR_OVERLAY...
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/work
+>>> Preparing source in /var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: dev-libs/binpkgrmpkg-1.0
+
+>>> Install dev-libs/binpkgrmpkg-1.0 into /var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/image
+>>> Completed installing dev-libs/binpkgrmpkg-1.0 into /var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/image
+
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  5 KiB
+
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging dev-libs/binpkgrmpkg-1.0 to /var/tmp/317-s0-root.U70qQK/
+>>> /var/tmp/317-s0-root.U70qQK/usr/
+>>> /var/tmp/317-s0-root.U70qQK/usr/share/
+>>> /var/tmp/317-s0-root.U70qQK/usr/share/binpkgrmpkg/
+>>> /var/tmp/317-s0-root.U70qQK/usr/share/binpkgrmpkg/payload-1.0.txt
+>>> dev-libs/binpkgrmpkg-1.0 merged.

@@ -1,0 +1,369 @@
+1288636 14:49:49.072230 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", {st_mode=S_IFDIR|0755, st_size=2, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1288636 14:49:49.183388 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", 0x7ffc9fe15ce0, 0) = -1 ENOENT (No such file or directory)
+1288636 14:49:49.183428 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", 0x7ffc9fe15cc0, 0) = -1 ENOENT (No such file or directory)
+1289071 14:49:52.597360 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 8</var/db/pkg>
+1289071 14:49:52.597386 fstat(8</var/db/pkg>, {st_mode=S_IFDIR|0755, st_size=2, ...}) = 0
+1289071 14:49:52.597412 getdents64(8</var/db/pkg>, 0x55c2b7843730 /* 2 entries */, 131072) = 48
+1289071 14:49:52.597442 getdents64(8</var/db/pkg>, 0x55c2b7843730 /* 0 entries */, 131072) = 0
+1289071 14:49:52.597464 close(8</var/db/pkg>) = 0
+1288636 14:49:52.606647 mkdir("/var/db/pkg", 0777) = -1 EEXIST (File exists)
+1288636 14:49:52.607581 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 15</var/db/pkg>
+1288636 14:49:52.607602 fstat(15</var/db/pkg>, {st_mode=S_IFDIR|0755, st_size=2, ...}) = 0
+1288636 14:49:52.607622 getdents64(15</var/db/pkg>, 0x55c2b7843730 /* 2 entries */, 131072) = 48
+1288636 14:49:52.607647 getdents64(15</var/db/pkg>, 0x55c2b7843730 /* 0 entries */, 131072) = 0
+1288636 14:49:52.607666 close(15</var/db/pkg>) = 0
+1289073 14:49:52.622894 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", {st_mode=S_IFDIR|0755, st_size=2, ...}, 0) = 0
+1289073 14:49:52.622918 mkdir("/var/db/pkg/dev-libs", 0777) = 0
+1289073 14:49:52.622990 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", {st_mode=S_IFDIR|0755, st_size=2, ...}, 0) = 0
+1289073 14:49:52.623009 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:52.623048 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile", O_RDWR|O_CREAT|O_CLOEXEC, 0660) = 8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>
+1289073 14:49:52.623083 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile", {st_mode=S_IFREG|0660, st_size=0, ...}, 0) = 0
+1289073 14:49:52.623103 chown("/var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile", -1, 250) = 0
+1289073 14:49:52.623143 fcntl(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>, F_SETLK, {l_type=F_WRLCK, l_whence=SEEK_SET, l_start=0, l_len=0}) = 0
+1289073 14:49:52.623161 fstat(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>, {st_mode=S_IFREG|0660, st_size=0, ...}) = 0
+1289073 14:49:52.623201 unlink("/var/db/pkg/dev-libs/..binpkgrmpkg:0.portage_lockfile.hardlock-portuale-1289073") = -1 ENOENT (No such file or directory)
+1289073 14:49:52.623226 linkat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile", AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/..binpkgrmpkg:0.portage_lockfile.hardlock-portuale-1289073", AT_SYMLINK_FOLLOW) = 0
+1289073 14:49:52.623262 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/..binpkgrmpkg:0.portage_lockfile.hardlock-portuale-1289073", {st_mode=S_IFREG|0660, st_size=0, ...}, 0) = 0
+1289073 14:49:52.623282 unlink("/var/db/pkg/dev-libs/..binpkgrmpkg:0.portage_lockfile.hardlock-portuale-1289073") = 0
+1289073 14:49:52.623363 utimensat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", [{tv_sec=1791211792, tv_nsec=623357534} /* 2026-10-05T14:49:52.623357534+0000 */, {tv_sec=1791211792, tv_nsec=623357534} /* 2026-10-05T14:49:52.623357534+0000 */], 0) = 0
+1289073 14:49:52.623388 utimensat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", [{tv_sec=1791211792, tv_nsec=623357534} /* 2026-10-05T14:49:52.623357534+0000 */, {tv_sec=1791211792, tv_nsec=623357534} /* 2026-10-05T14:49:52.623357534+0000 */], 0) = 0
+1289074 14:49:52.629081 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile> <unfinished ...>
+1289073 14:49:52.835249 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", {st_mode=S_IFDIR|0755, st_size=3, ...}, 0) = 0
+1289073 14:49:52.835367 mkdir("/var/db/pkg", 0777) = -1 EEXIST (File exists)
+1289073 14:49:52.835744 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", {st_mode=S_IFDIR|0755, st_size=3, ...}, 0) = 0
+1289073 14:49:52.835787 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 20</var/db/pkg/dev-libs>
+1289073 14:49:52.835806 fstat(20</var/db/pkg/dev-libs>, {st_mode=S_IFDIR|0755, st_size=3, ...}) = 0
+1289073 14:49:52.835821 getdents64(20</var/db/pkg/dev-libs>, 0x55c2b7843730 /* 3 entries */, 131072) = 104
+1289073 14:49:52.835841 getdents64(20</var/db/pkg/dev-libs>, 0x55c2b7843730 /* 0 entries */, 131072) = 0
+1289073 14:49:52.835856 close(20</var/db/pkg/dev-libs>) = 0
+1289073 14:49:52.835901 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289089 14:49:52.838913 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile> <unfinished ...>
+1289073 14:49:53.050374 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0", 0x7ffc9fe15130, AT_SYMLINK_NOFOLLOW) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.050413 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", {st_mode=S_IFDIR|0755, st_size=3, ...}, 0) = 0
+1289073 14:49:53.050438 mkdir("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0", 0777) = 0
+1289105 14:49:53.054416 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile> <unfinished ...>
+1289131 14:49:53.325226 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>) = 0
+1289073 14:49:53.531112 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.531186 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.531279 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2>
+1289073 14:49:53.531325 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.531347 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2>, 0, SEEK_CUR) = 0
+1289073 14:49:53.531396 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/environment.bz2>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2>, [0], 8388608, 0) = 2610
+1289073 14:49:53.535475 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/environment.bz2>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2>, [2610], 8388608, 0) = 0
+1289073 14:49:53.535511 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/environment.bz2>) = 0
+1289073 14:49:53.535580 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.535637 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.535713 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>
+1289073 14:49:53.535759 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.535778 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>, 0, SEEK_CUR) = 0
+1289073 14:49:53.535816 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/SLOT>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>, [0], 8388608, 0) = 2
+1289073 14:49:53.535847 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/SLOT>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>, [2], 8388608, 0) = 0
+1289073 14:49:53.535866 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>) = 0
+1289073 14:49:53.535922 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.535965 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.536037 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild>
+1289073 14:49:53.536071 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.536088 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild>, 0, SEEK_CUR) = 0
+1289073 14:49:53.536123 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/binpkgrmpkg-1.0.ebuild>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild>, [0], 8388608, 0) = 725
+1289073 14:49:53.536153 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/binpkgrmpkg-1.0.ebuild>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild>, [725], 8388608, 0) = 0
+1289073 14:49:53.536171 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/binpkgrmpkg-1.0.ebuild>) = 0
+1289073 14:49:53.536227 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.536269 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.536339 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS>
+1289073 14:49:53.536371 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.536388 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS>, 0, SEEK_CUR) = 0
+1289073 14:49:53.536422 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/REPO_REVISIONS>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS>, [0], 8388608, 0) = 3
+1289073 14:49:53.536449 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/REPO_REVISIONS>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS>, [3], 8388608, 0) = 0
+1289073 14:49:53.536468 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/REPO_REVISIONS>) = 0
+1289073 14:49:53.536522 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.536563 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.536633 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>
+1289073 14:49:53.536664 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.536681 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>, 0, SEEK_CUR) = 0
+1289073 14:49:53.536715 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/IUSE>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>, [0], 8388608, 0) = 1
+1289073 14:49:53.536741 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/IUSE>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>, [1], 8388608, 0) = 0
+1289073 14:49:53.536760 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>) = 0
+1289073 14:49:53.536814 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.536855 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.536926 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>
+1289073 14:49:53.536956 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.536973 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>, 0, SEEK_CUR) = 0
+1289073 14:49:53.537007 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/DEFINED_PHASES>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>, [0], 8388608, 0) = 44
+1289073 14:49:53.537033 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/DEFINED_PHASES>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>, [44], 8388608, 0) = 0
+1289073 14:49:53.537051 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>) = 0
+1289073 14:49:53.537106 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.537147 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.537216 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>
+1289073 14:49:53.537247 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.537264 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>, 0, SEEK_CUR) = 0
+1289073 14:49:53.537299 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/DESCRIPTION>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>, [0], 8388608, 0) = 94
+1289073 14:49:53.537326 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/DESCRIPTION>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>, [94], 8388608, 0) = 0
+1289073 14:49:53.537345 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>) = 0
+1289073 14:49:53.537398 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.537439 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.537509 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY>
+1289073 14:49:53.537542 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.537559 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY>, 0, SEEK_CUR) = 0
+1289073 14:49:53.537593 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/CATEGORY>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY>, [0], 8388608, 0) = 9
+1289073 14:49:53.537620 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/CATEGORY>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY>, [9], 8388608, 0) = 0
+1289073 14:49:53.537639 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CATEGORY>) = 0
+1289073 14:49:53.537694 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.537742 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.537816 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>
+1289073 14:49:53.537848 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.537865 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>, 0, SEEK_CUR) = 0
+1289073 14:49:53.537899 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/USE>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>, [0], 8388608, 0) = 1
+1289073 14:49:53.537927 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/USE>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>, [1], 8388608, 0) = 0
+1289073 14:49:53.537945 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>) = 0
+1289073 14:49:53.538000 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.538043 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.538115 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE>
+1289073 14:49:53.538147 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.538164 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE>, 0, SEEK_CUR) = 0
+1289073 14:49:53.538198 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/IUSE_EFFECTIVE>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE>, [0], 8388608, 0) = 1
+1289073 14:49:53.538225 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/IUSE_EFFECTIVE>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE>, [1], 8388608, 0) = 0
+1289073 14:49:53.538243 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE_EFFECTIVE>) = 0
+1289073 14:49:53.538297 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.538338 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.538407 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF>
+1289073 14:49:53.538437 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.538455 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF>, 0, SEEK_CUR) = 0
+1289073 14:49:53.538489 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/PF>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF>, [0], 8388608, 0) = 16
+1289073 14:49:53.538515 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/PF>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF>, [16], 8388608, 0) = 0
+1289073 14:49:53.538533 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/PF>) = 0
+1289073 14:49:53.538587 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.538628 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.538699 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES>
+1289073 14:49:53.538729 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.538747 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES>, 0, SEEK_CUR) = 0
+1289073 14:49:53.538783 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/FEATURES>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES>, [0], 8388608, 0) = 396
+1289073 14:49:53.538819 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/FEATURES>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES>, [396], 8388608, 0) = 0
+1289073 14:49:53.538837 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/FEATURES>) = 0
+1289073 14:49:53.538893 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.538934 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.539005 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>
+1289073 14:49:53.539044 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.539062 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>, 0, SEEK_CUR) = 0
+1289073 14:49:53.539096 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/BUILD_TIME>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>, [0], 8388608, 0) = 11
+1289073 14:49:53.539122 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/BUILD_TIME>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>, [11], 8388608, 0) = 0
+1289073 14:49:53.539140 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>) = 0
+1289073 14:49:53.539194 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.539235 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.539304 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>
+1289073 14:49:53.539336 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.539354 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>, 0, SEEK_CUR) = 0
+1289073 14:49:53.539389 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/repository>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>, [0], 8388608, 0) = 9
+1289073 14:49:53.539415 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/repository>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>, [9], 8388608, 0) = 0
+1289073 14:49:53.539435 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>) = 0
+1289073 14:49:53.539489 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.539540 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.539632 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE>
+1289073 14:49:53.539664 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.539682 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE>, 0, SEEK_CUR) = 0
+1289073 14:49:53.539716 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/SIZE>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE>, [0], 8388608, 0) = 3
+1289073 14:49:53.539743 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/SIZE>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE>, [3], 8388608, 0) = 0
+1289073 14:49:53.539762 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SIZE>) = 0
+1289073 14:49:53.539817 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.539860 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.539930 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>
+1289073 14:49:53.539963 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.539981 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>, 0, SEEK_CUR) = 0
+1289073 14:49:53.540015 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/KEYWORDS>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>, [0], 8388608, 0) = 6
+1289073 14:49:53.540041 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/KEYWORDS>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>, [6], 8388608, 0) = 0
+1289073 14:49:53.540060 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>) = 0
+1289073 14:49:53.540114 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.540154 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.540225 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>
+1289073 14:49:53.540256 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.540273 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>, 0, SEEK_CUR) = 0
+1289073 14:49:53.540307 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/EAPI>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>, [0], 8388608, 0) = 2
+1289073 14:49:53.540334 copy_file_range(19</var/tmp/317-s0-tmp.cyXnNm/portage/dev-libs/binpkgrmpkg-1.0/build-info/EAPI>, NULL, 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>, [2], 8388608, 0) = 0
+1289073 14:49:53.540353 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>) = 0
+1289073 14:49:53.540394 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>
+1289073 14:49:53.540428 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.540445 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>, 0, SEEK_CUR) = 0
+1289073 14:49:53.540477 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>, 0, SEEK_CUR) = 0
+1289073 14:49:53.540506 write(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>, "3", 1) = 1
+1289073 14:49:53.540530 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>) = 0
+1289073 14:49:53.541464 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", {st_mode=S_IFDIR|0755, st_size=3, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.541481 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", {st_mode=S_IFDIR|0755, st_size=4, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.541498 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0", {st_mode=S_IFDIR|0755, st_size=20, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.541515 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTS", 0x7ffc9fe14d20, AT_SYMLINK_NOFOLLOW) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.541614 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j", O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j>
+1289073 14:49:53.541657 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j>, {st_mode=S_IFREG|0600, st_size=0, ...}) = 0
+1289073 14:49:53.541676 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j>, 0, SEEK_CUR) = 0
+1289073 14:49:53.541695 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j>, 0, SEEK_CUR) = 0
+1289073 14:49:53.543454 write(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j>, "dir /usr\ndir /usr/share\ndir /usr/share/binpkgrmpkg\nobj /usr/share/binpkgrmpkg/payload-1.0.txt 83aea4c5365a355a14953d9be2904a28 1791211791\n", 138 <unfinished ...>
+1289073 14:49:53.543488 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j> <unfinished ...>
+1289073 14:49:53.543507 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTS" <unfinished ...>
+1289073 14:49:53.543536 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j_umask_test", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>
+1289073 14:49:53.543566 <... openat resumed>) = 20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j_umask_test>
+1289073 14:49:53.543578 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j_umask_test> <unfinished ...>
+1289073 14:49:53.543598 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j_umask_test>, 0, SEEK_CUR) = 0
+1289073 14:49:53.543619 lseek(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j_umask_test>, 0, SEEK_CUR <unfinished ...>
+1289073 14:49:53.543645 fstat(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j_umask_test> <unfinished ...>
+1289073 14:49:53.543666 unlink("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j_umask_test" <unfinished ...>
+1289073 14:49:53.543704 close(20</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j_umask_test>(deleted) <unfinished ...>
+1289073 14:49:53.543752 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j" <unfinished ...>
+1289073 14:49:53.543783 chmod("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j", 0644) = 0
+1289073 14:49:53.543809 rename("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j", "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTS" <unfinished ...>
+1289073 14:49:53.543840 unlink("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/CONTENTSt0m9s86j") = -1 ENOENT (No such file or directory)
+1289073 14:49:53.544384 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.544410 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0>
+1289073 14:49:53.544427 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0>, {st_mode=S_IFDIR|0755, st_size=21, ...}) = 0
+1289073 14:49:53.544443 getdents64(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0>, 0x55c2b7843730 /* 21 entries */, 131072) = 656
+1289073 14:49:53.544466 getdents64(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0>, 0x55c2b7843730 /* 0 entries */, 131072) = 0
+1289073 14:49:53.544480 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0>) = 0
+1289073 14:49:53.544504 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>
+1289073 14:49:53.544521 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>, {st_mode=S_IFREG|0644, st_size=2, ...}) = 0
+1289073 14:49:53.544537 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>, 0, SEEK_CUR) = 0
+1289073 14:49:53.544559 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>, "0\n", 3) = 2
+1289073 14:49:53.544581 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>, "", 1) = 0
+1289073 14:49:53.544601 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/SLOT>) = 0
+1289073 14:49:53.544621 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>
+1289073 14:49:53.544639 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>, {st_mode=S_IFREG|0644, st_size=1, ...}) = 0
+1289073 14:49:53.544656 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>, 0, SEEK_CUR) = 0
+1289073 14:49:53.544676 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>, "\n", 2) = 1
+1289073 14:49:53.544695 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>, "", 1) = 0
+1289073 14:49:53.544714 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/IUSE>) = 0
+1289073 14:49:53.544734 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>
+1289073 14:49:53.544751 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>, {st_mode=S_IFREG|0644, st_size=44, ...}) = 0
+1289073 14:49:53.544768 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>, 0, SEEK_CUR) = 0
+1289073 14:49:53.544787 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>, "install postinst postrm preinst prerm setup\n", 45) = 44
+1289073 14:49:53.544806 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>, "", 1) = 0
+1289073 14:49:53.544825 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DEFINED_PHASES>) = 0
+1289073 14:49:53.544843 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>
+1289073 14:49:53.544861 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>, {st_mode=S_IFREG|0644, st_size=1, ...}) = 0
+1289073 14:49:53.544877 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>, 0, SEEK_CUR) = 0
+1289073 14:49:53.544898 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>, "3", 2) = 1
+1289073 14:49:53.544915 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>, "", 1) = 0
+1289073 14:49:53.544932 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/COUNTER>) = 0
+1289073 14:49:53.544950 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>
+1289073 14:49:53.544967 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>, {st_mode=S_IFREG|0644, st_size=9, ...}) = 0
+1289073 14:49:53.544983 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>, 0, SEEK_CUR) = 0
+1289073 14:49:53.545002 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>, "testrepo\n", 10) = 9
+1289073 14:49:53.545021 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>, "", 1) = 0
+1289073 14:49:53.545039 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/repository>) = 0
+1289073 14:49:53.545057 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>
+1289073 14:49:53.545074 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>, {st_mode=S_IFREG|0644, st_size=11, ...}) = 0
+1289073 14:49:53.545090 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>, 0, SEEK_CUR) = 0
+1289073 14:49:53.545110 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>, "1791211791\n", 12) = 11
+1289073 14:49:53.545128 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>, "", 1) = 0
+1289073 14:49:53.545146 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/BUILD_TIME>) = 0
+1289073 14:49:53.545163 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>
+1289073 14:49:53.545180 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>, {st_mode=S_IFREG|0644, st_size=94, ...}) = 0
+1289073 14:49:53.545196 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>, 0, SEEK_CUR) = 0
+1289073 14:49:53.545214 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>, "fixture package: the full binpkg pkg_* phase-hook chain (setup/preinst/postinst/prerm/postrm)\n", 95) = 94
+1289073 14:49:53.545233 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>, "", 1) = 0
+1289073 14:49:53.545251 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/DESCRIPTION>) = 0
+1289073 14:49:53.545269 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>
+1289073 14:49:53.545286 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>, {st_mode=S_IFREG|0644, st_size=1, ...}) = 0
+1289073 14:49:53.545302 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>, 0, SEEK_CUR) = 0
+1289073 14:49:53.545320 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>, "\n", 2) = 1
+1289073 14:49:53.545338 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>, "", 1) = 0
+1289073 14:49:53.545355 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/USE>) = 0
+1289073 14:49:53.545372 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>
+1289073 14:49:53.545390 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>, {st_mode=S_IFREG|0644, st_size=6, ...}) = 0
+1289073 14:49:53.545405 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>, 0, SEEK_CUR) = 0
+1289073 14:49:53.545422 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>, "amd64\n", 7) = 6
+1289073 14:49:53.545441 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>, "", 1) = 0
+1289073 14:49:53.545458 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/KEYWORDS>) = 0
+1289073 14:49:53.545476 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>
+1289073 14:49:53.545493 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>, {st_mode=S_IFREG|0644, st_size=2, ...}) = 0
+1289073 14:49:53.545510 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>, 0, SEEK_CUR) = 0
+1289073 14:49:53.545528 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>, "8\n", 3) = 2
+1289073 14:49:53.545547 read(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>, "", 1) = 0
+1289073 14:49:53.545564 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/EAPI>) = 0
+1289073 14:49:53.545706 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", {st_mode=S_IFDIR|0755, st_size=3, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.545722 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", {st_mode=S_IFDIR|0755, st_size=4, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.545743 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0", {st_mode=S_IFDIR|0755, st_size=21, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.545761 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata", 0x7ffc9fe14d80, AT_SYMLINK_NOFOLLOW) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.545806 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew", O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew>
+1289073 14:49:53.545851 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew>, {st_mode=S_IFREG|0600, st_size=0, ...}) = 0
+1289073 14:49:53.545869 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew>, 0, SEEK_CUR) = 0
+1289073 14:49:53.545887 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew>, 0, SEEK_CUR) = 0
+1289073 14:49:53.545912 write(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew>, "#format=1\nBUILD_TIME=1791211791\nCOUNTER=3\nDEFINED_PHASES=install postinst postrm preinst prerm setup\nDESCRIPTION=fixture package: the full binpkg pkg_* phase-hook chain (setup/preinst/postinst/prerm/postrm)\nEAPI=8\nIUSE=\nKEYWORDS=amd64\nSLOT=0\nUSE=\nrepositor"..., 267) = 267
+1289073 14:49:53.545937 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew>) = 0
+1289073 14:49:53.545953 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata", 0x7ffc9fe15100, 0) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.545977 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew_umask_test", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew_umask_test>
+1289073 14:49:53.546011 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew_umask_test>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.546029 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew_umask_test>, 0, SEEK_CUR) = 0
+1289073 14:49:53.546048 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew_umask_test>, 0, SEEK_CUR) = 0
+1289073 14:49:53.546064 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew_umask_test>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289073 14:49:53.546081 unlink("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew_umask_test") = 0
+1289073 14:49:53.546107 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew_umask_test>(deleted)) = 0
+1289073 14:49:53.546139 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew", {st_mode=S_IFREG|0600, st_size=267, ...}, 0) = 0
+1289073 14:49:53.546160 chmod("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew", 0644) = 0
+1289073 14:49:53.546182 rename("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew", "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata") = 0
+1289073 14:49:53.546206 unlink("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadataevvdy3ew") = -1 ENOENT (No such file or directory)
+1289073 14:49:53.546239 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata", O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC, 0666) = 19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata>
+1289073 14:49:53.546258 fstat(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata>, {st_mode=S_IFREG|0644, st_size=267, ...}) = 0
+1289073 14:49:53.546273 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata>, 0, SEEK_END) = 267
+1289073 14:49:53.546289 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata>, 0, SEEK_CUR) = 267
+1289073 14:49:53.546306 lseek(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata>, 0, SEEK_CUR) = 267
+1289073 14:49:53.546326 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0", {st_mode=S_IFDIR|0755, st_size=22, ...}, 0) = 0
+1289073 14:49:53.546348 write(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata>, "#dir_mtime=1791211793544575347\n", 31) = 31
+1289073 14:49:53.546369 close(19</var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0/metadata>) = 0
+1289073 14:49:53.546419 mkdir("/var/db/pkg", 0777) = -1 EEXIST (File exists)
+1289073 14:49:53.546727 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0", 0x7ffc9fe15110, AT_SYMLINK_NOFOLLOW) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.546757 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0", {st_mode=S_IFDIR|0755, st_size=22, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.546775 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0", 0x7ffc9fe15110, AT_SYMLINK_NOFOLLOW) = -1 ENOENT (No such file or directory)
+1289073 14:49:53.546795 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", {st_mode=S_IFDIR|0755, st_size=4, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.546814 rename("/var/db/pkg/dev-libs/-MERGING-binpkgrmpkg-1.0", "/var/db/pkg/dev-libs/binpkgrmpkg-1.0") = 0
+1289073 14:49:53.546851 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0", {st_mode=S_IFDIR|0755, st_size=22, ...}, AT_SYMLINK_NOFOLLOW) = 0
+1289073 14:49:53.547024 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS", O_RDONLY|O_CLOEXEC) = 19</var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS>
+1289073 14:49:53.547043 fstat(19</var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS>, {st_mode=S_IFREG|0644, st_size=138, ...}) = 0
+1289073 14:49:53.547060 lseek(19</var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS>, 0, SEEK_CUR) = 0
+1289073 14:49:53.547083 read(19</var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS>, "dir /usr\ndir /usr/share\ndir /usr/share/binpkgrmpkg\nobj /usr/share/binpkgrmpkg/payload-1.0.txt 83aea4c5365a355a14953d9be2904a28 1791211791\n", 8192) = 138
+1289073 14:49:53.547105 read(19</var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS>, "", 8192) = 0
+1289073 14:49:53.547123 close(19</var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS>) = 0
+1289150 14:49:53.551442 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile> <unfinished ...>
+1289165 14:49:53.587827 openat(AT_FDCWD</usr/lib/python3.14/site-packages>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3</var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2>
+1289165 14:49:53.587876 dup2(3</var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2>, 1</dev/pts/5>) = 1</var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2>
+1289165 14:49:53.587899 close(3</var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2>) = 0
+1289165 14:49:53.589240 ioctl(1</var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2>, TCGETS2, 0x7ffcffc5e1a0) = -1 ENOTTY (Inappropriate ioctl for device)
+1289166 14:49:53.669170 write(1<pipe:[416091467]>, "declare -rx PORTAGE_UPDATE_ENV=\"/var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2\"\n", 113 <unfinished ...>
+1289172 14:49:53.669186 <... read resumed>, "declare -rx PORTAGE_UPDATE_ENV=\"/var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2\"\n", 131072) = 113
+1289165 14:49:53.676312 fstat(1</var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2>, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+1289165 14:49:53.676351 write(1</var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2>, "BZh91AY&SY\32%\7\342\0\10\300_\200DPu\377\377\373\377\357\377\376\277\357\377\376`\v\274S\341\261Z\325\27\7uiYj\354\355\0\r\0(\240\350\6\22\204\223\323Jji\351\351=S\3324\322\3P\323\323(\315\20='\250\304\323\324bz2e\30\6E0\236\210\2144S&\247\250z\215\0\0\0h\0\0\0\3\2324hi\204\3L\t\246\2002\32\30\2004b40F@\4\211\2\2154\323A\t\215$\365<\223h\322d\315FFi\6M\32i\215LF@9\243F\206\230@4\300\232h\3!\241\210\3F#C\4d\0*\210@&\203Bdh!(h\304\36\240\364 \17P20\201\241\350\232BF`\342D\10hhhm!\214L2\4\3\v\7\262`L\217eBA_\3716\304.\323I.\353H\347h\362\262\202W\10#\230\3701\372QH&\312$$\177"..., 2614) = 2614
+1289175 14:49:53.747979 write(1<pipe:[416091470]>, "declare -rx PORTAGE_UPDATE_ENV=\"/var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2\"\n", 113 <unfinished ...>
+1289181 14:49:53.747994 <... read resumed>, "declare -rx PORTAGE_UPDATE_ENV=\"/var/db/pkg/dev-libs/binpkgrmpkg-1.0/environment.bz2\"\n", 131072) = 113
+1289186 14:49:53.900659 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile> <unfinished ...>
+1289073 14:49:54.110148 mkdir("/var/db/pkg", 0777) = -1 EEXIST (File exists)
+1289073 14:49:54.110457 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 22</var/db/pkg>
+1289073 14:49:54.110475 fstat(22</var/db/pkg>, {st_mode=S_IFDIR|0755, st_size=3, ...}) = 0
+1289073 14:49:54.110492 getdents64(22</var/db/pkg>, 0x55c2b7843730 /* 3 entries */, 131072) = 80
+1289073 14:49:54.110526 getdents64(22</var/db/pkg>, 0x55c2b7843730 /* 0 entries */, 131072) = 0
+1289073 14:49:54.110544 close(22</var/db/pkg>) = 0
+1289073 14:49:54.110574 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 22</var/db/pkg/dev-libs>
+1289073 14:49:54.110593 fstat(22</var/db/pkg/dev-libs>, {st_mode=S_IFDIR|0755, st_size=4, ...}) = 0
+1289073 14:49:54.110609 getdents64(22</var/db/pkg/dev-libs>, 0x55c2b7843730 /* 4 entries */, 131072) = 144
+1289073 14:49:54.110632 getdents64(22</var/db/pkg/dev-libs>, 0x55c2b7843730 /* 0 entries */, 131072) = 0
+1289073 14:49:54.110647 close(22</var/db/pkg/dev-libs>) = 0
+1289073 14:49:54.110704 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0", {st_mode=S_IFDIR|0755, st_size=22, ...}, 0) = 0
+1289073 14:49:54.110747 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata", O_RDONLY|O_CLOEXEC) = 22</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>
+1289073 14:49:54.110766 fstat(22</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>, {st_mode=S_IFREG|0644, st_size=298, ...}) = 0
+1289073 14:49:54.110783 lseek(22</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>, 0, SEEK_CUR) = 0
+1289073 14:49:54.110809 read(22</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>, "#format=1\nBUILD_TIME=1791211791\nCOUNTER=3\nDEFINED_PHASES=install postinst postrm preinst prerm setup\nDESCRIPTION=fixture package: the full binpkg pkg_* phase-hook chain (setup/preinst/postinst/prerm/postrm)\nEAPI=8\nIUSE=\nKEYWORDS=amd64\nSLOT=0\nUSE=\nrepositor"..., 8192) = 298
+1289073 14:49:54.110844 read(22</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>, "", 8192) = 0
+1289073 14:49:54.110862 close(22</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>) = 0
+1289073 14:49:54.110886 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0/NEEDED.ELF.2", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+1289205 14:49:54.113358 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile> <unfinished ...>
+1289206 14:49:54.155078 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>) = 0
+1289221 14:49:54.364392 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile> <unfinished ...>
+1289073 14:49:54.404212 utimensat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs", [{tv_sec=1791211794, tv_nsec=404208421} /* 2026-10-05T14:49:54.404208421+0000 */, {tv_sec=1791211794, tv_nsec=404208421} /* 2026-10-05T14:49:54.404208421+0000 */], 0) = 0
+1289073 14:49:54.404247 utimensat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg", [{tv_sec=1791211794, tv_nsec=404208421} /* 2026-10-05T14:49:54.404208421+0000 */, {tv_sec=1791211794, tv_nsec=404208421} /* 2026-10-05T14:49:54.404208421+0000 */], 0) = 0
+1289073 14:49:54.404297 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile", {st_mode=S_IFREG|0660, st_size=0, ...}, 0) = 0
+1289073 14:49:54.404322 fcntl(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>, F_SETLKW, {l_type=F_UNLCK, l_whence=SEEK_SET, l_start=0, l_len=0}) = 0
+1289073 14:49:54.404344 fcntl(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>, F_SETLK, {l_type=F_WRLCK, l_whence=SEEK_SET, l_start=0, l_len=0}) = 0
+1289073 14:49:54.404368 fstat(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>, {st_mode=S_IFREG|0660, st_size=0, ...}) = 0
+1289073 14:49:54.404389 unlink("/var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile") = 0
+1289073 14:49:54.404424 fcntl(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>(deleted), F_SETLKW, {l_type=F_UNLCK, l_whence=SEEK_SET, l_start=0, l_len=0}) = 0
+1289073 14:49:54.404456 close(8</var/db/pkg/dev-libs/.binpkgrmpkg:0.portage_lockfile>(deleted)) = 0
+1288636 14:49:54.406428 newfstatat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0", {st_mode=S_IFDIR|0755, st_size=22, ...}, 0) = 0
+1288636 14:49:54.406485 openat(AT_FDCWD</home/vivo/repo/PORTUALE/portuale>, "/var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata", O_RDONLY|O_CLOEXEC) = 7</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>
+1288636 14:49:54.406505 fstat(7</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>, {st_mode=S_IFREG|0644, st_size=298, ...}) = 0
+1288636 14:49:54.406525 lseek(7</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>, 0, SEEK_CUR) = 0
+1288636 14:49:54.406557 read(7</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>, "#format=1\nBUILD_TIME=1791211791\nCOUNTER=3\nDEFINED_PHASES=install postinst postrm preinst prerm setup\nDESCRIPTION=fixture package: the full binpkg pkg_* phase-hook chain (setup/preinst/postinst/prerm/postrm)\nEAPI=8\nIUSE=\nKEYWORDS=amd64\nSLOT=0\nUSE=\nrepositor"..., 8192) = 298
+1288636 14:49:54.406601 read(7</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>, "", 8192) = 0
+1288636 14:49:54.406620 close(7</var/db/pkg/dev-libs/binpkgrmpkg-1.0/metadata>) = 0
