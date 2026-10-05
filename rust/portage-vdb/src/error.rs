@@ -9,7 +9,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Every failure of an [`InstalledDb`](crate::InstalledDb) or
 /// [`WriteTxn`](crate::WriteTxn). Non-exhaustive: later steps add
-/// variants (for example a busy redb file, S5.5).
+/// variants (S5.2 added [`Error::Busy`]; S5.5 surfaces it in the CLIs).
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -27,6 +27,11 @@ pub enum Error {
     /// A database engine failure (SQLite: locked past the busy timeout,
     /// disk full, ...). The text carries the file and the engine's message.
     Backend(String),
+    /// The database file is held open by another handle, in this or another
+    /// process. Only redb has this: it allows **one process (one handle) at a
+    /// time**, so a second `mrg`, a converter or a FUSE mount on the same
+    /// file must wait for the first to finish.
+    Busy { path: PathBuf },
 }
 
 impl Error {
@@ -47,6 +52,12 @@ impl fmt::Display for Error {
             Error::Invalid(what) => write!(f, "invalid argument: {what}"),
             Error::Corrupt(what) => write!(f, "corrupt VDB: {what}"),
             Error::Backend(what) => write!(f, "database error: {what}"),
+            Error::Busy { path } => write!(
+                f,
+                "{}: database is already open (redb allows only one process to use \
+                 the file at a time; wait for the other user to finish, or stop it)",
+                path.display()
+            ),
         }
     }
 }

@@ -452,6 +452,36 @@
 //!   files VDB has changed since the database was created and a re-conversion
 //!   is needed.
 //!
+//! # RedbDb (feature `vdb-redb`)
+//!
+//! S5.2 adds the tables, `open` / `open_readonly` and the read side; the
+//! write side is S5.3 (`begin_write` is [`Error::Unsupported`], or
+//! [`Error::Invalid`] on a read-only handle). Details are in the module doc
+//! of `redb_db.rs`.
+//!
+//! - **One process only.** redb locks the file for a read-write handle, so
+//!   a second open (read-write or read-only, any process, also a second
+//!   handle in the same process) fails with [`Error::Busy`], which names the
+//!   file and says redb allows one process at a time. Several read-only
+//!   handles may coexist. S5.5 surfaces this in `convert` and `vdb status`.
+//! - **State model as sqlite**: `entry` is keyed by `(state, category, pf)`
+//!   (`0` merging, `1` installed), so a pending entry is a committed row
+//!   that outlives a transaction, beside a live row of the same key. File
+//!   bytes are stored in chunks of 64 KiB (`entry_file_chunk`, with a
+//!   `(len, mode, mtime)` record in `entry_file_meta`), and `read_file_at`
+//!   loads only the chunks it needs. Values are fixed little-endian binary
+//!   records, no serde.
+//! - **Reads equal sqlite's** (and `FilesDb`'s): same stamp rule, same
+//!   `owners` rule, `category_generation` = `generation`, `categories` lists
+//!   only categories with a live entry. The listing and the 23-field
+//!   snapshot are cached in process and validated against `meta.generation`
+//!   (read in the same read transaction) on every call; redb being
+//!   single-process, only this handle's own commits can change the file.
+//! - **Schema version** [`REDB_SCHEMA_VERSION`] (1) in `meta`; another
+//!   value, a redb file without the tables or a non-redb file is
+//!   [`Error::Corrupt`]. `meta` also holds `generation` (0 at creation),
+//!   `counter_hwm` (-1) and `created_at`.
+//!
 //! **Rejected from N1–N16:** N10 `cpv_for_path` (the caller prints the
 //! canonical VDB directory in its errors, so it needs
 //! [`InstalledDb::vdb_dir`], not a key); N16's `CONTENTS`-shaped
@@ -480,6 +510,10 @@ mod convert;
 mod error;
 mod files;
 mod files_write;
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+mod loaded;
+#[cfg(feature = "vdb-redb")]
+mod redb_db;
 mod registry;
 mod scratch;
 #[cfg(feature = "vdb-sqlite")]
@@ -490,6 +524,8 @@ pub use convert::{CopyReport, VerifyReport, copy_all, verify};
 pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
+#[cfg(feature = "vdb-redb")]
+pub use redb_db::{RedbDb, SCHEMA_VERSION as REDB_SCHEMA_VERSION};
 pub use registry::{for_root, register, reset};
 pub use scratch::{absorb_file, materialize_entry, materialize_files};
 #[cfg(feature = "vdb-sqlite")]
