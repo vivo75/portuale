@@ -1,0 +1,14 @@
+# Writes into a live entry after it was published:
+# - pkg_postinst's PORTAGE_UPDATE_ENV rewrite of environment.bz2 in place
+#   (phase-functions.sh:1072-1082; S0 1-merge-new, O_WRONLY|O_CREAT|O_TRUNC);
+# - write_atomic onto a field of a live entry, the shape of W4
+#   removeFromContents (vartree.py:3823) and aux_update: mkstemp temp,
+#   _umask_test, chmod, rename.
+write dev-libs/seed-1/environment.bz2 BZh91AY&SY updated by postinst
+create dev-libs/seed-1/CONTENTSt0m9s86j 600
+write dev-libs/seed-1/CONTENTSt0m9s86j obj /usr/bin/seed 0123 1\nobj /usr/bin/seed2 89ab 1\n
+create dev-libs/seed-1/CONTENTSt0m9s86j_umask_test 644
+unlink dev-libs/seed-1/CONTENTSt0m9s86j_umask_test
+chmod dev-libs/seed-1/CONTENTSt0m9s86j 644
+rename dev-libs/seed-1/CONTENTSt0m9s86j dev-libs/seed-1/CONTENTS
+unlink? dev-libs/seed-1/CONTENTSt0m9s86j

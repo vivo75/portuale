@@ -18,8 +18,11 @@ portuale\-vdb \- Convert, verify, inspect, reindex or mount the installed\-packa
 .B portuale vdb rebuild\-index
 \fIKIND:PATH\fR
 .TP
+.B portuale vdb import\-stores
+\fBfiles:\fR\fIROOT\fR \fIKIND:PATH\fR
+.TP
 .B portuale vdb mount
-[\fB\-\-foreground\fR] [\fB\-\-allow\-other\fR] \fIKIND:PATH\fR \fIMOUNTPOINT\fR
+[\fB\-\-foreground\fR] [\fB\-\-allow\-other\fR] [\fB\-\-rw\fR [\fB\-\-root\fR \fIROOT\fR]] \fIKIND:PATH\fR \fIMOUNTPOINT\fR
 .TP
 .B portuale vdb
 \fB\-\-help\fR
@@ -67,6 +70,12 @@ Run it once on a database converted by an older portuale, or when the index
 is suspected to be wrong.  The entry files and the counter are not touched.
 A \fBfiles:\fR tree has no index, so it is refused.
 .LP
+\fBimport\-stores\fR copies the world, world_sets, preserved\-libs registry,
+config\-memory and counter files under \fIROOT\fR into a \fBsqlite\fR or
+\fBredb\fR database in one transaction; the counter becomes the larger of the
+two.  A \fB\-\-rw\fR mount does this when it is unmounted; run it by hand
+if the mount process died.
+.LP
 \fBmount\fR serves the database read\-only at \fIMOUNTPOINT\fR, an existing
 directory, as the historic tree \fICAT\fR/\fIPF\fR/\fIfiles\fR, so tools
 that read \fB/var/db/pkg\fR (eix, qlist, equery, real \fBportageq\fR and
@@ -94,8 +103,27 @@ mount holds the file read\-only: readers (\fBmrg \-\-pretend\fR, \fBverify\fR,
 \fBconvert\fR, \fBsweep\fR, \fBrebuild\-index\fR) fail as busy until it is
 unmounted.  A
 \fBfiles:\fR source is passed through unchanged, which is useful for
-testing.  Real \fBemerge\fR and \fBebuild\fR merges do not work on a mount:
-they must create lock files inside the tree.
+testing.
+.LP
+With \fB\-\-rw\fR (\fBsqlite\fR and \fBredb\fR only) real \fBemerge\fR and
+\fBebuild\fR can merge, replace and unmerge packages with the mount as their
+\fIROOT\fR\fB/var/db/pkg\fR, and the changes go to the database.  A new
+\fIcat\fR\fB/\-MERGING\-\fR\fIpf\fR directory is staged on scratch disk
+(\fB$TMPDIR/portuale\-vdb\-rw\-*\fR, cleared by the next mount of the same
+database) and stored in one transaction when it is renamed to
+\fIcat\fR\fB/\fR\fIpf\fR; the \fBmetadata\fR stamp real wrote stays valid and
+the database counter is raised to the entry's \fBCOUNTER\fR.  A rewrite of a
+file in a live entry (the \fBenvironment.bz2\fR update of \fBpkg_postinst\fR,
+an atomic rewrite of \fBCONTENTS\fR) is stored when it is closed or renamed
+into place.  An entry is deleted in one transaction when real has removed
+its files and its directory; a mount that stops in between leaves it
+installed.  Slot lock files exist in memory only.  Every other write is
+\fBEPERM\fR.  Real \fBemerge\fR keeps writing world, the counter and the
+other stores under \fIROOT\fR (\fB\-\-root\fR, default \fB/\fR); they are
+imported when the mount is unmounted.  A failed database write is reported
+as \fBEIO\fR to the writing process.  Over \fBredb\fR a \fB\-\-rw\fR mount
+holds the file read\-write, so \fBmrg\fR and the other \fBvdb\fR commands
+get the busy error until it is unmounted.
 .SH "KIND:PATH"
 .TP
 \fBfiles:\fR\fIROOT\fR
@@ -144,13 +172,21 @@ and exit.
 Let other users, root in particular, read the mount.  Unless run by root
 it needs \fBuser_allow_other\fR in \fB/etc/fuse.conf\fR.
 .TP
+.B \-\-rw
+Mount read\-write (\fBsqlite\fR and \fBredb\fR); see \fBmount\fR above.
+.TP
+\fB\-\-root\fR \fIROOT\fR
+With \fB\-\-rw\fR: the root whose world, counter and other stores are
+imported at unmount (default \fB/\fR).
+.TP
 \fB\-\-against\fR
 Accepted before the two arguments of \fBverify\fR.  It changes nothing.
 .SH "EXIT STATUS"
 .TP
 .B 0
 The conversion finished, \fBverify\fR found no difference, \fBstatus\fR
-found nothing pending, or \fBsweep\fR or \fBrebuild\-index\fR finished.
+found nothing pending, or \fBsweep\fR, \fBrebuild\-index\fR or
+\fBimport\-stores\fR finished.
 .TP
 .B 1
 \fBverify\fR found differences, or \fBstatus\fR found pending entries.
@@ -167,6 +203,8 @@ portuale vdb status sqlite:/var/lib/portage/vdb.sqlite
 portuale vdb sweep \-\-remove dev\-libs/foo\-1.0 sqlite:/var/lib/portage/vdb.sqlite
 portuale vdb rebuild\-index redb:/var/lib/portage/vdb.redb
 portuale vdb mount \-\-allow\-other sqlite:/var/lib/portage/vdb.sqlite /mnt/vdb
+portuale vdb mount \-\-rw \-\-root /mnt/root sqlite:vdb.sqlite /mnt/root/var/db/pkg
+portuale vdb import\-stores files:/mnt/root sqlite:vdb.sqlite
 fusermount3 \-u /mnt/vdb
 .fi
 .SH "SEE ALSO"

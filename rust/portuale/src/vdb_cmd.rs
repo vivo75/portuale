@@ -54,7 +54,8 @@ Usage:
    portuale vdb sweep (--remove CAT/PF)... KIND:PATH
    portuale vdb sweep --all KIND:PATH
    portuale vdb rebuild-index KIND:PATH
-   portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT
+   portuale vdb import-stores files:ROOT KIND:PATH
+   portuale vdb mount [--foreground] [--allow-other] [--rw [--root ROOT]] KIND:PATH MOUNTPOINT
    portuale vdb --help
 
 Copy the installed-package database (VDB) between backends, or compare two
@@ -98,27 +99,48 @@ sweep deletes pending entries (never installed ones) in one transaction:
    --all              every pending entry
 A key that is not pending refuses the whole sweep (nothing is deleted).
 
+import-stores copies the world, world_sets, preserved-libs, config-memory and
+counter files of files:ROOT into a sqlite or redb database in one transaction
+(the counter becomes the larger of the two). A --rw mount does this itself
+when it is unmounted; run it by hand if the mount process died.
+
 rebuild-index recomputes the index a sqlite or redb database derives from the
 stored entry files (file owners, dependency atoms, NEEDED.ELF.2 lines) for
 every installed entry, in one transaction, and prints the row counts. It
 repairs an index written wrong or incompletely by an older build. The files
 and the counter are not touched; files:ROOT has no index (exit 2).
 
-mount serves the database read-only at MOUNTPOINT (an existing directory) as
-the historic tree CAT/PF/files, through FUSE (fusermount3; no libfuse needed):
+mount serves the database at MOUNTPOINT (an existing directory) as the
+historic tree CAT/PF/files, through FUSE (fusermount3; no libfuse needed):
    --foreground, -f   stay in the foreground; SIGINT/SIGTERM unmount and exit
    --allow-other      let other users (root, running emerge) read the mount;
                       needs user_allow_other in /etc/fuse.conf unless root
+   --rw               read-write, sqlite and redb only: real Portage can merge,
+                      replace and unmerge through the mount; see below
+   --root ROOT        with --rw: the ROOT whose world, world_sets,
+                      preserved-libs, config-memory and counter files real
+                      emerge writes (default /); imported at unmount
 Without --foreground it detaches once the mount is ready. Unmount with
-`fusermount3 -u MOUNTPOINT`. The database is opened read-only. Every write is
-EROFS. Directory mtimes follow real Portage (an entry shows its stored
-mtime, a category the latest of its entries, the root the latest category)
-and the metadata file's stamp matches the entry directory mtime shown. Each
+`fusermount3 -u MOUNTPOINT` (or umount as root). Without --rw the database is
+opened read-only and every write is EROFS. Directory mtimes follow real
+Portage (an entry shows its stored mtime, a category the latest of its
+entries, the root the latest category) and the metadata file's stamp
+matches the entry directory mtime shown. Each
 directory listing and each open file serves the generation it was opened on.
 Over redb the mount holds the file read-only: readers (mrg --pretend, verify,
 status) run beside it, writers (a merging mrg, convert, sweep, rebuild-index)
 get the Busy message until it is unmounted. sqlite can be mounted while mrg
 merges. files:ROOT is a pass-through, for testing.
+
+With --rw (mount it over real Portage's VDB directory) the writes real
+Portage makes are stored: a new <cat>/-MERGING-<pf> directory is staged on
+scratch disk ($TMPDIR/portuale-vdb-rw-*) and stored in one transaction when
+it is renamed to <cat>/<pf> (its metadata stamp kept valid, the counter
+raised to its COUNTER); a rewrite of a file in a live entry is stored at
+close; an entry is deleted in one transaction when real removes its last
+file and the directory. Lock files live in memory only. Any other write is
+EPERM. Over redb the --rw mount holds the file read-write, so mrg and other
+vdb commands get the Busy message until it is unmounted.
 
 Exit status: 0 done / equal / nothing pending, 1 verify found differences or
 status found pending entries, 2 usage or I/O error.";
@@ -155,9 +177,10 @@ fn dispatch(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result
         "status" => status(&args[1..], out),
         "sweep" => sweep(&args[1..], out),
         "rebuild-index" => rebuild_index(&args[1..], out),
+        "import-stores" => import_stores_cmd(&args[1..], out),
         "mount" => mount(&args[1..], out),
         other => Err(format!(
-            "unknown subcommand {other:?} (expected convert, verify, status, sweep, rebuild-index or mount); see `portuale vdb --help`"
+            "unknown subcommand {other:?} (expected convert, verify, status, sweep, rebuild-index, import-stores or mount); see `portuale vdb --help`"
         )),
     }
 }
@@ -347,19 +370,29 @@ fn open_existing(spec: &Spec, write: bool) -> Result<Box<dyn InstalledDb>, Strin
     open(spec, write)
 }
 
-/// `portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT`.
+/// `portuale vdb mount [--foreground] [--allow-other] [--rw] KIND:PATH MOUNTPOINT`.
 fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
     let mut foreground = false;
     let mut allow_other = false;
+    let mut rw = false;
+    let mut root: Option<PathBuf> = None;
     let mut pos: Vec<&str> = Vec::new();
-    for a in args {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
         match a.as_str() {
+            "--root" => {
+                root = Some(PathBuf::from(
+                    it.next().ok_or("mount: --root needs a directory")?,
+                ))
+            }
+            s if s.starts_with("--root=") => root = Some(PathBuf::from(&s["--root=".len()..])),
             "-h" | "--help" => {
                 let _ = writeln!(out, "{USAGE}");
                 return Ok(0);
             }
             "-f" | "--foreground" => foreground = true,
             "--allow-other" => allow_other = true,
+            "--rw" => rw = true,
             s if s.starts_with('-') => return Err(format!("mount: unknown option {s:?}")),
             s => pos.push(s),
         }
@@ -368,6 +401,13 @@ fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
         return Err("mount: expected KIND:PATH and MOUNTPOINT".into());
     };
     let spec = parse_spec(spec)?;
+    if rw && spec.kind == BackendKind::Files {
+        return Err("mount --rw: files:ROOT is already writable on disk".into());
+    }
+    if root.is_some() && !rw {
+        return Err("mount: --root only applies to --rw".into());
+    }
+    let root = root.unwrap_or_else(|| PathBuf::from("/"));
     let mountpoint = PathBuf::from(mountpoint);
     if !mountpoint.is_dir() {
         return Err(format!(
@@ -375,7 +415,25 @@ fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
             mountpoint.display()
         ));
     }
-    mount_spec(spec, mountpoint, foreground, allow_other)
+    mount_spec(
+        spec,
+        mountpoint,
+        foreground,
+        allow_other,
+        rw.then_some(root),
+    )
+}
+
+/// The scratch directory of a `--rw` mount of `db`: named after the
+/// database file, so the next mount of the same database clears what a
+/// daemon that died left behind (`RwView::new` empties it).
+#[cfg(feature = "vdb-fuse")]
+fn rw_scratch(db: &Path) -> PathBuf {
+    use std::hash::{Hash as _, Hasher as _};
+    let abs = std::fs::canonicalize(db).unwrap_or_else(|_| db.to_path_buf());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    abs.hash(&mut h);
+    std::env::temp_dir().join(format!("portuale-vdb-rw-{:016x}", h.finish()))
 }
 
 #[cfg(feature = "vdb-fuse")]
@@ -384,21 +442,40 @@ fn mount_spec(
     mountpoint: PathBuf,
     foreground: bool,
     allow_other: bool,
+    rw: Option<PathBuf>,
 ) -> Result<u8, String> {
     use std::sync::Arc;
     let fsname = format!("{}:{}", spec.kind, spec.path.display());
-    let open_ro =
-        || -> Result<Arc<dyn InstalledDb>, String> { open_existing(&spec, false).map(Arc::from) };
+    let write = rw.is_some();
+    let open_db =
+        || -> Result<Arc<dyn InstalledDb>, String> { open_existing(&spec, write).map(Arc::from) };
+    let opts = rw.map(|root| crate::vdb_fuse::RwOpts {
+        scratch: rw_scratch(&spec.path),
+        root,
+    });
     // Open once here so a bad PATH, a busy redb or a missing feature is
     // reported before anything forks; the handle is dropped again, the
     // daemon opens its own.
-    drop(open_ro()?);
+    drop(open_db()?);
     if foreground {
-        crate::vdb_fuse::serve(open_ro()?, &mountpoint, &fsname, allow_other, || {})
-            .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+        crate::vdb_fuse::serve(
+            open_db()?,
+            &mountpoint,
+            &fsname,
+            allow_other,
+            opts.as_ref(),
+            || {},
+        )
+        .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
     } else {
-        crate::vdb_fuse::serve_background(open_ro, &mountpoint, &fsname, allow_other)
-            .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+        crate::vdb_fuse::serve_background(
+            open_db,
+            &mountpoint,
+            &fsname,
+            allow_other,
+            opts.as_ref(),
+        )
+        .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
     }
     Ok(0)
 }
@@ -409,6 +486,7 @@ fn mount_spec(
     _mountpoint: PathBuf,
     _foreground: bool,
     _allow_other: bool,
+    _rw: Option<PathBuf>,
 ) -> Result<u8, String> {
     Err("mount: this portuale was built without the vdb-fuse feature".into())
 }
@@ -539,6 +617,90 @@ fn sweep(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
     if remove.is_empty() {
         let _ = writeln!(out, "nothing pending");
     }
+    Ok(0)
+}
+
+/// What [`import_stores`] copied.
+pub(crate) struct StoresReport {
+    pub world: usize,
+    pub world_sets: usize,
+    pub preserved_libs: usize,
+    pub config_memory: usize,
+    pub counter: Option<i64>,
+}
+
+impl std::fmt::Display for StoresReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "world {} atoms, {} sets; preserved libs {}; config memory {}; counter {}",
+            self.world,
+            self.world_sets,
+            self.preserved_libs,
+            self.config_memory,
+            self.counter.map_or("none".to_string(), |c| c.to_string())
+        )
+    }
+}
+
+/// Copy the stores real emerge keeps outside the VDB tree (world,
+/// world_sets, the preserved-libs registry, config memory, the counter)
+/// from the files tree under `root` into `db`, in one transaction. The
+/// counter becomes the larger of the two, so it never goes back (#317 S4).
+pub(crate) fn import_stores(
+    root: &Path,
+    db: &dyn InstalledDb,
+) -> portage_vdb::Result<StoresReport> {
+    let src = FilesDb::new(root);
+    let world = src.world()?;
+    let sets = src.world_sets()?;
+    let libs = src.preserved_libs()?;
+    let memory = src.config_memory()?;
+    let counter = match (src.counter()?, db.counter()?) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    let mut txn = db.begin_write()?;
+    txn.set_world(&world)?;
+    txn.set_world_sets(&sets)?;
+    txn.set_preserved_libs(&libs)?;
+    txn.set_config_memory(&memory)?;
+    if let Some(c) = counter {
+        txn.set_counter(c)?;
+    }
+    txn.commit()?;
+    Ok(StoresReport {
+        world: world.atoms.len(),
+        world_sets: sets.sets.len(),
+        preserved_libs: libs.entries.len(),
+        config_memory: memory.entries.len(),
+        counter: counter.map(|c| c.0),
+    })
+}
+
+/// `portuale vdb import-stores files:ROOT KIND:PATH`.
+fn import_stores_cmd(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
+    let mut specs = Vec::new();
+    for a in args {
+        if a == "-h" || a == "--help" {
+            let _ = writeln!(out, "{USAGE}");
+            return Ok(0);
+        } else if a.starts_with('-') && !a.contains(':') {
+            return Err(format!("import-stores: unknown option {a:?}"));
+        }
+        specs.push(parse_spec(a)?);
+    }
+    let [from, to] = <[Spec; 2]>::try_from(specs)
+        .map_err(|_| "import-stores: expected files:ROOT and KIND:PATH".to_string())?;
+    if from.kind != BackendKind::Files {
+        return Err("import-stores: the source must be files:ROOT".into());
+    }
+    if to.kind == BackendKind::Files {
+        return Err("import-stores: the destination must be a sqlite or redb database".into());
+    }
+    let db = open_existing(&to, true)?;
+    let rep = import_stores(&from.path, &*db).map_err(|e| e.to_string())?;
+    let _ = writeln!(out, "imported {rep}");
     Ok(0)
 }
 
@@ -923,6 +1085,53 @@ mod tests {
         let spec = format!("files:{}", s(&root));
         status_sweep_cycle(&spec, &format!("dev-libs/{installed}"));
         assert!(root.join("var/db/pkg/dev-libs").join(&installed).is_dir());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// #317 S4: `import-stores` copies the five stores real emerge keeps
+    /// outside the VDB tree into a database; the counter never goes back.
+    #[cfg(all(feature = "vdb-sqlite", feature = "vdb-redb"))]
+    #[test]
+    fn import_stores_copies_the_files_stores_and_keeps_the_larger_counter() {
+        use portage_vdb::{ConfigMemory, Counter, World, WorldSets};
+        let root = fixture_root("importstores");
+        let files = format!("files:{}", s(&root));
+        for (kind, file) in [("sqlite", "vdb.sqlite"), ("redb", "vdb.redb")] {
+            let spec = format!("{kind}:{}", s(&root.join(file)));
+            let (c, o, e) = cli(&["convert", "--from", &files, "--to", &spec]);
+            assert_eq!(c, 0, "{o}{e}");
+            let src = FilesDb::new(&root);
+            for (counter, want) in [(Counter(90_000), 90_000), (Counter(5), 90_000)] {
+                let mut txn = src.begin_write().unwrap();
+                txn.set_world(&World {
+                    atoms: vec!["app-misc/new-one".into(), "dev-libs/other".into()],
+                })
+                .unwrap();
+                txn.set_world_sets(&WorldSets {
+                    sets: vec!["myset".into()],
+                })
+                .unwrap();
+                txn.set_config_memory(&ConfigMemory {
+                    entries: [("/etc/foo.conf".to_string(), "abc".to_string())].into(),
+                })
+                .unwrap();
+                txn.set_counter(counter).unwrap();
+                txn.commit().unwrap();
+                let (c, o, e) = cli(&["import-stores", &files, &spec]);
+                assert_eq!(c, 0, "{o}{e}");
+                assert!(o.starts_with("imported world 2 atoms, 1 sets"), "{o}");
+                let db = open(&parse_spec(&spec).unwrap(), false).unwrap();
+                assert_eq!(db.world().unwrap(), src.world().unwrap());
+                assert_eq!(db.world_sets().unwrap(), src.world_sets().unwrap());
+                assert_eq!(db.config_memory().unwrap(), src.config_memory().unwrap());
+                assert_eq!(db.preserved_libs().unwrap(), src.preserved_libs().unwrap());
+                assert_eq!(db.counter().unwrap(), Some(Counter(want)), "{kind}");
+            }
+        }
+        assert_eq!(cli(&["import-stores", &files, &files]).0, 2);
+        let db = format!("sqlite:{}", s(&root.join("vdb.sqlite")));
+        assert_eq!(cli(&["import-stores", &db, &db]).0, 2);
+        assert_eq!(cli(&["import-stores", &files]).0, 2);
         let _ = fs::remove_dir_all(&root);
     }
 
