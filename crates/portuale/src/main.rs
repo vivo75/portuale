@@ -170,6 +170,16 @@ fn run_mrg(args: &[String]) -> ExitCode {
     mrg::run(args)
 }
 
+fn run(applet: Applet, args: &[String]) -> ExitCode {
+    match applet {
+        Applet::Emerge => run_emerge(args),
+        Applet::Ebuild => run_ebuild(args),
+        Applet::Mrg => run_mrg(args),
+        Applet::Vdb => vdb_cmd::run(args),
+        Applet::Portageq => portageq::run(args),
+    }
+}
+
 /// The Rust runtime ignores SIGPIPE, so `portuale ... | head` would make the
 /// next `println!` panic; turn that one panic into the quiet exit 141 a
 /// SIGPIPE death shows a shell. The ignored disposition stays (the remote

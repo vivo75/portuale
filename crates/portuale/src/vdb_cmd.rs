@@ -145,6 +145,46 @@ vdb commands get the Busy message until it is unmounted.
 Exit status: 0 done / equal / nothing pending, 1 verify found differences or
 status found pending entries, 2 usage or I/O error.";
 
+/// Entry point: `args` are the arguments after `vdb`.
+pub fn run(args: &[String]) -> ExitCode {
+    let code = run_args(args, &mut std::io::stdout(), &mut std::io::stderr());
+    ExitCode::from(code)
+}
+
+/// `run` with injectable output, returning the exit status.
+pub(crate) fn run_args(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+    match dispatch(args, out, err) {
+        Ok(code) => code,
+        Err(msg) => {
+            let _ = writeln!(err, "portuale vdb: {msg}");
+            2
+        }
+    }
+}
+
+fn dispatch(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result<u8, String> {
+    let Some(sub) = args.first().map(String::as_str) else {
+        let _ = writeln!(err, "{USAGE}");
+        return Ok(2);
+    };
+    match sub {
+        "-h" | "--help" | "help" => {
+            let _ = writeln!(out, "{USAGE}");
+            Ok(0)
+        }
+        "convert" => convert(&args[1..], out, err),
+        "verify" => verify(&args[1..], out),
+        "status" => status(&args[1..], out),
+        "sweep" => sweep(&args[1..], out),
+        "rebuild-index" => rebuild_index(&args[1..], out),
+        "import-stores" => import_stores_cmd(&args[1..], out),
+        "mount" => mount(&args[1..], out),
+        other => Err(format!(
+            "unknown subcommand {other:?} (expected convert, verify, status, sweep, rebuild-index, import-stores or mount); see `portuale vdb --help`"
+        )),
+    }
+}
+
 struct Spec {
     kind: BackendKind,
     path: PathBuf,
@@ -330,6 +370,60 @@ fn open_existing(spec: &Spec, write: bool) -> Result<Box<dyn InstalledDb>, Strin
     open(spec, write)
 }
 
+/// `portuale vdb mount [--foreground] [--allow-other] [--rw] KIND:PATH MOUNTPOINT`.
+fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
+    let mut foreground = false;
+    let mut allow_other = false;
+    let mut rw = false;
+    let mut root: Option<PathBuf> = None;
+    let mut pos: Vec<&str> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--root" => {
+                root = Some(PathBuf::from(
+                    it.next().ok_or("mount: --root needs a directory")?,
+                ))
+            }
+            s if s.starts_with("--root=") => root = Some(PathBuf::from(&s["--root=".len()..])),
+            "-h" | "--help" => {
+                let _ = writeln!(out, "{USAGE}");
+                return Ok(0);
+            }
+            "-f" | "--foreground" => foreground = true,
+            "--allow-other" => allow_other = true,
+            "--rw" => rw = true,
+            s if s.starts_with('-') => return Err(format!("mount: unknown option {s:?}")),
+            s => pos.push(s),
+        }
+    }
+    let [spec, mountpoint] = pos[..] else {
+        return Err("mount: expected KIND:PATH and MOUNTPOINT".into());
+    };
+    let spec = parse_spec(spec)?;
+    if rw && spec.kind == BackendKind::Files {
+        return Err("mount --rw: files:ROOT is already writable on disk".into());
+    }
+    if root.is_some() && !rw {
+        return Err("mount: --root only applies to --rw".into());
+    }
+    let root = root.unwrap_or_else(|| PathBuf::from("/"));
+    let mountpoint = PathBuf::from(mountpoint);
+    if !mountpoint.is_dir() {
+        return Err(format!(
+            "{}: the mountpoint must be an existing directory",
+            mountpoint.display()
+        ));
+    }
+    mount_spec(
+        spec,
+        mountpoint,
+        foreground,
+        allow_other,
+        rw.then_some(root),
+    )
+}
+
 /// The scratch directory of a `--rw` mount of `db`: named after the
 /// database file, so the next mount of the same database clears what a
 /// daemon that died left behind (`RwView::new` empties it).
@@ -340,6 +434,52 @@ fn rw_scratch(db: &Path) -> PathBuf {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     abs.hash(&mut h);
     std::env::temp_dir().join(format!("portuale-vdb-rw-{:016x}", h.finish()))
+}
+
+#[cfg(feature = "vdb-fuse")]
+fn mount_spec(
+    spec: Spec,
+    mountpoint: PathBuf,
+    foreground: bool,
+    allow_other: bool,
+    rw: Option<PathBuf>,
+) -> Result<u8, String> {
+    use std::sync::Arc;
+    let fsname = format!("{}:{}", spec.kind, spec.path.display());
+    let write = rw.is_some();
+    let open_db =
+        || -> Result<Arc<dyn InstalledDb>, String> { open_existing(&spec, write).map(Arc::from) };
+    let opts = rw.map(|root| crate::vdb_fuse::RwOpts {
+        scratch: rw_scratch(&spec.path),
+        root,
+    });
+    // Open once here so a bad PATH, a busy redb or a missing feature is
+    // reported before anything forks; the handle is dropped again, the
+    // daemon opens its own.
+    drop(open_db()?);
+    if foreground {
+        crate::vdb_fuse::serve(
+            crate::vdb_fuse::ServeArgs {
+                db: open_db()?,
+                mountpoint: &mountpoint,
+                fsname: &fsname,
+                allow_other,
+                rw: opts.as_ref(),
+            },
+            || {},
+        )
+        .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+    } else {
+        crate::vdb_fuse::serve_background(
+            open_db,
+            &mountpoint,
+            &fsname,
+            allow_other,
+            opts.as_ref(),
+        )
+        .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+    }
+    Ok(0)
 }
 
 #[cfg(not(feature = "vdb-fuse"))]
@@ -637,8 +777,226 @@ mod tests {
         root
     }
 
+    fn cli(args: &[&str]) -> (u8, String, String) {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        let code = run_args(&args, &mut o, &mut e);
+        (
+            code,
+            String::from_utf8_lossy(&o).into_owned(),
+            String::from_utf8_lossy(&e).into_owned(),
+        )
+    }
+
     fn s(p: &Path) -> String {
         p.to_string_lossy().into_owned()
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn round_trip_files_sqlite_files_verifies_equal_and_an_alteration_is_named() {
+        let root = fixture_root("rt");
+        let db = root.join("vdb.sqlite");
+        let back = root.join("back");
+        let (c, o, e) = cli(&[
+            "convert",
+            "--from",
+            &format!("files:{}", s(&root)),
+            "--to",
+            &format!("sqlite:{}", s(&db)),
+        ]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(o.contains("converted "), "{o}");
+        let (c, o, e) = cli(&[
+            "convert",
+            &format!("--from=sqlite:{}", s(&db)),
+            &format!("--to=files:{}", s(&back)),
+        ]);
+        assert_eq!(c, 0, "{o}{e}");
+        // files:<vdb dir> normalises to its root, so the stores are compared too.
+        let (c, o, e) = cli(&[
+            "verify",
+            "--against",
+            &format!("files:{}", s(&root.join("var/db/pkg"))),
+            &format!("sqlite:{}", s(&db)),
+        ]);
+        assert_eq!(c, 0, "{o}{e}");
+        let (c, o, e) = cli(&[
+            "verify",
+            &format!("files:{}", s(&root)),
+            &format!("files:{}", s(&back)),
+        ]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(o.starts_with("equal: "), "{o}");
+
+        // Alter one byte of one entry file in the round-tripped copy.
+        let victim = fs::read_dir(back.join("var/db/pkg/dev-libs"))
+            .unwrap()
+            .map(|d| d.unwrap().path())
+            .find(|p| p.join("SLOT").is_file())
+            .unwrap();
+        let slot = victim.join("SLOT");
+        let mtime = fs::metadata(&slot).unwrap().modified().unwrap();
+        fs::write(&slot, "9\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&slot)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        let (c, o, _) = cli(&[
+            "verify",
+            &format!("files:{}", s(&root)),
+            &format!("files:{}", s(&back)),
+        ]);
+        assert_eq!(c, 1, "{o}");
+        let name = victim.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            o.contains(&format!("dev-libs/{name}/SLOT: bytes differ")),
+            "{o}"
+        );
+        // The altered files copy also differs from the sqlite file.
+        let (c, _, _) = cli(&[
+            "verify",
+            &format!("files:{}", s(&back)),
+            &format!("sqlite:{}", s(&db)),
+        ]);
+        assert_eq!(c, 1);
+        // A changed world is named too.
+        fs::write(back.join("var/lib/portage/world"), "x/y\n").unwrap();
+        let (c, o, _) = cli(&[
+            "verify",
+            &format!("files:{}", s(&root)),
+            &format!("files:{}", s(&back)),
+        ]);
+        assert_eq!(c, 1);
+        assert!(o.contains("world: "), "{o}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_non_empty_destination_is_refused_unless_forced() {
+        let root = fixture_root("ne");
+        let other = fixture_root("ne2");
+        let before = fs::metadata(other.join("var/lib/portage/world"))
+            .unwrap()
+            .mtime_nsec();
+        let (c, _, e) = cli(&[
+            "convert",
+            "--from",
+            &format!("files:{}", s(&root)),
+            "--to",
+            &format!("files:{}", s(&other)),
+        ]);
+        assert_eq!(c, 2);
+        assert!(e.contains("not empty") && e.contains("--force"), "{e}");
+        assert_eq!(
+            fs::metadata(other.join("var/lib/portage/world"))
+                .unwrap()
+                .mtime_nsec(),
+            before,
+            "a refused copy touches nothing"
+        );
+        // --force over an altered copy makes it equal again.
+        fs::remove_dir_all(other.join("var/db/pkg/dev-libs/igw0a-1")).unwrap();
+        fs::create_dir_all(other.join("var/db/pkg/x-extra/extra-1")).unwrap();
+        let (c, o, e) = cli(&[
+            "convert",
+            "--force",
+            "--from",
+            &format!("files:{}", s(&root)),
+            "--to",
+            &format!("files:{}", s(&other)),
+        ]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(o.contains("removed from destination"), "{o}");
+        let (c, o, _) = cli(&[
+            "verify",
+            &format!("files:{}", s(&root)),
+            &format!("files:{}", s(&other)),
+        ]);
+        assert_eq!(c, 0, "{o}");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn a_pending_entry_is_reported_and_not_copied() {
+        let root = fixture_root("pend");
+        let dst = scratch("pend-dst");
+        let cat = root.join("var/db/pkg/dev-libs");
+        copy_tree(&cat.join("igw0a-1"), &cat.join("-MERGING-halfdone-1"));
+        let (c, o, e) = cli(&[
+            "convert",
+            "--from",
+            &format!("files:{}", s(&root)),
+            "--to",
+            &format!("files:{}", s(&dst)),
+        ]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(
+            e.contains("pending entry not copied: dev-libs/halfdone-1"),
+            "{e}"
+        );
+        let vdb = dst.join("var/db/pkg/dev-libs");
+        assert!(vdb.join("igw0a-1").is_dir());
+        assert!(!vdb.join("halfdone-1").exists());
+        assert!(!vdb.join("-MERGING-halfdone-1").exists());
+        let (c, o, _) = cli(&[
+            "verify",
+            &format!("files:{}", s(&root)),
+            &format!("files:{}", s(&dst)),
+        ]);
+        assert_eq!(c, 0, "pending entries are not compared: {o}");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn usage_errors_exit_2_and_help_exits_0() {
+        assert_eq!(cli(&["--help"]).0, 0);
+        assert_eq!(cli(&[]).0, 2);
+        assert_eq!(cli(&["frob"]).0, 2);
+        assert_eq!(cli(&["convert", "--from", "files:/x"]).0, 2);
+        assert_eq!(cli(&["verify", "files:/x"]).0, 2);
+        // A missing redb file is an I/O error (exit 2), never created by verify.
+        let (c, _, e) = cli(&["verify", "redb:/nonexistent/a", "redb:/nonexistent/b"]);
+        assert_eq!(c, 2);
+        assert!(e.contains("portuale vdb:"), "{e}");
+        let (c, _, e) = cli(&["verify", "lmdb:/a", "files:/b"]);
+        assert_eq!(c, 2);
+        assert!(e.contains("unknown VDB backend"), "{e}");
+    }
+
+    #[test]
+    fn mount_usage_errors_exit_2_before_anything_is_mounted() {
+        let (c, o, _) = cli(&["mount", "--help"]);
+        assert_eq!(c, 0);
+        assert!(o.contains("vdb mount"), "{o}");
+        // Arguments: exactly KIND:PATH and MOUNTPOINT.
+        for args in [
+            &["mount"][..],
+            &["mount", "files:/x"],
+            &["mount", "files:/x", "/a", "/b"],
+            &["mount", "--bogus", "files:/x", "/a"],
+        ] {
+            let (c, _, e) = cli(args);
+            assert_eq!(c, 2, "{args:?}: {e}");
+            assert!(e.contains("mount:"), "{e}");
+        }
+        let (c, _, e) = cli(&["mount", "lmdb:/x", "/tmp"]);
+        assert_eq!(c, 2);
+        assert!(e.contains("unknown VDB backend"), "{e}");
+        // The mountpoint must be an existing directory.
+        let (c, _, e) = cli(&["mount", "files:/x", "/nonexistent/mountpoint"]);
+        assert_eq!(c, 2);
+        assert!(e.contains("existing directory"), "{e}");
+        // A database that does not exist is refused before any mount; the
+        // backend is opened read-only and never created.
+        let mp = scratch("mp");
+        let (c, _, e) = cli(&["mount", "sqlite:/nonexistent/vdb.sqlite", &s(&mp)]);
+        assert_eq!(c, 2, "{e}");
+        assert!(!Path::new("/nonexistent/vdb.sqlite").exists());
     }
 
     #[test]
@@ -670,5 +1028,196 @@ mod tests {
         txn.begin_entry(&k).unwrap();
         txn.put_entry_file(&k, "CONTENTS", b"half\n").unwrap();
         txn.commit().unwrap();
+    }
+
+    fn status_sweep_cycle(spec: &str, keep: &str) {
+        let (c, o, e) = cli(&["status", spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(o.contains("pending:    none"), "{o}");
+        leave_pending(spec, "dev-libs", "halfdone-1");
+        let (c, o, e) = cli(&["status", spec]);
+        assert_eq!(c, 1, "{o}{e}");
+        assert!(o.contains("dev-libs/halfdone-1"), "{o}");
+        // An installed key is refused and nothing is removed.
+        let (c, _, e) = cli(&["sweep", "--remove", keep, spec]);
+        assert_eq!(c, 2);
+        assert!(e.contains("installed entry"), "{e}");
+        let (c, _, e) = cli(&[
+            "sweep",
+            "--remove",
+            "dev-libs/halfdone-1",
+            "--remove",
+            keep,
+            spec,
+        ]);
+        assert_eq!(c, 2, "{e}");
+        assert_eq!(
+            cli(&["status", spec]).0,
+            1,
+            "the orphan survives a refused sweep"
+        );
+        // A key that is neither is refused too.
+        assert_eq!(cli(&["sweep", "--remove", "x/y-1", spec]).0, 2);
+        let (c, o, e) = cli(&["sweep", "--remove", "dev-libs/halfdone-1", spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(
+            o.contains("removed pending entry dev-libs/halfdone-1"),
+            "{o}"
+        );
+        let (c, o, _) = cli(&["status", spec]);
+        assert_eq!(c, 0, "{o}");
+        // The installed entry is still there.
+        assert!(o.contains("installed:  "), "{o}");
+        leave_pending(spec, "dev-libs", "one-1");
+        leave_pending(spec, "dev-libs", "two-1");
+        let (c, o, e) = cli(&["sweep", "--all", spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        assert!(o.contains("one-1") && o.contains("two-1"), "{o}");
+        assert_eq!(cli(&["status", spec]).0, 0);
+    }
+
+    #[test]
+    fn status_and_sweep_on_files() {
+        let root = fixture_root("sweepfiles");
+        let installed = fs::read_dir(root.join("var/db/pkg/dev-libs"))
+            .unwrap()
+            .map(|d| d.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|n| !n.starts_with('-'))
+            .unwrap();
+        let spec = format!("files:{}", s(&root));
+        status_sweep_cycle(&spec, &format!("dev-libs/{installed}"));
+        assert!(root.join("var/db/pkg/dev-libs").join(&installed).is_dir());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `rebuild-index` on a converted fixture VDB reports the same
+    /// row counts on sqlite and redb.
+    #[cfg(all(feature = "vdb-sqlite", feature = "vdb-redb"))]
+    #[test]
+    fn rebuild_index_counts_agree_across_databases() {
+        let root = fixture_root("rebuildidx");
+        let files = format!("files:{}", s(&root));
+        let mut reports = Vec::new();
+        for spec in [
+            format!("sqlite:{}", s(&root.join("vdb.sqlite"))),
+            format!("redb:{}", s(&root.join("vdb.redb"))),
+        ] {
+            let (c, o, e) = cli(&["convert", "--from", &files, "--to", &spec]);
+            assert_eq!(c, 0, "{o}{e}");
+            let (c, o, e) = cli(&["rebuild-index", &spec]);
+            assert_eq!(c, 0, "{o}{e}");
+            assert!(o.starts_with("rebuilt the index of "), "{o}");
+            let (c, again, _) = cli(&["rebuild-index", &spec]);
+            assert_eq!((c, &again), (0, &o), "idempotent");
+            let (c, v, _) = cli(&["verify", &files, &spec]);
+            assert_eq!(c, 0, "{v}");
+            reports.push(o);
+        }
+        assert_eq!(reports[0], reports[1]);
+        assert!(!reports[0].contains(" 0 installed"), "{}", reports[0]);
+        let (c, _, e) = cli(&["rebuild-index", &files]);
+        assert_eq!(c, 2);
+        assert!(e.contains("no derived index"), "{e}");
+        let missing = format!("sqlite:{}", s(&root.join("none.sqlite")));
+        assert_eq!(cli(&["rebuild-index", &missing]).0, 2);
+        assert!(!root.join("none.sqlite").exists());
+        assert_eq!(cli(&["rebuild-index"]).0, 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn status_and_sweep_on_sqlite() {
+        let root = fixture_root("sweepsql");
+        let db = root.join("vdb.sqlite");
+        let spec = format!("sqlite:{}", s(&db));
+        let (c, o, e) = cli(&[
+            "convert",
+            "--from",
+            &format!("files:{}", s(&root)),
+            "--to",
+            &spec,
+        ]);
+        assert_eq!(c, 0, "{o}{e}");
+        let d = open(&parse_spec(&spec).unwrap(), false).unwrap();
+        let keep = d.entries().unwrap()[0].to_string();
+        drop(d);
+        let (_, o, _) = cli(&["status", &spec]);
+        assert!(o.contains("imported:"), "{o}");
+        status_sweep_cycle(&spec, &keep);
+        let d = open(&parse_spec(&spec).unwrap(), false).unwrap();
+        assert!(d.has_entry(&d.entries().unwrap()[0]).unwrap());
+        // A missing database is an error and is not created.
+        let missing = format!("sqlite:{}", s(&root.join("none.sqlite")));
+        assert_eq!(cli(&["status", &missing]).0, 2);
+        assert!(!root.join("none.sqlite").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(feature = "vdb-redb")]
+    #[test]
+    fn status_and_sweep_on_redb_and_busy_when_held() {
+        let root = fixture_root("sweepredb");
+        let db = root.join("vdb.redb");
+        let spec = format!("redb:{}", s(&db));
+        let files = format!("files:{}", s(&root));
+        let (c, o, e) = cli(&["convert", "--from", &files, "--to", &spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        // files -> redb -> files round trip verifies equal.
+        let back = root.join("back");
+        let back_spec = format!("files:{}", s(&back));
+        let (c, o, e) = cli(&["convert", "--from", &spec, "--to", &back_spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        let (c, o, _) = cli(&["verify", &spec, &back_spec]);
+        assert_eq!(c, 0, "{o}");
+        let (c, o, _) = cli(&["verify", &files, &spec]);
+        assert_eq!(c, 0, "{o}");
+        let d = open(&parse_spec(&spec).unwrap(), false).unwrap();
+        let keep = d.entries().unwrap()[0].to_string();
+        drop(d);
+        let (_, o, _) = cli(&["status", &spec]);
+        assert!(
+            o.contains("imported:") && o.contains("backend:    redb"),
+            "{o}"
+        );
+        status_sweep_cycle(&spec, &keep);
+        // A missing database is an error and is not created.
+        let missing = format!("redb:{}", s(&root.join("none.redb")));
+        assert_eq!(cli(&["status", &missing]).0, 2);
+        assert_eq!(cli(&["sweep", "--all", &missing]).0, 2);
+        assert!(!root.join("none.redb").exists());
+        // Held by a read-write handle: every command reports Busy, exit 2.
+        let held = portage_vdb::RedbDb::open(&db).unwrap();
+        for args in [
+            vec!["status", spec.as_str()],
+            vec!["sweep", "--all", spec.as_str()],
+            vec!["verify", spec.as_str(), files.as_str()],
+            vec![
+                "convert",
+                "--from",
+                files.as_str(),
+                "--to",
+                spec.as_str(),
+                "--force",
+            ],
+        ] {
+            let (c, _, e) = cli(&args);
+            assert_eq!(c, 2, "{args:?}: {e}");
+            assert!(e.contains("database is already open"), "{args:?}: {e}");
+        }
+        drop(held);
+        assert_eq!(cli(&["status", &spec]).0, 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn status_and_sweep_usage_errors_exit_2() {
+        assert_eq!(cli(&["status"]).0, 2);
+        assert_eq!(cli(&["sweep", "files:/x"]).0, 2);
+        assert_eq!(
+            cli(&["sweep", "--all", "--remove", "a/b-1", "files:/x"]).0,
+            2
+        );
+        assert_eq!(cli(&["sweep", "--remove", "nocat", "files:/x"]).0, 2);
     }
 }
