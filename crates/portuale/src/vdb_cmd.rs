@@ -1090,6 +1090,53 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// `import-stores` copies the five files-tree stores into a database;
+    /// the counter never goes back.
+    #[cfg(all(feature = "vdb-sqlite", feature = "vdb-redb"))]
+    #[test]
+    fn import_stores_copies_the_files_stores_and_keeps_the_larger_counter() {
+        use portage_vdb::{ConfigMemory, Counter, World, WorldSets};
+        let root = fixture_root("importstores");
+        let files = format!("files:{}", s(&root));
+        for (kind, file) in [("sqlite", "vdb.sqlite"), ("redb", "vdb.redb")] {
+            let spec = format!("{kind}:{}", s(&root.join(file)));
+            let (c, o, e) = cli(&["convert", "--from", &files, "--to", &spec]);
+            assert_eq!(c, 0, "{o}{e}");
+            let src = FilesDb::new(&root);
+            for (counter, want) in [(Counter(90_000), 90_000), (Counter(5), 90_000)] {
+                let mut txn = src.begin_write().unwrap();
+                txn.set_world(&World {
+                    atoms: vec!["app-misc/new-one".into(), "dev-libs/other".into()],
+                })
+                .unwrap();
+                txn.set_world_sets(&WorldSets {
+                    sets: vec!["myset".into()],
+                })
+                .unwrap();
+                txn.set_config_memory(&ConfigMemory {
+                    entries: [("/etc/foo.conf".to_string(), "abc".to_string())].into(),
+                })
+                .unwrap();
+                txn.set_counter(counter).unwrap();
+                txn.commit().unwrap();
+                let (c, o, e) = cli(&["import-stores", &files, &spec]);
+                assert_eq!(c, 0, "{o}{e}");
+                assert!(o.starts_with("imported world 2 atoms, 1 sets"), "{o}");
+                let db = open(&parse_spec(&spec).unwrap(), false).unwrap();
+                assert_eq!(db.world().unwrap(), src.world().unwrap());
+                assert_eq!(db.world_sets().unwrap(), src.world_sets().unwrap());
+                assert_eq!(db.config_memory().unwrap(), src.config_memory().unwrap());
+                assert_eq!(db.preserved_libs().unwrap(), src.preserved_libs().unwrap());
+                assert_eq!(db.counter().unwrap(), Some(Counter(want)), "{kind}");
+            }
+        }
+        assert_eq!(cli(&["import-stores", &files, &files]).0, 2);
+        let db = format!("sqlite:{}", s(&root.join("vdb.sqlite")));
+        assert_eq!(cli(&["import-stores", &db, &db]).0, 2);
+        assert_eq!(cli(&["import-stores", &files]).0, 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// `rebuild-index` on a converted fixture VDB reports the same
     /// row counts on sqlite and redb.
     #[cfg(all(feature = "vdb-sqlite", feature = "vdb-redb"))]

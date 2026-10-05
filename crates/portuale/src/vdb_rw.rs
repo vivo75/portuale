@@ -1424,6 +1424,66 @@ mod tests {
     use super::ops::{Env, envs};
     use super::*;
 
+    fn rw(env: &Env) -> RwView {
+        RwView::new(
+            env.db.clone(),
+            env.scratch.clone(),
+            Owner { uid: 0, gid: 0 },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn names_this_layer_does_not_map_are_eperm() {
+        for env in envs("eperm") {
+            let v = rw(&env);
+            let (_, fh) = v
+                .create(ROOT_INO, ".x.portage_lockfile", 0o644, libc::O_CREAT)
+                .map_or((None, 0), |(a, fh)| (Some(a), fh));
+            assert_eq!(fh, 0, "{}: nothing is created at the root", env.label);
+            v.mkdir(ROOT_INO, "app-misc", 0o755).unwrap();
+            let cat = v.lookup(ROOT_INO, "app-misc").unwrap();
+            assert_eq!(
+                v.create(cat.ino, "stray", 0o644, libc::O_CREAT).err(),
+                Some(ViewError::Perm)
+            );
+            assert_eq!(
+                v.mkdir(ROOT_INO, "app-misc", 0o755).err(),
+                Some(ViewError::Exists)
+            );
+            assert_eq!(
+                v.mkdir(cat.ino, "nested", 0o755).err(),
+                Some(ViewError::Perm),
+                "a staged -MERGING- dir is S2; any other name stays EPERM"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stored_category_cannot_be_removed_and_its_entries_stay_listed() {
+        for env in envs("storedcat") {
+            let v = rw(&env);
+            let cat = env.seeded.category.clone();
+            assert_eq!(v.rmdir(ROOT_INO, &cat).err(), Some(ViewError::NotEmpty));
+            let c = v.lookup(ROOT_INO, &cat).unwrap();
+            let (lf, fh) = v
+                .create(c.ino, ".p:0.portage_lockfile", 0o660, libc::O_CREAT)
+                .unwrap();
+            v.release(fh).unwrap();
+            let dfh = v.opendir(c.ino).unwrap();
+            let names: Vec<String> = v
+                .readdir(dfh)
+                .unwrap()
+                .iter()
+                .map(|d| d.name.clone())
+                .collect();
+            v.release(dfh).unwrap();
+            assert!(names.contains(&env.seeded.pf), "{names:?}");
+            assert!(names.contains(&".p:0.portage_lockfile".to_string()));
+            assert_eq!(v.getattr(lf.ino).unwrap().kind, Kind::File);
+        }
+    }
+
     #[test]
     fn stamp_state_follows_the_portage_rule() {
         assert_eq!(stamp_state(None, 5), MetadataStamp::Absent);

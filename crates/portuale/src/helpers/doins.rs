@@ -335,6 +335,35 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/doins")
     }
 
+    /// Decode one `args` line (`\\` → `\`, `\n` → newline).
+    fn decode_arg(line: &str) -> Vec<u8> {
+        let b = line.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\\' && i + 1 < b.len() {
+                match b[i + 1] {
+                    b'\\' => {
+                        out.push(b'\\');
+                        i += 2;
+                    }
+                    b'n' => {
+                        out.push(b'\n');
+                        i += 2;
+                    }
+                    _ => {
+                        out.push(b'\\');
+                        i += 1;
+                    }
+                }
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
     // ---- end to end: a real package whose src_install uses doins ----
 
     /// `dev-libs/packagepkg`'s `src_install` is `insinto` + `doins`
