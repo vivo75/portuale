@@ -50,7 +50,8 @@ installed\-package lookup is sent to the parent; the atom rules above are
 still applied here.  The parent answers from the last committed state of
 the database: during \fBpkg_preinst\fR the instance being replaced is still
 installed and the new one is not.  Without \fBPORTUALE_VDB_IPC\fR a
-\fBredb\fR file is opened read\-only when no other process holds it.  The
+\fBredb\fR file is opened read\-only, which works unless another process
+holds it read\-write.  The
 \fBfiles\fR and \fBsqlite\fR backends never use the socket.
 .SH "EXIT STATUS"
 .TP

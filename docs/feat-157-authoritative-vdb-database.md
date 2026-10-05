@@ -1,7 +1,10 @@
 # #157 — swappable installed-package database (files / sqlite / redb)
 
-Status: **proposed 2026-09-25** (revised the same day: three backends,
-`mrg` first). Design only, no slice started.
+Status: **implemented 2026-10-05** on branch `backlog/305-vdb-backends`
+(slices S0–S8; S9, `emerge` selection, not done: optional, owner's call).
+Proposed 2026-09-25 (revised the same day: three backends, `mrg` first).
+What shipped and how it was checked: [`what-this-proves.md`](what-this-proves.md)
+(#305 paragraph), evidence in `docs/evidence/305-*.md`.
 Design: [`vdb_to_db.md`](vdb_to_db.md). Read it first; this file holds
 only the slices, the gates and the open decisions.
 Backlog: [`backlog-tasks-2026-10.md`](backlog-tasks-2026-10.md) Tier 2

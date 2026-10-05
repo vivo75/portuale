@@ -57,9 +57,10 @@ backend is not \fBfiles\fR, \fBmrg\fR sets \fBPORTUALE_VDB_BACKEND\fR,
 \fBPORTUALE_VDB_PATH\fR and \fBPORTUALE_VDB_ROOT\fR in the environment of
 the programs it starts.
 .LP
-\fBredb\fR allows only one process to use the file at a time: a running
-\fBmrg\fR holds it, and any other process that opens it fails with a
-\fBbusy\fR error.  So that \fBhas_version\fR and \fBbest_version\fR still
+\fBredb\fR allows only one writer process at a time: a merging \fBmrg\fR
+holds the file read\-write, and any other process that opens it fails with
+a \fBbusy\fR error.  A \fB\-\-pretend\fR \fBmrg\fR opens it read\-only and runs
+beside other readers, such as a \fBportuale vdb mount\fR.  So that \fBhas_version\fR and \fBbest_version\fR still
 work in the ebuild phases, a merging (not \fB\-\-pretend\fR) \fBmrg\fR on
 \fBredb\fR answers those lookups itself over a Unix socket in a private
 directory under \fBTMPDIR\fR (\fB/tmp\fR when that path is too long), and
