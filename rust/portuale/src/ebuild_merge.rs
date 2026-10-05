@@ -1144,17 +1144,22 @@ fn prune_non_existing(root: &Path, registry: &mut PlibRegistry) {
 /// in portuale's own unsandboxed process -- the phases it spawns are
 /// separate bash children.)
 fn write_plib_registry(root: &Path, registry: &PlibRegistry) -> Result<(), String> {
-    if registry.entries == registry.orig_entries {
+    let Some(libs) = plib_store(registry) else {
         return Ok(());
-    }
-    let libs = portage_vdb::PreservedLibs {
-        entries: plib_entries_to_vdb(&registry.entries),
-        loaded: plib_entries_to_vdb(&registry.orig_entries),
     };
     let db = portage_vdb::for_root(root);
     let mut txn = db.begin_write().map_err(|e| e.to_string())?;
     txn.set_preserved_libs(&libs).map_err(|e| e.to_string())?;
     txn.commit().map_err(|e| e.to_string())
+}
+
+/// What [`write_plib_registry`] stores: `None` when the registry is
+/// unchanged since it was loaded (real `store()` writes nothing then).
+fn plib_store(registry: &PlibRegistry) -> Option<portage_vdb::PreservedLibs> {
+    (registry.entries != registry.orig_entries).then(|| portage_vdb::PreservedLibs {
+        entries: plib_entries_to_vdb(&registry.entries),
+        loaded: plib_entries_to_vdb(&registry.orig_entries),
+    })
 }
 
 /// Real `_lstat_inode_map`: `(st_dev, st_ino)` -> every registered
@@ -1623,6 +1628,32 @@ fn register_merge_preserved_libs(
     }
     let new_counter =
         read_entry_text(root, category, new_pf, "COUNTER").unwrap_or_else(|| "0".to_string());
+    let registry = merge_plib_registration(
+        root,
+        category,
+        pn,
+        new_pf,
+        main_slot,
+        preserve_paths,
+        &new_counter,
+    );
+    write_plib_registry(root, &registry)
+}
+
+/// The registry [`register_merge_preserved_libs`] stores, with the
+/// counter given: the freshly loaded (and pruned) registry plus the
+/// merging package's `register(...)`. Split out so a database backend can
+/// store it in the publishing transaction (feat#157 S4.1), reading the
+/// counter from the still-pending entry.
+fn merge_plib_registration(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    new_pf: &str,
+    main_slot: &str,
+    preserve_paths: &BTreeSet<String>,
+    new_counter: &str,
+) -> PlibRegistry {
     let new_cpv = format!("{category}/{new_pf}");
     let mut registry = read_plib_registry(root);
     let paths_vec: Vec<String> = preserve_paths.iter().cloned().collect();
@@ -1632,10 +1663,10 @@ fn register_merge_preserved_libs(
         category,
         pn,
         main_slot,
-        &new_counter,
+        new_counter,
         &paths_vec,
     );
-    write_plib_registry(root, &registry)
+    registry
 }
 
 /// Real `dblink._prune_plib_registry`, called from real `unmerge()`
@@ -2665,6 +2696,131 @@ fn publish_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> 
     let mut txn = db.begin_write().map_err(|e| e.to_string())?;
     txn.finish_entry(&key).map_err(|e| e.to_string())?;
     txn.commit().map_err(|e| e.to_string())
+}
+
+/// The merge's publish step: the new entry goes live, the replaced
+/// same-slot entries go away, and the merge's preserved-libs registration
+/// (real `vartree.py:5266-5272`) is stored.
+///
+/// - `files` ([`portage_vdb::InstalledDb::replace_in_publish`] is
+///   `false`): exactly the S1.4 calls, [`publish_vdb_tmp`] then
+///   [`register_merge_preserved_libs`]. The replace loop already deleted
+///   each entry of `replaced` (`unmerge_one_installed`), so it is unused.
+/// - database backends: **one transaction** (design §9, feat#157 S4.1):
+///   [`portage_vdb::WriteTxn::finish_entry_replacing`] deletes the rows of
+///   `replaced` and publishes the pending row (which also raises the
+///   counter high-water mark to its `COUNTER`), and the registry update
+///   rides along through `set_preserved_libs`. The counter it records is
+///   read from the pending entry, the bytes `populate_vdb_tmp` stored, the
+///   same value the published entry carries. Until this commit every
+///   reader (`has_version` included) still sees the old instances; a
+///   crash before it leaves them installed and the new row `merging`.
+#[allow(clippy::too_many_arguments)]
+fn publish_merged_entry(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    main_slot: &str,
+    preserve_paths: &BTreeSet<String>,
+    replaced: &[String],
+) -> Result<(), String> {
+    let db = portage_vdb::for_root(root);
+    if !db.replace_in_publish() {
+        publish_vdb_tmp(root, category, pf)?;
+        return register_merge_preserved_libs(root, category, pn, pf, main_slot, preserve_paths);
+    }
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let libs = if preserve_paths.is_empty() {
+        None
+    } else {
+        let counter = db
+            .read_pending_file(&key, "COUNTER")
+            .ok()
+            .flatten()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_else(|| "0".to_string());
+        plib_store(&merge_plib_registration(
+            root,
+            category,
+            pn,
+            pf,
+            main_slot,
+            preserve_paths,
+            &counter,
+        ))
+    };
+    let old: Vec<portage_vdb::EntryKey> = replaced
+        .iter()
+        .map(|old_pf| portage_vdb::EntryKey::new(category, old_pf.as_str()))
+        .collect();
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.finish_entry_replacing(&key, &old)
+        .map_err(|e| e.to_string())?;
+    if let Some(libs) = &libs {
+        txn.set_preserved_libs(libs).map_err(|e| e.to_string())?;
+    }
+    #[cfg(test)]
+    tests::publish_hook(root);
+    txn.commit().map_err(|e| e.to_string())
+}
+
+/// Where `pkg_postinst`'s `PORTAGE_UPDATE_ENV` points (real
+/// `vartree.py:5334-5337`): the live entry's own `environment.bz2`.
+/// `files`: `<entry>/environment.bz2`, rewritten in place by bash, and
+/// `scratch` is `None`. A database backend has no entry directory, so the
+/// stored file is copied into `scratch_dir` and the phase rewrites that
+/// copy; [`absorb_update_env`] stores it back (feat#157 S4.1, N9).
+struct UpdateEnvTarget {
+    path: PathBuf,
+    scratch: Option<PathBuf>,
+}
+
+fn update_env_target(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    scratch_dir: &Path,
+) -> Result<UpdateEnvTarget, String> {
+    let db = portage_vdb::for_root(root);
+    let key = portage_vdb::EntryKey::new(category, pf);
+    if let Some(entry) = db.entry_path(&key) {
+        return Ok(UpdateEnvTarget {
+            path: entry.join("environment.bz2"),
+            scratch: None,
+        });
+    }
+    portage_vdb::materialize_files(db.as_ref(), &key, &["environment.bz2"], scratch_dir)
+        .map_err(|e| e.to_string())?;
+    Ok(UpdateEnvTarget {
+        path: scratch_dir.join("environment.bz2"),
+        scratch: Some(scratch_dir.to_path_buf()),
+    })
+}
+
+/// After `pkg_postinst`: on a database backend, store the rewritten
+/// scratch `environment.bz2` into the live entry (one `replace_file`
+/// commit, only when the bytes changed). Real rewrites the file after the
+/// entry is published too, so this is a separate commit there as well.
+/// No-op on `files`.
+fn absorb_update_env(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    target: &UpdateEnvTarget,
+) -> Result<(), String> {
+    let Some(dir) = &target.scratch else {
+        return Ok(());
+    };
+    let db = portage_vdb::for_root(root);
+    portage_vdb::absorb_file(
+        db.as_ref(),
+        &portage_vdb::EntryKey::new(category, pf),
+        dir,
+        "environment.bz2",
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Real `dblink.treewalk()`'s `preinst_mask` + `install_mask_dir` step
@@ -3887,15 +4043,17 @@ fn merge_after_install(
     // paths)`, so a second consecutive soname bump cannot keep a stale
     // path list.
     // After the rename into place, like real (backlog #183: the counter
-    // is read back from the published entry).
-    publish_vdb_tmp(root, &env.category, &env.split.pf)?;
-    register_merge_preserved_libs(
+    // is read back from the published entry). On a database backend the
+    // publish, the deletion of the replaced entries and this registration
+    // are one commit (see `publish_merged_entry`).
+    publish_merged_entry(
         root,
         &env.category,
         &env.split.pn,
         &env.split.pf,
         main_slot,
         &preserve_paths,
+        &replaced,
     )?;
 
     // Real `merge()`'s own ordering: `postinst` runs, but its own exit
@@ -3921,26 +4079,21 @@ fn merge_after_install(
     // The path is the live entry's own file (`InstalledDb::entry_path`,
     // feat#157 N9; on `files` `<root>/var/db/pkg/<cat>/<pf>`, so bash
     // rewrites it in place exactly as before). A database backend has
-    // no such path and needs a scratch copy plus `replace_file` (S4).
-    let vdb_env_bz2 = portage_vdb::for_root(root)
-        .entry_path(&portage_vdb::EntryKey::new(
-            env.category.as_str(),
-            env.split.pf.as_str(),
-        ))
-        .ok_or_else(|| {
-            format!(
-                "{}/{}: the VDB backend has no entry path for PORTAGE_UPDATE_ENV",
-                env.category, env.split.pf
-            )
-        })?
-        .join("environment.bz2");
+    // no such path: a scratch copy in the build dir, stored back after
+    // the phase (`update_env_target` / `absorb_update_env`, S4.1).
+    let update_env = update_env_target(
+        root,
+        &env.category,
+        &env.split.pf,
+        &env.portage_builddir().join("vdb-update-env"),
+    )?;
     let mut postinst_env = options.build_env.clone();
     if let Some(version) = &replacing_versions {
         postinst_env.push(("REPLACING_VERSIONS".to_string(), version.clone()));
     }
     postinst_env.push((
         "PORTAGE_UPDATE_ENV".to_string(),
-        vdb_env_bz2.display().to_string(),
+        update_env.path.display().to_string(),
     ));
     if let Some(a) = source_distfiles(env, &postinst_env) {
         postinst_env.push(("A".to_string(), a));
@@ -3956,6 +4109,7 @@ fn merge_after_install(
         &postinst_env,
         options.log_file.as_deref(),
     )?;
+    absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
 
     if !contents.is_empty() || !replaced.is_empty() {
         env_update::run_env_update(root)?;
@@ -4048,7 +4202,14 @@ pub(crate) fn unmerge_replaced_same_slot(
     // for the whole loop) and thread through every replaced instance's
     // own post-unmerge prune below.
     let replacement_needed = replacement_needed_entries(root, category, new_pf);
-    for old_pf in &replaced {
+    // feat#157 S4.1: on a database backend the replaced entries are
+    // deleted by the publishing commit (`publish_merged_entry`), not here,
+    // so the old instance stays installed until the new one is. A later
+    // iteration must still treat the instances already unmerged as gone
+    // (`others_in_slot`), as it does on `files` where their directories
+    // are removed in this loop.
+    let defer_delete = portage_vdb::for_root(root).replace_in_publish();
+    for (i, old_pf) in replaced.iter().enumerate() {
         unmerge_one_installed(
             root,
             category,
@@ -4062,6 +4223,7 @@ pub(crate) fn unmerge_replaced_same_slot(
             true,
             replacement_preserved,
             &replacement_needed,
+            defer_delete.then(|| &replaced[..i]),
         )?;
     }
 
@@ -4146,6 +4308,14 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// package's own `NEEDED.ELF.2` lines -- see
 /// `unmerge_replaced_same_slot`): same threading, same empty-on-
 /// standalone rule.
+///
+/// `deferred_delete` (feat#157 S4.1) is `None` everywhere except the
+/// replace loop on a database backend: then the entry is **not** deleted
+/// here (the merge's publishing commit deletes it, see
+/// `publish_merged_entry`), and the slice names the instances this loop
+/// already unmerged, which are still installed in the database but must
+/// not count as `others_in_slot` (on `files` their directories are gone
+/// by now).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_one_installed(
     root: &Path,
@@ -4160,6 +4330,7 @@ pub(crate) fn unmerge_one_installed(
     is_replacement: bool,
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    deferred_delete: Option<&[String]>,
 ) -> Result<(), String> {
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
         debug: options.debug,
@@ -4167,6 +4338,7 @@ pub(crate) fn unmerge_one_installed(
         config_protect: options.config_protect.clone(),
         config_protect_mask: options.config_protect_mask.clone(),
         config_root: options.config_root.clone(),
+        already_unmerged: deferred_delete.map(<[String]>::to_vec).unwrap_or_default(),
         ..Default::default()
     };
 
@@ -4230,7 +4402,9 @@ pub(crate) fn unmerge_one_installed(
     if postrm_status != 0 {
         eprintln!("{category}/{pf}: FAILED postrm ({postrm_status}) -- unmerge continues");
     }
-    crate::ebuild_unmerge::delete_vdb_dir(root, category, pf)?;
+    if deferred_delete.is_none() {
+        crate::ebuild_unmerge::delete_vdb_dir(root, category, pf)?;
+    }
     Ok(())
 }
 
@@ -4257,12 +4431,12 @@ pub(crate) fn run_vdb_saved_env_phase(
     portage_tmpdir: &Path,
     options: &MergeOptions,
 ) -> Result<i32, String> {
-    // Both files go to bash / a copier by path (N9), so the backend must
-    // have a directory for the entry (`files`).
+    // Both files go to bash / a copier by path (N9): the entry's own
+    // directory on `files`; on a database backend a scratch copy of the
+    // two files under `scratch_dir` (feat#157 S4.1; nothing is stored
+    // back, the phase gets no `PORTAGE_UPDATE_ENV`).
     let vdb_dir = crate::ebuild_unmerge::entry_path_for_message(root, category, pf);
-    let env = vdb_dir.join("environment.bz2");
     let ebuild_name = format!("{pf}.ebuild");
-    let ebuild = vdb_dir.join(&ebuild_name);
     if !entry_file_is_regular(root, category, pf, "environment.bz2")
         || !entry_file_is_regular(root, category, pf, &ebuild_name)
     {
@@ -4271,6 +4445,23 @@ pub(crate) fn run_vdb_saved_env_phase(
             vdb_dir.display()
         ));
     }
+    let db = portage_vdb::for_root(root);
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let vdb_dir = if db.entry_path(&key).is_some() {
+        vdb_dir
+    } else {
+        let dir = scratch_dir.join("vdb-entry").join(category).join(pf);
+        portage_vdb::materialize_files(
+            db.as_ref(),
+            &key,
+            &["environment.bz2", ebuild_name.as_str()],
+            &dir,
+        )
+        .map_err(|e| e.to_string())?;
+        dir
+    };
+    let env = vdb_dir.join("environment.bz2");
+    let ebuild = vdb_dir.join(&ebuild_name);
     let src_dir = scratch_dir.join(category).join(package);
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
     let dst = src_dir.join(format!("{pf}.ebuild"));
@@ -4690,11 +4881,19 @@ pub fn merge_binpkg(
         options,
         &replacement_preserved,
     )?;
-    publish_vdb_tmp(root, &category, &pf)?;
-
-    // Real `dblink.treewalk()`'s own post-replace-loop registration
-    // (`vartree.py:5266-5272`) -- identical to `merge_after_install`.
-    register_merge_preserved_libs(root, &category, &package, &pf, &main_slot, &preserve_paths)?;
+    // Publish, then real `dblink.treewalk()`'s own post-replace-loop
+    // registration (`vartree.py:5266-5272`) -- identical to
+    // `merge_after_install` (one commit on a database backend, see
+    // `publish_merged_entry`).
+    publish_merged_entry(
+        root,
+        &category,
+        &package,
+        &pf,
+        &main_slot,
+        &preserve_paths,
+        &replaced_same_slot,
+    )?;
 
     // Real `treewalk()` order: `pkg_postinst` runs after the vdb entry
     // is live *and* every replaced same-slot version is gone, but before
@@ -4709,19 +4908,16 @@ pub fn merge_binpkg(
     // `ebuild_phases::run_phase_from_saved_env`. `always` so it runs even
     // with no `pkg_postinst`. No-op when the binpkg carries no saved env.
     //
-    // The live entry's own path (`InstalledDb::entry_path`, N9; see
-    // `merge_after_install`).
-    let vdb_env_bz2 = portage_vdb::for_root(root)
-        .entry_path(&portage_vdb::EntryKey::new(category.as_str(), pf.as_str()))
-        .ok_or_else(|| {
-            format!("{category}/{pf}: the VDB backend has no entry path for PORTAGE_UPDATE_ENV")
-        })?
-        .join("environment.bz2");
+    // The live entry's own path (`InstalledDb::entry_path`, N9), or a
+    // scratch copy on a database backend (see `merge_after_install`).
+    let update_env = update_env_target(root, &category, &pf, &builddir.join("vdb-update-env"))?;
+    let vdb_env_bz2 = &update_env.path;
     let postinst_status = run_hook_ex(
         "postinst",
         true,
         vdb_env_bz2.is_file().then_some(vdb_env_bz2.as_path()),
     )?;
+    absorb_update_env(root, &category, &pf, &update_env)?;
     if postinst_status != 0 {
         eprintln!(
             "{category}/{pf}: FAILED postinst ({postinst_status}) -- merge kept (real _postinst_failure)"
@@ -9076,6 +9272,24 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
     }
 
+    type PublishHook = Box<dyn Fn(&Path)>;
+
+    thread_local! {
+        /// Test hook (feat#157 S4.1): run inside `publish_merged_entry` on
+        /// a database backend, after every call of the publishing
+        /// transaction and right before its `commit`, on this thread.
+        static PUBLISH_HOOK: std::cell::RefCell<Option<PublishHook>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn publish_hook(root: &Path) {
+        PUBLISH_HOOK.with(|hook| {
+            if let Some(f) = hook.borrow().as_ref() {
+                f(root);
+            }
+        });
+    }
+
     /// Sanity baseline (portuale's own "fixtures must actually
     /// distinguish the new behavior" rule): with `MergeOptions::default()`
     /// (its own deliberately-inert `config_root` sentinel, see that
@@ -9164,5 +9378,322 @@ mod tests {
             std::fs::read_to_string(root.join("usr/share/mergeblockertest/shared.txt")).unwrap(),
             "hello from mergeblockerpkg\n"
         );
+    }
+
+    /// feat#157 S4.1: the merge on a database backend (sqlite).
+    #[cfg(feature = "vdb-sqlite")]
+    mod sqlite_merge {
+        use super::*;
+        use portage_vdb::{EntryKey, InstalledDb};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::Arc;
+
+        type Tree = BTreeMap<String, (u32, Vec<u8>)>;
+
+        fn binpkg(name: &str) -> PathBuf {
+            fixtures_root().join("pkgdir/dev-libs").join(name)
+        }
+
+        /// Convert whatever `files` VDB `root` holds into a new sqlite
+        /// database at `db_path` (as `portuale vdb convert` does) and make
+        /// it `root`'s backend, as `mrg --vdb-backend=sqlite` does.
+        fn use_sqlite(root: &Path, db_path: &Path) -> Arc<portage_vdb::SqliteDb> {
+            let db = Arc::new(portage_vdb::SqliteDb::open(db_path).unwrap());
+            portage_vdb::copy_all(&portage_vdb::FilesDb::new(root), db.as_ref(), false).unwrap();
+            portage_vdb::register(root, db.clone());
+            db
+        }
+
+        /// Every file of a live entry with its permission bits and bytes;
+        /// the volatile `#dir_mtime=` line of `metadata` is dropped (the
+        /// same thing `verify` ignores: directory mtimes).
+        fn entry_files(db: &dyn InstalledDb, key: &EntryKey) -> Tree {
+            let image = db.entry_image(key).unwrap().expect("entry is installed");
+            image
+                .files
+                .into_iter()
+                .map(|f| {
+                    let data = if f.meta.name == "metadata" {
+                        String::from_utf8(f.data)
+                            .unwrap()
+                            .lines()
+                            .filter(|l| !l.starts_with("#dir_mtime="))
+                            .map(|l| format!("{l}\n"))
+                            .collect::<String>()
+                            .into_bytes()
+                    } else {
+                        f.data
+                    };
+                    (f.meta.name, (f.meta.mode & 0o7777, data))
+                })
+                .collect()
+        }
+
+        /// Everything under `root` except the stores a backend keeps
+        /// (`var/db/pkg`, `var/lib/portage`, `var/cache/edb`): path ->
+        /// (mode, bytes or symlink target). Directories carry no bytes.
+        fn payload_tree(root: &Path) -> Tree {
+            fn walk(root: &Path, dir: &Path, out: &mut Tree) {
+                for entry in portage_util::read_dir_entries(dir).unwrap() {
+                    let path = entry.path();
+                    let rel = path.strip_prefix(root).unwrap().display().to_string();
+                    if ["var/db/pkg", "var/lib/portage", "var/cache/edb"].contains(&rel.as_str()) {
+                        continue;
+                    }
+                    let meta = std::fs::symlink_metadata(&path).unwrap();
+                    let data = if meta.file_type().is_symlink() {
+                        std::fs::read_link(&path)
+                            .unwrap()
+                            .display()
+                            .to_string()
+                            .into_bytes()
+                    } else if meta.is_file() {
+                        std::fs::read(&path).unwrap()
+                    } else {
+                        Vec::new()
+                    };
+                    out.insert(rel, (meta.mode(), data));
+                    if meta.is_dir() {
+                        walk(root, &path, out);
+                    }
+                }
+            }
+            let mut out = Tree::new();
+            walk(root, root, &mut out);
+            // A directory left with nothing in the tree only held a store
+            // (`var/db`, `var/cache` exist on `files` alone).
+            // Deepest first, so a parent of a dropped directory goes too.
+            let mut keys: Vec<String> = out.keys().cloned().collect();
+            keys.sort_by_key(|k| std::cmp::Reverse(k.matches('/').count()));
+            for rel in keys {
+                let is_dir = out[&rel].0 & 0o170000 == 0o040000;
+                let prefix = format!("{rel}/");
+                if is_dir && !out.keys().any(|k| k.starts_with(&prefix)) {
+                    out.remove(&rel);
+                }
+            }
+            out
+        }
+
+        fn install_hook(f: impl Fn(&Path) + 'static) {
+            PUBLISH_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(f)));
+        }
+
+        fn clear_hook() {
+            PUBLISH_HOOK.with(|hook| *hook.borrow_mut() = None);
+        }
+
+        /// What one merge leaves: the entry, the payload, the config memory.
+        fn outcome(root: &Path, key: &EntryKey) -> (Tree, Tree, portage_vdb::ConfigMemory) {
+            let db = portage_vdb::for_root(root);
+            (
+                entry_files(db.as_ref(), key),
+                payload_tree(root),
+                db.config_memory().unwrap(),
+            )
+        }
+
+        /// (a) + (c): a binpkg merged on sqlite stores the same entry
+        /// files (bytes and modes; `metadata` without its directory-mtime
+        /// stamp) and lands the same payload as the same merge on `files`.
+        /// Both runs use the same ROOT and PORTAGE_TMPDIR paths, so the
+        /// `pkg_postinst` `PORTAGE_UPDATE_ENV` rewrite of `environment.bz2`
+        /// (which records paths) is byte-identical; on sqlite it went
+        /// through the scratch copy and `replace_file`, and the stored
+        /// bytes differ from the binpkg's (the pending entry's) own.
+        #[test]
+        fn a_binpkg_merged_on_sqlite_matches_the_files_merge() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let key = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            let merge = || {
+                std::fs::create_dir_all(&root).unwrap();
+                let status = merge_binpkg(
+                    &binpkg("binpkgrmpkg-1.0.tbz2"),
+                    &root,
+                    &ptmp,
+                    &MergeOptions::default(),
+                )
+                .expect("merge succeeds");
+                assert_eq!(status, 0);
+            };
+
+            merge();
+            let on_files = outcome(&root, &key);
+            std::fs::remove_dir_all(&root).unwrap();
+            let _ = std::fs::remove_dir_all(&ptmp);
+
+            std::fs::create_dir_all(&root).unwrap();
+            let db = use_sqlite(&root, &tmp.join("vdb.sqlite"));
+            let pending_env: Rc<RefCell<Option<Vec<u8>>>> = Rc::default();
+            {
+                let db = db.clone();
+                let pending_env = pending_env.clone();
+                let key = key.clone();
+                install_hook(move |_| {
+                    *pending_env.borrow_mut() =
+                        db.read_pending_file(&key, "environment.bz2").unwrap();
+                });
+            }
+            merge();
+            clear_hook();
+            let on_sqlite = outcome(&root, &key);
+
+            assert!(
+                !root.join("var/db/pkg").exists(),
+                "a sqlite merge writes no var/db/pkg"
+            );
+            assert_eq!(on_sqlite.0, on_files.0, "entry files differ");
+            assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+            assert_eq!(on_sqlite.2, on_files.2, "config memory differs");
+            let pending_env = pending_env.borrow().clone().expect("pending env");
+            assert_ne!(
+                on_sqlite.0["environment.bz2"].1, pending_env,
+                "pkg_postinst's PORTAGE_UPDATE_ENV rewrite reached the database"
+            );
+            assert!(db.pending_entries().unwrap().is_empty());
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// (b): a same-slot upgrade on sqlite, over a converted VDB. Right
+        /// before the publishing commit the old instance is still the
+        /// installed one and the new one is pending; after it, only the
+        /// new one is installed. The replaced version's `pkg_prerm` /
+        /// `pkg_postrm` ran from its stored environment (scratch copy).
+        #[test]
+        fn a_same_slot_upgrade_on_sqlite_replaces_in_the_publishing_commit() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            std::fs::create_dir_all(&root).unwrap();
+            let old = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            let new = EntryKey::new("dev-libs", "binpkgrmpkg-2.0");
+
+            // 1.0 is installed on `files`, then the root is converted.
+            merge_binpkg(
+                &binpkg("binpkgrmpkg-1.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("1.0 merges");
+            let db = use_sqlite(&root, &tmp.join("vdb.sqlite"));
+            assert!(db.has_entry(&old).unwrap());
+
+            // (old live, new live, pending, generation) right before the commit.
+            type Seen = (bool, bool, Vec<EntryKey>, u64);
+            let seen: Rc<RefCell<Option<Seen>>> = Rc::default();
+            {
+                let db = db.clone();
+                let seen = seen.clone();
+                let (old, new) = (old.clone(), new.clone());
+                install_hook(move |_| {
+                    *seen.borrow_mut() = Some((
+                        db.has_entry(&old).unwrap(),
+                        db.has_entry(&new).unwrap(),
+                        db.pending_entries().unwrap(),
+                        db.generation().unwrap(),
+                    ));
+                });
+            }
+            let status = merge_binpkg(
+                &binpkg("binpkgrmpkg-2.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("2.0 merges");
+            clear_hook();
+            assert_eq!(status, 0);
+
+            let (old_live, new_live, pending, generation) =
+                seen.borrow().clone().expect("the publish hook ran");
+            assert!(old_live, "the old instance is installed until the commit");
+            assert!(!new_live, "the new instance is not live before the commit");
+            assert_eq!(pending, vec![new.clone()]);
+
+            assert!(!db.has_entry(&old).unwrap());
+            assert!(db.has_entry(&new).unwrap());
+            assert!(db.pending_entries().unwrap().is_empty());
+            assert!(db.generation().unwrap() > generation);
+            assert!(!root.join("var/db/pkg/dev-libs/binpkgrmpkg-2.0").exists());
+            assert!(root.join("usr/share/binpkgrmpkg/payload-2.0.txt").is_file());
+            assert!(!root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists());
+            assert_eq!(
+                std::fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap(),
+                "setup-1.0\npreinst-1.0\npostinst-1.0\n\
+                 setup-2.0\npreinst-2.0\nprerm-1.0\npostrm-1.0\npostinst-2.0\n"
+            );
+            // The counter ticked once on sqlite (1.0 took 0 on `files`).
+            assert_eq!(
+                db.read_file(&new, "COUNTER").unwrap().as_deref(),
+                Some(&b"1"[..])
+            );
+            assert_eq!(db.counter().unwrap(), Some(portage_vdb::Counter(1)));
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// A source merge (`ebuild <file> merge`) on sqlite: same entry
+        /// files and payload as on `files`, the `pkg_postinst` environment
+        /// rewrite included.
+        #[test]
+        fn a_source_merge_on_sqlite_matches_the_files_merge() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let ebuild = fixtures_root().join("repo/dev-libs/mergepkg/mergepkg-1.0.ebuild");
+            let key = EntryKey::new("dev-libs", "mergepkg-1.0");
+            let merge = || {
+                std::fs::create_dir_all(&root).unwrap();
+                std::fs::create_dir_all(&ptmp).unwrap();
+                let status = run_merge(&ebuild, &root, &ptmp, &MergeOptions::default(), None)
+                    .expect("run_merge succeeds");
+                assert_eq!(status, 0);
+            };
+
+            merge();
+            let on_files = outcome(&root, &key);
+            std::fs::remove_dir_all(&root).unwrap();
+            let _ = std::fs::remove_dir_all(&ptmp);
+
+            std::fs::create_dir_all(&root).unwrap();
+            use_sqlite(&root, &tmp.join("vdb.sqlite"));
+            merge();
+            let on_sqlite = outcome(&root, &key);
+
+            assert!(!root.join("var/db/pkg").exists());
+            assert_eq!(
+                on_sqlite.0.keys().collect::<Vec<_>>(),
+                on_files.0.keys().collect::<Vec<_>>()
+            );
+            for (name, (mode, data)) in &on_files.0 {
+                // A source build records its own build time.
+                if name == "BUILD_TIME" || name == "metadata" {
+                    continue;
+                }
+                assert_eq!(&on_sqlite.0[name].0, mode, "{name} mode");
+                // `CONTENTS` records each file's mtime, which a fresh
+                // build moves: compare the lines without their mtime.
+                let strip = |b: &[u8]| -> Vec<String> {
+                    String::from_utf8_lossy(b)
+                        .lines()
+                        .map(|l| match l.split_whitespace().next() {
+                            Some("obj" | "sym") => l.rsplit_once(' ').map_or(l, |(a, _)| a),
+                            _ => l,
+                        })
+                        .map(String::from)
+                        .collect()
+                };
+                if name == "CONTENTS" {
+                    assert_eq!(strip(&on_sqlite.0[name].1), strip(data), "CONTENTS lines");
+                    continue;
+                }
+                assert_eq!(&on_sqlite.0[name].1, data, "{name} bytes");
+            }
+            assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
     }
 }

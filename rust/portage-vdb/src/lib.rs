@@ -250,6 +250,51 @@
 //!     file" lines stay in `pretend`. On a bare VDB directory the reads
 //!     are empty and the writes are [`Error::Unsupported`].
 //!
+//! 23. **S4.1: the merge on a database backend (two interface
+//!     additions).** [`WriteTxn::finish_entry_replacing`] deletes the
+//!     replaced same-slot entries and publishes the pending one in one
+//!     transaction (default: `delete_entry` each, then `finish_entry`, the
+//!     order of item 4); [`InstalledDb::replace_in_publish`] tells the
+//!     merge whether to use it (`files`: `false`, database backends:
+//!     `true`). **`files` is unchanged**: the replace loop still removes
+//!     each old directory after its `pkg_postrm`, and `publish_vdb_tmp` /
+//!     the preserved-libs registration are the S1.4 calls. On a database
+//!     backend one merge with a same-slot replace commits, in order:
+//!     (1) `begin_entry` (the `merging` row, before `pkg_preinst`);
+//!     (2) the build-info files, `CATEGORY`/`SLOT`/`repository`, and
+//!     `next_counter` + `COUNTER` (the high-water mark is consumed here,
+//!     so a crash never hands a published value out again); (3) the config
+//!     memory of the payload merge; (4) `CONTENTS` + `seal_entry`; then
+//!     the D4 writes the replace loop makes for each old instance (W4
+//!     `replace_file` on preserved-lib owners, the registry, the stale
+//!     config memory), each its own commit, **without** deleting the old
+//!     row; then (F) **one commit**: `finish_entry_replacing(new, olds)`
+//!     (old rows gone, new row `installed`, derived tables,
+//!     `counter_hwm = max(hwm, COUNTER)`) plus the merge's preserved-libs
+//!     registration (`set_preserved_libs`, counter read from the pending
+//!     entry). After it: the `pkg_postinst` `environment.bz2` rewrite
+//!     (one `replace_file` commit) and the post-merge preserved-libs
+//!     prune. Commits 1–4 touch only the invisible `merging` row (plus
+//!     the counter and D4 stores), so until (F) every reader, `has_version`
+//!     included, sees the old instance; a crash anywhere before (F)
+//!     leaves the old instance installed and a `merging` orphan (design
+//!     §9.1). Commits 2 and 4 cannot join (1) or (F): `pkg_preinst` runs
+//!     between (1) and (2), and the replace loop reads the pending
+//!     `CONTENTS`/`NEEDED.ELF.2` that (4) and (2) store. The D4 writes
+//!     before (F) stay separate because the next step of the merge reads
+//!     them back (the loop re-reads the registry and the config memory).
+//!     `world` is written by `pretend` at the end of the run (§0.7).
+//!     The replace loop tells a later old instance's unmerge which
+//!     earlier ones it already unmerged (their rows are still live), so
+//!     `others_in_slot` matches `files`. **Paths for bash and copiers
+//!     (N9)**: [`materialize_files`] / [`materialize_entry`] write the
+//!     needed files of a live entry into a scratch directory
+//!     (`PORTAGE_UPDATE_ENV` → `<builddir>/vdb-update-env/`, the saved-env
+//!     phases → `<scratch>/vdb-entry/<cat>/<pf>/`, `quickpkg` → the whole
+//!     entry there) and [`absorb_file`] stores a rewritten file back
+//!     with one `replace_file` commit when its bytes changed. `files`
+//!     keeps [`InstalledDb::entry_path`].
+//!
 //! # SqliteDb (feature `vdb-sqlite`)
 //!
 //! S2.3 adds the schema and `open` / `open_readonly`; S2.4 the read side;
@@ -400,6 +445,7 @@ mod error;
 mod files;
 mod files_write;
 mod registry;
+mod scratch;
 #[cfg(feature = "vdb-sqlite")]
 mod sqlite;
 mod types;
@@ -409,6 +455,7 @@ pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
 pub use registry::{for_root, register, reset};
+pub use scratch::{absorb_file, materialize_entry, materialize_files};
 #[cfg(feature = "vdb-sqlite")]
 pub use sqlite::{SCHEMA_VERSION, SqliteDb};
 pub use types::*;
@@ -606,6 +653,18 @@ pub trait InstalledDb: Send + Sync {
     /// here (sqlite `BEGIN IMMEDIATE`).
     fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>>;
 
+    /// Whether a merge deletes the entries of the same-slot instances it
+    /// replaces in the publishing transaction
+    /// ([`WriteTxn::finish_entry_replacing`]) instead of one by one in
+    /// the replace loop (module doc, item 23). `files`: `false`, the
+    /// S1.4 order (each old directory is removed right after its
+    /// `pkg_postrm`, then the new one is renamed in). Database backends:
+    /// `true`, so the old instance stays installed until the one commit
+    /// that publishes the new one.
+    fn replace_in_publish(&self) -> bool {
+        self.kind() != BackendKind::Files
+    }
+
     /// Get the import mark: the generation value and source path at the time
     /// the database was converted from a files backend. `None` if the
     /// database has never been converted from files, or it's a files backend.
@@ -655,6 +714,22 @@ pub trait WriteTxn {
     /// Publish the pending entry for `key` (`files`: remove a live entry
     /// with the same `pf`, then rename `-MERGING-<pf>` into place).
     fn finish_entry(&mut self, key: &EntryKey) -> Result<()>;
+
+    /// Delete the live entries `replaced` (the same-slot instances this
+    /// merge replaces), then publish the pending entry for `key`, in this
+    /// transaction (design §9, module doc item 23). The default is
+    /// [`WriteTxn::delete_entry`] for each, in order, then
+    /// [`WriteTxn::finish_entry`]: the replace order of item 4. On a
+    /// database backend the whole call commits at once, so no reader sees
+    /// both instances or neither. The merge passes an empty `replaced` on
+    /// `files`, which already deleted them in the replace loop
+    /// ([`InstalledDb::replace_in_publish`]).
+    fn finish_entry_replacing(&mut self, key: &EntryKey, replaced: &[EntryKey]) -> Result<()> {
+        for old in replaced {
+            self.delete_entry(old)?;
+        }
+        self.finish_entry(key)
+    }
 
     /// Insert a whole live entry from an image (converters, W1 in one
     /// call). Counters are kept as they are. `files`: writes the files,

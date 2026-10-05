@@ -102,6 +102,7 @@
 
 use clap::builder::PossibleValuesParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
+#[cfg(feature = "vdb-sqlite")]
 use portage_vdb::InstalledDb;
 use std::process::ExitCode;
 
@@ -1577,6 +1578,7 @@ fn open_vdb_backend(
 
 /// Check if the database backend is stale (the source files VDB changed since conversion).
 /// Returns a warning message if stale, `None` if not stale or if no import mark is set.
+#[cfg(feature = "vdb-sqlite")]
 fn stale_db_warning(mark: Option<(u64, String)>, files_gen: u64, db_path: &Path) -> Option<String> {
     let (mark_gen, mark_src) = mark?;
     // If import_mark is set but the files generation is 0, the source doesn't exist anymore
@@ -2457,6 +2459,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "vdb-sqlite")]
     fn test_stale_db_warning() {
         use std::path::PathBuf;
         let db_path = PathBuf::from("/var/lib/portage/vdb.sqlite");

@@ -1468,14 +1468,22 @@ pub(crate) fn quickpkg_from_vdb(
     let ext = binpkg_extension(&options.binpkg_format)?;
     // The entry's files are read through the root's installed-database
     // backend (feat#157 S1.6; `files`: one `open` each, as before). The
-    // vdb ebuild and the whole entry are handed to a copier by path, so a
-    // backend with no entry directory cannot be packaged from yet.
+    // vdb ebuild and the whole entry are handed to a copier by path: the
+    // entry directory on `files`, a scratch copy of the whole entry under
+    // `scratch_ebuild_dir` on a database backend (S4.1).
     let db = portage_vdb::for_root(root);
     let key = portage_vdb::EntryKey::new(category, pf);
-    let Some(vdb_dir) = db.entry_path(&key) else {
-        return Err(format!(
-            "{category}/{pf}: quickpkg needs a directory-backed installed database"
-        ));
+    let vdb_dir = match db.entry_path(&key) {
+        Some(dir) => dir,
+        None => {
+            let dir = scratch_ebuild_dir.join("vdb-entry").join(category).join(pf);
+            if !portage_vdb::materialize_entry(db.as_ref(), &key, &dir)
+                .map_err(|e| e.to_string())?
+            {
+                return Err(format!("{category}/{pf}: not installed"));
+            }
+            dir
+        }
     };
     let vdb_build_time = ebuild_merge::read_entry_text(root, category, pf, "BUILD_TIME")
         .unwrap_or_default()

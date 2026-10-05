@@ -5964,6 +5964,9 @@ fn execute_unmerge(
             // Standalone `emerge -C`: no replacing package, so neither
             // feed (backlog #224).
             &[],
+            // The entry is deleted at once, as before (S4.1 defers only
+            // the replace loop's deletes).
+            None,
         ) {
             // Backlog #196 fix round 1: real `post_emerge` prints the
             // notice regardless of retval -- gated on the vdb having

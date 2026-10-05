@@ -544,6 +544,12 @@ pub struct UnmergeOptions {
     /// eclass_locations_value`'s own masters-chain resolution, reached
     /// via `prerm`/`postrm`'s own `run_single_phase` call below).
     pub config_root: PathBuf,
+    /// feat#157 S4.1: `pf`s of the same category that the merge's replace
+    /// loop already unmerged but whose entries a database backend keeps
+    /// installed until the publishing commit. They are left out of
+    /// `others_in_slot`, as on `files`, where their directories are
+    /// already gone. Empty everywhere else.
+    pub already_unmerged: Vec<String>,
 }
 
 impl Default for UnmergeOptions {
@@ -555,6 +561,7 @@ impl Default for UnmergeOptions {
             config_protect_mask: "/etc/env.d".to_string(),
             unmerge_orphans: true,
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
+            already_unmerged: Vec::new(),
         }
     }
 }
@@ -633,7 +640,7 @@ pub(crate) fn unmerge_pkgfiles(
         Some(slot) => portage_repo::installed_versions(root, category, pn)
             .into_iter()
             .map(|version| format!("{pn}-{version}"))
-            .filter(|other_pf| other_pf != pf)
+            .filter(|other_pf| other_pf != pf && !options.already_unmerged.contains(other_pf))
             .filter(|other_pf| {
                 let version = &other_pf[pn.len() + 1..];
                 ebuild_merge::read_installed_slot(root, category, pn, version).as_deref()
