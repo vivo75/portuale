@@ -369,6 +369,15 @@ impl View {
         }
     }
 
+    fn ino(&self, node: &Node) -> u64 {
+        lock(&self.inodes).intern(node)
+    }
+
+    /// The inode of `node`, interned on first use (stable, never reused).
+    pub(crate) fn ino_of(&self, node: &Node) -> u64 {
+        self.ino(node)
+    }
+
     /// Make `ino` stand for `node` from now on (the read-write layer's
     /// publish keeps the staged directory's inode, as a rename does).
     pub(crate) fn rebind(&self, ino: u64, node: Node) {

@@ -230,11 +230,94 @@ pub struct RwView {
 }
 
 impl RwView {
+    /// A read-write layer over `db`. `scratch` is emptied (a previous
+    /// daemon's staged entries are discarded, like Portage removes a
+    /// stale `-MERGING-` directory) and created. `owner` is what `getattr`
+    /// reports for everything but volatile files.
+    pub fn new(db: Arc<dyn InstalledDb>, scratch: PathBuf, owner: Owner) -> std::io::Result<Self> {
+        match std::fs::remove_dir_all(&scratch) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        std::fs::create_dir_all(&scratch)?;
+        Ok(RwView {
+            view: View::new(db.clone()),
+            db,
+            scratch,
+            owner,
+            st: Mutex::new(RwState {
+                next_obj: 1,
+                objs: HashMap::new(),
+                names: BTreeMap::new(),
+                vol_cats: BTreeMap::new(),
+                hidden: BTreeMap::new(),
+                handles: HashMap::new(),
+                next_fh: FH_BASE,
+                next_scratch: 1,
+            }),
+        })
+    }
+
+    fn obj_ino(&self, id: u64) -> u64 {
+        self.view.ino_of(&Node::Obj(id))
+    }
+
     fn new_fh(st: &mut RwState, h: Fh) -> u64 {
         let fh = st.next_fh;
         st.next_fh += 1;
         st.handles.insert(fh, h);
         fh
+    }
+
+    fn obj_attr(&self, id: u64, obj: &Obj) -> Res<Attr> {
+        let ino = self.obj_ino(id);
+        Ok(match obj {
+            Obj::Vol {
+                data,
+                mode,
+                mtime_ns,
+                nlink,
+                ..
+            } => Attr {
+                ino,
+                kind: Kind::File,
+                perm: (*mode & 0o7777) as u16,
+                size: data.len() as u64,
+                nlink: *nlink,
+                mtime_ns: *mtime_ns,
+            },
+            Obj::StagedDir { mode, mtime_ns, .. } => Attr {
+                ino,
+                kind: Kind::Dir,
+                perm: (*mode & 0o7777) as u16,
+                size: 0,
+                nlink: 2,
+                mtime_ns: *mtime_ns,
+            },
+            Obj::StagedFile { path } => {
+                let md = std::fs::metadata(path).map_err(io_err)?;
+                Attr {
+                    ino,
+                    kind: Kind::File,
+                    perm: (md.mode() & 0o7777) as u16,
+                    size: md.len(),
+                    nlink: 1,
+                    mtime_ns: mtime_of(&md),
+                }
+            }
+        })
+    }
+
+    fn vol_cat_attr(&self, cat: &str, mtime_ns: i128) -> Attr {
+        Attr {
+            ino: self.view.ino_of(&Node::Cat(cat.to_string())),
+            kind: Kind::Dir,
+            perm: 0o755,
+            size: 0,
+            nlink: 2,
+            mtime_ns,
+        }
     }
 
     /// A scratch path for a file outside any staged directory.
@@ -321,6 +404,44 @@ impl RwView {
         Ok(bytes.len() as u32)
     }
 
+    /// `os.rename(<old_pf>.ebuild, <new_pf>.ebuild)` inside a live entry
+    /// (`move_ent`): a stored file takes a new name (the whole entry is
+    /// rewritten in one transaction, stamp turned stale as any change of
+    /// the directory does).
+    fn rename_stored_file(&self, key: &EntryKey, name: &str, newname: &str) -> Res<()> {
+        let st = lock(&self.st);
+        if Self::removing(&st, key) {
+            return Err(ViewError::NoEnt);
+        }
+        let mut image = self.db.entry_image(key)?.ok_or(ViewError::NoEnt)?;
+        let Some(pos) = image.files.iter().position(|f| f.meta.name == name) else {
+            return Err(ViewError::NoEnt);
+        };
+        image.files.retain(|f| f.meta.name != newname);
+        let pos = image
+            .files
+            .iter()
+            .position(|f| f.meta.name == name)
+            .unwrap_or(pos);
+        image.files[pos].meta.name = newname.to_string();
+        image.files.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
+        image.dir_mtime_ns = now_ns();
+        if image.metadata_stamp == MetadataStamp::Valid {
+            image.metadata_stamp = MetadataStamp::Stale;
+        }
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.insert_entry(&image)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        drop(st);
+        let ino = self.view.ino_of(&Node::File(key.clone(), name.to_string()));
+        self.view
+            .rebind(ino, Node::File(key.clone(), newname.to_string()));
+        Ok(())
+    }
+
     /// Rename one of this layer's names (volatile files, staged files),
     /// replacing whatever `newname` named.
     fn move_name(&self, from: Parent, name: &str, to: Parent, newname: &str) -> Res<()> {
@@ -390,6 +511,60 @@ impl RwView {
             dir_mtime_ns: *mtime_ns,
             metadata_stamp,
         })
+    }
+
+    /// `rename(<entry>/<temp>, <entry>/<field>)` inside a live entry.
+    fn replace_from_temp(&self, key: &EntryKey, temp: &str, field: &str) -> Res<()> {
+        let mut st = lock(&self.st);
+        let tkey = (Parent::Live(key.clone()), temp.to_string());
+        let id = *st.names.get(&tkey).ok_or(ViewError::NoEnt)?;
+        let Some(Obj::StagedFile { path }) = st.objs.get(&id) else {
+            return Err(ViewError::Perm);
+        };
+        if Self::removing(&st, key) {
+            return Err(ViewError::NoEnt);
+        }
+        // A rename carries the temp's bytes, mode and mtime, and moves the
+        // directory mtime, so a valid `metadata` stamp turns stale, as on
+        // disk. The whole entry is rewritten in one transaction.
+        let md = std::fs::metadata(path).map_err(io_err)?;
+        let data = std::fs::read(path).map_err(io_err)?;
+        let path = path.clone();
+        let mut image = self.db.entry_image(key)?.ok_or(ViewError::NoEnt)?;
+        let file = EntryFile {
+            meta: FileMeta {
+                name: field.to_string(),
+                len: data.len() as u64,
+                mode: md.mode(),
+                mtime_ns: mtime_of(&md),
+            },
+            data,
+        };
+        match image.files.iter_mut().find(|f| f.meta.name == field) {
+            Some(f) => *f = file,
+            None => {
+                image.files.push(file);
+                image.files.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
+            }
+        }
+        image.dir_mtime_ns = now_ns();
+        if image.metadata_stamp == MetadataStamp::Valid {
+            image.metadata_stamp = MetadataStamp::Stale;
+        }
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.insert_entry(&image)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        st.names.remove(&tkey);
+        st.objs.remove(&id);
+        drop(st);
+        let _ = std::fs::remove_file(path);
+        // The renamed file keeps its inode.
+        self.view
+            .rebind(self.obj_ino(id), Node::File(key.clone(), field.to_string()));
+        Ok(())
     }
 
     /// The database stores no owner: a `chown` to the owner `getattr`
