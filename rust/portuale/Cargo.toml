@@ -143,8 +143,9 @@ clap = "4"
 # feat#157 (#305): optional VDB backend features. Q6 default: vdb-sqlite
 # and vdb-redb are ON in the default dev build, OFF in the minimal
 # static build profile (S2.1, S5.1).
-default = ["vdb-sqlite"]
+default = ["vdb-sqlite", "vdb-redb"]
 vdb-sqlite = ["portage-vdb/vdb-sqlite"]
+vdb-redb = ["portage-vdb/vdb-redb"]
 
 [dev-dependencies]
 # Test-only: assemble gpkg `Manifest` `DATA` lines with real BLAKE2B

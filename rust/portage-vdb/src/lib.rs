@@ -506,6 +506,29 @@ pub fn sqlite_version() -> &'static str {
     rusqlite::version()
 }
 
+/// feat#157 (#305) S5.1: prove that redb links in the vdb-redb feature.
+/// Creates a redb Database at path and writes one key in a table.
+#[cfg(feature = "vdb-redb")]
+pub fn redb_smoke(path: &std::path::Path) -> Result<()> {
+    let db = redb::Database::create(path).map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+    let write_txn = db
+        .begin_write()
+        .map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+    {
+        let table_def: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new("test");
+        let mut table = write_txn
+            .open_table(table_def)
+            .map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+        table
+            .insert(b"key" as &[u8], b"value" as &[u8])
+            .map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+    }
+    write_txn
+        .commit()
+        .map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+    Ok(())
+}
+
 /// Real `_METADATA_FILE_FIELDS` (`vartree.py:78-104`): the 23 single-line
 /// fields of the consolidated `metadata` file, sorted. `CONTENTS` and
 /// `NEEDED*` are line-oriented and excluded. The set is part of the
@@ -832,5 +855,29 @@ mod tests {
         assert!(!version.is_empty());
         // The version should contain at least one digit
         assert!(version.chars().any(|c| c.is_ascii_digit()));
+    }
+}
+
+#[cfg(all(test, feature = "vdb-redb"))]
+mod redb_tests {
+    use super::*;
+
+    #[test]
+    fn test_redb_smoke() {
+        let temp_dir = std::env::temp_dir().join("redb-smoke-test");
+        let db_path = temp_dir.join("test.db");
+
+        // Clean up any previous test database
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // Run the smoke test
+        let result = redb_smoke(&db_path);
+        assert!(result.is_ok(), "redb_smoke failed: {:?}", result);
+
+        // Clean up
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&temp_dir);
     }
 }
