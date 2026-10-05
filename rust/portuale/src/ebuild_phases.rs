@@ -3449,6 +3449,41 @@ async fn new_brush_phase_shell() -> Result<brush_core::Shell, String> {
     Ok(shell)
 }
 
+/// Restores the process umask on drop. The embedded `Brush` shell's
+/// `umask` builtin (`bin/ebuild.sh` runs `umask 022`, `phase-functions.sh`
+/// `umask 002`) is the process-wide `umask(2)`, whereas real runs every
+/// phase in its own process and the parent's umask never moves. Without
+/// this, one in-process phase leaves its umask behind for every later
+/// file the host process (or a parallel test) creates (#308).
+struct UmaskGuard(libc::mode_t);
+
+impl UmaskGuard {
+    fn save() -> Self {
+        // `/proc/self/status` reads without the `umask(0)` dance, which
+        // would briefly make files created by other threads world-writable.
+        let from_proc = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("Umask:"))
+                    .and_then(|v| libc::mode_t::from_str_radix(v.trim(), 8).ok())
+            });
+        Self(from_proc.unwrap_or_else(|| {
+            // SAFETY: `umask(2)` cannot fail.
+            let old = unsafe { libc::umask(0) };
+            unsafe { libc::umask(old) };
+            old
+        }))
+    }
+}
+
+impl Drop for UmaskGuard {
+    fn drop(&mut self) {
+        // SAFETY: `umask(2)` cannot fail.
+        unsafe { libc::umask(self.0) };
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_one_phase_brush(
     env: &Environment,
@@ -3461,6 +3496,7 @@ async fn run_one_phase_brush(
     config_root: &Path,
     log_file: Option<&Path>,
 ) -> Result<i32, String> {
+    let _umask = UmaskGuard::save();
     let mut shell = new_brush_phase_shell().await?;
     let (params, pump) = brush_phase_params(&mut shell, log_file)?;
 
@@ -4095,6 +4131,7 @@ async fn run_misc_functions_brush(
     config_root: &Path,
     log_file: Option<&Path>,
 ) -> Result<i32, String> {
+    let _umask = UmaskGuard::save();
     let mut shell = new_brush_phase_shell().await?;
     let (params, pump) = brush_phase_params(&mut shell, log_file)?;
 
@@ -5599,6 +5636,56 @@ mod tests {
             .unwrap_or_else(|e| panic!("{} should have been installed: {e}", installed.display()));
         assert_eq!(contents, "hello from phasepkg\n");
 
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// #308: an in-process `Brush` phase must not leave its umask behind.
+    /// `bin/ebuild.sh` runs `umask 022` and brush's builtin is the
+    /// process-wide `umask(2)`; real runs each phase in its own process.
+    /// The test moves the umask, which would itself race every parallel
+    /// test's file modes, so the body runs in a re-executed child of this
+    /// test binary (`PORTUALE_UMASK_CHILD`) and the parent only checks it.
+    #[test]
+    fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
+        if std::env::var_os("PORTUALE_UMASK_CHILD").is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ebuild_phases::tests::a_brush_phase_does_not_leak_its_umask_into_the_host_process",
+                    "--nocapture",
+                ])
+                .env("PORTUALE_UMASK_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "child failed:\n{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+        let portage_tmpdir = TempDir::new(&format!("umask-leak-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        // SAFETY: `umask(2)` cannot fail; this is the single-test child.
+        unsafe { libc::umask(0o027) };
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Brush,
+            &[],
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0);
+        let after = unsafe { libc::umask(0o027) };
+        assert_eq!(after, 0o027, "the phase's umask leaked: {after:04o}");
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
 
