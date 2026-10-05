@@ -22,6 +22,9 @@
 //! keys, file names, `aux_get` values, world atoms, preserved-libs records
 //! and config memory are `String` (decoded, lossy for `aux_get`).
 
+mod convert;
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+mod dep_cp;
 mod error;
 mod files;
 mod files_write;
@@ -34,6 +37,8 @@ mod sqlite;
 #[cfg(all(test, any(feature = "vdb-sqlite", feature = "vdb-redb")))]
 mod test_support;
 mod types;
+
+pub use convert::{CopyReport, VerifyReport, copy_all, verify};
 pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};

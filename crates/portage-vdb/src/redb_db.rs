@@ -101,16 +101,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use redb::{
+    Database, MultimapTableDefinition, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction,
+    ReadableDatabase, ReadableTable, TableDefinition,
+};
+
+use crate::dep_cp::UNSURE_CP;
 use crate::files::owner_wanted;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryFile, EntryImage,
     EntryKey, EntryStat, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, MetadataStamp,
     PreservedLibs, PreservedLibsEntry, Result, Snapshot, World, WorldSets, WriteTxn,
     in_metadata_file,
-};
-use redb::{
-    Database, MultimapTableDefinition, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction,
-    ReadableDatabase, ReadableTable, TableDefinition,
 };
 
 // ---------------------------------------------------------------------

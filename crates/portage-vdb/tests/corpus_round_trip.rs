@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use portage_vdb::{FilesDb, InstalledDb};
+use portage_vdb::{FilesDb, InstalledDb, copy_all, verify};
 
 fn scratch(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!(

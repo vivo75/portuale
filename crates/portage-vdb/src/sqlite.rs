@@ -17,6 +17,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 
 mod write;
+
+use crate::dep_cp::UNSURE_CP;
 use crate::files::owner_wanted;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryFile, EntryImage,
