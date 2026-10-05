@@ -99,6 +99,7 @@ pub fn absorb_file(db: &dyn InstalledDb, key: &EntryKey, dir: &Path, name: &str)
 #[cfg(all(test, feature = "vdb-sqlite"))]
 mod tests {
     use super::*;
+    use crate::SqliteDb;
     use std::path::PathBuf;
 
     struct Tmp(PathBuf);
