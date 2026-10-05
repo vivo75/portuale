@@ -80,6 +80,9 @@ enum Parent {
     Cat(String),
     /// A staged `-MERGING-<pf>` directory (its object id).
     Staged(u64),
+    /// A live entry: new names real creates in it (`write_atomic` temps,
+    /// `_umask_test` files) until they are renamed onto a field.
+    Live(EntryKey),
 }
 
 /// The prefix real Portage gives an entry while it is being merged
@@ -104,8 +107,8 @@ enum Obj {
         mode: u32,
         mtime_ns: i128,
     },
-    /// A file inside a staged directory: the scratch file holds the bytes,
-    /// mode and mtime.
+    /// A file inside a staged directory, or a new name inside a live
+    /// entry: the scratch file holds the bytes, mode and mtime.
     StagedFile { path: PathBuf },
 }
 
@@ -118,6 +121,17 @@ enum Fh {
     Vol(u64),
     /// An open staged file.
     Staged(std::fs::File),
+    /// A stored file of a live entry opened for writing: the new bytes
+    /// build up in a scratch copy and are stored with `replace_file` at
+    /// `flush` (the `close` real sees). Real's `PORTAGE_UPDATE_ENV`
+    /// rewrite of `environment.bz2` in `pkg_postinst`.
+    Live {
+        key: EntryKey,
+        name: String,
+        file: std::fs::File,
+        path: PathBuf,
+        dirty: bool,
+    },
 }
 
 struct RwState {
@@ -126,11 +140,17 @@ struct RwState {
     /// This layer's names: `(parent, name) -> object id`. Hardlinks are two
     /// names with one id.
     names: BTreeMap<(Parent, String), u64>,
-    /// Categories that exist only because of `mkdir` (no entry yet),
+    /// Categories that exist only because of `mkdir` (no entry yet), or
+    /// because an unmerge emptied them and real has not removed them yet,
     /// with their mtime.
     vol_cats: BTreeMap<String, i128>,
+    /// Stored files real has unlinked from a live entry (an `rmtree` in
+    /// progress): hidden from the view until `rmdir` deletes the entry.
+    hidden: BTreeMap<EntryKey, std::collections::BTreeSet<String>>,
     handles: HashMap<u64, Fh>,
     next_fh: u64,
+    /// Names for scratch files that are not in a staged directory.
+    next_scratch: u64,
 }
 
 impl RwState {
@@ -207,6 +227,14 @@ pub(crate) fn stamp_state(metadata: Option<&[u8]>, dir_mtime_ns: i128) -> Metada
 
 const DIR_MTIME_PREFIX: &[u8] = b"#dir_mtime=";
 
+/// The category a category inode stands for.
+fn cat_name(view: &View, ino: u64) -> Res<String> {
+    match view.node_of(ino)? {
+        Node::Cat(c) => Ok(c),
+        _ => Err(ViewError::NotDir),
+    }
+}
+
 pub struct RwView {
     view: View,
     db: Arc<dyn InstalledDb>,
@@ -237,8 +265,10 @@ impl RwView {
                 objs: HashMap::new(),
                 names: BTreeMap::new(),
                 vol_cats: BTreeMap::new(),
+                hidden: BTreeMap::new(),
                 handles: HashMap::new(),
                 next_fh: FH_BASE,
+                next_scratch: 1,
             }),
         })
     }
@@ -339,8 +369,22 @@ impl RwView {
                 Some(_) => return Err(ViewError::NotDir),
                 None => return Err(ViewError::NoEnt),
             },
+            Node::Entry(k) => Some(Parent::Live(k)),
             _ => None,
         })
+    }
+
+    /// A scratch path for a file outside any staged directory.
+    fn scratch_file(&self, st: &mut RwState) -> PathBuf {
+        let n = st.next_scratch;
+        st.next_scratch += 1;
+        self.scratch.join(format!("live-{n}"))
+    }
+
+    /// Whether `key` is being removed (real's `rmtree` has unlinked some
+    /// of its files).
+    fn removing(st: &RwState, key: &EntryKey) -> bool {
+        st.hidden.get(key).is_some_and(|h| !h.is_empty())
     }
 
     // ------------------------------------------------------- read side
@@ -377,6 +421,19 @@ impl RwView {
                     .ok_or(ViewError::NoEnt)?;
                 self.obj_attr(id, &st.objs[&id])
             }
+            Node::Entry(key) => {
+                {
+                    let st = lock(&self.st);
+                    if let Some(&id) = st.names.get(&(Parent::Live(key.clone()), name.to_string()))
+                    {
+                        return self.obj_attr(id, &st.objs[&id]);
+                    }
+                    if st.hidden.get(&key).is_some_and(|h| h.contains(name)) {
+                        return Err(ViewError::NoEnt);
+                    }
+                }
+                self.view.lookup(parent, name)
+            }
             _ => self.view.lookup(parent, name),
         }
     }
@@ -395,6 +452,16 @@ impl RwView {
                 }
                 r => r,
             },
+            Node::File(key, name) => {
+                if lock(&self.st)
+                    .hidden
+                    .get(&key)
+                    .is_some_and(|h| h.contains(&name))
+                {
+                    return Err(ViewError::NoEnt);
+                }
+                self.view.getattr(ino)
+            }
             _ => self.view.getattr(ino),
         }
     }
@@ -468,6 +535,12 @@ impl RwView {
             }
             Node::Cat(cat) => Some(Parent::Cat(cat.clone())),
             Node::Obj(id) => Some(Parent::Staged(*id)),
+            Node::Entry(key) => {
+                if let Some(h) = st.hidden.get(key) {
+                    listing.retain(|d| !h.contains(&d.name));
+                }
+                Some(Parent::Live(key.clone()))
+            }
             _ => None,
         };
         if let Some(parent) = parent {
@@ -520,12 +593,40 @@ impl RwView {
                 };
                 Ok(Self::new_fh(&mut st, h))
             }
+            Node::File(key, name) if open_wants_write(flags) => {
+                self.getattr(ino)?;
+                let mut st = lock(&self.st);
+                if Self::removing(&st, &key) {
+                    return Err(ViewError::NoEnt);
+                }
+                let path = self.scratch_file(&mut st);
+                drop(st);
+                let old = if flags & libc::O_TRUNC != 0 {
+                    Vec::new()
+                } else {
+                    self.db.read_file(&key, &name)?.unwrap_or_default()
+                };
+                std::fs::write(&path, &old).map_err(io_err)?;
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                    .map_err(io_err)?;
+                let h = Fh::Live {
+                    key,
+                    name,
+                    file,
+                    path,
+                    dirty: flags & libc::O_TRUNC != 0,
+                };
+                Ok(Self::new_fh(&mut lock(&self.st), h))
+            }
             _ => {
                 if open_wants_write(flags) {
-                    // Live-entry rewrites are S3.
-                    self.view.getattr(ino)?;
+                    self.getattr(ino)?;
                     return Err(ViewError::Perm);
                 }
+                self.getattr(ino)?;
                 let vfh = self.view.open(ino, false)?;
                 Ok(Self::new_fh(&mut lock(&self.st), Fh::Base(vfh)))
             }
@@ -548,7 +649,7 @@ impl RwView {
                 }
                 _ => Err(ViewError::Stale),
             },
-            Some(Fh::Staged(f)) => {
+            Some(Fh::Staged(f) | Fh::Live { file: f, .. }) => {
                 let mut buf = vec![0u8; size];
                 let n = f.read_at(&mut buf, off).map_err(io_err)?;
                 buf.truncate(n);
@@ -559,13 +660,52 @@ impl RwView {
         }
     }
 
-    /// `release` / `releasedir`.
-    pub fn release(&self, fh: u64) -> Res<()> {
-        let h = lock(&self.st).handles.remove(&fh);
-        if let Some(Fh::Base(v)) = h {
-            self.view.release(v);
+    /// `flush` (each `close`): store a written live file with one
+    /// `replace_file` transaction. A failure is `EIO`, which `close`
+    /// returns to the caller; the scratch copy stays for a later flush.
+    pub fn flush(&self, fh: u64) -> Res<()> {
+        let mut st = lock(&self.st);
+        let Some(Fh::Live {
+            key,
+            name,
+            path,
+            dirty,
+            ..
+        }) = st.handles.get_mut(&fh)
+        else {
+            return Ok(());
+        };
+        if !*dirty {
+            return Ok(());
+        }
+        let data = std::fs::read(&*path).map_err(io_err)?;
+        let (key, name) = (key.clone(), name.clone());
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.replace_file(&key, &name, &data)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        if let Some(Fh::Live { dirty, .. }) = st.handles.get_mut(&fh) {
+            *dirty = false;
         }
         Ok(())
+    }
+
+    /// `release` / `releasedir`: a written live file not flushed yet is
+    /// stored now (the kernel ignores errors here, so `flush` is where
+    /// they are reported).
+    pub fn release(&self, fh: u64) -> Res<()> {
+        let r = self.flush(fh);
+        let h = lock(&self.st).handles.remove(&fh);
+        match h {
+            Some(Fh::Base(v)) => self.view.release(v),
+            Some(Fh::Live { path, .. }) => {
+                let _ = std::fs::remove_file(path);
+            }
+            _ => {}
+        }
+        r
     }
 
     // ------------------------------------------------------ write side
@@ -597,6 +737,31 @@ impl RwView {
                 None,
             ),
             Parent::Cat(_) => return Err(ViewError::Perm),
+            Parent::Live(key) => {
+                if Self::removing(&st, key) {
+                    return Err(ViewError::NoEnt);
+                }
+                drop(st);
+                if self.view.lookup(parent, name).is_ok() {
+                    // An existing stored file: open it for writing.
+                    let ino = self.view.lookup(parent, name)?.ino;
+                    if flags & libc::O_EXCL != 0 {
+                        return Err(ViewError::Exists);
+                    }
+                    let fh = self.open(ino, flags | libc::O_WRONLY)?;
+                    return Ok((self.getattr(ino)?, fh));
+                }
+                st = lock(&self.st);
+                let path = self.scratch_file(&mut st);
+                let f = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .mode(mode & 0o7777)
+                    .open(&path)
+                    .map_err(io_err)?;
+                (Obj::StagedFile { path }, Some(f))
+            }
             Parent::Staged(dir) => {
                 let Some(Obj::StagedDir { path, .. }) = st.objs.get(dir) else {
                     return Err(ViewError::NoEnt);
@@ -631,10 +796,15 @@ impl RwView {
     /// `write(fh, offset, data)`: the bytes written.
     pub fn write(&self, fh: u64, off: u64, bytes: &[u8]) -> Res<u32> {
         let mut st = lock(&self.st);
-        let id = match st.handles.get(&fh) {
+        let id = match st.handles.get_mut(&fh) {
             Some(Fh::Vol(id)) => *id,
             Some(Fh::Staged(f)) => {
                 f.write_all_at(bytes, off).map_err(io_err)?;
+                return Ok(bytes.len() as u32);
+            }
+            Some(Fh::Live { file, dirty, .. }) => {
+                file.write_all_at(bytes, off).map_err(io_err)?;
+                *dirty = true;
                 return Ok(bytes.len() as u32);
             }
             Some(_) => return Err(ViewError::Perm),
@@ -707,6 +877,17 @@ impl RwView {
             if let Parent::Staged(_) = parent_key {
                 return Err(ViewError::NoEnt);
             }
+            if let Parent::Live(entry) = &parent_key {
+                // A stored file: hidden now, deleted with the entry at
+                // `rmdir` (real `shutil.rmtree`).
+                self.lookup(parent, name)?;
+                lock(&self.st)
+                    .hidden
+                    .entry(entry.clone())
+                    .or_default()
+                    .insert(name.to_string());
+                return Ok(());
+            }
             // A stored entry is a directory; anything else is not here.
             return match self.view.lookup(parent, name) {
                 Ok(_) => Err(ViewError::IsDir),
@@ -759,11 +940,12 @@ impl RwView {
                         st.objs.remove(&id);
                         Ok(())
                     }
-                    // Live entries are S3.
                     None => {
                         drop(st);
-                        self.view.lookup(parent, name)?;
-                        Err(ViewError::Perm)
+                        self.remove_entry(
+                            parent,
+                            EntryKey::new(cat_name(&self.view, parent)?, name),
+                        )
                     }
                 }
             }
@@ -793,6 +975,11 @@ impl RwView {
             // `write_atomic` inside a staged directory.
             (Parent::Staged(a), Parent::Staged(b)) if a == b => {
                 self.move_name(from, name, to, newname)
+            }
+            // `write_atomic` inside a live entry (W4 `removeFromContents`,
+            // `aux_update`): the temp's bytes replace the stored file.
+            (Parent::Live(a), Parent::Live(b)) if a == b => {
+                self.replace_from_temp(a, name, newname)
             }
             // Live-entry rewrites are S3.
             _ => Err(ViewError::Perm),
@@ -933,6 +1120,86 @@ impl RwView {
         for (ino, node) in rebinds {
             self.view.rebind(ino, node);
         }
+        Ok(())
+    }
+
+    /// `rmdir(<cat>/<pf>)` of a live entry: once every stored file was
+    /// unlinked (hidden) and no temp is left, delete the entry in one
+    /// transaction. The category stays listed until real removes it.
+    fn remove_entry(&self, cat_ino: u64, key: EntryKey) -> Res<()> {
+        let entry = self.view.lookup(cat_ino, &key.pf)?;
+        let fh = self.opendir(entry.ino)?;
+        let left = self.readdir(fh);
+        self.release(fh)?;
+        if left?.len() > 2 {
+            return Err(ViewError::NotEmpty);
+        }
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.delete_entry(&key)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        let mut st = lock(&self.st);
+        st.hidden.remove(&key);
+        st.vol_cats
+            .entry(key.category.clone())
+            .or_insert_with(now_ns);
+        Ok(())
+    }
+
+    /// `rename(<entry>/<temp>, <entry>/<field>)` inside a live entry.
+    fn replace_from_temp(&self, key: &EntryKey, temp: &str, field: &str) -> Res<()> {
+        let mut st = lock(&self.st);
+        let tkey = (Parent::Live(key.clone()), temp.to_string());
+        let id = *st.names.get(&tkey).ok_or(ViewError::NoEnt)?;
+        let Some(Obj::StagedFile { path }) = st.objs.get(&id) else {
+            return Err(ViewError::Perm);
+        };
+        if Self::removing(&st, key) {
+            return Err(ViewError::NoEnt);
+        }
+        // A rename carries the temp's bytes, mode and mtime, and moves the
+        // directory mtime, so a valid `metadata` stamp turns stale, as on
+        // disk (real's reader then falls back to the field files). The
+        // whole entry is rewritten in one transaction.
+        let md = std::fs::metadata(path).map_err(io_err)?;
+        let data = std::fs::read(path).map_err(io_err)?;
+        let path = path.clone();
+        let mut image = self.db.entry_image(key)?.ok_or(ViewError::NoEnt)?;
+        let file = EntryFile {
+            meta: FileMeta {
+                name: field.to_string(),
+                len: data.len() as u64,
+                mode: md.mode(),
+                mtime_ns: mtime_of(&md),
+            },
+            data,
+        };
+        match image.files.iter_mut().find(|f| f.meta.name == field) {
+            Some(f) => *f = file,
+            None => {
+                image.files.push(file);
+                image.files.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
+            }
+        }
+        image.dir_mtime_ns = now_ns();
+        if image.metadata_stamp == MetadataStamp::Valid {
+            image.metadata_stamp = MetadataStamp::Stale;
+        }
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.insert_entry(&image)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        st.names.remove(&tkey);
+        st.objs.remove(&id);
+        drop(st);
+        let _ = std::fs::remove_file(path);
+        // The renamed file keeps its inode.
+        self.view
+            .rebind(self.obj_ino(id), Node::File(key.clone(), field.to_string()));
         Ok(())
     }
 
@@ -1186,6 +1453,9 @@ mod tests {
     fn script(name: &str) -> Vec<super::ops::Op> {
         let text = match name {
             "merge-new" => include_str!("vdb_rw/testdata/merge-new.ops"),
+            "unmerge" => include_str!("vdb_rw/testdata/unmerge.ops"),
+            "replace-same-pf" => include_str!("vdb_rw/testdata/replace-same-pf.ops"),
+            "live-rewrites" => include_str!("vdb_rw/testdata/live-rewrites.ops"),
             _ => unreachable!("{name}"),
         };
         parse(text)
@@ -1362,6 +1632,167 @@ mod tests {
             assert_eq!(
                 v.mkdir(cat, "not-merging", 0o755).err(),
                 Some(ViewError::Perm)
+            );
+        }
+    }
+
+    /// Replay `name` on files and through the view; compare.
+    fn same_as_files(name: &str, tag: &str) {
+        for env in envs(tag) {
+            let ops = script(name);
+            apply_fs(&env.files_vdb, &ops);
+            let v = rw(&env);
+            apply_rw(&v, &ops);
+            assert_same(&env.files_root, &*env.db);
+        }
+    }
+
+    #[test]
+    fn an_unmerge_through_the_view_equals_files() {
+        same_as_files("unmerge", "unmerge");
+    }
+
+    #[test]
+    fn a_same_pf_replace_through_the_view_equals_files() {
+        same_as_files("replace-same-pf", "replsame");
+    }
+
+    #[test]
+    fn live_rewrites_through_the_view_equal_files() {
+        same_as_files("live-rewrites", "liverw");
+    }
+
+    #[test]
+    fn an_unmerge_removes_the_entry_in_one_commit_at_rmdir() {
+        for env in envs("rmtree") {
+            let v = rw(&env);
+            let ops = script("unmerge");
+            let rmdir_at = ops.len() - 2;
+            let g0 = env.db.generation().unwrap();
+            apply_rw(&v, &ops[..rmdir_at]);
+            assert_eq!(env.db.generation().unwrap(), g0, "unlinks only hide");
+            assert_eq!(resolve(&v, "dev-libs/seed-1/SLOT"), Err(ViewError::NoEnt));
+            apply_rw(&v, &ops[rmdir_at..rmdir_at + 1]);
+            assert!(!env.db.has_entry(&env.seeded).unwrap());
+            assert!(
+                resolve(&v, "dev-libs").is_ok(),
+                "the emptied category stays until real removes it"
+            );
+            apply_rw(&v, &ops[rmdir_at + 1..]);
+            assert_eq!(resolve(&v, "dev-libs"), Err(ViewError::NoEnt));
+        }
+    }
+
+    #[test]
+    fn an_interrupted_rmtree_leaves_the_entry_installed() {
+        for env in envs("interrupted") {
+            let v = rw(&env);
+            let ops = script("unmerge");
+            apply_rw(&v, &ops[..ops.len() - 2]);
+            drop(v);
+            let v2 = rw(&env);
+            assert!(env.db.has_entry(&env.seeded).unwrap());
+            assert!(resolve(&v2, "dev-libs/seed-1/SLOT").is_ok());
+        }
+    }
+
+    #[test]
+    fn rmdir_of_a_live_entry_with_visible_files_is_enotempty() {
+        for env in envs("notempty") {
+            let v = rw(&env);
+            apply_rw(&v, &parse("unlink dev-libs/seed-1/SLOT\n"));
+            let cat = resolve(&v, "dev-libs").unwrap();
+            assert_eq!(v.rmdir(cat, "seed-1"), Err(ViewError::NotEmpty));
+            assert!(env.db.has_entry(&env.seeded).unwrap());
+        }
+    }
+
+    #[test]
+    fn writes_into_a_live_entry_being_removed_are_enoent() {
+        for env in envs("removing") {
+            let v = rw(&env);
+            apply_rw(&v, &parse("unlink dev-libs/seed-1/SLOT\n"));
+            let e = resolve(&v, "dev-libs/seed-1").unwrap();
+            assert_eq!(
+                v.create(e, "CONTENTSxyz", 0o600, libc::O_CREAT | libc::O_EXCL)
+                    .err(),
+                Some(ViewError::NoEnt)
+            );
+            let c = resolve(&v, "dev-libs/seed-1/CONTENTS").unwrap();
+            assert_eq!(
+                v.open(c, libc::O_WRONLY | libc::O_TRUNC).err(),
+                Some(ViewError::NoEnt)
+            );
+        }
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn a_failed_live_rewrite_is_eio_at_flush() {
+        for env in envs("flusheio").into_iter().filter(|e| e.label == "sqlite") {
+            let ro: Arc<dyn InstalledDb> =
+                Arc::new(portage_vdb::SqliteDb::open_readonly(&env.db_path).unwrap());
+            let v = RwView::new(ro, env.scratch.clone(), Owner { uid: 0, gid: 0 }).unwrap();
+            let f = resolve(&v, "dev-libs/seed-1/environment.bz2").unwrap();
+            let fh = v.open(f, libc::O_WRONLY | libc::O_TRUNC).unwrap();
+            v.write(fh, 0, b"new").unwrap();
+            assert!(matches!(v.flush(fh), Err(ViewError::Io(_))));
+            let _ = v.release(fh);
+            assert_eq!(
+                env.db
+                    .read_file(&env.seeded, "environment.bz2")
+                    .unwrap()
+                    .unwrap(),
+                b"BZh91AY&SY seed env"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rewritten_live_file_keeps_its_inode_and_reads_the_new_bytes() {
+        for env in envs("liveino") {
+            let v = rw(&env);
+            let tmp_ino = {
+                apply_rw(
+                    &v,
+                    &parse(
+                        "create dev-libs/seed-1/SLOTabc 600\n\
+                         write dev-libs/seed-1/SLOTabc 1\\n\n",
+                    ),
+                );
+                resolve(&v, "dev-libs/seed-1/SLOTabc").unwrap()
+            };
+            apply_rw(
+                &v,
+                &parse("rename dev-libs/seed-1/SLOTabc dev-libs/seed-1/SLOT\n"),
+            );
+            assert_eq!(resolve(&v, "dev-libs/seed-1/SLOT").unwrap(), tmp_ino);
+            let fh = v.open(tmp_ino, libc::O_RDONLY).unwrap();
+            assert_eq!(v.read(fh, 0, 16).unwrap(), b"1\n");
+            v.release(fh).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_rename_in_a_stamped_live_entry_leaves_the_stamp_stale_as_on_disk() {
+        for env in envs("w4stamp") {
+            let mut ops = script("merge-new");
+            ops.extend(parse(
+                "create app-misc/foo-1.0/CONTENTSa1b2c3d4 600\n\
+                 write app-misc/foo-1.0/CONTENTSa1b2c3d4 dir /usr/share/foo\\n\n\
+                 chmod app-misc/foo-1.0/CONTENTSa1b2c3d4 644\n\
+                 rename app-misc/foo-1.0/CONTENTSa1b2c3d4 app-misc/foo-1.0/CONTENTS\n",
+            ));
+            apply_fs(&env.files_vdb, &ops);
+            let v = rw(&env);
+            apply_rw(&v, &ops);
+            assert_same(&env.files_root, &*env.db);
+            let k = EntryKey::new("app-misc", "foo-1.0");
+            assert_eq!(
+                env.db.entry_stat(&k).unwrap().unwrap().metadata_stamp,
+                MetadataStamp::Stale,
+                "{}",
+                env.label
             );
         }
     }

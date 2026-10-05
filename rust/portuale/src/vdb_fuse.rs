@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use fuser::{
     AccessFlags, BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType, Filesystem,
-    FopenFlags, Generation, INodeNo, LockOwner, MountOption, OpenFlags, RenameFlags, ReplyAttr,
-    ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs,
-    ReplyWrite, Request, Session, SessionACL, TimeOrNow, WriteFlags,
+    FopenFlags, Generation, INodeNo, InitFlags, KernelConfig, LockOwner, MountOption, OpenFlags,
+    RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
+    ReplyOpen, ReplyStatfs, ReplyWrite, Request, Session, SessionACL, TimeOrNow, WriteFlags,
 };
 use portage_vdb::InstalledDb;
 
@@ -148,6 +148,16 @@ fn ns_of(t: TimeOrNow) -> i128 {
 }
 
 impl Filesystem for Fs {
+    fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> io::Result<()> {
+        if let Mode::Rw(_) = self.mode {
+            // Pass O_TRUNC to `open` instead of a separate setattr(size=0)
+            // first: real's in-place `> environment.bz2` (pkg_postinst)
+            // is then one live rewrite, stored at `close`.
+            let _ = config.add_capabilities(InitFlags::FUSE_ATOMIC_O_TRUNC);
+        }
+        Ok(())
+    }
+
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let Some(name) = name.to_str() else {
             return reply.error(Errno::ENOENT);
@@ -395,11 +405,15 @@ impl Filesystem for Fs {
         &self,
         _req: &Request,
         _ino: INodeNo,
-        _fh: FileHandle,
+        fh: FileHandle,
         _lock_owner: LockOwner,
         reply: ReplyEmpty,
     ) {
-        reply.ok();
+        match &self.mode {
+            Mode::Ro(_) => reply.ok(),
+            // A written live file is stored here, so `close` sees an error.
+            Mode::Rw(rw) => Self::empty(rw.flush(u64::from(fh)), reply),
+        }
     }
 
     fn release(

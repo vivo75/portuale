@@ -380,7 +380,8 @@ impl Drop for Env {
 }
 
 /// One `Env` per database backend compiled in. Both sides start with one
-/// live entry, `dev-libs/seed-1` (`SLOT`, `CONTENTS`, `COUNTER 7`).
+/// live entry, `dev-libs/seed-1` (`SLOT`, `CONTENTS`, `COUNTER 7`,
+/// `environment.bz2`).
 pub fn envs(tag: &str) -> Vec<Env> {
     let mut out = Vec::new();
     for label in ["sqlite", "redb"] {
@@ -405,8 +406,11 @@ pub fn envs(tag: &str) -> Vec<Env> {
             ("SLOT", &b"0\n"[..]),
             ("CONTENTS", b"obj /usr/bin/seed 0123 1\n"),
             ("COUNTER", b"7"),
+            ("environment.bz2", b"BZh91AY&SY seed env"),
         ] {
             std::fs::write(e.join(n), b).unwrap();
+            // Exactly 0644, whatever the process umask (#308).
+            std::fs::set_permissions(e.join(n), std::fs::Permissions::from_mode(0o644)).unwrap();
         }
         let spec = format!("{label}:{}", dir.join(format!("vdb.{label}")).display());
         let args: Vec<String> = [
