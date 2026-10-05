@@ -9826,6 +9826,181 @@ mod tests {
             let _ = std::fs::remove_dir_all(&tmp);
         }
 
+        /// Clears the thread-local publish hook when dropped, so a hook that
+        /// panics (a simulated crash) cannot leak into later tests that reuse
+        /// this thread.
+        struct HookGuard;
+        impl Drop for HookGuard {
+            fn drop(&mut self) {
+                clear_hook();
+            }
+        }
+
+        /// Run `f` (a merge or unmerge) with a hook that records the
+        /// generation and then panics, i.e. "the process dies right before
+        /// the final commit". Returns that generation; `f` must have panicked.
+        fn crash_before_commit(db: &Arc<portage_vdb::SqliteDb>, f: impl FnOnce()) -> u64 {
+            let at: Rc<RefCell<Option<u64>>> = Rc::default();
+            let _guard = HookGuard;
+            {
+                let db = db.clone();
+                let at = at.clone();
+                install_hook(move |_| {
+                    *at.borrow_mut() = Some(db.generation().unwrap());
+                    panic!("simulated crash before the final commit");
+                });
+            }
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            assert!(res.is_err(), "the hook crashed the operation");
+            let generation = *at.borrow();
+            generation.expect("the hook ran")
+        }
+
+        fn vdb_cli(args: &[&str]) -> (u8, String) {
+            let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            let (mut o, mut e) = (Vec::new(), Vec::new());
+            let code = crate::vdb_cmd::run_args(&args, &mut o, &mut e);
+            (
+                code,
+                String::from_utf8_lossy(&o).into_owned() + &String::from_utf8_lossy(&e),
+            )
+        }
+
+        /// feat#157 S4.5 (design 9.1): the process dies right before the
+        /// publishing commit of a same-slot upgrade. After a restart (fresh
+        /// handle) the old instance is still installed with its files, the
+        /// new one is a pending orphan that `status` reports and `sweep`
+        /// removes, the generation was not advanced by the aborted commit and
+        /// the counter is not reused. The new payload files landed on disk
+        /// before the crash and stay there (as in real Portage); that is only
+        /// documented here, not asserted.
+        #[test]
+        fn a_crash_before_the_publishing_commit_leaves_the_old_instance_and_a_sweepable_orphan() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let dbp = tmp.join("vdb.sqlite");
+            std::fs::create_dir_all(&root).unwrap();
+            let old = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            let new = EntryKey::new("dev-libs", "binpkgrmpkg-2.0");
+            merge_binpkg(
+                &binpkg("binpkgrmpkg-1.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("1.0 merges");
+            let db = use_sqlite(&root, &dbp);
+            let old_files = entry_files(db.as_ref(), &old);
+
+            let before_commit = crash_before_commit(&db, || {
+                let _ = merge_binpkg(
+                    &binpkg("binpkgrmpkg-2.0.tbz2"),
+                    &root,
+                    &ptmp,
+                    &MergeOptions::default(),
+                );
+            });
+            drop(db);
+
+            // "Restart": a fresh handle on the same file.
+            let fresh = Arc::new(portage_vdb::SqliteDb::open(&dbp).unwrap());
+            portage_vdb::register(&root, fresh.clone());
+            assert_eq!(fresh.entries().unwrap(), vec![old.clone()]);
+            assert_eq!(entry_files(fresh.as_ref(), &old), old_files);
+            assert!(!fresh.has_entry(&new).unwrap());
+            assert_eq!(fresh.pending_entries().unwrap(), vec![new.clone()]);
+            assert_eq!(
+                fresh.generation().unwrap(),
+                before_commit,
+                "the aborted commit did not advance the generation"
+            );
+            let counter_after_crash = fresh.counter().unwrap().expect("a counter was taken");
+            let warnings = crate::mrg::pending_entries_warnings(std::slice::from_ref(&new), &dbp);
+            assert!(warnings[0].contains("binpkgrmpkg-2.0"), "{warnings:?}");
+            assert!(
+                crate::mrg::pending_entries_warnings(&fresh.pending_entries().unwrap(), &dbp)
+                    .iter()
+                    .any(|w| w.contains("dev-libs/binpkgrmpkg-2.0"))
+            );
+
+            let spec = format!("sqlite:{}", dbp.display());
+            let (code, out) = vdb_cli(&["status", &spec]);
+            assert_eq!(code, 1, "{out}");
+            assert!(out.contains("dev-libs/binpkgrmpkg-2.0"), "{out}");
+            let (code, out) = vdb_cli(&["sweep", "--remove", "dev-libs/binpkgrmpkg-2.0", &spec]);
+            assert_eq!(code, 0, "{out}");
+            let (code, out) = vdb_cli(&["status", &spec]);
+            assert_eq!(code, 0, "{out}");
+            assert!(fresh.pending_entries().unwrap().is_empty());
+            assert!(fresh.has_entry(&old).unwrap());
+            assert_eq!(entry_files(fresh.as_ref(), &old), old_files);
+
+            // The upgrade can now be redone.
+            let status = merge_binpkg(
+                &binpkg("binpkgrmpkg-2.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("2.0 merges after the sweep");
+            assert_eq!(status, 0);
+            assert!(fresh.has_entry(&new).unwrap());
+            assert!(!fresh.has_entry(&old).unwrap());
+            let counter_file = fresh.read_file(&new, "COUNTER").unwrap().unwrap();
+            let counter: i64 = String::from_utf8(counter_file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(
+                counter > counter_after_crash.0,
+                "{counter} reuses a counter taken before the crash ({counter_after_crash:?})"
+            );
+            assert!(fresh.generation().unwrap() > before_commit);
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// feat#157 S4.5: the process dies right before the retiring commit
+        /// of `-C`. With a fresh handle the row is still installed and the
+        /// generation is unchanged; a later `-C` succeeds. (The payload files
+        /// were already removed before the crash; not asserted.)
+        #[test]
+        fn a_crash_before_the_retire_commit_leaves_the_entry_installed() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let dbp = tmp.join("vdb.sqlite");
+            std::fs::create_dir_all(&root).unwrap();
+            let key = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            merge_binpkg(
+                &binpkg("binpkgrmpkg-1.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("1.0 merges");
+            let db = use_sqlite(&root, &dbp);
+            let files = entry_files(db.as_ref(), &key);
+
+            let before_commit = crash_before_commit(&db, || {
+                unmerge_standalone(&root, &ptmp, "binpkgrmpkg-1.0", "binpkgrmpkg");
+            });
+            drop(db);
+
+            let fresh = Arc::new(portage_vdb::SqliteDb::open(&dbp).unwrap());
+            portage_vdb::register(&root, fresh.clone());
+            assert!(fresh.has_entry(&key).unwrap());
+            assert_eq!(entry_files(fresh.as_ref(), &key), files);
+            assert!(fresh.pending_entries().unwrap().is_empty());
+            assert_eq!(fresh.generation().unwrap(), before_commit);
+
+            unmerge_standalone(&root, &ptmp, "binpkgrmpkg-1.0", "binpkgrmpkg");
+            assert!(!fresh.has_entry(&key).unwrap());
+            assert!(fresh.generation().unwrap() > before_commit);
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
         /// A source merge (`ebuild <file> merge`) on sqlite: same entry
         /// files and payload as on `files`, the `pkg_postinst` environment
         /// rewrite included.

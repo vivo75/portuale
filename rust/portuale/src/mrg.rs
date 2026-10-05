@@ -1608,7 +1608,10 @@ fn stale_db_warning(mark: Option<(u64, String)>, files_gen: u64, db_path: &Path)
 /// pending entry of mrg's own merge (legitimate while it runs) is never
 /// listed.
 #[cfg(feature = "vdb-sqlite")]
-fn pending_entries_warnings(pending: &[portage_vdb::EntryKey], db_path: &Path) -> Vec<String> {
+pub(crate) fn pending_entries_warnings(
+    pending: &[portage_vdb::EntryKey],
+    db_path: &Path,
+) -> Vec<String> {
     pending
         .iter()
         .map(|k| {
