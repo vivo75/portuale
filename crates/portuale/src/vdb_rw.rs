@@ -128,6 +128,65 @@ enum Fh {
     },
 }
 
+struct RwState {
+    next_obj: u64,
+    objs: HashMap<u64, Obj>,
+    /// This layer's names: `(parent, name) -> object id`. Hardlinks are two
+    /// names with one id.
+    names: BTreeMap<(Parent, String), u64>,
+    /// Categories that exist only because of `mkdir` (no entry yet), or
+    /// because an unmerge emptied them and Portage has not removed them yet,
+    /// with their mtime.
+    vol_cats: BTreeMap<String, i128>,
+    /// Stored files Portage has unlinked from a live entry (an `rmtree` in
+    /// progress): hidden from the view until `rmdir` deletes the entry.
+    hidden: BTreeMap<EntryKey, std::collections::BTreeSet<String>>,
+    handles: HashMap<u64, Fh>,
+    next_fh: u64,
+    /// Names for scratch files that are not in a staged directory.
+    next_scratch: u64,
+}
+
+impl RwState {
+    fn new_obj(&mut self, obj: Obj) -> u64 {
+        let id = self.next_obj;
+        self.next_obj += 1;
+        self.objs.insert(id, obj);
+        id
+    }
+
+    /// The children of `parent`, in name order.
+    fn children(&self, parent: &Parent) -> Vec<(String, u64)> {
+        self.names
+            .range((parent.clone(), String::new())..)
+            .take_while(|((p, _), _)| p == parent)
+            .map(|((_, n), id)| (n.clone(), *id))
+            .collect()
+    }
+
+    /// A create, unlink or rename inside staged directory `dir`.
+    fn bump(&mut self, dir: u64) {
+        if let Some(Obj::StagedDir { mtime_ns, .. }) = self.objs.get_mut(&dir) {
+            *mtime_ns = now_ns();
+        }
+    }
+
+    /// Drop one name of object `id`; the object goes with its last name.
+    fn drop_name(&mut self, id: u64) {
+        let gone = match self.objs.get_mut(&id) {
+            Some(Obj::Vol { nlink, .. }) => {
+                *nlink -= 1;
+                *nlink == 0
+            }
+            Some(_) => true,
+            None => false,
+        };
+        if gone {
+            self.objs.remove(&id);
+        }
+    }
+}
+
 fn io_err(e: std::io::Error) -> ViewError {
     match e.kind() {
         std::io::ErrorKind::NotFound => ViewError::NoEnt,
