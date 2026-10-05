@@ -295,6 +295,33 @@
 //!     with one `replace_file` commit when its bytes changed. `files`
 //!     keeps [`InstalledDb::entry_path`].
 //!
+//! 24. **S4.2: a standalone unmerge on a database backend (no interface
+//!     change).** `mrg -C` / `--depclean` (`unmerge_one_installed`) and
+//!     `ebuild <file> unmerge` (`run_unmerge`) use
+//!     [`InstalledDb::replace_in_publish`] (true off `files`) as the switch
+//!     again: the unmerge collects its D4 writes in memory and commits them
+//!     with the row's deletion in **one transaction** after `pkg_postrm`
+//!     (`ebuild_unmerge::retire_entry`): the W4 `replace_file`s of the
+//!     *other* installed entries whose preserved libraries the prune removed,
+//!     [`WriteTxn::set_preserved_libs`] (the registry as the unmerge left it;
+//!     `loaded` is the stored registry, so an unchanged one writes nothing),
+//!     [`WriteTxn::set_config_memory`] (the `stale_confmem` prune) and
+//!     [`WriteTxn::delete_entry`]. Exactly one generation step per unmerge.
+//!     Until that commit every reader still sees the entry (its payload
+//!     files are already gone, as on `files` before `delete_vdb_dir`), and
+//!     `prerm`/`postrm` read the scratch copy of item 23. The steps that read
+//!     what an earlier step wrote (the prune reads the registry
+//!     `preserve_libs_on_unmerge` just updated) read the in-memory copy, not
+//!     the store. What stays separate: the world files (`deselect_from_world`
+//!     in `pretend.rs`, a second transaction after the unmerge, as on
+//!     `files`; `--deselect` has no unmerge); the replace loop of a merge
+//!     (S4.1, item 23: its D4 writes precede the publishing commit and are
+//!     read back by the next step); and a failed unmerge, which leaves the
+//!     registry, config memory and rows as they were (on `files` the registry
+//!     write of `preserve_libs_on_unmerge` would already have landed).
+//!     **`files` is unchanged**: no collector exists there, and the same
+//!     calls run in the same order as in S1.5.
+//!
 //! # SqliteDb (feature `vdb-sqlite`)
 //!
 //! S2.3 adds the schema and `open` / `open_readonly`; S2.4 the read side;

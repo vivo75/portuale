@@ -595,6 +595,7 @@ impl Default for UnmergeOptions {
 /// package's own `NEEDED.ELF.2` lines -- see
 /// `ebuild_merge::unmerge_replaced_same_slot`): same threading, same
 /// empty-on-standalone rule.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_pkgfiles(
     root: &Path,
@@ -606,6 +607,37 @@ pub(crate) fn unmerge_pkgfiles(
     is_replacement: bool,
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+) -> Result<(), String> {
+    unmerge_pkgfiles_into(
+        root,
+        category,
+        pn,
+        pf,
+        also_keep,
+        options,
+        is_replacement,
+        replacement_preserved,
+        replacement_needed,
+        None,
+    )
+}
+
+/// [`unmerge_pkgfiles`] with the D4 writes (preserved-libs registry,
+/// config memory, W4 rewrites of other entries) collected into `retire`
+/// instead of committed one by one (feat#157 S4.2); the caller commits
+/// them with [`retire_entry`]. `None` is the S1.5 behaviour, call for call.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn unmerge_pkgfiles_into(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    also_keep: &[String],
+    options: &UnmergeOptions,
+    is_replacement: bool,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    mut retire: Option<&mut ebuild_merge::RetireWrites>,
 ) -> Result<(), String> {
     // Through the root's installed-database backend. The error keeps the
     // text `read_to_string` gave: the io error for a read that failed,
@@ -679,7 +711,7 @@ pub(crate) fn unmerge_pkgfiles(
     // `parse_slot`'s own real fallback already does, matching real
     // `_pkg_str`'s own `settings["SLOT"]` fallback for a package with no
     // recorded slot at all.
-    let preserved_paths = ebuild_merge::preserve_libs_on_unmerge(
+    let preserved_paths = ebuild_merge::preserve_libs_on_unmerge_into(
         root,
         category,
         pn,
@@ -687,6 +719,7 @@ pub(crate) fn unmerge_pkgfiles(
         own_slot.as_deref().unwrap_or("0"),
         &contents_text,
         is_replacement,
+        retire.as_deref_mut(),
     )?;
 
     remove_contents(
@@ -707,7 +740,10 @@ pub(crate) fn unmerge_pkgfiles(
         for filename in &stale_confmem {
             updated.remove(filename);
         }
-        ebuild_merge::write_cfgfiledict(root, &updated)?;
+        match retire.as_deref_mut() {
+            Some(retire) => retire.set_config_memory(updated),
+            None => ebuild_merge::write_cfgfiledict(root, &updated)?,
+        }
     }
 
     // Real `_prune_plib_registry`'s own tail, which runs on unmerge
@@ -726,13 +762,14 @@ pub(crate) fn unmerge_pkgfiles(
         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
         .collect();
     let exclude_cpv = is_replacement.then(|| format!("{category}/{pf}"));
-    ebuild_merge::prune_unused_preserved_libs(
+    ebuild_merge::prune_unused_preserved_libs_into(
         root,
         !is_replacement,
         &|p| being_unmerged.contains(p),
         exclude_cpv.as_deref(),
         replacement_preserved,
         replacement_needed,
+        retire,
     )?;
 
     Ok(())
@@ -752,6 +789,22 @@ pub(crate) fn delete_vdb_dir(root: &Path, category: &str, pf: &str) -> Result<()
     txn.delete_entry(&portage_vdb::EntryKey::new(category, pf))
         .map_err(|e| e.to_string())?;
     txn.commit().map_err(|e| e.to_string())
+}
+
+/// The last step of a standalone unmerge: `retire` is `Some` on a database
+/// backend (feat#157 S4.2), and one transaction then holds the row's
+/// deletion together with the D4 writes the unmerge collected (registry,
+/// config memory, W4 rewrites); `None` is [`delete_vdb_dir`], the S1.5 call.
+pub(crate) fn retire_entry(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    retire: Option<ebuild_merge::RetireWrites>,
+) -> Result<(), String> {
+    match retire {
+        Some(writes) => writes.commit(root, &portage_vdb::EntryKey::new(category, pf)),
+        None => delete_vdb_dir(root, category, pf),
+    }
 }
 
 /// The directory of the installed entry `category/pf` as the old messages
@@ -803,7 +856,8 @@ pub fn run_unmerge(
         return Ok(prerm_status);
     }
 
-    unmerge_pkgfiles(
+    let mut retire = ebuild_merge::RetireWrites::for_root(root);
+    unmerge_pkgfiles_into(
         root,
         &env.category,
         &env.split.pn,
@@ -815,6 +869,7 @@ pub fn run_unmerge(
         // Standalone `emerge -C`: no replacing package, so no include
         // feed (backlog #224).
         &[],
+        retire.as_mut(),
     )?;
 
     let postrm_status = ebuild_phases::run_single_phase(
@@ -832,7 +887,7 @@ pub fn run_unmerge(
         return Ok(postrm_status);
     }
 
-    delete_vdb_dir(root, &env.category, &env.split.pf)?;
+    retire_entry(root, &env.category, &env.split.pf, retire)?;
     Ok(0)
 }
 

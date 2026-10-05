@@ -959,9 +959,82 @@ pub(crate) fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> 
 /// identical to real's.
 type PlibEntries = BTreeMap<String, (String, String, Vec<String>)>;
 
+#[derive(Clone)]
 struct PlibRegistry {
     entries: PlibEntries,
     orig_entries: PlibEntries,
+}
+
+/// The writes of one standalone unmerge that a database backend commits
+/// together with the row's deletion (feat#157 S4.2, `retire_entry`):
+/// collected while the unmerge runs, applied in one transaction after
+/// `pkg_postrm`. `None` everywhere on `files`, where every write is made
+/// when the unmerge makes it (the S1.5 syscall sequence).
+///
+/// - `registry`: the preserved-libs registry as the unmerge left it
+///   in memory. `preserve_libs_on_unmerge` and the prune that follows
+///   read it back from here instead of the store (the store still holds
+///   the state before the unmerge); its `orig_entries` stay the loaded
+///   store, so the one `set_preserved_libs` writes nothing when the
+///   unmerge changed nothing.
+/// - `config_memory`: the pruned config memory (`stale_confmem`).
+/// - `files`: the W4 rewrites (`remove_from_contents`) of the *other*
+///   installed entries that owned preserved libraries pruned here.
+#[derive(Default)]
+pub(crate) struct RetireWrites {
+    registry: Option<PlibRegistry>,
+    config_memory: Option<BTreeMap<String, String>>,
+    files: Vec<(portage_vdb::EntryKey, String, Vec<u8>)>,
+}
+
+impl RetireWrites {
+    /// `Some` when `root`'s backend commits a retirement as one
+    /// transaction (the database backends); `None` on `files`.
+    pub(crate) fn for_root(root: &Path) -> Option<Self> {
+        portage_vdb::for_root(root)
+            .replace_in_publish()
+            .then(Self::default)
+    }
+
+    pub(crate) fn set_config_memory(&mut self, map: BTreeMap<String, String>) {
+        self.config_memory = Some(map);
+    }
+
+    /// One transaction: the W4 rewrites, the registry (only if it
+    /// changed), the config memory, and the deletion of `key`.
+    pub(crate) fn commit(self, root: &Path, key: &portage_vdb::EntryKey) -> Result<(), String> {
+        let db = portage_vdb::for_root(root);
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        for (entry, name, data) in &self.files {
+            txn.replace_file(entry, name, data)
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(libs) = self.registry.as_ref().and_then(plib_store) {
+            txn.set_preserved_libs(&libs).map_err(|e| e.to_string())?;
+        }
+        if let Some(map) = self.config_memory {
+            txn.set_config_memory(&portage_vdb::ConfigMemory { entries: map })
+                .map_err(|e| e.to_string())?;
+        }
+        txn.delete_entry(key).map_err(|e| e.to_string())?;
+        #[cfg(test)]
+        tests::publish_hook(root);
+        txn.commit().map_err(|e| e.to_string())
+    }
+}
+
+/// The registry an unmerge in progress sees: the in-memory one when an
+/// earlier step of this unmerge deferred its write, else the stored one
+/// (pruned of vanished paths either way, like `read_plib_registry`).
+fn plib_registry_for(root: &Path, retire: Option<&RetireWrites>) -> PlibRegistry {
+    match retire.and_then(|r| r.registry.as_ref()) {
+        Some(registry) => {
+            let mut registry = registry.clone();
+            prune_non_existing(root, &mut registry);
+            registry
+        }
+        None => read_plib_registry(root),
+    }
 }
 
 impl PlibRegistry {
@@ -1251,6 +1324,17 @@ fn unregister_preserved_libs(
 /// corrupt a *later* `LinkageMap.rebuild()`'s own preserve-libs decision
 /// for some *other* package's own future unmerge.
 fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Result<(), String> {
+    remove_from_contents_into(root, cpv, paths, None)
+}
+
+/// [`remove_from_contents`], optionally collecting the rewrites into
+/// `retire` (feat#157 S4.2) instead of committing each at once.
+fn remove_from_contents_into(
+    root: &Path,
+    cpv: &str,
+    paths: &BTreeSet<String>,
+    mut retire: Option<&mut RetireWrites>,
+) -> Result<(), String> {
     let Some((category, pf)) = cpv.split_once('/') else {
         return Ok(());
     };
@@ -1282,7 +1366,13 @@ fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Res
         })
         .map(|l| format!("{l}\n"))
         .collect();
-    let replace = |name: &str, data: String| -> Result<(), String> {
+    let mut replace = |name: &str, data: String| -> Result<(), String> {
+        if let Some(retire) = retire.as_deref_mut() {
+            retire
+                .files
+                .push((key.clone(), name.to_string(), data.into_bytes()));
+            return Ok(());
+        }
         let mut txn = db.begin_write().map_err(|e| e.to_string())?;
         txn.replace_file(&key, name, data.as_bytes())
             .map_err(|e| e.to_string())?;
@@ -1715,6 +1805,7 @@ fn merge_plib_registration(
 /// won't be unmerged"; portuale's own vdb entry directory gets deleted
 /// wholesale moments later regardless, so there's no separate real
 /// `CONTENTS`-file rewrite to also perform here).
+#[cfg(test)]
 pub(crate) fn preserve_libs_on_unmerge(
     root: &Path,
     category: &str,
@@ -1723,6 +1814,31 @@ pub(crate) fn preserve_libs_on_unmerge(
     slot: &str,
     contents_text: &str,
     is_replacement: bool,
+) -> Result<BTreeSet<String>, String> {
+    preserve_libs_on_unmerge_into(
+        root,
+        category,
+        pn,
+        pf,
+        slot,
+        contents_text,
+        is_replacement,
+        None,
+    )
+}
+
+/// [`preserve_libs_on_unmerge`], optionally keeping the registry in
+/// `retire` instead of writing it (feat#157 S4.2).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preserve_libs_on_unmerge_into(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    slot: &str,
+    contents_text: &str,
+    is_replacement: bool,
+    retire: Option<&mut RetireWrites>,
 ) -> Result<BTreeSet<String>, String> {
     // Real `_prune_plib_registry` still runs `unregister()` for an
     // instance that owns no files (`instance_owns_files` gates only the
@@ -1779,7 +1895,10 @@ pub(crate) fn preserve_libs_on_unmerge(
             &paths_vec,
         );
     }
-    write_plib_registry(root, &registry)?;
+    match retire {
+        Some(retire) => retire.registry = Some(registry),
+        None => write_plib_registry(root, &registry)?,
+    }
 
     Ok(if is_replacement {
         BTreeSet::new()
@@ -1843,6 +1962,7 @@ pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> 
 /// another") is not reproduced -- portuale has never had a preserved-lib
 /// directory-move path, and the collision-protect takeover
 /// (`unregister_preserved_libs`) already covers the same-path case.
+#[cfg(test)]
 pub(crate) fn find_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
@@ -1851,7 +1971,28 @@ pub(crate) fn find_unused_preserved_libs(
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> BTreeMap<String, BTreeSet<String>> {
-    let registry = read_plib_registry(root);
+    find_unused_preserved_libs_in(
+        root,
+        read_plib_registry(root),
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpv,
+        replacement_preserved,
+        replacement_needed,
+    )
+}
+
+/// [`find_unused_preserved_libs`] over an explicit registry (the one an
+/// unmerge in progress holds in memory, feat#157 S4.2).
+fn find_unused_preserved_libs_in(
+    root: &Path,
+    registry: PlibRegistry,
+    unmerge_no_replacement: bool,
+    being_unmerged: &dyn Fn(&str) -> bool,
+    exclude_cpv: Option<&str>,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+) -> BTreeMap<String, BTreeSet<String>> {
     let plib_dict = registry.preserved_libs();
     if plib_dict.is_empty() {
         return BTreeMap::new();
@@ -1939,8 +2080,34 @@ pub(crate) fn prune_unused_preserved_libs(
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<Vec<String>, String> {
-    let cpv_lib_map = find_unused_preserved_libs(
+    prune_unused_preserved_libs_into(
         root,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpv,
+        replacement_preserved,
+        replacement_needed,
+        None,
+    )
+}
+
+/// [`prune_unused_preserved_libs`], optionally reading the registry from
+/// `retire` and leaving its writes (the registry, the W4 rewrites) there
+/// instead of committing them (feat#157 S4.2). The files it removes are
+/// removed at once either way.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prune_unused_preserved_libs_into(
+    root: &Path,
+    unmerge_no_replacement: bool,
+    being_unmerged: &dyn Fn(&str) -> bool,
+    exclude_cpv: Option<&str>,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    mut retire: Option<&mut RetireWrites>,
+) -> Result<Vec<String>, String> {
+    let cpv_lib_map = find_unused_preserved_libs_in(
+        root,
+        plib_registry_for(root, retire.as_deref()),
         unmerge_no_replacement,
         being_unmerged,
         exclude_cpv,
@@ -1985,7 +2152,7 @@ pub(crate) fn prune_unused_preserved_libs(
 
     // Strip the removed paths from every still-installed owner's vdb
     // CONTENTS/NEEDED.ELF.2, then rewrite the registry.
-    let mut registry = read_plib_registry(root);
+    let mut registry = plib_registry_for(root, retire.as_deref());
     for (cpv, paths) in &cpv_lib_map {
         let cat_pf = cpv.split_once('/');
         let still_installed = cat_pf
@@ -1996,7 +2163,7 @@ pub(crate) fn prune_unused_preserved_libs(
             })
             .unwrap_or(false);
         if still_installed {
-            remove_from_contents(root, cpv, paths)?;
+            remove_from_contents_into(root, cpv, paths, retire.as_deref_mut())?;
         }
         for (entry_cpv, _counter, entry_paths) in registry.entries.values_mut() {
             if entry_cpv == cpv {
@@ -2010,7 +2177,10 @@ pub(crate) fn prune_unused_preserved_libs(
     // registry entry once none of its recorded paths exist on disk any
     // more (rebuilding survivors file-then-symlink, not just retaining).
     prune_non_existing(root, &mut registry);
-    write_plib_registry(root, &registry)?;
+    match retire {
+        Some(retire) => retire.registry = Some(registry),
+        None => write_plib_registry(root, &registry)?,
+    }
 
     Ok(removed)
 }
@@ -4387,7 +4557,12 @@ pub(crate) fn unmerge_one_installed(
     if prerm_status != 0 {
         eprintln!("{category}/{pf}: FAILED prerm ({prerm_status}) -- unmerge continues");
     }
-    crate::ebuild_unmerge::unmerge_pkgfiles(
+    // feat#157 S4.2: a standalone unmerge on a database backend collects
+    // its D4 writes and commits them with the row's deletion (below).
+    let mut retire = (deferred_delete.is_none() && !is_replacement)
+        .then(|| RetireWrites::for_root(root))
+        .flatten();
+    crate::ebuild_unmerge::unmerge_pkgfiles_into(
         root,
         category,
         package,
@@ -4397,13 +4572,14 @@ pub(crate) fn unmerge_one_installed(
         is_replacement,
         replacement_preserved,
         replacement_needed,
+        retire.as_mut(),
     )?;
     let postrm_status = run_hook("postrm")?;
     if postrm_status != 0 {
         eprintln!("{category}/{pf}: FAILED postrm ({postrm_status}) -- unmerge continues");
     }
     if deferred_delete.is_none() {
-        crate::ebuild_unmerge::delete_vdb_dir(root, category, pf)?;
+        crate::ebuild_unmerge::retire_entry(root, category, pf, retire)?;
     }
     Ok(())
 }
@@ -9275,9 +9451,10 @@ mod tests {
     type PublishHook = Box<dyn Fn(&Path)>;
 
     thread_local! {
-        /// Test hook (feat#157 S4.1): run inside `publish_merged_entry` on
-        /// a database backend, after every call of the publishing
-        /// transaction and right before its `commit`, on this thread.
+        /// Test hook (feat#157 S4.1, S4.2): run inside `publish_merged_entry`
+        /// and `RetireWrites::commit` on a database backend, after every call
+        /// of the publishing / retiring transaction and right before its
+        /// `commit`, on this thread.
         static PUBLISH_HOOK: std::cell::RefCell<Option<PublishHook>> =
             const { std::cell::RefCell::new(None) };
     }
@@ -9431,14 +9608,18 @@ mod tests {
         }
 
         /// Everything under `root` except the stores a backend keeps
-        /// (`var/db/pkg`, `var/lib/portage`, `var/cache/edb`): path ->
+        /// (`var/db/pkg`, `var/lib/portage`, `var/cache/edb`) and `etc`
+        /// (env-update's generated files, whose modes follow the process
+        /// umask; no fixture installs under `etc`): path ->
         /// (mode, bytes or symlink target). Directories carry no bytes.
         fn payload_tree(root: &Path) -> Tree {
             fn walk(root: &Path, dir: &Path, out: &mut Tree) {
                 for entry in portage_util::read_dir_entries(dir).unwrap() {
                     let path = entry.path();
                     let rel = path.strip_prefix(root).unwrap().display().to_string();
-                    if ["var/db/pkg", "var/lib/portage", "var/cache/edb"].contains(&rel.as_str()) {
+                    if ["var/db/pkg", "var/lib/portage", "var/cache/edb", "etc"]
+                        .contains(&rel.as_str())
+                    {
                         continue;
                     }
                     let meta = std::fs::symlink_metadata(&path).unwrap();
@@ -9474,6 +9655,16 @@ mod tests {
                 }
             }
             out
+        }
+
+        /// [`payload_tree`] without the permission bits: another test's
+        /// `umask` change (process-wide) can alter the modes of files a run
+        /// creates, which is not what the unmerge tests compare.
+        fn payload_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
+            payload_tree(root)
+                .into_iter()
+                .map(|(k, (_, data))| (k, data))
+                .collect()
         }
 
         fn install_hook(f: impl Fn(&Path) + 'static) {
@@ -9693,6 +9884,204 @@ mod tests {
                 assert_eq!(&on_sqlite.0[name].1, data, "{name} bytes");
             }
             assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+        fn unmerge_standalone(root: &Path, ptmp: &Path, pf: &str, pn: &str) {
+            unmerge_one_installed(
+                root,
+                "dev-libs",
+                pn,
+                pf,
+                &[],
+                &ptmp.join("scratch"),
+                ptmp,
+                &MergeOptions::default(),
+                None,
+                false,
+                &BTreeMap::new(),
+                &[],
+                None,
+            )
+            .expect("unmerge succeeds");
+        }
+
+        /// feat#157 S4.2 (a): `mrg -C` of an installed package on sqlite.
+        /// The payload goes as on `files`, prerm/postrm ran from the
+        /// scratch copy of the stored environment, and the row goes in ONE
+        /// commit: right before it the entry is still installed (and its
+        /// payload already gone); the generation moved by exactly one.
+        #[test]
+        fn a_standalone_unmerge_on_sqlite_retires_the_row_in_one_commit() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let key = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            let run = |sqlite: bool| {
+                std::fs::create_dir_all(&root).unwrap();
+                let db = sqlite.then(|| use_sqlite(&root, &tmp.join("vdb.sqlite")));
+                merge_binpkg(
+                    &binpkg("binpkgrmpkg-1.0.tbz2"),
+                    &root,
+                    &ptmp,
+                    &MergeOptions::default(),
+                )
+                .expect("merge succeeds");
+                assert!(portage_vdb::for_root(&root).has_entry(&key).unwrap());
+                let seen: Rc<RefCell<Option<(bool, bool, u64)>>> = Rc::default();
+                let before = db.as_ref().map(|db| db.generation().unwrap());
+                if let Some(db) = &db {
+                    let db = db.clone();
+                    let seen = seen.clone();
+                    let key = key.clone();
+                    let root = root.clone();
+                    install_hook(move |_| {
+                        *seen.borrow_mut() = Some((
+                            db.has_entry(&key).unwrap(),
+                            root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists(),
+                            db.generation().unwrap(),
+                        ));
+                    });
+                }
+                unmerge_standalone(&root, &ptmp, "binpkgrmpkg-1.0", "binpkgrmpkg");
+                clear_hook();
+                assert!(!portage_vdb::for_root(&root).has_entry(&key).unwrap());
+                let log = std::fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap();
+                let tree = payload_bytes(&root);
+                if let Some(db) = &db {
+                    let (live, payload, generation) = seen.borrow().expect("retire hook ran");
+                    assert!(live, "the row is installed until the retire commit");
+                    assert!(!payload, "the payload was removed before it");
+                    assert_eq!(generation, before.unwrap());
+                    assert_eq!(db.generation().unwrap(), before.unwrap() + 1);
+                    assert!(!root.join("var/db/pkg").exists());
+                }
+                (log, tree)
+            };
+            let on_files = run(false);
+            std::fs::remove_dir_all(&root).unwrap();
+            let _ = std::fs::remove_dir_all(&ptmp);
+            let on_sqlite = run(true);
+            assert!(
+                on_files.0.ends_with("prerm-1.0\npostrm-1.0\n"),
+                "{}",
+                on_files.0
+            );
+            assert_eq!(on_sqlite.0, on_files.0, "phase log differs");
+            assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// feat#157 S4.2 (b): the soname-bump scenario of S1.5. After
+        /// `sonamebumplib` 1.0 -> 2.0 (the old soname is preserved under
+        /// 2.0), unmerging the last consumer prunes the preserved library:
+        /// it is removed, the registry is cleared, and the W4 rewrites of
+        /// `sonamebumplib-2.0`'s `CONTENTS` / `NEEDED.ELF.2` happen. On
+        /// sqlite they all land in the commit that deletes the consumer's
+        /// row (one generation step); the end state equals the `files` run.
+        #[test]
+        fn a_standalone_unmerge_prunes_preserved_libs_in_its_retire_commit() {
+            let tmp = tempdir();
+            let ptmp = tmp.join("ptmp");
+            let run = |name: &str, sqlite: bool| {
+                let root = tmp.join(name);
+                std::fs::create_dir_all(&root).unwrap();
+                // As the S1.5 soname-bump test: `/usr/lib64` must be in the
+                // linker path for the consumer to be found.
+                std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+                std::fs::write(
+                    root.join("etc/env.d/99sonamebump"),
+                    "LDPATH=\"/usr/lib64\"\n",
+                )
+                .unwrap();
+                let db = sqlite.then(|| use_sqlite(&root, &tmp.join(format!("{name}.sqlite"))));
+                for (pn, version) in [
+                    ("sonamebumplib", "1.0"),
+                    ("consumesonamebump", "1.0"),
+                    ("sonamebumplib", "2.0"),
+                ] {
+                    let status = run_merge(
+                        &versioned_fixture(pn, version),
+                        &root,
+                        &ptmp,
+                        &MergeOptions::default(),
+                        None,
+                    )
+                    .expect("merge succeeds");
+                    assert_eq!(status, 0);
+                }
+                let lib = EntryKey::new("dev-libs", "sonamebumplib-2.0");
+                let consumer = EntryKey::new("dev-libs", "consumesonamebump-1.0");
+                let live = portage_vdb::for_root(&root);
+                let registry_before = read_plib_registry(&root).preserved_libs();
+                assert!(
+                    registry_before.contains_key("dev-libs/sonamebumplib-2.0"),
+                    "sanity: the old soname is preserved: {registry_before:?}"
+                );
+                let contents_before = live.read_file(&lib, "CONTENTS").unwrap().unwrap();
+
+                type Seen = (Vec<u8>, BTreeMap<String, Vec<String>>);
+                let seen: Rc<RefCell<Option<Seen>>> = Rc::default();
+                let before = db.as_ref().map(|db| db.generation().unwrap());
+                if let Some(db) = &db {
+                    let db = db.clone();
+                    let seen = seen.clone();
+                    let lib = lib.clone();
+                    install_hook(move |_| {
+                        *seen.borrow_mut() = Some((
+                            db.read_file(&lib, "CONTENTS").unwrap().unwrap(),
+                            // The stored registry (`read_plib_registry` would
+                            // prune the paths the unmerge already deleted).
+                            db.preserved_libs()
+                                .unwrap()
+                                .entries
+                                .into_values()
+                                .map(|e| (e.cpv, e.paths))
+                                .collect(),
+                        ));
+                    });
+                }
+                unmerge_standalone(&root, &ptmp, "consumesonamebump-1.0", "consumesonamebump");
+                clear_hook();
+
+                assert!(!live.has_entry(&consumer).unwrap());
+                assert!(read_plib_registry(&root).entries.is_empty());
+                let contents_after = live.read_file(&lib, "CONTENTS").unwrap().unwrap();
+                assert_ne!(contents_after, contents_before, "W4 rewrote CONTENTS");
+                if let Some(db) = &db {
+                    let (contents_seen, registry_seen) = seen.borrow().clone().expect("hook ran");
+                    assert_eq!(contents_seen, contents_before, "W4 not visible before");
+                    assert_eq!(
+                        registry_seen, registry_before,
+                        "registry not visible before"
+                    );
+                    assert_eq!(db.generation().unwrap(), before.unwrap() + 1);
+                }
+                // Each run builds its own files: compare `CONTENTS` without mtimes.
+                let contents_after: Vec<String> = String::from_utf8(contents_after)
+                    .unwrap()
+                    .lines()
+                    .map(|l| match l.split_whitespace().next() {
+                        Some("obj" | "sym") => l.rsplit_once(' ').map_or(l, |(a, _)| a).to_string(),
+                        _ => l.to_string(),
+                    })
+                    .collect();
+                (
+                    contents_after,
+                    live.read_file(&lib, "NEEDED.ELF.2").unwrap(),
+                    payload_bytes(&root),
+                )
+            };
+            let on_files = run("files-root", false);
+            let on_sqlite = run("sqlite-root", true);
+            assert_eq!(on_sqlite.0, on_files.0, "CONTENTS differs");
+            assert_eq!(on_sqlite.1, on_files.1, "NEEDED.ELF.2 differs");
+            let differing: Vec<&String> = on_files
+                .2
+                .keys()
+                .chain(on_sqlite.2.keys())
+                .filter(|k| on_files.2.get(*k) != on_sqlite.2.get(*k))
+                .collect();
+            assert!(differing.is_empty(), "payload differs at {differing:?}");
             let _ = std::fs::remove_dir_all(&tmp);
         }
     }
