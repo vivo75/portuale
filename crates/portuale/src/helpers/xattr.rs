@@ -34,3 +34,9 @@ fn read_stdin() -> Vec<u8> {
 // Probed from Portage `xattr-helper.py --help` (80 columns, piped).
 // `xattr-helper.py` occurs in the usage line only.
 const XATTR_USAGE: &str = "usage: xattr-helper.py [-h] [--dump] [--restore] [paths ...]\n";
+
+fn xattr_usage(prog: &str) -> Vec<u8> {
+    XATTR_USAGE
+        .replacen("xattr-helper.py", prog, 1)
+        .into_bytes()
+}

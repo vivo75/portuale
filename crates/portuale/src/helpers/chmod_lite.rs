@@ -33,3 +33,25 @@ fn report_stat_error(top: &Path, e: &std::io::Error) -> bool {
         }
     }
 }
+
+#[cfg(test)]
+mod fixture_tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::collections::BTreeMap;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
+
+    /// One manifest entry: type, mode (files/dirs only) or target (links).
+    #[derive(Debug, PartialEq)]
+    enum Entry {
+        Dir(u32),
+        File(u32),
+        Link(Vec<u8>),
+    }
+
+    fn join(root: &Path, rel: &[u8]) -> PathBuf {
+        use std::ffi::OsStr;
+        root.join(OsStr::from_bytes(rel))
+    }
+}

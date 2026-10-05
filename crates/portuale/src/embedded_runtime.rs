@@ -84,4 +84,58 @@ mod tests {
     fn repo() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
+
+    /// What a tree looks like for comparison: relative path -> a short
+    /// description (`dir`, `exec`/`file` + bytes, `-> target`).
+    #[derive(Debug, PartialEq)]
+    enum Node {
+        Dir,
+        File { exec: bool, bytes: Vec<u8> },
+        Link(String),
+    }
+
+    /// A phase-running merge works from an extracted runtime, never the
+    /// live `bin/`.
+    #[test]
+    fn a_phase_running_merge_works_from_an_extracted_runtime() {
+        let tmp = TempDir::new("embedded-runtime-merge");
+        let bin = tmp.join("rt/bin");
+        extract("bin", &bin).unwrap();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let fixtures = repo().join("fixtures");
+        let exe = crate::self_exe::built_portuale_bin();
+        let out = std::process::Command::new(exe)
+            .env(crate::ebuild_phases::BIN_DIR_VAR, &bin)
+            .env("PORTAGE_CONFIGROOT", &fixtures)
+            .env("ROOT", &fixtures)
+            .env("PORTAGE_RUNNING_ROOT", &fixtures)
+            .env("DISTDIR", fixtures.join("distfiles"))
+            .args([
+                "mrg",
+                "--remote-hostname=localtest",
+                "--remote-transport=local",
+            ])
+            .arg(format!("--remote-root={}", root.display()))
+            .arg(format!("--remote-workdir={}", tmp.join("work").display()))
+            .arg(format!(
+                "--remote-binpkg={}",
+                fixtures
+                    .join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2")
+                    .display()
+            ))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
+        assert!(
+            stdout.contains(">>> Remote merged dev-libs/binpkgrmpkg-1.0"),
+            "{stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap(),
+            "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+        );
+    }
 }

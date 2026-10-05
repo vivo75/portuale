@@ -327,6 +327,14 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
+    // ---- oracle (one test per case dir) -------------------------------
+
+    /// pmtest's `fixtures/helpers/doins/` (the oracle from running the
+    /// Portage wrapper; no checkout or Python needed).
+    fn fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/doins")
+    }
+
     // ---- end to end: a real package whose src_install uses doins ----
 
     /// `dev-libs/packagepkg`'s `src_install` is `insinto` + `doins`

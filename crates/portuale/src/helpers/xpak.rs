@@ -29,3 +29,14 @@ fn scan_xpaksize(file: &Path) -> std::io::Result<u64> {
     let infosize = u32::from_be_bytes([trailer[8], trailer[9], trailer[10], trailer[11]]) as u64;
     Ok(infosize + 8)
 }
+
+#[cfg(test)]
+mod tests {
+    use portage_util::TempDir;
+    use std::os::unix::fs::MetadataExt;
+    use std::path::{Path, PathBuf};
+
+    fn fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/xpak")
+    }
+}

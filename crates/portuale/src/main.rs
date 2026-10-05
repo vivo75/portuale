@@ -124,8 +124,52 @@ fn emerge_is_pretend(args: &[String]) -> bool {
     })
 }
 
+/// The Rust runtime ignores SIGPIPE, so `portuale ... | head` would make the
+/// next `println!` panic; turn that one panic into the quiet exit 141 a
+/// SIGPIPE death shows a shell. The ignored disposition stays (the remote
+/// transport relies on `EPIPE` errors when ssh dies).
+fn exit_quietly_on_broken_pipe() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info.to_string();
+        if msg.contains("failed printing to std") && msg.contains("Broken pipe") {
+            std::process::exit(141);
+        }
+        previous(info);
+    }));
+}
+
 fn main() -> ExitCode {
     // Applets are wired in here as they become usable.
     eprintln!("portuale: no applet is wired in yet");
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod broken_pipe_tests {
+    /// A closed stdout pipe exits 141 quietly, not a panic message and an abort.
+    #[test]
+    fn a_closed_stdout_pipe_exits_141_without_a_panic() {
+        use std::os::unix::process::ExitStatusExt;
+        let exe = crate::self_exe::built_portuale_bin();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let mut child = std::process::Command::new(exe)
+            .args(["emerge", "--list-sets"])
+            .env("PORTAGE_CONFIGROOT", &root)
+            .env("ROOT", &root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(child.stdout.take()); // the reader goes away before the first write
+        let out = child.wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!err.contains("panicked"), "stderr: {err}");
+        assert_eq!(out.status.signal(), None, "killed by a signal: {out:?}");
+        assert!(
+            matches!(out.status.code(), Some(0) | Some(141)),
+            "unexpected exit: {:?}",
+            out.status
+        );
+    }
 }
