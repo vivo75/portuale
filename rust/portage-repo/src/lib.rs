@@ -17942,6 +17942,7 @@ fn slot_operator_update_force_scan(
 /// visibility gate (`_pkg_visibility_check` 2347, #243).
 /// The binary arm (`dep.child` a binary package scheduled for merge) is
 /// v2 `#24c`.
+#[allow(clippy::too_many_arguments)]
 fn slot_operator_slot_change_probe(
     root: &Path,
     repos: &[RepoConfig],
@@ -35093,7 +35094,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     let ctx = ResolveCtx::new(req)?;
     let initial = BacktrackParams::initial(req);
     let mut bt = Backtracker::new(
-        std::cmp::max(1, (ctx.backtrack_max + 1) / 2),
+        std::cmp::max(1, ctx.backtrack_max.div_ceil(2)),
         initial.clone(),
     );
     let mut first_pass = true;
@@ -60661,7 +60662,7 @@ mod tests {
             let atoms: Vec<String> = atoms.iter().map(|a| (*a).to_string()).collect();
             set_seed_holds_instance(
                 &atoms,
-                &[merged.clone()],
+                std::slice::from_ref(&merged),
                 "app-misc",
                 "bdprov",
                 "1",
@@ -60695,7 +60696,7 @@ mod tests {
             let atoms: Vec<String> = atoms.iter().map(|a| (*a).to_string()).collect();
             set_seed_holds_instance(
                 &atoms,
-                &[merged.clone()],
+                std::slice::from_ref(&merged),
                 "app-misc",
                 "bdprov",
                 "1",
