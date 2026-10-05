@@ -54,7 +54,7 @@ Usage:
    portuale vdb sweep (--remove CAT/PF)... KIND:PATH
    portuale vdb sweep --all KIND:PATH
    portuale vdb rebuild-index KIND:PATH
-   portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT
+   portuale vdb mount [--foreground] [--allow-other] [--rw] KIND:PATH MOUNTPOINT
    portuale vdb --help
 
 Copy the installed-package database (VDB) between backends, or compare two
@@ -109,6 +109,8 @@ the historic tree CAT/PF/files, through FUSE (fusermount3; no libfuse needed):
    --foreground, -f   stay in the foreground; SIGINT/SIGTERM unmount and exit
    --allow-other      let other users (root, running emerge) read the mount;
                       needs user_allow_other in /etc/fuse.conf unless root
+   --rw               read-write, sqlite and redb only (#317, in progress): real
+                      Portage's lock files live in memory; other writes EPERM
 Without --foreground it detaches once the mount is ready. Unmount with
 `fusermount3 -u MOUNTPOINT`. The database is opened read-only. Every write is
 EROFS. Directory mtimes follow real Portage (an entry shows its stored
@@ -347,10 +349,11 @@ fn open_existing(spec: &Spec, write: bool) -> Result<Box<dyn InstalledDb>, Strin
     open(spec, write)
 }
 
-/// `portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT`.
+/// `portuale vdb mount [--foreground] [--allow-other] [--rw] KIND:PATH MOUNTPOINT`.
 fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
     let mut foreground = false;
     let mut allow_other = false;
+    let mut rw = false;
     let mut pos: Vec<&str> = Vec::new();
     for a in args {
         match a.as_str() {
@@ -360,6 +363,7 @@ fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
             }
             "-f" | "--foreground" => foreground = true,
             "--allow-other" => allow_other = true,
+            "--rw" => rw = true,
             s if s.starts_with('-') => return Err(format!("mount: unknown option {s:?}")),
             s => pos.push(s),
         }
@@ -368,6 +372,9 @@ fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
         return Err("mount: expected KIND:PATH and MOUNTPOINT".into());
     };
     let spec = parse_spec(spec)?;
+    if rw && spec.kind == BackendKind::Files {
+        return Err("mount --rw: files:ROOT is already writable on disk".into());
+    }
     let mountpoint = PathBuf::from(mountpoint);
     if !mountpoint.is_dir() {
         return Err(format!(
@@ -375,7 +382,19 @@ fn mount(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
             mountpoint.display()
         ));
     }
-    mount_spec(spec, mountpoint, foreground, allow_other)
+    mount_spec(spec, mountpoint, foreground, allow_other, rw)
+}
+
+/// The scratch directory of a `--rw` mount of `db`: named after the
+/// database file, so the next mount of the same database clears what a
+/// daemon that died left behind (`RwView::new` empties it).
+#[cfg(feature = "vdb-fuse")]
+fn rw_scratch(db: &Path) -> PathBuf {
+    use std::hash::{Hash as _, Hasher as _};
+    let abs = std::fs::canonicalize(db).unwrap_or_else(|_| db.to_path_buf());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    abs.hash(&mut h);
+    std::env::temp_dir().join(format!("portuale-vdb-rw-{:016x}", h.finish()))
 }
 
 #[cfg(feature = "vdb-fuse")]
@@ -384,21 +403,38 @@ fn mount_spec(
     mountpoint: PathBuf,
     foreground: bool,
     allow_other: bool,
+    rw: bool,
 ) -> Result<u8, String> {
     use std::sync::Arc;
     let fsname = format!("{}:{}", spec.kind, spec.path.display());
-    let open_ro =
-        || -> Result<Arc<dyn InstalledDb>, String> { open_existing(&spec, false).map(Arc::from) };
+    let open_db =
+        || -> Result<Arc<dyn InstalledDb>, String> { open_existing(&spec, rw).map(Arc::from) };
+    let opts = rw.then(|| crate::vdb_fuse::RwOpts {
+        scratch: rw_scratch(&spec.path),
+    });
     // Open once here so a bad PATH, a busy redb or a missing feature is
     // reported before anything forks; the handle is dropped again, the
     // daemon opens its own.
-    drop(open_ro()?);
+    drop(open_db()?);
     if foreground {
-        crate::vdb_fuse::serve(open_ro()?, &mountpoint, &fsname, allow_other, || {})
-            .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+        crate::vdb_fuse::serve(
+            open_db()?,
+            &mountpoint,
+            &fsname,
+            allow_other,
+            opts.as_ref(),
+            || {},
+        )
+        .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
     } else {
-        crate::vdb_fuse::serve_background(open_ro, &mountpoint, &fsname, allow_other)
-            .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+        crate::vdb_fuse::serve_background(
+            open_db,
+            &mountpoint,
+            &fsname,
+            allow_other,
+            opts.as_ref(),
+        )
+        .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
     }
     Ok(0)
 }
@@ -409,6 +445,7 @@ fn mount_spec(
     _mountpoint: PathBuf,
     _foreground: bool,
     _allow_other: bool,
+    _rw: bool,
 ) -> Result<u8, String> {
     Err("mount: this portuale was built without the vdb-fuse feature".into())
 }

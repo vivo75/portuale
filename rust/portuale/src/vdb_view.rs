@@ -108,6 +108,12 @@ pub enum ViewError {
     Rofs,
     /// A pinned file changed or went away under an open handle.
     Stale,
+    /// A write the read-write layer (`vdb_rw`, #317) does not map.
+    Perm,
+    /// `rmdir` of a directory that still has children.
+    NotEmpty,
+    /// The name exists already (`mkdir`, `O_EXCL`, `link`).
+    Exists,
     /// The backend failed.
     Io(String),
 }
@@ -122,6 +128,9 @@ impl ViewError {
             ViewError::BadHandle => libc::EBADF,
             ViewError::Rofs => libc::EROFS,
             ViewError::Stale => libc::ESTALE,
+            ViewError::Perm => libc::EPERM,
+            ViewError::NotEmpty => libc::ENOTEMPTY,
+            ViewError::Exists => libc::EEXIST,
             ViewError::Io(_) => libc::EIO,
         }
     }
@@ -203,17 +212,20 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 // ---------------------------------------------------------------- inodes
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Node {
+pub(crate) enum Node {
     Root,
     Cat(String),
     Entry(EntryKey),
     File(EntryKey, String),
+    /// An object of the read-write layer (`vdb_rw`, #317): a volatile
+    /// file, a staged directory or file. This view never serves it.
+    Obj(u64),
 }
 
 impl Node {
     fn kind(&self) -> Kind {
         match self {
-            Node::File(..) => Kind::File,
+            Node::File(..) | Node::Obj(_) => Kind::File,
             _ => Kind::Dir,
         }
     }
@@ -355,6 +367,16 @@ impl View {
 
     fn node(&self, ino: u64) -> Res<Node> {
         lock(&self.inodes).node(ino).ok_or(ViewError::NoEnt)
+    }
+
+    /// The inode of `node`, interned on first use (stable, never reused).
+    pub(crate) fn ino_of(&self, node: &Node) -> u64 {
+        self.ino(node)
+    }
+
+    /// The node an inode stands for.
+    pub(crate) fn node_of(&self, ino: u64) -> Res<Node> {
+        self.node(ino)
     }
 
     /// Run `f` until the generation reads the same before and after (a
@@ -512,6 +534,7 @@ impl View {
                     e.stat.dir_mtime_ns,
                 ))
             }
+            Node::Obj(_) => Err(ViewError::NoEnt),
             Node::File(key, name) => {
                 let e = self.entry_snap(gn, key)?.ok_or(ViewError::NoEnt)?;
                 let meta = e.file(name).ok_or(ViewError::NoEnt)?;
@@ -542,7 +565,7 @@ impl View {
             Node::Root => ROOT_INO,
             Node::Cat(_) => ROOT_INO,
             Node::Entry(k) => self.ino(&Node::Cat(k.category.clone())),
-            Node::File(..) => return Err(ViewError::NotDir),
+            Node::File(..) | Node::Obj(_) => return Err(ViewError::NotDir),
         };
         let mut out = vec![
             DirEnt {
@@ -581,7 +604,7 @@ impl View {
                     push(Node::File(key.clone(), f.name.clone()), &f.name);
                 }
             }
-            Node::File(..) => unreachable!("returned above"),
+            Node::File(..) | Node::Obj(_) => unreachable!("returned above"),
         }
         Ok(out)
     }
@@ -596,7 +619,7 @@ impl View {
             Node::Root => Node::Cat(name.to_string()),
             Node::Cat(cat) => Node::Entry(EntryKey::new(cat.as_str(), name)),
             Node::Entry(key) => Node::File(key.clone(), name.to_string()),
-            Node::File(..) => return Err(ViewError::NotDir),
+            Node::File(..) | Node::Obj(_) => return Err(ViewError::NotDir),
         };
         // Checked in the current generation; an unknown name is `NoEnt`
         // without interning an inode for it.

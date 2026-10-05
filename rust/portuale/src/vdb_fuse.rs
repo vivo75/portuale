@@ -2,7 +2,8 @@
 // S7.2): a thin translation from the `fuser` callbacks to the pure
 // `vdb_view::View`, which holds every decision (tree, inodes, attributes,
 // generation pinning, EROFS, the generated `metadata` file) and is unit
-// tested without a mount. This file only converts types and errno values;
+// tested without a mount. With `--rw` (#317) the callbacks go to
+// `vdb_rw::RwView` instead, the read-write layer over the same view. This file only converts types and errno values;
 // it needs `/dev/fuse` and `fusermount3` to run and is exercised by the S7.4
 // commands on a FUSE-capable host, not by `cargo test`.
 //
@@ -12,7 +13,7 @@
 
 use std::ffi::OsStr;
 use std::io::{self, Read as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,21 +25,41 @@ use fuser::{
 };
 use portage_vdb::InstalledDb;
 
+use crate::vdb_rw::{Owner, RwView, SetAttr};
 use crate::vdb_view::{self, Attr, Kind, View, ViewError, WriteOp};
 
 /// Attribute and entry validity handed to the kernel. Short: a commit by
 /// another process is seen within this time.
 const TTL: Duration = Duration::from_secs(1);
 
+/// What a mount serves: the read-only view, or the read-write layer
+/// (`--rw`, #317) over it.
+enum Mode {
+    Ro(View),
+    Rw(Box<RwView>),
+}
+
 struct Fs {
-    view: View,
+    mode: Mode,
     uid: u32,
     gid: u32,
+}
+
+/// `--rw`: where staged entries live while real Portage writes them.
+pub struct RwOpts {
+    pub scratch: PathBuf,
 }
 
 impl Fs {
     fn attr(&self, a: &Attr) -> FileAttr {
         let t = vdb_view::system_time(a.mtime_ns);
+        let (uid, gid) = match &self.mode {
+            Mode::Ro(_) => (self.uid, self.gid),
+            Mode::Rw(rw) => {
+                let o = rw.owner_of(a.ino);
+                (o.uid, o.gid)
+            }
+        };
         FileAttr {
             ino: INodeNo(a.ino),
             size: a.size,
@@ -53,11 +74,56 @@ impl Fs {
             },
             perm: a.perm,
             nlink: a.nlink,
-            uid: self.uid,
-            gid: self.gid,
+            uid,
+            gid,
             rdev: 0,
             blksize: 4096,
             flags: 0,
+        }
+    }
+
+    fn lookup_(&self, parent: u64, name: &str) -> Result<Attr, ViewError> {
+        match &self.mode {
+            Mode::Ro(v) => v.lookup(parent, name),
+            Mode::Rw(rw) => rw.lookup(parent, name),
+        }
+    }
+
+    fn getattr_(&self, ino: u64) -> Result<Attr, ViewError> {
+        match &self.mode {
+            Mode::Ro(v) => v.getattr(ino),
+            Mode::Rw(rw) => rw.getattr(ino),
+        }
+    }
+
+    fn release_(&self, fh: u64) {
+        match &self.mode {
+            Mode::Ro(v) => v.release(fh),
+            Mode::Rw(rw) => {
+                let _ = rw.release(fh);
+            }
+        }
+    }
+
+    /// The read-write layer, or `EROFS` for `op` on a read-only mount.
+    fn rw(&self, op: WriteOp) -> Result<&RwView, Errno> {
+        match &self.mode {
+            Mode::Ro(_) => Err(denied(op)),
+            Mode::Rw(rw) => Ok(rw),
+        }
+    }
+
+    fn entry(&self, r: Result<Attr, ViewError>, reply: ReplyEntry) {
+        match r {
+            Ok(a) => reply.entry(&TTL, &self.attr(&a), Generation(0)),
+            Err(e) => reply.error(errno(&e)),
+        }
+    }
+
+    fn empty(r: Result<(), ViewError>, reply: ReplyEmpty) {
+        match r {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(errno(&e)),
         }
     }
 }
@@ -70,21 +136,30 @@ fn denied(op: WriteOp) -> Errno {
     errno(&vdb_view::deny(op))
 }
 
+fn ns_of(t: TimeOrNow) -> i128 {
+    let st = match t {
+        TimeOrNow::SpecificTime(st) => st,
+        TimeOrNow::Now => std::time::SystemTime::now(),
+    };
+    match st.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_nanos() as i128,
+        Err(e) => -(e.duration().as_nanos() as i128),
+    }
+}
+
 impl Filesystem for Fs {
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let Some(name) = name.to_str() else {
             return reply.error(Errno::ENOENT);
         };
-        match self.view.lookup(u64::from(parent), name) {
-            Ok(a) => reply.entry(&TTL, &self.attr(&a), Generation(0)),
-            Err(e) => reply.error(errno(&e)),
-        }
+        self.entry(self.lookup_(u64::from(parent), name), reply);
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
-        let r = match fh {
-            Some(fh) => self.view.getattr_fh(u64::from(fh)),
-            None => self.view.getattr(u64::from(ino)),
+        let r = match (&self.mode, fh) {
+            (Mode::Ro(v), Some(fh)) => v.getattr_fh(u64::from(fh)),
+            (Mode::Rw(rw), Some(fh)) => rw.getattr_fh(u64::from(ino), u64::from(fh)),
+            (_, None) => self.getattr_(u64::from(ino)),
         };
         match r {
             Ok(a) => reply.attr(&TTL, &self.attr(&a)),
@@ -95,13 +170,13 @@ impl Filesystem for Fs {
     fn setattr(
         &self,
         _req: &Request,
-        _ino: INodeNo,
-        _mode: Option<u32>,
-        _uid: Option<u32>,
-        _gid: Option<u32>,
-        _size: Option<u64>,
+        ino: INodeNo,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
         _atime: Option<TimeOrNow>,
-        _mtime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
         _ctime: Option<std::time::SystemTime>,
         _fh: Option<FileHandle>,
         _crtime: Option<std::time::SystemTime>,
@@ -110,7 +185,21 @@ impl Filesystem for Fs {
         _flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
-        reply.error(denied(WriteOp::Setattr));
+        let rw = match self.rw(WriteOp::Setattr) {
+            Ok(rw) => rw,
+            Err(e) => return reply.error(e),
+        };
+        let s = SetAttr {
+            mode,
+            uid,
+            gid,
+            size,
+            mtime_ns: mtime.map(ns_of),
+        };
+        match rw.setattr(u64::from(ino), &s) {
+            Ok(a) => reply.attr(&TTL, &self.attr(&a)),
+            Err(e) => reply.error(errno(&e)),
+        }
     }
 
     fn readlink(&self, _req: &Request, _ino: INodeNo, reply: ReplyData) {
@@ -128,27 +217,53 @@ impl Filesystem for Fs {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
-        reply.error(denied(WriteOp::Mknod));
+        // Real Portage creates regular files with open(O_CREAT), which
+        // arrives as `create`; a mknod is outside the mapping.
+        match self.rw(WriteOp::Mknod) {
+            Ok(_) => reply.error(Errno::EPERM),
+            Err(e) => reply.error(e),
+        }
     }
 
     fn mkdir(
         &self,
         _req: &Request,
-        _parent: INodeNo,
-        _name: &OsStr,
-        _mode: u32,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        reply.error(denied(WriteOp::Mkdir));
+        let rw = match self.rw(WriteOp::Mkdir) {
+            Ok(rw) => rw,
+            Err(e) => return reply.error(e),
+        };
+        let Some(name) = name.to_str() else {
+            return reply.error(Errno::EPERM);
+        };
+        self.entry(rw.mkdir(u64::from(parent), name, mode), reply);
     }
 
-    fn unlink(&self, _req: &Request, _parent: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(denied(WriteOp::Unlink));
+    fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let rw = match self.rw(WriteOp::Unlink) {
+            Ok(rw) => rw,
+            Err(e) => return reply.error(e),
+        };
+        let Some(name) = name.to_str() else {
+            return reply.error(Errno::ENOENT);
+        };
+        Self::empty(rw.unlink(u64::from(parent), name), reply);
     }
 
-    fn rmdir(&self, _req: &Request, _parent: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(denied(WriteOp::Rmdir));
+    fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let rw = match self.rw(WriteOp::Rmdir) {
+            Ok(rw) => rw,
+            Err(e) => return reply.error(e),
+        };
+        let Some(name) = name.to_str() else {
+            return reply.error(Errno::ENOENT);
+        };
+        Self::empty(rw.rmdir(u64::from(parent), name), reply);
     }
 
     fn symlink(
@@ -159,41 +274,76 @@ impl Filesystem for Fs {
         _target: &Path,
         reply: ReplyEntry,
     ) {
-        reply.error(denied(WriteOp::Symlink));
+        match self.rw(WriteOp::Symlink) {
+            Ok(_) => reply.error(Errno::EPERM),
+            Err(e) => reply.error(e),
+        }
     }
 
     fn rename(
         &self,
         _req: &Request,
-        _parent: INodeNo,
-        _name: &OsStr,
-        _newparent: INodeNo,
-        _newname: &OsStr,
-        _flags: RenameFlags,
+        parent: INodeNo,
+        name: &OsStr,
+        newparent: INodeNo,
+        newname: &OsStr,
+        flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
-        reply.error(denied(WriteOp::Rename));
+        let rw = match self.rw(WriteOp::Rename) {
+            Ok(rw) => rw,
+            Err(e) => return reply.error(e),
+        };
+        let (Some(name), Some(newname)) = (name.to_str(), newname.to_str()) else {
+            return reply.error(Errno::EPERM);
+        };
+        if !flags.is_empty() {
+            // RENAME_EXCHANGE / RENAME_NOREPLACE are not used by Portage.
+            return reply.error(Errno::EINVAL);
+        }
+        Self::empty(
+            rw.rename(u64::from(parent), name, u64::from(newparent), newname),
+            reply,
+        );
     }
 
     fn link(
         &self,
         _req: &Request,
-        _ino: INodeNo,
-        _newparent: INodeNo,
-        _newname: &OsStr,
+        ino: INodeNo,
+        newparent: INodeNo,
+        newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        reply.error(denied(WriteOp::Link));
+        let rw = match self.rw(WriteOp::Link) {
+            Ok(rw) => rw,
+            Err(e) => return reply.error(e),
+        };
+        let Some(newname) = newname.to_str() else {
+            return reply.error(Errno::EPERM);
+        };
+        self.entry(
+            rw.link(u64::from(ino), u64::from(newparent), newname),
+            reply,
+        );
     }
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
-        match self
-            .view
-            .open(u64::from(ino), vdb_view::open_wants_write(flags.0))
-        {
-            // The content of a generation never changes under a handle, so
-            // the kernel may keep its page cache for it.
-            Ok(fh) => reply.opened(FileHandle(fh), FopenFlags::empty()),
+        let r = match &self.mode {
+            Mode::Ro(v) => v.open(u64::from(ino), vdb_view::open_wants_write(flags.0)),
+            Mode::Rw(rw) => rw.open(u64::from(ino), flags.0),
+        };
+        match r {
+            // Read-only: the content of a generation never changes under a
+            // handle, so the kernel may keep its page cache for it.
+            // Read-write: written files change, so no cache is kept.
+            Ok(fh) => reply.opened(
+                FileHandle(fh),
+                match self.mode {
+                    Mode::Ro(_) => FopenFlags::empty(),
+                    Mode::Rw(_) => FopenFlags::FOPEN_DIRECT_IO,
+                },
+            ),
             Err(e) => reply.error(errno(&e)),
         }
     }
@@ -209,7 +359,11 @@ impl Filesystem for Fs {
         _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
-        match self.view.read(u64::from(fh), offset, size as usize) {
+        let r = match &self.mode {
+            Mode::Ro(v) => v.read(u64::from(fh), offset, size as usize),
+            Mode::Rw(rw) => rw.read(u64::from(fh), offset, size as usize),
+        };
+        match r {
             Ok(b) => reply.data(&b),
             Err(e) => reply.error(errno(&e)),
         }
@@ -219,15 +373,22 @@ impl Filesystem for Fs {
         &self,
         _req: &Request,
         _ino: INodeNo,
-        _fh: FileHandle,
-        _offset: u64,
-        _data: &[u8],
+        fh: FileHandle,
+        offset: u64,
+        data: &[u8],
         _write_flags: WriteFlags,
         _flags: OpenFlags,
         _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
-        reply.error(denied(WriteOp::Write));
+        let rw = match self.rw(WriteOp::Write) {
+            Ok(rw) => rw,
+            Err(e) => return reply.error(e),
+        };
+        match rw.write(u64::from(fh), offset, data) {
+            Ok(n) => reply.written(n),
+            Err(e) => reply.error(errno(&e)),
+        }
     }
 
     fn flush(
@@ -251,8 +412,14 @@ impl Filesystem for Fs {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        self.view.release(u64::from(fh));
-        reply.ok();
+        match &self.mode {
+            Mode::Ro(v) => {
+                v.release(u64::from(fh));
+                reply.ok();
+            }
+            // A release can publish (a live-entry rewrite, S3).
+            Mode::Rw(rw) => Self::empty(rw.release(u64::from(fh)), reply),
+        }
     }
 
     fn fsync(
@@ -263,11 +430,16 @@ impl Filesystem for Fs {
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
+        // Durability comes with the publishing transaction.
         reply.ok();
     }
 
     fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
-        match self.view.opendir(u64::from(ino)) {
+        let r = match &self.mode {
+            Mode::Ro(v) => v.opendir(u64::from(ino)),
+            Mode::Rw(rw) => rw.opendir(u64::from(ino)),
+        };
+        match r {
             Ok(fh) => reply.opened(FileHandle(fh), FopenFlags::empty()),
             Err(e) => reply.error(errno(&e)),
         }
@@ -281,7 +453,11 @@ impl Filesystem for Fs {
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        let listing = match self.view.readdir(u64::from(fh)) {
+        let r = match &self.mode {
+            Mode::Ro(v) => v.readdir(u64::from(fh)),
+            Mode::Rw(rw) => rw.readdir(u64::from(fh)),
+        };
+        let listing = match r {
             Ok(l) => l,
             Err(e) => return reply.error(errno(&e)),
         };
@@ -306,7 +482,7 @@ impl Filesystem for Fs {
         _flags: OpenFlags,
         reply: ReplyEmpty,
     ) {
-        self.view.release(u64::from(fh));
+        self.release_(u64::from(fh));
         reply.ok();
     }
 
@@ -335,39 +511,59 @@ impl Filesystem for Fs {
         _position: u32,
         reply: ReplyEmpty,
     ) {
-        reply.error(denied(WriteOp::Setxattr));
+        match self.rw(WriteOp::Setxattr) {
+            Ok(_) => reply.error(Errno::EPERM),
+            Err(e) => reply.error(e),
+        }
     }
 
     fn removexattr(&self, _req: &Request, _ino: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(denied(WriteOp::Removexattr));
+        match self.rw(WriteOp::Removexattr) {
+            Ok(_) => reply.error(Errno::EPERM),
+            Err(e) => reply.error(e),
+        }
     }
 
     fn access(&self, _req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
         // Read and execute-search are granted by the mode bits the kernel
         // checks itself; a write probe is the one thing this answers.
-        if mask.contains(AccessFlags::W_OK) {
-            return match self.view.getattr(u64::from(ino)) {
-                Ok(_) => reply.error(denied(WriteOp::Write)),
-                Err(e) => reply.error(errno(&e)),
-            };
-        }
-        match self.view.getattr(u64::from(ino)) {
-            Ok(_) => reply.ok(),
-            Err(e) => reply.error(errno(&e)),
+        let exists = self.getattr_(u64::from(ino));
+        match (exists, &self.mode) {
+            (Err(e), _) => reply.error(errno(&e)),
+            (Ok(_), Mode::Ro(_)) if mask.contains(AccessFlags::W_OK) => {
+                reply.error(denied(WriteOp::Write))
+            }
+            (Ok(_), _) => reply.ok(),
         }
     }
 
     fn create(
         &self,
         _req: &Request,
-        _parent: INodeNo,
-        _name: &OsStr,
-        _mode: u32,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
         _umask: u32,
-        _flags: i32,
+        flags: i32,
         reply: ReplyCreate,
     ) {
-        reply.error(denied(WriteOp::Create));
+        let rw = match self.rw(WriteOp::Create) {
+            Ok(rw) => rw,
+            Err(e) => return reply.error(e),
+        };
+        let Some(name) = name.to_str() else {
+            return reply.error(Errno::EPERM);
+        };
+        match rw.create(u64::from(parent), name, mode, flags) {
+            Ok((a, fh)) => reply.created(
+                &TTL,
+                &self.attr(&a),
+                Generation(0),
+                FileHandle(fh),
+                FopenFlags::FOPEN_DIRECT_IO,
+            ),
+            Err(e) => reply.error(errno(&e)),
+        }
     }
 
     fn fallocate(
@@ -380,7 +576,10 @@ impl Filesystem for Fs {
         _mode: i32,
         reply: ReplyEmpty,
     ) {
-        reply.error(denied(WriteOp::Fallocate));
+        match self.rw(WriteOp::Fallocate) {
+            Ok(_) => reply.error(Errno::from_i32(libc::EOPNOTSUPP)),
+            Err(e) => reply.error(e),
+        }
     }
 
     fn copy_file_range(
@@ -396,7 +595,12 @@ impl Filesystem for Fs {
         _flags: fuser::CopyFileRangeFlags,
         reply: fuser::ReplyWrite,
     ) {
-        reply.error(denied(WriteOp::CopyFileRange));
+        // Real `shutil.copyfile` tries copy_file_range first (S0) and falls
+        // back to plain writes on EOPNOTSUPP.
+        match self.rw(WriteOp::CopyFileRange) {
+            Ok(_) => reply.error(Errno::from_i32(libc::EOPNOTSUPP)),
+            Err(e) => reply.error(e),
+        }
     }
 }
 
@@ -423,12 +627,17 @@ pub fn serve(
     mountpoint: &Path,
     fsname: &str,
     allow_other: bool,
+    rw: Option<&RwOpts>,
     on_mounted: impl FnOnce(),
 ) -> io::Result<()> {
     let set = block_termination_signals();
     let mut cfg = Config::default();
     cfg.mount_options = vec![
-        MountOption::RO,
+        if rw.is_some() {
+            MountOption::RW
+        } else {
+            MountOption::RO
+        },
         MountOption::NoSuid,
         MountOption::NoDev,
         MountOption::NoAtime,
@@ -440,11 +649,15 @@ pub fn serve(
     }
     // SAFETY: geteuid/getegid never fail and touch no memory.
     let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
-    let fs = Fs {
-        view: View::new(db),
-        uid,
-        gid,
+    let mode = match rw {
+        None => Mode::Ro(View::new(db)),
+        Some(o) => Mode::Rw(Box::new(RwView::new(
+            db,
+            o.scratch.clone(),
+            Owner { uid, gid },
+        )?)),
     };
+    let fs = Fs { mode, uid, gid };
     let mut session = Session::new(fs, mountpoint, &cfg)?;
     on_mounted();
     let mut unmounter = session.unmount_callable();
@@ -471,6 +684,7 @@ pub fn serve_background(
     mountpoint: &Path,
     fsname: &str,
     allow_other: bool,
+    rw: Option<&RwOpts>,
 ) -> Result<(), String> {
     let mut fds = [0i32; 2];
     // SAFETY: `fds` is a valid two-element array.
@@ -527,7 +741,7 @@ pub fn serve_background(
             2
         }
         Ok(db) => {
-            let r = serve(db, mountpoint, fsname, allow_other, || {
+            let r = serve(db, mountpoint, fsname, allow_other, rw, || {
                 report(true, "");
                 detach_from_terminal();
             });

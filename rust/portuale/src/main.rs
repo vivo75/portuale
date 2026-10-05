@@ -49,6 +49,8 @@ mod vdb_cmd;
 mod vdb_fuse;
 mod vdb_ipc;
 #[cfg(feature = "vdb-fuse")]
+mod vdb_rw;
+#[cfg(feature = "vdb-fuse")]
 mod vdb_view;
 
 use std::process::ExitCode;
