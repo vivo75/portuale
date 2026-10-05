@@ -23,7 +23,8 @@
 //! - `dep_atom`: key = `cp`; value = `id u64`, `class u8` (index in
 //!   `DEP_CLASSES`: DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND), then the
 //!   atom token as the remaining bytes. One value per distinct `(class,
-//!   cp, token)`, from the shared `dep_cp`.
+//!   cp, token)`, from the shared `dep_cp`; a token it cannot classify is
+//!   stored under the key `""` (S8.1, `reverse_dependents` always reads it).
 //! - `needed`: key = `id u64`; value = `seq u32`, `arch`, `obj` (bytes),
 //!   `soname`, `rpath`, `needed` (u32-length strings; the no-rpath
 //!   sentinel is stored as `""`). Removal is `remove_all(id)`.
@@ -41,7 +42,7 @@ use super::{
     ENTRY_FILE_META, Enc, EntryRec, FileRec, Handle, INSTALLED, META, NEEDED, OWNER, PENDING,
     PRESERVED_LIB, RedbDb, WORLD, WORLD_SETS, chunk_count, corrupt, meta_u64, rerr,
 };
-use crate::dep_cp::dep_cp;
+use crate::dep_cp::dep_index_key;
 use crate::files::{normalise_aux_bytes, translate_aux_slot};
 use crate::{
     ConfigMemory, Counter, DepClass, EntryImage, EntryKey, Error, METADATA_FILE_FIELDS,
@@ -744,6 +745,12 @@ fn index_file(t: &WriteTransaction, key: &EntryKey, id: u64, name: &str) -> Tx<(
     Ok(())
 }
 
+/// Test seeding: fill the derived rows of the stored file `name`.
+#[cfg(test)]
+pub(super) fn index_file_for_test(t: &WriteTransaction, key: &EntryKey, id: u64, name: &str) {
+    assert!(index_file(t, key, id, name).is_ok());
+}
+
 /// `slot`, `subslot`, `repo`, `counter` of the entry record from its
 /// `SLOT`, `repository` and `COUNTER` files (empty string / `None` when
 /// the file is missing or, for the counter, not a number), and the
@@ -886,7 +893,7 @@ fn dep_rows(id: u64, class: usize, raw: Option<&[u8]>) -> Vec<(String, Vec<u8>)>
     let text = String::from_utf8_lossy(raw);
     let rows: BTreeSet<(&str, &str)> = text
         .split_whitespace()
-        .filter_map(|tok| dep_cp(tok).map(|cp| (cp, tok)))
+        .filter_map(|tok| dep_index_key(tok).map(|cp| (cp, tok)))
         .collect();
     rows.into_iter()
         .map(|(cp, tok)| {

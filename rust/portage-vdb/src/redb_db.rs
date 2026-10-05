@@ -107,7 +107,8 @@ use redb::{
     ReadableDatabase, ReadableTable, TableDefinition,
 };
 
-use crate::files::claim_paths;
+use crate::dep_cp::UNSURE_CP;
+use crate::files::{owner_spellings, owner_wanted};
 use crate::loaded::Loaded;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryFile, EntryImage,
@@ -775,19 +776,6 @@ impl Rd {
         Ok(files)
     }
 
-    /// Every live entry with the files named in `names` (and `metadata`).
-    fn load_live(&self, names: &[&str]) -> R<Vec<Loaded>> {
-        let mut out = Vec::new();
-        for (key, rec) in self.rows(INSTALLED)? {
-            out.push(Loaded {
-                files: self.load_named(rec.id, names)?,
-                stamp: rec.stamp,
-                key,
-            });
-        }
-        Ok(out)
-    }
-
     /// The 23 normalised fields of every entry of `listing`.
     fn snapshot(&self, generation: u64, listing: &Listing) -> R<Snapshot> {
         let mut entries = Vec::with_capacity(listing.entries.len());
@@ -1011,14 +999,54 @@ impl InstalledDb for RedbDb {
         })
     }
 
-    /// Every live entry, in `(category, pf)` order, with its `USE` and the
-    /// requested classes normalised like `aux_get` (the superset rule of
-    /// the lib.rs module doc, item 8; the `dep_atom` index narrows it in
-    /// S8).
-    fn reverse_dependents(&self, _cp: &str, classes: &[DepClass]) -> Result<Vec<DepRecord>> {
+    /// The live entries whose `dep_atom` rows name `cp` in one of `classes`,
+    /// or carry the unsure marker (`cp = ""`, see `dep_cp::dep_index_key`),
+    /// in `(category, pf)` order, with their `USE` and the requested classes
+    /// normalised like `aux_get`. A superset of the real dependents (lib.rs
+    /// module doc, item 8); an entry none of whose tokens is, or might be,
+    /// `cp` is not read (S8.1).
+    fn reverse_dependents(&self, cp: &str, classes: &[DepClass]) -> Result<Vec<DepRecord>> {
+        if classes.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut names: Vec<&str> = vec!["USE"];
         names.extend(classes.iter().map(|c| c.field()));
-        let loaded = self.read(|rd| rd.load_live(&names))?;
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let loaded = (|| -> R<Vec<Loaded>> {
+            let rd = Rd::new(&txn)?;
+            let want: Vec<u8> = classes
+                .iter()
+                .filter_map(|c| write::DEP_CLASSES.iter().position(|d| d == c))
+                .map(|i| i as u8)
+                .collect();
+            let mut ids = std::collections::HashSet::new();
+            let dep = txn.open_multimap_table(DEP_ATOM)?;
+            for key in [cp, UNSURE_CP] {
+                for v in dep.get(key)? {
+                    let v = v?;
+                    let v = v.value();
+                    if v.len() < 9 {
+                        return Err(corrupt("dep_atom row too short"));
+                    }
+                    if want.contains(&v[8]) {
+                        ids.insert(u64::from_le_bytes(v[..8].try_into().expect("8 bytes")));
+                    }
+                }
+            }
+            let mut out = Vec::new();
+            for (key, rec) in rd.rows(INSTALLED)? {
+                if ids.contains(&rec.id) {
+                    out.push(Loaded {
+                        files: rd.load_named(rec.id, &names)?,
+                        stamp: rec.stamp,
+                        key,
+                    });
+                }
+            }
+            Ok(out)
+        })()
+        .map_err(wrap)?;
         Ok(loaded
             .into_iter()
             .map(|l| {
@@ -1035,21 +1063,50 @@ impl InstalledDb for RedbDb {
             .collect())
     }
 
-    /// Computed from the stored `CONTENTS` files with the rule of
-    /// `FilesDb::owners` (shared code), so the result is identical to
-    /// `files`: a missing or non-UTF-8 `CONTENTS` owns nothing. The derived
-    /// `owner` multimap (S5.3, indexed reads in S8) is not read yet.
+    /// From the `owner` multimap (S8.2): an indexed lookup of each distinct
+    /// path (both spellings `CONTENTS` can have, see `owner_spellings`),
+    /// with the rule of `FilesDb::owners` (`claim_paths`): one leading `/`
+    /// ignored on both sides, the first matching input path reported, the
+    /// entries in `(category, pf)` order and, within one, `CONTENTS` order
+    /// (`seq`). Only live entries count (a pending entry has no rows).
     fn owners(&self, paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
-        let mut out = Vec::new();
-        if paths.is_empty() {
-            return Ok(out);
+        let wanted = owner_wanted(paths);
+        if wanted.is_empty() {
+            return Ok(Vec::new());
         }
-        for (key, data) in self.read_file_all("CONTENTS")? {
-            if let Some(text) = data.and_then(|b| String::from_utf8(b).ok()) {
-                claim_paths(&text, &key, paths, &mut out);
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let mut hits: Vec<(String, String, u32, &[u8])> = Vec::new();
+        (|| -> R<()> {
+            let owner = txn.open_multimap_table(OWNER)?;
+            let by_id = txn.open_table(ENTRY_BY_ID)?;
+            for (&norm, &first) in &wanted {
+                for raw in owner_spellings(norm) {
+                    for v in owner.get(raw.as_slice())? {
+                        let v = v?;
+                        let v = v.value();
+                        if v.len() < 12 {
+                            return Err(corrupt("owner row too short"));
+                        }
+                        let id = u64::from_le_bytes(v[..8].try_into().expect("8 bytes"));
+                        let seq = u32::from_le_bytes(v[8..12].try_into().expect("4 bytes"));
+                        if let Some(g) = by_id.get(id)? {
+                            let (state, category, pf) = g.value();
+                            if state == INSTALLED {
+                                hits.push((category.to_owned(), pf.to_owned(), seq, first));
+                            }
+                        }
+                    }
+                }
             }
-        }
-        Ok(out)
+            Ok(())
+        })()
+        .map_err(wrap)?;
+        hits.sort();
+        Ok(hits
+            .into_iter()
+            .map(|(category, pf, _, first)| (first.to_vec(), EntryKey::new(category, pf)))
+            .collect())
     }
 
     /// In the order written (`pos`), like `files`.
@@ -1211,9 +1268,10 @@ mod tests {
     impl RedbDb {
         fn seed_entry(&self, key: &EntryKey, state: u8, stamp: MetadataStamp, files: &Rows) {
             let txn = rw(self).begin_write().unwrap();
+            let id: u64;
             {
                 let mut by_id = txn.open_table(ENTRY_BY_ID).unwrap();
-                let id = by_id.last().unwrap().map_or(1, |(k, _)| k.value() + 1);
+                id = by_id.last().unwrap().map_or(1, |(k, _)| k.value() + 1);
                 by_id
                     .insert(id, (state, key.category.as_str(), key.pf.as_str()))
                     .unwrap();
@@ -1247,6 +1305,17 @@ mod tests {
                         .unwrap();
                     for (i, c) in data.chunks(CHUNK).enumerate() {
                         chunks.insert((id, name.as_str(), i as u32), c).unwrap();
+                    }
+                }
+            }
+            if state == INSTALLED {
+                // The owner / dep_atom rows of a live entry, as a real write
+                // fills them (the columns stay as seeded).
+                for (name, ..) in files {
+                    if matches!(name.as_str(), "CONTENTS")
+                        || write::DEP_CLASSES.iter().any(|d| d.field() == name)
+                    {
+                        write::index_file_for_test(&txn, key, id, name);
                     }
                 }
             }
@@ -1894,7 +1963,9 @@ mod tests {
             .rdb
             .reverse_dependents("x/y", &[DepClass::Rdepend, DepClass::Depend])
             .unwrap();
-        assert_eq!(recs.len(), 6);
+        // Only the entries whose deps carry a token (here the non-atoms "x" and
+        // "y", i.e. the unsure marker) come back (S8.1).
+        assert_eq!(recs.len(), 3);
         let ra = recs.iter().find(|r| r.key == f.keys[0]).unwrap();
         assert_eq!(ra.use_flags, "a b");
         assert_eq!(

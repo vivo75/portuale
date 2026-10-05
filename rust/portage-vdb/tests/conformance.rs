@@ -1143,6 +1143,175 @@ mod suite {
         }
     }
 
+    /// S8.2: the edge cases of the path rule, on every backend (the
+    /// database backends answer from the `owner` index): one leading `/`
+    /// ignored on both sides, a path written without it, `//`, a repeated
+    /// line, the first matching input path reported, and the order (entries
+    /// by `(category, pf)`, then `CONTENTS` order).
+    pub fn owners_follow_the_claim_paths_rule_on_edge_spellings(f: Factory, _c: &Caps) {
+        let ctx = Ctx::new(f, "owners-edge");
+        let a = key("dev-libs", "a-1");
+        let b = key("app-misc", "b-1");
+        put(
+            &ctx,
+            &a,
+            &[(
+                "CONTENTS",
+                b"obj /usr/bin/x abc 1\ndir usr/share\nobj //weird d 2\n\
+                  sym /usr/bin/x -> y 3\nobj /usr/bin/x abc 1\n\
+                  dir /\nobj /tab\tbed 1\ndev /dev/null\nfif /f\nbin /b\n",
+            )],
+            false,
+        );
+        put(
+            &ctx,
+            &b,
+            &[("CONTENTS", b"obj /usr/share d 1\r\nobj /zz z 1\n")],
+            false,
+        );
+        // Not UTF-8: owns nothing, anywhere.
+        let bad = key("dev-libs", "bad-1");
+        put(
+            &ctx,
+            &bad,
+            &[("CONTENTS", b"obj /usr/bin/x \xff 1\n")],
+            false,
+        );
+        let q: &[&[u8]] = &[
+            b"usr/bin/x",
+            b"/usr/bin/x",
+            b"/usr/share",
+            b"/weird",
+            b"//weird",
+            b"/",
+            b"",
+            b"/dev/null",
+            b"/f",
+            b"/b",
+            b"/zz",
+            b"/nothing",
+        ];
+        let got = ctx.db.owners(q).unwrap();
+        let x = b"usr/bin/x".to_vec();
+        let want = vec![
+            // app-misc/b-1 sorts first.
+            (b"/usr/share".to_vec(), b.clone()),
+            (b"/zz".to_vec(), b.clone()),
+            // dev-libs/a-1, in CONTENTS order.
+            (x.clone(), a.clone()),
+            (b"/usr/share".to_vec(), a.clone()),
+            (b"//weird".to_vec(), a.clone()),
+            (x.clone(), a.clone()),
+            (x.clone(), a.clone()),
+            (b"/".to_vec(), a.clone()),
+            (b"/dev/null".to_vec(), a.clone()),
+            (b"/f".to_vec(), a.clone()),
+            (b"/b".to_vec(), a.clone()),
+        ];
+        assert_eq!(got, want);
+    }
+
+    /// S8.1: `reverse_dependents` is a superset of the real dependents and
+    /// an indexed backend still returns an entry whose deps it could not
+    /// fully index (a `USE` conditional, an `||` group, a wildcard or other
+    /// odd token), follows `replace_file` and `delete_entry`, and leaves out
+    /// entries that cannot depend on the cp.
+    pub fn reverse_dependents_index_is_a_superset_and_keeps_unsure_entries(f: Factory, c: &Caps) {
+        if c.reverse_dependents.is_some() {
+            return;
+        }
+        let ctx = Ctx::new(f, "revdeps-index");
+        let mk = |n: &str, files: &[(&str, &[u8])]| {
+            let k = key("app-misc", n);
+            put(&ctx, &k, files, false);
+            k
+        };
+        let cond = mk(
+            "cond-1",
+            &[
+                ("USE", b"ssl\n"),
+                ("RDEPEND", b"ssl? ( dev-libs/lib:= ) !ssl? ( dev-libs/o )\n"),
+            ],
+        );
+        let alt = mk(
+            "alt-1",
+            &[(
+                "RDEPEND",
+                b"|| ( dev-libs/o >=dev-libs/lib-1.2[x,-y(+)] )\n",
+            )],
+        );
+        let wild = mk("wild-1", &[("RDEPEND", b"dev-libs/* \n")]);
+        let bare = mk("bare-1", &[("DEPEND", b"dev-libs/lib-1.2\n")]);
+        let blk = mk("blk-1", &[("PDEPEND", b"!!<dev-libs/lib-3\n")]);
+        let other = mk("other-1", &[("RDEPEND", b"dev-libs/o dev-libs/p:2\n")]);
+        let none = mk("none-1", &[("USE", b"a\n"), ("SLOT", b"0\n")]);
+        let all = [
+            DepClass::Depend,
+            DepClass::Rdepend,
+            DepClass::Bdepend,
+            DepClass::Pdepend,
+            DepClass::Idepend,
+        ];
+        let keys = |cp: &str, cls: &[DepClass]| -> Vec<EntryKey> {
+            ctx.db
+                .reverse_dependents(cp, cls)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.key)
+                .collect()
+        };
+        let got = keys("dev-libs/lib", &all);
+        for (k, why) in [
+            (&cond, "USE-conditional"),
+            (&alt, "|| group with a versioned atom and use deps"),
+            (&wild, "unindexable token"),
+            (&bare, "bare versioned name (unsure)"),
+            (&blk, "blocker"),
+        ] {
+            assert!(got.contains(k), "{why}: {k} missing from {got:?}");
+        }
+        assert!(
+            !got.contains(&other),
+            "an indexed entry that cannot match is skipped"
+        );
+        assert!(!got.contains(&none));
+        // Entries come back in (category, pf) order, with the records the
+        // caller reduces.
+        assert_eq!(got, sorted(got.clone()));
+        let rec = ctx
+            .db
+            .reverse_dependents("dev-libs/lib", &[DepClass::Rdepend, DepClass::Depend])
+            .unwrap();
+        let rc = rec.iter().find(|r| r.key == cond).unwrap();
+        assert_eq!(rc.use_flags, "ssl");
+        assert_eq!(
+            rc.deps[0],
+            (
+                DepClass::Rdepend,
+                "ssl? ( dev-libs/lib:= ) !ssl? ( dev-libs/o )".to_string()
+            )
+        );
+        // The class filter: PDEPEND-only is not asked for.
+        assert!(!keys("dev-libs/lib", &[DepClass::Rdepend]).contains(&blk));
+        assert!(keys("dev-libs/lib", &[]).is_empty());
+        // The index follows the files.
+        assert!(!keys("dev-libs/p", &all).contains(&none));
+        assert!(keys("dev-libs/p", &all).contains(&other));
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.replace_file(&none, "RDEPEND", b"dev-libs/p\n").unwrap();
+        txn.replace_file(&other, "RDEPEND", b"dev-libs/q\n")
+            .unwrap();
+        txn.commit().unwrap();
+        let after = keys("dev-libs/p", &all);
+        assert!(after.contains(&none), "{after:?}");
+        assert!(!after.contains(&other), "{after:?}");
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.delete_entry(&none).unwrap();
+        txn.commit().unwrap();
+        assert!(!keys("dev-libs/p", &all).contains(&none));
+        assert!(!keys("dev-libs/lib", &all).contains(&none));
+    }
+
     pub fn read_file_at_is_supported_or_names_its_step(f: Factory, caps: &Caps) {
         let ctx = Ctx::new(f, "at");
         let k = key("dev-libs", "a-1");
@@ -1395,6 +1564,8 @@ macro_rules! conformance_suite {
                 read_file_all_lists_every_live_entry_with_none_for_a_missing_file
                 categories_and_category_entries_list_live_entries
                 reverse_dependents_is_supported_or_names_its_step
+                reverse_dependents_index_is_a_superset_and_keeps_unsure_entries
+                owners_follow_the_claim_paths_rule_on_edge_spellings
                 read_file_at_is_supported_or_names_its_step
                 snapshot_is_supported_or_names_its_step
                 entry_image_and_insert_entry_are_supported_or_name_their_step

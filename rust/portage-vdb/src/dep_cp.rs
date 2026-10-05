@@ -66,6 +66,26 @@ pub(crate) fn dep_cp(tok: &str) -> Option<&str> {
     name_ok.then(|| &s[..cat.len() + 1 + name.len()])
 }
 
+/// The marker `cp` of a `dep_atom` row for a token that [`dep_cp`] could not
+/// classify. No real `category/package` is empty, so the marker never
+/// collides with a lookup key; `reverse_dependents` always adds it to its
+/// key set (S8.1).
+pub(crate) const UNSURE_CP: &str = "";
+
+/// The index key of one token of a `*DEPEND` string (S8.1): `None` for a
+/// structure token that can never hold an atom (`(`, `)`, `||`, `^^`,
+/// `??`, `flag?`), `Some(cp)` when [`dep_cp`] reads a package out of it and
+/// `Some(`[`UNSURE_CP`]`)` for anything else, i.e. a token that might still
+/// be an atom the matcher accepts (a wildcard, a bare versioned name, an
+/// odd version). The marker keeps the prefilter a superset: an entry with
+/// such a token is returned for every `cp`.
+pub(crate) fn dep_index_key(tok: &str) -> Option<&str> {
+    if matches!(tok, "(" | ")" | "||" | "^^" | "??") || tok.ends_with('?') {
+        return None;
+    }
+    Some(dep_cp(tok).unwrap_or(UNSURE_CP))
+}
+
 /// `foo-1.2_p3-r1*` to `foo`; `None` when no version follows the last `-`.
 fn strip_version(rest: &str) -> Option<&str> {
     let mut r = rest.strip_suffix('*').unwrap_or(rest);
@@ -118,7 +138,25 @@ fn is_version(v: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::dep_cp;
+    use super::{dep_cp, dep_index_key};
+
+    #[test]
+    fn dep_index_key_marks_unclear_tokens_and_skips_structure() {
+        for (tok, want) in [
+            ("dev-libs/a", Some("dev-libs/a")),
+            (">=dev-libs/a-1.2", Some("dev-libs/a")),
+            ("(", None),
+            ("||", None),
+            ("ssl?", None),
+            ("!ssl?", None),
+            ("dev-libs/*", Some("")),
+            ("dev-libs/a-1.2", Some("")),
+            (">=dev-libs/a", Some("")),
+            ("justaword", Some("")),
+        ] {
+            assert_eq!(dep_index_key(tok), want, "{tok}");
+        }
+    }
 
     #[test]
     fn dep_cp_extracts_the_package_of_atom_like_tokens() {

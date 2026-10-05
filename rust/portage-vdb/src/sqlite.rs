@@ -21,7 +21,8 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 mod write;
 use write::SqliteTxn;
 
-use crate::files::claim_paths;
+use crate::dep_cp::UNSURE_CP;
+use crate::files::{owner_spellings, owner_wanted};
 use crate::loaded::Loaded;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryFile, EntryImage,
@@ -441,6 +442,57 @@ fn load_live(conn: &Connection, names: &[&str]) -> rusqlite::Result<Vec<Loaded>>
     Ok(out)
 }
 
+/// [`load_live`] for the entries `dep_atom` ties to `cp` (or to the unsure
+/// marker) in one of `classes`: the candidate ids come from the index, and
+/// each candidate's named files from a primary-key seek.
+fn load_dependents(
+    conn: &Connection,
+    names: &[&str],
+    cp: &str,
+    classes: &[DepClass],
+) -> rusqlite::Result<Vec<Loaded>> {
+    let class_list = classes
+        .iter()
+        .map(|c| format!("'{}'", c.field()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, category, pf, metadata_stamp FROM entry
+         WHERE state = 'installed' AND id IN
+           (SELECT entry_id FROM dep_atom
+            WHERE cp IN (?1, '{UNSURE_CP}') AND class IN ({class_list}))
+         ORDER BY category, pf"
+    ))?;
+    let mut cands: Vec<(i64, Loaded)> = Vec::new();
+    let mut rows = stmt.query([cp])?;
+    while let Some(r) = rows.next()? {
+        cands.push((
+            r.get(0)?,
+            Loaded {
+                key: EntryKey::new(r.get::<_, String>(1)?, r.get::<_, String>(2)?),
+                stamp: stamp_of(&r.get::<_, String>(3)?),
+                files: HashMap::new(),
+            },
+        ));
+    }
+    let list = names
+        .iter()
+        .chain(&["metadata"])
+        .map(|n| format!("'{n}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut files = conn.prepare(&format!(
+        "SELECT name, data FROM entry_file WHERE entry_id = ?1 AND name IN ({list})"
+    ))?;
+    for (id, l) in &mut cands {
+        let mut rows = files.query([*id])?;
+        while let Some(r) = rows.next()? {
+            l.files.insert(r.get(0)?, r.get(1)?);
+        }
+    }
+    Ok(cands.into_iter().map(|(_, l)| l).collect())
+}
+
 fn data_version(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row("PRAGMA data_version", [], |r| r.get(0))
 }
@@ -843,13 +895,19 @@ impl InstalledDb for SqliteDb {
         })
     }
 
-    /// Every live entry, in `(category, pf)` order, with its `USE` and the
-    /// requested classes normalised like `aux_get` (the superset rule of
-    /// the module doc, item 8; the `dep_atom` index narrows it in S8).
-    fn reverse_dependents(&self, _cp: &str, classes: &[DepClass]) -> Result<Vec<DepRecord>> {
+    /// The live entries whose `dep_atom` rows name `cp` in one of `classes`,
+    /// or carry the unsure marker (`cp = ""`, see `dep_cp::dep_index_key`),
+    /// in `(category, pf)` order, with their `USE` and the requested classes
+    /// normalised like `aux_get`. A superset of the real dependents (module
+    /// doc, item 8); an entry none of whose tokens is, or might be, `cp` is
+    /// not read at all (S8.1).
+    fn reverse_dependents(&self, cp: &str, classes: &[DepClass]) -> Result<Vec<DepRecord>> {
+        if classes.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut names: Vec<&str> = vec!["USE"];
         names.extend(classes.iter().map(|c| c.field()));
-        let loaded = self.with(|c| load_live(c, &names))?;
+        let loaded = self.with(|c| load_dependents(c, &names, cp, classes))?;
         Ok(loaded
             .into_iter()
             .map(|l| {
@@ -866,22 +924,40 @@ impl InstalledDb for SqliteDb {
             .collect())
     }
 
-    /// Computed from the stored `CONTENTS` files with the rule of
-    /// `FilesDb::owners` (shared code), in `(category, pf)` order, so the
-    /// result is identical to `files`: a missing or non-UTF-8 `CONTENTS`
-    /// owns nothing. The derived `owner` table (filled by S2.5, indexed
-    /// in S8) is not read yet.
+    /// From the `owner` table (S8.2): an indexed lookup of each distinct
+    /// path (both spellings `CONTENTS` can have, see `owner_spellings`),
+    /// with the rule of `FilesDb::owners` (`claim_paths`): one leading `/`
+    /// ignored on both sides, the first matching input path reported, the
+    /// entries in `(category, pf)` order and, within one, `CONTENTS` order
+    /// (`seq`). The table is filled with the same line rule from the stored
+    /// `CONTENTS`, so a missing or non-UTF-8 `CONTENTS` owns nothing.
     fn owners(&self, paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
-        let mut out = Vec::new();
-        if paths.is_empty() {
-            return Ok(out);
+        let wanted = owner_wanted(paths);
+        if wanted.is_empty() {
+            return Ok(Vec::new());
         }
-        for (key, data) in self.read_file_all("CONTENTS")? {
-            if let Some(text) = data.and_then(|b| String::from_utf8(b).ok()) {
-                claim_paths(&text, &key, paths, &mut out);
+        let mut hits: Vec<(String, String, i64, &[u8])> = Vec::new();
+        self.with(|c| {
+            let mut stmt = c.prepare_cached(
+                "SELECT e.category, e.pf, o.seq FROM owner o
+                 JOIN entry e ON e.id = o.entry_id
+                 WHERE o.path = ?1 AND e.state = 'installed'",
+            )?;
+            for (&norm, &first) in &wanted {
+                for raw in owner_spellings(norm) {
+                    let mut rows = stmt.query([raw])?;
+                    while let Some(r) = rows.next()? {
+                        hits.push((r.get(0)?, r.get(1)?, r.get(2)?, first));
+                    }
+                }
             }
-        }
-        Ok(out)
+            Ok(())
+        })?;
+        hits.sort();
+        Ok(hits
+            .into_iter()
+            .map(|(category, pf, _, first)| (first.to_vec(), EntryKey::new(category, pf)))
+            .collect())
     }
 
     /// In the order written (`pos`), like `files`.
@@ -1199,6 +1275,10 @@ mod tests {
                     params![id, name, data, mode, mtime],
                 )
                 .unwrap();
+            }
+            if state == "installed" {
+                // The derived tables of a live entry, as a real write fills them.
+                write::derive_all(&conn, id).unwrap();
             }
         }
 
@@ -1721,7 +1801,9 @@ mod tests {
             .sdb
             .reverse_dependents("x/y", &[DepClass::Rdepend, DepClass::Depend])
             .unwrap();
-        assert_eq!(recs.len(), 6);
+        // Only the entries whose deps carry a token (here the non-atoms "x" and
+        // "y", i.e. the unsure marker) come back (S8.1).
+        assert_eq!(recs.len(), 3);
         let ra = recs.iter().find(|r| r.key == f.keys[0]).unwrap();
         assert_eq!(ra.use_flags, "a b");
         assert_eq!(

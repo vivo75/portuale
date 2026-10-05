@@ -10596,5 +10596,304 @@ mod tests {
         fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_redb_and_files() {
             sequence_equivalence(portage_vdb::BackendKind::Redb);
         }
+
+        /// The database backends compiled in, as `BackendKind`s.
+        fn db_kinds() -> Vec<portage_vdb::BackendKind> {
+            vec![
+                #[cfg(feature = "vdb-sqlite")]
+                portage_vdb::BackendKind::Sqlite,
+                #[cfg(feature = "vdb-redb")]
+                portage_vdb::BackendKind::Redb,
+            ]
+        }
+
+        /// feat#157 S8.2: the collision scenario on a database backend
+        /// (`find_owners` answered from the `owner` index): `collisionpkg-c`
+        /// would overwrite `collisionpkg-a`'s `shared.txt`, the merge
+        /// aborts under `collision-protect` and names `collisionpkg-a` as
+        /// the owner, and `find_owners` agrees with the files answer.
+        #[test]
+        fn collision_protect_names_the_owner_from_the_index_on_every_backend() {
+            for kind in db_kinds() {
+                let tmp = tempdir();
+                let root = tmp.join("root");
+                let portage_tmpdir = tmp.join("tmp");
+                std::fs::create_dir_all(&root).unwrap();
+                std::fs::create_dir_all(&portage_tmpdir).unwrap();
+                let db = use_db(kind, &root, &tmp.join("vdb.db"));
+                run_merge(
+                    &collision_fixture("collisionpkg-a"),
+                    &root,
+                    &portage_tmpdir,
+                    &MergeOptions::default(),
+                    None,
+                )
+                .expect("collisionpkg-a merges cleanly");
+                assert_eq!(db.kind(), kind);
+                let collisions = vec![
+                    "/usr/share/collisiontest/shared.txt".to_string(),
+                    "/usr/share/collisiontest/stray.txt".to_string(),
+                ];
+                assert_eq!(
+                    find_owners(&root, &collisions),
+                    BTreeMap::from([(
+                        "dev-libs/collisionpkg-a-1.0".to_string(),
+                        vec!["/usr/share/collisiontest/shared.txt".to_string()],
+                    )]),
+                    "{kind}"
+                );
+                let options = MergeOptions {
+                    collision_protect: true,
+                    ..MergeOptions::default()
+                };
+                let err = run_merge(
+                    &collision_fixture("collisionpkg-c"),
+                    &root,
+                    &portage_tmpdir,
+                    &options,
+                    None,
+                )
+                .expect_err("collision-protect should abort the merge");
+                assert!(err.contains("dev-libs/collisionpkg-a-1.0"), "{kind}: {err}");
+                assert!(
+                    err.contains("/usr/share/collisiontest/shared.txt"),
+                    "{kind}: {err}"
+                );
+                assert!(
+                    err.contains("NOT merged due to file collisions"),
+                    "{kind}: {err}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt"))
+                        .unwrap(),
+                    "hello from collisionpkg-a\n",
+                    "{kind}"
+                );
+                let _ = std::fs::remove_dir_all(&tmp);
+            }
+        }
+
+        /// One hand-written entry: `(category, pf, files)`.
+        type HandEntry<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+        /// A `files` VDB written by hand.
+        fn write_vdb(root: &Path, entries: &[HandEntry]) {
+            for (cat, pf, files) in entries {
+                let dir = root.join("var/db/pkg").join(cat).join(pf);
+                std::fs::create_dir_all(&dir).unwrap();
+                for (name, data) in *files {
+                    std::fs::write(dir.join(name), data).unwrap();
+                }
+            }
+        }
+
+        /// feat#157 S8.1 / S8.2: on a hand-built VDB whose dependency
+        /// strings carry every kind of token (USE conditional, `||` group,
+        /// slot operator, blocker, version bounds, a wildcard and bare
+        /// versioned names the index cannot classify), plus `CONTENTS`
+        /// lines with odd path spellings, `installed_reverse_dependents`
+        /// and `find_owners` give the same answer on `files` (the scan)
+        /// and on every database backend (the index), and the answer is
+        /// the right one.
+        #[test]
+        fn reverse_dependents_and_owners_from_the_index_equal_the_scan() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let e = |pf: &'static str, files: &'static [(&'static str, &'static str)]| {
+                ("dev-libs", pf, files)
+            };
+            write_vdb(
+                &root,
+                &[
+                    e(
+                        "consumer-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("CONTENTS", "dir /usr/lib\nobj /usr/lib/libc.so abc 1\n"),
+                        ],
+                    ),
+                    e(
+                        "cond-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("USE", "ssl\n"),
+                            (
+                                "RDEPEND",
+                                "ssl? ( dev-libs/consumer ) !ssl? ( dev-libs/o )\n",
+                            ),
+                        ],
+                    ),
+                    e(
+                        "condoff-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("USE", "x\n"),
+                            ("RDEPEND", "ssl? ( dev-libs/consumer )\n"),
+                        ],
+                    ),
+                    e(
+                        "alt-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("RDEPEND", "|| ( dev-libs/zzz >=dev-libs/consumer-0.5 )\n"),
+                        ],
+                    ),
+                    e(
+                        "slotted-1.0",
+                        &[("SLOT", "0\n"), ("DEPEND", "dev-libs/consumer:0=[x(+)]\n")],
+                    ),
+                    e(
+                        "pdep-1.0",
+                        &[("SLOT", "0\n"), ("PDEPEND", "=dev-libs/consumer-1*\n")],
+                    ),
+                    e(
+                        "blocker-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("RDEPEND", "!dev-libs/consumer !!<dev-libs/consumer-3\n"),
+                        ],
+                    ),
+                    e(
+                        "toonew-1.0",
+                        &[("SLOT", "0\n"), ("RDEPEND", ">=dev-libs/consumer-2\n")],
+                    ),
+                    e("wild-1.0", &[("SLOT", "0\n"), ("RDEPEND", "dev-libs/*\n")]),
+                    e(
+                        "bare-1.0",
+                        &[("SLOT", "0\n"), ("RDEPEND", "dev-libs/consumer-1.0\n")],
+                    ),
+                    e(
+                        "junk-1.0",
+                        &[("SLOT", "0\n"), ("RDEPEND", "ssl? ( ( dev-libs/consumer\n")],
+                    ),
+                    e(
+                        "other-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("RDEPEND", "dev-libs/other dev-libs/consumer2\n"),
+                        ],
+                    ),
+                    e("nodeps-1.0", &[("SLOT", "0\n")]),
+                    e(
+                        "bidx-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("BDEPEND", "dev-libs/consumer\n"),
+                            ("CONTENTS", "obj usr/lib/libc.so d 1\nobj //x d 2\n"),
+                        ],
+                    ),
+                ],
+            );
+            let consumers = [
+                ("dev-libs", "consumer", "1.0"),
+                ("dev-libs", "other", "1.0"),
+            ];
+            let want_rdeps =
+                |c: (&str, &str, &str)| installed_reverse_dependents_for(&root, c.0, c.1, c.2);
+            let scan: Vec<Vec<String>> = consumers.iter().map(|&c| want_rdeps(c)).collect();
+            let wanted: Vec<String> =
+                ["alt-1.0", "bidx-1.0", "cond-1.0", "pdep-1.0", "slotted-1.0"]
+                    .iter()
+                    .map(|pf| format!("dev-libs/{pf}"))
+                    .collect();
+            for d in &wanted {
+                assert!(scan[0].contains(d), "the scan misses {d}: {:?}", scan[0]);
+            }
+            for no in [
+                "condoff-1.0",
+                "blocker-1.0",
+                "toonew-1.0",
+                "other-1.0",
+                "nodeps-1.0",
+            ] {
+                assert!(!scan[0].contains(&format!("dev-libs/{no}")), "{no}");
+            }
+            let paths: Vec<String> = ["/usr/lib", "/usr/lib/libc.so", "/x", "/nope"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let scan_owners = find_owners(&root, &paths);
+            assert_eq!(scan_owners.len(), 2, "{scan_owners:?}");
+            for (n, kind) in db_kinds().into_iter().enumerate() {
+                // Another spelling of the same root per backend, so the
+                // registry keeps `root` on `files`.
+                let mut alias = root.clone();
+                for _ in 0..=n {
+                    alias = alias.join("../root");
+                }
+                let db = use_db(kind, &alias, &tmp.join(format!("vdb{n}.db")));
+                assert_eq!(db.kind(), kind);
+                // `use_db` converted `alias`'s files VDB (the same tree).
+                for (&c, want) in consumers.iter().zip(&scan) {
+                    assert_eq!(
+                        &installed_reverse_dependents_for(&alias, c.0, c.1, c.2),
+                        want,
+                        "{kind}: {c:?}"
+                    );
+                }
+                assert_eq!(find_owners(&alias, &paths), scan_owners, "{kind}");
+                // The index is really in use: the entry without any dep
+                // token is not even read.
+                let recs = db
+                    .reverse_dependents("dev-libs/consumer", &[portage_vdb::DepClass::Rdepend])
+                    .unwrap();
+                assert!(!recs.iter().any(|r| r.key.pf == "nodeps-1.0"), "{kind}");
+                assert!(recs.iter().any(|r| r.key.pf == "wild-1.0"), "{kind}");
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        fn installed_reverse_dependents_for(
+            root: &Path,
+            category: &str,
+            package: &str,
+            version: &str,
+        ) -> Vec<String> {
+            portage_repo::installed_reverse_dependents(root, category, package, version)
+        }
+
+        /// feat#157 S8.1 on the fixture root: every installed package gets
+        /// the same reverse dependents from the scan (`files`) and from
+        /// each database backend converted from it.
+        #[test]
+        fn fixture_reverse_dependents_are_identical_on_every_backend() {
+            let fixtures = fixtures_root();
+            let tmp = tempdir();
+            let pkgs = portage_repo::all_installed_packages(&fixtures);
+            assert!(pkgs.len() > 5);
+            let want: Vec<Vec<String>> = pkgs
+                .iter()
+                .map(|p| {
+                    portage_repo::installed_reverse_dependents(
+                        &fixtures,
+                        &p.category,
+                        &p.package,
+                        &p.version,
+                    )
+                })
+                .collect();
+            assert!(want.iter().any(|w| !w.is_empty()), "the fixture has edges");
+            for (n, kind) in db_kinds().into_iter().enumerate() {
+                let mut alias = fixtures.clone();
+                for _ in 0..=n {
+                    alias = alias.join("../fixtures");
+                }
+                use_db(kind, &alias, &tmp.join(format!("vdb{n}.db")));
+                for (p, w) in pkgs.iter().zip(&want) {
+                    assert_eq!(
+                        &portage_repo::installed_reverse_dependents(
+                            &alias,
+                            &p.category,
+                            &p.package,
+                            &p.version
+                        ),
+                        w,
+                        "{kind}: {}",
+                        p.cpv()
+                    );
+                }
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
     }
 }

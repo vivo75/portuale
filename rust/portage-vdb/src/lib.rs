@@ -357,13 +357,15 @@
 //!   dropped, e.g. non-UTF-8, is `""`); `absent`/`stale` read the field
 //!   file, lossy and whitespace-joined; invalid `SLOT` is `"0"`. The
 //!   extracted `slot`/`subslot`/`repo` columns are not used by reads.
-//!   `owners` is computed from the stored `CONTENTS` files with `FilesDb`'s
-//!   own line rule (the `owner` table is for S2.5/S8).
+//!   `owners` reads the `owner` table (S8.2: an indexed lookup of each
+//!   distinct path, spelled `/p` and `p`, with `claim_paths`' rule, the
+//!   first matching input path, `(category, pf)` then `CONTENTS` order).
 //!   `category_generation` is the global `meta.generation`.
 //!   `counter` is `meta.counter_hwm`, `-1` reading as `None`.
 //!   `read_file_at` is `substr` on the blob. `snapshot` is built from the
 //!   field files under the `aux_get` rules in one read transaction.
-//!   `reverse_dependents` returns every live entry (superset rule).
+//!   `reverse_dependents` reads `dep_atom` (S8.1): the live entries with a
+//!   row for `cp` or for the unsure marker `""` in a requested class.
 //!   Known difference: `categories` lists only categories with a live entry.
 //!   (`world`, `world_sets` and an empty-path preserved-libs entry round-trip
 //!   as `files` does since S2.5.)
@@ -427,8 +429,15 @@
 //!   operator, a stripped `-<version>[-rN][*]` (an unrecognisable version
 //!   skips the token), or, with no operator, a name that does not look
 //!   versioned. A superset of the real atoms is the goal; the caller of
-//!   `reverse_dependents` still reduces `USE` and matches (S8 reads this
-//!   index). The columns `slot`, `subslot` (the slot when there is no `/`),
+//!   `reverse_dependents` still reduces `USE` and matches. **S8.1:** every
+//!   token that is neither structure (`( ) || ^^ ??`, `flag?`) nor read by
+//!   `dep_cp` is stored with `cp = ""` (the unsure marker), and
+//!   `reverse_dependents(cp)` returns the entries with a row for `cp` **or**
+//!   for `""`, so an entry whose deps could not be fully indexed is never
+//!   lost. The index is derived from the stored `*DEPEND` files, so it
+//!   assumes a `valid` `metadata` snapshot agrees with them (what the stamp
+//!   asserts); a database written before S8.1 has no markers and needs its
+//!   index rebuilt (S8.3). The columns `slot`, `subslot` (the slot when there is no `/`),
 //!   `repo` and `counter` come from `SLOT` (as `aux_get` serves it),
 //!   `repository` and `COUNTER`.
 //! - **Schema edits in S2.5** (nothing is released, so `SCHEMA_VERSION`

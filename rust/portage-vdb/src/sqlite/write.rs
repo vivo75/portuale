@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 
 use super::{BUSY_TIMEOUT_MS, SqliteDb, blob, db_err, entry_row, installed_row};
-use crate::dep_cp::dep_cp;
+use crate::dep_cp::dep_index_key;
 use crate::files::{normalise_aux_bytes, translate_aux_slot};
 use crate::{
     ConfigMemory, Counter, DepClass, EntryImage, EntryKey, Error, METADATA_FILE_FIELDS,
@@ -540,7 +540,7 @@ impl WriteTxn for SqliteTxn<'_> {
 // ------------------------------------------------------------- derived data
 
 /// Refill every derived part of entry `id`; returns its `COUNTER`.
-fn derive_all(c: &Connection, id: i64) -> rusqlite::Result<Option<i64>> {
+pub(super) fn derive_all(c: &Connection, id: i64) -> rusqlite::Result<Option<i64>> {
     let counter = derive_columns(c, id)?;
     derive_owner(c, id)?;
     derive_needed(c, id)?;
@@ -679,7 +679,9 @@ fn derive_needed(c: &Connection, id: i64) -> rusqlite::Result<()> {
 }
 
 /// `dep_atom`: one row per distinct `(class, cp, token)` of the five
-/// `*DEPEND` fields, from [`dep_cp`]. A prefilter, see there.
+/// `*DEPEND` fields, from [`dep_index_key`]; a token it cannot classify gets
+/// `cp = ""` (the "unsure" marker, always read by `reverse_dependents`). A
+/// prefilter, see `dep_cp`.
 fn derive_dep_atom(c: &Connection, id: i64) -> rusqlite::Result<()> {
     c.execute("DELETE FROM dep_atom WHERE entry_id = ?1", [id])?;
     let mut stmt =
@@ -691,7 +693,7 @@ fn derive_dep_atom(c: &Connection, id: i64) -> rusqlite::Result<()> {
         let text = String::from_utf8_lossy(&raw);
         let rows: BTreeSet<(&str, &str)> = text
             .split_whitespace()
-            .filter_map(|tok| dep_cp(tok).map(|cp| (cp, tok)))
+            .filter_map(|tok| dep_index_key(tok).map(|cp| (cp, tok)))
             .collect();
         for (cp, tok) in rows {
             stmt.execute(params![id, class.field(), cp, tok])?;

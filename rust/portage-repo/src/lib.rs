@@ -6937,6 +6937,22 @@ pub fn installed_reverse_dependents(
         read_vdb_slot(root, consumer_category, consumer_package, consumer_version);
     let candidate =
         format!("{consumer_category}/{consumer_package}-{consumer_version}:{slot}/{sub_slot}");
+    let db = portage_vdb::for_root(root);
+    // S8.1: a database backend narrows the entries with its dependency
+    // index and hands over their raw records; the reduction and the match
+    // below are the same code as the scan's. `files` (and a backend that
+    // cannot answer) keeps the scan, with its exact syscall pattern.
+    if db.kind() != portage_vdb::BackendKind::Files
+        && let Some(found) = indexed_reverse_dependents(
+            db.as_ref(),
+            consumer_category,
+            consumer_package,
+            consumer_version,
+            &candidate,
+        )
+    {
+        return found;
+    }
     let mut out = std::collections::BTreeSet::new();
     for pkg in all_installed_packages(root) {
         if pkg.category == consumer_category
@@ -6948,31 +6964,105 @@ pub fn installed_reverse_dependents(
         let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
         for key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND"] {
             let depstr = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
-            if depstr.trim().is_empty() {
-                continue;
-            }
-            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
-                continue;
-            };
-            for atom_str in atoms {
-                let Some(atom) = portage_dep::parse_atom(&atom_str) else {
-                    continue;
-                };
-                if atom.blocker != portage_dep::Blocker::None {
-                    continue;
-                }
-                if atom.category != consumer_category || atom.package != consumer_package {
-                    continue;
-                }
-                if portage_dep::match_from_list(&atom_str, &[candidate.as_str()])
-                    .is_some_and(|m| !m.is_empty())
-                {
-                    out.insert(format!("{}/{}-{}", pkg.category, pkg.package, pkg.version));
-                }
+            if depstr_names_consumer(
+                &depstr,
+                &use_flags,
+                consumer_category,
+                consumer_package,
+                &candidate,
+            ) {
+                out.insert(format!("{}/{}-{}", pkg.category, pkg.package, pkg.version));
             }
         }
     }
     out.into_iter().collect()
+}
+
+/// Whether the (non-empty) dependency string `depstr`, flattened against
+/// `use_flags`, has a non-blocker atom for the consumer that `candidate`
+/// (`cat/pkg-ver:slot/subslot`) satisfies. The reduction and match shared
+/// by both ways of [`installed_reverse_dependents`].
+fn depstr_names_consumer(
+    depstr: &str,
+    use_flags: &HashSet<String>,
+    consumer_category: &str,
+    consumer_package: &str,
+    candidate: &str,
+) -> bool {
+    if depstr.trim().is_empty() {
+        return false;
+    }
+    let Some(atoms) = flat_dep_atoms(depstr, use_flags) else {
+        return false;
+    };
+    atoms.iter().any(|atom_str| {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            return false;
+        };
+        atom.blocker == portage_dep::Blocker::None
+            && atom.category == consumer_category
+            && atom.package == consumer_package
+            && portage_dep::match_from_list(atom_str, &[candidate]).is_some_and(|m| !m.is_empty())
+    })
+}
+
+/// The database-backend half of [`installed_reverse_dependents`]: the raw
+/// records `InstalledDb::reverse_dependents` returns for the consumer's
+/// `category/package` (a superset: the backend's index drops only entries
+/// that cannot name it), put through the same per-entry steps as the scan
+/// (`split_pf`, the package-move identity, skip the consumer itself, the
+/// entry's own `USE`, the four `*DEPEND` keys). `None` when the backend
+/// cannot answer, so the caller falls back to the scan.
+fn indexed_reverse_dependents(
+    db: &dyn portage_vdb::InstalledDb,
+    consumer_category: &str,
+    consumer_package: &str,
+    consumer_version: &str,
+    candidate: &str,
+) -> Option<Vec<String>> {
+    use portage_vdb::DepClass;
+    let cp = format!("{consumer_category}/{consumer_package}");
+    let records = db
+        .reverse_dependents(
+            &cp,
+            &[
+                DepClass::Depend,
+                DepClass::Rdepend,
+                DepClass::Bdepend,
+                DepClass::Pdepend,
+            ],
+        )
+        .ok()?;
+    let mut out = std::collections::BTreeSet::new();
+    for rec in records {
+        let Some((name, version)) = split_pf(&rec.key.pf) else {
+            continue;
+        };
+        let (category, package) = apply_updates_to_cp(&rec.key.category, &name);
+        if category == consumer_category
+            && package == consumer_package
+            && version == consumer_version
+        {
+            continue;
+        }
+        let use_flags: HashSet<String> = rec
+            .use_flags
+            .split_whitespace()
+            .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+            .collect();
+        if rec.deps.iter().any(|(_, depstr)| {
+            depstr_names_consumer(
+                depstr,
+                &use_flags,
+                consumer_category,
+                consumer_package,
+                candidate,
+            )
+        }) {
+            out.insert(format!("{category}/{package}-{version}"));
+        }
+    }
+    Some(out.into_iter().collect())
 }
 
 /// The highest installed version of `category/package` that satisfies

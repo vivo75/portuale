@@ -403,6 +403,31 @@ pub(crate) fn claim_paths(
     }
 }
 
+/// For the indexed `owners` of the database backends (S8.2): each distinct
+/// normal form (one leading `/` stripped, as [`claim_paths`] compares) of
+/// `paths`, with the first input path that has it, which is the one
+/// `claim_paths` reports.
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+pub(crate) fn owner_wanted<'a>(paths: &[&'a [u8]]) -> HashMap<&'a [u8], &'a [u8]> {
+    let mut m: HashMap<&[u8], &[u8]> = HashMap::new();
+    for p in paths {
+        m.entry(p.strip_prefix(b"/").unwrap_or(p)).or_insert(p);
+    }
+    m
+}
+
+/// The spellings a `CONTENTS` line can have for the normal form `n`, as
+/// stored in the `owner` index (the path as written): `/n`, and `n` itself
+/// when it does not start with `/` (a line whose path has none).
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+pub(crate) fn owner_spellings(n: &[u8]) -> Vec<Vec<u8>> {
+    let mut v = vec![[b"/".as_slice(), n].concat()];
+    if !n.starts_with(b"/") {
+        v.push(n.to_vec());
+    }
+    v
+}
+
 pub(crate) fn todo_step<T>(what: &str, step: &str) -> Result<T> {
     Err(Error::Unsupported(format!(
         "FilesDb::{what} is not implemented yet (feat#157 {step})"
