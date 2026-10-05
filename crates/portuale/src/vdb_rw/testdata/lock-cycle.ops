@@ -1,0 +1,12 @@
+# Real Portage's slot lock with FEATURES=parallel-install, from
+# LLM/evidence/317-s0-strace/5-pi-merge-new.ops.txt (locks.py lockfile +
+# _lockfile_was_removed), on a category that does not exist yet.
+mkdir app-misc 755
+create app-misc/.binpkgrmpkg:0.portage_lockfile 660
+chown app-misc/.binpkgrmpkg:0.portage_lockfile -1 250
+unlink? app-misc/..binpkgrmpkg:0.portage_lockfile.hardlock-portuale-1
+link app-misc/.binpkgrmpkg:0.portage_lockfile app-misc/..binpkgrmpkg:0.portage_lockfile.hardlock-portuale-1
+sameino app-misc/.binpkgrmpkg:0.portage_lockfile app-misc/..binpkgrmpkg:0.portage_lockfile.hardlock-portuale-1
+unlink app-misc/..binpkgrmpkg:0.portage_lockfile.hardlock-portuale-1
+unlink app-misc/.binpkgrmpkg:0.portage_lockfile
+rmdir app-misc

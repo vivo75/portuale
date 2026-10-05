@@ -1421,7 +1421,7 @@ mod ops;
 
 #[cfg(all(test, any(feature = "vdb-sqlite", feature = "vdb-redb")))]
 mod tests {
-    use super::ops::{Env, envs};
+    use super::ops::{Env, apply_fs, apply_rw, assert_same, envs, parse, resolve};
     use super::*;
 
     fn rw(env: &Env) -> RwView {
@@ -1431,6 +1431,71 @@ mod tests {
             Owner { uid: 0, gid: 0 },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_lock_cycle_leaves_the_database_untouched() {
+        for env in envs("lockcycle") {
+            let g0 = env.db.generation().unwrap();
+            let v = rw(&env);
+            let ops = parse(include_str!("vdb_rw/testdata/lock-cycle.ops"));
+            apply_fs(&env.files_vdb, &ops);
+            apply_rw(&v, &ops);
+            assert_eq!(env.db.generation().unwrap(), g0, "{}", env.label);
+            assert_same(&env.files_root, &*env.db);
+            assert_eq!(
+                v.lookup(ROOT_INO, "app-misc"),
+                Err(ViewError::NoEnt),
+                "{}: rmdir removed the empty category",
+                env.label
+            );
+        }
+    }
+
+    #[test]
+    fn a_hardlink_shares_the_inode_and_unlink_keeps_the_other_name() {
+        for env in envs("hardlink") {
+            let v = rw(&env);
+            apply_rw(
+                &v,
+                &parse(
+                    "mkdir app-misc 755\n\
+                     create app-misc/.a:0.portage_lockfile 660\n\
+                     link app-misc/.a:0.portage_lockfile app-misc/..a:0.portage_lockfile.hardlock-h-1\n\
+                     sameino app-misc/.a:0.portage_lockfile app-misc/..a:0.portage_lockfile.hardlock-h-1\n\
+                     unlink app-misc/.a:0.portage_lockfile\n",
+                ),
+            );
+            let cat = v.lookup(ROOT_INO, "app-misc").unwrap();
+            let left = v
+                .lookup(cat.ino, "..a:0.portage_lockfile.hardlock-h-1")
+                .unwrap();
+            assert_eq!(left.nlink, 1, "{}", env.label);
+            assert_eq!(
+                v.lookup(cat.ino, ".a:0.portage_lockfile"),
+                Err(ViewError::NoEnt)
+            );
+        }
+    }
+
+    #[test]
+    fn a_lock_file_takes_chown_and_keeps_the_owner_in_memory() {
+        for env in envs("chown") {
+            let v = rw(&env);
+            apply_rw(
+                &v,
+                &parse("mkdir app-misc 755\ncreate app-misc/.a:0.portage_lockfile 660\n"),
+            );
+            let cat = v.lookup(ROOT_INO, "app-misc").unwrap();
+            let f = v.lookup(cat.ino, ".a:0.portage_lockfile").unwrap();
+            let s = SetAttr {
+                gid: Some(250),
+                ..SetAttr::default()
+            };
+            v.setattr(f.ino, &s).unwrap();
+            assert_eq!(v.owner_of(f.ino), Owner { uid: 0, gid: 250 });
+            assert_eq!(v.owner_of(cat.ino), Owner { uid: 0, gid: 0 });
+        }
     }
 
     #[test]
@@ -1484,6 +1549,75 @@ mod tests {
         }
     }
 
+    fn script(name: &str) -> Vec<super::ops::Op> {
+        let text = match name {
+            "merge-new" => include_str!("vdb_rw/testdata/merge-new.ops"),
+            "unmerge" => include_str!("vdb_rw/testdata/unmerge.ops"),
+            "replace-same-pf" => include_str!("vdb_rw/testdata/replace-same-pf.ops"),
+            "live-rewrites" => include_str!("vdb_rw/testdata/live-rewrites.ops"),
+            "move-ent" => include_str!("vdb_rw/testdata/move-ent.ops"),
+            _ => unreachable!("{name}"),
+        };
+        parse(text)
+    }
+
+    #[test]
+    fn a_new_merge_through_the_view_equals_the_same_merge_on_files() {
+        for env in envs("mergenew") {
+            let ops = script("merge-new");
+            apply_fs(&env.files_vdb, &ops);
+            let v = rw(&env);
+            let g0 = env.db.generation().unwrap();
+            let (staging, publish) = ops.split_at(ops.len() - 1);
+            apply_rw(&v, staging);
+            assert_eq!(
+                env.db.generation().unwrap(),
+                g0,
+                "{}: nothing is stored before the rename",
+                env.label
+            );
+            apply_rw(&v, publish);
+            assert_same(&env.files_root, &*env.db);
+            let k = EntryKey::new("app-misc", "foo-1.0");
+            assert_eq!(
+                env.db.entry_stat(&k).unwrap().unwrap().metadata_stamp,
+                MetadataStamp::Valid,
+                "{}: the stamp Portage appended matches the staged dir mtime",
+                env.label
+            );
+            assert!(
+                std::fs::read_dir(&env.scratch).unwrap().next().is_none(),
+                "{}: the scratch copy is gone",
+                env.label
+            );
+        }
+    }
+
+    #[test]
+    fn the_published_entry_keeps_the_staged_inode_and_reads_back() {
+        for env in envs("inode") {
+            let ops = script("merge-new");
+            let v = rw(&env);
+            let (staging, publish) = ops.split_at(ops.len() - 1);
+            apply_rw(&v, staging);
+            let staged = resolve(&v, "app-misc/-MERGING-foo-1.0").unwrap();
+            let staged_slot = resolve(&v, "app-misc/-MERGING-foo-1.0/SLOT").unwrap();
+            apply_rw(&v, publish);
+            // The kernel keeps the inodes it learned before the rename.
+            assert_eq!(v.getattr(staged_slot).unwrap().size, 2);
+            assert_eq!(resolve(&v, "app-misc/foo-1.0").unwrap(), staged);
+            assert_eq!(
+                resolve(&v, "app-misc/-MERGING-foo-1.0"),
+                Err(ViewError::NoEnt)
+            );
+            let f = resolve(&v, "app-misc/foo-1.0/SLOT").unwrap();
+            assert_eq!(f, staged_slot, "the file keeps its inode");
+            let fh = v.open(f, libc::O_RDONLY).unwrap();
+            assert_eq!(v.read(fh, 0, 64).unwrap(), b"0\n");
+            v.release(fh).unwrap();
+        }
+    }
+
     #[test]
     fn stamp_state_follows_the_portage_rule() {
         assert_eq!(stamp_state(None, 5), MetadataStamp::Absent);
@@ -1499,5 +1633,267 @@ mod tests {
             stamp_state(Some(b"#format=1\nSLOT=0\n"), 5),
             MetadataStamp::Stale
         );
+    }
+
+    #[test]
+    fn publishing_raises_the_counter_to_the_entry_counter() {
+        for env in envs("counter") {
+            let v = rw(&env);
+            apply_rw(&v, &script("merge-new"));
+            assert_eq!(
+                env.db.counter().unwrap(),
+                Some(portage_vdb::Counter(41)),
+                "{}",
+                env.label
+            );
+        }
+    }
+
+    #[test]
+    fn a_rename_onto_a_live_entry_is_enotempty() {
+        for env in envs("onto") {
+            let v = rw(&env);
+            apply_rw(
+                &v,
+                &parse(
+                    "mkdir dev-libs/-MERGING-seed-1 755\n\
+                     create dev-libs/-MERGING-seed-1/SLOT 644\n\
+                     write dev-libs/-MERGING-seed-1/SLOT 1\\n\n",
+                ),
+            );
+            let cat = resolve(&v, "dev-libs").unwrap();
+            assert_eq!(
+                v.rename(cat, "-MERGING-seed-1", cat, "seed-1"),
+                Err(ViewError::NotEmpty)
+            );
+            assert!(resolve(&v, "dev-libs/-MERGING-seed-1/SLOT").is_ok());
+        }
+    }
+
+    #[test]
+    fn a_stale_merging_dir_is_removable_and_a_new_view_clears_scratch() {
+        for env in envs("stale") {
+            let v = rw(&env);
+            apply_rw(
+                &v,
+                &parse(
+                    "mkdir dev-libs/-MERGING-x-1 755\n\
+                     create dev-libs/-MERGING-x-1/SLOT 644\n",
+                ),
+            );
+            let cat = resolve(&v, "dev-libs").unwrap();
+            assert_eq!(
+                v.rmdir(cat, "-MERGING-x-1"),
+                Err(ViewError::NotEmpty),
+                "rmdir before the rmtree emptied it"
+            );
+            apply_rw(
+                &v,
+                &parse("unlink dev-libs/-MERGING-x-1/SLOT\nrmdir dev-libs/-MERGING-x-1\n"),
+            );
+            assert_eq!(resolve(&v, "dev-libs/-MERGING-x-1"), Err(ViewError::NoEnt));
+            apply_rw(
+                &v,
+                &parse("mkdir dev-libs/-MERGING-y-1 755\ncreate dev-libs/-MERGING-y-1/SLOT 644\n"),
+            );
+            drop(v);
+            let v2 = rw(&env);
+            assert!(std::fs::read_dir(&env.scratch).unwrap().next().is_none());
+            assert_eq!(resolve(&v2, "dev-libs/-MERGING-y-1"), Err(ViewError::NoEnt));
+        }
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn a_failed_publish_is_eio_and_keeps_the_staged_entry() {
+        for env in envs("eio").into_iter().filter(|e| e.label == "sqlite") {
+            let ro: Arc<dyn InstalledDb> =
+                Arc::new(portage_vdb::SqliteDb::open_readonly(&env.db_path).unwrap());
+            let v = RwView::new(ro, env.scratch.clone(), Owner { uid: 0, gid: 0 }).unwrap();
+            let ops = script("merge-new");
+            let (staging, _) = ops.split_at(ops.len() - 1);
+            apply_rw(&v, staging);
+            let cat = resolve(&v, "app-misc").unwrap();
+            let r = v.rename(cat, "-MERGING-foo-1.0", cat, "foo-1.0");
+            assert!(matches!(r, Err(ViewError::Io(_))), "{r:?}");
+            assert_eq!(ViewError::Io(String::new()).errno(), libc::EIO);
+            assert!(resolve(&v, "app-misc/-MERGING-foo-1.0/CONTENTS").is_ok());
+        }
+    }
+
+    #[test]
+    fn names_inside_a_staged_dir_are_free_but_nested_dirs_are_eperm() {
+        for env in envs("nested") {
+            let v = rw(&env);
+            apply_rw(&v, &parse("mkdir dev-libs/-MERGING-z-1 755\n"));
+            let d = resolve(&v, "dev-libs/-MERGING-z-1").unwrap();
+            assert_eq!(v.mkdir(d, "sub", 0o755).err(), Some(ViewError::Perm));
+            let cat = resolve(&v, "dev-libs").unwrap();
+            assert_eq!(
+                v.mkdir(cat, "not-merging", 0o755).err(),
+                Some(ViewError::Perm)
+            );
+        }
+    }
+
+    /// Replay `name` on files and through the view; compare.
+    fn same_as_files(name: &str, tag: &str) {
+        for env in envs(tag) {
+            let ops = script(name);
+            apply_fs(&env.files_vdb, &ops);
+            let v = rw(&env);
+            apply_rw(&v, &ops);
+            assert_same(&env.files_root, &*env.db);
+        }
+    }
+
+    #[test]
+    fn an_unmerge_through_the_view_equals_files() {
+        same_as_files("unmerge", "unmerge");
+    }
+
+    #[test]
+    fn a_same_pf_replace_through_the_view_equals_files() {
+        same_as_files("replace-same-pf", "replsame");
+    }
+
+    #[test]
+    fn live_rewrites_through_the_view_equal_files() {
+        same_as_files("live-rewrites", "liverw");
+    }
+
+    #[test]
+    fn an_unmerge_removes_the_entry_in_one_commit_at_rmdir() {
+        for env in envs("rmtree") {
+            let v = rw(&env);
+            let ops = script("unmerge");
+            let rmdir_at = ops.len() - 2;
+            let g0 = env.db.generation().unwrap();
+            apply_rw(&v, &ops[..rmdir_at]);
+            assert_eq!(env.db.generation().unwrap(), g0, "unlinks only hide");
+            assert_eq!(resolve(&v, "dev-libs/seed-1/SLOT"), Err(ViewError::NoEnt));
+            apply_rw(&v, &ops[rmdir_at..rmdir_at + 1]);
+            assert!(!env.db.has_entry(&env.seeded).unwrap());
+            assert!(
+                resolve(&v, "dev-libs").is_ok(),
+                "the emptied category stays until Portage removes it"
+            );
+            apply_rw(&v, &ops[rmdir_at + 1..]);
+            assert_eq!(resolve(&v, "dev-libs"), Err(ViewError::NoEnt));
+        }
+    }
+
+    #[test]
+    fn an_interrupted_rmtree_leaves_the_entry_installed() {
+        for env in envs("interrupted") {
+            let v = rw(&env);
+            let ops = script("unmerge");
+            apply_rw(&v, &ops[..ops.len() - 2]);
+            drop(v);
+            let v2 = rw(&env);
+            assert!(env.db.has_entry(&env.seeded).unwrap());
+            assert!(resolve(&v2, "dev-libs/seed-1/SLOT").is_ok());
+        }
+    }
+
+    #[test]
+    fn rmdir_of_a_live_entry_with_visible_files_is_enotempty() {
+        for env in envs("notempty") {
+            let v = rw(&env);
+            apply_rw(&v, &parse("unlink dev-libs/seed-1/SLOT\n"));
+            let cat = resolve(&v, "dev-libs").unwrap();
+            assert_eq!(v.rmdir(cat, "seed-1"), Err(ViewError::NotEmpty));
+            assert!(env.db.has_entry(&env.seeded).unwrap());
+        }
+    }
+
+    #[test]
+    fn writes_into_a_live_entry_being_removed_are_enoent() {
+        for env in envs("removing") {
+            let v = rw(&env);
+            apply_rw(&v, &parse("unlink dev-libs/seed-1/SLOT\n"));
+            let e = resolve(&v, "dev-libs/seed-1").unwrap();
+            assert_eq!(
+                v.create(e, "CONTENTSxyz", 0o600, libc::O_CREAT | libc::O_EXCL)
+                    .err(),
+                Some(ViewError::NoEnt)
+            );
+            let c = resolve(&v, "dev-libs/seed-1/CONTENTS").unwrap();
+            assert_eq!(
+                v.open(c, libc::O_WRONLY | libc::O_TRUNC).err(),
+                Some(ViewError::NoEnt)
+            );
+        }
+    }
+
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn a_failed_live_rewrite_is_eio_at_flush() {
+        for env in envs("flusheio").into_iter().filter(|e| e.label == "sqlite") {
+            let ro: Arc<dyn InstalledDb> =
+                Arc::new(portage_vdb::SqliteDb::open_readonly(&env.db_path).unwrap());
+            let v = RwView::new(ro, env.scratch.clone(), Owner { uid: 0, gid: 0 }).unwrap();
+            let f = resolve(&v, "dev-libs/seed-1/environment.bz2").unwrap();
+            let fh = v.open(f, libc::O_WRONLY | libc::O_TRUNC).unwrap();
+            v.write(fh, 0, b"new").unwrap();
+            assert!(matches!(v.flush(fh), Err(ViewError::Io(_))));
+            let _ = v.release(fh);
+            assert_eq!(
+                env.db
+                    .read_file(&env.seeded, "environment.bz2")
+                    .unwrap()
+                    .unwrap(),
+                b"BZh91AY&SY seed env"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rewritten_live_file_keeps_its_inode_and_reads_the_new_bytes() {
+        for env in envs("liveino") {
+            let v = rw(&env);
+            let tmp_ino = {
+                apply_rw(
+                    &v,
+                    &parse(
+                        "create dev-libs/seed-1/SLOTabc 600\n\
+                         write dev-libs/seed-1/SLOTabc 1\\n\n",
+                    ),
+                );
+                resolve(&v, "dev-libs/seed-1/SLOTabc").unwrap()
+            };
+            apply_rw(
+                &v,
+                &parse("rename dev-libs/seed-1/SLOTabc dev-libs/seed-1/SLOT\n"),
+            );
+            assert_eq!(resolve(&v, "dev-libs/seed-1/SLOT").unwrap(), tmp_ino);
+            let fh = v.open(tmp_ino, libc::O_RDONLY).unwrap();
+            assert_eq!(v.read(fh, 0, 16).unwrap(), b"1\n");
+            v.release(fh).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_rename_in_a_stamped_live_entry_leaves_the_stamp_stale_as_on_disk() {
+        for env in envs("w4stamp") {
+            let mut ops = script("merge-new");
+            ops.extend(parse(
+                "create app-misc/foo-1.0/CONTENTSa1b2c3d4 600\n\
+                 write app-misc/foo-1.0/CONTENTSa1b2c3d4 dir /usr/share/foo\\n\n\
+                 chmod app-misc/foo-1.0/CONTENTSa1b2c3d4 644\n\
+                 rename app-misc/foo-1.0/CONTENTSa1b2c3d4 app-misc/foo-1.0/CONTENTS\n",
+            ));
+            apply_fs(&env.files_vdb, &ops);
+            let v = rw(&env);
+            apply_rw(&v, &ops);
+            assert_same(&env.files_root, &*env.db);
+            let k = EntryKey::new("app-misc", "foo-1.0");
+            assert_eq!(
+                env.db.entry_stat(&k).unwrap().unwrap().metadata_stamp,
+                MetadataStamp::Stale,
+                "{}",
+                env.label
+            );
+        }
     }
 }

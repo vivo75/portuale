@@ -1,0 +1,21 @@
+# Real same-pf replace (LLM/evidence/317-s0-strace/2-merge-same-pf.ops.txt):
+# the new entry is staged, the live one is rmtree'd, rmdir of the category
+# fails (the staged dir is still there), then the publish rename.
+mkdir dev-libs/-MERGING-seed-1 755
+create dev-libs/-MERGING-seed-1/SLOT 644
+write dev-libs/-MERGING-seed-1/SLOT 0\n
+create dev-libs/-MERGING-seed-1/COUNTER 644
+write dev-libs/-MERGING-seed-1/COUNTER 8
+create dev-libs/-MERGING-seed-1/CONTENTSwagz68z6 600
+write dev-libs/-MERGING-seed-1/CONTENTSwagz68z6 obj /usr/bin/seed 4567 2\n
+chmod dev-libs/-MERGING-seed-1/CONTENTSwagz68z6 644
+rename dev-libs/-MERGING-seed-1/CONTENTSwagz68z6 dev-libs/-MERGING-seed-1/CONTENTS
+create dev-libs/-MERGING-seed-1/environment.bz2 644
+write dev-libs/-MERGING-seed-1/environment.bz2 BZh91AY&SY new env
+unlink dev-libs/seed-1/COUNTER
+unlink dev-libs/seed-1/CONTENTS
+unlink dev-libs/seed-1/SLOT
+unlink dev-libs/seed-1/environment.bz2
+rmdir dev-libs/seed-1
+rmdir? dev-libs
+rename dev-libs/-MERGING-seed-1 dev-libs/seed-1
