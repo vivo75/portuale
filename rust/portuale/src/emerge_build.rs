@@ -5011,7 +5011,7 @@ mod tests {
         // still running rather than letting it finish -- its own result
         // would be discarded regardless. `schedbad` (fails almost
         // instantly, in `install`, the last phase) and `schedslow`
-        // (sleeps 20s in `compile`, well before `install`) are
+        // (sleeps 120s in `compile`, well before `install`) are
         // independent leaves under `jobs=2`, so both start together;
         // `schedbad` fails long before `schedslow`'s own sleep would
         // ever finish on its own.
@@ -5056,10 +5056,10 @@ mod tests {
         )
         .expect_err("schedbad's own failure must fail the whole run");
         assert!(err.contains("schedbad-1.0"), "{err}");
-        // Real generously bounded: well under schedslow's own 20s sleep,
+        // Real generously bounded (loaded machines, #308): well under schedslow's own 120s sleep,
         // proving the scheduler didn't just wait it out.
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(15),
+            started.elapsed() < std::time::Duration::from_secs(60),
             "run_source_merge took {:?}, schedslow's sleep should have been killed",
             started.elapsed()
         );
