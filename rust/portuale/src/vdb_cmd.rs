@@ -63,11 +63,13 @@ KIND:PATH
                   (entries only, no stores).
    sqlite:FILE    one SQLite file (created by convert when missing)
    redb:FILE      one redb file (created by convert when missing). redb allows one
-                  process at a time: a file held open by another process (a
-                  running mrg, another vdb command, a FUSE mount) fails with the
-                  Busy message (database is already open) (exit 2) instead of
-                  waiting. Read-only commands (verify, status) also need the
-                  file to be free of a read-write holder.
+                  writer process at a time: a write (convert, sweep, a merging
+                  mrg) on a file held open by another process (a running mrg,
+                  another vdb command, a FUSE mount) fails with the Busy
+                  message (database is already open) (exit 2) instead of
+                  waiting. Readers (verify, status, mrg --pretend, a FUSE
+                  mount) share the file with each other, but also need it to
+                  be free of a read-write holder.
 
 convert options:
    --from KIND:PATH   the source (read only)
