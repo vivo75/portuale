@@ -432,6 +432,34 @@ impl RwView {
         }
     }
 
+    pub fn getattr(&self, ino: u64) -> Res<Attr> {
+        match self.view.node_of(ino)? {
+            Node::Obj(id) => {
+                let st = lock(&self.st);
+                let obj = st.objs.get(&id).ok_or(ViewError::NoEnt)?;
+                self.obj_attr(id, obj)
+            }
+            Node::Cat(cat) => match self.view.getattr(ino) {
+                Err(ViewError::NoEnt) => {
+                    let m = *lock(&self.st).vol_cats.get(&cat).ok_or(ViewError::NoEnt)?;
+                    Ok(self.vol_cat_attr(&cat, m))
+                }
+                r => r,
+            },
+            Node::File(key, name) => {
+                if lock(&self.st)
+                    .hidden
+                    .get(&key)
+                    .is_some_and(|h| h.contains(&name))
+                {
+                    return Err(ViewError::NoEnt);
+                }
+                self.view.getattr(ino)
+            }
+            _ => self.view.getattr(ino),
+        }
+    }
+
     pub fn readdir(&self, fh: u64) -> Res<Arc<Vec<DirEnt>>> {
         match lock(&self.st).handles.get(&fh) {
             Some(Fh::Dir(l)) => Ok(l.clone()),
@@ -501,6 +529,47 @@ impl RwView {
             _ => return Err(ViewError::Stale),
         }
         Ok(bytes.len() as u32)
+    }
+
+    /// `mkdir(parent, name, mode)`: a category at the root, or a staged
+    /// `-MERGING-<pf>` directory in a category.
+    pub fn mkdir(&self, parent: u64, name: &str, mode: u32) -> Res<Attr> {
+        match self.view.node_of(parent)? {
+            Node::Root => {
+                if self.lookup(ROOT_INO, name).is_ok() {
+                    return Err(ViewError::Exists);
+                }
+                if name.starts_with('.') || name.contains('/') {
+                    return Err(ViewError::Perm);
+                }
+                let m = now_ns();
+                lock(&self.st).vol_cats.insert(name.to_string(), m);
+                Ok(self.vol_cat_attr(name, m))
+            }
+            Node::Cat(cat) => {
+                let pf = name.strip_prefix(MERGING).unwrap_or("");
+                if pf.is_empty() || pf.contains('/') {
+                    return Err(ViewError::Perm);
+                }
+                self.getattr(parent)?;
+                if self.lookup(parent, name).is_ok() {
+                    return Err(ViewError::Exists);
+                }
+                let mut st = lock(&self.st);
+                let id = st.next_obj;
+                let path = self.scratch.join(id.to_string());
+                std::fs::create_dir(&path).map_err(io_err)?;
+                let id = st.new_obj(Obj::StagedDir {
+                    cat: cat.clone(),
+                    path,
+                    mode: mode & 0o7777,
+                    mtime_ns: now_ns(),
+                });
+                st.names.insert((Parent::Cat(cat), name.to_string()), id);
+                self.obj_attr(id, &st.objs[&id])
+            }
+            _ => Err(ViewError::Perm),
+        }
     }
 
     /// `unlink(parent, name)`.
@@ -899,6 +968,83 @@ impl RwView {
         }
         st.names.insert(key, id);
         self.obj_attr(id, &st.objs[&id])
+    }
+
+    /// `setattr(ino, …)`.
+    pub fn setattr(&self, ino: u64, s: &SetAttr) -> Res<Attr> {
+        if let Some(id) = self.obj_id(ino) {
+            {
+                let mut st = lock(&self.st);
+                let owner = self.owner;
+                match st.objs.get_mut(&id).ok_or(ViewError::NoEnt)? {
+                    Obj::Vol {
+                        data,
+                        mode,
+                        owner,
+                        mtime_ns,
+                        ..
+                    } => {
+                        if let Some(m) = s.mode {
+                            *mode = m & 0o7777;
+                        }
+                        if let Some(u) = s.uid {
+                            owner.uid = u;
+                        }
+                        if let Some(g) = s.gid {
+                            owner.gid = g;
+                        }
+                        if let Some(n) = s.size {
+                            data.resize(usize::try_from(n).map_err(|_| ViewError::Perm)?, 0);
+                        }
+                        if let Some(t) = s.mtime_ns {
+                            *mtime_ns = t;
+                        }
+                    }
+                    Obj::StagedDir { mode, mtime_ns, .. } => {
+                        Self::check_owner(owner, s)?;
+                        if s.size.is_some() {
+                            return Err(ViewError::IsDir);
+                        }
+                        if let Some(m) = s.mode {
+                            *mode = m & 0o7777;
+                        }
+                        if let Some(t) = s.mtime_ns {
+                            *mtime_ns = t;
+                        }
+                    }
+                    Obj::StagedFile { path } => {
+                        Self::check_owner(owner, s)?;
+                        if let Some(m) = s.mode {
+                            std::fs::set_permissions(
+                                &*path,
+                                std::fs::Permissions::from_mode(m & 0o7777),
+                            )
+                            .map_err(io_err)?;
+                        }
+                        let f = std::fs::OpenOptions::new()
+                            .write(true)
+                            .open(&*path)
+                            .map_err(io_err)?;
+                        if let Some(n) = s.size {
+                            f.set_len(n).map_err(io_err)?;
+                        }
+                        if let Some(t) = s.mtime_ns {
+                            f.set_modified(crate::vdb_view::system_time(t))
+                                .map_err(io_err)?;
+                        }
+                    }
+                }
+            }
+            return self.getattr(ino);
+        }
+        let attr = self.getattr(ino)?;
+        Self::check_owner(self.owner, s)?;
+        if s.mode.is_some() || s.size.is_some() {
+            return Err(ViewError::Perm);
+        }
+        // `utime` on a category or the root: accepted, no lasting effect;
+        // the view derives those mtimes.
+        Ok(attr)
     }
 
     /// The database stores no owner: a `chown` to the owner `getattr`

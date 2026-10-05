@@ -671,4 +671,11 @@ impl View {
         }
         self.attr_of(&gn, &child)
     }
+
+    /// `getattr(ino)` without a handle: the current generation.
+    pub fn getattr(&self, ino: u64) -> Res<Attr> {
+        let node = self.node(ino)?;
+        let gn = self.current()?;
+        self.attr_of(&gn, &node)
+    }
 }
