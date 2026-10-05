@@ -28,6 +28,8 @@ mod dep_cp;
 mod error;
 mod files;
 mod files_write;
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+mod loaded;
 #[cfg(feature = "vdb-redb")]
 mod redb_db;
 mod registry;
@@ -42,12 +44,42 @@ pub use convert::{CopyReport, VerifyReport, copy_all, verify};
 pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
+#[cfg(feature = "vdb-redb")]
+pub use redb_db::SCHEMA_VERSION as REDB_SCHEMA_VERSION;
 pub use registry::for_root;
 pub use scratch::{absorb_file, materialize_entry, materialize_files};
 pub use types::*;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// Returns the rusqlite version string (proves the feature links).
+#[cfg(feature = "vdb-sqlite")]
+pub fn sqlite_version() -> &'static str {
+    rusqlite::version()
+}
+
+/// Creates a redb database at `path` and writes one key (proves the feature links).
+#[cfg(feature = "vdb-redb")]
+pub fn redb_smoke(path: &std::path::Path) -> Result<()> {
+    let db = redb::Database::create(path).map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+    let write_txn = db
+        .begin_write()
+        .map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+    {
+        let table_def: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new("test");
+        let mut table = write_txn
+            .open_table(table_def)
+            .map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+        table
+            .insert(b"key" as &[u8], b"value" as &[u8])
+            .map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+    }
+    write_txn
+        .commit()
+        .map_err(|e| Error::io(path, std::io::Error::other(e)))?;
+    Ok(())
+}
 
 /// The 23 single-line fields of the consolidated `metadata` file, sorted.
 /// `CONTENTS` and `NEEDED*` are line-oriented and excluded. The set is part
@@ -78,6 +110,9 @@ pub const METADATA_FILE_FIELDS: &[&str] = &[
     "USE",
     "repository",
 ];
+
+// [`EntryFields`] stores exactly this many values.
+const _: () = assert!(METADATA_FILE_FIELDS.len() == 23);
 
 /// Portage's `_METADATA_FILE_FORMAT_VERSION`.
 pub const METADATA_FILE_FORMAT_VERSION: u32 = 1;
@@ -324,4 +359,37 @@ pub trait WriteTxn {
 
     /// Make the transaction durable. A no-op on `files`.
     fn commit(self: Box<Self>) -> Result<()>;
+}
+
+#[cfg(all(test, feature = "vdb-sqlite"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sqlite_version() {
+        let version = sqlite_version();
+        assert!(!version.is_empty());
+        assert!(version.chars().any(|c| c.is_ascii_digit()));
+    }
+}
+
+#[cfg(all(test, feature = "vdb-redb"))]
+mod redb_tests {
+    use super::*;
+
+    #[test]
+    fn test_redb_smoke() {
+        let temp_dir = std::env::temp_dir().join("redb-smoke-test");
+        let db_path = temp_dir.join("test.db");
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let result = redb_smoke(&db_path);
+        assert!(result.is_ok(), "redb_smoke failed: {:?}", result);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
 }

@@ -837,11 +837,315 @@ mod tests {
     use super::*;
     use crate::InstalledDb;
 
+    fn scratch(tag: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("portage-vdb-s14-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// The merge sequence on `files`: the stamp is the last write and
+    /// survives the rename, and a same-`pf` live entry is replaced.
+    #[test]
+    fn merge_sequence_publishes_a_stamped_entry() {
+        let root = scratch("merge");
+        let db = FilesDb::new(&root);
+        let key = EntryKey::new("dev-libs", "a-1.0");
+        let live = root.join("var/db/pkg/dev-libs/a-1.0");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("OLD"), b"x").unwrap();
+        let src = root.join("SLOT.src");
+        fs::write(&src, b"0\n").unwrap();
+
+        let mut txn = db.begin_write().unwrap();
+        txn.begin_entry(&key).unwrap();
+        // A stale pending entry is wiped by the next begin_entry.
+        txn.put_entry_file(&key, "STALE", b"").unwrap();
+        txn.begin_entry(&key).unwrap();
+        txn.copy_entry_file(&key, "SLOT", &src).unwrap();
+        assert_eq!(txn.next_counter().unwrap(), Counter(0));
+        assert_eq!(txn.next_counter().unwrap(), Counter(1));
+        txn.put_entry_file(&key, "COUNTER", b"1").unwrap();
+        txn.put_entry_file(&key, "CONTENTS", b"obj /x 0 0\n")
+            .unwrap();
+        txn.seal_entry(&key).unwrap();
+        assert_eq!(
+            db.read_pending_file(&key, "COUNTER").unwrap().as_deref(),
+            Some(&b"1"[..])
+        );
+        assert_eq!(db.read_pending_file(&key, "STALE").unwrap(), None);
+        assert_eq!(db.category_entries("dev-libs").unwrap(), vec!["a-1.0"]);
+        txn.finish_entry(&key).unwrap();
+        txn.commit().unwrap();
+
+        assert!(!live.join("OLD").exists());
+        assert_eq!(db.read_pending_file(&key, "COUNTER").unwrap(), None);
+        assert_eq!(db.counter().unwrap(), Some(Counter(1)));
+        let meta = fs::read_to_string(live.join("metadata")).unwrap();
+        assert!(meta.starts_with("#format=1\nCOUNTER=1\nSLOT=0\n#dir_mtime="));
+        assert_eq!(db.aux_get(&key, "SLOT").unwrap().as_deref(), Some("0"));
+        let st = fs::metadata(&live).unwrap();
+        let ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
+        assert!(meta.ends_with(&format!("#dir_mtime={ns}\n")));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn installed(root: &Path, cpv: &str, counter: Option<&str>) {
+        let dir = root.join("var/db/pkg").join(cpv);
+        fs::create_dir_all(&dir).unwrap();
+        if let Some(c) = counter {
+            fs::write(dir.join("COUNTER"), c).unwrap();
+        }
+    }
+
+    fn tick(db: &FilesDb) -> i64 {
+        let mut txn = db.begin_write().unwrap();
+        let c = txn.next_counter().unwrap();
+        txn.commit().unwrap();
+        c.0
+    }
+
+    /// Concurrent ticks (threads here, processes in Portage) never hand
+    /// out the same value: the read-max-write is one critical section.
+    #[test]
+    fn concurrent_ticks_are_unique() {
+        let root = scratch("counter-race");
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let r = root.clone();
+                std::thread::spawn(move || {
+                    let db = FilesDb::new(&r);
+                    (0..10).map(|_| tick(&db)).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let mut all: Vec<i64> = handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
+        all.sort_unstable();
+        assert_eq!(all, (0..80).collect::<Vec<_>>());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn seal_without_fields_writes_nothing() {
+        let root = scratch("seal-empty");
+        let db = FilesDb::new(&root);
+        let key = EntryKey::new("dev-libs", "b-1.0");
+        let mut txn = db.begin_write().unwrap();
+        txn.begin_entry(&key).unwrap();
+        txn.put_entry_file(&key, "CONTENTS", b"").unwrap();
+        txn.seal_entry(&key).unwrap();
+        assert_eq!(db.read_pending_file(&key, "metadata").unwrap(), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn world_stores_round_trip_alone_in_a_world_only_transaction() {
+        let root = scratch("world");
+        let db = FilesDb::new(&root);
+        assert_eq!(db.world().unwrap(), World::default());
+        assert_eq!(db.world_sets().unwrap(), WorldSets::default());
+        let mut txn = db.begin_write().unwrap();
+        txn.set_world(&World {
+            atoms: vec!["dev-libs/a".into(), "dev-libs/b:2".into()],
+        })
+        .unwrap();
+        txn.commit().unwrap();
+        let path = root.join("var/lib/portage/world");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "dev-libs/a\ndev-libs/b:2\n"
+        );
+        assert!(!root.join("var/lib/portage/world_sets").exists());
+        fs::write(&path, "# c\n\n @x \n dev-libs/a \n").unwrap();
+        assert_eq!(db.world().unwrap().atoms, vec!["dev-libs/a".to_string()]);
+        let mut txn = db.begin_write().unwrap();
+        txn.set_world_sets(&WorldSets {
+            sets: vec!["one".into(), "two".into()],
+        })
+        .unwrap();
+        txn.set_world(&World::default()).unwrap();
+        txn.commit().unwrap();
+        let sets = root.join("var/lib/portage/world_sets");
+        assert_eq!(fs::read_to_string(&sets).unwrap(), "@one\n@two\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        fs::write(&sets, "dev-libs/a\n# c\n@@one\n@two\n").unwrap();
+        assert_eq!(
+            db.world_sets().unwrap().sets,
+            vec!["one".to_string(), "two".to_string()]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn preserved_libs_round_trip_and_skip_unchanged() {
+        let root = scratch("plib");
+        let db = FilesDb::new(&root);
+        assert_eq!(db.preserved_libs().unwrap(), PreservedLibs::default());
+        let mut libs = db.preserved_libs().unwrap();
+        let mut txn = db.begin_write().unwrap();
+        txn.set_preserved_libs(&libs).unwrap();
+        assert!(!root.join("var/lib/portage").exists());
+        libs.entries.insert(
+            "dev-libs/a:0".to_string(),
+            PreservedLibsEntry {
+                cpv: "dev-libs/a-1.0".to_string(),
+                counter: "3".to_string(),
+                paths: vec!["/usr/lib/a\"b.so".to_string()],
+            },
+        );
+        txn.set_preserved_libs(&libs).unwrap();
+        let back = db.preserved_libs().unwrap();
+        assert_eq!(back.entries, libs.entries);
+        assert_eq!(back.loaded, back.entries);
+        assert_eq!(format_preserved_libs(&BTreeMap::new()), "{}");
+        fs::write(root.join(PRESERVED_LIBS_PATH), b"not json").unwrap();
+        assert!(db.preserved_libs().unwrap().entries.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn config_memory_round_trips() {
+        let root = scratch("confmem");
+        let db = FilesDb::new(&root);
+        assert!(db.config_memory().unwrap().entries.is_empty());
+        let mut mem = ConfigMemory::default();
+        mem.entries.insert("/etc/a".to_string(), "abc".to_string());
+        let mut txn = db.begin_write().unwrap();
+        txn.set_config_memory(&mem).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join(CONFIG_MEMORY_PATH)).unwrap(),
+            "/etc/a abc\n"
+        );
+        assert_eq!(db.config_memory().unwrap(), mem);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_bare_vdb_dir_has_no_stores() {
+        let root = scratch("bare");
+        let db = FilesDb::open_vdb_dir(&root);
+        assert_eq!(db.counter().unwrap(), None);
+        assert!(db.preserved_libs().unwrap().entries.is_empty());
+        let mut txn = db.begin_write().unwrap();
+        assert!(matches!(txn.next_counter(), Err(Error::Unsupported(_))));
+        let _ = fs::remove_dir_all(&root);
+    }
+
     fn put_live(root: &Path, cat: &str, pf: &str, files: &[(&str, &str)]) {
         let dir = root.join("var/db/pkg").join(cat).join(pf);
         fs::create_dir_all(&dir).unwrap();
         for (name, body) in files {
             fs::write(dir.join(name), body).unwrap();
         }
+    }
+
+    /// `delete_entry` removes the entry, and the category only when it is
+    /// then empty.
+    #[test]
+    fn delete_entry_removes_the_empty_category_only() {
+        let root = scratch("delete");
+        put_live(&root, "dev-libs", "a-1", &[("CONTENTS", "")]);
+        put_live(&root, "dev-libs", "b-1", &[("CONTENTS", "")]);
+        let db = FilesDb::new(&root);
+        let vdb = root.join("var/db/pkg");
+        let mut txn = db.begin_write().unwrap();
+        txn.delete_entry(&EntryKey::new("dev-libs", "a-1")).unwrap();
+        assert!(!vdb.join("dev-libs/a-1").exists());
+        assert!(vdb.join("dev-libs").is_dir(), "b-1 keeps the category");
+        txn.delete_entry(&EntryKey::new("dev-libs", "b-1")).unwrap();
+        assert!(!vdb.join("dev-libs").exists(), "empty category is removed");
+        let err = txn
+            .delete_entry(&EntryKey::new("dev-libs", "b-1"))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with(&format!("{}: ", vdb.join("dev-libs/b-1").display()))
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `replace_file` rewrites in place and leaves the entry directory's
+    /// mtime alone.
+    #[test]
+    fn replace_file_rewrites_in_place() {
+        use std::os::unix::fs::MetadataExt as _;
+        let root = scratch("replace");
+        put_live(&root, "dev-libs", "a-1", &[("CONTENTS", "old old old\n")]);
+        let dir = root.join("var/db/pkg/dev-libs/a-1");
+        let (ino, mtime) = {
+            let f = fs::metadata(dir.join("CONTENTS")).unwrap();
+            let d = fs::metadata(&dir).unwrap();
+            (f.ino(), (d.mtime(), d.mtime_nsec()))
+        };
+        let db = FilesDb::new(&root);
+        let mut txn = db.begin_write().unwrap();
+        txn.replace_file(&EntryKey::new("dev-libs", "a-1"), "CONTENTS", b"new\n")
+            .unwrap();
+        assert_eq!(fs::read(dir.join("CONTENTS")).unwrap(), b"new\n");
+        assert_eq!(fs::metadata(dir.join("CONTENTS")).unwrap().ino(), ino);
+        let d = fs::metadata(&dir).unwrap();
+        assert_eq!((d.mtime(), d.mtime_nsec()), mtime);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `read_file_all`, `owners` and `categories` scan the tree.
+    #[test]
+    fn bulk_reads_and_owners_scan_the_tree() {
+        let root = scratch("bulk");
+        put_live(
+            &root,
+            "dev-libs",
+            "a-1",
+            &[
+                ("NEEDED.ELF.2", "n\n"),
+                ("CONTENTS", "dir /usr\nobj /usr/x abc 1\nfoo /usr/y\n"),
+            ],
+        );
+        put_live(
+            &root,
+            "dev-libs",
+            "b-1",
+            &[("CONTENTS", "sym /usr/x -> y 1\n")],
+        );
+        put_live(
+            &root,
+            "dev-libs",
+            "-MERGING-c-1",
+            &[("NEEDED.ELF.2", "p\n")],
+        );
+        put_live(&root, "app-misc", "d-1", &[]);
+        fs::write(root.join("var/db/pkg/stray"), "").unwrap();
+        let db = FilesDb::new(&root);
+        assert_eq!(db.categories().unwrap(), ["app-misc", "dev-libs"]);
+        let all = db.read_file_all("NEEDED.ELF.2").unwrap();
+        assert_eq!(
+            all,
+            vec![
+                (EntryKey::new("app-misc", "d-1"), None),
+                (EntryKey::new("dev-libs", "a-1"), Some(b"n\n".to_vec())),
+                (EntryKey::new("dev-libs", "b-1"), None),
+            ]
+        );
+        let owned = db
+            .owners(&[
+                b"/usr/x".as_slice(),
+                b"/usr/y".as_slice(),
+                b"/usr".as_slice(),
+            ])
+            .unwrap();
+        assert_eq!(
+            owned,
+            vec![
+                (b"/usr".to_vec(), EntryKey::new("dev-libs", "a-1")),
+                (b"/usr/x".to_vec(), EntryKey::new("dev-libs", "a-1")),
+                (b"/usr/x".to_vec(), EntryKey::new("dev-libs", "b-1")),
+            ],
+            "`foo` is not a recorded kind, so /usr/y is unowned"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

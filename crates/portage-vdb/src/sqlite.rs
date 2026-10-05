@@ -19,7 +19,8 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 mod write;
 
 use crate::dep_cp::UNSURE_CP;
-use crate::files::owner_wanted;
+use crate::files::{owner_spellings, owner_wanted};
+use crate::loaded::Loaded;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryFile, EntryImage,
     EntryKey, EntryStat, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, MetadataStamp,

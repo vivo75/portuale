@@ -54,6 +54,26 @@ impl FilesDb {
         }
     }
 
+    /// The `files` backend a command-line `files:PATH` names: `PATH` is a
+    /// root or the VDB directory itself. `None` when `PATH` is no directory.
+    pub fn from_cli_path(path: &Path) -> Option<Self> {
+        if path.ends_with(VDB_PATH) {
+            // `<root>/var/db/pkg` is three levels below the root.
+            let root = path.ancestors().nth(3)?;
+            let root = if root.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                root
+            };
+            return Some(FilesDb::new(root));
+        }
+        if path.join(VDB_PATH).is_dir() {
+            Some(FilesDb::new(path))
+        } else {
+            path.is_dir().then(|| FilesDb::open_vdb_dir(path))
+        }
+    }
+
     /// The root given to [`FilesDb::new`]; `None` for a bare VDB directory.
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
@@ -313,6 +333,17 @@ pub(crate) fn owner_wanted<'a>(paths: &[&'a [u8]]) -> HashMap<&'a [u8], &'a [u8]
         m.entry(p.strip_prefix(b"/").unwrap_or(p)).or_insert(p);
     }
     m
+}
+
+/// The spellings a `CONTENTS` line can have for the normal form `n`:
+/// `/n`, and `n` itself when it does not start with `/`.
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+pub(crate) fn owner_spellings(n: &[u8]) -> Vec<Vec<u8>> {
+    let mut v = vec![[b"/".as_slice(), n].concat()];
+    if !n.starts_with(b"/") {
+        v.push(n.to_vec());
+    }
+    v
 }
 
 pub(crate) fn todo_step<T>(what: &str, step: &str) -> Result<T> {
@@ -716,5 +747,130 @@ impl InstalledDb for FilesDb {
     /// (crate doc item 20).
     fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>> {
         Ok(Box::new(FilesTxn::new(self)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh scratch root, removed by the caller.
+    fn scratch(tag: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("portage-vdb-s12-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    // Only deterministic oracles pin the hash: absence (0), presence
+    // (non-zero, non-one), and sensitivity to structural change.
+
+    /// A missing vdb fingerprints to exactly 0.
+    #[test]
+    fn generation_of_a_missing_vdb_is_zero() {
+        let root = scratch("fp-missing");
+        assert_eq!(FilesDb::new(&root).generation().unwrap(), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// An existing (even empty) vdb never fingerprints to 0 or 1.
+    #[test]
+    fn generation_of_an_existing_vdb_is_neither_zero_nor_one() {
+        let root = scratch("fp-empty");
+        fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let fp = FilesDb::new(&root).generation().unwrap();
+        assert_ne!(fp, 0);
+        assert_ne!(fp, 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Adding a category changes the fingerprint.
+    #[test]
+    fn generation_changes_when_a_category_appears() {
+        let root = scratch("fp-sensitivity");
+        fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let db = FilesDb::new(&root);
+        let before = db.generation().unwrap();
+        fs::create_dir_all(root.join("var/db/pkg/dev-libs")).unwrap();
+        assert_ne!(before, db.generation().unwrap());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn category_generation_is_zero_when_missing_and_nonzero_when_present() {
+        let root = scratch("catgen");
+        fs::create_dir_all(root.join("var/db/pkg/dev-libs")).unwrap();
+        let db = FilesDb::new(&root);
+        assert_eq!(db.category_generation("sys-apps").unwrap(), 0);
+        assert_ne!(db.category_generation("dev-libs").unwrap(), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn listing_skips_merging_entries_and_plain_files() {
+        let root = scratch("listing");
+        let cat = root.join("var/db/pkg/dev-libs");
+        fs::create_dir_all(cat.join("a-1.0")).unwrap();
+        fs::create_dir_all(cat.join("-MERGING-b-2.0")).unwrap();
+        fs::write(cat.join("stray"), b"").unwrap();
+        let db = FilesDb::new(&root);
+        assert_eq!(db.category_entries("dev-libs").unwrap(), vec!["a-1.0"]);
+        assert!(db.category_entries("nope").unwrap().is_empty());
+        assert_eq!(
+            db.entries().unwrap(),
+            vec![EntryKey::new("dev-libs", "a-1.0")]
+        );
+        assert!(db.has_entry(&EntryKey::new("dev-libs", "a-1.0")).unwrap());
+        assert!(!db.has_entry(&EntryKey::new("dev-libs", "stray")).unwrap());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn aux_get_distinguishes_missing_entry_empty_field_and_foreign_key() {
+        let root = scratch("aux");
+        let dir = root.join("var/db/pkg/dev-libs/a-1.0");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("RDEPEND"), b"a\n  b\n").unwrap();
+        fs::write(dir.join("SLOT"), b"!bad\n").unwrap();
+        fs::write(dir.join("CONTENTS"), b"obj /x\n").unwrap();
+        let db = FilesDb::new(&root);
+        let k = EntryKey::new("dev-libs", "a-1.0");
+        assert_eq!(db.aux_get(&k, "RDEPEND").unwrap().as_deref(), Some("a b"));
+        assert_eq!(db.aux_get(&k, "SLOT").unwrap().as_deref(), Some("0"));
+        assert_eq!(db.aux_get(&k, "DEPEND").unwrap().as_deref(), Some(""));
+        assert_eq!(
+            db.aux_get(&EntryKey::new("dev-libs", "zz-1"), "SLOT")
+                .unwrap(),
+            None
+        );
+        assert!(matches!(db.aux_get(&k, "CONTENTS"), Err(Error::Invalid(_))));
+        assert_eq!(
+            db.read_file(&k, "CONTENTS").unwrap().as_deref(),
+            Some(&b"obj /x\n"[..])
+        );
+        assert_eq!(db.read_file(&k, "nope").unwrap(), None);
+        assert_eq!(
+            db.read_file(&EntryKey::new("dev-libs", "zz-1"), "SLOT")
+                .unwrap(),
+            None
+        );
+        let m = db.file_meta(&k, "CONTENTS").unwrap().unwrap();
+        assert_eq!((m.name.as_str(), m.len), ("CONTENTS", 7));
+        assert_eq!(db.file_meta(&k, "nope").unwrap(), None);
+        let names: Vec<String> = db
+            .list_files(&k)
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(names, ["CONTENTS", "RDEPEND", "SLOT"]);
+        assert!(
+            db.list_files(&EntryKey::new("dev-libs", "zz-1"))
+                .unwrap()
+                .is_none()
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }
