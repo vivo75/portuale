@@ -1,0 +1,21 @@
+# Real Portage `vardbapi.move_ent` (vartree.py:626-683, package moves from
+# profiles/updates) on app-misc/foo-1.0 -> sys-apps/bar-1.0, the syscall
+# sequence captured with strace on 2026-10-06 (portage 3.0.82.2): mkdir of
+# the new category, the cross-category rename of the entry directory, the
+# rename of <old_pf>.ebuild, then write_atomic of PF and CATEGORY.
+# The ebuild is stored first the way real stores it (write_atomic).
+create app-misc/foo-1.0/foo-1.0.ebuildq1w2e3r4 600
+write app-misc/foo-1.0/foo-1.0.ebuildq1w2e3r4 EAPI=8\n
+chmod app-misc/foo-1.0/foo-1.0.ebuildq1w2e3r4 644
+rename app-misc/foo-1.0/foo-1.0.ebuildq1w2e3r4 app-misc/foo-1.0/foo-1.0.ebuild
+mkdir sys-apps 755
+rename app-misc/foo-1.0 sys-apps/bar-1.0
+rename sys-apps/bar-1.0/foo-1.0.ebuild sys-apps/bar-1.0/bar-1.0.ebuild
+create sys-apps/bar-1.0/PFsqa53hhm 600
+write sys-apps/bar-1.0/PFsqa53hhm bar-1.0\n
+chmod sys-apps/bar-1.0/PFsqa53hhm 644
+rename sys-apps/bar-1.0/PFsqa53hhm sys-apps/bar-1.0/PF
+create sys-apps/bar-1.0/CATEGORY2mmqelzq 600
+write sys-apps/bar-1.0/CATEGORY2mmqelzq sys-apps\n
+chmod sys-apps/bar-1.0/CATEGORY2mmqelzq 644
+rename sys-apps/bar-1.0/CATEGORY2mmqelzq sys-apps/bar-1.0/CATEGORY
