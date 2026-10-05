@@ -45,7 +45,7 @@ pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
 #[cfg(feature = "vdb-redb")]
-pub use redb_db::SCHEMA_VERSION as REDB_SCHEMA_VERSION;
+pub use redb_db::{RedbDb, SCHEMA_VERSION as REDB_SCHEMA_VERSION};
 pub use registry::{for_root, register, reset};
 pub use scratch::{absorb_file, materialize_entry, materialize_files};
 #[cfg(feature = "vdb-sqlite")]

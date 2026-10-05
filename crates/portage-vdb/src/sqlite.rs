@@ -346,6 +346,53 @@ fn generation_of(conn: &Connection) -> rusqlite::Result<Option<u64>> {
     Ok(g.and_then(|g| g.parse().ok()))
 }
 
+/// One read transaction: `data_version` (read inside it, so it matches
+/// the data), `generation` and every live entry with its normalised
+/// fields (one `SELECT` over `entry` joined to `entry_file` restricted to
+/// the 23 field names and `metadata`).
+fn load_full(conn: &Connection, path: &Path) -> Result<(i64, u64, Full)> {
+    let wrap = |e| db_err(path, e);
+    let (dv, generation, loaded) = (|| {
+        let tx = conn.unchecked_transaction()?;
+        let dv = data_version(&tx)?;
+        let generation = generation_of(&tx)?;
+        let loaded = load_live(&tx, METADATA_FILE_FIELDS)?;
+        Ok((dv, generation, loaded))
+    })()
+    .map_err(wrap)?;
+    let generation = generation.ok_or_else(|| no_generation(path))?;
+    let mut by_category: HashMap<String, Vec<String>> = HashMap::new();
+    let mut categories: Vec<String> = Vec::new();
+    let entries = loaded
+        .into_iter()
+        .map(|l| {
+            match by_category.get_mut(&l.key.category) {
+                Some(v) => v.push(l.key.pf.clone()),
+                None => {
+                    categories.push(l.key.category.clone());
+                    by_category.insert(l.key.category.clone(), vec![l.key.pf.clone()]);
+                }
+            }
+            let snap = l.snapshot();
+            let fields = EntryFields::from_pairs(
+                METADATA_FILE_FIELDS
+                    .iter()
+                    .map(|&f| (f, l.field(snap.as_ref(), f))),
+            );
+            (l.key, Arc::new(fields))
+        })
+        .collect();
+    Ok((
+        dv,
+        generation,
+        Full {
+            snapshot: Arc::new(Snapshot::new(generation, entries)),
+            by_category,
+            categories,
+        },
+    ))
+}
+
 fn file_meta_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FileMeta> {
     Ok(FileMeta {
         name: r.get(0)?,

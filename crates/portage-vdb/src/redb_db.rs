@@ -405,6 +405,18 @@ impl Handle {
     }
 }
 
+/// The redb backend. One file, one handle; see the module doc for the
+/// one-process rule.
+pub struct RedbDb {
+    path: PathBuf,
+    handle: Handle,
+    /// The in-process read cache ([`CacheState`]).
+    cache: Mutex<CacheState>,
+    /// The thread that holds the open write transaction, if any (see
+    /// `begin_write`).
+    writer: Mutex<Option<std::thread::ThreadId>>,
+}
+
 /// What the read cache holds for one `meta.generation` value.
 #[derive(Default)]
 struct CacheState {
@@ -424,6 +436,54 @@ struct Listing {
     by_category: HashMap<String, Vec<String>>,
     /// Categories with a live entry, sorted.
     categories: Vec<String>,
+}
+
+impl std::fmt::Debug for RedbDb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedbDb")
+            .field("path", &self.path)
+            .field("readonly", &self.is_readonly())
+            .finish()
+    }
+}
+
+impl RedbDb {
+    /// Whether this handle was opened with [`RedbDb::open_readonly`].
+    pub fn is_readonly(&self) -> bool {
+        matches!(self.handle, Handle::Ro(_))
+    }
+
+    /// Run `f` in one read transaction; redb errors become this crate's.
+    fn read<T>(&self, f: impl FnOnce(&Rd) -> R<T>) -> Result<T> {
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let rd = Rd::new(&txn).map_err(wrap)?;
+        f(&rd).map_err(wrap)
+    }
+
+    /// The validated cache: `(generation, listing, snapshot)`; the
+    /// snapshot is loaded only when `want_full`. See the module doc.
+    fn cached(&self, want_full: bool) -> Result<(u64, Arc<Listing>, Option<Arc<Snapshot>>)> {
+        let wrap = |e| rerr(&self.path, e);
+        let mut st = self.cache.lock().map_err(|_| {
+            Error::Backend(format!("{}: cache mutex poisoned", self.path.display()))
+        })?;
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let rd = Rd::new(&txn).map_err(wrap)?;
+        let generation = rd.generation(&txn).map_err(wrap)?;
+        if st.generation != Some(generation) {
+            *st = CacheState::default();
+        }
+        if st.listing.is_none() {
+            st.listing = Some(Arc::new(rd.listing().map_err(wrap)?));
+        }
+        let listing = st.listing.clone().unwrap_or_default();
+        if want_full && st.full.is_none() {
+            st.full = Some(Arc::new(rd.snapshot(generation, &listing).map_err(wrap)?));
+        }
+        st.generation = Some(generation);
+        Ok((generation, listing, st.full.clone()))
+    }
 }
 
 /// Create every table and write the `meta` seed, in one transaction.
@@ -679,6 +739,26 @@ impl Rd {
         }
         Ok(files)
     }
+
+    /// The 23 normalised fields of every entry of `listing`.
+    fn snapshot(&self, generation: u64, listing: &Listing) -> R<Snapshot> {
+        let mut entries = Vec::with_capacity(listing.entries.len());
+        for (key, &(id, stamp)) in listing.entries.iter().zip(&listing.rows) {
+            let l = Loaded {
+                key: key.clone(),
+                stamp,
+                files: self.load_named(id, METADATA_FILE_FIELDS)?,
+            };
+            let snap = l.snapshot();
+            let fields = EntryFields::from_pairs(
+                METADATA_FILE_FIELDS
+                    .iter()
+                    .map(|&f| (f, l.field(snap.as_ref(), f))),
+            );
+            entries.push((l.key, Arc::new(fields)));
+        }
+        Ok(Snapshot::new(generation, entries))
+    }
 }
 
 /// Chunks of a file of `len` bytes.
@@ -698,6 +778,401 @@ fn file_meta_of(name: &str, rec: FileRec) -> FileMeta {
         len: rec.len,
         mode: rec.mode,
         mtime_ns: i128::from(rec.mtime_ns),
+    }
+}
+
+impl InstalledDb for RedbDb {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Redb
+    }
+    fn vdb_dir(&self) -> Option<PathBuf> {
+        None
+    }
+    fn entry_path(&self, _key: &EntryKey) -> Option<PathBuf> {
+        None
+    }
+
+    /// `meta.generation`: +1 on every effective commit. One point
+    /// lookup.
+    fn generation(&self) -> Result<u64> {
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let rd = Rd::new(&txn).map_err(wrap)?;
+        rd.generation(&txn).map_err(wrap)
+    }
+
+    /// The global generation, as sqlite: it moves on every commit, so a
+    /// category-keyed cache is invalidated more often than needed, never
+    /// less.
+    fn category_generation(&self, _category: &str) -> Result<u64> {
+        self.generation()
+    }
+
+    fn entries(&self) -> Result<Vec<EntryKey>> {
+        Ok(self.cached(false)?.1.entries.clone())
+    }
+
+    /// Categories that hold at least one live entry (`files` also lists a
+    /// category directory that is empty or holds only a pending entry).
+    fn categories(&self) -> Result<Vec<String>> {
+        Ok(self.cached(false)?.1.categories.clone())
+    }
+
+    fn category_entries(&self, category: &str) -> Result<Vec<String>> {
+        Ok(self
+            .cached(false)?
+            .1
+            .by_category
+            .get(category)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn pending_entries(&self) -> Result<Vec<EntryKey>> {
+        self.read(|rd| Ok(rd.rows(PENDING)?.into_iter().map(|(k, _)| k).collect()))
+    }
+
+    fn has_entry(&self, key: &EntryKey) -> Result<bool> {
+        self.read(|rd| Ok(rd.rec(INSTALLED, key)?.is_some()))
+    }
+
+    fn aux_get(&self, key: &EntryKey, field: &str) -> Result<Option<String>> {
+        if !in_metadata_file(field) {
+            return Err(Error::Invalid(format!(
+                "aux_get key {field:?} is not one of the 23 metadata fields (use read_file)"
+            )));
+        }
+        let full = self.cached(true)?.2;
+        Ok(full
+            .and_then(|s| s.get(key).cloned())
+            .and_then(|f| f.get(field).map(str::to_owned)))
+    }
+
+    /// The cached snapshot (the 23 normalised fields, snapshot rule per
+    /// stored stamp), taken in one read transaction with `generation`.
+    fn snapshot(&self) -> Result<Arc<Snapshot>> {
+        self.cached(true)?
+            .2
+            .ok_or_else(|| Error::Backend("read cache not loaded".into()))
+    }
+
+    fn list_files(&self, key: &EntryKey) -> Result<Option<Vec<FileMeta>>> {
+        self.read(|rd| {
+            let Some(rec) = rd.rec(INSTALLED, key)? else {
+                return Ok(None);
+            };
+            Ok(Some(
+                rd.file_metas(rec.id)?
+                    .into_iter()
+                    .map(|(n, r)| file_meta_of(&n, r))
+                    .collect(),
+            ))
+        })
+    }
+
+    fn file_meta(&self, key: &EntryKey, name: &str) -> Result<Option<FileMeta>> {
+        self.read(|rd| {
+            let Some(rec) = rd.rec(INSTALLED, key)? else {
+                return Ok(None);
+            };
+            Ok(rd.file_rec(rec.id, name)?.map(|r| file_meta_of(name, r)))
+        })
+    }
+
+    fn read_file(&self, key: &EntryKey, name: &str) -> Result<Option<Vec<u8>>> {
+        self.read(|rd| match rd.rec(INSTALLED, key)? {
+            Some(rec) => rd.file(rec.id, name),
+            None => Ok(None),
+        })
+    }
+
+    /// Loads only the chunks `[off, off + len)` touches: `Some(empty)` at
+    /// or past the end, short at the end, `None` for a missing entry or
+    /// file.
+    fn read_file_at(
+        &self,
+        key: &EntryKey,
+        name: &str,
+        off: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        self.read(|rd| match rd.rec(INSTALLED, key)? {
+            Some(rec) => rd.file_at(rec.id, name, off, len),
+            None => Ok(None),
+        })
+    }
+
+    fn read_pending_file(&self, key: &EntryKey, name: &str) -> Result<Option<Vec<u8>>> {
+        self.read(|rd| match rd.rec(PENDING, key)? {
+            Some(rec) => rd.file(rec.id, name),
+            None => Ok(None),
+        })
+    }
+
+    fn read_file_all(&self, name: &str) -> Result<Vec<(EntryKey, Option<Vec<u8>>)>> {
+        self.read(|rd| {
+            let mut out = Vec::new();
+            for (key, rec) in rd.rows(INSTALLED)? {
+                out.push((key, rd.file(rec.id, name)?));
+            }
+            Ok(out)
+        })
+    }
+
+    fn entry_stat(&self, key: &EntryKey) -> Result<Option<EntryStat>> {
+        self.read(|rd| {
+            let Some(rec) = rd.rec(INSTALLED, key)? else {
+                return Ok(None);
+            };
+            let files = rd
+                .file_metas(rec.id)?
+                .into_iter()
+                .map(|(name, frec)| file_meta_of(&name, frec))
+                .collect();
+            Ok(Some(EntryStat {
+                files,
+                dir_mode: rec.dir_mode,
+                dir_mtime_ns: i128::from(rec.dir_mtime_ns),
+                metadata_stamp: rec.stamp,
+            }))
+        })
+    }
+
+    fn entry_image(&self, key: &EntryKey) -> Result<Option<EntryImage>> {
+        self.read(|rd| {
+            let Some(rec) = rd.rec(INSTALLED, key)? else {
+                return Ok(None);
+            };
+            let mut files = Vec::new();
+            for (name, frec) in rd.file_metas(rec.id)? {
+                let data = rd
+                    .file(rec.id, &name)?
+                    .ok_or_else(|| corrupt(format!("file {name:?} vanished")))?;
+                files.push(EntryFile {
+                    meta: file_meta_of(&name, frec),
+                    data,
+                });
+            }
+            Ok(Some(EntryImage {
+                key: key.clone(),
+                files,
+                dir_mode: rec.dir_mode,
+                dir_mtime_ns: i128::from(rec.dir_mtime_ns),
+                metadata_stamp: rec.stamp,
+            }))
+        })
+    }
+
+    /// The live entries whose `dep_atom` rows name `cp` in one of `classes`,
+    /// or carry the unsure marker (`cp = ""`, see `dep_cp::dep_index_key`),
+    /// in `(category, pf)` order, with their `USE` and the requested classes
+    /// normalised like `aux_get`. A superset of the true dependents; an
+    /// entry none of whose tokens is, or might be, `cp` is not read.
+    fn reverse_dependents(&self, cp: &str, classes: &[DepClass]) -> Result<Vec<DepRecord>> {
+        if classes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut names: Vec<&str> = vec!["USE"];
+        names.extend(classes.iter().map(|c| c.field()));
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let loaded = (|| -> R<Vec<Loaded>> {
+            let rd = Rd::new(&txn)?;
+            let want: Vec<u8> = classes
+                .iter()
+                .filter_map(|c| write::DEP_CLASSES.iter().position(|d| d == c))
+                .map(|i| i as u8)
+                .collect();
+            let mut ids = std::collections::HashSet::new();
+            let dep = txn.open_multimap_table(DEP_ATOM)?;
+            for key in [cp, UNSURE_CP] {
+                for v in dep.get(key)? {
+                    let v = v?;
+                    let v = v.value();
+                    if v.len() < 9 {
+                        return Err(corrupt("dep_atom row too short"));
+                    }
+                    if want.contains(&v[8]) {
+                        ids.insert(u64::from_le_bytes(v[..8].try_into().expect("8 bytes")));
+                    }
+                }
+            }
+            let mut out = Vec::new();
+            for (key, rec) in rd.rows(INSTALLED)? {
+                if ids.contains(&rec.id) {
+                    out.push(Loaded {
+                        files: rd.load_named(rec.id, &names)?,
+                        stamp: rec.stamp,
+                        key,
+                    });
+                }
+            }
+            Ok(out)
+        })()
+        .map_err(wrap)?;
+        Ok(loaded
+            .into_iter()
+            .map(|l| {
+                let snap = l.snapshot();
+                DepRecord {
+                    use_flags: l.field(snap.as_ref(), "USE"),
+                    deps: classes
+                        .iter()
+                        .map(|&c| (c, l.field(snap.as_ref(), c.field())))
+                        .collect(),
+                    key: l.key,
+                }
+            })
+            .collect())
+    }
+
+    /// From the `owner` multimap: an indexed lookup of each distinct
+    /// path (both spellings `CONTENTS` can have, see `owner_spellings`),
+    /// with the rule of `FilesDb::owners` (`claim_paths`): one leading `/`
+    /// ignored on both sides, the first matching input path reported, the
+    /// entries in `(category, pf)` order and, within one, `CONTENTS` order
+    /// (`seq`). Only live entries count (a pending entry has no rows).
+    fn owners(&self, paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
+        let wanted = owner_wanted(paths);
+        if wanted.is_empty() {
+            return Ok(Vec::new());
+        }
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let mut hits: Vec<(String, String, u32, &[u8])> = Vec::new();
+        (|| -> R<()> {
+            let owner = txn.open_multimap_table(OWNER)?;
+            let by_id = txn.open_table(ENTRY_BY_ID)?;
+            for (&norm, &first) in &wanted {
+                for raw in owner_spellings(norm) {
+                    for v in owner.get(raw.as_slice())? {
+                        let v = v?;
+                        let v = v.value();
+                        if v.len() < 12 {
+                            return Err(corrupt("owner row too short"));
+                        }
+                        let id = u64::from_le_bytes(v[..8].try_into().expect("8 bytes"));
+                        let seq = u32::from_le_bytes(v[8..12].try_into().expect("4 bytes"));
+                        if let Some(g) = by_id.get(id)? {
+                            let (state, category, pf) = g.value();
+                            if state == INSTALLED {
+                                hits.push((category.to_owned(), pf.to_owned(), seq, first));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })()
+        .map_err(wrap)?;
+        hits.sort();
+        Ok(hits
+            .into_iter()
+            .map(|(category, pf, _, first)| (first.to_vec(), EntryKey::new(category, pf)))
+            .collect())
+    }
+
+    /// In the order written (`pos`), like `files`.
+    fn world(&self) -> Result<World> {
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let atoms = read_list(&txn, WORLD).map_err(wrap)?;
+        Ok(World { atoms })
+    }
+
+    fn world_sets(&self) -> Result<WorldSets> {
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let sets = read_list(&txn, WORLD_SETS).map_err(wrap)?;
+        Ok(WorldSets { sets })
+    }
+
+    fn preserved_libs(&self) -> Result<PreservedLibs> {
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let entries = (|| -> R<_> {
+            let t = txn.open_table(PRESERVED_LIB)?;
+            let mut m = std::collections::BTreeMap::new();
+            for item in t.iter()? {
+                let (k, v) = item?;
+                m.insert(k.value().to_owned(), decode_plib(v.value())?);
+            }
+            Ok(m)
+        })()
+        .map_err(wrap)?;
+        Ok(PreservedLibs {
+            loaded: entries.clone(),
+            entries,
+        })
+    }
+
+    fn config_memory(&self) -> Result<ConfigMemory> {
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        let entries = (|| -> R<_> {
+            let t = txn.open_table(CONFIG_MEMORY)?;
+            let mut m = std::collections::BTreeMap::new();
+            for item in t.iter()? {
+                let (k, v) = item?;
+                m.insert(k.value().to_owned(), v.value().to_owned());
+            }
+            Ok(m)
+        })()
+        .map_err(wrap)?;
+        Ok(ConfigMemory { entries })
+    }
+
+    /// `meta.counter_hwm`; `-1` (nothing handed out yet) is `None`, like a
+    /// missing `counter` file on `files`.
+    fn counter(&self) -> Result<Option<Counter>> {
+        let v = self.meta_get("counter_hwm")?;
+        match v {
+            None => Ok(None),
+            Some(b) => {
+                let n = meta_u64(&b, "counter_hwm")
+                    .map(|u| u as i64)
+                    .map_err(|e| rerr(&self.path, e))?;
+                Ok((n >= 0).then_some(Counter(n)))
+            }
+        }
+    }
+
+    /// The generation and source path of the files VDB this database was
+    /// converted from; `None` when never converted.
+    fn import_mark(&self) -> Result<Option<(u64, String)>> {
+        let g = self.meta_get("imported_files_generation")?;
+        let s = self.meta_get("imported_files_source")?;
+        match (g, s) {
+            (Some(g), Some(s)) => {
+                let g =
+                    meta_u64(&g, "imported_files_generation").map_err(|e| rerr(&self.path, e))?;
+                Ok(Some((g, String::from_utf8_lossy(&s).into_owned())))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// One redb `WriteTransaction` ([`write::RedbTxn`]). redb allows one
+    /// write transaction per `Database`: another thread's `begin_write`
+    /// blocks until the open one commits or is dropped (redb's own wait).
+    /// A second `begin_write` on the thread that already holds one would
+    /// wait for itself forever, so it is refused with [`Error::Invalid`]
+    /// instead of deadlocking.
+    fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>> {
+        Ok(Box::new(write::RedbTxn::begin(self)?))
+    }
+}
+
+impl RedbDb {
+    /// A `meta` value; `None` when the key is absent.
+    fn meta_get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let wrap = |e| rerr(&self.path, e);
+        let txn = self.handle.begin_read().map_err(|e| wrap(e.into()))?;
+        (|| -> R<_> {
+            let meta = txn.open_table(META)?;
+            Ok(meta.get(key)?.map(|g| g.value().to_vec()))
+        })()
+        .map_err(wrap)
     }
 }
 

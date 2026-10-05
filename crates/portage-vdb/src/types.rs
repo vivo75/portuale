@@ -167,6 +167,38 @@ pub struct EntryFields {
     values: [String; 23],
 }
 
+impl EntryFields {
+    /// Fields from `(name, value)` pairs; names outside the set are
+    /// ignored, missing ones are `""`. Values are stored as given (the
+    /// backend normalises).
+    pub fn from_pairs<'a>(pairs: impl IntoIterator<Item = (&'a str, String)>) -> Self {
+        let mut out = EntryFields::default();
+        for (name, value) in pairs {
+            if let Some(i) = field_index(name) {
+                out.values[i] = value;
+            }
+        }
+        out
+    }
+
+    /// One field; `None` when `name` is not one of the 23.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        field_index(name).map(|i| self.values[i].as_str())
+    }
+
+    /// `(name, value)` in [`METADATA_FILE_FIELDS`] order.
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &str)> {
+        METADATA_FILE_FIELDS
+            .iter()
+            .copied()
+            .zip(self.values.iter().map(String::as_str))
+    }
+}
+
+fn field_index(name: &str) -> Option<usize> {
+    METADATA_FILE_FIELDS.iter().position(|f| *f == name)
+}
+
 /// Every live entry with its fields, taken at one
 /// [`generation`](crate::InstalledDb::generation).
 #[derive(Debug, Clone, Default)]
@@ -174,6 +206,26 @@ pub struct Snapshot {
     pub generation: u64,
     pub entries: Vec<(EntryKey, Arc<EntryFields>)>,
     index: HashMap<EntryKey, usize>,
+}
+
+impl Snapshot {
+    pub fn new(generation: u64, entries: Vec<(EntryKey, Arc<EntryFields>)>) -> Self {
+        let index = entries
+            .iter()
+            .enumerate()
+            .map(|(i, (k, _))| (k.clone(), i))
+            .collect();
+        Snapshot {
+            generation,
+            entries,
+            index,
+        }
+    }
+
+    /// The fields of one entry.
+    pub fn get(&self, key: &EntryKey) -> Option<&Arc<EntryFields>> {
+        self.index.get(key).map(|&i| &self.entries[i].1)
+    }
 }
 
 /// A dependency class stored per entry.
@@ -184,6 +236,19 @@ pub enum DepClass {
     Bdepend,
     Pdepend,
     Idepend,
+}
+
+impl DepClass {
+    /// The field name (`DEPEND`, ...).
+    pub fn field(self) -> &'static str {
+        match self {
+            DepClass::Depend => "DEPEND",
+            DepClass::Rdepend => "RDEPEND",
+            DepClass::Bdepend => "BDEPEND",
+            DepClass::Pdepend => "PDEPEND",
+            DepClass::Idepend => "IDEPEND",
+        }
+    }
 }
 
 /// Raw dependency data of one entry for reverse-dependency matching
