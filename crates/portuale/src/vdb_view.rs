@@ -229,3 +229,126 @@ struct Inodes {
     /// `nodes[ino - 1]`.
     nodes: Vec<Node>,
 }
+
+impl Inodes {
+    fn new() -> Self {
+        let mut t = Inodes::default();
+        let root = t.intern(&Node::Root);
+        debug_assert_eq!(root, ROOT_INO);
+        t
+    }
+
+    fn intern(&mut self, node: &Node) -> u64 {
+        if let Some(&ino) = self.by_node.get(node) {
+            return ino;
+        }
+        self.nodes.push(node.clone());
+        let ino = self.nodes.len() as u64;
+        self.by_node.insert(node.clone(), ino);
+        ino
+    }
+
+    fn node(&self, ino: u64) -> Option<Node> {
+        let i = usize::try_from(ino.checked_sub(1)?).ok()?;
+        self.nodes.get(i).cloned()
+    }
+
+    /// Make `ino` stand for `node` (a rename that keeps the inode).
+    fn rebind(&mut self, ino: u64, node: Node) {
+        let Some(i) = ino.checked_sub(1).and_then(|i| usize::try_from(i).ok()) else {
+            return;
+        };
+        if let Some(old) = self.nodes.get(i).cloned() {
+            if self.by_node.get(&old) == Some(&ino) {
+                self.by_node.remove(&old);
+            }
+            self.nodes[i] = node.clone();
+            self.by_node.insert(node, ino);
+        }
+    }
+}
+
+// ----------------------------------------------------------- generations
+
+/// The pf names of one category, in listing order.
+struct CatSnap {
+    pfs: Vec<String>,
+    set: HashSet<String>,
+}
+
+/// One entry's stat plus its lazily read `metadata` bytes.
+struct EntrySnap {
+    stat: EntryStat,
+    /// `None`: not read yet; `Some(None)`: the file vanished.
+    metadata: Mutex<Option<Option<Arc<Vec<u8>>>>>,
+}
+
+impl EntrySnap {
+    /// The files this view shows: a `metadata` file only when the stamp
+    /// state says there is one.
+    fn shown_files(&self) -> impl Iterator<Item = &FileMeta> {
+        let absent = self.stat.metadata_stamp == MetadataStamp::Absent;
+        self.stat
+            .files
+            .iter()
+            .filter(move |f| !(absent && f.name == METADATA))
+    }
+
+    fn file(&self, name: &str) -> Option<&FileMeta> {
+        self.shown_files().find(|f| f.name == name)
+    }
+}
+
+#[derive(Default)]
+struct GenCache {
+    cats: HashMap<String, Arc<CatSnap>>,
+    entries: HashMap<EntryKey, Arc<EntrySnap>>,
+    cat_mtime: HashMap<String, i128>,
+    root_mtime: Option<i128>,
+}
+
+/// The view of one database generation. Names and stats load lazily and
+/// are cached here; a newer generation replaces the whole value.
+struct Gen {
+    generation: u64,
+    cats: Vec<String>,
+    cat_set: HashSet<String>,
+    cache: Mutex<GenCache>,
+}
+
+// --------------------------------------------------------------- handles
+
+enum Pinned {
+    /// The bytes, read once at `open` (small files, the `metadata` file).
+    Bytes(Arc<Vec<u8>>),
+    /// A big stored file: read with `read_file_at`, validated against this
+    /// size and mtime once the generation has moved on.
+    Stat { len: u64, mtime_ns: i128 },
+}
+
+enum Handle {
+    Dir {
+        attr: Attr,
+        listing: Arc<Vec<DirEnt>>,
+    },
+    File {
+        /// The generation the handle opened on; only the tests ask.
+        #[cfg_attr(not(test), allow(dead_code))]
+        generation: u64,
+        attr: Attr,
+        key: EntryKey,
+        name: String,
+        pinned: Pinned,
+    },
+}
+
+// ------------------------------------------------------------------ view
+
+pub struct View {
+    db: Arc<dyn InstalledDb>,
+    inodes: Mutex<Inodes>,
+    current: Mutex<Option<Arc<Gen>>>,
+    handles: Mutex<HashMap<u64, Handle>>,
+    next_fh: AtomicU64,
+    pin_max: usize,
+}

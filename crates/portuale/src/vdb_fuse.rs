@@ -22,7 +22,7 @@ use fuser::{
 use portage_vdb::InstalledDb;
 
 use crate::vdb_rw::{Owner, SetAttr};
-use crate::vdb_view::{self, Attr, Kind, ViewError, WriteOp};
+use crate::vdb_view::{self, Attr, Kind, View, ViewError, WriteOp};
 
 /// Attribute and entry validity handed to the kernel. Short: a commit by
 /// another process is seen within this time.

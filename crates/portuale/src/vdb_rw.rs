@@ -24,7 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use portage_vdb::{Counter, EntryFile, EntryImage, EntryKey, FileMeta, InstalledDb, MetadataStamp};
 
-use crate::vdb_view::{Attr, DirEnt, Kind, Node, ROOT_INO, ViewError, open_wants_write};
+use crate::vdb_view::{Attr, DirEnt, Kind, Node, ROOT_INO, View, ViewError, open_wants_write};
 
 type Res<T> = Result<T, ViewError>;
 
