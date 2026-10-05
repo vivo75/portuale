@@ -219,7 +219,6 @@ use crate::ebuild_phases;
 use crate::env_update;
 use md5::{Digest, Md5};
 use mrg_director::PackagesDb as _;
-use portage_util::MERGING_IDENTIFIER;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -907,37 +906,34 @@ fn protect_decision(
 /// admin has already been shown this exact change once. Portuale's
 /// own `ebuild` CLI has no `--noconfmem` flag, so behavior always
 /// matches real portage's own default (`--noconfmem` off).
-fn cfg_mem_path(root: &Path) -> PathBuf {
-    root.join("var/lib/portage/config")
-}
-
+///
+/// Stored by the root's [`portage_vdb::InstalledDb`] (feat#157 S1.4:
+/// `config_memory` / `set_config_memory`; on `files` the same
+/// `<root>/var/lib/portage/config` file, read and written exactly as
+/// before).
+///
 /// `pub(crate)`: also read by `ebuild_unmerge::run_unmerge` (real
 /// `_unmerge_pkgfiles()`'s own `stale_confmem` cleanup,
 /// `vartree.py:2747`/`2931-2932`/`3106-3109` -- a removed file's
 /// `_conf_mem_file` entry is dropped once nothing still owns that path).
+/// A missing or unreadable store is empty.
 pub(crate) fn read_cfgfiledict(root: &Path) -> BTreeMap<String, String> {
-    let mut map = BTreeMap::new();
-    if let Ok(text) = std::fs::read_to_string(cfg_mem_path(root)) {
-        for line in text.lines() {
-            let mut parts = line.split_whitespace();
-            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                map.insert(key.to_string(), value.to_string());
-            }
-        }
-    }
-    map
+    portage_vdb::for_root(root)
+        .config_memory()
+        .map(|memory| memory.entries)
+        .unwrap_or_default()
 }
 
+/// Replace the config memory, unconditionally (one `WriteTxn`, committed
+/// at once; on `files` a plain in-place write).
 pub(crate) fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
-    let path = cfg_mem_path(root);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    let mut text = String::new();
-    for (k, v) in map {
-        text.push_str(&format!("{k} {v}\n"));
-    }
-    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.set_config_memory(&portage_vdb::ConfigMemory {
+        entries: map.clone(),
+    })
+    .map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
 }
 
 /// Real `PreservedLibsRegistry`'s own in-memory shape
@@ -963,9 +959,82 @@ pub(crate) fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> 
 /// identical to real's.
 type PlibEntries = BTreeMap<String, (String, String, Vec<String>)>;
 
+#[derive(Clone)]
 struct PlibRegistry {
     entries: PlibEntries,
     orig_entries: PlibEntries,
+}
+
+/// The writes of one standalone unmerge that a database backend commits
+/// together with the row's deletion (feat#157 S4.2, `retire_entry`):
+/// collected while the unmerge runs, applied in one transaction after
+/// `pkg_postrm`. `None` everywhere on `files`, where every write is made
+/// when the unmerge makes it (the S1.5 syscall sequence).
+///
+/// - `registry`: the preserved-libs registry as the unmerge left it
+///   in memory. `preserve_libs_on_unmerge` and the prune that follows
+///   read it back from here instead of the store (the store still holds
+///   the state before the unmerge); its `orig_entries` stay the loaded
+///   store, so the one `set_preserved_libs` writes nothing when the
+///   unmerge changed nothing.
+/// - `config_memory`: the pruned config memory (`stale_confmem`).
+/// - `files`: the W4 rewrites (`remove_from_contents`) of the *other*
+///   installed entries that owned preserved libraries pruned here.
+#[derive(Default)]
+pub(crate) struct RetireWrites {
+    registry: Option<PlibRegistry>,
+    config_memory: Option<BTreeMap<String, String>>,
+    files: Vec<(portage_vdb::EntryKey, String, Vec<u8>)>,
+}
+
+impl RetireWrites {
+    /// `Some` when `root`'s backend commits a retirement as one
+    /// transaction (the database backends); `None` on `files`.
+    pub(crate) fn for_root(root: &Path) -> Option<Self> {
+        portage_vdb::for_root(root)
+            .replace_in_publish()
+            .then(Self::default)
+    }
+
+    pub(crate) fn set_config_memory(&mut self, map: BTreeMap<String, String>) {
+        self.config_memory = Some(map);
+    }
+
+    /// One transaction: the W4 rewrites, the registry (only if it
+    /// changed), the config memory, and the deletion of `key`.
+    pub(crate) fn commit(self, root: &Path, key: &portage_vdb::EntryKey) -> Result<(), String> {
+        let db = portage_vdb::for_root(root);
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        for (entry, name, data) in &self.files {
+            txn.replace_file(entry, name, data)
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(libs) = self.registry.as_ref().and_then(plib_store) {
+            txn.set_preserved_libs(&libs).map_err(|e| e.to_string())?;
+        }
+        if let Some(map) = self.config_memory {
+            txn.set_config_memory(&portage_vdb::ConfigMemory { entries: map })
+                .map_err(|e| e.to_string())?;
+        }
+        txn.delete_entry(key).map_err(|e| e.to_string())?;
+        #[cfg(test)]
+        tests::publish_hook(root);
+        txn.commit().map_err(|e| e.to_string())
+    }
+}
+
+/// The registry an unmerge in progress sees: the in-memory one when an
+/// earlier step of this unmerge deferred its write, else the stored one
+/// (pruned of vanished paths either way, like `read_plib_registry`).
+fn plib_registry_for(root: &Path, retire: Option<&RetireWrites>) -> PlibRegistry {
+    match retire.and_then(|r| r.registry.as_ref()) {
+        Some(registry) => {
+            let mut registry = registry.clone();
+            prune_non_existing(root, &mut registry);
+            registry
+        }
+        None => read_plib_registry(root),
+    }
 }
 
 impl PlibRegistry {
@@ -979,127 +1048,48 @@ impl PlibRegistry {
 }
 
 /// Real `lib/portage/const.py`'s own `PRIVATE_PATH` (`"var/lib/portage"`)
-/// joined with `PreservedLibsRegistry`'s own hardcoded filename.
+/// joined with `PreservedLibsRegistry`'s own hardcoded filename: where
+/// the `files` backend keeps the registry. Tests only; production code
+/// goes through [`portage_vdb::InstalledDb::preserved_libs`] (S1.4).
+#[cfg(test)]
 fn plib_registry_path(root: &Path) -> PathBuf {
     root.join("var/lib/portage/preserved_libs_registry")
 }
 
-/// A minimal hand-rolled JSON string-literal reader (handling the
-/// `\"`/`\\`/`\/`/`\n`/`\t`/`\r`/`\b`/`\f`/`\uXXXX` escapes real
-/// `json.dumps` may emit for a path), used only by `parse_plib_registry`
-/// below -- narrow by design, not a general JSON parser.
-fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> {
-    if chars.next()? != '"' {
-        return None;
-    }
-    let mut out = String::new();
-    loop {
-        match chars.next()? {
-            '"' => return Some(out),
-            '\\' => match chars.next()? {
-                '"' => out.push('"'),
-                '\\' => out.push('\\'),
-                '/' => out.push('/'),
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                'r' => out.push('\r'),
-                'b' => out.push('\u{8}'),
-                'f' => out.push('\u{C}'),
-                'u' => {
-                    let hex: String = (0..4).map(|_| chars.next()).collect::<Option<String>>()?;
-                    let code = u32::from_str_radix(&hex, 16).ok()?;
-                    out.push(char::from_u32(code)?);
-                }
-                _ => return None,
-            },
-            c => out.push(c),
-        }
-    }
-}
-
-fn skip_json_ws(chars: &mut std::iter::Peekable<std::str::Chars>) {
-    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
-        chars.next();
-    }
-}
-
-fn parse_json_string_array(
-    chars: &mut std::iter::Peekable<std::str::Chars>,
-) -> Option<Vec<String>> {
-    skip_json_ws(chars);
-    if chars.next()? != '[' {
-        return None;
-    }
-    let mut out = Vec::new();
-    skip_json_ws(chars);
-    if chars.peek() == Some(&']') {
-        chars.next();
-        return Some(out);
-    }
-    loop {
-        skip_json_ws(chars);
-        out.push(parse_json_string(chars)?);
-        skip_json_ws(chars);
-        match chars.next()? {
-            ',' => continue,
-            ']' => return Some(out),
-            _ => return None,
-        }
-    }
-}
-
-/// Parses exactly the shape real `PreservedLibsRegistry.store()` writes:
-/// `{"cp:slot": [cpv, counter, [paths...]], ...}`. Returns `None` on any
-/// deviation -- the caller treats that the same as a missing file (real
-/// `load()`'s own graceful degrade to `{}` on a corrupt/unreadable file).
+/// The registry's file format (real `json.dumps` shape) is parsed by
+/// [`portage_vdb::parse_preserved_libs`]. Tests only: production reads go
+/// through [`read_plib_registry`].
+#[cfg(test)]
 fn parse_plib_registry(text: &str) -> Option<PlibEntries> {
-    let mut chars = text.chars().peekable();
-    let mut entries = BTreeMap::new();
-    skip_json_ws(&mut chars);
-    if chars.next()? != '{' {
-        return None;
-    }
-    skip_json_ws(&mut chars);
-    if chars.peek() == Some(&'}') {
-        chars.next();
-        return Some(entries);
-    }
-    loop {
-        skip_json_ws(&mut chars);
-        let key = parse_json_string(&mut chars)?;
-        skip_json_ws(&mut chars);
-        if chars.next()? != ':' {
-            return None;
-        }
-        skip_json_ws(&mut chars);
-        if chars.next()? != '[' {
-            return None;
-        }
-        skip_json_ws(&mut chars);
-        let cpv = parse_json_string(&mut chars)?;
-        skip_json_ws(&mut chars);
-        if chars.next()? != ',' {
-            return None;
-        }
-        skip_json_ws(&mut chars);
-        let counter = parse_json_string(&mut chars)?;
-        skip_json_ws(&mut chars);
-        if chars.next()? != ',' {
-            return None;
-        }
-        let paths = parse_json_string_array(&mut chars)?;
-        skip_json_ws(&mut chars);
-        if chars.next()? != ']' {
-            return None;
-        }
-        entries.insert(key, (cpv, counter, paths));
-        skip_json_ws(&mut chars);
-        match chars.next()? {
-            ',' => continue,
-            '}' => return Some(entries),
-            _ => return None,
-        }
-    }
+    portage_vdb::parse_preserved_libs(text).map(plib_entries_from_vdb)
+}
+
+/// [`portage_vdb::PreservedLibsEntry`] records as this module's
+/// `(cpv, counter, paths)` tuples.
+fn plib_entries_from_vdb(
+    entries: BTreeMap<String, portage_vdb::PreservedLibsEntry>,
+) -> PlibEntries {
+    entries
+        .into_iter()
+        .map(|(key, e)| (key, (e.cpv, e.counter, e.paths)))
+        .collect()
+}
+
+/// The reverse of [`plib_entries_from_vdb`].
+fn plib_entries_to_vdb(entries: &PlibEntries) -> BTreeMap<String, portage_vdb::PreservedLibsEntry> {
+    entries
+        .iter()
+        .map(|(key, (cpv, counter, paths))| {
+            (
+                key.clone(),
+                portage_vdb::PreservedLibsEntry {
+                    cpv: cpv.clone(),
+                    counter: counter.clone(),
+                    paths: paths.clone(),
+                },
+            )
+        })
+        .collect()
 }
 
 /// Real `load()`: a missing or unparseable registry file degrades
@@ -1107,14 +1097,18 @@ fn parse_plib_registry(text: &str) -> Option<PlibEntries> {
 /// `load()` (`PreservedLibsRegistry.py:load`), the parsed snapshot is
 /// kept as `orig_entries` and `prune_non_existing` runs immediately --
 /// every consumer below therefore sees the pruned registry, exactly as
-/// real consumers of `load()` do.
+/// real consumers of `load()` do. The stored registry comes from the
+/// root's [`portage_vdb::InstalledDb::preserved_libs`] (S1.4; on `files`
+/// the same one read of `var/lib/portage/preserved_libs_registry`); the
+/// `lstat`-based prune stays here (N6).
 fn read_plib_registry(root: &Path) -> PlibRegistry {
-    let parsed: Option<PlibEntries> = std::fs::read_to_string(plib_registry_path(root))
-        .ok()
-        .and_then(|text| parse_plib_registry(&text));
+    let parsed: PlibEntries = portage_vdb::for_root(root)
+        .preserved_libs()
+        .map(|libs| plib_entries_from_vdb(libs.entries))
+        .unwrap_or_default();
     let mut registry = PlibRegistry {
-        orig_entries: parsed.clone().unwrap_or_default(),
-        entries: parsed.unwrap_or_default(),
+        orig_entries: parsed.clone(),
+        entries: parsed,
     };
     prune_non_existing(root, &mut registry);
     registry
@@ -1205,31 +1199,10 @@ fn prune_non_existing(root: &Path, registry: &mut PlibRegistry) {
     }
 }
 
-fn json_quote(s: &str) -> String {
-    // Real `json.dumps(..., ensure_ascii=False)`: `"` and `\` escaped,
-    // C0 controls as the short forms (`\b \t \n \f \r`) or `\u00xx`,
-    // everything else (including non-ASCII and DEL) raw UTF-8.
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
 /// Real `store()`'s own `json.dumps(..., ensure_ascii=False,
-/// indent="\t", sort_keys=True)` layout (`PreservedLibsRegistry.store`)
+/// indent="\t", sort_keys=True)` layout (`PreservedLibsRegistry.store`;
+/// serialised by [`portage_vdb::format_preserved_libs`] and stored by
+/// the root's `WriteTxn::set_preserved_libs`, S1.4)
 /// -- `BTreeMap` already keeps keys sorted -- written via a plain
 /// `fs::write` (real `atomic_ofstream`'s own atomicity is a
 /// portuale-wide cut, not this slice's). An empty dict serializes as
@@ -1244,39 +1217,22 @@ fn json_quote(s: &str) -> String {
 /// in portuale's own unsandboxed process -- the phases it spawns are
 /// separate bash children.)
 fn write_plib_registry(root: &Path, registry: &PlibRegistry) -> Result<(), String> {
-    if registry.entries == registry.orig_entries {
+    let Some(libs) = plib_store(registry) else {
         return Ok(());
-    }
-    let out = if registry.entries.is_empty() {
-        String::from("{}")
-    } else {
-        let mut out = String::from("{\n");
-        let n = registry.entries.len();
-        for (i, (key, (cpv, counter, paths))) in registry.entries.iter().enumerate() {
-            out.push_str(&format!("\t{}: [\n", json_quote(key)));
-            out.push_str(&format!("\t\t{},\n", json_quote(cpv)));
-            out.push_str(&format!("\t\t{},\n", json_quote(counter)));
-            if paths.is_empty() {
-                out.push_str("\t\t[]\n");
-            } else {
-                out.push_str("\t\t[\n");
-                for (j, p) in paths.iter().enumerate() {
-                    out.push_str(&format!("\t\t\t{}", json_quote(p)));
-                    out.push_str(if j + 1 < paths.len() { ",\n" } else { "\n" });
-                }
-                out.push_str("\t\t]\n");
-            }
-            out.push_str("\t]");
-            out.push_str(if i + 1 < n { ",\n" } else { "\n" });
-        }
-        out.push('}');
-        out
     };
-    let path = plib_registry_path(root);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.set_preserved_libs(&libs).map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}
+
+/// What [`write_plib_registry`] stores: `None` when the registry is
+/// unchanged since it was loaded (real `store()` writes nothing then).
+fn plib_store(registry: &PlibRegistry) -> Option<portage_vdb::PreservedLibs> {
+    (registry.entries != registry.orig_entries).then(|| portage_vdb::PreservedLibs {
+        entries: plib_entries_to_vdb(&registry.entries),
+        loaded: plib_entries_to_vdb(&registry.orig_entries),
+    })
 }
 
 /// Real `_lstat_inode_map`: `(st_dev, st_ino)` -> every registered
@@ -1368,14 +1324,28 @@ fn unregister_preserved_libs(
 /// corrupt a *later* `LinkageMap.rebuild()`'s own preserve-libs decision
 /// for some *other* package's own future unmerge.
 fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Result<(), String> {
+    remove_from_contents_into(root, cpv, paths, None)
+}
+
+/// [`remove_from_contents`], optionally collecting the rewrites into
+/// `retire` (feat#157 S4.2) instead of committing each at once.
+fn remove_from_contents_into(
+    root: &Path,
+    cpv: &str,
+    paths: &BTreeSet<String>,
+    mut retire: Option<&mut RetireWrites>,
+) -> Result<(), String> {
     let Some((category, pf)) = cpv.split_once('/') else {
         return Ok(());
     };
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
-    let contents_path = vdb_dir.join("CONTENTS");
-    let Ok(text) = std::fs::read_to_string(&contents_path) else {
+    // W4 through the backend: `read_entry_text` is today's `read_to_string(..)
+    // else return Ok(())` (missing, unreadable or non-UTF-8 all stop here),
+    // `replace_file` its two in-place `std::fs::write`s.
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let Some(text) = read_entry_text(root, category, pf, "CONTENTS") else {
         return Ok(());
     };
+    let db = portage_vdb::for_root(root);
     let mut removed = false;
     let mut surviving_paths: BTreeSet<String> = BTreeSet::new();
     let new_text: String = text
@@ -1396,20 +1366,27 @@ fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Res
         })
         .map(|l| format!("{l}\n"))
         .collect();
-    std::fs::write(&contents_path, new_text)
-        .map_err(|e| format!("{}: {e}", contents_path.display()))?;
-
-    if removed {
-        let needed_path = vdb_dir.join("NEEDED.ELF.2");
-        if let Ok(needed_text) = std::fs::read_to_string(&needed_path) {
-            let new_needed: String = crate::needed_elf::NeededEntry::parse_file(&needed_text)
-                .into_iter()
-                .filter(|entry| surviving_paths.contains(&entry.filename))
-                .map(|entry| entry.to_needed_line())
-                .collect();
-            std::fs::write(&needed_path, new_needed)
-                .map_err(|e| format!("{}: {e}", needed_path.display()))?;
+    let mut replace = |name: &str, data: String| -> Result<(), String> {
+        if let Some(retire) = retire.as_deref_mut() {
+            retire
+                .files
+                .push((key.clone(), name.to_string(), data.into_bytes()));
+            return Ok(());
         }
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        txn.replace_file(&key, name, data.as_bytes())
+            .map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())
+    };
+    replace("CONTENTS", new_text)?;
+
+    if removed && let Some(needed_text) = read_entry_text(root, category, pf, "NEEDED.ELF.2") {
+        let new_needed: String = crate::needed_elf::NeededEntry::parse_file(&needed_text)
+            .into_iter()
+            .filter(|entry| surviving_paths.contains(&entry.filename))
+            .map(|entry| entry.to_needed_line())
+            .collect();
+        replace("NEEDED.ELF.2", new_needed)?;
     }
     Ok(())
 }
@@ -1572,12 +1549,17 @@ fn replacement_needed_entries(
     category: &str,
     new_pf: &str,
 ) -> Vec<(String, Vec<crate::needed_elf::NeededEntry>)> {
-    let needed_path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{MERGING_IDENTIFIER}{new_pf}"))
-        .join("NEEDED.ELF.2");
-    let Ok(text) = std::fs::read_to_string(&needed_path) else {
+    // The pending entry's file (`files`: `-MERGING-<new_pf>/NEEDED.ELF.2`,
+    // one `open`); unreadable or non-UTF-8 is "no lines", as before.
+    let Some(text) = portage_vdb::for_root(root)
+        .read_pending_file(
+            &portage_vdb::EntryKey::new(category, new_pf),
+            "NEEDED.ELF.2",
+        )
+        .ok()
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    else {
         return Vec::new();
     };
     let entries = crate::needed_elf::NeededEntry::parse_file(&text);
@@ -1620,13 +1602,8 @@ fn find_preserve_paths_for_merge(
     new_image_paths: &BTreeSet<String>,
 ) -> Option<(BTreeSet<String>, String)> {
     let old_pf = installed_instance_pf(root, category, package, main_slot)?;
-    let old_contents_text = std::fs::read_to_string(
-        root.join("var/db/pkg")
-            .join(category)
-            .join(&old_pf)
-            .join("CONTENTS"),
-    )
-    .unwrap_or_default();
+    let old_contents_text =
+        read_entry_text(root, category, &old_pf, "CONTENTS").unwrap_or_default();
     let old_contents: Vec<String> = old_contents_text
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
@@ -1739,13 +1716,34 @@ fn register_merge_preserved_libs(
     if preserve_paths.is_empty() {
         return Ok(());
     }
-    let new_counter = std::fs::read_to_string(
-        root.join("var/db/pkg")
-            .join(category)
-            .join(new_pf)
-            .join("COUNTER"),
-    )
-    .unwrap_or_else(|_| "0".to_string());
+    let new_counter =
+        read_entry_text(root, category, new_pf, "COUNTER").unwrap_or_else(|| "0".to_string());
+    let registry = merge_plib_registration(
+        root,
+        category,
+        pn,
+        new_pf,
+        main_slot,
+        preserve_paths,
+        &new_counter,
+    );
+    write_plib_registry(root, &registry)
+}
+
+/// The registry [`register_merge_preserved_libs`] stores, with the
+/// counter given: the freshly loaded (and pruned) registry plus the
+/// merging package's `register(...)`. Split out so a database backend can
+/// store it in the publishing transaction (feat#157 S4.1), reading the
+/// counter from the still-pending entry.
+fn merge_plib_registration(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    new_pf: &str,
+    main_slot: &str,
+    preserve_paths: &BTreeSet<String>,
+    new_counter: &str,
+) -> PlibRegistry {
     let new_cpv = format!("{category}/{new_pf}");
     let mut registry = read_plib_registry(root);
     let paths_vec: Vec<String> = preserve_paths.iter().cloned().collect();
@@ -1755,10 +1753,10 @@ fn register_merge_preserved_libs(
         category,
         pn,
         main_slot,
-        &new_counter,
+        new_counter,
         &paths_vec,
     );
-    write_plib_registry(root, &registry)
+    registry
 }
 
 /// Real `dblink._prune_plib_registry`, called from real `unmerge()`
@@ -1807,6 +1805,7 @@ fn register_merge_preserved_libs(
 /// won't be unmerged"; portuale's own vdb entry directory gets deleted
 /// wholesale moments later regardless, so there's no separate real
 /// `CONTENTS`-file rewrite to also perform here).
+#[cfg(test)]
 pub(crate) fn preserve_libs_on_unmerge(
     root: &Path,
     category: &str,
@@ -1816,18 +1815,38 @@ pub(crate) fn preserve_libs_on_unmerge(
     contents_text: &str,
     is_replacement: bool,
 ) -> Result<BTreeSet<String>, String> {
+    preserve_libs_on_unmerge_into(
+        root,
+        category,
+        pn,
+        pf,
+        slot,
+        contents_text,
+        is_replacement,
+        None,
+    )
+}
+
+/// [`preserve_libs_on_unmerge`], optionally keeping the registry in
+/// `retire` instead of writing it (feat#157 S4.2).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preserve_libs_on_unmerge_into(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    slot: &str,
+    contents_text: &str,
+    is_replacement: bool,
+    retire: Option<&mut RetireWrites>,
+) -> Result<BTreeSet<String>, String> {
     // Real `_prune_plib_registry` still runs `unregister()` for an
     // instance that owns no files (`instance_owns_files` gates only the
     // linkmap rebuild and the preserve/prune scans below); only the
     // preserve-set computation is skipped.
     let instance_owns_files = !contents_text.trim().is_empty();
 
-    let counter_path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("COUNTER");
-    let counter = std::fs::read_to_string(&counter_path).unwrap_or_else(|_| "0".to_string());
+    let counter = read_entry_text(root, category, pf, "COUNTER").unwrap_or_else(|| "0".to_string());
     let cpv = format!("{category}/{pf}");
 
     let mut registry = read_plib_registry(root);
@@ -1876,7 +1895,10 @@ pub(crate) fn preserve_libs_on_unmerge(
             &paths_vec,
         );
     }
-    write_plib_registry(root, &registry)?;
+    match retire {
+        Some(retire) => retire.registry = Some(registry),
+        None => write_plib_registry(root, &registry)?,
+    }
 
     Ok(if is_replacement {
         BTreeSet::new()
@@ -1940,6 +1962,7 @@ pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> 
 /// another") is not reproduced -- portuale has never had a preserved-lib
 /// directory-move path, and the collision-protect takeover
 /// (`unregister_preserved_libs`) already covers the same-path case.
+#[cfg(test)]
 pub(crate) fn find_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
@@ -1948,7 +1971,28 @@ pub(crate) fn find_unused_preserved_libs(
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> BTreeMap<String, BTreeSet<String>> {
-    let registry = read_plib_registry(root);
+    find_unused_preserved_libs_in(
+        root,
+        read_plib_registry(root),
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpv,
+        replacement_preserved,
+        replacement_needed,
+    )
+}
+
+/// [`find_unused_preserved_libs`] over an explicit registry (the one an
+/// unmerge in progress holds in memory, feat#157 S4.2).
+fn find_unused_preserved_libs_in(
+    root: &Path,
+    registry: PlibRegistry,
+    unmerge_no_replacement: bool,
+    being_unmerged: &dyn Fn(&str) -> bool,
+    exclude_cpv: Option<&str>,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+) -> BTreeMap<String, BTreeSet<String>> {
     let plib_dict = registry.preserved_libs();
     if plib_dict.is_empty() {
         return BTreeMap::new();
@@ -2036,8 +2080,34 @@ pub(crate) fn prune_unused_preserved_libs(
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<Vec<String>, String> {
-    let cpv_lib_map = find_unused_preserved_libs(
+    prune_unused_preserved_libs_into(
         root,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpv,
+        replacement_preserved,
+        replacement_needed,
+        None,
+    )
+}
+
+/// [`prune_unused_preserved_libs`], optionally reading the registry from
+/// `retire` and leaving its writes (the registry, the W4 rewrites) there
+/// instead of committing them (feat#157 S4.2). The files it removes are
+/// removed at once either way.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prune_unused_preserved_libs_into(
+    root: &Path,
+    unmerge_no_replacement: bool,
+    being_unmerged: &dyn Fn(&str) -> bool,
+    exclude_cpv: Option<&str>,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    mut retire: Option<&mut RetireWrites>,
+) -> Result<Vec<String>, String> {
+    let cpv_lib_map = find_unused_preserved_libs_in(
+        root,
+        plib_registry_for(root, retire.as_deref()),
         unmerge_no_replacement,
         being_unmerged,
         exclude_cpv,
@@ -2082,14 +2152,18 @@ pub(crate) fn prune_unused_preserved_libs(
 
     // Strip the removed paths from every still-installed owner's vdb
     // CONTENTS/NEEDED.ELF.2, then rewrite the registry.
-    let mut registry = read_plib_registry(root);
+    let mut registry = plib_registry_for(root, retire.as_deref());
     for (cpv, paths) in &cpv_lib_map {
         let cat_pf = cpv.split_once('/');
         let still_installed = cat_pf
-            .map(|(cat, pf)| root.join("var/db/pkg").join(cat).join(pf).is_dir())
+            .map(|(cat, pf)| {
+                portage_vdb::for_root(root)
+                    .has_entry(&portage_vdb::EntryKey::new(cat, pf))
+                    .unwrap_or(false)
+            })
             .unwrap_or(false);
         if still_installed {
-            remove_from_contents(root, cpv, paths)?;
+            remove_from_contents_into(root, cpv, paths, retire.as_deref_mut())?;
         }
         for (entry_cpv, _counter, entry_paths) in registry.entries.values_mut() {
             if entry_cpv == cpv {
@@ -2103,7 +2177,10 @@ pub(crate) fn prune_unused_preserved_libs(
     // registry entry once none of its recorded paths exist on disk any
     // more (rebuilding survivors file-then-symlink, not just retaining).
     prune_non_existing(root, &mut registry);
-    write_plib_registry(root, &registry)?;
+    match retire {
+        Some(retire) => retire.registry = Some(registry),
+        None => write_plib_registry(root, &registry)?,
+    }
 
     Ok(removed)
 }
@@ -2642,33 +2719,6 @@ fn read_filling(reader: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<u
     Ok(filled)
 }
 
-/// Real `lib/portage/const.py`'s own `CACHE_PATH` (`var/cache/edb`): the
-/// global, monotonically-increasing merge counter lives at
-/// `<root>/var/cache/edb/counter`, a bare integer with no trailing
-/// newline (`write_atomic(self._counter_path, str(counter))`). Real
-/// `vardbapi.counter_tick_core()` treats a missing or corrupt file as
-/// `-1` (so the very first merge anywhere gets `COUNTER=0`), then
-/// increments and writes back. Not reproduced here: real
-/// `get_counter_tick_core()`'s own extra safety net of scanning every
-/// already-installed package's own `COUNTER` for a higher value, in case
-/// the global file itself is stale/corrupt relative to the vdb -- a
-/// corner case with no real relevance to portuale's own synthetic
-/// fixtures.
-fn next_counter(root: &Path) -> Result<i64, String> {
-    let counter_path = root.join("var/cache/edb/counter");
-    let previous: i64 = std::fs::read_to_string(&counter_path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(-1);
-    let next = previous + 1;
-    if let Some(parent) = counter_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    std::fs::write(&counter_path, next.to_string())
-        .map_err(|e| format!("{}: {e}", counter_path.display()))?;
-    Ok(next)
-}
-
 /// Real `dblink.treewalk()`'s own `self.dbdir = self.dbtmpdir;
 /// self.delete(); ensure_dirs(self.dbtmpdir)` step (`vartree.py`, right
 /// after the collision-protect abort gate and before `pkg_preinst` runs,
@@ -2679,16 +2729,19 @@ fn next_counter(root: &Path) -> Result<i64, String> {
 /// from here on leaves `-MERGING-<pf>` behind exactly like real (the
 /// `l32` C4 killed-mid-merge invariant) -- and every portuale vdb reader
 /// skips such names (see [`portage_util::is_merging_vdb_entry`]).
+///
+/// feat#157 S1.4: the entry is written through the root's
+/// [`portage_vdb::WriteTxn`] (`begin_entry`; on `files` the same
+/// `stat` / `remove_dir_all` / `create_dir_all` as before). Each of the
+/// merge's VDB steps opens and commits its own transaction: the pending
+/// entry outlives a transaction (crate doc item 3), and on `files` every
+/// call is applied at once, so the write order is the call order below.
 fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
-    let tmp_dir = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{MERGING_IDENTIFIER}{pf}"));
-    if tmp_dir.exists() {
-        std::fs::remove_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
-    }
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
-    Ok(())
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.begin_entry(&key).map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
 }
 
 /// Real `dblink.treewalk()`'s own info-file + `COUNTER` step (`vartree.py`,
@@ -2708,6 +2761,12 @@ fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
 /// portuale's own `next_counter`, ticked here so the replace loop below
 /// records the new value from the temporary entry). The directory itself
 /// must already exist (see [`create_vdb_tmp`]).
+///
+/// The counter is `WriteTxn::next_counter` (on `files` portuale's
+/// historic rule, kept in S1: the `counter` file only, `-1` when missing
+/// or corrupt, plus one, no lock, no scan of the installed `COUNTER`s;
+/// real `get_counter_tick_core()` also takes the max over every
+/// installed package's own `COUNTER`, plan §0.7 residue).
 fn populate_vdb_tmp(
     root: &Path,
     category: &str,
@@ -2716,33 +2775,37 @@ fn populate_vdb_tmp(
     slot: &str,
     repository: &str,
 ) -> Result<(), String> {
-    let tmp_dir = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{MERGING_IDENTIFIER}{pf}"));
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
     if let Ok(entries) = portage_util::read_dir_entries(build_info_dir) {
         for entry in entries {
             let src = entry.path();
             if src.is_file()
                 && let Some(name) = src.file_name()
             {
-                std::fs::copy(&src, tmp_dir.join(name))
-                    .map_err(|e| format!("{}: {e}", src.display()))?;
+                // Entry file names are UTF-8 in the interface; every
+                // build-info name is a fixed ASCII key or `<PF>.ebuild`.
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| format!("{}: file name is not UTF-8", src.display()))?;
+                txn.copy_entry_file(&key, name, &src)
+                    .map_err(|e| e.to_string())?;
             }
         }
     }
-    let counter = next_counter(root)?;
+    let counter = txn.next_counter().map_err(|e| e.to_string())?;
     for (name, value) in [
         ("CATEGORY", category),
         ("SLOT", slot),
         ("repository", repository),
     ] {
-        std::fs::write(tmp_dir.join(name), format!("{value}\n"))
-            .map_err(|e| format!("{}: {e}", tmp_dir.join(name).display()))?;
+        txn.put_entry_file(&key, name, format!("{value}\n").as_bytes())
+            .map_err(|e| e.to_string())?;
     }
-    std::fs::write(tmp_dir.join("COUNTER"), counter.to_string())
-        .map_err(|e| format!("{}: {e}", tmp_dir.join("COUNTER").display()))?;
-    Ok(())
+    txn.put_entry_file(&key, "COUNTER", counter.to_string().as_bytes())
+        .map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
 }
 
 /// Real `dblink.treewalk()`'s own `CONTENTS` + metadata-consolidation tail
@@ -2762,10 +2825,9 @@ fn write_vdb_tmp_contents(
     pf: &str,
     contents: &str,
 ) -> Result<(), String> {
-    let tmp_dir = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{MERGING_IDENTIFIER}{pf}"));
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
     // Real `_consolidate_to_metadata_file(self.dbtmpdir)` (`vartree.py`):
     // the last write into the temp vdb dir before the rename -- fold
     // every per-field file real's `_in_metadata_file()` accepts into one
@@ -2775,10 +2837,12 @@ fn write_vdb_tmp_contents(
     // `#dir_mtime=` line must be *appended* (a plain write, no new dir
     // entry) after the body is on disk. The rename below does not touch
     // the dir's own mtime, so the value survives the move.
-    std::fs::write(tmp_dir.join("CONTENTS"), contents)
-        .map_err(|e| format!("{}: {e}", tmp_dir.join("CONTENTS").display()))?;
-    write_consolidated_metadata_file(&tmp_dir)?;
-    Ok(())
+    // `seal_entry` is that consolidation (moved into `portage-vdb`,
+    // S1.4): body, `stat`, `#dir_mtime=` appended last.
+    txn.put_entry_file(&key, "CONTENTS", contents.as_bytes())
+        .map_err(|e| e.to_string())?;
+    txn.seal_entry(&key).map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
 }
 
 /// Real `dblink.treewalk()`'s own move into place (`vartree.py`: after
@@ -2793,15 +2857,140 @@ fn write_vdb_tmp_contents(
 /// [`create_vdb_tmp`] wipes it) -- never a half-written *final* entry,
 /// except real's own delete-then-move exposure on a same-pf reinstall,
 /// which this shares exactly.
+///
+/// `WriteTxn::finish_entry` (S1.4; on `files` the same `stat`,
+/// `remove_dir_all` and `rename` as before).
 fn publish_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
-    let cat_dir = root.join("var/db/pkg").join(category);
-    let tmp_dir = cat_dir.join(format!("{MERGING_IDENTIFIER}{pf}"));
-    let final_dir = cat_dir.join(pf);
-    if final_dir.exists() {
-        std::fs::remove_dir_all(&final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.finish_entry(&key).map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}
+
+/// The merge's publish step: the new entry goes live, the replaced
+/// same-slot entries go away, and the merge's preserved-libs registration
+/// (real `vartree.py:5266-5272`) is stored.
+///
+/// - `files` ([`portage_vdb::InstalledDb::replace_in_publish`] is
+///   `false`): exactly the S1.4 calls, [`publish_vdb_tmp`] then
+///   [`register_merge_preserved_libs`]. The replace loop already deleted
+///   each entry of `replaced` (`unmerge_one_installed`), so it is unused.
+/// - database backends: **one transaction** (design §9, feat#157 S4.1):
+///   [`portage_vdb::WriteTxn::finish_entry_replacing`] deletes the rows of
+///   `replaced` and publishes the pending row (which also raises the
+///   counter high-water mark to its `COUNTER`), and the registry update
+///   rides along through `set_preserved_libs`. The counter it records is
+///   read from the pending entry, the bytes `populate_vdb_tmp` stored, the
+///   same value the published entry carries. Until this commit every
+///   reader (`has_version` included) still sees the old instances; a
+///   crash before it leaves them installed and the new row `merging`.
+#[allow(clippy::too_many_arguments)]
+fn publish_merged_entry(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    main_slot: &str,
+    preserve_paths: &BTreeSet<String>,
+    replaced: &[String],
+) -> Result<(), String> {
+    let db = portage_vdb::for_root(root);
+    if !db.replace_in_publish() {
+        publish_vdb_tmp(root, category, pf)?;
+        return register_merge_preserved_libs(root, category, pn, pf, main_slot, preserve_paths);
     }
-    std::fs::rename(&tmp_dir, &final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
-    Ok(())
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let libs = if preserve_paths.is_empty() {
+        None
+    } else {
+        let counter = db
+            .read_pending_file(&key, "COUNTER")
+            .ok()
+            .flatten()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_else(|| "0".to_string());
+        plib_store(&merge_plib_registration(
+            root,
+            category,
+            pn,
+            pf,
+            main_slot,
+            preserve_paths,
+            &counter,
+        ))
+    };
+    let old: Vec<portage_vdb::EntryKey> = replaced
+        .iter()
+        .map(|old_pf| portage_vdb::EntryKey::new(category, old_pf.as_str()))
+        .collect();
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.finish_entry_replacing(&key, &old)
+        .map_err(|e| e.to_string())?;
+    if let Some(libs) = &libs {
+        txn.set_preserved_libs(libs).map_err(|e| e.to_string())?;
+    }
+    #[cfg(test)]
+    tests::publish_hook(root);
+    txn.commit().map_err(|e| e.to_string())
+}
+
+/// Where `pkg_postinst`'s `PORTAGE_UPDATE_ENV` points (real
+/// `vartree.py:5334-5337`): the live entry's own `environment.bz2`.
+/// `files`: `<entry>/environment.bz2`, rewritten in place by bash, and
+/// `scratch` is `None`. A database backend has no entry directory, so the
+/// stored file is copied into `scratch_dir` and the phase rewrites that
+/// copy; [`absorb_update_env`] stores it back (feat#157 S4.1, N9).
+struct UpdateEnvTarget {
+    path: PathBuf,
+    scratch: Option<PathBuf>,
+}
+
+fn update_env_target(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    scratch_dir: &Path,
+) -> Result<UpdateEnvTarget, String> {
+    let db = portage_vdb::for_root(root);
+    let key = portage_vdb::EntryKey::new(category, pf);
+    if let Some(entry) = db.entry_path(&key) {
+        return Ok(UpdateEnvTarget {
+            path: entry.join("environment.bz2"),
+            scratch: None,
+        });
+    }
+    portage_vdb::materialize_files(db.as_ref(), &key, &["environment.bz2"], scratch_dir)
+        .map_err(|e| e.to_string())?;
+    Ok(UpdateEnvTarget {
+        path: scratch_dir.join("environment.bz2"),
+        scratch: Some(scratch_dir.to_path_buf()),
+    })
+}
+
+/// After `pkg_postinst`: on a database backend, store the rewritten
+/// scratch `environment.bz2` into the live entry (one `replace_file`
+/// commit, only when the bytes changed). Real rewrites the file after the
+/// entry is published too, so this is a separate commit there as well.
+/// No-op on `files`.
+fn absorb_update_env(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    target: &UpdateEnvTarget,
+) -> Result<(), String> {
+    let Some(dir) = &target.scratch else {
+        return Ok(());
+    };
+    let db = portage_vdb::for_root(root);
+    portage_vdb::absorb_file(
+        db.as_ref(),
+        &portage_vdb::EntryKey::new(category, pf),
+        dir,
+        "environment.bz2",
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Real `dblink.treewalk()`'s `preinst_mask` + `install_mask_dir` step
@@ -2844,65 +3033,6 @@ pub(crate) fn apply_install_mask(
     Ok(())
 }
 
-/// Real `vartree.py`'s `_METADATA_FILE_FIELDS` (`lib/portage/dbapi/
-/// vartree.py:78-104`) lives in `portage_repo` now -- reader and writer
-/// must agree on the field set (it is part of the format version), and
-/// two copies of a 23-element list that must never drift is the bug
-/// real's own module comment warns about. See
-/// [`portage_repo::METADATA_FILE_FIELDS`] and
-/// [`portage_repo::in_metadata_file`].
-///
-/// Real `_write_metadata_file` + `_stamp_metadata_file` (`vartree.py:
-/// 188-229`), driven by `_consolidate_to_metadata_file`'s own
-/// `not delete_individual` path (portuale always keeps the per-field
-/// files, matching real's default): every [`portage_repo::
-/// METADATA_FILE_FIELDS`] file present in `dbdir`, whitespace-normalized
-/// (`" ".join(v.split())`), sorted, under a `#format=1` header, then a
-/// `#dir_mtime=<st_mtime_ns>` line **appended** last so it records the
-/// directory's mtime *after* the body write (real's reader validates the
-/// two against each other). A no-op when `dbdir` holds none of the
-/// fields.
-fn write_consolidated_metadata_file(dbdir: &Path) -> Result<(), String> {
-    let mut data: Vec<(String, String)> = Vec::new();
-    for &field in portage_repo::METADATA_FILE_FIELDS {
-        let path = dbdir.join(field);
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        data.push((
-            field.to_string(),
-            raw.split_whitespace().collect::<Vec<_>>().join(" "),
-        ));
-    }
-    if data.is_empty() {
-        return Ok(());
-    }
-    data.sort();
-
-    let metadata_path = dbdir.join("metadata");
-    let mut body = format!("#format={}\n", portage_repo::METADATA_FILE_FORMAT_VERSION);
-    for (k, v) in &data {
-        body.push_str(&format!("{k}={v}\n"));
-    }
-    std::fs::write(&metadata_path, &body)
-        .map_err(|e| format!("{}: {e}", metadata_path.display()))?;
-
-    // Real appends `#dir_mtime=` in a separate `open(..., "a")` step,
-    // *after* the body is on disk, so `st_mtime_ns` reflects the body
-    // write (the last dir change) and the append itself -- no new dir
-    // entry -- leaves it untouched.
-    let st = std::fs::metadata(dbdir).map_err(|e| format!("{}: {e}", dbdir.display()))?;
-    let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
-    let mut f = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&metadata_path)
-        .map_err(|e| format!("{}: {e}", metadata_path.display()))?;
-    use std::io::Write as _;
-    writeln!(f, "#dir_mtime={dir_mtime_ns}")
-        .map_err(|e| format!("{}: {e}", metadata_path.display()))?;
-    Ok(())
-}
-
 /// The installed `SLOT` (main slot only) of
 /// `<root>/var/db/pkg/<category>/<package>-<version>`, read through the
 /// shared [`portage_repo::vdb_entry_slot`] seam every other
@@ -2942,7 +3072,7 @@ pub(crate) fn read_installed_slot(
 /// among every other real, currently-installed version of this exact
 /// `category/package/slot`, the one with the highest real `COUNTER`
 /// (real `cpv_counter`, portuale's own real per-package `COUNTER` file
-/// -- see `next_counter`'s own doc comment) -- `None` when none exist (a
+/// -- see `WriteTxn::next_counter`, called by `populate_vdb_tmp`) -- `None` when none exist (a
 /// first-ever install, or every other same-slot instance's own
 /// `COUNTER` is unreadable). Real `_installed_instance` is only ever
 /// set when `slot_matches` (this exact slot has at least one other
@@ -2956,16 +3086,10 @@ fn installed_instance_pf(root: &Path, category: &str, package: &str, slot: &str)
         })
         .filter_map(|version| {
             let pf = format!("{package}-{version}");
-            let counter: i64 = std::fs::read_to_string(
-                root.join("var/db/pkg")
-                    .join(category)
-                    .join(&pf)
-                    .join("COUNTER"),
-            )
-            .ok()?
-            .trim()
-            .parse()
-            .ok()?;
+            let counter: i64 = read_entry_text(root, category, &pf, "COUNTER")?
+                .trim()
+                .parse()
+                .ok()?;
             Some((pf, counter))
         })
         .max_by_key(|(_, counter)| *counter)
@@ -3023,20 +3147,38 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
 /// entry always exists when these are queried, so the fallback only ever
 /// fires mid-merge.
 fn read_contents_pf(root: &Path, category: &str, pf: &str) -> Option<String> {
-    let live = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("CONTENTS");
-    if let Ok(text) = std::fs::read_to_string(&live) {
+    if let Some(text) = read_entry_text(root, category, pf, "CONTENTS") {
         return Some(text);
     }
-    let tmp = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{MERGING_IDENTIFIER}{pf}"))
-        .join("CONTENTS");
-    std::fs::read_to_string(&tmp).ok()
+    portage_vdb::for_root(root)
+        .read_pending_file(&portage_vdb::EntryKey::new(category, pf), "CONTENTS")
+        .ok()
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+/// `entry/<name>.is_file()` of old: one `stat` (following symlinks)
+/// through the root's [`portage_vdb::InstalledDb::file_meta`]; a missing
+/// entry or file, or any error, is `false`.
+pub(crate) fn entry_file_is_regular(root: &Path, category: &str, pf: &str, name: &str) -> bool {
+    portage_vdb::for_root(root)
+        .file_meta(&portage_vdb::EntryKey::new(category, pf), name)
+        .ok()
+        .flatten()
+        .is_some_and(|meta| meta.mode & 0o170000 == 0o100000)
+}
+
+/// One file of the live entry `category/pf` as UTF-8 text, through the
+/// root's [`portage_vdb::InstalledDb::read_file`] (`files`: one `open`
+/// of `var/db/pkg/<category>/<pf>/<name>`). `None` when the entry or the
+/// file is missing, unreadable or not UTF-8 -- every case today's
+/// `read_to_string(..).ok()` callers treated alike.
+pub(crate) fn read_entry_text(root: &Path, category: &str, pf: &str, name: &str) -> Option<String> {
+    portage_vdb::for_root(root)
+        .read_file(&portage_vdb::EntryKey::new(category, pf), name)
+        .ok()
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
 /// Same real `CONTENTS`-ownership check as `owns_path`, but keyed by a
@@ -3250,26 +3392,18 @@ fn blocked_installed_packages(
 /// own `mypkglist` construction doesn't either).
 fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String, String)> {
     (|| -> Option<HashSet<(String, String)>> {
-        let pkg_root = root.join("var/db/pkg");
-        let categories = portage_util::read_dir_entries(&pkg_root).ok()?;
-        let installed: Vec<(String, String, String)> = categories
+        // Category by category, like the old walk: list the category,
+        // then read each entry's `SLOT`, then the next category.
+        let db = portage_vdb::for_root(root);
+        let installed: Vec<(String, String, String)> = db
+            .categories()
+            .ok()?
             .into_iter()
-            .filter(|e| e.path().is_dir())
-            .flat_map(|category_entry| {
-                let category_name = category_entry.file_name().to_string_lossy().to_string();
-                portage_util::read_dir_entries(&category_entry.path())
+            .flat_map(|category_name| {
+                db.category_entries(&category_name)
                     .into_iter()
                     .flatten()
-                    .filter(|e| e.path().is_dir())
-                    .filter_map(move |pkg_entry| {
-                        let pf = pkg_entry.file_name().to_string_lossy().to_string();
-                        // Real `vardbapi._excluded_dirs`: an in-progress
-                        // `-MERGING-<pf>` entry is never an installed
-                        // package, so it never participates in blocker
-                        // matching either.
-                        if portage_util::is_merging_vdb_entry(&pf) {
-                            return None;
-                        }
+                    .map(move |pf| {
                         // #116: through the vdb seam, so this scan sees the
                         // same normalised `SLOT` every other consumer does
                         // (a missing field is `""` -> `("", "")` here).
@@ -3278,11 +3412,8 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
                             .split_once('/')
                             .map(|(s, ss)| (s.to_string(), ss.to_string()))
                             .unwrap_or_else(|| (slot.clone(), slot.clone()));
-                        Some((category_name.clone(), pf, slot, sub_slot))
-                    })
-                    .map(|(category, pf, slot, sub_slot)| {
-                        let candidate_str = format!("{category}/{pf}:{slot}/{sub_slot}");
-                        (category, pf, candidate_str)
+                        let candidate_str = format!("{category_name}/{pf}:{slot}/{sub_slot}");
+                        (category_name.clone(), pf, candidate_str)
                     })
                     .collect::<Vec<_>>()
             })
@@ -3448,65 +3579,32 @@ fn find_collisions(
 /// and returns the `category/pf` -> claimed-paths map for whichever
 /// ones actually claim it.
 ///
-/// The directory tree is still walked by hand -- `PackagesDb` has no
-/// "list every installed package" query -- but each `package-version`
-/// directory's path list is read through the trait
-/// ([`mrg_director::VdbReader`] over `root`, keyed by the
-/// `(package, version)` its directory name splits into), the same seam
-/// `owns_path` above uses. `collisions` entries are logical absolute
-/// paths; the seam's `contents_files` strips the vdb record's one
-/// leading `/` (its documented shape), so each collision is stripped the
-/// same way for the comparison -- the exact inverse of that strip on
-/// every `format_contents_line`-written entry -- and the matched
-/// collision (the same absolute string the old direct read pushed) is
-/// what lands in the map.
+/// The scan is [`portage_vdb::InstalledDb::owners`] (S1.5: the old
+/// two-level walk and per-entry `CONTENTS` read moved into `FilesDb`
+/// unchanged). Two things the old loop did stay here because they live
+/// above `portage-vdb`: an entry whose directory name does not split as
+/// `<package>-<version>` (`portage_repo::split_pf`) claims nothing (the
+/// old walk skipped it before reading its `CONTENTS`; it is now read and
+/// its claims dropped), and the result is regrouped as `category/pf` ->
+/// the matched collision strings (the same absolute strings the old
+/// direct read pushed). `owns_path` keeps reading through the
+/// `mrg_director::PackagesDb` seam.
 fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<String>> {
     let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let db = mrg_director::VdbReader::new(root);
-    let pkg_root = root.join("var/db/pkg");
-    let Ok(categories) = portage_util::read_dir_entries(&pkg_root) else {
+    let paths: Vec<&[u8]> = collisions.iter().map(|c| c.as_bytes()).collect();
+    let Ok(claims) = portage_vdb::for_root(root).owners(&paths) else {
         return owners;
     };
-    for category_entry in categories {
-        let category_path = category_entry.path();
-        if !category_path.is_dir() {
+    for (path, key) in claims {
+        // The old walk skipped an entry name that is not
+        // `<package>-<version>` before reading its `CONTENTS`.
+        if portage_repo::split_pf(&key.pf).is_none() {
             continue;
         }
-        let category_name = category_entry.file_name().to_string_lossy().to_string();
-        let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
-            continue;
-        };
-        for pkg_entry in packages {
-            let pkg_path = pkg_entry.path();
-            if !pkg_path.is_dir() {
-                continue;
-            }
-            let pf = pkg_entry.file_name().to_string_lossy().to_string();
-            // Real `vardbapi._excluded_dirs`: an in-progress
-            // `-MERGING-<pf>` entry owns nothing -- a stale one's
-            // half-written `CONTENTS` must never claim a colliding path.
-            if portage_util::is_merging_vdb_entry(&pf) {
-                continue;
-            }
-            let Some((package, version)) = portage_repo::split_pf(&pf) else {
-                continue;
-            };
-            let mut claimed = Vec::new();
-            for path in db.contents_files(&category_name, &package, &version) {
-                if let Some(c) = collisions
-                    .iter()
-                    .find(|c| c.strip_prefix('/').unwrap_or(c) == path)
-                {
-                    claimed.push(c.clone());
-                }
-            }
-            if !claimed.is_empty() {
-                owners
-                    .entry(format!("{category_name}/{pf}"))
-                    .or_default()
-                    .extend(claimed);
-            }
-        }
+        owners
+            .entry(format!("{}/{}", key.category, key.pf))
+            .or_default()
+            .push(String::from_utf8_lossy(&path).into_owned());
     }
     owners
 }
@@ -4115,15 +4213,17 @@ fn merge_after_install(
     // paths)`, so a second consecutive soname bump cannot keep a stale
     // path list.
     // After the rename into place, like real (backlog #183: the counter
-    // is read back from the published entry).
-    publish_vdb_tmp(root, &env.category, &env.split.pf)?;
-    register_merge_preserved_libs(
+    // is read back from the published entry). On a database backend the
+    // publish, the deletion of the replaced entries and this registration
+    // are one commit (see `publish_merged_entry`).
+    publish_merged_entry(
         root,
         &env.category,
         &env.split.pn,
         &env.split.pf,
         main_slot,
         &preserve_paths,
+        &replaced,
     )?;
 
     // Real `merge()`'s own ordering: `postinst` runs, but its own exit
@@ -4145,18 +4245,25 @@ fn merge_after_install(
     // exactly as real `doebuild_environment` exports it
     // (`doebuild.py:585-594`: the use-reduced, unique distfile names;
     // real's `config.environ()` gives every phase that value).
-    let vdb_env_bz2 = root
-        .join("var/db/pkg")
-        .join(&env.category)
-        .join(&env.split.pf)
-        .join("environment.bz2");
+    //
+    // The path is the live entry's own file (`InstalledDb::entry_path`,
+    // feat#157 N9; on `files` `<root>/var/db/pkg/<cat>/<pf>`, so bash
+    // rewrites it in place exactly as before). A database backend has
+    // no such path: a scratch copy in the build dir, stored back after
+    // the phase (`update_env_target` / `absorb_update_env`, S4.1).
+    let update_env = update_env_target(
+        root,
+        &env.category,
+        &env.split.pf,
+        &env.portage_builddir().join("vdb-update-env"),
+    )?;
     let mut postinst_env = options.build_env.clone();
     if let Some(version) = &replacing_versions {
         postinst_env.push(("REPLACING_VERSIONS".to_string(), version.clone()));
     }
     postinst_env.push((
         "PORTAGE_UPDATE_ENV".to_string(),
-        vdb_env_bz2.display().to_string(),
+        update_env.path.display().to_string(),
     ));
     if let Some(a) = source_distfiles(env, &postinst_env) {
         postinst_env.push(("A".to_string(), a));
@@ -4172,6 +4279,7 @@ fn merge_after_install(
         &postinst_env,
         options.log_file.as_deref(),
     )?;
+    absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
 
     if !contents.is_empty() || !replaced.is_empty() {
         env_update::run_env_update(root)?;
@@ -4237,14 +4345,9 @@ pub(crate) fn unmerge_replaced_same_slot(
     // temporary can never match the `<package>-<digit...>` shape (real
     // package names never start with `-`), but skip it explicitly anyway:
     // readers never see in-progress entries, not even here.
-    let vdb_cat = root.join("var/db/pkg").join(category);
     let mut replaced: Vec<String> = Vec::new();
-    if let Ok(entries) = portage_util::read_dir_entries(&vdb_cat) {
-        for e in entries {
-            let name = e.file_name().to_string_lossy().to_string();
-            if portage_util::is_merging_vdb_entry(&name) {
-                continue;
-            }
+    if let Ok(names) = portage_vdb::for_root(root).category_entries(category) {
+        for name in names {
             let is_this_cp = name.starts_with(&format!("{package}-"))
                 && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit());
             if !is_this_cp || name == new_pf {
@@ -4269,7 +4372,14 @@ pub(crate) fn unmerge_replaced_same_slot(
     // for the whole loop) and thread through every replaced instance's
     // own post-unmerge prune below.
     let replacement_needed = replacement_needed_entries(root, category, new_pf);
-    for old_pf in &replaced {
+    // feat#157 S4.1: on a database backend the replaced entries are
+    // deleted by the publishing commit (`publish_merged_entry`), not here,
+    // so the old instance stays installed until the new one is. A later
+    // iteration must still treat the instances already unmerged as gone
+    // (`others_in_slot`), as it does on `files` where their directories
+    // are removed in this loop.
+    let defer_delete = portage_vdb::for_root(root).replace_in_publish();
+    for (i, old_pf) in replaced.iter().enumerate() {
         unmerge_one_installed(
             root,
             category,
@@ -4283,6 +4393,7 @@ pub(crate) fn unmerge_replaced_same_slot(
             true,
             replacement_preserved,
             &replacement_needed,
+            defer_delete.then(|| &replaced[..i]),
         )?;
     }
 
@@ -4367,6 +4478,14 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// package's own `NEEDED.ELF.2` lines -- see
 /// `unmerge_replaced_same_slot`): same threading, same empty-on-
 /// standalone rule.
+///
+/// `deferred_delete` (feat#157 S4.1) is `None` everywhere except the
+/// replace loop on a database backend: then the entry is **not** deleted
+/// here (the merge's publishing commit deletes it, see
+/// `publish_merged_entry`), and the slice names the instances this loop
+/// already unmerged, which are still installed in the database but must
+/// not count as `others_in_slot` (on `files` their directories are gone
+/// by now).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_one_installed(
     root: &Path,
@@ -4381,14 +4500,15 @@ pub(crate) fn unmerge_one_installed(
     is_replacement: bool,
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    deferred_delete: Option<&[String]>,
 ) -> Result<(), String> {
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
         debug: options.debug,
         shell: options.shell,
         config_protect: options.config_protect.clone(),
         config_protect_mask: options.config_protect_mask.clone(),
         config_root: options.config_root.clone(),
+        already_unmerged: deferred_delete.map(<[String]>::to_vec).unwrap_or_default(),
         ..Default::default()
     };
 
@@ -4414,9 +4534,9 @@ pub(crate) fn unmerge_one_installed(
     }
 
     let run_hook = |phase: &str| -> Result<i32, String> {
-        let defined = std::fs::read_to_string(vdb_dir.join("DEFINED_PHASES")).unwrap_or_default();
-        if !vdb_dir.join("environment.bz2").is_file()
-            || !vdb_dir.join(format!("{pf}.ebuild")).is_file()
+        let defined = read_entry_text(root, category, pf, "DEFINED_PHASES").unwrap_or_default();
+        if !entry_file_is_regular(root, category, pf, "environment.bz2")
+            || !entry_file_is_regular(root, category, pf, &format!("{pf}.ebuild"))
             || !defined.split_whitespace().any(|d| d == phase)
         {
             return Ok(0);
@@ -4437,7 +4557,12 @@ pub(crate) fn unmerge_one_installed(
     if prerm_status != 0 {
         eprintln!("{category}/{pf}: FAILED prerm ({prerm_status}) -- unmerge continues");
     }
-    crate::ebuild_unmerge::unmerge_pkgfiles(
+    // feat#157 S4.2: a standalone unmerge on a database backend collects
+    // its D4 writes and commits them with the row's deletion (below).
+    let mut retire = (deferred_delete.is_none() && !is_replacement)
+        .then(|| RetireWrites::for_root(root))
+        .flatten();
+    crate::ebuild_unmerge::unmerge_pkgfiles_into(
         root,
         category,
         package,
@@ -4447,12 +4572,15 @@ pub(crate) fn unmerge_one_installed(
         is_replacement,
         replacement_preserved,
         replacement_needed,
+        retire.as_mut(),
     )?;
     let postrm_status = run_hook("postrm")?;
     if postrm_status != 0 {
         eprintln!("{category}/{pf}: FAILED postrm ({postrm_status}) -- unmerge continues");
     }
-    crate::ebuild_unmerge::delete_vdb_dir(root, category, pf)?;
+    if deferred_delete.is_none() {
+        crate::ebuild_unmerge::retire_entry(root, category, pf, retire)?;
+    }
     Ok(())
 }
 
@@ -4479,15 +4607,37 @@ pub(crate) fn run_vdb_saved_env_phase(
     portage_tmpdir: &Path,
     options: &MergeOptions,
 ) -> Result<i32, String> {
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
-    let env = vdb_dir.join("environment.bz2");
-    let ebuild = vdb_dir.join(format!("{pf}.ebuild"));
-    if !env.is_file() || !ebuild.is_file() {
+    // Both files go to bash / a copier by path (N9): the entry's own
+    // directory on `files`; on a database backend a scratch copy of the
+    // two files under `scratch_dir` (feat#157 S4.1; nothing is stored
+    // back, the phase gets no `PORTAGE_UPDATE_ENV`).
+    let vdb_dir = crate::ebuild_unmerge::entry_path_for_message(root, category, pf);
+    let ebuild_name = format!("{pf}.ebuild");
+    if !entry_file_is_regular(root, category, pf, "environment.bz2")
+        || !entry_file_is_regular(root, category, pf, &ebuild_name)
+    {
         return Err(format!(
             "{}: no saved build environment (installed before portuale kept one?)",
             vdb_dir.display()
         ));
     }
+    let db = portage_vdb::for_root(root);
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let vdb_dir = if db.entry_path(&key).is_some() {
+        vdb_dir
+    } else {
+        let dir = scratch_dir.join("vdb-entry").join(category).join(pf);
+        portage_vdb::materialize_files(
+            db.as_ref(),
+            &key,
+            &["environment.bz2", ebuild_name.as_str()],
+            &dir,
+        )
+        .map_err(|e| e.to_string())?;
+        dir
+    };
+    let env = vdb_dir.join("environment.bz2");
+    let ebuild = vdb_dir.join(&ebuild_name);
     let src_dir = scratch_dir.join(category).join(package);
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
     let dst = src_dir.join(format!("{pf}.ebuild"));
@@ -4907,11 +5057,19 @@ pub fn merge_binpkg(
         options,
         &replacement_preserved,
     )?;
-    publish_vdb_tmp(root, &category, &pf)?;
-
-    // Real `dblink.treewalk()`'s own post-replace-loop registration
-    // (`vartree.py:5266-5272`) -- identical to `merge_after_install`.
-    register_merge_preserved_libs(root, &category, &package, &pf, &main_slot, &preserve_paths)?;
+    // Publish, then real `dblink.treewalk()`'s own post-replace-loop
+    // registration (`vartree.py:5266-5272`) -- identical to
+    // `merge_after_install` (one commit on a database backend, see
+    // `publish_merged_entry`).
+    publish_merged_entry(
+        root,
+        &category,
+        &package,
+        &pf,
+        &main_slot,
+        &preserve_paths,
+        &replaced_same_slot,
+    )?;
 
     // Real `treewalk()` order: `pkg_postinst` runs after the vdb entry
     // is live *and* every replaced same-slot version is gone, but before
@@ -4925,16 +5083,17 @@ pub fn merge_binpkg(
     // `FEATURES` and drops stale build-host locals -- see
     // `ebuild_phases::run_phase_from_saved_env`. `always` so it runs even
     // with no `pkg_postinst`. No-op when the binpkg carries no saved env.
-    let vdb_env_bz2 = root
-        .join("var/db/pkg")
-        .join(&category)
-        .join(&pf)
-        .join("environment.bz2");
+    //
+    // The live entry's own path (`InstalledDb::entry_path`, N9), or a
+    // scratch copy on a database backend (see `merge_after_install`).
+    let update_env = update_env_target(root, &category, &pf, &builddir.join("vdb-update-env"))?;
+    let vdb_env_bz2 = &update_env.path;
     let postinst_status = run_hook_ex(
         "postinst",
         true,
         vdb_env_bz2.is_file().then_some(vdb_env_bz2.as_path()),
     )?;
+    absorb_update_env(root, &category, &pf, &update_env)?;
     if postinst_status != 0 {
         eprintln!(
             "{category}/{pf}: FAILED postinst ({postinst_status}) -- merge kept (real _postinst_failure)"
@@ -9289,6 +9448,25 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
     }
 
+    type PublishHook = Box<dyn Fn(&Path)>;
+
+    thread_local! {
+        /// Test hook (feat#157 S4.1, S4.2): run inside `publish_merged_entry`
+        /// and `RetireWrites::commit` on a database backend, after every call
+        /// of the publishing / retiring transaction and right before its
+        /// `commit`, on this thread.
+        static PUBLISH_HOOK: std::cell::RefCell<Option<PublishHook>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn publish_hook(root: &Path) {
+        PUBLISH_HOOK.with(|hook| {
+            if let Some(f) = hook.borrow().as_ref() {
+                f(root);
+            }
+        });
+    }
+
     /// Sanity baseline (portuale's own "fixtures must actually
     /// distinguish the new behavior" rule): with `MergeOptions::default()`
     /// (its own deliberately-inert `config_root` sentinel, see that
@@ -9377,5 +9555,1350 @@ mod tests {
             std::fs::read_to_string(root.join("usr/share/mergeblockertest/shared.txt")).unwrap(),
             "hello from mergeblockerpkg\n"
         );
+    }
+
+    /// feat#157 S4.1: the merge on a database backend (sqlite).
+    #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+    mod db_merge {
+        use super::*;
+        use portage_vdb::{EntryKey, InstalledDb};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::Arc;
+
+        type Tree = BTreeMap<String, (u32, Vec<u8>)>;
+
+        fn binpkg(name: &str) -> PathBuf {
+            fixtures_root().join("pkgdir/dev-libs").join(name)
+        }
+
+        /// Convert whatever `files` VDB `root` holds into a new sqlite
+        /// database at `db_path` (as `portuale vdb convert` does) and make
+        /// it `root`'s backend, as `mrg --vdb-backend=sqlite` does.
+        #[cfg(feature = "vdb-sqlite")]
+        fn use_sqlite(root: &Path, db_path: &Path) -> Arc<portage_vdb::SqliteDb> {
+            let db = Arc::new(portage_vdb::SqliteDb::open(db_path).unwrap());
+            portage_vdb::copy_all(&portage_vdb::FilesDb::new(root), db.as_ref(), false).unwrap();
+            portage_vdb::register(root, db.clone());
+            db
+        }
+
+        /// [`use_sqlite`] for any database backend: the same, with `kind`'s
+        /// file (`mrg --vdb-backend=<kind>`).
+        fn use_db(
+            kind: portage_vdb::BackendKind,
+            root: &Path,
+            db_path: &Path,
+        ) -> Arc<dyn InstalledDb> {
+            let db: Arc<dyn InstalledDb> = match kind {
+                #[cfg(feature = "vdb-sqlite")]
+                portage_vdb::BackendKind::Sqlite => {
+                    Arc::new(portage_vdb::SqliteDb::open(db_path).unwrap())
+                }
+                #[cfg(feature = "vdb-redb")]
+                portage_vdb::BackendKind::Redb => {
+                    Arc::new(portage_vdb::RedbDb::open(db_path).unwrap())
+                }
+                other => panic!("backend {other} is not built"),
+            };
+            portage_vdb::copy_all(&portage_vdb::FilesDb::new(root), db.as_ref(), false).unwrap();
+            portage_vdb::register(root, db.clone());
+            db
+        }
+
+        /// Every file of a live entry with its permission bits and bytes;
+        /// the volatile `#dir_mtime=` line of `metadata` is dropped (the
+        /// same thing `verify` ignores: directory mtimes).
+        fn entry_files(db: &dyn InstalledDb, key: &EntryKey) -> Tree {
+            let image = db.entry_image(key).unwrap().expect("entry is installed");
+            image
+                .files
+                .into_iter()
+                .map(|f| {
+                    let data = if f.meta.name == "metadata" {
+                        String::from_utf8(f.data)
+                            .unwrap()
+                            .lines()
+                            .filter(|l| !l.starts_with("#dir_mtime="))
+                            .map(|l| format!("{l}\n"))
+                            .collect::<String>()
+                            .into_bytes()
+                    } else {
+                        f.data
+                    };
+                    (f.meta.name, (f.meta.mode & 0o7777, data))
+                })
+                .collect()
+        }
+
+        /// Everything under `root` except the stores a backend keeps
+        /// (`var/db/pkg`, `var/lib/portage`, `var/cache/edb`) and `etc`
+        /// (env-update's generated files, whose modes follow the process
+        /// umask; no fixture installs under `etc`): path ->
+        /// (mode, bytes or symlink target). Directories carry no bytes.
+        fn payload_tree(root: &Path) -> Tree {
+            fn walk(root: &Path, dir: &Path, out: &mut Tree) {
+                for entry in portage_util::read_dir_entries(dir).unwrap() {
+                    let path = entry.path();
+                    let rel = path.strip_prefix(root).unwrap().display().to_string();
+                    if ["var/db/pkg", "var/lib/portage", "var/cache/edb", "etc"]
+                        .contains(&rel.as_str())
+                    {
+                        continue;
+                    }
+                    let meta = std::fs::symlink_metadata(&path).unwrap();
+                    let data = if meta.file_type().is_symlink() {
+                        std::fs::read_link(&path)
+                            .unwrap()
+                            .display()
+                            .to_string()
+                            .into_bytes()
+                    } else if meta.is_file() {
+                        std::fs::read(&path).unwrap()
+                    } else {
+                        Vec::new()
+                    };
+                    out.insert(rel, (meta.mode(), data));
+                    if meta.is_dir() {
+                        walk(root, &path, out);
+                    }
+                }
+            }
+            let mut out = Tree::new();
+            walk(root, root, &mut out);
+            // A directory left with nothing in the tree only held a store
+            // (`var/db`, `var/cache` exist on `files` alone).
+            // Deepest first, so a parent of a dropped directory goes too.
+            let mut keys: Vec<String> = out.keys().cloned().collect();
+            keys.sort_by_key(|k| std::cmp::Reverse(k.matches('/').count()));
+            for rel in keys {
+                let is_dir = out[&rel].0 & 0o170000 == 0o040000;
+                let prefix = format!("{rel}/");
+                if is_dir && !out.keys().any(|k| k.starts_with(&prefix)) {
+                    out.remove(&rel);
+                }
+            }
+            out
+        }
+
+        /// [`payload_tree`] without the permission bits: another test's
+        /// `umask` change (process-wide) can alter the modes of files a run
+        /// creates, which is not what the unmerge tests compare.
+        #[cfg(feature = "vdb-sqlite")]
+        fn payload_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
+            payload_tree(root)
+                .into_iter()
+                .map(|(k, (_, data))| (k, data))
+                .collect()
+        }
+
+        fn install_hook(f: impl Fn(&Path) + 'static) {
+            PUBLISH_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(f)));
+        }
+
+        fn clear_hook() {
+            PUBLISH_HOOK.with(|hook| *hook.borrow_mut() = None);
+        }
+
+        /// What one merge leaves: the entry, the payload, the config memory.
+        fn outcome(root: &Path, key: &EntryKey) -> (Tree, Tree, portage_vdb::ConfigMemory) {
+            let db = portage_vdb::for_root(root);
+            (
+                entry_files(db.as_ref(), key),
+                payload_tree(root),
+                db.config_memory().unwrap(),
+            )
+        }
+
+        /// (a) + (c): a binpkg merged on sqlite stores the same entry
+        /// files (bytes and modes; `metadata` without its directory-mtime
+        /// stamp) and lands the same payload as the same merge on `files`.
+        /// Both runs use the same ROOT and PORTAGE_TMPDIR paths, so the
+        /// `pkg_postinst` `PORTAGE_UPDATE_ENV` rewrite of `environment.bz2`
+        /// (which records paths) is byte-identical; on sqlite it went
+        /// through the scratch copy and `replace_file`, and the stored
+        /// bytes differ from the binpkg's (the pending entry's) own.
+        fn binpkg_merge_matches_files(kind: portage_vdb::BackendKind) {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let key = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            let merge = || {
+                std::fs::create_dir_all(&root).unwrap();
+                let status = merge_binpkg(
+                    &binpkg("binpkgrmpkg-1.0.tbz2"),
+                    &root,
+                    &ptmp,
+                    &MergeOptions::default(),
+                )
+                .expect("merge succeeds");
+                assert_eq!(status, 0);
+            };
+
+            merge();
+            let on_files = outcome(&root, &key);
+            std::fs::remove_dir_all(&root).unwrap();
+            let _ = std::fs::remove_dir_all(&ptmp);
+
+            std::fs::create_dir_all(&root).unwrap();
+            let db = use_db(kind, &root, &tmp.join("vdb.db"));
+            let pending_env: Rc<RefCell<Option<Vec<u8>>>> = Rc::default();
+            {
+                let db = db.clone();
+                let pending_env = pending_env.clone();
+                let key = key.clone();
+                install_hook(move |_| {
+                    *pending_env.borrow_mut() =
+                        db.read_pending_file(&key, "environment.bz2").unwrap();
+                });
+            }
+            merge();
+            clear_hook();
+            let on_sqlite = outcome(&root, &key);
+
+            assert!(
+                !root.join("var/db/pkg").exists(),
+                "a {kind} merge writes no var/db/pkg"
+            );
+            assert_eq!(on_sqlite.0, on_files.0, "entry files differ");
+            assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+            assert_eq!(on_sqlite.2, on_files.2, "config memory differs");
+            let pending_env = pending_env.borrow().clone().expect("pending env");
+            assert_ne!(
+                on_sqlite.0["environment.bz2"].1, pending_env,
+                "pkg_postinst's PORTAGE_UPDATE_ENV rewrite reached the database"
+            );
+            assert!(db.pending_entries().unwrap().is_empty());
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_binpkg_merged_on_sqlite_matches_the_files_merge() {
+            binpkg_merge_matches_files(portage_vdb::BackendKind::Sqlite);
+        }
+
+        /// feat#157 S5.4 (c): the same binpkg merge on redb. The fixture
+        /// ebuilds (`binpkgrmpkg`) run no phase that calls `has_version` /
+        /// `best_version` (grep of the fixture repo finds none), so this
+        /// needs no parent pipe (S6.3); a phase that did would reach the
+        /// held redb file only through that pipe.
+        #[cfg(feature = "vdb-redb")]
+        #[test]
+        fn a_binpkg_merged_on_redb_matches_the_files_merge() {
+            binpkg_merge_matches_files(portage_vdb::BackendKind::Redb);
+        }
+
+        /// (b): a same-slot upgrade on sqlite, over a converted VDB. Right
+        /// before the publishing commit the old instance is still the
+        /// installed one and the new one is pending; after it, only the
+        /// new one is installed. The replaced version's `pkg_prerm` /
+        /// `pkg_postrm` ran from its stored environment (scratch copy).
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_same_slot_upgrade_on_sqlite_replaces_in_the_publishing_commit() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            std::fs::create_dir_all(&root).unwrap();
+            let old = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            let new = EntryKey::new("dev-libs", "binpkgrmpkg-2.0");
+
+            // 1.0 is installed on `files`, then the root is converted.
+            merge_binpkg(
+                &binpkg("binpkgrmpkg-1.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("1.0 merges");
+            let db = use_sqlite(&root, &tmp.join("vdb.sqlite"));
+            assert!(db.has_entry(&old).unwrap());
+
+            // (old live, new live, pending, generation) right before the commit.
+            type Seen = (bool, bool, Vec<EntryKey>, u64);
+            let seen: Rc<RefCell<Option<Seen>>> = Rc::default();
+            {
+                let db = db.clone();
+                let seen = seen.clone();
+                let (old, new) = (old.clone(), new.clone());
+                install_hook(move |_| {
+                    *seen.borrow_mut() = Some((
+                        db.has_entry(&old).unwrap(),
+                        db.has_entry(&new).unwrap(),
+                        db.pending_entries().unwrap(),
+                        db.generation().unwrap(),
+                    ));
+                });
+            }
+            let status = merge_binpkg(
+                &binpkg("binpkgrmpkg-2.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("2.0 merges");
+            clear_hook();
+            assert_eq!(status, 0);
+
+            let (old_live, new_live, pending, generation) =
+                seen.borrow().clone().expect("the publish hook ran");
+            assert!(old_live, "the old instance is installed until the commit");
+            assert!(!new_live, "the new instance is not live before the commit");
+            assert_eq!(pending, vec![new.clone()]);
+
+            assert!(!db.has_entry(&old).unwrap());
+            assert!(db.has_entry(&new).unwrap());
+            assert!(db.pending_entries().unwrap().is_empty());
+            assert!(db.generation().unwrap() > generation);
+            assert!(!root.join("var/db/pkg/dev-libs/binpkgrmpkg-2.0").exists());
+            assert!(root.join("usr/share/binpkgrmpkg/payload-2.0.txt").is_file());
+            assert!(!root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists());
+            assert_eq!(
+                std::fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap(),
+                "setup-1.0\npreinst-1.0\npostinst-1.0\n\
+                 setup-2.0\npreinst-2.0\nprerm-1.0\npostrm-1.0\npostinst-2.0\n"
+            );
+            // The counter ticked once on sqlite (1.0 took 0 on `files`).
+            assert_eq!(
+                db.read_file(&new, "COUNTER").unwrap().as_deref(),
+                Some(&b"1"[..])
+            );
+            assert_eq!(db.counter().unwrap(), Some(portage_vdb::Counter(1)));
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// Clears the thread-local publish hook when dropped, so a hook that
+        /// panics (a simulated crash) cannot leak into later tests that reuse
+        /// this thread.
+        #[cfg(feature = "vdb-sqlite")]
+        struct HookGuard;
+        #[cfg(feature = "vdb-sqlite")]
+        impl Drop for HookGuard {
+            fn drop(&mut self) {
+                clear_hook();
+            }
+        }
+
+        /// Run `f` (a merge or unmerge) with a hook that records the
+        /// generation and then panics, i.e. "the process dies right before
+        /// the final commit". Returns that generation; `f` must have panicked.
+        #[cfg(feature = "vdb-sqlite")]
+        fn crash_before_commit(db: &Arc<portage_vdb::SqliteDb>, f: impl FnOnce()) -> u64 {
+            let at: Rc<RefCell<Option<u64>>> = Rc::default();
+            let _guard = HookGuard;
+            {
+                let db = db.clone();
+                let at = at.clone();
+                install_hook(move |_| {
+                    *at.borrow_mut() = Some(db.generation().unwrap());
+                    panic!("simulated crash before the final commit");
+                });
+            }
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            assert!(res.is_err(), "the hook crashed the operation");
+            let generation = *at.borrow();
+            generation.expect("the hook ran")
+        }
+
+        #[cfg(feature = "vdb-sqlite")]
+        fn vdb_cli(args: &[&str]) -> (u8, String) {
+            let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            let (mut o, mut e) = (Vec::new(), Vec::new());
+            let code = crate::vdb_cmd::run_args(&args, &mut o, &mut e);
+            (
+                code,
+                String::from_utf8_lossy(&o).into_owned() + &String::from_utf8_lossy(&e),
+            )
+        }
+
+        /// feat#157 S4.5 (design 9.1): the process dies right before the
+        /// publishing commit of a same-slot upgrade. After a restart (fresh
+        /// handle) the old instance is still installed with its files, the
+        /// new one is a pending orphan that `status` reports and `sweep`
+        /// removes, the generation was not advanced by the aborted commit and
+        /// the counter is not reused. The new payload files landed on disk
+        /// before the crash and stay there (as in real Portage); that is only
+        /// documented here, not asserted.
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_crash_before_the_publishing_commit_leaves_the_old_instance_and_a_sweepable_orphan() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let dbp = tmp.join("vdb.sqlite");
+            std::fs::create_dir_all(&root).unwrap();
+            let old = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            let new = EntryKey::new("dev-libs", "binpkgrmpkg-2.0");
+            merge_binpkg(
+                &binpkg("binpkgrmpkg-1.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("1.0 merges");
+            let db = use_sqlite(&root, &dbp);
+            let old_files = entry_files(db.as_ref(), &old);
+
+            let before_commit = crash_before_commit(&db, || {
+                let _ = merge_binpkg(
+                    &binpkg("binpkgrmpkg-2.0.tbz2"),
+                    &root,
+                    &ptmp,
+                    &MergeOptions::default(),
+                );
+            });
+            drop(db);
+
+            // "Restart": a fresh handle on the same file.
+            let fresh = Arc::new(portage_vdb::SqliteDb::open(&dbp).unwrap());
+            portage_vdb::register(&root, fresh.clone());
+            assert_eq!(fresh.entries().unwrap(), vec![old.clone()]);
+            assert_eq!(entry_files(fresh.as_ref(), &old), old_files);
+            assert!(!fresh.has_entry(&new).unwrap());
+            assert_eq!(fresh.pending_entries().unwrap(), vec![new.clone()]);
+            assert_eq!(
+                fresh.generation().unwrap(),
+                before_commit,
+                "the aborted commit did not advance the generation"
+            );
+            let counter_after_crash = fresh.counter().unwrap().expect("a counter was taken");
+            let warnings = crate::mrg::pending_entries_warnings(
+                std::slice::from_ref(&new),
+                &dbp,
+                portage_vdb::BackendKind::Sqlite,
+            );
+            assert!(warnings[0].contains("binpkgrmpkg-2.0"), "{warnings:?}");
+            assert!(
+                crate::mrg::pending_entries_warnings(
+                    &fresh.pending_entries().unwrap(),
+                    &dbp,
+                    portage_vdb::BackendKind::Sqlite,
+                )
+                .iter()
+                .any(|w| w.contains("dev-libs/binpkgrmpkg-2.0"))
+            );
+
+            let spec = format!("sqlite:{}", dbp.display());
+            let (code, out) = vdb_cli(&["status", &spec]);
+            assert_eq!(code, 1, "{out}");
+            assert!(out.contains("dev-libs/binpkgrmpkg-2.0"), "{out}");
+            let (code, out) = vdb_cli(&["sweep", "--remove", "dev-libs/binpkgrmpkg-2.0", &spec]);
+            assert_eq!(code, 0, "{out}");
+            let (code, out) = vdb_cli(&["status", &spec]);
+            assert_eq!(code, 0, "{out}");
+            assert!(fresh.pending_entries().unwrap().is_empty());
+            assert!(fresh.has_entry(&old).unwrap());
+            assert_eq!(entry_files(fresh.as_ref(), &old), old_files);
+
+            // The upgrade can now be redone.
+            let status = merge_binpkg(
+                &binpkg("binpkgrmpkg-2.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("2.0 merges after the sweep");
+            assert_eq!(status, 0);
+            assert!(fresh.has_entry(&new).unwrap());
+            assert!(!fresh.has_entry(&old).unwrap());
+            let counter_file = fresh.read_file(&new, "COUNTER").unwrap().unwrap();
+            let counter: i64 = String::from_utf8(counter_file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(
+                counter > counter_after_crash.0,
+                "{counter} reuses a counter taken before the crash ({counter_after_crash:?})"
+            );
+            assert!(fresh.generation().unwrap() > before_commit);
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// feat#157 S4.5: the process dies right before the retiring commit
+        /// of `-C`. With a fresh handle the row is still installed and the
+        /// generation is unchanged; a later `-C` succeeds. (The payload files
+        /// were already removed before the crash; not asserted.)
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_crash_before_the_retire_commit_leaves_the_entry_installed() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let dbp = tmp.join("vdb.sqlite");
+            std::fs::create_dir_all(&root).unwrap();
+            let key = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            merge_binpkg(
+                &binpkg("binpkgrmpkg-1.0.tbz2"),
+                &root,
+                &ptmp,
+                &MergeOptions::default(),
+            )
+            .expect("1.0 merges");
+            let db = use_sqlite(&root, &dbp);
+            let files = entry_files(db.as_ref(), &key);
+
+            let before_commit = crash_before_commit(&db, || {
+                unmerge_standalone(&root, &ptmp, "binpkgrmpkg-1.0", "binpkgrmpkg");
+            });
+            drop(db);
+
+            let fresh = Arc::new(portage_vdb::SqliteDb::open(&dbp).unwrap());
+            portage_vdb::register(&root, fresh.clone());
+            assert!(fresh.has_entry(&key).unwrap());
+            assert_eq!(entry_files(fresh.as_ref(), &key), files);
+            assert!(fresh.pending_entries().unwrap().is_empty());
+            assert_eq!(fresh.generation().unwrap(), before_commit);
+
+            unmerge_standalone(&root, &ptmp, "binpkgrmpkg-1.0", "binpkgrmpkg");
+            assert!(!fresh.has_entry(&key).unwrap());
+            assert!(fresh.generation().unwrap() > before_commit);
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// A source merge (`ebuild <file> merge`) on sqlite: same entry
+        /// files and payload as on `files`, the `pkg_postinst` environment
+        /// rewrite included.
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_source_merge_on_sqlite_matches_the_files_merge() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let ebuild = fixtures_root().join("repo/dev-libs/mergepkg/mergepkg-1.0.ebuild");
+            let key = EntryKey::new("dev-libs", "mergepkg-1.0");
+            let merge = || {
+                std::fs::create_dir_all(&root).unwrap();
+                std::fs::create_dir_all(&ptmp).unwrap();
+                let status = run_merge(&ebuild, &root, &ptmp, &MergeOptions::default(), None)
+                    .expect("run_merge succeeds");
+                assert_eq!(status, 0);
+            };
+
+            merge();
+            let on_files = outcome(&root, &key);
+            std::fs::remove_dir_all(&root).unwrap();
+            let _ = std::fs::remove_dir_all(&ptmp);
+
+            std::fs::create_dir_all(&root).unwrap();
+            use_sqlite(&root, &tmp.join("vdb.sqlite"));
+            merge();
+            let on_sqlite = outcome(&root, &key);
+
+            assert!(!root.join("var/db/pkg").exists());
+            assert_eq!(
+                on_sqlite.0.keys().collect::<Vec<_>>(),
+                on_files.0.keys().collect::<Vec<_>>()
+            );
+            for (name, (mode, data)) in &on_files.0 {
+                // A source build records its own build time.
+                if name == "BUILD_TIME" || name == "metadata" {
+                    continue;
+                }
+                assert_eq!(&on_sqlite.0[name].0, mode, "{name} mode");
+                // `CONTENTS` records each file's mtime, which a fresh
+                // build moves: compare the lines without their mtime.
+                let strip = |b: &[u8]| -> Vec<String> {
+                    String::from_utf8_lossy(b)
+                        .lines()
+                        .map(|l| match l.split_whitespace().next() {
+                            Some("obj" | "sym") => l.rsplit_once(' ').map_or(l, |(a, _)| a),
+                            _ => l,
+                        })
+                        .map(String::from)
+                        .collect()
+                };
+                if name == "CONTENTS" {
+                    assert_eq!(strip(&on_sqlite.0[name].1), strip(data), "CONTENTS lines");
+                    continue;
+                }
+                assert_eq!(&on_sqlite.0[name].1, data, "{name} bytes");
+            }
+            assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+        fn unmerge_standalone(root: &Path, ptmp: &Path, pf: &str, pn: &str) {
+            unmerge_one_installed(
+                root,
+                "dev-libs",
+                pn,
+                pf,
+                &[],
+                &ptmp.join("scratch"),
+                ptmp,
+                &MergeOptions::default(),
+                None,
+                false,
+                &BTreeMap::new(),
+                &[],
+                None,
+            )
+            .expect("unmerge succeeds");
+        }
+
+        /// feat#157 S4.2 (a): `mrg -C` of an installed package on sqlite.
+        /// The payload goes as on `files`, prerm/postrm ran from the
+        /// scratch copy of the stored environment, and the row goes in ONE
+        /// commit: right before it the entry is still installed (and its
+        /// payload already gone); the generation moved by exactly one.
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_standalone_unmerge_on_sqlite_retires_the_row_in_one_commit() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let key = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
+            let run = |sqlite: bool| {
+                std::fs::create_dir_all(&root).unwrap();
+                let db = sqlite.then(|| use_sqlite(&root, &tmp.join("vdb.sqlite")));
+                merge_binpkg(
+                    &binpkg("binpkgrmpkg-1.0.tbz2"),
+                    &root,
+                    &ptmp,
+                    &MergeOptions::default(),
+                )
+                .expect("merge succeeds");
+                assert!(portage_vdb::for_root(&root).has_entry(&key).unwrap());
+                let seen: Rc<RefCell<Option<(bool, bool, u64)>>> = Rc::default();
+                let before = db.as_ref().map(|db| db.generation().unwrap());
+                if let Some(db) = &db {
+                    let db = db.clone();
+                    let seen = seen.clone();
+                    let key = key.clone();
+                    let root = root.clone();
+                    install_hook(move |_| {
+                        *seen.borrow_mut() = Some((
+                            db.has_entry(&key).unwrap(),
+                            root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists(),
+                            db.generation().unwrap(),
+                        ));
+                    });
+                }
+                unmerge_standalone(&root, &ptmp, "binpkgrmpkg-1.0", "binpkgrmpkg");
+                clear_hook();
+                assert!(!portage_vdb::for_root(&root).has_entry(&key).unwrap());
+                let log = std::fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap();
+                let tree = payload_bytes(&root);
+                if let Some(db) = &db {
+                    let (live, payload, generation) = seen.borrow().expect("retire hook ran");
+                    assert!(live, "the row is installed until the retire commit");
+                    assert!(!payload, "the payload was removed before it");
+                    assert_eq!(generation, before.unwrap());
+                    assert_eq!(db.generation().unwrap(), before.unwrap() + 1);
+                    assert!(!root.join("var/db/pkg").exists());
+                }
+                (log, tree)
+            };
+            let on_files = run(false);
+            std::fs::remove_dir_all(&root).unwrap();
+            let _ = std::fs::remove_dir_all(&ptmp);
+            let on_sqlite = run(true);
+            assert!(
+                on_files.0.ends_with("prerm-1.0\npostrm-1.0\n"),
+                "{}",
+                on_files.0
+            );
+            assert_eq!(on_sqlite.0, on_files.0, "phase log differs");
+            assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// feat#157 S4.2 (b): the soname-bump scenario of S1.5. After
+        /// `sonamebumplib` 1.0 -> 2.0 (the old soname is preserved under
+        /// 2.0), unmerging the last consumer prunes the preserved library:
+        /// it is removed, the registry is cleared, and the W4 rewrites of
+        /// `sonamebumplib-2.0`'s `CONTENTS` / `NEEDED.ELF.2` happen. On
+        /// sqlite they all land in the commit that deletes the consumer's
+        /// row (one generation step); the end state equals the `files` run.
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_standalone_unmerge_prunes_preserved_libs_in_its_retire_commit() {
+            let tmp = tempdir();
+            let ptmp = tmp.join("ptmp");
+            let run = |name: &str, sqlite: bool| {
+                let root = tmp.join(name);
+                std::fs::create_dir_all(&root).unwrap();
+                // As the S1.5 soname-bump test: `/usr/lib64` must be in the
+                // linker path for the consumer to be found.
+                std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+                std::fs::write(
+                    root.join("etc/env.d/99sonamebump"),
+                    "LDPATH=\"/usr/lib64\"\n",
+                )
+                .unwrap();
+                let db = sqlite.then(|| use_sqlite(&root, &tmp.join(format!("{name}.sqlite"))));
+                for (pn, version) in [
+                    ("sonamebumplib", "1.0"),
+                    ("consumesonamebump", "1.0"),
+                    ("sonamebumplib", "2.0"),
+                ] {
+                    let status = run_merge(
+                        &versioned_fixture(pn, version),
+                        &root,
+                        &ptmp,
+                        &MergeOptions::default(),
+                        None,
+                    )
+                    .expect("merge succeeds");
+                    assert_eq!(status, 0);
+                }
+                let lib = EntryKey::new("dev-libs", "sonamebumplib-2.0");
+                let consumer = EntryKey::new("dev-libs", "consumesonamebump-1.0");
+                let live = portage_vdb::for_root(&root);
+                let registry_before = read_plib_registry(&root).preserved_libs();
+                assert!(
+                    registry_before.contains_key("dev-libs/sonamebumplib-2.0"),
+                    "sanity: the old soname is preserved: {registry_before:?}"
+                );
+                let contents_before = live.read_file(&lib, "CONTENTS").unwrap().unwrap();
+
+                type Seen = (Vec<u8>, BTreeMap<String, Vec<String>>);
+                let seen: Rc<RefCell<Option<Seen>>> = Rc::default();
+                let before = db.as_ref().map(|db| db.generation().unwrap());
+                if let Some(db) = &db {
+                    let db = db.clone();
+                    let seen = seen.clone();
+                    let lib = lib.clone();
+                    install_hook(move |_| {
+                        *seen.borrow_mut() = Some((
+                            db.read_file(&lib, "CONTENTS").unwrap().unwrap(),
+                            // The stored registry (`read_plib_registry` would
+                            // prune the paths the unmerge already deleted).
+                            db.preserved_libs()
+                                .unwrap()
+                                .entries
+                                .into_values()
+                                .map(|e| (e.cpv, e.paths))
+                                .collect(),
+                        ));
+                    });
+                }
+                unmerge_standalone(&root, &ptmp, "consumesonamebump-1.0", "consumesonamebump");
+                clear_hook();
+
+                assert!(!live.has_entry(&consumer).unwrap());
+                assert!(read_plib_registry(&root).entries.is_empty());
+                let contents_after = live.read_file(&lib, "CONTENTS").unwrap().unwrap();
+                assert_ne!(contents_after, contents_before, "W4 rewrote CONTENTS");
+                if let Some(db) = &db {
+                    let (contents_seen, registry_seen) = seen.borrow().clone().expect("hook ran");
+                    assert_eq!(contents_seen, contents_before, "W4 not visible before");
+                    assert_eq!(
+                        registry_seen, registry_before,
+                        "registry not visible before"
+                    );
+                    assert_eq!(db.generation().unwrap(), before.unwrap() + 1);
+                }
+                // Each run builds its own files: compare `CONTENTS` without mtimes.
+                let contents_after: Vec<String> = String::from_utf8(contents_after)
+                    .unwrap()
+                    .lines()
+                    .map(|l| match l.split_whitespace().next() {
+                        Some("obj" | "sym") => l.rsplit_once(' ').map_or(l, |(a, _)| a).to_string(),
+                        _ => l.to_string(),
+                    })
+                    .collect();
+                (
+                    contents_after,
+                    live.read_file(&lib, "NEEDED.ELF.2").unwrap(),
+                    payload_bytes(&root),
+                )
+            };
+            let on_files = run("files-root", false);
+            let on_sqlite = run("sqlite-root", true);
+            assert_eq!(on_sqlite.0, on_files.0, "CONTENTS differs");
+            assert_eq!(on_sqlite.1, on_files.1, "NEEDED.ELF.2 differs");
+            let differing: Vec<&String> = on_files
+                .2
+                .keys()
+                .chain(on_sqlite.2.keys())
+                .filter(|k| on_files.2.get(*k) != on_sqlite.2.get(*k))
+                .collect();
+            assert!(differing.is_empty(), "payload differs at {differing:?}");
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        /// What a VDB holds after a sequence, with the run-dependent values
+        /// taken out (see [`a_merge_upgrade_unmerge_sequence_is_equivalent_on_sqlite_and_files`]).
+        #[derive(Debug, PartialEq)]
+        struct Snap {
+            /// key -> (files: name -> (mode, bytes), stamp state).
+            entries: BTreeMap<EntryKey, (Tree, portage_vdb::MetadataStamp)>,
+            world: portage_vdb::World,
+            world_sets: portage_vdb::WorldSets,
+            preserved_libs: BTreeMap<String, portage_vdb::PreservedLibsEntry>,
+            config_memory: portage_vdb::ConfigMemory,
+            counter: Option<portage_vdb::Counter>,
+        }
+
+        /// `CONTENTS` / `metadata` / `BUILD_TIME` reduced to their stable
+        /// parts; every other file is returned as stored.
+        fn stable_bytes(name: &str, data: Vec<u8>) -> Vec<u8> {
+            let lines = |data: &[u8], keep: &dyn Fn(&str) -> Option<String>| -> Vec<u8> {
+                String::from_utf8_lossy(data)
+                    .lines()
+                    .filter_map(keep)
+                    .map(|l| format!("{l}\n"))
+                    .collect::<String>()
+                    .into_bytes()
+            };
+            match name {
+                // The mtime is the last field of `obj` / `sym` lines.
+                "CONTENTS" => lines(&data, &|l| {
+                    Some(match l.split_whitespace().next() {
+                        Some("obj" | "sym") => l.rsplit_once(' ').map_or(l, |(a, _)| a).to_string(),
+                        _ => l.to_string(),
+                    })
+                }),
+                // The stamp line and the BUILD_TIME field; the other
+                // `metadata` lines are the stable fields.
+                "metadata" => lines(&data, &|l| {
+                    (!l.starts_with("#dir_mtime=") && !l.starts_with("BUILD_TIME="))
+                        .then(|| l.to_string())
+                }),
+                _ => data,
+            }
+        }
+
+        fn snapshot(db: &dyn InstalledDb) -> Snap {
+            let mut entries = BTreeMap::new();
+            for key in db.entries().unwrap() {
+                let image = db.entry_image(&key).unwrap().expect("live entry");
+                let files: Tree = image
+                    .files
+                    .into_iter()
+                    // A source build records its own build time.
+                    .filter(|f| f.meta.name != "BUILD_TIME")
+                    .map(|f| {
+                        let data = stable_bytes(&f.meta.name, f.data);
+                        // Group/other write bits depend on the process umask,
+                        // which another test may have changed.
+                        (f.meta.name, (f.meta.mode & 0o7755, data))
+                    })
+                    .collect();
+                entries.insert(key, (files, image.metadata_stamp));
+            }
+            Snap {
+                entries,
+                world: db.world().unwrap(),
+                world_sets: db.world_sets().unwrap(),
+                preserved_libs: db.preserved_libs().unwrap().entries,
+                config_memory: db.config_memory().unwrap(),
+                counter: db.counter().unwrap(),
+            }
+        }
+
+        /// feat#157 S4.4: the same sequence on a `files` ROOT and on a
+        /// sqlite ROOT ends in the same installed state. Sequence: (1) merge
+        /// binpkgrmpkg-1.0 (binary), (2) merge mergepkg (source), (3)
+        /// same-slot upgrade binpkgrmpkg 1.0 -> 2.0, (4) the soname bump
+        /// sonamebumplib 1.0 -> consumesonamebump -> sonamebumplib 2.0
+        /// (preserves the old soname), (5) unmerge consumesonamebump (prunes
+        /// the preserved library, W4), (6) unmerge mergepkg.
+        ///
+        /// Both runs use the same ROOT and PORTAGE_TMPDIR paths one after
+        /// the other, so `environment.bz2` (which records paths) is
+        /// comparable byte for byte. The sqlite result is also converted to
+        /// a temporary `files` root with `copy_all` and compared as well;
+        /// `verify` runs on that pair too.
+        ///
+        /// Compared per live entry: the file set, every file's bytes and
+        /// permission bits (group/other write masked, see below) and the
+        /// `metadata` stamp state; plus the same
+        /// live-entry set, `world`, `world_sets`, `preserved_libs`,
+        /// `config_memory`, counter, and the payload trees under ROOT
+        /// (paths, bytes, symlink targets; no modes, see below).
+        ///
+        /// Ignored, because they are run-dependent by nature (and `verify`
+        /// compares them, so its reported differences are only checked to
+        /// be among these, the modes only by the umask bits): all file mtimes and the entry directory mtime
+        /// (each run builds and writes its files at another instant); the
+        /// `#dir_mtime=` stamp line of `metadata` (derived from the entry
+        /// directory mtime; its Valid/Stale/Absent state is compared); the
+        /// mtime field of `obj` / `sym` lines of `CONTENTS` (the payload
+        /// files' mtimes); the `BUILD_TIME` file and the `BUILD_TIME=` line of
+        /// `metadata` (a source merge records the time of its build); the entry
+        /// directory's mode (`files` records the merge's `mkdir` under the
+        /// process umask, so 0o40755, or 0o40775 after another test changed
+        /// the umask; a sqlite merge stores the schema default 0o755 with no
+        /// type bits); the group and other write bits of entry file modes
+        /// (a file written under another umask: 0o664 vs 0o644); the modes
+        /// of the payload tree (the same umask race,
+        /// as `payload_bytes` notes). Nothing else is dropped: not
+        /// `environment.bz2`, not `COUNTER`, not the rest of `metadata`.
+        fn sequence_equivalence(kind: portage_vdb::BackendKind) {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let ptmp = tmp.join("ptmp");
+            let ebuild = fixtures_root().join("repo/dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+            let sequence = || {
+                for dir in [&root, &ptmp] {
+                    let _ = std::fs::remove_dir_all(dir);
+                    std::fs::create_dir_all(dir).unwrap();
+                }
+                // As the S1.5 soname-bump test: `/usr/lib64` must be in the
+                // linker path for the consumer to be found.
+                std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+                std::fs::write(
+                    root.join("etc/env.d/99sonamebump"),
+                    "LDPATH=\"/usr/lib64\"\n",
+                )
+                .unwrap();
+            };
+            // Runs the steps on whatever backend `root` has.
+            let steps = || {
+                let opts = MergeOptions::default();
+                let binpkg_1 = binpkg("binpkgrmpkg-1.0.tbz2");
+                assert_eq!(merge_binpkg(&binpkg_1, &root, &ptmp, &opts).unwrap(), 0);
+                assert_eq!(run_merge(&ebuild, &root, &ptmp, &opts, None).unwrap(), 0);
+                assert_eq!(
+                    merge_binpkg(&binpkg("binpkgrmpkg-2.0.tbz2"), &root, &ptmp, &opts).unwrap(),
+                    0
+                );
+                for (pn, version) in [
+                    ("sonamebumplib", "1.0"),
+                    ("consumesonamebump", "1.0"),
+                    ("sonamebumplib", "2.0"),
+                ] {
+                    let fixture = versioned_fixture(pn, version);
+                    assert_eq!(run_merge(&fixture, &root, &ptmp, &opts, None).unwrap(), 0);
+                }
+                let preserved = portage_vdb::for_root(&root).preserved_libs().unwrap();
+                assert!(
+                    preserved.entries.contains_key("dev-libs/sonamebumplib:0"),
+                    "sanity: the old soname is preserved: {:?}",
+                    preserved.entries
+                );
+                unmerge_standalone(&root, &ptmp, "consumesonamebump-1.0", "consumesonamebump");
+                assert!(
+                    portage_vdb::for_root(&root)
+                        .preserved_libs()
+                        .unwrap()
+                        .entries
+                        .is_empty()
+                );
+                unmerge_standalone(&root, &ptmp, "mergepkg-1.0", "mergepkg");
+            };
+
+            // The files run; then its ROOT moves aside (rename keeps mtimes).
+            sequence();
+            steps();
+            let files_db = portage_vdb::FilesDb::new(&root);
+            let files_snap = snapshot(&files_db);
+            let files_payload = payload_tree(&root);
+            let files_final = tmp.join("files-final");
+            std::fs::rename(&root, &files_final).unwrap();
+
+            // The sqlite run, in the same paths.
+            sequence();
+            let db = use_db(kind, &root, &tmp.join("vdb.db"));
+            steps();
+            let sqlite_snap = snapshot(db.as_ref());
+            let sqlite_payload = payload_tree(&root);
+            assert!(!root.join("var/db/pkg").exists());
+            assert!(db.pending_entries().unwrap().is_empty());
+
+            // Convert the sqlite result to a temporary files root.
+            let converted = tmp.join("converted");
+            std::fs::create_dir_all(&converted).unwrap();
+            let converted_db = portage_vdb::FilesDb::new(&converted);
+            portage_vdb::copy_all(db.as_ref(), &converted_db, false).unwrap();
+            let converted_snap = snapshot(&converted_db);
+
+            // The sequence left something to compare (1 + 2 + upgrade +
+            // soname bump - consumer - mergepkg).
+            let live: Vec<String> = files_snap.entries.keys().map(|k| k.to_string()).collect();
+            assert_eq!(
+                live,
+                ["dev-libs/binpkgrmpkg-2.0", "dev-libs/sonamebumplib-2.0"],
+                "unexpected end state"
+            );
+            assert!(files_snap.counter.is_some());
+
+            // Field by field, so a failure names what differs.
+            let same = |got: &Snap, what: &str| {
+                assert_eq!(
+                    got.entries.keys().collect::<Vec<_>>(),
+                    files_snap.entries.keys().collect::<Vec<_>>(),
+                    "{what}: live entries"
+                );
+                for (key, (files, stamp)) in &files_snap.entries {
+                    let (g_files, g_stamp) = &got.entries[key];
+                    assert_eq!(g_stamp, stamp, "{what}: {key} metadata stamp state");
+                    assert_eq!(
+                        g_files.keys().collect::<Vec<_>>(),
+                        files.keys().collect::<Vec<_>>(),
+                        "{what}: {key} file set"
+                    );
+                    for (name, (mode, data)) in files {
+                        let (g_mode, g_data) = &g_files[name];
+                        assert_eq!(g_mode, mode, "{what}: {key}/{name} mode");
+                        assert_eq!(
+                            String::from_utf8_lossy(g_data),
+                            String::from_utf8_lossy(data),
+                            "{what}: {key}/{name} bytes"
+                        );
+                    }
+                }
+                assert_eq!(got.world, files_snap.world, "{what}: world");
+                assert_eq!(got.world_sets, files_snap.world_sets, "{what}: world_sets");
+                assert_eq!(
+                    got.preserved_libs, files_snap.preserved_libs,
+                    "{what}: plibs"
+                );
+                assert_eq!(
+                    got.config_memory, files_snap.config_memory,
+                    "{what}: config"
+                );
+                assert_eq!(got.counter, files_snap.counter, "{what}: counter");
+            };
+            same(&sqlite_snap, &format!("{kind} vs files"));
+            same(&converted_snap, &format!("{kind} converted vs files"));
+            let bytes = |tree: Tree| -> BTreeMap<String, Vec<u8>> {
+                tree.into_iter().map(|(k, (_, data))| (k, data)).collect()
+            };
+            assert_eq!(bytes(sqlite_payload), bytes(files_payload), "payload tree");
+
+            // `verify` on the converted pair: every difference it reports
+            // must be one of the ignored, run-dependent kinds.
+            let rep = portage_vdb::verify(&portage_vdb::FilesDb::new(&files_final), &converted_db)
+                .unwrap();
+            assert_eq!(rep.entries_compared, 2);
+            for line in &rep.differences {
+                let (name, what) = line.split_once(": ").unwrap_or((line, ""));
+                let file = name.rsplit_once('/').map_or("", |(_, f)| f);
+                // "mode <a> != <b>" (octal): only the umask bits may differ.
+                let mode_ok = what.strip_prefix("mode ").is_some_and(|m| {
+                    let v: Vec<u32> = m
+                        .split(" != ")
+                        .filter_map(|x| u32::from_str_radix(x, 8).ok())
+                        .collect();
+                    v.len() == 2 && (v[0] ^ v[1]) & !0o022 == 0
+                });
+                let ok = what.starts_with("mtime")
+                    || what.starts_with("directory mtime")
+                    || what.starts_with("directory mode")
+                    || mode_ok
+                    || (what.starts_with("bytes differ")
+                        && ["CONTENTS", "metadata", "BUILD_TIME"].contains(&file));
+                assert!(ok, "verify reports a non-volatile difference: {line}");
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_sqlite_and_files() {
+            sequence_equivalence(portage_vdb::BackendKind::Sqlite);
+        }
+
+        /// feat#157 S5.4: the same sequence on redb (see
+        /// [`sequence_equivalence`] for what is compared and ignored).
+        #[cfg(feature = "vdb-redb")]
+        #[test]
+        fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_redb_and_files() {
+            sequence_equivalence(portage_vdb::BackendKind::Redb);
+        }
+
+        /// The database backends compiled in, as `BackendKind`s.
+        fn db_kinds() -> Vec<portage_vdb::BackendKind> {
+            vec![
+                #[cfg(feature = "vdb-sqlite")]
+                portage_vdb::BackendKind::Sqlite,
+                #[cfg(feature = "vdb-redb")]
+                portage_vdb::BackendKind::Redb,
+            ]
+        }
+
+        /// feat#157 S8.2: the collision scenario on a database backend
+        /// (`find_owners` answered from the `owner` index): `collisionpkg-c`
+        /// would overwrite `collisionpkg-a`'s `shared.txt`, the merge
+        /// aborts under `collision-protect` and names `collisionpkg-a` as
+        /// the owner, and `find_owners` agrees with the files answer.
+        #[test]
+        fn collision_protect_names_the_owner_from_the_index_on_every_backend() {
+            for kind in db_kinds() {
+                let tmp = tempdir();
+                let root = tmp.join("root");
+                let portage_tmpdir = tmp.join("tmp");
+                std::fs::create_dir_all(&root).unwrap();
+                std::fs::create_dir_all(&portage_tmpdir).unwrap();
+                let db = use_db(kind, &root, &tmp.join("vdb.db"));
+                run_merge(
+                    &collision_fixture("collisionpkg-a"),
+                    &root,
+                    &portage_tmpdir,
+                    &MergeOptions::default(),
+                    None,
+                )
+                .expect("collisionpkg-a merges cleanly");
+                assert_eq!(db.kind(), kind);
+                let collisions = vec![
+                    "/usr/share/collisiontest/shared.txt".to_string(),
+                    "/usr/share/collisiontest/stray.txt".to_string(),
+                ];
+                assert_eq!(
+                    find_owners(&root, &collisions),
+                    BTreeMap::from([(
+                        "dev-libs/collisionpkg-a-1.0".to_string(),
+                        vec!["/usr/share/collisiontest/shared.txt".to_string()],
+                    )]),
+                    "{kind}"
+                );
+                let options = MergeOptions {
+                    collision_protect: true,
+                    ..MergeOptions::default()
+                };
+                let err = run_merge(
+                    &collision_fixture("collisionpkg-c"),
+                    &root,
+                    &portage_tmpdir,
+                    &options,
+                    None,
+                )
+                .expect_err("collision-protect should abort the merge");
+                assert!(err.contains("dev-libs/collisionpkg-a-1.0"), "{kind}: {err}");
+                assert!(
+                    err.contains("/usr/share/collisiontest/shared.txt"),
+                    "{kind}: {err}"
+                );
+                assert!(
+                    err.contains("NOT merged due to file collisions"),
+                    "{kind}: {err}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt"))
+                        .unwrap(),
+                    "hello from collisionpkg-a\n",
+                    "{kind}"
+                );
+                let _ = std::fs::remove_dir_all(&tmp);
+            }
+        }
+
+        /// One hand-written entry: `(category, pf, files)`.
+        type HandEntry<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+        /// A `files` VDB written by hand.
+        fn write_vdb(root: &Path, entries: &[HandEntry]) {
+            for (cat, pf, files) in entries {
+                let dir = root.join("var/db/pkg").join(cat).join(pf);
+                std::fs::create_dir_all(&dir).unwrap();
+                for (name, data) in *files {
+                    std::fs::write(dir.join(name), data).unwrap();
+                }
+            }
+        }
+
+        /// feat#157 S8.1 / S8.2: on a hand-built VDB whose dependency
+        /// strings carry every kind of token (USE conditional, `||` group,
+        /// slot operator, blocker, version bounds, a wildcard and bare
+        /// versioned names the index cannot classify), plus `CONTENTS`
+        /// lines with odd path spellings, `installed_reverse_dependents`
+        /// and `find_owners` give the same answer on `files` (the scan)
+        /// and on every database backend (the index), and the answer is
+        /// the right one.
+        #[test]
+        fn reverse_dependents_and_owners_from_the_index_equal_the_scan() {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let e = |pf: &'static str, files: &'static [(&'static str, &'static str)]| {
+                ("dev-libs", pf, files)
+            };
+            write_vdb(
+                &root,
+                &[
+                    e(
+                        "consumer-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("CONTENTS", "dir /usr/lib\nobj /usr/lib/libc.so abc 1\n"),
+                        ],
+                    ),
+                    e(
+                        "cond-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("USE", "ssl\n"),
+                            (
+                                "RDEPEND",
+                                "ssl? ( dev-libs/consumer ) !ssl? ( dev-libs/o )\n",
+                            ),
+                        ],
+                    ),
+                    e(
+                        "condoff-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("USE", "x\n"),
+                            ("RDEPEND", "ssl? ( dev-libs/consumer )\n"),
+                        ],
+                    ),
+                    e(
+                        "alt-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("RDEPEND", "|| ( dev-libs/zzz >=dev-libs/consumer-0.5 )\n"),
+                        ],
+                    ),
+                    e(
+                        "slotted-1.0",
+                        &[("SLOT", "0\n"), ("DEPEND", "dev-libs/consumer:0=[x(+)]\n")],
+                    ),
+                    e(
+                        "pdep-1.0",
+                        &[("SLOT", "0\n"), ("PDEPEND", "=dev-libs/consumer-1*\n")],
+                    ),
+                    e(
+                        "blocker-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("RDEPEND", "!dev-libs/consumer !!<dev-libs/consumer-3\n"),
+                        ],
+                    ),
+                    e(
+                        "toonew-1.0",
+                        &[("SLOT", "0\n"), ("RDEPEND", ">=dev-libs/consumer-2\n")],
+                    ),
+                    e("wild-1.0", &[("SLOT", "0\n"), ("RDEPEND", "dev-libs/*\n")]),
+                    e(
+                        "bare-1.0",
+                        &[("SLOT", "0\n"), ("RDEPEND", "dev-libs/consumer-1.0\n")],
+                    ),
+                    e(
+                        "junk-1.0",
+                        &[("SLOT", "0\n"), ("RDEPEND", "ssl? ( ( dev-libs/consumer\n")],
+                    ),
+                    e(
+                        "other-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("RDEPEND", "dev-libs/other dev-libs/consumer2\n"),
+                        ],
+                    ),
+                    e("nodeps-1.0", &[("SLOT", "0\n")]),
+                    e(
+                        "bidx-1.0",
+                        &[
+                            ("SLOT", "0\n"),
+                            ("BDEPEND", "dev-libs/consumer\n"),
+                            ("CONTENTS", "obj usr/lib/libc.so d 1\nobj //x d 2\n"),
+                        ],
+                    ),
+                ],
+            );
+            let consumers = [
+                ("dev-libs", "consumer", "1.0"),
+                ("dev-libs", "other", "1.0"),
+            ];
+            let want_rdeps =
+                |c: (&str, &str, &str)| installed_reverse_dependents_for(&root, c.0, c.1, c.2);
+            let scan: Vec<Vec<String>> = consumers.iter().map(|&c| want_rdeps(c)).collect();
+            let wanted: Vec<String> =
+                ["alt-1.0", "bidx-1.0", "cond-1.0", "pdep-1.0", "slotted-1.0"]
+                    .iter()
+                    .map(|pf| format!("dev-libs/{pf}"))
+                    .collect();
+            for d in &wanted {
+                assert!(scan[0].contains(d), "the scan misses {d}: {:?}", scan[0]);
+            }
+            for no in [
+                "condoff-1.0",
+                "blocker-1.0",
+                "toonew-1.0",
+                "other-1.0",
+                "nodeps-1.0",
+            ] {
+                assert!(!scan[0].contains(&format!("dev-libs/{no}")), "{no}");
+            }
+            let paths: Vec<String> = ["/usr/lib", "/usr/lib/libc.so", "/x", "/nope"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let scan_owners = find_owners(&root, &paths);
+            assert_eq!(scan_owners.len(), 2, "{scan_owners:?}");
+            for (n, kind) in db_kinds().into_iter().enumerate() {
+                // Another spelling of the same root per backend, so the
+                // registry keeps `root` on `files`.
+                let mut alias = root.clone();
+                for _ in 0..=n {
+                    alias = alias.join("../root");
+                }
+                let db = use_db(kind, &alias, &tmp.join(format!("vdb{n}.db")));
+                assert_eq!(db.kind(), kind);
+                // `use_db` converted `alias`'s files VDB (the same tree).
+                for (&c, want) in consumers.iter().zip(&scan) {
+                    assert_eq!(
+                        &installed_reverse_dependents_for(&alias, c.0, c.1, c.2),
+                        want,
+                        "{kind}: {c:?}"
+                    );
+                }
+                assert_eq!(find_owners(&alias, &paths), scan_owners, "{kind}");
+                // The index is really in use: the entry without any dep
+                // token is not even read.
+                let recs = db
+                    .reverse_dependents("dev-libs/consumer", &[portage_vdb::DepClass::Rdepend])
+                    .unwrap();
+                assert!(!recs.iter().any(|r| r.key.pf == "nodeps-1.0"), "{kind}");
+                assert!(recs.iter().any(|r| r.key.pf == "wild-1.0"), "{kind}");
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        fn installed_reverse_dependents_for(
+            root: &Path,
+            category: &str,
+            package: &str,
+            version: &str,
+        ) -> Vec<String> {
+            portage_repo::installed_reverse_dependents(root, category, package, version)
+        }
+
+        /// feat#157 S8.1 on the fixture root: every installed package gets
+        /// the same reverse dependents from the scan (`files`) and from
+        /// each database backend converted from it.
+        #[test]
+        fn fixture_reverse_dependents_are_identical_on_every_backend() {
+            let fixtures = fixtures_root();
+            let tmp = tempdir();
+            let pkgs = portage_repo::all_installed_packages(&fixtures);
+            assert!(pkgs.len() > 5);
+            let want: Vec<Vec<String>> = pkgs
+                .iter()
+                .map(|p| {
+                    portage_repo::installed_reverse_dependents(
+                        &fixtures,
+                        &p.category,
+                        &p.package,
+                        &p.version,
+                    )
+                })
+                .collect();
+            assert!(want.iter().any(|w| !w.is_empty()), "the fixture has edges");
+            for (n, kind) in db_kinds().into_iter().enumerate() {
+                let mut alias = fixtures.clone();
+                for _ in 0..=n {
+                    alias = alias.join("../fixtures");
+                }
+                use_db(kind, &alias, &tmp.join(format!("vdb{n}.db")));
+                for (p, w) in pkgs.iter().zip(&want) {
+                    assert_eq!(
+                        &portage_repo::installed_reverse_dependents(
+                            &alias,
+                            &p.category,
+                            &p.package,
+                            &p.version
+                        ),
+                        w,
+                        "{kind}: {}",
+                        p.cpv()
+                    );
+                }
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
     }
 }

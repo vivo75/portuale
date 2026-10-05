@@ -671,8 +671,10 @@ pub trait SchedulerPolicy {
 // contracts today)
 // ---------------------------------------------------------------------------
 
-/// The filesystem `PackagesDb` implementation: reads the vdb directly
-/// from `<root>/var/db/pkg`. One of two implementations (the other is
+/// The filesystem `PackagesDb` implementation: a thin adapter whose
+/// queries go through `portage_repo` helpers, which reach the installed
+/// database through `portage_vdb::for_root(root)` (this crate builds no
+/// vdb path itself). One of two implementations (the other is
 /// [`MemoryDb` below); both satisfy the same three read queries.
 ///
 /// Production traffic today runs through `contents_files` only: the real

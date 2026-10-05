@@ -26,7 +26,10 @@ FROM docker.io/library/alpine:3.24.1 AS builder
 RUN apk add --no-cache rust cargo
 WORKDIR /work
 COPY rust/ rust/
+# feat#157 (#305) S2.1: Q6 default, vdb-sqlite and vdb-redb are OFF in the
+# minimal static build profile. Use --no-default-features to exclude them.
 RUN cd rust && cargo build --release --target x86_64-alpine-linux-musl \
+    --no-default-features \
     --package versions-harness --package atom-harness \
     --package use-reduce-harness --package required-use-harness --package portuale
 

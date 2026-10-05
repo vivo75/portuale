@@ -19278,3 +19278,21 @@ cd $F && PORTAGE_CONFIGROOT=$F ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$F/distfi
 # [ebuild  N     ] dev-libs/slotconflicttarget-1.0 to $R   (no pprov-2, no pcons row)
 # WARNING ... dev-libs/slotconflicttarget:0 ... then app-misc/pprov:0 ... (pcons-1:0/0::testrepo, installed in '$R')
 ```
+
+**#305 (design "feat#157") — the installed-package database is swappable: `files` / `sqlite` / `redb` (branch `backlog/305-vdb-backends`, plan [`02.305-vdb-backends.opus.md`](02.305-vdb-backends.opus.md), S0–S8, portuale-only).** Every VDB access in portuale goes through one `portage-vdb::InstalledDb` interface. `files` is the historic `/var/db/pkg` tree and stays the default (and the only thing `emerge` uses). `sqlite` and `redb` keep the same entries in one database file, with an index derived from the stored files: owners from `CONTENTS`, dependency atoms from the five `*DEPEND` files, `NEEDED.ELF.2` lines. `mrg --vdb-backend=sqlite|redb` merges, unmerges and resolves on them. Ebuild phases on a database answer `has_version` / `best_version` through the native `portuale portageq`, over a parent pipe on redb (which allows one writer process at a time). `portuale vdb` converts, verifies, reports and sweeps interrupted merges, rebuilds the index (`rebuild-index`), and serves any backend as a read-only FUSE tree (`mount`). How it was checked: one conformance suite runs on all three backends; the host VDB (2130 entries, 75 611 files) round-trips files → sqlite → files byte-identically (`diff -r` empty; `vdb verify`, which also compares modes and mtimes, equal; `docs/evidence/305-s2-roundtrip.md`), and `vdb verify` finds files and redb equal. `mrg --pretend` prints the same plan from each backend, in fixture tests and on this host. The merge-path gate (glibc + bash binpkg merges in the L1 bed) passes on files, sqlite and redb with 0 hard / 0 unexplained (`305-s4-gate-sqlite.md`, `305-s5-gate-redb.md`). Through the FUSE view, `qlist`, `qcheck`, `qfile`, `eix`, `equery` and real Portage 3.0.82.2 `emerge -p @world` give the same output as from `/var/db/pkg`, apart from a timing line (`305-s7-fuse.md`). Open residues: `docs/evidence/305-residues.md`.
+
+```sh
+# from the repo root (portuale built with default features); reads the host VDB, writes only under $T
+T=$(mktemp -d); P=$PWD/rust/target/release
+$P/portuale vdb convert --from files:/ --to sqlite:$T/vdb.sqlite
+$P/portuale vdb convert --from files:/ --to redb:$T/vdb.redb
+$P/portuale vdb verify files:/ sqlite:$T/vdb.sqlite; $P/portuale vdb verify files:/ redb:$T/vdb.redb
+$P/mrg --pretend --color=n -uDN @world > $T/files.out
+$P/mrg --pretend --color=n -uDN --vdb-backend=sqlite --vdb-path=$T/vdb.sqlite @world > $T/sqlite.out
+$P/mrg --pretend --color=n -uDN --vdb-backend=redb --vdb-path=$T/vdb.redb @world > $T/redb.out
+cmp $T/files.out $T/sqlite.out && cmp $T/files.out $T/redb.out && echo "same plan: $(wc -l < $T/files.out) lines"
+$P/portuale vdb rebuild-index redb:$T/vdb.redb
+rm -rf $T
+# live 2026-10-05: converted 2130 entries ... counter 23336 (x2); equal: 2130 entries compared (x2);
+# same plan: 19 lines; rebuilt the index of 2130 installed entries: owner 753879 rows, dep_atom 27566, needed 13589
+```

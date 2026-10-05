@@ -146,6 +146,13 @@ __filter_readonly_variables() {
 	# because it was used unofficially before EAPI 7. See bug #661006.
 	filtered_vars+=( SYSROOT )
 
+	# portuale: its own runtime variables (PORTUALE_BIN for the native
+	# portageq-wrapper shim, PORTUALE_VDB_* naming the selected
+	# installed-package database) are exported into every phase but must
+	# never be saved into ${T}/environment or the vdb environment.bz2,
+	# which real Portage writes without them (feat#157 S6.4).
+	filtered_vars+=( "PORTUALE_.*" )
+
 	if ___eapi_has_BROOT; then
 		filtered_vars+=( BROOT )
 	fi

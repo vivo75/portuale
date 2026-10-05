@@ -327,6 +327,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 .unwrap_or(default_unmerge_options.config_protect_mask),
             unmerge_orphans,
             config_root: portage_repo::config_root_from_env(),
+            already_unmerged: Vec::new(),
         };
         // Real binpkg scalars from the resolved chain (backlogs #173,
         // #180): calling env over `make.conf`/profile/`make.globals`

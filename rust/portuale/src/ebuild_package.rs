@@ -1466,8 +1466,26 @@ pub(crate) fn quickpkg_from_vdb(
     config_protect_mask: &str,
 ) -> Result<Option<PathBuf>, String> {
     let ext = binpkg_extension(&options.binpkg_format)?;
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
-    let vdb_build_time = std::fs::read_to_string(vdb_dir.join("BUILD_TIME"))
+    // The entry's files are read through the root's installed-database
+    // backend (feat#157 S1.6; `files`: one `open` each, as before). The
+    // vdb ebuild and the whole entry are handed to a copier by path: the
+    // entry directory on `files`, a scratch copy of the whole entry under
+    // `scratch_ebuild_dir` on a database backend (S4.1).
+    let db = portage_vdb::for_root(root);
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let vdb_dir = match db.entry_path(&key) {
+        Some(dir) => dir,
+        None => {
+            let dir = scratch_ebuild_dir.join("vdb-entry").join(category).join(pf);
+            if !portage_vdb::materialize_entry(db.as_ref(), &key, &dir)
+                .map_err(|e| e.to_string())?
+            {
+                return Err(format!("{category}/{pf}: not installed"));
+            }
+            dir
+        }
+    };
+    let vdb_build_time = ebuild_merge::read_entry_text(root, category, pf, "BUILD_TIME")
         .unwrap_or_default()
         .trim()
         .to_string();
@@ -1510,10 +1528,24 @@ pub(crate) fn quickpkg_from_vdb(
         return Ok(None);
     }
 
-    let contents = std::fs::read_to_string(vdb_dir.join("CONTENTS"))
-        .map_err(|e| format!("{}: {e}", vdb_dir.join("CONTENTS").display()))?;
+    // `read_to_string` of old: the io error for a read that failed,
+    // `ENOENT` for a missing entry or file, the std UTF-8 text for a
+    // `CONTENTS` that is not UTF-8.
+    let contents_path = vdb_dir.join("CONTENTS");
+    let contents_err = |e: &dyn std::fmt::Display| format!("{}: {e}", contents_path.display());
+    let contents = match db.read_file(&key, "CONTENTS") {
+        Ok(Some(bytes)) => String::from_utf8(bytes).map_err(|_| {
+            contents_err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ))
+        })?,
+        Ok(None) => return Err(contents_err(&std::io::Error::from_raw_os_error(2))),
+        Err(portage_vdb::Error::Io { source, .. }) => return Err(contents_err(&source)),
+        Err(e) => return Err(contents_err(&e)),
+    };
     let vdb_ebuild = vdb_dir.join(format!("{pf}.ebuild"));
-    if !vdb_ebuild.is_file() {
+    if !ebuild_merge::entry_file_is_regular(root, category, pf, &format!("{pf}.ebuild")) {
         return Err(format!(
             "{}: no vdb ebuild to package from (installed before portuale kept one?)",
             vdb_dir.display()
@@ -1611,7 +1643,7 @@ pub(crate) fn quickpkg_from_vdb(
 
     // `$PKGDIR/Packages` entry from the vdb's own build-info files.
     let bi = |k: &str| {
-        std::fs::read_to_string(vdb_dir.join(k))
+        ebuild_merge::read_entry_text(root, category, pf, k)
             .unwrap_or_default()
             .trim()
             .to_string()

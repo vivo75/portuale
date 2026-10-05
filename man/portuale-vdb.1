@@ -1,0 +1,173 @@
+.TH "PORTUALE\-VDB" "1" "Oct 2026" "Portuale @VERSION@" "Portuale"
+.SH "NAME"
+portuale\-vdb \- Convert, verify, inspect, reindex or mount the installed\-package database
+.SH "SYNOPSIS"
+.TP
+.B portuale vdb convert
+\fB\-\-from\fR \fIKIND:PATH\fR \fB\-\-to\fR \fIKIND:PATH\fR [\fB\-\-force\fR]
+.TP
+.B portuale vdb verify
+[\fB\-\-against\fR] \fIKIND:PATH\fR \fIKIND:PATH\fR
+.TP
+.B portuale vdb status
+\fIKIND:PATH\fR
+.TP
+.B portuale vdb sweep
+(\fB\-\-remove\fR \fICAT/PF\fR)... | \fB\-\-all\fR \fIKIND:PATH\fR
+.TP
+.B portuale vdb rebuild\-index
+\fIKIND:PATH\fR
+.TP
+.B portuale vdb mount
+[\fB\-\-foreground\fR] [\fB\-\-allow\-other\fR] \fIKIND:PATH\fR \fIMOUNTPOINT\fR
+.TP
+.B portuale vdb
+\fB\-\-help\fR
+.SH "DESCRIPTION"
+The installed\-package database (the VDB, normally \fB/var/db/pkg\fR) can
+be kept in more than one backend.  \fBportuale vdb\fR copies it from one
+backend to another and checks that two backends hold the same data.
+It works on any pair of backends, in either direction.
+.LP
+\fBconvert\fR copies every live entry, with the exact bytes, modes and
+mtimes of its files and the mode and mtime of its directory, then the
+\fBworld\fR and \fBworld_sets\fR files, the preserved\-libs registry, the
+config\-protect memory and the merge counter.  Counters are preserved,
+never renumbered.  The consolidated \fBmetadata\fR file is never created,
+and a stale stamp stays stale; a valid one is stamped again for the new
+directory.  Entries that are still being merged (\fB\-MERGING\-\fR) are
+not copied; each one is listed on standard error.  A database
+destination is written in one transaction, so a failed conversion leaves
+it unchanged.
+.LP
+\fBverify\fR compares two backends without changing either: the set of
+live entries; for each entry its files, bytes, modes, mtimes, directory
+mode and mtime, and whether the \fBmetadata\fR stamp is valid; then the
+world files, preserved libs, config memory and counter.  The differences
+are listed, at most 100 lines.
+.LP
+\fBstatus\fR prints the backend, the path, the number of installed entries,
+the generation, the counter, the import mark of a database converted from
+files, and the entries left mid\-merge by an interrupted merge (\fBmerging\fR
+rows on a database, \fB\-MERGING\-\fR directories on files).  \fBmrg\fR
+reports the same entries at startup on a database backend.
+.LP
+\fBsweep\fR deletes pending entries in one write transaction: the named ones
+(\fB\-\-remove\fR, repeatable) or all of them (\fB\-\-all\fR).  A key that is
+not pending, in particular an installed entry, refuses the whole sweep and
+nothing is deleted.  Nothing is ever swept automatically.
+.LP
+\fBrebuild\-index\fR recomputes the index a \fBsqlite\fR or \fBredb\fR
+database derives from the stored entry files: the file owners from
+\fBCONTENTS\fR, the dependency atoms from the five \fB*DEPEND\fR files and
+the lines of \fBNEEDED.ELF.2\fR.  File collision checks and reverse
+dependency lookups read that index instead of the files.  Every installed
+entry is reindexed in one write transaction, and the row counts are printed.
+Run it once on a database converted by an older portuale, or when the index
+is suspected to be wrong.  The entry files and the counter are not touched.
+A \fBfiles:\fR tree has no index, so it is refused.
+.LP
+\fBmount\fR serves the database read\-only at \fIMOUNTPOINT\fR, an existing
+directory, as the historic tree \fICAT\fR/\fIPF\fR/\fIfiles\fR, so tools
+that read \fB/var/db/pkg\fR (eix, qlist, equery, real \fBportageq\fR and
+\fBemerge \-p\fR) can use a database backend.  It uses FUSE through
+\fBfusermount3\fR and needs \fB/dev/fuse\fR; no libfuse is linked, and it
+exists only when portuale is built with the \fBvdb\-fuse\fR feature.
+The database is opened read\-only.  Every operation that would change the
+tree (create, write, unlink, rename, mkdir, symlink, link, chmod, truncate,
+extended attributes) fails with \fBEROFS\fR.  File modes, sizes and mtimes
+are the stored ones.  Directory mtimes follow real Portage (bug #290428):
+an entry directory shows its stored mtime, a category directory the latest
+mtime of its entries, and the root the latest of its categories.  The
+consolidated \fBmetadata\fR file is served with its \fB#dir_mtime=\fR
+stamp equal to the entry directory mtime shown, so real Portage accepts it;
+a stamp that was stale when stored stays stale, and an entry stored without
+a \fBmetadata\fR file has none.  Each directory listing and each open file
+serves the generation it was opened on: a tool never sees half a merge, and
+a file larger than 64 KiB that is rewritten while it is open reads as
+\fBESTALE\fR instead of mixing old and new bytes.  A new lookup sees the
+newest generation.  Without \fB\-\-foreground\fR the command detaches once the
+mount is ready; unmount with \fBfusermount3 \-u\fR \fIMOUNTPOINT\fR.  Over
+\fBsqlite\fR the mount can stay up while \fBmrg\fR merges.  Over \fBredb\fR the
+mount holds the file read\-only: readers (\fBmrg \-\-pretend\fR, \fBverify\fR,
+\fBstatus\fR) run beside it, while writers (a merging \fBmrg\fR,
+\fBconvert\fR, \fBsweep\fR, \fBrebuild\-index\fR) fail as busy until it is
+unmounted.  A
+\fBfiles:\fR source is passed through unchanged, which is useful for
+testing.  Real \fBemerge\fR and \fBebuild\fR merges do not work on a mount:
+they must create lock files inside the tree.
+.SH "KIND:PATH"
+.TP
+\fBfiles:\fR\fIROOT\fR
+The historic tree: \fIROOT\fR\fB/var/db/pkg\fR plus the world,
+preserved\-libs, config\-memory and counter files that live outside the
+VDB directory, under \fIROOT\fR.  A \fIPATH\fR that ends in
+\fBvar/db/pkg\fR means the root three levels up, so \fBfiles:/var/db/pkg\fR
+is \fBfiles:/\fR.  As a source only, a directory without \fBvar/db/pkg\fR
+is read as a bare VDB directory (entries only, no other stores).
+.TP
+\fBsqlite:\fR\fIFILE\fR
+One SQLite file, created by \fBconvert\fR when missing.  Available only
+when portuale is built with the \fBvdb\-sqlite\fR feature.
+.TP
+\fBredb:\fR\fIFILE\fR
+One redb file, created by \fBconvert\fR when missing.  Available only when
+portuale is built with the \fBvdb\-redb\fR feature.  redb allows one writer
+process at a time: a command that writes to a file another process holds
+open (a running \fBmrg\fR, another \fBvdb\fR command, a mount) fails at once
+with "database is already open" (exit 2) instead of waiting.  Readers share
+the file with each other, but also need it free of a writer.
+.SH "OPTIONS"
+.TP
+\fB\-\-from\fR \fIKIND:PATH\fR
+The source of \fBconvert\fR.  It is only read.
+.TP
+\fB\-\-to\fR \fIKIND:PATH\fR
+The destination of \fBconvert\fR.  It must hold no entries, unless
+\fB\-\-force\fR is given.
+.TP
+.B \-\-force
+Make the destination an exact copy of the source: replace entries with
+the same name and delete the ones the source does not have.
+.TP
+\fB\-\-remove\fR \fICAT/PF\fR
+A pending entry for \fBsweep\fR to delete.  May be repeated.
+.TP
+.B \-\-all
+\fBsweep\fR every pending entry.
+.TP
+.B \-\-foreground, \-f
+Keep \fBmount\fR in the foreground.  SIGINT, SIGTERM and SIGHUP unmount
+and exit.
+.TP
+.B \-\-allow\-other
+Let other users, root in particular, read the mount.  Unless run by root
+it needs \fBuser_allow_other\fR in \fB/etc/fuse.conf\fR.
+.TP
+\fB\-\-against\fR
+Accepted before the two arguments of \fBverify\fR.  It changes nothing.
+.SH "EXIT STATUS"
+.TP
+.B 0
+The conversion finished, \fBverify\fR found no difference, \fBstatus\fR
+found nothing pending, or \fBsweep\fR or \fBrebuild\-index\fR finished.
+.TP
+.B 1
+\fBverify\fR found differences, or \fBstatus\fR found pending entries.
+.TP
+.B 2
+Usage error, or an I/O or database error (including a destination that
+is not empty, a busy redb file, or \fBrebuild\-index\fR on \fBfiles:\fR).
+.SH "EXAMPLES"
+.nf
+portuale vdb convert \-\-from files:/ \-\-to sqlite:/var/lib/portage/vdb.sqlite
+portuale vdb verify \-\-against files:/ sqlite:/var/lib/portage/vdb.sqlite
+portuale vdb convert \-\-from sqlite:vdb.sqlite \-\-to files:/tmp/vdb\-export
+portuale vdb status sqlite:/var/lib/portage/vdb.sqlite
+portuale vdb sweep \-\-remove dev\-libs/foo\-1.0 sqlite:/var/lib/portage/vdb.sqlite
+portuale vdb rebuild\-index redb:/var/lib/portage/vdb.redb
+portuale vdb mount \-\-allow\-other sqlite:/var/lib/portage/vdb.sqlite /mnt/vdb
+fusermount3 \-u /mnt/vdb
+.fi
+.SH "SEE ALSO"
+\fBemerge\fR(1), \fBebuild\fR(1)

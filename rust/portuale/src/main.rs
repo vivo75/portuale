@@ -37,12 +37,19 @@ mod mrg;
 mod mtimedb;
 mod needed_elf;
 mod portage_lock;
+mod portageq;
 mod preserved_libs;
 mod pretend;
 mod privileges;
 mod regen;
 mod remote;
 mod remote_bundle;
+mod vdb_cmd;
+#[cfg(feature = "vdb-fuse")]
+mod vdb_fuse;
+mod vdb_ipc;
+#[cfg(feature = "vdb-fuse")]
+mod vdb_view;
 
 use std::process::ExitCode;
 
@@ -50,6 +57,8 @@ enum Applet {
     Emerge,
     Ebuild,
     Mrg,
+    Vdb,
+    Portageq,
 }
 
 impl Applet {
@@ -58,6 +67,8 @@ impl Applet {
             "emerge" => Some(Applet::Emerge),
             "ebuild" => Some(Applet::Ebuild),
             "mrg" => Some(Applet::Mrg),
+            "vdb" => Some(Applet::Vdb),
+            "portageq" => Some(Applet::Portageq),
             _ => None,
         }
     }
@@ -73,7 +84,7 @@ fn basename(path: &str) -> &str {
 /// text is not a port of anything.
 fn print_applets() {
     println!(
-        "portuale: a multicall binary -- runs as `emerge`, `ebuild`, or `mrg` depending on how it is invoked"
+        "portuale: a multicall binary -- runs as `emerge`, `ebuild`, `mrg`, `vdb`, or `portageq` depending on how it is invoked"
     );
     println!();
     println!("Usage:");
@@ -92,6 +103,12 @@ fn print_applets() {
     );
     println!(
         "   mrg      the real emerge option surface via clap, driving portuale's emerge codepath -- a relaxed re-take"
+    );
+    println!(
+        "   vdb      convert or verify the installed-package database between backends (files, sqlite)"
+    );
+    println!(
+        "   portageq has_version / best_version over the installed-package database (the only portageq commands)"
     );
     println!();
     println!("Run `portuale <applet> --help` for that applet's own options.");
@@ -124,6 +141,8 @@ fn run(applet: Applet, args: &[String]) -> ExitCode {
         Applet::Emerge => run_emerge(args),
         Applet::Ebuild => run_ebuild(args),
         Applet::Mrg => run_mrg(args),
+        Applet::Vdb => vdb_cmd::run(args),
+        Applet::Portageq => portageq::run(args),
     }
 }
 
@@ -160,7 +179,7 @@ fn main() -> ExitCode {
             eprintln!(
                 "portuale: unrecognized applet {other:?} (invoked as {invoked_as:?}); \
                  expected a symlink named 'emerge', 'ebuild', or 'mrg', or \
-                 `portuale <emerge|ebuild|mrg> ...` -- run `portuale --help` for the applet list"
+                 `portuale <emerge|ebuild|mrg|vdb|portageq> ...` -- run `portuale --help` for the applet list"
             );
             ExitCode::from(1)
         }

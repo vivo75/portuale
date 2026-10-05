@@ -18,7 +18,10 @@ man_pages_in = [
     'ebuild.5',
     'emerge.1',
     'make.conf.5',
+    'mrg.1',
     'portage.5',
+    'portuale-portageq.1',
+    'portuale-vdb.1',
     'xpak.5',
 ]
 

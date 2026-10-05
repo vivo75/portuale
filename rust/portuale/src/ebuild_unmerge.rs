@@ -544,6 +544,12 @@ pub struct UnmergeOptions {
     /// eclass_locations_value`'s own masters-chain resolution, reached
     /// via `prerm`/`postrm`'s own `run_single_phase` call below).
     pub config_root: PathBuf,
+    /// feat#157 S4.1: `pf`s of the same category that the merge's replace
+    /// loop already unmerged but whose entries a database backend keeps
+    /// installed until the publishing commit. They are left out of
+    /// `others_in_slot`, as on `files`, where their directories are
+    /// already gone. Empty everywhere else.
+    pub already_unmerged: Vec<String>,
 }
 
 impl Default for UnmergeOptions {
@@ -555,6 +561,7 @@ impl Default for UnmergeOptions {
             config_protect_mask: "/etc/env.d".to_string(),
             unmerge_orphans: true,
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
+            already_unmerged: Vec::new(),
         }
     }
 }
@@ -588,6 +595,7 @@ impl Default for UnmergeOptions {
 /// package's own `NEEDED.ELF.2` lines -- see
 /// `ebuild_merge::unmerge_replaced_same_slot`): same threading, same
 /// empty-on-standalone rule.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_pkgfiles(
     root: &Path,
@@ -600,10 +608,60 @@ pub(crate) fn unmerge_pkgfiles(
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<(), String> {
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
-    let contents_path = vdb_dir.join("CONTENTS");
-    let contents_text = std::fs::read_to_string(&contents_path)
-        .map_err(|e| format!("{}: not installed ({e})", vdb_dir.display()))?;
+    unmerge_pkgfiles_into(
+        root,
+        category,
+        pn,
+        pf,
+        also_keep,
+        options,
+        is_replacement,
+        replacement_preserved,
+        replacement_needed,
+        None,
+    )
+}
+
+/// [`unmerge_pkgfiles`] with the D4 writes (preserved-libs registry,
+/// config memory, W4 rewrites of other entries) collected into `retire`
+/// instead of committed one by one (feat#157 S4.2); the caller commits
+/// them with [`retire_entry`]. `None` is the S1.5 behaviour, call for call.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn unmerge_pkgfiles_into(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    also_keep: &[String],
+    options: &UnmergeOptions,
+    is_replacement: bool,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    mut retire: Option<&mut ebuild_merge::RetireWrites>,
+) -> Result<(), String> {
+    // Through the root's installed-database backend. The error keeps the
+    // text `read_to_string` gave: the io error for a read that failed,
+    // `ENOENT` for a missing entry or file, the std UTF-8 text for a
+    // `CONTENTS` that is not UTF-8.
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let not_installed = |e: &dyn std::fmt::Display| {
+        format!(
+            "{}: not installed ({e})",
+            entry_path_for_message(root, category, pf).display()
+        )
+    };
+    let contents_text = match db.read_file(&key, "CONTENTS") {
+        Ok(Some(bytes)) => String::from_utf8(bytes).map_err(|_| {
+            not_installed(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ))
+        })?,
+        Ok(None) => return Err(not_installed(&std::io::Error::from_raw_os_error(2))),
+        Err(portage_vdb::Error::Io { source, .. }) => return Err(not_installed(&source)),
+        Err(e) => return Err(not_installed(&e)),
+    };
 
     // Real `others_in_slot`: every other installed version of this same
     // category/PN in the same SLOT, excluding self -- see this module's
@@ -614,7 +672,7 @@ pub(crate) fn unmerge_pkgfiles(
         Some(slot) => portage_repo::installed_versions(root, category, pn)
             .into_iter()
             .map(|version| format!("{pn}-{version}"))
-            .filter(|other_pf| other_pf != pf)
+            .filter(|other_pf| other_pf != pf && !options.already_unmerged.contains(other_pf))
             .filter(|other_pf| {
                 let version = &other_pf[pn.len() + 1..];
                 ebuild_merge::read_installed_slot(root, category, pn, version).as_deref()
@@ -653,7 +711,7 @@ pub(crate) fn unmerge_pkgfiles(
     // `parse_slot`'s own real fallback already does, matching real
     // `_pkg_str`'s own `settings["SLOT"]` fallback for a package with no
     // recorded slot at all.
-    let preserved_paths = ebuild_merge::preserve_libs_on_unmerge(
+    let preserved_paths = ebuild_merge::preserve_libs_on_unmerge_into(
         root,
         category,
         pn,
@@ -661,6 +719,7 @@ pub(crate) fn unmerge_pkgfiles(
         own_slot.as_deref().unwrap_or("0"),
         &contents_text,
         is_replacement,
+        retire.as_deref_mut(),
     )?;
 
     remove_contents(
@@ -681,7 +740,10 @@ pub(crate) fn unmerge_pkgfiles(
         for filename in &stale_confmem {
             updated.remove(filename);
         }
-        ebuild_merge::write_cfgfiledict(root, &updated)?;
+        match retire.as_deref_mut() {
+            Some(retire) => retire.set_config_memory(updated),
+            None => ebuild_merge::write_cfgfiledict(root, &updated)?,
+        }
     }
 
     // Real `_prune_plib_registry`'s own tail, which runs on unmerge
@@ -700,13 +762,14 @@ pub(crate) fn unmerge_pkgfiles(
         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
         .collect();
     let exclude_cpv = is_replacement.then(|| format!("{category}/{pf}"));
-    ebuild_merge::prune_unused_preserved_libs(
+    ebuild_merge::prune_unused_preserved_libs_into(
         root,
         !is_replacement,
         &|p| being_unmerged.contains(p),
         exclude_cpv.as_deref(),
         replacement_preserved,
         replacement_needed,
+        retire,
     )?;
 
     Ok(())
@@ -719,12 +782,38 @@ pub(crate) fn unmerge_pkgfiles(
 /// `ebuild_merge::merge_binpkg`'s replace path can drop an old
 /// version's vdb entry without going through the phase machinery.
 pub(crate) fn delete_vdb_dir(root: &Path, category: &str, pf: &str) -> Result<(), String> {
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
-    std::fs::remove_dir_all(&vdb_dir).map_err(|e| format!("{}: {e}", vdb_dir.display()))?;
-    if let Some(cat_dir) = vdb_dir.parent() {
-        let _ = std::fs::remove_dir(cat_dir);
+    // `WriteTxn::delete_entry` is the old body, unchanged: `remove_dir_all`
+    // of the entry, then the best-effort category `rmdir` (N14).
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.delete_entry(&portage_vdb::EntryKey::new(category, pf))
+        .map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}
+
+/// The last step of a standalone unmerge: `retire` is `Some` on a database
+/// backend (feat#157 S4.2), and one transaction then holds the row's
+/// deletion together with the D4 writes the unmerge collected (registry,
+/// config memory, W4 rewrites); `None` is [`delete_vdb_dir`], the S1.5 call.
+pub(crate) fn retire_entry(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    retire: Option<ebuild_merge::RetireWrites>,
+) -> Result<(), String> {
+    match retire {
+        Some(writes) => writes.commit(root, &portage_vdb::EntryKey::new(category, pf)),
+        None => delete_vdb_dir(root, category, pf),
     }
-    Ok(())
+}
+
+/// The directory of the installed entry `category/pf` as the old messages
+/// printed it (`<root>/var/db/pkg/<category>/<pf>`); on a backend with no
+/// such directory, the bare `category/pf`.
+pub(crate) fn entry_path_for_message(root: &Path, category: &str, pf: &str) -> std::path::PathBuf {
+    portage_vdb::for_root(root)
+        .entry_path(&portage_vdb::EntryKey::new(category, pf))
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{category}/{pf}")))
 }
 
 /// Real top-level `unmerge()`: `dblink.unmerge()` (`prerm` -> delete
@@ -737,12 +826,19 @@ pub fn run_unmerge(
     options: &UnmergeOptions,
 ) -> Result<i32, String> {
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
-    let vdb_dir = root
-        .join("var/db/pkg")
-        .join(&env.category)
-        .join(&env.split.pf);
-    if !vdb_dir.join("CONTENTS").exists() {
-        return Err(format!("{}: not installed", vdb_dir.display()));
+    // `exists()` of old: one `stat` that follows symlinks, any error is
+    // "not there".
+    let installed = portage_vdb::for_root(root)
+        .file_meta(
+            &portage_vdb::EntryKey::new(env.category.as_str(), env.split.pf.as_str()),
+            "CONTENTS",
+        )
+        .is_ok_and(|meta| meta.is_some());
+    if !installed {
+        return Err(format!(
+            "{}: not installed",
+            entry_path_for_message(root, &env.category, &env.split.pf).display()
+        ));
     }
 
     let prerm_status = ebuild_phases::run_single_phase(
@@ -760,7 +856,8 @@ pub fn run_unmerge(
         return Ok(prerm_status);
     }
 
-    unmerge_pkgfiles(
+    let mut retire = ebuild_merge::RetireWrites::for_root(root);
+    unmerge_pkgfiles_into(
         root,
         &env.category,
         &env.split.pn,
@@ -772,6 +869,7 @@ pub fn run_unmerge(
         // Standalone `emerge -C`: no replacing package, so no include
         // feed (backlog #224).
         &[],
+        retire.as_mut(),
     )?;
 
     let postrm_status = ebuild_phases::run_single_phase(
@@ -789,7 +887,7 @@ pub fn run_unmerge(
         return Ok(postrm_status);
     }
 
-    delete_vdb_dir(root, &env.category, &env.split.pf)?;
+    retire_entry(root, &env.category, &env.split.pf, retire)?;
     Ok(0)
 }
 

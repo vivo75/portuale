@@ -1,0 +1,7 @@
+#!/bin/sh
+# portageq-wrapper shim (feat#157 S6, backlog #151): phase-helpers.sh's
+# has_version/best_version exec ${PORTAGE_BIN_PATH}/portageq-wrapper. Upstream's
+# wrapper needs a Python portage checkout; portuale answers natively.
+# PORTUALE_BIN (absolute path, exported into every phase by portuale) keeps
+# this independent of PATH.
+exec "${PORTUALE_BIN:-portuale}" portageq "$@"

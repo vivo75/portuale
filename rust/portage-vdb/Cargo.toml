@@ -1,0 +1,19 @@
+[package]
+name = "portage-vdb"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# feat#157 (#305): the installed-package database behind one interface.
+# Sits below `portage-repo` and depends only on lower crates
+# (`portage-util`: sorted directory reads, `-MERGING-` test). Every
+# backend crate it will gain (rusqlite, redb, a FUSE crate) arrives
+# behind an optional feature (plan S2.1, S5.1, S7.1).
+[dependencies]
+portage-util = { path = "../portage-util" }
+rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
+redb = { version = "4.3.0", optional = true }
+
+[features]
+vdb-sqlite = ["dep:rusqlite"]
+vdb-redb = ["dep:redb"]

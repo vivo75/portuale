@@ -8,6 +8,9 @@ rust-version.workspace = true
 portage-util = { path = "../portage-util" }
 portage-dep = { path = "../portage-dep" }
 portage-repo = { path = "../portage-repo" }
+# feat#157 (#305): the installed-package database interface; the merge
+# writes its VDB entry through `portage_vdb::for_root(root)` (S1.4).
+portage-vdb = { path = "../portage-vdb" }
 portage-profile = { path = "../portage-profile" }
 portage-fetch = { path = "../portage-fetch" }
 portage-use-reduce = { path = "../portage-use-reduce" }
@@ -135,6 +138,21 @@ tar = { version = "0.4", default-features = false }
 # hand-rolled parser. Pure Rust, zero C linkage, so the musl-static
 # story is untouched.
 clap = "4"
+# feat#157 (#305) S7: the read-only FUSE view of the installed-package
+# database (`portuale vdb mount`). Optional (feature `vdb-fuse`), and
+# WITHOUT fuser's `libfuse` feature: fuser then speaks the kernel protocol
+# itself and mounts through the `fusermount3` helper, so no C library is
+# linked and the musl-static story is untouched.
+fuser = { version = "0.18", default-features = false, optional = true }
+
+[features]
+# feat#157 (#305): optional VDB backend features. Q6 default: vdb-sqlite
+# and vdb-redb are ON in the default dev build, OFF in the minimal
+# static build profile (S2.1, S5.1).
+default = ["vdb-sqlite", "vdb-redb", "vdb-fuse"]
+vdb-sqlite = ["portage-vdb/vdb-sqlite"]
+vdb-redb = ["portage-vdb/vdb-redb"]
+vdb-fuse = ["dep:fuser"]
 
 [dev-dependencies]
 # Test-only: assemble gpkg `Manifest` `DATA` lines with real BLAKE2B

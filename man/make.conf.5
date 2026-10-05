@@ -1103,6 +1103,15 @@ Only trusted users should be granted write access to this location.
 
 Defaults to /var/cache/binpkgs.
 .TP
+\fBPORTUALE_VDB_BACKEND\fR = \fI[files|sqlite|redb]\fR
+Portuale only. The installed\-package database backend \fBmrg\fR(1) uses
+when neither \fB\-\-vdb\-backend\fR nor the environment variable of the same
+name is set. Defaults to files. \fBemerge\fR ignores it.
+.TP
+\fBPORTUALE_VDB_PATH\fR = \fI[path]\fR
+Portuale only. The database file for a non\-files backend. Defaults to
+\fIROOT\fR/var/lib/portage/vdb.sqlite. See \fBmrg\fR(1).
+.TP
 .B PORT_LOGDIR
 See \fIPORTAGE_LOGDIR\fR below. Deprecated.
 .TP

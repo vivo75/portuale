@@ -5757,7 +5757,7 @@ fn installed_parent_use_state(
     let PretendOutcome::AlreadyInstalled { version } = &parent_entry.outcome else {
         return None;
     };
-    if !vdb_pkg_dir(root, &owner.0, &owner.1, version).is_dir() {
+    if !vdb_entry_is_dir(root, &owner.0, &owner.1, version) {
         return None;
     }
     let candidates = list_candidates(repos, &owner.0, &owner.1).ok()?;
@@ -6584,22 +6584,6 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
 /// itself only ever uses `version`/`slot` from this (real
 /// `Atom(f"{pkg.cp}:{pkg.slot}")` never includes sub-slot either), so
 /// adding `sub_slot` here doesn't change its behavior at all.
-/// `st_mtime` of `p` in nanos, 0 when the path is missing or unreadable.
-/// The invalidation signal for the [`installed_candidates`] cache below:
-/// every portuale vdb mutation replaces or removes a package dir
-/// (`ebuild_merge::publish_vdb_tmp` `remove_dir_all` + `rename`;
-/// unmerge removes the dir), so the *category* dir mtime catches all of
-/// them. An external in-place rewrite of a file inside a running process
-/// is not caught -- the same in-process-cache property real's `vardb`
-/// dbapi has; no portuale writer does it.
-fn dir_mtime_nanos(p: &Path) -> u64 {
-    fs::metadata(p)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_nanos() as u64)
-}
-
 pub fn installed_candidates(
     root: &Path,
     category: &str,
@@ -6612,18 +6596,21 @@ pub fn installed_candidates(
     // each scanned category dir (1–2 `statx`, not ~80); negative results
     // are cached too. Thread-local so the lookup stays lock-free.
     type CandidatesCache =
-        HashMap<(PathBuf, String, String), (Vec<(PathBuf, u64)>, Vec<(String, String, String)>)>;
+        HashMap<(PathBuf, String, String), (Vec<(String, u64)>, Vec<(String, String, String)>)>;
     thread_local! {
         static CANDIDATES_CACHE: RefCell<CandidatesCache> = RefCell::new(HashMap::new());
     }
     let sources = installed_cp_sources(category, package);
-    let pkgdir = root.join("var/db/pkg");
-    let mut fps: Vec<(PathBuf, u64)> = Vec::with_capacity(sources.len());
+    // feat#157 S1.2: the validity signal is the category directory's
+    // generation (`st_mtime` in nanos, 0 when missing: every portuale vdb
+    // mutation replaces or removes a package dir, so the *category* dir
+    // mtime catches all of them), read through the registered backend.
+    let db = portage_vdb::for_root(root);
+    let mut fps: Vec<(String, u64)> = Vec::with_capacity(sources.len());
     for (src_cat, _) in &sources {
-        let dir = pkgdir.join(src_cat);
-        if !fps.iter().any(|(d, _)| d == &dir) {
-            let mtime = dir_mtime_nanos(&dir);
-            fps.push((dir, mtime));
+        if !fps.iter().any(|(d, _)| d == src_cat) {
+            let mtime = db.category_generation(src_cat).unwrap_or(0);
+            fps.push((src_cat.clone(), mtime));
         }
     }
     let key = (
@@ -6660,34 +6647,22 @@ fn installed_candidates_uncached(
     // under its pre-`move` `cat/pkg` dir. Scan every source name that
     // maps onto this one (`installed_cp_sources`); `slotmove` then
     // rewrites each hit's `(slot, sub_slot)`.
-    let pkgdir = root.join("var/db/pkg");
+    let db = portage_vdb::for_root(root);
     let mut out = Vec::new();
     for (src_cat, src_pkg) in sources {
-        let Ok(entries) = portage_util::read_dir_entries(&pkgdir.join(&src_cat)) else {
+        // Live entries only (directories, no in-progress `-MERGING-<pf>`
+        // entry -- real `vardbapi._excluded_dirs`), in listing order.
+        let Ok(names) = db.category_entries(&src_cat) else {
             continue;
         };
-        for e in entries.into_iter().filter(|e| {
-            // `d_type` fast path: a real directory needs no `statx`. The
-            // `path().is_dir()` fallback keeps exact semantics for
-            // symlinked entries and `DT_UNKNOWN` filesystems.
-            e.file_type().is_ok_and(|t| t.is_dir()) || e.path().is_dir()
-        }) {
-            let name = e.file_name().to_string_lossy().to_string();
-            // Real `vardbapi._excluded_dirs`: an in-progress
-            // `-MERGING-<pf>` entry is never an installed version (the
-            // `strip_version_prefix` below already rejects it, since no
-            // package name starts with `-MERGING-`; this states the rule
-            // where real states it).
-            if portage_util::is_merging_vdb_entry(&name) {
-                continue;
-            }
+        for name in names {
             let Some(version) = strip_version_prefix(&name, &src_pkg) else {
                 continue;
             };
             let version = version.to_string();
             // #109 S3: the same `vdb_aux_get` seam the other vdb readers
             // use, so a validated consolidated snapshot serves `SLOT`
-            // too. `vdb_pkg_dir` resolves this same entry path back from
+            // too. `resolve_vdb_entry` resolves this same entry back from
             // `(src_cat, src_pkg, version)`, so the value is unchanged on
             // the fallback path (the old read `.trim()`ed, the helper
             // normalises).
@@ -6915,7 +6890,14 @@ pub fn installed_contents_files(
     package: &str,
     version: &str,
 ) -> Vec<String> {
-    let text = fs::read_to_string(vdb_pkg_dir(root, category, package, version).join("CONTENTS"))
+    let key = resolve_vdb_entry(root, category, package, version);
+    // `read_to_string` of old: invalid UTF-8 reads as empty, like a
+    // missing file.
+    let text = portage_vdb::for_root(root)
+        .read_file(&key, "CONTENTS")
+        .ok()
+        .flatten()
+        .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     text.lines()
         .filter_map(|line| {
@@ -6955,6 +6937,22 @@ pub fn installed_reverse_dependents(
         read_vdb_slot(root, consumer_category, consumer_package, consumer_version);
     let candidate =
         format!("{consumer_category}/{consumer_package}-{consumer_version}:{slot}/{sub_slot}");
+    let db = portage_vdb::for_root(root);
+    // S8.1: a database backend narrows the entries with its dependency
+    // index and hands over their raw records; the reduction and the match
+    // below are the same code as the scan's. `files` (and a backend that
+    // cannot answer) keeps the scan, with its exact syscall pattern.
+    if db.kind() != portage_vdb::BackendKind::Files
+        && let Some(found) = indexed_reverse_dependents(
+            db.as_ref(),
+            consumer_category,
+            consumer_package,
+            consumer_version,
+            &candidate,
+        )
+    {
+        return found;
+    }
     let mut out = std::collections::BTreeSet::new();
     for pkg in all_installed_packages(root) {
         if pkg.category == consumer_category
@@ -6966,31 +6964,105 @@ pub fn installed_reverse_dependents(
         let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
         for key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND"] {
             let depstr = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
-            if depstr.trim().is_empty() {
-                continue;
-            }
-            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
-                continue;
-            };
-            for atom_str in atoms {
-                let Some(atom) = portage_dep::parse_atom(&atom_str) else {
-                    continue;
-                };
-                if atom.blocker != portage_dep::Blocker::None {
-                    continue;
-                }
-                if atom.category != consumer_category || atom.package != consumer_package {
-                    continue;
-                }
-                if portage_dep::match_from_list(&atom_str, &[candidate.as_str()])
-                    .is_some_and(|m| !m.is_empty())
-                {
-                    out.insert(format!("{}/{}-{}", pkg.category, pkg.package, pkg.version));
-                }
+            if depstr_names_consumer(
+                &depstr,
+                &use_flags,
+                consumer_category,
+                consumer_package,
+                &candidate,
+            ) {
+                out.insert(format!("{}/{}-{}", pkg.category, pkg.package, pkg.version));
             }
         }
     }
     out.into_iter().collect()
+}
+
+/// Whether the (non-empty) dependency string `depstr`, flattened against
+/// `use_flags`, has a non-blocker atom for the consumer that `candidate`
+/// (`cat/pkg-ver:slot/subslot`) satisfies. The reduction and match shared
+/// by both ways of [`installed_reverse_dependents`].
+fn depstr_names_consumer(
+    depstr: &str,
+    use_flags: &HashSet<String>,
+    consumer_category: &str,
+    consumer_package: &str,
+    candidate: &str,
+) -> bool {
+    if depstr.trim().is_empty() {
+        return false;
+    }
+    let Some(atoms) = flat_dep_atoms(depstr, use_flags) else {
+        return false;
+    };
+    atoms.iter().any(|atom_str| {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            return false;
+        };
+        atom.blocker == portage_dep::Blocker::None
+            && atom.category == consumer_category
+            && atom.package == consumer_package
+            && portage_dep::match_from_list(atom_str, &[candidate]).is_some_and(|m| !m.is_empty())
+    })
+}
+
+/// The database-backend half of [`installed_reverse_dependents`]: the raw
+/// records `InstalledDb::reverse_dependents` returns for the consumer's
+/// `category/package` (a superset: the backend's index drops only entries
+/// that cannot name it), put through the same per-entry steps as the scan
+/// (`split_pf`, the package-move identity, skip the consumer itself, the
+/// entry's own `USE`, the four `*DEPEND` keys). `None` when the backend
+/// cannot answer, so the caller falls back to the scan.
+fn indexed_reverse_dependents(
+    db: &dyn portage_vdb::InstalledDb,
+    consumer_category: &str,
+    consumer_package: &str,
+    consumer_version: &str,
+    candidate: &str,
+) -> Option<Vec<String>> {
+    use portage_vdb::DepClass;
+    let cp = format!("{consumer_category}/{consumer_package}");
+    let records = db
+        .reverse_dependents(
+            &cp,
+            &[
+                DepClass::Depend,
+                DepClass::Rdepend,
+                DepClass::Bdepend,
+                DepClass::Pdepend,
+            ],
+        )
+        .ok()?;
+    let mut out = std::collections::BTreeSet::new();
+    for rec in records {
+        let Some((name, version)) = split_pf(&rec.key.pf) else {
+            continue;
+        };
+        let (category, package) = apply_updates_to_cp(&rec.key.category, &name);
+        if category == consumer_category
+            && package == consumer_package
+            && version == consumer_version
+        {
+            continue;
+        }
+        let use_flags: HashSet<String> = rec
+            .use_flags
+            .split_whitespace()
+            .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+            .collect();
+        if rec.deps.iter().any(|(_, depstr)| {
+            depstr_names_consumer(
+                depstr,
+                &use_flags,
+                consumer_category,
+                consumer_package,
+                candidate,
+            )
+        }) {
+            out.insert(format!("{category}/{package}-{version}"));
+        }
+    }
+    Some(out.into_iter().collect())
 }
 
 /// The highest installed version of `category/package` that satisfies
@@ -7216,292 +7288,73 @@ pub enum PretendOutcome {
     },
 }
 
-/// Real `vartree.py`'s `_METADATA_FILE_FIELDS` (`lib/portage/dbapi/
-/// vartree.py:79-104`): the single-line vdb fields real folds into the
-/// consolidated `metadata` file. `CONTENTS`/`NEEDED*` are line-oriented
-/// and deliberately excluded (real `_in_metadata_file()`).
+// feat#157 S1.2: the `metadata` format (the 23-field set, the format
+// version, `_in_metadata_file`) lives in `portage-vdb`, next to the code
+// that reads it; one copy only.
+pub use portage_vdb::{METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, in_metadata_file};
+
+/// One field of one installed entry, served by [`portage_vdb`]'s
+/// `FilesDb::aux_get` (feat#157 S1.2; the code that used to live here --
+/// the `stat` of the package dir, the consolidated `metadata` snapshot
+/// check, the dir-mtime-keyed memo, the whitespace normalisation and the
+/// invalid-`SLOT` -> `"0"` translation -- moved there unchanged).
 ///
-/// **The field set is part of the format.** Real sets
-/// `self._aux_cache_keys = set(_METADATA_FILE_FIELDS)` so the cached set
-/// and the snapshot set are identical by construction, and its module
-/// docstring says to bump [`METADATA_FILE_FORMAT_VERSION`] on any change
-/// to this set, in either direction: a field added here would otherwise
-/// make an older file lacking it read as saying it is empty, and a field
-/// dropped would do the same to an older reader. A key outside this set
-/// **and** outside `^NEEDED\..*$` falls back to an `environment.bz2`
-/// search (real bug 395463), which the snapshot must never silently
-/// answer with `""`.
-pub const METADATA_FILE_FIELDS: &[&str] = &[
-    "BDEPEND",
-    "BUILD_ID",
-    "BUILD_TIME",
-    "CHOST",
-    "COUNTER",
-    "DEFINED_PHASES",
-    "DEPEND",
-    "DESCRIPTION",
-    "EAPI",
-    "HOMEPAGE",
-    "IDEPEND",
-    "IUSE",
-    "KEYWORDS",
-    "LICENSE",
-    "PDEPEND",
-    "PROPERTIES",
-    "PROVIDES",
-    "RDEPEND",
-    "REQUIRES",
-    "RESTRICT",
-    "SLOT",
-    "USE",
-    "repository",
-];
-
-/// Real `_METADATA_FILE_FORMAT_VERSION` (`vartree.py:105`): the
-/// `#format=` value real's reader accepts and its writer stamps. Portuale
-/// writes and real reads the same live vdb, so this must not change
-/// unless [`METADATA_FILE_FIELDS`] does (see its own doc comment).
-pub const METADATA_FILE_FORMAT_VERSION: u32 = 1;
-
-/// Real `_in_metadata_file(fname)` (`vartree.py:110`): whether `name` is
-/// one of the fields the consolidated `metadata` snapshot carries.
-pub fn in_metadata_file(name: &str) -> bool {
-    METADATA_FILE_FIELDS.contains(&name)
-}
-
-/// Real `_read_metadata_file(path, dir_st)` (`vartree.py:115-187`): parse
-/// and validate a consolidated `metadata` snapshot. `None` unless
-/// `#format=` parses to [`METADATA_FILE_FORMAT_VERSION`] **and**
-/// `#dir_mtime=` parses and equals the package directory's `st_mtime_ns`.
-/// A `#format=` this version does not know is rejected immediately (real
-/// abandons the file on the version line, before parsing the rest); other
-/// `#` lines are ignored; a line without `=` is skipped;
-/// `k, v = line.split("=", 1)` with the last duplicate winning. Real
-/// writes `#dir_mtime=` last, so a file left truncated by an interrupted
-/// write lacks it and is rejected rather than read as a short snapshot.
-fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String, String>> {
-    let raw = fs::read_to_string(path).ok()?;
-    let mut result: HashMap<String, String> = HashMap::new();
-    let mut version: Option<u32> = None;
-    let mut dir_mtime: Option<i128> = None;
-    for line in raw.lines() {
-        if let Some(rest) = line.strip_prefix('#') {
-            if let Some(v) = rest.strip_prefix("format=") {
-                version = Some(v.parse::<u32>().ok()?);
-                if version != Some(METADATA_FILE_FORMAT_VERSION) {
-                    return None;
-                }
-            } else if let Some(v) = rest.strip_prefix("dir_mtime=") {
-                dir_mtime = Some(v.parse::<i128>().ok()?);
-            }
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=') {
-            result.insert(k.to_string(), v.to_string());
-        }
-    }
-    if version.is_none() || dir_mtime.is_none() || dir_mtime != Some(dir_mtime_ns) {
-        return None;
-    }
-    Some(result)
-}
-
-/// Real `_aux_get(cpv, wants, st)` (`vartree.py:975-1053`) for one key:
-/// `stat` the package dir once, try the consolidated `metadata` snapshot,
-/// and serve an in-set key from it with **no** `open()`; otherwise read
-/// the individual file (the pre-#109 path).
-///
-/// The snapshot rule is real's own (`vartree.py:1010-1017`): a validated
-/// snapshot is *complete*, so a field missing from it had no individual
-/// file either and is served as `""` instead of paying an `open()` that
-/// would just fail. Safe by construction for added fields -- adding a
-/// per-field file bumps the package dir's mtime, which invalidates the
-/// snapshot -- and the residual in-place-rewrite hole is real's own
-/// documented one (why it calls `_bump_mtime` on both sides of
-/// `aux_update`), the same in-process property `#102`'s
-/// `installed_candidates` cache has.
-///
-/// Two real behaviours are deliberately absent, both audited:
+/// What stays here is the package-move fallback (real global-updates
+/// renames a moved package's vdb dir; portuale never writes, so when the
+/// direct path is absent every `installed_cp_sources` name -- the
+/// pre-`move` locations that map onto this `cat/pkg` -- is tried in
+/// order, one `statx` each, the first real directory wins), and the two
+/// behaviours audited at the seam:
 ///
 /// - **No `KeyError`.** A missing or non-directory entry is `""`, today's
 ///   `unwrap_or_default()` behaviour; portuale has no caller that wants a
 ///   raise.
 /// - **No `environment.bz2` search** (real bug 395463) for a key outside
-///   the 23-set. Every key any caller passes is a
-///   [`METADATA_FILE_FIELDS`] member (audited for #109 S1; `CONTENTS` and
-///   `NEEDED.*` read through their own paths), so the search is
-///   unreachable. Backlog #125: instead of a `debug_assert!` (which left
-///   a future out-of-set caller silently served `""` -- or worse, a
-///   whitespace-collapsed read -- in release), an out-of-set key now
+///   the 23-set. Backlog #125: an out-of-set key (`CONTENTS`, `NEEDED.*`)
 ///   structurally bypasses the snapshot and the cache and reads the raw
 ///   file with no normalisation at all (real never `" ".join()`s a
-///   line-oriented key).
-///
-/// Real's `aux_get` `EAPI == "" -> "0"` translation is not here:
-/// portuale's callers default individually and that parity question is
-/// a filed residue, not this slice's. The invalid-`SLOT` -> `"0"` half
-/// *is* here (`translate_aux_slot`, #115 S1): every vdb `SLOT` read
-/// flows through this seam, so one site covers all of them.
+///   line-oriented key), invalid UTF-8 decoded lossy.
 fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &str) -> String {
+    let db = portage_vdb::for_root(root);
+    let pf = format!("{package}-{version}");
     if !in_metadata_file(key) {
-        return read_vdb_raw_file(&vdb_pkg_dir(root, category, package, version).join(key));
-    }
-    // #112: one `statx` for both the path resolution and the
-    // validity/`st_mtime_ns` check below.
-    let (dir, st) = vdb_pkg_dir_meta(root, category, package, version);
-    let Some(st) = st else {
-        return String::new();
-    };
-    use std::os::unix::fs::MetadataExt as _;
-    let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
-
-    // Real `aux_get`'s `_aux_cache["packages"]` (`vartree.py:909-973`):
-    // per-instance metadata keyed on the package dir's `st_mtime_ns`, so
-    // a second key on the same instance costs one `stat` instead of a
-    // snapshot read (and a per-key `open()` on the fallback path).
-    // `cache_these = _aux_cache_keys ∪ wants` is why a validated snapshot
-    // fills **all** 23 fields at once; the fallback path resolves lazily
-    // per key and records each resolved value, including `""`.
-    //
-    // The in-process staleness property is real's own: an in-place rewrite
-    // of a field file leaves the dir mtime alone, so a value read once is
-    // served until the dir changes. Real calls `_bump_mtime` on both sides
-    // of `aux_update` for exactly that reason; the same property is
-    // documented at `installed_candidates` (#102) and is why portuale's
-    // merge path (which replaces the whole entry dir) is safe. Thread-local
-    // so the lookup stays lock-free, like `EUF_CACHE`.
-    type CacheKey = (PathBuf, String, String, String);
-    type AuxCache = HashMap<CacheKey, (i128, Rc<HashMap<String, String>>)>;
-    thread_local! {
-        static AUX_CACHE: RefCell<AuxCache> = RefCell::new(HashMap::new());
-    }
-    let cache_key = (
-        root.to_path_buf(),
-        category.to_string(),
-        package.to_string(),
-        version.to_string(),
-    );
-
-    // The `stat` above is the validity signal, paid on every call (real
-    // stats before consulting `_aux_cache` too); the memo removes the
-    // snapshot read and the per-key `open`.
-    let cached = AUX_CACHE.with(|c| {
-        c.borrow()
-            .get(&cache_key)
-            .filter(|(mtime, _)| *mtime == dir_mtime_ns)
-            .map(|(_, map)| Rc::clone(map))
-    });
-    if let Some(map) = cached {
-        if let Some(v) = map.get(key) {
-            return translate_aux_slot(key, v.clone());
-        }
-        // Fallback path: this key has not been resolved yet. Drop the
-        // shared handle before mutating so `Rc::make_mut` can reuse it.
-        drop(map);
-        let value = translate_aux_slot(key, read_vdb_file(&dir.join(key)));
-        AUX_CACHE.with(|c| {
-            if let Some((_, map)) = c.borrow_mut().get_mut(&cache_key) {
-                Rc::make_mut(map).insert(key.to_string(), value.clone());
-            }
-        });
-        return value;
-    }
-
-    // Miss or dir-mtime change: read and validate the snapshot once.
-    let mut map: HashMap<String, String> =
-        match read_metadata_file(&dir.join("metadata"), dir_mtime_ns) {
-            Some(snapshot) => {
-                // A validated snapshot is complete for the 23-set: pre-fill
-                // every member so an absent one is `""` with no `open()`.
-                let mut m = snapshot;
-                for &field in METADATA_FILE_FIELDS {
-                    m.entry(field.to_string()).or_default();
+        // Resolve the entry like `resolve_vdb_entry` (one `statx` per
+        // candidate, the unresolved direct name when none is a
+        // directory), then one `open` of the raw file.
+        let direct = portage_vdb::EntryKey::new(category, pf.as_str());
+        let mut found: Option<portage_vdb::EntryKey> = None;
+        if db.has_entry(&direct).unwrap_or(false) {
+            found = Some(direct.clone());
+        } else if !global_package_updates().is_empty() {
+            for (c, p) in installed_cp_sources(category, package) {
+                let cand = portage_vdb::EntryKey::new(c, format!("{p}-{version}"));
+                if db.has_entry(&cand).unwrap_or(false) {
+                    found = Some(cand);
+                    break;
                 }
-                m
             }
-            None => HashMap::new(),
-        };
-    let value = map
-        .get(key)
-        .cloned()
-        .unwrap_or_else(|| read_vdb_file(&dir.join(key)));
-    let value = translate_aux_slot(key, value);
-    map.insert(key.to_string(), value.clone());
-    AUX_CACHE.with(|c| {
-        c.borrow_mut()
-            .insert(cache_key, (dir_mtime_ns, Rc::new(map)));
-    });
-    value
-}
-
-/// The per-key fallback read: the raw file normalised exactly like real
-/// `_aux_get` (`" ".join(myd.split())`, `vartree.py:1044-1046`), with an
-/// absent file as `""`. Real applies the same normalisation on this path,
-/// so the bytes are the same whether the snapshot validated or not.
-/// Invalid UTF-8 decodes lossy (`U+FFFD`), matching real's
-/// `encoding="utf-8", errors="replace"` (`vartree.py:1035-1039`) instead
-/// of collapsing to `""` (backlog #125, audit O15).
-fn read_vdb_file(path: &Path) -> String {
-    fs::read(path)
-        .map(|bytes| {
-            String::from_utf8_lossy(&bytes)
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default()
-}
-
-/// Whether `value` is a `SLOT` real `aux_get` keeps instead of
-/// translating to `"0"`: `slot(/slot)?` with `slot = [\w][\w+.-]*`
-/// (ASCII — `versions.py:38`, `re.ASCII`), the `/sub` half iff the
-/// EAPI has `slot_operator` (`versions.py:76-90`). Portuale does no
-/// EAPI parametrization inside the EAPI 5+ floor (`agent-context.md`:
-/// every live EAPI has `slot_operator`, `eapi.py:319`), so this is
-/// always the operator shape; an entry whose own `EAPI` is empty (for
-/// which real would use the single-slot shape after its `EAPI ""→"0"`
-/// step) is out of scope — that translation is #115's documented cut,
-/// and no such entry has a portuale-visible consumer anyway (Phase 12
-/// S0.3). Empty is *not* invalid here: a missing/empty `SLOT` stays
-/// `""` at this layer and keeps #126's O5 caller contracts.
-fn is_valid_aux_slot(value: &str) -> bool {
-    fn is_slot(s: &str) -> bool {
-        let mut chars = s.bytes();
-        match chars.next() {
-            Some(b) if b.is_ascii_alphanumeric() || b == b'_' => {}
-            _ => return false,
         }
-        chars.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'.' | b'-'))
+        let key_to_read = found.unwrap_or(direct);
+        return match db.read_file(&key_to_read, key) {
+            Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+            _ => String::new(),
+        };
     }
-    match value.split_once('/') {
-        Some((main, sub)) => is_slot(main) && is_slot(sub),
-        None => is_slot(value),
+    let direct = portage_vdb::EntryKey::new(category, pf);
+    match db.aux_get(&direct, key) {
+        Ok(Some(v)) => return v,
+        Ok(None) => {}
+        Err(_) => return String::new(),
     }
-}
-
-/// Real `aux_get`'s invalid-`SLOT` → `"0"` translation, applied at the
-/// one seam every vdb `SLOT` read flows through. Real translates in
-/// the outer `aux_get` (`vartree.py:967-972`); portuale has no outer
-/// layer — `vdb_aux_get` serves both roles — so it lives here, for the
-/// `SLOT` key only, over present (non-empty) values. The memoised value
-/// is the translated one (observably identical: the translation is
-/// idempotent, `"0"` is valid).
-fn translate_aux_slot(key: &str, value: String) -> String {
-    if key == "SLOT" && !value.is_empty() && !is_valid_aux_slot(&value) {
-        return "0".to_string();
+    if !global_package_updates().is_empty() {
+        for (c, p) in installed_cp_sources(category, package) {
+            let cand = portage_vdb::EntryKey::new(c, format!("{p}-{version}"));
+            if let Ok(Some(v)) = db.aux_get(&cand, key) {
+                return v;
+            }
+        }
     }
-    value
-}
-
-/// The out-of-set read for [`vdb_aux_get`]: a key outside real's
-/// 23-field `_METADATA_FILE_FIELDS` (`CONTENTS`, `NEEDED.*`, ...) is a
-/// line-oriented file real never whitespace-normalises, so it is read
-/// raw -- no `split_whitespace` collapse, no snapshot, no cache.
-/// Invalid UTF-8 decodes lossy, like the in-set path.
-fn read_vdb_raw_file(path: &Path) -> String {
-    fs::read(path)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default()
+    String::new()
 }
 
 /// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
@@ -7663,47 +7516,41 @@ pub fn candidate_effective_use_flags(
     sorted
 }
 
-/// The on-disk vdb directory for `<category>/<package>-<version>`. Real
+/// The vdb entry for `<category>/<package>-<version>`. Real
 /// global-updates renames a moved package's vdb dir; portuale never
-/// writes, so when the direct path is absent it falls back to every
+/// writes, so when the direct entry is absent it falls back to every
 /// `installed_cp_sources` name (the pre-`move` locations that map onto
-/// this `cat/pkg`). Returns the direct path unchanged when nothing
+/// this `cat/pkg`), one `has_entry` (`statx`) per candidate, the first
+/// real directory wins. Returns the direct key unchanged when nothing
 /// matches, so a genuinely-missing entry still reads as empty/absent.
-fn vdb_pkg_dir(root: &Path, category: &str, package: &str, version: &str) -> PathBuf {
-    vdb_pkg_dir_meta(root, category, package, version).0
-}
-
-/// [`vdb_pkg_dir`] plus the `Metadata` the resolution already stat'ed
-/// (`Some` only when the returned path is a real directory). Backlog
-/// `#112`: `vdb_aux_get` needs the directory's `is_dir()` and its
-/// `st_mtime_ns`, so resolving the path and then stat'ing it again paid
-/// two `statx` per lookup (~126 k `statx`/run on the reference workload).
-/// `fs::metadata` follows symlinks exactly like the `is_dir()` it
-/// replaces, and `None` means the unresolved direct path -- absent, a
-/// file, or a broken symlink -- which every caller already treats as an
-/// absent entry.
-fn vdb_pkg_dir_meta(
+/// (feat#157 S1.3: was `vdb_pkg_dir`/`vdb_pkg_dir_meta`, which returned
+/// the path; the disk access is `FilesDb::has_entry` now, same `statx`.)
+fn resolve_vdb_entry(
     root: &Path,
     category: &str,
     package: &str,
     version: &str,
-) -> (PathBuf, Option<std::fs::Metadata>) {
-    let pkgdir = root.join("var/db/pkg");
-    let direct = pkgdir.join(category).join(format!("{package}-{version}"));
-    match fs::metadata(&direct) {
-        Ok(st) if st.is_dir() => return (direct, Some(st)),
-        _ if global_package_updates().is_empty() => return (direct, None),
-        _ => {}
+) -> portage_vdb::EntryKey {
+    let db = portage_vdb::for_root(root);
+    let direct = portage_vdb::EntryKey::new(category, format!("{package}-{version}"));
+    if db.has_entry(&direct).unwrap_or(false) || global_package_updates().is_empty() {
+        return direct;
     }
     for (c, p) in installed_cp_sources(category, package) {
-        let cand = pkgdir.join(&c).join(format!("{p}-{version}"));
-        if let Ok(st) = fs::metadata(&cand)
-            && st.is_dir()
-        {
-            return (cand, Some(st));
+        let cand = portage_vdb::EntryKey::new(c, format!("{p}-{version}"));
+        if db.has_entry(&cand).unwrap_or(false) {
+            return cand;
         }
     }
-    (direct, None)
+    direct
+}
+
+/// `vdb_pkg_dir(..).is_dir()` of old: resolve the entry, then test the
+/// resolved entry again (two `statx` when the direct entry exists, as
+/// before).
+fn vdb_entry_is_dir(root: &Path, category: &str, package: &str, version: &str) -> bool {
+    let key = resolve_vdb_entry(root, category, package, version);
+    portage_vdb::for_root(root).has_entry(&key).unwrap_or(false)
 }
 
 /// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
@@ -7807,33 +7654,6 @@ impl InstalledPackage {
     }
 }
 
-/// A cheap fingerprint of `<root>/var/db/pkg`'s directory structure: the
-/// vdb dir's own mtime plus every category dir's mtime, xor-folded with a
-/// count. Any package merge/unmerge changes the mtime of `var/db/pkg` (new
-/// category) or of a category dir (new/removed package dir), so a matching
-/// fingerprint means the installed set is unchanged -- enough to reuse a
-/// memoised [`all_installed_packages`] result. ~30 `stat`s vs the ~2000
-/// `SLOT` file reads a full scan does.
-fn vdb_fingerprint(vdb: &Path) -> u64 {
-    fn mtime_nanos(p: &Path) -> u64 {
-        fs::metadata(p)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_nanos() as u64)
-    }
-    let Ok(cats) = portage_util::read_dir_entries(vdb) else {
-        return 0;
-    };
-    let mut acc = mtime_nanos(vdb);
-    let mut count: u64 = 0;
-    for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
-        acc ^= mtime_nanos(&cat.path()).rotate_left((count % 61) as u32 + 1);
-        count += 1;
-    }
-    acc ^ count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-}
-
 /// Every package recorded under `<root>/var/db/pkg` (real
 /// `vartree.dbapi.cpv_all()`), each with its own main slot. Directory
 /// names are split into `package`/`version` by finding the last
@@ -7845,7 +7665,7 @@ fn vdb_fingerprint(vdb: &Path) -> u64 {
 /// Memoised per `root`: a deep `emerge -pu` reads the whole installed set
 /// (~2000 `SLOT` files) at ~10 resolver call sites, several inside loops,
 /// and the vdb never changes mid-resolve. Keyed by `root` + a
-/// [`vdb_fingerprint`] so a merge/unmerge earlier in the same process
+/// `generation` so a merge/unmerge earlier in the same process
 /// (test suites do this) is picked up -- real `vardbapi` invalidates its
 /// own `cp_all` cache on category-dir mtime the same way.
 pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
@@ -7853,8 +7673,11 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
     type InstalledCache = HashMap<PathBuf, (u64, std::sync::Arc<Vec<InstalledPackage>>)>;
     static CACHE: OnceLock<RwLock<InstalledCache>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-    let vdb = root.join("var/db/pkg");
-    let fingerprint = vdb_fingerprint(&vdb);
+    // The cheap fingerprint of the vdb's directory structure (the vdb
+    // dir's mtime plus every category dir's mtime, folded): `FilesDb::
+    // generation` (feat#157 S1.2; was `vdb_fingerprint` here). ~30
+    // `stat`s vs the ~2000 `SLOT` file reads a full scan does.
+    let fingerprint = portage_vdb::for_root(root).generation().unwrap_or(0);
     if let Ok(guard) = cache.read()
         && let Some((fp, packages)) = guard.get(root)
         && *fp == fingerprint
@@ -7873,36 +7696,27 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
 
 fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {
     let mut out = Vec::new();
-    let vdb = root.join("var/db/pkg");
-    let Ok(cats) = portage_util::read_dir_entries(&vdb) else {
+    // `FilesDb::entries` (feat#157 S1.3): the category/package directory
+    // walk that used to be here, `-MERGING-` entries already skipped.
+    let Ok(keys) = portage_vdb::for_root(root).entries() else {
         return out;
     };
-    for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
-        let category = cat.file_name().to_string_lossy().to_string();
-        let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
-            continue;
-        };
-        for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
-            let dirname = pkg.file_name().to_string_lossy().to_string();
-            // Real `vardbapi._excluded_dirs`: an in-progress
-            // `-MERGING-<pf>` entry is never an installed package
-            // (`split_pf` would otherwise mis-split it into a bogus
-            // `-MERGING-<pn>`/`version` row).
-            if portage_util::is_merging_vdb_entry(&dirname) {
-                continue;
-            }
+    for key in keys {
+        let category = key.category;
+        let dirname = key.pf;
+        {
             let Some((name, version)) = split_pf(&dirname) else {
                 continue;
             };
             // #109 S3: through the shared `vdb_aux_get` seam, so a valid
             // consolidated snapshot serves `SLOT` without the per-entry
-            // `open()`. `vdb_pkg_dir` resolves the entry being scanned
+            // `open()`. `resolve_vdb_entry` resolves the entry being scanned
             // back from `(category, name, version)`.
             let (slot, sub) = split_slot(&vdb_aux_get(root, &category, &name, &version, "SLOT"));
             // Real `profiles/updates/` package moves: present each vdb
             // entry under its post-`move`/`slotmove` identity, the way
             // real global-updates rewrites the vdb on sync (portuale
-            // never writes -- see `vdb_pkg_dir` for the read-back side).
+            // never writes -- see `resolve_vdb_entry` for the read-back side).
             let (category, name) = apply_updates_to_cp(&category, &name);
             let (slot, _sub) = apply_updates_to_slot(&category, &name, &slot, &sub);
             out.push(InstalledPackage {
@@ -11510,7 +11324,7 @@ fn chain_node_usedep_suffix(
     // The node's own enabled set: effective USE merge-bound, recorded
     // vdb USE installed.
     let enabled: HashSet<String> = if installed {
-        if !vdb_pkg_dir(root, &node.category, &node.package, version).is_dir() {
+        if !vdb_entry_is_dir(root, &node.category, &node.package, version) {
             return String::new();
         }
         read_vdb_flag_set(root, &node.category, &node.package, version, "USE")
@@ -11789,6 +11603,31 @@ fn best_installed_matching(
     atom_str: &str,
     config: &portage_profile::Config,
 ) -> Option<String> {
+    best_installed_match(root, atom_str, None, &|| config.iuse_effective.clone())
+}
+
+/// [`best_installed_matching`] with the two inputs a caller outside the
+/// resolver supplies itself (feat#157 S6.2, the native `portageq`
+/// `has_version` / `best_version`, real `vardb.match()`):
+///
+/// - `unevaluated`: when `atom_str` is a USE-conditional-evaluated copy of
+///   an atom (real `Atom.evaluate_conditionals`), the original text.
+///   Real `_match_use` checks the IUSE membership of the *unevaluated*
+///   atom's `.required` flags, so a flag a dropped `[flag?]` names must
+///   still be in the installed `IUSE`; the dropped conditionals are fed to
+///   `use_deps_satisfied` as constraint-free entries for that check.
+/// - `implicit_iuse`: the profile's `IUSE_EFFECTIVE` (what
+///   `config.iuse_effective` is for the resolver). Called at most once and
+///   only when the atom has `[use]` deps, so a caller can load the config
+///   lazily.
+///
+/// Returns the highest matching installed version (the `PF` version part).
+pub fn best_installed_match(
+    root: &Path,
+    atom_str: &str,
+    unevaluated: Option<&str>,
+    implicit_iuse: &dyn Fn() -> HashSet<String>,
+) -> Option<String> {
     let atom = portage_dep::parse_atom(atom_str)?;
     let installed = installed_candidates(root, &atom.category, &atom.package);
     if installed.is_empty() {
@@ -11807,19 +11646,27 @@ fn best_installed_matching(
         .collect();
     let refs: Vec<&str> = cpv_strs.iter().map(String::as_str).collect();
     let matched = portage_dep::match_from_list(atom_str, &refs)?;
-    let use_deps = atom.use_deps.as_ref().filter(|d| !d.is_empty());
+    let mut all_deps: Vec<portage_dep::UseDep> = atom.use_deps.clone().unwrap_or_default();
+    if let Some(orig) = unevaluated.and_then(portage_dep::parse_atom)
+        && let Some(orig_deps) = orig.use_deps
+    {
+        all_deps.extend(orig_deps);
+    }
+    let use_deps = Some(all_deps).filter(|d| !d.is_empty());
     let by_str: HashMap<&str, &(String, String, String)> =
         refs.iter().copied().zip(installed.iter()).collect();
+    let implicit: std::cell::OnceCell<HashSet<String>> = std::cell::OnceCell::new();
     matched
         .into_iter()
         .filter_map(|m| by_str.get(m).map(|(version, _slot, _sub)| version.clone()))
         .filter(|version| {
-            let Some(use_deps) = use_deps else {
+            let Some(use_deps) = &use_deps else {
                 return true;
             };
             let vdb_iuse = read_vdb_flag_set(root, &atom.category, &atom.package, version, "IUSE");
             let vdb_use = read_vdb_flag_set(root, &atom.category, &atom.package, version, "USE");
-            let mut valid = valid_iuse(&vdb_iuse, config);
+            let mut valid = vdb_iuse;
+            valid.extend(implicit.get_or_init(implicit_iuse).iter().cloned());
             valid.extend(vdb_use.iter().cloned());
             portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
         })
@@ -13087,8 +12934,8 @@ pub fn read_vdb_env_vars(
     wanted: &[&str],
 ) -> HashMap<String, String> {
     use std::io::Read as _;
-    let Ok(compressed) =
-        fs::read(vdb_pkg_dir(root, category, package, version).join("environment.bz2"))
+    let key = resolve_vdb_entry(root, category, package, version);
+    let Ok(Some(compressed)) = portage_vdb::for_root(root).read_file(&key, "environment.bz2")
     else {
         return HashMap::new();
     };
@@ -39012,33 +38859,27 @@ mod tests {
         );
     }
 
-    /// #112: the resolution helper hands back the `Metadata` it already
-    /// stat'ed, so `vdb_aux_get` does not pay a second `statx` for the
-    /// validity/mtime check.
+    /// `resolve_vdb_entry` returns the direct key for an existing entry,
+    /// and the direct key unchanged for a file or an absent entry.
     #[test]
-    fn vdb_pkg_dir_meta_returns_the_stat_it_used() {
+    fn resolve_vdb_entry_returns_the_direct_key() {
         let root = tmp_vdb("dev-libs", "statmeta-1.0", &[]);
-        let dir = root.join("var/db/pkg/dev-libs/statmeta-1.0");
-        let (got, st) = vdb_pkg_dir_meta(&root, "dev-libs", "statmeta", "1.0");
-        assert_eq!(got, dir);
-        let st = st.expect("an existing directory must carry its stat");
-        use std::os::unix::fs::MetadataExt as _;
-        assert!(st.is_dir());
-        assert_eq!(
-            st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128,
-            dir_mtime_ns(&dir)
-        );
-        // A *file* at the entry path is not a directory: no stat served.
+        let got = resolve_vdb_entry(&root, "dev-libs", "statmeta", "1.0");
+        assert_eq!(got, portage_vdb::EntryKey::new("dev-libs", "statmeta-1.0"));
+        assert!(vdb_entry_is_dir(&root, "dev-libs", "statmeta", "1.0"));
+        // A *file* at the entry path is not a directory.
         let file_root = tmp_vdb("dev-libs", "statmeta-2.0", &[]);
         let file_dir = file_root.join("var/db/pkg/dev-libs/statmeta-2.0");
         std::fs::remove_dir_all(&file_dir).unwrap();
         std::fs::write(&file_dir, b"not a dir").unwrap();
-        let (_, st) = vdb_pkg_dir_meta(&file_root, "dev-libs", "statmeta", "2.0");
-        assert!(st.is_none(), "a non-directory must not be served as a stat");
-        // An absent entry: the unresolved direct path, no stat.
-        let (missing, st) = vdb_pkg_dir_meta(&root, "dev-libs", "absent", "1.0");
-        assert_eq!(missing, root.join("var/db/pkg/dev-libs/absent-1.0"));
-        assert!(st.is_none());
+        assert!(!vdb_entry_is_dir(&file_root, "dev-libs", "statmeta", "2.0"));
+        // An absent entry: the unresolved direct key.
+        let missing = resolve_vdb_entry(&root, "dev-libs", "absent", "1.0");
+        assert_eq!(
+            missing,
+            portage_vdb::EntryKey::new("dev-libs", "absent-1.0")
+        );
+        assert!(!vdb_entry_is_dir(&root, "dev-libs", "absent", "1.0"));
     }
 
     /// Bump a package dir's mtime without changing what it holds (create
@@ -74227,55 +74068,6 @@ mod tests_165 {
             installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0"),
             vec!["dev-libs/user-1.0".to_string()]
         );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    // ---- S2: `vdb_fingerprint` (the `all_installed_packages` cache
-    // key: the vdb dir's own mtime plus every category dir's mtime,
-    // xor-folded with the category count; a missing vdb is exactly 0).
-    // Only deterministic oracles pin the hash: absence (0), presence
-    // (non-zero, non-one), and sensitivity to structural change. The
-    // pure-mixing mutants (`^=`/`%`/`+=`/`^` variants that keep the
-    // stability-and-sensitivity contract) have no deterministic oracle
-    // and are classified in the closeout, not pinned here. ----
-
-    /// A missing vdb fingerprints to exactly 0 -- the whole-body `-> 1`
-    /// row fails here.
-    #[test]
-    fn vdb_fingerprint_of_a_missing_vdb_is_zero() {
-        let root = dir_165("fp-missing");
-        assert_eq!(vdb_fingerprint(&root.join("var/db/pkg")), 0);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// An existing (even empty) vdb never fingerprints to 0 or 1: the
-    /// whole-body `-> 0` row, the nested `mtime_nanos -> 0` row (which
-    /// zeroes the only accumulator term), the `mtime_nanos -> 1` row
-    /// (whose constant survives the empty count term), and the final
-    /// `^` -> `&` row (which masks the accumulator with the zero count
-    /// term) all fail here.
-    #[test]
-    fn vdb_fingerprint_of_an_existing_vdb_is_neither_zero_nor_one() {
-        let root = dir_165("fp-empty");
-        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
-        let fp = vdb_fingerprint(&root.join("var/db/pkg"));
-        assert_ne!(fp, 0);
-        assert_ne!(fp, 1);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// Adding a category changes the fingerprint: the `count += 1` ->
-    /// `-=` row underflows (debug panic) and the rotation `+ 1` -> `- 1`
-    /// row underflows on the first category's `u32` amount, so both
-    /// fail here rather than silently keeping a stale cache key.
-    #[test]
-    fn vdb_fingerprint_changes_when_a_category_appears() {
-        let root = dir_165("fp-sensitivity");
-        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
-        let before = vdb_fingerprint(&root.join("var/db/pkg"));
-        std::fs::create_dir_all(root.join("var/db/pkg/dev-libs")).unwrap();
-        let after = vdb_fingerprint(&root.join("var/db/pkg"));
-        assert_ne!(before, after);
         let _ = std::fs::remove_dir_all(&root);
     }
 

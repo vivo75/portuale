@@ -63,6 +63,14 @@ real tree in the differential bed). At a capability level:
 - **Whole-`emerge` actions** — `--info` (byte-exact vs live, incl.
   config-layer stack), `--regen`, `--check-news`, `--search` /
   ambiguous-name, `package.provided`.
+- **Installed-package database backends (#305)** — the VDB behind one
+  `InstalledDb` interface with `files` (the historic tree, default),
+  `sqlite` and `redb` backends; `mrg --vdb-backend=` selects one (merge,
+  unmerge, `--pretend`, ebuild-phase `has_version` / `best_version` via
+  the native `portuale portageq`); `portuale vdb convert / verify /
+  status / sweep / rebuild-index`; a read-only FUSE view (`portuale vdb
+  mount`) that eix / q* / equery / real `emerge -p` read unchanged.
+  `emerge` itself stays on `files`.
 - **Infra** — musl static build; edition 2024; the `err-*` per-crate
   error model; `mrg` applet (clap over the emerge codepath) + the
   `mrg-director` eight-slot contract layer; the `TEST/` L0 + L1
@@ -700,8 +708,9 @@ unit and the serial source-merge loop through the seam), `NewsSet`
 through the seam), `Fetcher` (H1: the `fetch_src_uri` candidate loop
 dispatches every per-candidate download through `WgetFetcher` via
 `FetchRequest`; Manifest verification and the `fsmirror` pre-copy stay
-at the call site), `PackagesDb` (H2: `find_owners`/`owns_path` read
-merge-time CONTENTS through `VdbReader`; `reverse_dependents` still has
+at the call site), `PackagesDb` (H2: `owns_path` reads merge-time
+CONTENTS through `VdbReader`; `find_owners` left the seam in #305 S8 and
+asks the installed-database backend's `owners` index; `reverse_dependents` still has
 no production caller -- depclean's parent data is a different shape
 computed inside `portage-repo`), `BinpkgIndex` (H3: the remote
 `Packages` lookup in `merge_one_binary_entry` goes through

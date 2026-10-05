@@ -489,44 +489,21 @@ pub fn generate_soname_deps(
 /// "what does path X provide" or "what needs path X" -- only "what did
 /// each installed package's own real `NEEDED.ELF.2` say".
 pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
-    let mut result = Vec::new();
-    let pkg_root = root.join("var/db/pkg");
-    let Ok(categories) = portage_util::read_dir_entries(&pkg_root) else {
-        return result;
-    };
-    let category_names: Vec<String> = categories
+    // `read_file_all` is the old walk, moved into `FilesDb` unchanged
+    // (the `-MERGING-` skip included); a missing, unreadable or non-UTF-8
+    // file is still an empty row.
+    portage_vdb::for_root(root)
+        .read_file_all("NEEDED.ELF.2")
+        .unwrap_or_default()
         .into_iter()
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-
-    for category in category_names {
-        let category_path = pkg_root.join(&category);
-        let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
-            continue;
-        };
-        let pf_names: Vec<String> = packages
-            .into_iter()
-            .filter(|e| e.path().is_dir())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-
-        for pf in pf_names {
-            // Real `vardbapi._excluded_dirs`: an in-progress
-            // `-MERGING-<pf>` entry contributes no soname index rows --
-            // its `NEEDED.ELF.2` is half-written by definition.
-            if portage_util::is_merging_vdb_entry(&pf) {
-                continue;
-            }
-            let cpv = format!("{category}/{pf}");
-            let needed_path = category_path.join(&pf).join("NEEDED.ELF.2");
-            let entries = std::fs::read_to_string(&needed_path)
+        .map(|(key, data)| {
+            let entries = data
+                .and_then(|bytes| String::from_utf8(bytes).ok())
                 .map(|text| NeededEntry::parse_file(&text))
                 .unwrap_or_default();
-            result.push((cpv, entries));
-        }
-    }
-    result
+            (format!("{}/{}", key.category, key.pf), entries)
+        })
+        .collect()
 }
 
 /// Real `_approx_multilib_categories` (`LinkageMapELF.py:29-46`): maps a
