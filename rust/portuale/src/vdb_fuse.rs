@@ -45,9 +45,11 @@ struct Fs {
     gid: u32,
 }
 
-/// `--rw`: where staged entries live while real Portage writes them.
+/// `--rw`: where staged entries live while real Portage writes them, and
+/// the ROOT whose stores (world, counter, …) are imported at unmount.
 pub struct RwOpts {
     pub scratch: PathBuf,
+    pub root: PathBuf,
 }
 
 impl Fs {
@@ -663,6 +665,7 @@ pub fn serve(
     }
     // SAFETY: geteuid/getegid never fail and touch no memory.
     let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    let import = rw.map(|o| (o.root.clone(), db.clone()));
     let mode = match rw {
         None => Mode::Ro(View::new(db)),
         Some(o) => Mode::Rw(Box::new(RwView::new(
@@ -684,7 +687,24 @@ pub fn serve(
                 let _ = unmounter.unmount();
             }
         })?;
-    session.run()
+    session.run()?;
+    // `--rw`: real emerge wrote world, the counter, … on disk under ROOT
+    // while the entries went to the database; take them in now (#317 S4).
+    if let Some((root, db)) = import {
+        match crate::vdb_cmd::import_stores(&root, &*db) {
+            Ok(rep) => eprintln!("portuale vdb mount: imported {rep} from {}", root.display()),
+            Err(e) => {
+                eprintln!(
+                    "portuale vdb mount: importing the stores from {} failed: {e}; run \
+                     `portuale vdb import-stores files:{} …` by hand",
+                    root.display(),
+                    root.display()
+                );
+                return Err(io::Error::other(e.to_string()));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Run `serve` in a background process: fork, `setsid`, report the mount
