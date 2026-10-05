@@ -1420,6 +1420,45 @@ conformance_suite!(
     }
 );
 
+/// redb refuses a second read-write handle on one file, in this process
+/// too (`Error::Busy`), but the generic tests call the factory again for
+/// "a second handle on the same storage" while the first is alive. The
+/// factory therefore hands out the one live handle of a path (a `Weak`
+/// table, so it closes with its `Ctx`). Persistence across a real reopen
+/// is covered by the unit tests in `redb_db.rs`.
+#[cfg(feature = "vdb-redb")]
+fn redb_handle(root: &Path) -> Arc<dyn InstalledDb> {
+    use std::collections::HashMap;
+    use std::sync::Weak;
+    static OPEN: Mutex<Option<HashMap<PathBuf, Weak<portage_vdb::RedbDb>>>> = Mutex::new(None);
+    let path = root.join("vdb.redb");
+    let mut g = OPEN.lock().unwrap_or_else(PoisonError::into_inner);
+    let map = g.get_or_insert_with(HashMap::new);
+    map.retain(|_, w| w.strong_count() > 0);
+    if let Some(db) = map.get(&path).and_then(Weak::upgrade) {
+        return db;
+    }
+    let db = Arc::new(portage_vdb::RedbDb::open(&path).unwrap());
+    map.insert(path, Arc::downgrade(&db));
+    db
+}
+
+// S5.3: every method is implemented on redb, in one redb write
+// transaction per `begin_write`.
+#[cfg(feature = "vdb-redb")]
+conformance_suite!(
+    redb,
+    |root| redb_handle(root),
+    Caps {
+        set_counter: None,
+        reverse_dependents: None,
+        snapshot: None,
+        read_file_at: None,
+        entry_image: None,
+        seal_stores_metadata_file: true,
+    }
+);
+
 // --------------------------------------------------- backend-independent
 
 /// `parse_preserved_libs` / `format_preserved_libs` are the `files`

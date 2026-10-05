@@ -454,10 +454,10 @@
 //!
 //! # RedbDb (feature `vdb-redb`)
 //!
-//! S5.2 adds the tables, `open` / `open_readonly` and the read side; the
-//! write side is S5.3 (`begin_write` is [`Error::Unsupported`], or
+//! S5.2 adds the tables, `open` / `open_readonly` and the read side; S5.3
+//! the write side (every [`WriteTxn`] method; `begin_write` is
 //! [`Error::Invalid`] on a read-only handle). Details are in the module doc
-//! of `redb_db.rs`.
+//! of `redb_db.rs` and `redb_db/write.rs`.
 //!
 //! - **One process only.** redb locks the file for a read-write handle, so
 //!   a second open (read-write or read-only, any process, also a second
@@ -471,6 +471,19 @@
 //!   `(len, mode, mtime)` record in `entry_file_meta`), and `read_file_at`
 //!   loads only the chunks it needs. Values are fixed little-endian binary
 //!   records, no serde.
+//! - **Writes follow `SqliteTxn` method by method** (same semantics,
+//!   errors, generation policy, counter rule, stamp handling and derived
+//!   rows). One [`WriteTxn`] is one `redb::WriteTransaction`, committed by
+//!   `commit` and aborted when dropped. redb allows one write transaction
+//!   per `Database` and its `begin_write` **blocks** until the open one
+//!   ends: another thread simply waits, but a second `begin_write` on the
+//!   thread that already holds one would wait for itself, so it returns
+//!   [`Error::Invalid`]. Callers hold one transaction at a time (the merge
+//!   already does: each transaction is short). Reads during a transaction
+//!   do not block and see the committed state. `owner`, `dep_atom` (the
+//!   shared `dep_cp` prefilter) and `needed` are filled in the same
+//!   transaction (row encodings: `redb_db/write.rs`); `meta.generation` is
+//!   bumped on commit when anything was written.
 //! - **Reads equal sqlite's** (and `FilesDb`'s): same stamp rule, same
 //!   `owners` rule, `category_generation` = `generation`, `categories` lists
 //!   only categories with a live entry. The listing and the 23-field
@@ -507,6 +520,8 @@
 //! S0.3 corpus.
 
 mod convert;
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+mod dep_cp;
 mod error;
 mod files;
 mod files_write;

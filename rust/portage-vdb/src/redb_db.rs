@@ -30,9 +30,9 @@
 //! | `entry_by_counter` | table | `counter: i64` | `id: u64` |
 //! | `entry_file_meta` | table | `(id, name)` | `FileRec` (20 bytes) |
 //! | `entry_file_chunk` | table | `(id, name, chunk: u32)` | up to [`CHUNK`] bytes |
-//! | `owner` | multimap | path bytes | row (S5.3) |
-//! | `dep_atom` | multimap | `cp` | row (S5.3) |
-//! | `needed` | multimap | `id: u64` | row (S5.3) |
+//! | `owner` | multimap | path bytes | row, see `write.rs` |
+//! | `dep_atom` | multimap | `cp` | row, see `write.rs` |
+//! | `needed` | multimap | `id: u64` | row, see `write.rs` |
 //! | `world`, `world_sets` | table | `pos: u32` | atom / set name |
 //! | `preserved_lib` | table | registry key `cp:slot` | `PlibRec` |
 //! | `config_memory` | table | path | md5 |
@@ -185,13 +185,10 @@ fn rerr(path: &Path, e: redb::Error) -> Error {
 // ---------------------------------------------------------------------
 // Value encodings.
 
-/// Little-endian writer for the record encodings (tests only until the
-/// S5.3 writer lands).
-#[cfg(test)]
+/// Little-endian writer for the record encodings.
 #[derive(Default)]
 struct Enc(Vec<u8>);
 
-#[cfg(test)]
 impl Enc {
     fn u8(mut self, v: u8) -> Self {
         self.0.push(v);
@@ -209,10 +206,26 @@ impl Enc {
         self.0.extend_from_slice(&v.to_le_bytes());
         self
     }
-    fn str(mut self, v: &str) -> Self {
+    fn bytes(mut self, v: &[u8]) -> Self {
         self = self.u32(v.len() as u32);
-        self.0.extend_from_slice(v.as_bytes());
+        self.0.extend_from_slice(v);
         self
+    }
+    fn str(self, v: &str) -> Self {
+        self.bytes(v.as_bytes())
+    }
+    /// Flag byte, then the value when present.
+    fn opt_str(self, v: Option<&str>) -> Self {
+        match v {
+            Some(s) => self.u8(1).str(s),
+            None => self.u8(0),
+        }
+    }
+    fn opt_i64(self, v: Option<i64>) -> Self {
+        match v {
+            Some(n) => self.u8(1).i64(n),
+            None => self.u8(0),
+        }
     }
 }
 
@@ -260,7 +273,6 @@ struct EntryRec {
     repo: String,
 }
 
-#[cfg(test)]
 fn stamp_byte(s: MetadataStamp) -> u8 {
     match s {
         MetadataStamp::Absent => 0,
@@ -270,7 +282,6 @@ fn stamp_byte(s: MetadataStamp) -> u8 {
 }
 
 impl EntryRec {
-    #[cfg(test)]
     fn encode(&self) -> Vec<u8> {
         let e = Enc::default().u64(self.id);
         let e = match self.counter {
@@ -324,7 +335,6 @@ struct FileRec {
 }
 
 impl FileRec {
-    #[cfg(test)]
     fn encode(&self) -> Vec<u8> {
         Enc::default()
             .u64(self.len)
@@ -401,6 +411,9 @@ pub struct RedbDb {
     handle: Handle,
     /// The in-process read cache ([`CacheState`]).
     cache: Mutex<CacheState>,
+    /// The thread that holds the open write transaction, if any (see
+    /// `begin_write`).
+    writer: Mutex<Option<std::thread::ThreadId>>,
 }
 
 /// What the read cache holds for one `meta.generation` value.
@@ -481,6 +494,7 @@ impl RedbDb {
             path,
             handle,
             cache: Mutex::new(CacheState::default()),
+            writer: Mutex::new(None),
         }
     }
 
@@ -605,6 +619,8 @@ fn check_version(handle: &Handle, path: &Path) -> Result<()> {
         None => Err(foreign()),
     }
 }
+
+mod write;
 
 // ---------------------------------------------------------------------
 // Reads inside one transaction.
@@ -1096,18 +1112,14 @@ impl InstalledDb for RedbDb {
         }
     }
 
-    /// The write side is S5.3.
+    /// One redb `WriteTransaction` ([`write::RedbTxn`]). redb allows one
+    /// write transaction per `Database`: another thread's `begin_write`
+    /// blocks until the open one commits or is dropped (redb's own wait).
+    /// A second `begin_write` on the thread that already holds one would
+    /// wait for itself forever, so it is refused with [`Error::Invalid`]
+    /// instead of deadlocking.
     fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>> {
-        if self.is_readonly() {
-            return Err(Error::Invalid(format!(
-                "{}: opened read-only",
-                self.path.display()
-            )));
-        }
-        Err(Error::Unsupported(format!(
-            "RedbDb::begin_write: the write side arrives in feat#157 S5.3 ({})",
-            self.path.display()
-        )))
+        Ok(Box::new(write::RedbTxn::begin(self)?))
     }
 }
 
@@ -1313,7 +1325,6 @@ mod tests {
         assert!(db.entries().unwrap().is_empty());
         assert_eq!(db.generation().unwrap(), 0);
         assert_eq!(db.counter().unwrap(), None);
-        assert!(matches!(db.begin_write(), Err(Error::Unsupported(m)) if m.contains("S5.3")));
     }
 
     #[test]
@@ -2101,5 +2112,809 @@ mod tests {
         );
         assert_eq!(chunk_len(CHUNK as u64 + 5, 1), 5);
         assert_eq!(chunk_len(CHUNK as u64, 1), 0);
+    }
+
+    // --- the write side (S5.3), mirroring sqlite's S2.5 tests ---------
+
+    use redb::{ReadableMultimapTable, ReadableTableMetadata};
+
+    type OwnerRow = (
+        Vec<u8>,
+        u32,
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<Vec<u8>>,
+    );
+
+    fn merge(db: &RedbDb, k: &EntryKey, files: &[(&str, &[u8])], seal: bool) {
+        let mut t = db.begin_write().unwrap();
+        t.begin_entry(k).unwrap();
+        for (n, d) in files {
+            t.put_entry_file(k, n, d).unwrap();
+        }
+        if seal {
+            t.seal_entry(k).unwrap();
+        }
+        t.finish_entry(k).unwrap();
+        t.commit().unwrap();
+    }
+
+    const CONTENTS_A: &[u8] = b"dir /usr\nobj /usr/bin/x d41d8cd98f00b204e9800998ecf8427e 1700\n\
+sym /usr/bin/y -> x 1701\nfoo /usr/z\ndev /dev/n\n";
+    const NEEDED_A: &[u8] =
+        b"X86_64;/usr/lib/liba.so;liba.so.1;/opt/a:/usr/lib;libc.so.6,libb.so\n\
+bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
+
+    fn a_files() -> Vec<(&'static str, &'static [u8])> {
+        vec![
+            ("SLOT", b"2/3.4\n"),
+            ("repository", b"gentoo\n"),
+            ("COUNTER", b"41\n"),
+            ("CONTENTS", CONTENTS_A),
+            ("NEEDED.ELF.2", NEEDED_A),
+            (
+                "RDEPEND",
+                b"!<dev-libs/old-2 ssl? ( >=dev-libs/ssl-1.1:0=[static] ) || ( a/b c/d )\n",
+            ),
+            ("DEPEND", b"dev-libs/ssl\n"),
+            ("BDEPEND", b""),
+            ("USE", b"ssl\n"),
+        ]
+    }
+
+    fn rec_of_key(db: &RedbDb, k: &EntryKey, state: u8) -> Option<EntryRec> {
+        db.read(|rd| rd.rec(state, k)).unwrap()
+    }
+
+    fn id_of(db: &RedbDb, k: &EntryKey, state: u8) -> Option<u64> {
+        rec_of_key(db, k, state).map(|r| r.id)
+    }
+
+    /// Row counts: `[entry, entry_by_id, entry_by_counter, file_meta,
+    /// file_chunk, owner, dep_atom, needed, world, world_sets,
+    /// preserved_lib, config_memory]`.
+    fn counts(db: &RedbDb) -> [u64; 12] {
+        let txn = db.handle.begin_read().unwrap();
+        let t = |d| txn.open_table(d).unwrap().len().unwrap();
+        [
+            t(ENTRY),
+            txn.open_table(ENTRY_BY_ID).unwrap().len().unwrap(),
+            txn.open_table(ENTRY_BY_COUNTER).unwrap().len().unwrap(),
+            txn.open_table(ENTRY_FILE_META).unwrap().len().unwrap(),
+            txn.open_table(ENTRY_FILE_CHUNK).unwrap().len().unwrap(),
+            txn.open_multimap_table(OWNER).unwrap().len().unwrap(),
+            txn.open_multimap_table(DEP_ATOM).unwrap().len().unwrap(),
+            txn.open_multimap_table(NEEDED).unwrap().len().unwrap(),
+            txn.open_table(WORLD).unwrap().len().unwrap(),
+            txn.open_table(WORLD_SETS).unwrap().len().unwrap(),
+            txn.open_table(PRESERVED_LIB).unwrap().len().unwrap(),
+            txn.open_table(CONFIG_MEMORY).unwrap().len().unwrap(),
+        ]
+    }
+
+    fn owner_rows_of(db: &RedbDb, id: u64) -> Vec<OwnerRow> {
+        let txn = db.handle.begin_read().unwrap();
+        let o = txn.open_multimap_table(OWNER).unwrap();
+        let mut out = Vec::new();
+        for item in o.iter().unwrap() {
+            let (k, vals) = item.unwrap();
+            for v in vals {
+                let v = v.unwrap();
+                let mut d = Dec(v.value());
+                if d.u64().unwrap() != id {
+                    continue;
+                }
+                let seq = d.u32().unwrap();
+                let kind = d.str().unwrap();
+                let md5 = (d.u8().unwrap() == 1).then(|| d.str().unwrap());
+                let mtime = (d.u8().unwrap() == 1).then(|| d.i64().unwrap());
+                let target = (d.u8().unwrap() == 1).then(|| {
+                    let n = d.u32().unwrap() as usize;
+                    d.take(n).unwrap().to_vec()
+                });
+                assert!(d.done());
+                out.push((k.value().to_vec(), seq, kind, md5, mtime, target));
+            }
+        }
+        out.sort_by_key(|r| r.1);
+        out
+    }
+
+    /// `(arch, obj, soname, rpath, needed)` in `seq` order.
+    fn needed_rows_of(db: &RedbDb, id: u64) -> Vec<(String, Vec<u8>, String, String, String)> {
+        let txn = db.handle.begin_read().unwrap();
+        let n = txn.open_multimap_table(NEEDED).unwrap();
+        let mut out = Vec::new();
+        for v in n.get(id).unwrap() {
+            let v = v.unwrap();
+            let mut d = Dec(v.value());
+            let seq = d.u32().unwrap();
+            let arch = d.str().unwrap();
+            let len = d.u32().unwrap() as usize;
+            let obj = d.take(len).unwrap().to_vec();
+            let row = (
+                arch,
+                obj,
+                d.str().unwrap(),
+                d.str().unwrap(),
+                d.str().unwrap(),
+            );
+            assert!(d.done());
+            out.push((seq, row));
+        }
+        out.sort_by_key(|r| r.0);
+        out.into_iter().map(|r| r.1).collect()
+    }
+
+    /// `(class, cp, token)` sorted.
+    fn dep_rows_of(db: &RedbDb, id: u64) -> Vec<(String, String, String)> {
+        let txn = db.handle.begin_read().unwrap();
+        let t = txn.open_multimap_table(DEP_ATOM).unwrap();
+        let mut out = Vec::new();
+        for item in t.iter().unwrap() {
+            let (k, vals) = item.unwrap();
+            for v in vals {
+                let v = v.unwrap();
+                let mut d = Dec(v.value());
+                if d.u64().unwrap() != id {
+                    continue;
+                }
+                let class = write::DEP_CLASSES[d.u8().unwrap() as usize].field();
+                let tok = String::from_utf8(d.0.to_vec()).unwrap();
+                out.push((class.to_string(), k.value().to_string(), tok));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_dropped_or_failed_transaction_changes_nothing() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        merge(&db, &a, &a_files(), true);
+        let gen0 = db.generation().unwrap();
+        let before = counts(&db);
+        let hwm = db.counter().unwrap();
+        let big_chunks = before[4];
+        assert!(big_chunks > 0 && before[5] > 0 && before[6] > 0 && before[7] > 0);
+
+        // Dropped without commit: every kind of write is undone.
+        let b = EntryKey::new("dev-libs", "b-1");
+        {
+            let mut t = db.begin_write().unwrap();
+            t.begin_entry(&b).unwrap();
+            t.put_entry_file(&b, "CONTENTS", b"obj /x 0 0\n").unwrap();
+            t.finish_entry(&b).unwrap();
+            t.delete_entry(&a).unwrap();
+            t.next_counter().unwrap();
+            t.set_world(&World {
+                atoms: vec!["a/b".into()],
+            })
+            .unwrap();
+            t.set_world_sets(&WorldSets {
+                sets: vec!["s".into()],
+            })
+            .unwrap();
+            let mut cm = ConfigMemory::default();
+            cm.entries.insert("/etc/x".into(), "abc".into());
+            t.set_config_memory(&cm).unwrap();
+            t.set_import_mark(3, "/x").unwrap();
+        }
+        assert_eq!(db.generation().unwrap(), gen0);
+        assert_eq!(counts(&db), before);
+        assert_eq!(db.counter().unwrap(), hwm);
+        assert_eq!(db.import_mark().unwrap(), None);
+        assert!(db.has_entry(&a).unwrap());
+        assert!(!db.has_entry(&b).unwrap());
+
+        // A transaction that fails half way and is then dropped.
+        {
+            let mut t = db.begin_write().unwrap();
+            t.begin_entry(&b).unwrap();
+            t.put_entry_file(&b, "SLOT", b"0\n").unwrap();
+            let never = EntryKey::new("x", "never-1");
+            assert!(matches!(t.finish_entry(&never), Err(Error::Invalid(_))));
+            assert!(matches!(
+                t.put_entry_file(&never, "f", b""),
+                Err(Error::Invalid(_))
+            ));
+            assert!(matches!(t.delete_entry(&b), Err(Error::Invalid(_))));
+            assert!(matches!(
+                t.replace_file(&b, "CONTENTS", b""),
+                Err(Error::Invalid(_))
+            ));
+            assert!(matches!(t.discard_pending(&never), Err(Error::Invalid(_))));
+        }
+        assert_eq!(db.generation().unwrap(), gen0);
+        assert_eq!(counts(&db), before);
+        assert_eq!(db.read_pending_file(&b, "SLOT").unwrap(), None);
+
+        // An open transaction does not block reads, which see the old state.
+        let mut t = db.begin_write().unwrap();
+        t.delete_entry(&a).unwrap();
+        assert!(db.has_entry(&a).unwrap());
+        assert_eq!(db.generation().unwrap(), gen0);
+        t.commit().unwrap();
+        assert!(!db.has_entry(&a).unwrap());
+        assert_eq!(db.generation().unwrap(), gen0 + 1);
+        let c = counts(&db);
+        assert_eq!(
+            [c[0], c[1], c[3], c[4], c[5], c[6], c[7]],
+            [0; 7],
+            "delete leaves no row behind"
+        );
+    }
+
+    #[test]
+    fn one_write_transaction_at_a_time_per_database() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let txn = db.begin_write().unwrap();
+        // The same thread cannot take a second one: it would wait for itself.
+        assert!(matches!(db.begin_write(), Err(Error::Invalid(m)) if m.contains("already holds")));
+        // Another thread waits (redb blocks) until the first is dropped.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let mut second = db.begin_write().unwrap();
+                second.set_counter(Counter(5)).unwrap();
+                second.commit().unwrap();
+                tx.send(()).unwrap();
+            });
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_millis(300))
+                    .is_err(),
+                "the second begin_write must wait while the first is open"
+            );
+            drop(txn);
+            rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        });
+        assert_eq!(db.counter().unwrap(), Some(Counter(5)));
+        // Once the transaction is gone the same thread may begin again.
+        db.begin_write().unwrap().commit().unwrap();
+        let ro_dir = Tmp::new();
+        drop(RedbDb::open(ro_dir.db()).unwrap());
+        let ro = RedbDb::open_readonly(ro_dir.db()).unwrap();
+        assert!(matches!(ro.begin_write(), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn generation_bumps_by_one_per_committed_write_transaction() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let g = db.generation().unwrap();
+        db.begin_write().unwrap().commit().unwrap();
+        assert_eq!(db.generation().unwrap(), g, "an empty transaction");
+        let mut tx = db.begin_write().unwrap();
+        tx.set_preserved_libs(&PreservedLibs::default()).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            db.generation().unwrap(),
+            g,
+            "an unchanged preserved-libs write"
+        );
+        let mut tx = db.begin_write().unwrap();
+        tx.set_world(&World::default()).unwrap();
+        tx.set_world_sets(&WorldSets::default()).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db.generation().unwrap(), g + 1, "D4-only counts, once");
+        let k = EntryKey::new("a", "b-1");
+        merge(&db, &k, &[("SLOT", b"0\n")], true);
+        assert_eq!(db.generation().unwrap(), g + 2, "a whole merge in one txn");
+        // The read cache follows the bumps.
+        assert_eq!(db.entries().unwrap(), vec![k.clone()]);
+        let mut tx = db.begin_write().unwrap();
+        tx.delete_entry(&k).unwrap();
+        tx.commit().unwrap();
+        assert!(db.entries().unwrap().is_empty());
+        assert_eq!(db.aux_get(&k, "SLOT").unwrap(), None);
+    }
+
+    #[test]
+    fn finish_entry_fills_columns_and_derived_multimaps() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        merge(&db, &a, &a_files(), true);
+        let id = id_of(&db, &a, INSTALLED).unwrap();
+        let rec = rec_of_key(&db, &a, INSTALLED).unwrap();
+        assert_eq!(
+            (rec.slot.as_str(), rec.subslot.as_str(), rec.repo.as_str()),
+            ("2", "3.4", "gentoo")
+        );
+        assert_eq!(rec.counter, Some(41));
+        assert_eq!(rec.stamp, MetadataStamp::Valid);
+        assert_eq!(
+            db.counter().unwrap(),
+            Some(Counter(41)),
+            "hwm follows COUNTER"
+        );
+        let by_counter = db
+            .handle
+            .begin_read()
+            .unwrap()
+            .open_table(ENTRY_BY_COUNTER)
+            .unwrap()
+            .get(41)
+            .unwrap()
+            .map(|g| g.value());
+        assert_eq!(by_counter, Some(id));
+
+        let b = |s: &str| s.as_bytes().to_vec();
+        assert_eq!(
+            owner_rows_of(&db, id),
+            vec![
+                (b("/usr"), 0, "dir".into(), None, None, None),
+                (
+                    b("/usr/bin/x"),
+                    1,
+                    "obj".into(),
+                    Some("d41d8cd98f00b204e9800998ecf8427e".into()),
+                    Some(1700),
+                    None
+                ),
+                (
+                    b("/usr/bin/y"),
+                    2,
+                    "sym".into(),
+                    None,
+                    Some(1701),
+                    Some(b("x"))
+                ),
+                (b("/dev/n"), 3, "dev".into(), None, None, None),
+            ],
+            "`foo` is not a recorded kind"
+        );
+        assert_eq!(
+            needed_rows_of(&db, id),
+            vec![
+                (
+                    "X86_64".into(),
+                    b("/usr/lib/liba.so"),
+                    "liba.so.1".into(),
+                    "/opt/a:/usr/lib".into(),
+                    "libc.so.6,libb.so".into()
+                ),
+                (
+                    "X86_64".into(),
+                    b("/usr/bin/x"),
+                    String::new(),
+                    String::new(),
+                    "liba.so.1".into()
+                ),
+            ],
+            "the short line is skipped, the no-rpath sentinel is empty"
+        );
+        let s = |c: &str, cp: &str, atom: &str| (c.to_string(), cp.to_string(), atom.to_string());
+        assert_eq!(
+            dep_rows_of(&db, id),
+            vec![
+                s("DEPEND", "dev-libs/ssl", "dev-libs/ssl"),
+                s("RDEPEND", "a/b", "a/b"),
+                s("RDEPEND", "c/d", "c/d"),
+                s("RDEPEND", "dev-libs/old", "!<dev-libs/old-2"),
+                s("RDEPEND", "dev-libs/ssl", ">=dev-libs/ssl-1.1:0=[static]"),
+            ]
+        );
+        // The stored metadata file is the sealed one.
+        let img = db.entry_image(&a).unwrap().unwrap();
+        assert_eq!(img.metadata_stamp, MetadataStamp::Valid);
+        let text = String::from_utf8(db.read_file(&a, "metadata").unwrap().unwrap()).unwrap();
+        assert!(
+            text.starts_with("#format=1\nBDEPEND=\nCOUNTER=41\n"),
+            "{text}"
+        );
+        assert!(text.ends_with(&format!("#dir_mtime={}\n", img.dir_mtime_ns)));
+        assert_eq!(db.aux_get(&a, "SLOT").unwrap().as_deref(), Some("2/3.4"));
+
+        // A lower COUNTER does not lower the hwm; a higher one raises it.
+        let c = EntryKey::new("dev-libs", "c-1");
+        merge(&db, &c, &[("COUNTER", b"7"), ("SLOT", b"bad slot")], false);
+        assert_eq!(db.counter().unwrap(), Some(Counter(41)));
+        assert_eq!(rec_of_key(&db, &c, INSTALLED).unwrap().slot, "0");
+        let d = EntryKey::new("dev-libs", "d-1");
+        merge(&db, &d, &[("COUNTER", b"99\n")], false);
+        assert_eq!(db.counter().unwrap(), Some(Counter(99)));
+        let rec = rec_of_key(&db, &d, INSTALLED).unwrap();
+        assert_eq!((rec.counter, rec.slot.as_str()), (Some(99), ""));
+        // A duplicate COUNTER: the first claimant keeps entry_by_counter.
+        let e = EntryKey::new("dev-libs", "e-1");
+        merge(&db, &e, &[("COUNTER", b"99\n")], false);
+        let claimant = db
+            .handle
+            .begin_read()
+            .unwrap()
+            .open_table(ENTRY_BY_COUNTER)
+            .unwrap()
+            .get(99)
+            .unwrap()
+            .map(|g| g.value());
+        assert_eq!(claimant, id_of(&db, &d, INSTALLED));
+    }
+
+    #[test]
+    fn a_pending_entry_has_no_derived_rows_and_a_late_put_stales_the_stamp() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let k = EntryKey::new("dev-libs", "a-1");
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&k).unwrap();
+        tx.put_entry_file(&k, "CONTENTS", CONTENTS_A).unwrap();
+        tx.put_entry_file(&k, "SLOT", b"0\n").unwrap();
+        tx.seal_entry(&k).unwrap();
+        tx.commit().unwrap();
+        let c = counts(&db);
+        assert_eq!((c[2], c[5], c[6], c[7]), (0, 0, 0, 0));
+        let stamp = |db: &RedbDb| rec_of_key(db, &k, PENDING).unwrap().stamp;
+        assert_eq!(stamp(&db), MetadataStamp::Valid);
+        let mut tx = db.begin_write().unwrap();
+        tx.put_entry_file(&k, "SLOT", b"1\n").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            stamp(&db),
+            MetadataStamp::Valid,
+            "overwriting a name keeps the stamp"
+        );
+        let mut tx = db.begin_write().unwrap();
+        tx.put_entry_file(&k, "extra", b"x").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(stamp(&db), MetadataStamp::Stale, "a new name stales it");
+        // A pending file is readable, a live entry does not exist yet.
+        assert_eq!(db.read_pending_file(&k, "SLOT").unwrap().unwrap(), b"1\n");
+        assert!(!db.has_entry(&k).unwrap());
+    }
+
+    #[test]
+    fn replacing_in_a_slot_and_deleting_remove_the_derived_rows() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let old = EntryKey::new("dev-libs", "a-1");
+        let new = EntryKey::new("dev-libs", "a-2");
+        merge(&db, &old, &a_files(), true);
+        let old_id = id_of(&db, &old, INSTALLED).unwrap();
+        let before = counts(&db);
+        let (owners, needed, deps) = (before[5], before[7], before[6]);
+        assert!(owners > 0 && needed > 0 && deps > 0);
+
+        // The merge's two-step shape: the pending row beside the live one,
+        // then finish_entry_replacing in one transaction.
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&new).unwrap();
+        tx.put_entry_file(&new, "SLOT", b"2/5\n").unwrap();
+        tx.put_entry_file(&new, "CONTENTS", b"obj /usr/bin/n aaa 5\n")
+            .unwrap();
+        tx.put_entry_file(&new, "RDEPEND", b"dev-libs/ssl\n")
+            .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(id_of(&db, &old, INSTALLED), Some(old_id));
+        assert_eq!(counts(&db)[5], owners, "pending adds no owner rows");
+        let mut tx = db.begin_write().unwrap();
+        tx.finish_entry_replacing(&new, std::slice::from_ref(&old))
+            .unwrap();
+        tx.commit().unwrap();
+        assert!(id_of(&db, &old, INSTALLED).is_none());
+        let new_id = id_of(&db, &new, INSTALLED).unwrap();
+        assert_eq!(owner_rows_of(&db, new_id).len(), 1);
+        let c = counts(&db);
+        assert_eq!(
+            (c[0], c[5], c[7], c[6]),
+            (1, 1, 0, 1),
+            "no pending row is left"
+        );
+        assert_eq!(c[2], 0, "the old COUNTER claim went with the entry");
+        assert_eq!(rec_of_key(&db, &new, INSTALLED).unwrap().subslot, "5");
+        assert_eq!(
+            db.counter().unwrap(),
+            Some(Counter(41)),
+            "hwm never goes down"
+        );
+
+        // The same pf: the live row is replaced as a whole by finish.
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&new).unwrap();
+        tx.put_entry_file(&new, "CONTENTS", b"dir /opt\ndir /opt/a\n")
+            .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(counts(&db)[0], 2, "pending beside live");
+        let mut tx = db.begin_write().unwrap();
+        tx.finish_entry(&new).unwrap();
+        tx.commit().unwrap();
+        let c = counts(&db);
+        assert_eq!((c[0], c[1], c[5], c[6]), (1, 1, 2, 0));
+        let rec = rec_of_key(&db, &new, INSTALLED).unwrap();
+        assert_eq!((rec.counter, rec.slot.as_str()), (None, ""));
+        assert_eq!(db.read_file(&new, "SLOT").unwrap(), None);
+
+        // Delete removes everything.
+        let mut tx = db.begin_write().unwrap();
+        tx.delete_entry(&new).unwrap();
+        tx.commit().unwrap();
+        let c = counts(&db);
+        assert_eq!([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]], [0; 8]);
+    }
+
+    #[test]
+    fn replace_file_refreshes_the_rows_that_derive_from_the_file() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        // A file of three chunks, so replacing it must drop the chunks.
+        let mut files = a_files();
+        let big = vec![b'x'; CHUNK * 2 + 10];
+        files.push(("environment.bz2", &big));
+        merge(&db, &a, &files, true);
+        let id = id_of(&db, &a, INSTALLED).unwrap();
+        let before = db.entry_image(&a).unwrap().unwrap();
+        let chunks0 = counts(&db)[4];
+        let g0 = db.generation().unwrap();
+
+        let mut tx = db.begin_write().unwrap();
+        tx.replace_file(&a, "CONTENTS", b"obj /usr/bin/x ffff 9\n")
+            .unwrap();
+        tx.replace_file(&a, "NEEDED.ELF.2", b"X86_64;/usr/bin/x;;;libz.so.1\n")
+            .unwrap();
+        tx.replace_file(&a, "environment.bz2", b"\xff\x00").unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(db.generation().unwrap(), g0 + 1);
+        let rows = owner_rows_of(&db, id);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].3.as_deref(), Some("ffff"));
+        assert_eq!(counts(&db)[5], 1, "the old owner rows are gone");
+        let n = needed_rows_of(&db, id);
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].4, "libz.so.1");
+        assert_eq!(dep_rows_of(&db, id).len(), 5, "untouched");
+        assert_eq!(
+            counts(&db)[4],
+            chunks0 - 3 + 1,
+            "chunks of the old file dropped"
+        );
+        assert_eq!(
+            db.read_file(&a, "environment.bz2").unwrap().as_deref(),
+            Some(&b"\xff\x00"[..])
+        );
+        // A new file name is created; stamp, directory mtime, modes and the
+        // other files stay.
+        let mut tx = db.begin_write().unwrap();
+        tx.replace_file(&a, "brand-new", b"n").unwrap();
+        tx.commit().unwrap();
+        let after = db.entry_image(&a).unwrap().unwrap();
+        assert_eq!(after.metadata_stamp, before.metadata_stamp);
+        assert_eq!(after.dir_mtime_ns, before.dir_mtime_ns);
+        assert_eq!(
+            db.file_meta(&a, "CONTENTS").unwrap().unwrap().mode,
+            0o100_644
+        );
+        let meta = |i: &EntryImage| {
+            i.files
+                .iter()
+                .find(|f| f.meta.name == "metadata")
+                .unwrap()
+                .data
+                .clone()
+        };
+        assert_eq!(meta(&after), meta(&before));
+        // The dependency fields, SLOT and COUNTER refresh theirs too.
+        let mut tx = db.begin_write().unwrap();
+        tx.replace_file(&a, "RDEPEND", b"x/y\n").unwrap();
+        tx.replace_file(&a, "SLOT", b"7\n").unwrap();
+        tx.replace_file(&a, "COUNTER", b"50\n").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(dep_rows_of(&db, id).len(), 2);
+        let rec = rec_of_key(&db, &a, INSTALLED).unwrap();
+        assert_eq!((rec.slot.as_str(), rec.counter), ("7", Some(50)));
+        assert_eq!(counts(&db)[2], 1, "one claim, moved from 41 to 50");
+        assert_eq!(
+            db.counter().unwrap(),
+            Some(Counter(41)),
+            "replace_file leaves hwm"
+        );
+        // No live entry, no replace.
+        let mut tx = db.begin_write().unwrap();
+        assert!(matches!(
+            tx.replace_file(&EntryKey::new("x", "y-1"), "f", b""),
+            Err(Error::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn the_counter_is_atomic_across_transactions_and_reopen() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        // A tick that is dropped does not move the counter.
+        let mut tx = db.begin_write().unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(0));
+        assert_eq!(tx.next_counter().unwrap(), Counter(1));
+        drop(tx);
+        assert_eq!(db.counter().unwrap(), None);
+        let mut tx = db.begin_write().unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(0));
+        tx.commit().unwrap();
+        let mut tx = db.begin_write().unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(1));
+        tx.commit().unwrap();
+        // It survives a close and a reopen, and the tick continues.
+        drop(db);
+        let db = RedbDb::open(t.db()).unwrap();
+        assert_eq!(db.counter().unwrap(), Some(Counter(1)));
+        let mut tx = db.begin_write().unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(2));
+        tx.commit().unwrap();
+        // set_counter is a plain store; the tick continues from it.
+        let mut tx = db.begin_write().unwrap();
+        tx.set_counter(Counter(100)).unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(101));
+        tx.commit().unwrap();
+        drop(db);
+        let ro = RedbDb::open_readonly(t.db()).unwrap();
+        assert_eq!(ro.counter().unwrap(), Some(Counter(101)));
+    }
+
+    #[test]
+    fn insert_entry_keeps_stamps_as_given_and_fills_derived_rows() {
+        let t = Tmp::new();
+        let src = RedbDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        merge(&src, &a, &a_files(), true);
+        let valid = src.entry_image(&a).unwrap().unwrap();
+
+        let image = |stamp, with_metadata: bool| {
+            let mut i = valid.clone();
+            i.metadata_stamp = stamp;
+            i.dir_mtime_ns = 77;
+            i.dir_mode = 0o750;
+            for f in &mut i.files {
+                f.meta.mtime_ns = 12_345;
+                f.meta.mode = 0o100_600;
+            }
+            if !with_metadata {
+                i.files.retain(|f| f.meta.name != "metadata");
+            }
+            i
+        };
+        for (tag, stamp, with_metadata) in [
+            ("stale", MetadataStamp::Stale, true),
+            ("absent", MetadataStamp::Absent, false),
+            ("valid", MetadataStamp::Valid, true),
+        ] {
+            let d = Tmp::new();
+            let dst = RedbDb::open(d.db()).unwrap();
+            let img = image(stamp, with_metadata);
+            let mut tx = dst.begin_write().unwrap();
+            tx.insert_entry(&img).unwrap();
+            tx.commit().unwrap();
+            assert_eq!(
+                dst.entry_image(&a).unwrap().unwrap(),
+                img,
+                "{tag}: as given"
+            );
+            assert_eq!(dst.generation().unwrap(), 1);
+            assert_eq!(
+                dst.counter().unwrap(),
+                None,
+                "{tag}: counter store untouched"
+            );
+            let id = id_of(&dst, &a, INSTALLED).unwrap();
+            assert_eq!(owner_rows_of(&dst, id).len(), 4, "{tag}");
+            assert_eq!(needed_rows_of(&dst, id).len(), 2, "{tag}");
+            assert_eq!(dep_rows_of(&dst, id).len(), 5, "{tag}");
+            assert_eq!(rec_of_key(&dst, &a, INSTALLED).unwrap().counter, Some(41));
+            // Stale stays stale through a second hop; no file is added.
+            let again = Tmp::new();
+            let dst2 = RedbDb::open(again.db()).unwrap();
+            let mut tx = dst2.begin_write().unwrap();
+            tx.insert_entry(&dst.entry_image(&a).unwrap().unwrap())
+                .unwrap();
+            tx.commit().unwrap();
+            let hop = dst2.entry_image(&a).unwrap().unwrap();
+            assert_eq!(hop.metadata_stamp, stamp, "{tag}");
+            assert_eq!(
+                hop.files.iter().any(|f| f.meta.name == "metadata"),
+                with_metadata,
+                "{tag}"
+            );
+        }
+        // A stale stamp is not served: aux_get reads the field file.
+        let d = Tmp::new();
+        let dst = RedbDb::open(d.db()).unwrap();
+        let mut img = image(MetadataStamp::Stale, true);
+        for f in &mut img.files {
+            if f.meta.name == "SLOT" {
+                f.data = b"9\n".to_vec();
+            }
+        }
+        let mut tx = dst.begin_write().unwrap();
+        tx.insert_entry(&img).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(dst.aux_get(&a, "SLOT").unwrap().as_deref(), Some("9"));
+        // Replacing a live entry through insert_entry leaves no old rows.
+        let mut tx = dst.begin_write().unwrap();
+        tx.insert_entry(&image(MetadataStamp::Valid, true)).unwrap();
+        tx.commit().unwrap();
+        let c = counts(&dst);
+        assert_eq!((c[0], c[2], c[5], c[6], c[7]), (1, 1, 4, 5, 2));
+        // Out-of-range values are refused before anything is written.
+        let mut bad = img.clone();
+        bad.dir_mtime_ns = i128::MAX;
+        let mut tx = dst.begin_write().unwrap();
+        assert!(matches!(tx.insert_entry(&bad), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn discard_pending_removes_only_the_pending_entry() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let k = EntryKey::new("dev-libs", "a-1");
+        merge(&db, &k, &a_files(), true);
+        let live = counts(&db);
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&k).unwrap();
+        tx.put_entry_file(&k, "SLOT", b"9\n").unwrap();
+        tx.put_entry_file(&k, "big", &vec![1; CHUNK + 1]).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db.pending_entries().unwrap(), vec![k.clone()]);
+        let mut tx = db.begin_write().unwrap();
+        tx.discard_pending(&k).unwrap();
+        assert!(matches!(tx.discard_pending(&k), Err(Error::Invalid(_))));
+        tx.commit().unwrap();
+        assert!(db.pending_entries().unwrap().is_empty());
+        assert_eq!(
+            counts(&db),
+            live,
+            "the live entry and its rows are untouched"
+        );
+        assert_eq!(db.aux_get(&k, "SLOT").unwrap().as_deref(), Some("2/3.4"));
+        // An orphan with no live entry beside it.
+        let o = EntryKey::new("dev-libs", "orphan-1");
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&o).unwrap();
+        tx.commit().unwrap();
+        let mut tx = db.begin_write().unwrap();
+        tx.discard_pending(&o).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(counts(&db), live);
+    }
+
+    #[test]
+    fn import_mark_round_trips_and_survives_reopen() {
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        assert_eq!(db.import_mark().unwrap(), None);
+        let mut tx = db.begin_write().unwrap();
+        tx.set_import_mark(42, "/var/db/pkg").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db.import_mark().unwrap(), Some((42, "/var/db/pkg".into())));
+        let mut tx = db.begin_write().unwrap();
+        tx.set_import_mark(43, "/other").unwrap();
+        tx.commit().unwrap();
+        drop(db);
+        let db = RedbDb::open(t.db()).unwrap();
+        assert_eq!(db.import_mark().unwrap(), Some((43, "/other".into())));
+    }
+
+    #[test]
+    fn copy_entry_file_reads_the_source_and_its_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let t = Tmp::new();
+        let db = RedbDb::open(t.db()).unwrap();
+        let src = t.0.join("src.bin");
+        std::fs::write(&src, b"hello").unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let k = EntryKey::new("a", "b-1");
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&k).unwrap();
+        tx.copy_entry_file(&k, "f", &src).unwrap();
+        let err = tx
+            .copy_entry_file(&k, "g", &t.0.join("missing"))
+            .unwrap_err();
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+        tx.finish_entry(&k).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db.read_file(&k, "f").unwrap().unwrap(), b"hello");
+        assert_eq!(db.file_meta(&k, "f").unwrap().unwrap().mode & 0o777, 0o600);
     }
 }

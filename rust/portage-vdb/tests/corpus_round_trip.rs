@@ -1,16 +1,18 @@
 //! Round trip of the #305 corpus (docs/evidence/305-s0-corpus.md, plan
-//! S2.8): every corpus member is copied files -> sqlite -> files and
-//! `verify` must find nothing, on both legs.
+//! S2.8, S5.3): every corpus member is copied files -> sqlite -> files
+//! (feature `vdb-sqlite`), files -> redb -> files (`vdb-redb`) and, with
+//! both, files -> sqlite -> redb -> files, and `verify` must find nothing
+//! on every leg.
 //!
 //! Members: the two pmtest fixture VDBs (always, read only through the
 //! `fixtures` symlink), plus the host `/` when `PORTUALE_VDB_HOST_CORPUS=1`
 //! (read only; the copies go to a scratch directory).
-#![cfg(feature = "vdb-sqlite")]
+#![cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use portage_vdb::{FilesDb, InstalledDb, SqliteDb, copy_all, verify};
+use portage_vdb::{FilesDb, InstalledDb, copy_all, verify};
 
 fn scratch(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!(
@@ -23,30 +25,46 @@ fn scratch(name: &str) -> PathBuf {
     d
 }
 
-/// files(`src`) -> sqlite -> files, verifying both legs.
-fn round_trip(name: &str, src: Arc<dyn InstalledDb>) {
-    let dir = scratch(name);
-    let sqlite: Arc<dyn InstalledDb> = Arc::new(SqliteDb::open(dir.join("vdb.sqlite")).unwrap());
-    copy_all(src.as_ref(), sqlite.as_ref(), false).unwrap();
-    let back: Arc<dyn InstalledDb> = Arc::new(FilesDb::new(&dir.join("root")));
-    copy_all(sqlite.as_ref(), back.as_ref(), false).unwrap();
+/// `verify(src, copy)` finds nothing.
+fn assert_equal(name: &str, what: &str, src: &dyn InstalledDb, copy: &dyn InstalledDb) {
+    let r = verify(src, copy).unwrap();
+    assert!(r.is_equal(), "{name}: {what}: {:#?}", r.differences);
+}
 
-    let first = verify(src.as_ref(), sqlite.as_ref()).unwrap();
-    assert!(
-        first.is_equal(),
-        "{name}: files vs sqlite: {:#?}",
-        first.differences
-    );
-    let second = verify(src.as_ref(), back.as_ref()).unwrap();
-    assert!(
-        second.is_equal(),
-        "{name}: files vs files copy: {:#?}",
-        second.differences
-    );
+/// Copy `from` into the fresh database `to`, then back into a fresh files
+/// tree; the files copy must equal `src`. `to` is also compared with
+/// `src` directly.
+fn via(name: &str, tag: &str, src: &dyn InstalledDb, from: &dyn InstalledDb, to: &dyn InstalledDb) {
+    copy_all(from, to, false).unwrap();
+    assert_equal(name, &format!("files vs {tag}"), src, to);
+    let dir = scratch(&format!("{name}-{tag}-back"));
+    let back = FilesDb::new(&dir);
+    copy_all(to, &back, false).unwrap();
+    assert_equal(name, &format!("files vs files copy via {tag}"), src, &back);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// files(`src`) -> each backend -> files, verifying every leg.
+fn round_trip(name: &str, src: Arc<dyn InstalledDb>) {
     assert!(
         !src.entries().unwrap().is_empty(),
         "{name}: corpus member has no entries"
     );
+    let dir = scratch(name);
+    #[cfg(feature = "vdb-sqlite")]
+    let sqlite = portage_vdb::SqliteDb::open(dir.join("vdb.sqlite")).unwrap();
+    #[cfg(feature = "vdb-sqlite")]
+    via(name, "sqlite", src.as_ref(), src.as_ref(), &sqlite);
+    #[cfg(feature = "vdb-redb")]
+    {
+        let redb = portage_vdb::RedbDb::open(dir.join("vdb.redb")).unwrap();
+        via(name, "redb", src.as_ref(), src.as_ref(), &redb);
+    }
+    #[cfg(all(feature = "vdb-sqlite", feature = "vdb-redb"))]
+    {
+        let redb = portage_vdb::RedbDb::open(dir.join("from-sqlite.redb")).unwrap();
+        via(name, "sqlite-redb", src.as_ref(), &sqlite, &redb);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
