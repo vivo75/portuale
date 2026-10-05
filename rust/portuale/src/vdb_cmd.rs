@@ -56,7 +56,12 @@ KIND:PATH
                   without a VDB under it is read as a bare VDB directory
                   (entries only, no stores).
    sqlite:FILE    one SQLite file (created by convert when missing)
-   redb:FILE      not implemented yet (S5)
+   redb:FILE      one redb file (created by convert when missing). redb allows one
+                  process at a time: a file held open by another process (a
+                  running mrg, another vdb command, a FUSE mount) fails with the
+                  Busy message (database is already open) (exit 2) instead of
+                  waiting. Read-only commands (verify, status) also need the
+                  file to be free of a read-write holder.
 
 convert options:
    --from KIND:PATH   the source (read only)
@@ -127,7 +132,7 @@ struct Spec {
 fn parse_spec(s: &str) -> Result<Spec, String> {
     let (kind, path) = s
         .split_once(':')
-        .ok_or_else(|| format!("{s:?}: expected KIND:PATH (files:ROOT, sqlite:FILE)"))?;
+        .ok_or_else(|| format!("{s:?}: expected KIND:PATH (files:ROOT, sqlite:FILE, redb:FILE)"))?;
     if path.is_empty() {
         return Err(format!("{s:?}: empty path"));
     }
@@ -160,8 +165,25 @@ fn open(spec: &Spec, write: bool) -> Result<Box<dyn InstalledDb>, String> {
             _ => Err(format!("{}: not a directory", spec.path.display())),
         },
         BackendKind::Sqlite => open_sqlite(&spec.path, write),
-        BackendKind::Redb => Err("redb: not built / not implemented yet (plan S5)".into()),
+        BackendKind::Redb => open_redb(&spec.path, write),
     }
+}
+
+#[cfg(feature = "vdb-redb")]
+fn open_redb(path: &Path, write: bool) -> Result<Box<dyn InstalledDb>, String> {
+    let db = if write {
+        portage_vdb::RedbDb::open(path)
+    } else {
+        portage_vdb::RedbDb::open_readonly(path)
+    };
+    // `Error::Busy` displays the file and the one-process rule.
+    db.map(|d| Box::new(d) as Box<dyn InstalledDb>)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "vdb-redb"))]
+fn open_redb(_path: &Path, _write: bool) -> Result<Box<dyn InstalledDb>, String> {
+    Err("redb: this portuale was built without the vdb-redb feature".into())
 }
 
 #[cfg(feature = "vdb-sqlite")]
@@ -281,7 +303,7 @@ fn verify(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
 
 /// Open an existing database for `status` / `sweep`; never creates one.
 fn open_existing(spec: &Spec, write: bool) -> Result<Box<dyn InstalledDb>, String> {
-    if spec.kind == BackendKind::Sqlite && !spec.path.exists() {
+    if spec.kind != BackendKind::Files && !spec.path.exists() {
         return Err(format!("{}: no such database", spec.path.display()));
     }
     open(spec, write)
@@ -639,9 +661,10 @@ mod tests {
         assert_eq!(cli(&["frob"]).0, 2);
         assert_eq!(cli(&["convert", "--from", "files:/x"]).0, 2);
         assert_eq!(cli(&["verify", "files:/x"]).0, 2);
-        let (c, _, e) = cli(&["verify", "redb:/a", "redb:/b"]);
+        // A missing redb file is an I/O error (exit 2), never created by verify.
+        let (c, _, e) = cli(&["verify", "redb:/nonexistent/a", "redb:/nonexistent/b"]);
         assert_eq!(c, 2);
-        assert!(e.contains("redb") && e.contains("S5"), "{e}");
+        assert!(e.contains("portuale vdb:"), "{e}");
         let (c, _, e) = cli(&["verify", "lmdb:/a", "files:/b"]);
         assert_eq!(c, 2);
         assert!(e.contains("unknown VDB backend"), "{e}");
@@ -764,6 +787,62 @@ mod tests {
         let missing = format!("sqlite:{}", s(&root.join("none.sqlite")));
         assert_eq!(cli(&["status", &missing]).0, 2);
         assert!(!root.join("none.sqlite").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(feature = "vdb-redb")]
+    #[test]
+    fn status_and_sweep_on_redb_and_busy_when_held() {
+        let root = fixture_root("sweepredb");
+        let db = root.join("vdb.redb");
+        let spec = format!("redb:{}", s(&db));
+        let files = format!("files:{}", s(&root));
+        let (c, o, e) = cli(&["convert", "--from", &files, "--to", &spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        // files -> redb -> files round trip verifies equal.
+        let back = root.join("back");
+        let back_spec = format!("files:{}", s(&back));
+        let (c, o, e) = cli(&["convert", "--from", &spec, "--to", &back_spec]);
+        assert_eq!(c, 0, "{o}{e}");
+        let (c, o, _) = cli(&["verify", &spec, &back_spec]);
+        assert_eq!(c, 0, "{o}");
+        let (c, o, _) = cli(&["verify", &files, &spec]);
+        assert_eq!(c, 0, "{o}");
+        let d = open(&parse_spec(&spec).unwrap(), false).unwrap();
+        let keep = d.entries().unwrap()[0].to_string();
+        drop(d);
+        let (_, o, _) = cli(&["status", &spec]);
+        assert!(
+            o.contains("imported:") && o.contains("backend:    redb"),
+            "{o}"
+        );
+        status_sweep_cycle(&spec, &keep);
+        // A missing database is an error and is not created.
+        let missing = format!("redb:{}", s(&root.join("none.redb")));
+        assert_eq!(cli(&["status", &missing]).0, 2);
+        assert_eq!(cli(&["sweep", "--all", &missing]).0, 2);
+        assert!(!root.join("none.redb").exists());
+        // Held by a read-write handle: every command reports Busy, exit 2.
+        let held = portage_vdb::RedbDb::open(&db).unwrap();
+        for args in [
+            vec!["status", spec.as_str()],
+            vec!["sweep", "--all", spec.as_str()],
+            vec!["verify", spec.as_str(), files.as_str()],
+            vec![
+                "convert",
+                "--from",
+                files.as_str(),
+                "--to",
+                spec.as_str(),
+                "--force",
+            ],
+        ] {
+            let (c, _, e) = cli(&args);
+            assert_eq!(c, 2, "{args:?}: {e}");
+            assert!(e.contains("database is already open"), "{args:?}: {e}");
+        }
+        drop(held);
+        assert_eq!(cli(&["status", &spec]).0, 0);
         let _ = fs::remove_dir_all(&root);
     }
 

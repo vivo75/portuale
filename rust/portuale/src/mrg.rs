@@ -102,7 +102,7 @@
 
 use clap::builder::PossibleValuesParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
-#[cfg(feature = "vdb-sqlite")]
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 use portage_vdb::InstalledDb;
 use std::process::ExitCode;
 
@@ -1572,17 +1572,20 @@ fn open_vdb_backend(
     };
     match sel.backend {
         BackendKind::Files => Ok(None),
-        BackendKind::Redb => {
-            Err("mrg: the redb VDB backend is not built / not implemented yet (plan S5)".into())
-        }
+        BackendKind::Redb => open_redb_backend(path, root, readonly),
         BackendKind::Sqlite => open_sqlite_backend(path, root, readonly),
     }
 }
 
 /// Check if the database backend is stale (the source files VDB changed since conversion).
 /// Returns a warning message if stale, `None` if not stale or if no import mark is set.
-#[cfg(feature = "vdb-sqlite")]
-fn stale_db_warning(mark: Option<(u64, String)>, files_gen: u64, db_path: &Path) -> Option<String> {
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+fn stale_db_warning(
+    mark: Option<(u64, String)>,
+    files_gen: u64,
+    db_path: &Path,
+    kind: BackendKind,
+) -> Option<String> {
     let (mark_gen, mark_src) = mark?;
     // If import_mark is set but the files generation is 0, the source doesn't exist anymore
     if files_gen == 0 {
@@ -1595,7 +1598,7 @@ fn stale_db_warning(mark: Option<(u64, String)>, files_gen: u64, db_path: &Path)
             .vdb_dir()
             .unwrap_or_else(|| src_root.to_path_buf());
         return Some(format!(
-            "!!! The installed-package database in {} changed since {} was converted from it; run: portuale vdb convert --force --from files:{} --to sqlite:{}",
+            "!!! The installed-package database in {} changed since {} was converted from it; run: portuale vdb convert --force --from files:{} --to {kind}:{}",
             vdb_path.display(),
             db_path.display(),
             mark_src,
@@ -1610,22 +1613,83 @@ fn stale_db_warning(mark: Option<(u64, String)>, files_gen: u64, db_path: &Path)
 /// after the database is opened and before any merge of this run, so the
 /// pending entry of mrg's own merge (legitimate while it runs) is never
 /// listed.
-#[cfg(feature = "vdb-sqlite")]
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 pub(crate) fn pending_entries_warnings(
     pending: &[portage_vdb::EntryKey],
     db_path: &Path,
+    kind: BackendKind,
 ) -> Vec<String> {
     pending
         .iter()
         .map(|k| {
             format!(
                 "!!! {k} was left half-merged in {db} (an interrupted merge); inspect: \
-                 portuale vdb status sqlite:{db}; remove it: \
-                 portuale vdb sweep --remove {k} sqlite:{db}",
+                 portuale vdb status {kind}:{db}; remove it: \
+                 portuale vdb sweep --remove {k} {kind}:{db}",
                 db = db_path.display()
             )
         })
         .collect()
+}
+
+/// Shared by the database backends: refuse a missing file (mrg never
+/// creates one), then, after the open, print the stale-import warning
+/// and one warning per entry an interrupted merge left behind.
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+fn check_db_exists(path: &Path, root: &Path, kind: BackendKind) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    Err(format!(
+        "mrg: the {kind} VDB {} does not exist (mrg never creates one implicitly); \
+         convert first: portuale vdb convert --from files:{} --to {kind}:{}",
+        path.display(),
+        root.display(),
+        path.display()
+    ))
+}
+
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+fn warn_about_db(db: &dyn portage_vdb::InstalledDb, path: &Path, kind: BackendKind) {
+    // Check for stale database conversion
+    let import_mark = db.import_mark().ok().flatten();
+    if let Some((_, mark_src)) = &import_mark
+        && let Ok(files_gen) =
+            portage_vdb::FilesDb::new(std::path::Path::new(mark_src)).generation()
+        && let Some(warning) = stale_db_warning(import_mark, files_gen, path, kind)
+    {
+        eprintln!("{warning}");
+    }
+    // Orphans of an interrupted merge: report only.
+    if let Ok(pending) = db.pending_entries() {
+        for w in pending_entries_warnings(&pending, path, kind) {
+            eprintln!("{w}");
+        }
+    }
+}
+
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+fn open_db_backend<D: portage_vdb::InstalledDb + 'static>(
+    path: &Path,
+    root: &Path,
+    kind: BackendKind,
+    open: impl FnOnce(&Path) -> portage_vdb::Result<D>,
+) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
+    check_db_exists(path, root, kind)?;
+    match open(path) {
+        Ok(db) => {
+            warn_about_db(&db, path, kind);
+            Ok(Some(std::sync::Arc::new(db)))
+        }
+        // `Busy` already names the file and the one-process rule.
+        Err(e @ portage_vdb::Error::Busy { .. }) => {
+            Err(format!("mrg: the {kind} VDB is busy: {e}"))
+        }
+        Err(e) => Err(format!(
+            "mrg: cannot open the {kind} VDB {}: {e}",
+            path.display()
+        )),
+    }
 }
 
 #[cfg(feature = "vdb-sqlite")]
@@ -1634,44 +1698,13 @@ fn open_sqlite_backend(
     root: &Path,
     readonly: bool,
 ) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
-    if !path.exists() {
-        return Err(format!(
-            "mrg: the sqlite VDB {} does not exist (mrg never creates one implicitly); \
-             convert first: portuale vdb convert --from files:{} --to sqlite:{}",
-            path.display(),
-            root.display(),
-            path.display()
-        ));
-    }
-    let db = if readonly {
-        portage_vdb::SqliteDb::open_readonly(path)
-    } else {
-        portage_vdb::SqliteDb::open(path)
-    };
-    match db {
-        Ok(db) => {
-            // Check for stale database conversion
-            let import_mark = db.import_mark().ok().flatten();
-            if let Some((_, mark_src)) = &import_mark
-                && let Ok(files_gen) =
-                    portage_vdb::FilesDb::new(std::path::Path::new(mark_src)).generation()
-                && let Some(warning) = stale_db_warning(import_mark, files_gen, path)
-            {
-                eprintln!("{warning}");
-            }
-            // Orphans of an interrupted merge: report only.
-            if let Ok(pending) = db.pending_entries() {
-                for w in pending_entries_warnings(&pending, path) {
-                    eprintln!("{w}");
-                }
-            }
-            Ok(Some(std::sync::Arc::new(db)))
+    open_db_backend(path, root, BackendKind::Sqlite, |p| {
+        if readonly {
+            portage_vdb::SqliteDb::open_readonly(p)
+        } else {
+            portage_vdb::SqliteDb::open(p)
         }
-        Err(e) => Err(format!(
-            "mrg: cannot open the sqlite VDB {}: {e}",
-            path.display()
-        )),
-    }
+    })
 }
 
 #[cfg(not(feature = "vdb-sqlite"))]
@@ -1683,6 +1716,36 @@ fn open_sqlite_backend(
     Err(
         "mrg: the sqlite VDB backend is not available: this portuale was built without the \
          vdb-sqlite feature"
+            .into(),
+    )
+}
+
+#[cfg(feature = "vdb-redb")]
+fn open_redb_backend(
+    path: &Path,
+    root: &Path,
+    readonly: bool,
+) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
+    // redb allows one process per file: a read-write mrg holds it until
+    // it exits (its ebuild phases reach it through the parent pipe, S6.3).
+    open_db_backend(path, root, BackendKind::Redb, |p| {
+        if readonly {
+            portage_vdb::RedbDb::open_readonly(p)
+        } else {
+            portage_vdb::RedbDb::open(p)
+        }
+    })
+}
+
+#[cfg(not(feature = "vdb-redb"))]
+fn open_redb_backend(
+    _path: &Path,
+    _root: &Path,
+    _readonly: bool,
+) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
+    Err(
+        "mrg: the redb VDB backend is not available: this portuale was built without the \
+         vdb-redb feature"
             .into(),
     )
 }
@@ -2320,11 +2383,49 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "vdb-redb")]
     #[test]
-    fn redb_is_refused_until_s5() {
+    fn a_missing_redb_file_is_refused_with_the_convert_hint_and_not_created() {
+        let dir = portage_util::TempDir::new("mrg_vdb_missing_redb");
+        let path = dir.join("var/lib/portage/vdb.redb");
+        let s = sel(Some("redb"), Some(path.to_str().unwrap()), &[], &[]).unwrap();
+        for readonly in [true, false] {
+            let e = open_vdb_backend(&s, Path::new("/some/root"), readonly)
+                .err()
+                .unwrap();
+            assert!(
+                e.contains(
+                    "convert first: portuale vdb convert --from files:/some/root --to redb:"
+                ),
+                "{e}"
+            );
+            assert!(!path.exists(), "nothing may be created");
+        }
+    }
+
+    #[cfg(feature = "vdb-redb")]
+    #[test]
+    fn a_held_redb_file_is_busy_in_process() {
+        let dir = portage_util::TempDir::new("mrg_vdb_busy_redb");
+        let path = dir.join("vdb.redb");
+        let held = portage_vdb::RedbDb::open(&path).unwrap();
+        let s = sel(Some("redb"), Some(path.to_str().unwrap()), &[], &[]).unwrap();
+        for readonly in [true, false] {
+            let e = open_vdb_backend(&s, Path::new("/r"), readonly)
+                .err()
+                .unwrap();
+            assert!(e.contains("busy") && e.contains("already open"), "{e}");
+        }
+        drop(held);
+        assert!(open_vdb_backend(&s, Path::new("/r"), false).is_ok());
+    }
+
+    #[cfg(not(feature = "vdb-redb"))]
+    #[test]
+    fn redb_without_the_feature_is_refused() {
         let s = sel(Some("redb"), Some("/x/vdb.redb"), &[], &[]).unwrap();
         let e = open_vdb_backend(&s, Path::new("/r"), false).err().unwrap();
-        assert!(e.contains("redb") && e.contains("not implemented"), "{e}");
+        assert!(e.contains("built without the vdb-redb feature"), "{e}");
     }
 
     #[cfg(feature = "vdb-sqlite")]
@@ -2401,16 +2502,36 @@ mod tests {
     /// `mrg --pretend` plan as the files tree. The atoms depend on what
     /// is installed (`--update --deep @world`, `--depclean`, a package
     /// with dependencies). Needs the built `portuale` binary.
-    #[cfg(feature = "vdb-sqlite")]
+    #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
     #[test]
-    fn pretend_plan_is_identical_on_files_and_sqlite() {
+    fn pretend_plan_is_identical_on_files_sqlite_and_redb() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
         let tmp = portage_util::TempDir::new("mrg_vdb_parity").keep();
-        let db_path = tmp.join("vdb.sqlite");
+        // (--vdb-backend=..., --vdb-path=...) of every compiled-in database
+        // backend, each a conversion of the fixture root.
+        #[allow(unused_mut)]
+        let mut variants: Vec<[String; 2]> = Vec::new();
+        let src = portage_vdb::FilesDb::new(&fixtures);
+        #[cfg(feature = "vdb-sqlite")]
         {
-            let src = portage_vdb::FilesDb::new(&fixtures);
-            let dst = portage_vdb::SqliteDb::open(&db_path).unwrap();
+            let p = tmp.join("vdb.sqlite");
+            let dst = portage_vdb::SqliteDb::open(&p).unwrap();
             portage_vdb::copy_all(&src, &dst, false).unwrap();
+            variants.push([
+                "--vdb-backend=sqlite".into(),
+                format!("--vdb-path={}", p.display()),
+            ]);
+        }
+        #[cfg(feature = "vdb-redb")]
+        {
+            let p = tmp.join("vdb.redb");
+            let dst = portage_vdb::RedbDb::open(&p).unwrap();
+            portage_vdb::copy_all(&src, &dst, false).unwrap();
+            drop(dst); // redb: one handle per file; mrg must be able to open it
+            variants.push([
+                "--vdb-backend=redb".into(),
+                format!("--vdb-path={}", p.display()),
+            ]);
         }
         let mut bin = std::env::current_exe().unwrap();
         bin.pop();
@@ -2440,7 +2561,6 @@ mod tests {
             );
             (out.stdout, out.stderr)
         };
-        let db = format!("--vdb-path={}", db_path.display());
         for atoms in [
             &["--pretend", "--update", "--deep", "@world"][..],
             &["--pretend", "--depclean"][..],
@@ -2466,28 +2586,59 @@ mod tests {
             ][..],
         ] {
             let files = run(&["--vdb-backend=files"], atoms);
-            let sqlite = run(&["--vdb-backend=sqlite", &db], atoms);
             assert!(!files.0.is_empty(), "{atoms:?} printed nothing");
-            assert_eq!(
-                String::from_utf8_lossy(&files.0),
-                String::from_utf8_lossy(&sqlite.0),
-                "{atoms:?}: files and sqlite plans differ"
-            );
-            assert_eq!(files.1, sqlite.1, "{atoms:?}: stderr differs");
+            for [backend, path] in &variants {
+                let db = run(&[backend, path], atoms);
+                assert_eq!(
+                    String::from_utf8_lossy(&files.0),
+                    String::from_utf8_lossy(&db.0),
+                    "{atoms:?}: files and {backend} plans differ"
+                );
+                assert_eq!(files.1, db.1, "{atoms:?}: {backend} stderr differs");
+            }
         }
         // A missing database is refused (exit 1), not created.
-        let missing = tmp.join("missing.sqlite");
-        let out = std::process::Command::new(&bin)
-            .args(["mrg", "--pretend", "--vdb-backend=sqlite"])
-            .arg(format!("--vdb-path={}", missing.display()))
-            .arg("dev-libs/withdeps")
-            .env("PORTAGE_CONFIGROOT", &fixtures)
-            .env("ROOT", &fixtures)
-            .output()
-            .unwrap();
-        assert_eq!(out.status.code(), Some(1));
-        assert!(String::from_utf8_lossy(&out.stderr).contains("convert first"));
-        assert!(!missing.exists());
+        for [backend, _] in &variants {
+            let missing = tmp.join(format!("missing.{}", backend.rsplit('=').next().unwrap()));
+            let out = std::process::Command::new(&bin)
+                .args(["mrg", "--pretend", backend.as_str()])
+                .arg(format!("--vdb-path={}", missing.display()))
+                .arg("dev-libs/withdeps")
+                .env("PORTAGE_CONFIGROOT", &fixtures)
+                .env("ROOT", &fixtures)
+                .output()
+                .unwrap();
+            assert_eq!(out.status.code(), Some(1), "{backend}");
+            assert!(String::from_utf8_lossy(&out.stderr).contains("convert first"));
+            assert!(!missing.exists());
+        }
+        // redb: a file held by this process is Busy for the mrg child (a
+        // real cross-process refusal), read-only and read-write alike.
+        #[cfg(feature = "vdb-redb")]
+        {
+            let p = tmp.join("vdb.redb");
+            let held = portage_vdb::RedbDb::open(&p).unwrap();
+            for extra in [&["--pretend"][..], &[][..]] {
+                let out = std::process::Command::new(&bin)
+                    .arg("mrg")
+                    .args(extra)
+                    .arg("--vdb-backend=redb")
+                    .arg(format!("--vdb-path={}", p.display()))
+                    .arg("dev-libs/withdeps")
+                    .env("PORTAGE_CONFIGROOT", &fixtures)
+                    .env("ROOT", &fixtures)
+                    .env("PORTAGE_TMPDIR", tmp.join("pt"))
+                    .output()
+                    .unwrap();
+                let err = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(out.status.code(), Some(1), "{extra:?}: {err}");
+                assert!(
+                    err.contains("busy") && err.contains("already open"),
+                    "{err}"
+                );
+            }
+            drop(held);
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -2497,19 +2648,37 @@ mod tests {
         use std::path::PathBuf;
         let db_path = PathBuf::from("/var/lib/portage/vdb.sqlite");
         // No import mark -> None
-        assert_eq!(stale_db_warning(None, 100, &db_path), None);
+        assert_eq!(
+            stale_db_warning(None, 100, &db_path, BackendKind::Sqlite),
+            None
+        );
         // Same generation -> None
         assert_eq!(
-            stale_db_warning(Some((100, "/root".to_string())), 100, &db_path),
+            stale_db_warning(
+                Some((100, "/root".to_string())),
+                100,
+                &db_path,
+                BackendKind::Sqlite
+            ),
             None
         );
         // Files generation is 0 (doesn't exist) -> None
         assert_eq!(
-            stale_db_warning(Some((100, "/root".to_string())), 0, &db_path),
+            stale_db_warning(
+                Some((100, "/root".to_string())),
+                0,
+                &db_path,
+                BackendKind::Sqlite
+            ),
             None
         );
         // Different generation -> Some(warning)
-        let warning = stale_db_warning(Some((100, "/root".to_string())), 200, &db_path);
+        let warning = stale_db_warning(
+            Some((100, "/root".to_string())),
+            200,
+            &db_path,
+            BackendKind::Sqlite,
+        );
         assert!(warning.is_some());
         let w = warning.unwrap();
         assert!(w.contains("!!!"));
@@ -2524,8 +2693,12 @@ mod tests {
     fn test_pending_entries_warnings() {
         use std::path::PathBuf;
         let db = PathBuf::from("/var/lib/portage/vdb.sqlite");
-        assert!(pending_entries_warnings(&[], &db).is_empty());
-        let w = pending_entries_warnings(&[portage_vdb::EntryKey::new("dev-libs", "a-1.0")], &db);
+        assert!(pending_entries_warnings(&[], &db, BackendKind::Sqlite).is_empty());
+        let w = pending_entries_warnings(
+            &[portage_vdb::EntryKey::new("dev-libs", "a-1.0")],
+            &db,
+            BackendKind::Sqlite,
+        );
         assert_eq!(w.len(), 1);
         assert!(w[0].starts_with("!!! dev-libs/a-1.0 "), "{}", w[0]);
         assert!(w[0].contains("portuale vdb status sqlite:/var/lib/portage/vdb.sqlite"));

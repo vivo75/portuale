@@ -9558,8 +9558,8 @@ mod tests {
     }
 
     /// feat#157 S4.1: the merge on a database backend (sqlite).
-    #[cfg(feature = "vdb-sqlite")]
-    mod sqlite_merge {
+    #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+    mod db_merge {
         use super::*;
         use portage_vdb::{EntryKey, InstalledDb};
         use std::cell::RefCell;
@@ -9575,8 +9575,32 @@ mod tests {
         /// Convert whatever `files` VDB `root` holds into a new sqlite
         /// database at `db_path` (as `portuale vdb convert` does) and make
         /// it `root`'s backend, as `mrg --vdb-backend=sqlite` does.
+        #[cfg(feature = "vdb-sqlite")]
         fn use_sqlite(root: &Path, db_path: &Path) -> Arc<portage_vdb::SqliteDb> {
             let db = Arc::new(portage_vdb::SqliteDb::open(db_path).unwrap());
+            portage_vdb::copy_all(&portage_vdb::FilesDb::new(root), db.as_ref(), false).unwrap();
+            portage_vdb::register(root, db.clone());
+            db
+        }
+
+        /// [`use_sqlite`] for any database backend: the same, with `kind`'s
+        /// file (`mrg --vdb-backend=<kind>`).
+        fn use_db(
+            kind: portage_vdb::BackendKind,
+            root: &Path,
+            db_path: &Path,
+        ) -> Arc<dyn InstalledDb> {
+            let db: Arc<dyn InstalledDb> = match kind {
+                #[cfg(feature = "vdb-sqlite")]
+                portage_vdb::BackendKind::Sqlite => {
+                    Arc::new(portage_vdb::SqliteDb::open(db_path).unwrap())
+                }
+                #[cfg(feature = "vdb-redb")]
+                portage_vdb::BackendKind::Redb => {
+                    Arc::new(portage_vdb::RedbDb::open(db_path).unwrap())
+                }
+                other => panic!("backend {other} is not built"),
+            };
             portage_vdb::copy_all(&portage_vdb::FilesDb::new(root), db.as_ref(), false).unwrap();
             portage_vdb::register(root, db.clone());
             db
@@ -9693,8 +9717,7 @@ mod tests {
         /// (which records paths) is byte-identical; on sqlite it went
         /// through the scratch copy and `replace_file`, and the stored
         /// bytes differ from the binpkg's (the pending entry's) own.
-        #[test]
-        fn a_binpkg_merged_on_sqlite_matches_the_files_merge() {
+        fn binpkg_merge_matches_files(kind: portage_vdb::BackendKind) {
             let tmp = tempdir();
             let root = tmp.join("root");
             let ptmp = tmp.join("ptmp");
@@ -9717,7 +9740,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&ptmp);
 
             std::fs::create_dir_all(&root).unwrap();
-            let db = use_sqlite(&root, &tmp.join("vdb.sqlite"));
+            let db = use_db(kind, &root, &tmp.join("vdb.db"));
             let pending_env: Rc<RefCell<Option<Vec<u8>>>> = Rc::default();
             {
                 let db = db.clone();
@@ -9734,7 +9757,7 @@ mod tests {
 
             assert!(
                 !root.join("var/db/pkg").exists(),
-                "a sqlite merge writes no var/db/pkg"
+                "a {kind} merge writes no var/db/pkg"
             );
             assert_eq!(on_sqlite.0, on_files.0, "entry files differ");
             assert_eq!(on_sqlite.1, on_files.1, "payload differs");
@@ -9748,11 +9771,29 @@ mod tests {
             let _ = std::fs::remove_dir_all(&tmp);
         }
 
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_binpkg_merged_on_sqlite_matches_the_files_merge() {
+            binpkg_merge_matches_files(portage_vdb::BackendKind::Sqlite);
+        }
+
+        /// feat#157 S5.4 (c): the same binpkg merge on redb. The fixture
+        /// ebuilds (`binpkgrmpkg`) run no phase that calls `has_version` /
+        /// `best_version` (grep of the fixture repo finds none), so this
+        /// needs no parent pipe (S6.3); a phase that did would reach the
+        /// held redb file only through that pipe.
+        #[cfg(feature = "vdb-redb")]
+        #[test]
+        fn a_binpkg_merged_on_redb_matches_the_files_merge() {
+            binpkg_merge_matches_files(portage_vdb::BackendKind::Redb);
+        }
+
         /// (b): a same-slot upgrade on sqlite, over a converted VDB. Right
         /// before the publishing commit the old instance is still the
         /// installed one and the new one is pending; after it, only the
         /// new one is installed. The replaced version's `pkg_prerm` /
         /// `pkg_postrm` ran from its stored environment (scratch copy).
+        #[cfg(feature = "vdb-sqlite")]
         #[test]
         fn a_same_slot_upgrade_on_sqlite_replaces_in_the_publishing_commit() {
             let tmp = tempdir();
@@ -9874,6 +9915,7 @@ mod tests {
         /// the counter is not reused. The new payload files landed on disk
         /// before the crash and stay there (as in real Portage); that is only
         /// documented here, not asserted.
+        #[cfg(feature = "vdb-sqlite")]
         #[test]
         fn a_crash_before_the_publishing_commit_leaves_the_old_instance_and_a_sweepable_orphan() {
             let tmp = tempdir();
@@ -9916,12 +9958,20 @@ mod tests {
                 "the aborted commit did not advance the generation"
             );
             let counter_after_crash = fresh.counter().unwrap().expect("a counter was taken");
-            let warnings = crate::mrg::pending_entries_warnings(std::slice::from_ref(&new), &dbp);
+            let warnings = crate::mrg::pending_entries_warnings(
+                std::slice::from_ref(&new),
+                &dbp,
+                portage_vdb::BackendKind::Sqlite,
+            );
             assert!(warnings[0].contains("binpkgrmpkg-2.0"), "{warnings:?}");
             assert!(
-                crate::mrg::pending_entries_warnings(&fresh.pending_entries().unwrap(), &dbp)
-                    .iter()
-                    .any(|w| w.contains("dev-libs/binpkgrmpkg-2.0"))
+                crate::mrg::pending_entries_warnings(
+                    &fresh.pending_entries().unwrap(),
+                    &dbp,
+                    portage_vdb::BackendKind::Sqlite,
+                )
+                .iter()
+                .any(|w| w.contains("dev-libs/binpkgrmpkg-2.0"))
             );
 
             let spec = format!("sqlite:{}", dbp.display());
@@ -9965,6 +10015,7 @@ mod tests {
         /// of `-C`. With a fresh handle the row is still installed and the
         /// generation is unchanged; a later `-C` succeeds. (The payload files
         /// were already removed before the crash; not asserted.)
+        #[cfg(feature = "vdb-sqlite")]
         #[test]
         fn a_crash_before_the_retire_commit_leaves_the_entry_installed() {
             let tmp = tempdir();
@@ -10004,6 +10055,7 @@ mod tests {
         /// A source merge (`ebuild <file> merge`) on sqlite: same entry
         /// files and payload as on `files`, the `pkg_postinst` environment
         /// rewrite included.
+        #[cfg(feature = "vdb-sqlite")]
         #[test]
         fn a_source_merge_on_sqlite_matches_the_files_merge() {
             let tmp = tempdir();
@@ -10085,6 +10137,7 @@ mod tests {
         /// scratch copy of the stored environment, and the row goes in ONE
         /// commit: right before it the entry is still installed (and its
         /// payload already gone); the generation moved by exactly one.
+        #[cfg(feature = "vdb-sqlite")]
         #[test]
         fn a_standalone_unmerge_on_sqlite_retires_the_row_in_one_commit() {
             let tmp = tempdir();
@@ -10153,6 +10206,7 @@ mod tests {
         /// `sonamebumplib-2.0`'s `CONTENTS` / `NEEDED.ELF.2` happen. On
         /// sqlite they all land in the commit that deletes the consumer's
         /// row (one generation step); the end state equals the `files` run.
+        #[cfg(feature = "vdb-sqlite")]
         #[test]
         fn a_standalone_unmerge_prunes_preserved_libs_in_its_retire_commit() {
             let tmp = tempdir();
@@ -10368,8 +10422,7 @@ mod tests {
         /// of the payload tree (the same umask race,
         /// as `payload_bytes` notes). Nothing else is dropped: not
         /// `environment.bz2`, not `COUNTER`, not the rest of `metadata`.
-        #[test]
-        fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_sqlite_and_files() {
+        fn sequence_equivalence(kind: portage_vdb::BackendKind) {
             let tmp = tempdir();
             let root = tmp.join("root");
             let ptmp = tmp.join("ptmp");
@@ -10435,7 +10488,7 @@ mod tests {
 
             // The sqlite run, in the same paths.
             sequence();
-            let db = use_sqlite(&root, &tmp.join("vdb.sqlite"));
+            let db = use_db(kind, &root, &tmp.join("vdb.db"));
             steps();
             let sqlite_snap = snapshot(db.as_ref());
             let sqlite_payload = payload_tree(&root);
@@ -10496,8 +10549,8 @@ mod tests {
                 );
                 assert_eq!(got.counter, files_snap.counter, "{what}: counter");
             };
-            same(&sqlite_snap, "sqlite vs files");
-            same(&converted_snap, "converted vs files");
+            same(&sqlite_snap, &format!("{kind} vs files"));
+            same(&converted_snap, &format!("{kind} converted vs files"));
             let bytes = |tree: Tree| -> BTreeMap<String, Vec<u8>> {
                 tree.into_iter().map(|(k, (_, data))| (k, data)).collect()
             };
@@ -10528,6 +10581,20 @@ mod tests {
                 assert!(ok, "verify reports a non-volatile difference: {line}");
             }
             let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        #[cfg(feature = "vdb-sqlite")]
+        #[test]
+        fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_sqlite_and_files() {
+            sequence_equivalence(portage_vdb::BackendKind::Sqlite);
+        }
+
+        /// feat#157 S5.4: the same sequence on redb (see
+        /// [`sequence_equivalence`] for what is compared and ignored).
+        #[cfg(feature = "vdb-redb")]
+        #[test]
+        fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_redb_and_files() {
+            sequence_equivalence(portage_vdb::BackendKind::Redb);
         }
     }
 }

@@ -218,32 +218,58 @@ fn setup_backend(eroot: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(feature = "vdb-sqlite")]
-fn open_readonly(
-    kind: BackendKind,
-    path: &Path,
-) -> Result<std::sync::Arc<dyn portage_vdb::InstalledDb>, String> {
+type SharedDb = std::sync::Arc<dyn portage_vdb::InstalledDb>;
+
+fn open_readonly(kind: BackendKind, path: &Path) -> Result<SharedDb, String> {
     match kind {
-        BackendKind::Sqlite => portage_vdb::SqliteDb::open_readonly(path)
-            .map(|db| std::sync::Arc::new(db) as std::sync::Arc<dyn portage_vdb::InstalledDb>)
-            .map_err(|e| format!("cannot open the sqlite VDB {}: {e}", path.display())),
-        _ => Err(format!(
-            "the {} VDB backend is not available in portageq (yet)",
-            kind.as_str()
-        )),
+        BackendKind::Sqlite => open_sqlite_readonly(path),
+        BackendKind::Redb => open_redb_readonly(path),
+        BackendKind::Files => Err("the files backend has no database file".into()),
     }
 }
 
+#[cfg(feature = "vdb-sqlite")]
+fn open_sqlite_readonly(path: &Path) -> Result<SharedDb, String> {
+    portage_vdb::SqliteDb::open_readonly(path)
+        .map(|db| std::sync::Arc::new(db) as SharedDb)
+        .map_err(|e| format!("cannot open the sqlite VDB {}: {e}", path.display()))
+}
+
 #[cfg(not(feature = "vdb-sqlite"))]
-fn open_readonly(
-    kind: BackendKind,
-    _path: &Path,
-) -> Result<std::sync::Arc<dyn portage_vdb::InstalledDb>, String> {
-    Err(format!(
-        "the {} VDB backend is not available: this portuale was built without the vdb-sqlite \
-         feature",
-        kind.as_str()
-    ))
+fn open_sqlite_readonly(_path: &Path) -> Result<SharedDb, String> {
+    Err(
+        "the sqlite VDB backend is not available: this portuale was built without the \
+         vdb-sqlite feature"
+            .into(),
+    )
+}
+
+/// redb allows one process per file. A read-only open succeeds only when
+/// nobody holds the file read-write (a helper run by hand, outside `mrg`).
+/// Under a running `mrg` on redb the file is held, so the open is `Busy`
+/// and the query fails with exit 4 until the parent pipe exists (plan S6.3,
+/// `PORTUALE_VDB_IPC`).
+#[cfg(feature = "vdb-redb")]
+fn open_redb_readonly(path: &Path) -> Result<SharedDb, String> {
+    match portage_vdb::RedbDb::open_readonly(path) {
+        Ok(db) => Ok(std::sync::Arc::new(db) as SharedDb),
+        Err(e @ portage_vdb::Error::Busy { .. }) => Err(format!(
+            "cannot open the redb VDB {}: it is held open by another process (the mrg that \
+             started this helper): {e}; querying a redb VDB held by mrg needs the parent pipe, \
+             which arrives in plan step S6.3",
+            path.display()
+        )),
+        Err(e) => Err(format!("cannot open the redb VDB {}: {e}", path.display())),
+    }
+}
+
+#[cfg(not(feature = "vdb-redb"))]
+fn open_redb_readonly(_path: &Path) -> Result<SharedDb, String> {
+    Err(
+        "the redb VDB backend is not available: this portuale was built without the vdb-redb \
+         feature"
+            .into(),
+    )
 }
 
 /// Lexical normalisation (`.` and repeated `/` dropped, trailing `/`
@@ -890,6 +916,48 @@ mod tests {
         ));
         assert_eq!(rc, 4);
         assert!(err.contains("redb"), "{err}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// S5.4: a redb database nobody holds is read directly (a helper run
+    /// outside `mrg`); one held by another process (the parent `mrg`) is a
+    /// clean exit 4 that points at the parent pipe of plan step S6.3.
+    #[cfg(feature = "vdb-redb")]
+    #[test]
+    fn redb_is_read_when_free_and_exit_4_when_held() {
+        let tmp = portage_util::TempDir::new("portageq_redb").keep();
+        let path = tmp.join("vdb.redb");
+        let fx = fixtures();
+        let fxs = fx.to_str().unwrap();
+        {
+            let src = portage_vdb::FilesDb::new(&fx);
+            let dst = portage_vdb::RedbDb::open(&path).unwrap();
+            portage_vdb::copy_all(&src, &dst, false).unwrap();
+        }
+        let env = [
+            ("PORTUALE_VDB_BACKEND", "redb"),
+            ("PORTUALE_VDB_PATH", path.to_str().unwrap()),
+            ("PORTUALE_VDB_ROOT", fxs),
+        ];
+        let ask = |atom: &str| res(&portageq(Backend::Files, &["has_version", fxs, atom], &env));
+        let files = res(&portageq(
+            Backend::Files,
+            &["has_version", fxs, "dev-libs/keeper"],
+            &[],
+        ));
+        // Free: the same answer as the files layout, for a hit and a miss.
+        assert_eq!(ask("dev-libs/keeper"), files);
+        assert_eq!(ask("dev-libs/not-installed-at-all").0, 1);
+        // Held (read-write, like mrg): exit 4 with the S6.3 message.
+        let held = portage_vdb::RedbDb::open(&path).unwrap();
+        let (rc, _, err) = ask("dev-libs/keeper");
+        assert_eq!(rc, 4, "{err}");
+        assert!(
+            err.contains("already open") && err.contains("S6.3"),
+            "{err}"
+        );
+        drop(held);
+        assert_eq!(ask("dev-libs/keeper"), files);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
