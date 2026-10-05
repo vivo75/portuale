@@ -373,9 +373,18 @@ impl View {
         lock(&self.inodes).intern(node)
     }
 
+    fn node(&self, ino: u64) -> Res<Node> {
+        lock(&self.inodes).node(ino).ok_or(ViewError::NoEnt)
+    }
+
     /// The inode of `node`, interned on first use (stable, never reused).
     pub(crate) fn ino_of(&self, node: &Node) -> u64 {
         self.ino(node)
+    }
+
+    /// The node an inode stands for.
+    pub(crate) fn node_of(&self, ino: u64) -> Res<Node> {
+        self.node(ino)
     }
 
     /// Make `ino` stand for `node` from now on (the read-write layer's

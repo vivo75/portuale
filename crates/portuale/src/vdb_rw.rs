@@ -221,6 +221,14 @@ pub(crate) fn stamp_state(metadata: Option<&[u8]>, dir_mtime_ns: i128) -> Metada
 
 const DIR_MTIME_PREFIX: &[u8] = b"#dir_mtime=";
 
+/// The category a category inode stands for.
+fn cat_name(view: &View, ino: u64) -> Res<String> {
+    match view.node_of(ino)? {
+        Node::Cat(c) => Ok(c),
+        _ => Err(ViewError::NotDir),
+    }
+}
+
 pub struct RwView {
     view: View,
     db: Arc<dyn InstalledDb>,
@@ -257,6 +265,22 @@ impl RwView {
                 next_scratch: 1,
             }),
         })
+    }
+
+    /// The owner `getattr` reports for `ino`.
+    pub fn owner_of(&self, ino: u64) -> Owner {
+        let st = lock(&self.st);
+        match self.obj_id(ino).and_then(|id| st.objs.get(&id)) {
+            Some(Obj::Vol { owner, .. }) => *owner,
+            _ => self.owner,
+        }
+    }
+
+    fn obj_id(&self, ino: u64) -> Option<u64> {
+        match self.view.node_of(ino) {
+            Ok(Node::Obj(id)) => Some(id),
+            _ => None,
+        }
     }
 
     fn obj_ino(&self, id: u64) -> u64 {
@@ -318,6 +342,21 @@ impl RwView {
             nlink: 2,
             mtime_ns,
         }
+    }
+
+    /// The directory `ino` stands for, as a parent of this layer's names:
+    /// a category (stored or volatile) or a staged directory.
+    fn parent_of(&self, ino: u64) -> Res<Option<Parent>> {
+        Ok(match self.view.node_of(ino)? {
+            Node::Cat(c) => Some(Parent::Cat(c)),
+            Node::Obj(id) => match lock(&self.st).objs.get(&id) {
+                Some(Obj::StagedDir { .. }) => Some(Parent::Staged(id)),
+                Some(_) => return Err(ViewError::NotDir),
+                None => return Err(ViewError::NoEnt),
+            },
+            Node::Entry(k) => Some(Parent::Live(k)),
+            _ => None,
+        })
     }
 
     /// A scratch path for a file outside any staged directory.
@@ -565,6 +604,31 @@ impl RwView {
         self.view
             .rebind(self.obj_ino(id), Node::File(key.clone(), field.to_string()));
         Ok(())
+    }
+
+    /// `link(ino, newparent, newname)`: hardlinks of volatile files only
+    /// (Portage links the lock file to a hardlock name and compares the
+    /// inodes).
+    // Portage: locks.py, _lockfile_was_removed
+    pub fn link(&self, ino: u64, newparent: u64, newname: &str) -> Res<Attr> {
+        let id = self.obj_id(ino).ok_or(ViewError::Perm)?;
+        let Some(Parent::Cat(cat)) = self.parent_of(newparent)? else {
+            return Err(ViewError::Perm);
+        };
+        if !is_volatile_name(newname) {
+            return Err(ViewError::Perm);
+        }
+        let mut st = lock(&self.st);
+        let key = (Parent::Cat(cat), newname.to_string());
+        if st.names.contains_key(&key) {
+            return Err(ViewError::Exists);
+        }
+        match st.objs.get_mut(&id).ok_or(ViewError::NoEnt)? {
+            Obj::Vol { nlink, .. } => *nlink += 1,
+            _ => return Err(ViewError::Perm),
+        }
+        st.names.insert(key, id);
+        self.obj_attr(id, &st.objs[&id])
     }
 
     /// The database stores no owner: a `chown` to the owner `getattr`
