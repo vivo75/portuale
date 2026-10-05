@@ -474,6 +474,85 @@ impl RwView {
         }
     }
 
+    pub fn opendir(&self, ino: u64) -> Res<u64> {
+        let node = self.view.node_of(ino)?;
+        let me = self.getattr(ino)?;
+        if me.kind != Kind::Dir {
+            return Err(ViewError::NotDir);
+        }
+        let mut listing: Vec<DirEnt> = match &node {
+            Node::Obj(_) => Vec::new(),
+            _ => match self.view.opendir(ino) {
+                Ok(vfh) => {
+                    let l = self.view.readdir(vfh);
+                    self.view.release(vfh);
+                    l?.as_ref().clone()
+                }
+                Err(ViewError::NoEnt) => Vec::new(),
+                Err(e) => return Err(e),
+            },
+        };
+        if listing.is_empty() {
+            let parent = match &node {
+                Node::Obj(id) => match lock(&self.st).objs.get(id) {
+                    Some(Obj::StagedDir { cat, .. }) => self.view.ino_of(&Node::Cat(cat.clone())),
+                    _ => ROOT_INO,
+                },
+                _ => ROOT_INO,
+            };
+            listing = vec![
+                DirEnt {
+                    ino: me.ino,
+                    kind: Kind::Dir,
+                    name: ".".into(),
+                },
+                DirEnt {
+                    ino: parent,
+                    kind: Kind::Dir,
+                    name: "..".into(),
+                },
+            ];
+        }
+        let mut st = lock(&self.st);
+        let parent = match &node {
+            Node::Root => {
+                for cat in st.vol_cats.keys() {
+                    if !listing.iter().any(|d| &d.name == cat) {
+                        listing.push(DirEnt {
+                            ino: self.view.ino_of(&Node::Cat(cat.clone())),
+                            kind: Kind::Dir,
+                            name: cat.clone(),
+                        });
+                    }
+                }
+                None
+            }
+            Node::Cat(cat) => Some(Parent::Cat(cat.clone())),
+            Node::Obj(id) => Some(Parent::Staged(*id)),
+            Node::Entry(key) => {
+                if let Some(h) = st.hidden.get(key) {
+                    listing.retain(|d| !h.contains(&d.name));
+                }
+                Some(Parent::Live(key.clone()))
+            }
+            _ => None,
+        };
+        if let Some(parent) = parent {
+            for (name, id) in st.children(&parent) {
+                let kind = match st.objs.get(&id) {
+                    Some(Obj::StagedDir { .. }) => Kind::Dir,
+                    _ => Kind::File,
+                };
+                listing.push(DirEnt {
+                    ino: self.obj_ino(id),
+                    kind,
+                    name,
+                });
+            }
+        }
+        Ok(Self::new_fh(&mut st, Fh::Dir(Arc::new(listing))))
+    }
+
     pub fn readdir(&self, fh: u64) -> Res<Arc<Vec<DirEnt>>> {
         match lock(&self.st).handles.get(&fh) {
             Some(Fh::Dir(l)) => Ok(l.clone()),
@@ -548,6 +627,33 @@ impl RwView {
         }
     }
 
+    pub fn read(&self, fh: u64, off: u64, size: usize) -> Res<Vec<u8>> {
+        let st = lock(&self.st);
+        match st.handles.get(&fh) {
+            Some(Fh::Base(v)) => {
+                let v = *v;
+                drop(st);
+                self.view.read(v, off, size)
+            }
+            Some(Fh::Vol(id)) => match st.objs.get(id) {
+                Some(Obj::Vol { data, .. }) => {
+                    let start = usize::try_from(off).unwrap_or(usize::MAX).min(data.len());
+                    let end = start.saturating_add(size).min(data.len());
+                    Ok(data[start..end].to_vec())
+                }
+                _ => Err(ViewError::Stale),
+            },
+            Some(Fh::Staged(f) | Fh::Live { file: f, .. }) => {
+                let mut buf = vec![0u8; size];
+                let n = f.read_at(&mut buf, off).map_err(io_err)?;
+                buf.truncate(n);
+                Ok(buf)
+            }
+            Some(Fh::Dir(_)) => Err(ViewError::IsDir),
+            None => Err(ViewError::BadHandle),
+        }
+    }
+
     /// `flush` (each `close`): store a written live file with one
     /// `replace_file` transaction. A failure is `EIO`, which `close`
     /// returns to the caller; the scratch copy stays for a later flush.
@@ -578,6 +684,22 @@ impl RwView {
             *dirty = false;
         }
         Ok(())
+    }
+
+    /// `release` / `releasedir`: a written live file not flushed yet is
+    /// stored now (the kernel ignores errors here, so `flush` is where
+    /// they are reported).
+    pub fn release(&self, fh: u64) -> Res<()> {
+        let r = self.flush(fh);
+        let h = lock(&self.st).handles.remove(&fh);
+        match h {
+            Some(Fh::Base(v)) => self.view.release(v),
+            Some(Fh::Live { path, .. }) => {
+                let _ = std::fs::remove_file(path);
+            }
+            _ => {}
+        }
+        r
     }
 
     // ------------------------------------------------------ write side
@@ -779,6 +901,50 @@ impl RwView {
             st.bump(dir);
         }
         Ok(())
+    }
+
+    /// `rmdir(parent, name)`: an empty category, or an emptied staged
+    /// directory (Portage removes a stale `-MERGING-<pf>` before it starts).
+    pub fn rmdir(&self, parent: u64, name: &str) -> Res<()> {
+        match self.view.node_of(parent)? {
+            Node::Root => {
+                let attr = self.lookup(ROOT_INO, name)?;
+                let fh = self.opendir(attr.ino)?;
+                let listing = self.readdir(fh);
+                self.release(fh)?;
+                if listing?.len() > 2 {
+                    return Err(ViewError::NotEmpty);
+                }
+                lock(&self.st).vol_cats.remove(name);
+                Ok(())
+            }
+            Node::Cat(cat) => {
+                let mut st = lock(&self.st);
+                let key = (Parent::Cat(cat), name.to_string());
+                match st.names.get(&key).copied() {
+                    Some(id) => {
+                        let Some(Obj::StagedDir { path, .. }) = st.objs.get(&id) else {
+                            return Err(ViewError::NotDir);
+                        };
+                        if !st.children(&Parent::Staged(id)).is_empty() {
+                            return Err(ViewError::NotEmpty);
+                        }
+                        let _ = std::fs::remove_dir(path);
+                        st.names.remove(&key);
+                        st.objs.remove(&id);
+                        Ok(())
+                    }
+                    None => {
+                        drop(st);
+                        self.remove_entry(
+                            parent,
+                            EntryKey::new(cat_name(&self.view, parent)?, name),
+                        )
+                    }
+                }
+            }
+            _ => Err(ViewError::Perm),
+        }
     }
 
     /// `rename(parent, name, newparent, newname)`.
@@ -1053,6 +1219,31 @@ impl RwView {
         for (ino, node) in rebinds {
             self.view.rebind(ino, node);
         }
+        Ok(())
+    }
+
+    /// `rmdir(<cat>/<pf>)` of a live entry: once every stored file was
+    /// unlinked (hidden) and no temp is left, delete the entry in one
+    /// transaction. The category stays listed until Portage removes it.
+    fn remove_entry(&self, cat_ino: u64, key: EntryKey) -> Res<()> {
+        let entry = self.view.lookup(cat_ino, &key.pf)?;
+        let fh = self.opendir(entry.ino)?;
+        let left = self.readdir(fh);
+        self.release(fh)?;
+        if left?.len() > 2 {
+            return Err(ViewError::NotEmpty);
+        }
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.delete_entry(&key)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        let mut st = lock(&self.st);
+        st.hidden.remove(&key);
+        st.vol_cats
+            .entry(key.category.clone())
+            .or_insert_with(now_ns);
         Ok(())
     }
 

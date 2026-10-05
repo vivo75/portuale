@@ -800,4 +800,9 @@ impl View {
             }
         }
     }
+
+    /// `release` / `releasedir`; an unknown handle is ignored.
+    pub fn release(&self, fh: u64) {
+        lock(&self.handles).remove(&fh);
+    }
 }
