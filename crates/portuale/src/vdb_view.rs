@@ -759,4 +759,45 @@ impl View {
             pinned,
         }))
     }
+
+    /// `read(fh, offset, size)`: up to `size` bytes from `offset`, short at
+    /// the end of the file.
+    pub fn read(&self, fh: u64, off: u64, size: usize) -> Res<Vec<u8>> {
+        // Copy what is needed so no lock is held across a backend call.
+        let (key, name, pinned) = match lock(&self.handles).get(&fh) {
+            Some(Handle::File {
+                key, name, pinned, ..
+            }) => (
+                key.clone(),
+                name.clone(),
+                match pinned {
+                    Pinned::Bytes(b) => Pinned::Bytes(b.clone()),
+                    Pinned::Stat { len, mtime_ns } => Pinned::Stat {
+                        len: *len,
+                        mtime_ns: *mtime_ns,
+                    },
+                },
+            ),
+            Some(Handle::Dir { .. }) => return Err(ViewError::IsDir),
+            None => return Err(ViewError::BadHandle),
+        };
+        match pinned {
+            Pinned::Bytes(b) => {
+                let start = usize::try_from(off).unwrap_or(usize::MAX).min(b.len());
+                let end = start.saturating_add(size).min(b.len());
+                Ok(b[start..end].to_vec())
+            }
+            Pinned::Stat { len, mtime_ns } => {
+                // Checked on every read: on `files` an in-place rewrite
+                // does not move the generation. One stat per read.
+                match self.db.file_meta(&key, &name)? {
+                    Some(m) if m.len == len && m.mtime_ns == mtime_ns => {}
+                    _ => return Err(ViewError::Stale),
+                }
+                self.db
+                    .read_file_at(&key, &name, off, size)?
+                    .ok_or(ViewError::Stale)
+            }
+        }
+    }
 }
