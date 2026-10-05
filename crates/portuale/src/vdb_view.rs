@@ -678,4 +678,85 @@ impl View {
         let gn = self.current()?;
         self.attr_of(&gn, &node)
     }
+
+    /// `getattr(ino, fh)`: the attributes the handle was opened with.
+    pub fn getattr_fh(&self, fh: u64) -> Res<Attr> {
+        match lock(&self.handles).get(&fh) {
+            Some(Handle::Dir { attr, .. } | Handle::File { attr, .. }) => Ok(attr.clone()),
+            None => Err(ViewError::BadHandle),
+        }
+    }
+
+    fn new_fh(&self, h: Handle) -> u64 {
+        let fh = self.next_fh.fetch_add(1, Ordering::Relaxed);
+        lock(&self.handles).insert(fh, h);
+        fh
+    }
+
+    /// `opendir(ino)`: pins the listing of the current generation.
+    pub fn opendir(&self, ino: u64) -> Res<u64> {
+        let node = self.node(ino)?;
+        if node.kind() != Kind::Dir {
+            return Err(ViewError::NotDir);
+        }
+        let gn = self.current()?;
+        let attr = self.attr_of(&gn, &node)?;
+        let listing = Arc::new(self.listing_of(&gn, &node)?);
+        Ok(self.new_fh(Handle::Dir { attr, listing }))
+    }
+
+    /// The pinned listing of a directory handle; the adapter serves offset
+    /// `n` as `listing[n..]` and numbers an entry's next offset `index + 1`.
+    pub fn readdir(&self, fh: u64) -> Res<Arc<Vec<DirEnt>>> {
+        match lock(&self.handles).get(&fh) {
+            Some(Handle::Dir { listing, .. }) => Ok(listing.clone()),
+            Some(Handle::File { .. }) => Err(ViewError::NotDir),
+            None => Err(ViewError::BadHandle),
+        }
+    }
+
+    /// `open(ino, flags)`. A write-class open is `EROFS` (after the
+    /// existence and type checks, as a read-only filesystem answers).
+    pub fn open(&self, ino: u64, write: bool) -> Res<u64> {
+        let node = self.node(ino)?;
+        let gn = self.current()?;
+        let attr = self.attr_of(&gn, &node)?;
+        let Node::File(key, name) = node else {
+            return Err(ViewError::IsDir);
+        };
+        if write {
+            return Err(ViewError::Rofs);
+        }
+        let entry = self.entry_snap(&gn, &key)?.ok_or(ViewError::NoEnt)?;
+        let (pinned, attr) = if name == METADATA {
+            let bytes = self.metadata_bytes(&key, &entry)?.ok_or(ViewError::NoEnt)?;
+            let attr = Attr {
+                size: bytes.len() as u64,
+                ..attr
+            };
+            (Pinned::Bytes(bytes), attr)
+        } else if attr.size <= self.pin_max as u64 {
+            let bytes = self.db.read_file(&key, &name)?.ok_or(ViewError::NoEnt)?;
+            let attr = Attr {
+                size: bytes.len() as u64,
+                ..attr
+            };
+            (Pinned::Bytes(Arc::new(bytes)), attr)
+        } else {
+            (
+                Pinned::Stat {
+                    len: attr.size,
+                    mtime_ns: attr.mtime_ns,
+                },
+                attr,
+            )
+        };
+        Ok(self.new_fh(Handle::File {
+            generation: gn.generation,
+            attr,
+            key,
+            name,
+            pinned,
+        }))
+    }
 }

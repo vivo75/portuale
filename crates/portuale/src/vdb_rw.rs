@@ -460,6 +460,20 @@ impl RwView {
         }
     }
 
+    /// `getattr` with a handle: this layer's handles report the object's
+    /// current attributes.
+    pub fn getattr_fh(&self, ino: u64, fh: u64) -> Res<Attr> {
+        let base = match lock(&self.st).handles.get(&fh) {
+            Some(Fh::Base(b)) => Some(*b),
+            Some(_) => None,
+            None => return Err(ViewError::BadHandle),
+        };
+        match base {
+            Some(b) => self.view.getattr_fh(b),
+            None => self.getattr(ino),
+        }
+    }
+
     pub fn readdir(&self, fh: u64) -> Res<Arc<Vec<DirEnt>>> {
         match lock(&self.st).handles.get(&fh) {
             Some(Fh::Dir(l)) => Ok(l.clone()),
