@@ -482,6 +482,72 @@ impl RwView {
         }
     }
 
+    /// `open(ino, flags)`.
+    pub fn open(&self, ino: u64, flags: i32) -> Res<u64> {
+        match self.view.node_of(ino)? {
+            Node::Obj(id) => {
+                let mut st = lock(&self.st);
+                let h = match st.objs.get_mut(&id).ok_or(ViewError::NoEnt)? {
+                    Obj::Vol { data, mtime_ns, .. } => {
+                        if flags & libc::O_TRUNC != 0 && open_wants_write(flags) {
+                            data.clear();
+                            *mtime_ns = now_ns();
+                        }
+                        Fh::Vol(id)
+                    }
+                    Obj::StagedFile { path } => {
+                        let f = std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(open_wants_write(flags))
+                            .truncate(flags & libc::O_TRUNC != 0 && open_wants_write(flags))
+                            .open(&*path)
+                            .map_err(io_err)?;
+                        Fh::Staged(f)
+                    }
+                    Obj::StagedDir { .. } => return Err(ViewError::IsDir),
+                };
+                Ok(Self::new_fh(&mut st, h))
+            }
+            Node::File(key, name) if open_wants_write(flags) => {
+                self.getattr(ino)?;
+                let mut st = lock(&self.st);
+                if Self::removing(&st, &key) {
+                    return Err(ViewError::NoEnt);
+                }
+                let path = self.scratch_file(&mut st);
+                drop(st);
+                let old = if flags & libc::O_TRUNC != 0 {
+                    Vec::new()
+                } else {
+                    self.db.read_file(&key, &name)?.unwrap_or_default()
+                };
+                std::fs::write(&path, &old).map_err(io_err)?;
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                    .map_err(io_err)?;
+                let h = Fh::Live {
+                    key,
+                    name,
+                    file,
+                    path,
+                    dirty: flags & libc::O_TRUNC != 0,
+                };
+                Ok(Self::new_fh(&mut lock(&self.st), h))
+            }
+            _ => {
+                if open_wants_write(flags) {
+                    self.getattr(ino)?;
+                    return Err(ViewError::Perm);
+                }
+                self.getattr(ino)?;
+                let vfh = self.view.open(ino, false)?;
+                Ok(Self::new_fh(&mut lock(&self.st), Fh::Base(vfh)))
+            }
+        }
+    }
+
     /// `flush` (each `close`): store a written live file with one
     /// `replace_file` transaction. A failure is `EIO`, which `close`
     /// returns to the caller; the scratch copy stays for a later flush.
@@ -512,6 +578,91 @@ impl RwView {
             *dirty = false;
         }
         Ok(())
+    }
+
+    // ------------------------------------------------------ write side
+
+    /// `create(parent, name, mode, flags)`: a new file, opened.
+    pub fn create(&self, parent: u64, name: &str, mode: u32, flags: i32) -> Res<(Attr, u64)> {
+        let parent_key = self.parent_of(parent)?.ok_or(ViewError::Perm)?;
+        self.getattr(parent)?;
+        let mut st = lock(&self.st);
+        let key = (parent_key.clone(), name.to_string());
+        if let Some(&id) = st.names.get(&key) {
+            if flags & libc::O_EXCL != 0 {
+                return Err(ViewError::Exists);
+            }
+            drop(st);
+            let ino = self.obj_ino(id);
+            let fh = self.open(ino, flags)?;
+            return Ok((self.getattr(ino)?, fh));
+        }
+        let (obj, h) = match &parent_key {
+            Parent::Cat(_) if is_volatile_name(name) => (
+                Obj::Vol {
+                    data: Vec::new(),
+                    mode: mode & 0o7777,
+                    owner: self.owner,
+                    mtime_ns: now_ns(),
+                    nlink: 1,
+                },
+                None,
+            ),
+            Parent::Cat(_) => return Err(ViewError::Perm),
+            Parent::Live(key) => {
+                if Self::removing(&st, key) {
+                    return Err(ViewError::NoEnt);
+                }
+                drop(st);
+                if self.view.lookup(parent, name).is_ok() {
+                    // An existing stored file: open it for writing.
+                    let ino = self.view.lookup(parent, name)?.ino;
+                    if flags & libc::O_EXCL != 0 {
+                        return Err(ViewError::Exists);
+                    }
+                    let fh = self.open(ino, flags | libc::O_WRONLY)?;
+                    return Ok((self.getattr(ino)?, fh));
+                }
+                st = lock(&self.st);
+                let path = self.scratch_file(&mut st);
+                let f = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .mode(mode & 0o7777)
+                    .open(&path)
+                    .map_err(io_err)?;
+                (Obj::StagedFile { path }, Some(f))
+            }
+            Parent::Staged(dir) => {
+                let Some(Obj::StagedDir { path, .. }) = st.objs.get(dir) else {
+                    return Err(ViewError::NoEnt);
+                };
+                let path = path.join(name);
+                let f = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .mode(mode & 0o7777)
+                    .open(&path)
+                    .map_err(io_err)?;
+                (Obj::StagedFile { path }, Some(f))
+            }
+        };
+        let id = st.new_obj(obj);
+        st.names.insert(key, id);
+        if let Parent::Staged(dir) = parent_key {
+            st.bump(dir);
+        }
+        let attr = self.obj_attr(id, &st.objs[&id])?;
+        let fh = Self::new_fh(
+            &mut st,
+            match h {
+                Some(f) => Fh::Staged(f),
+                None => Fh::Vol(id),
+            },
+        );
+        Ok((attr, fh))
     }
 
     /// `write(fh, offset, data)`: the bytes written.
