@@ -124,6 +124,52 @@ fn emerge_is_pretend(args: &[String]) -> bool {
     })
 }
 
+/// Select, open and register the VDB backend before the applet runs (the same
+/// rule `mrg` applies without its flags). `None` keeps the files tree.
+fn select_vdb_for(
+    who: &str,
+    args: &[String],
+    readonly: bool,
+) -> Result<Option<crate::vdb_ipc::Server>, ExitCode> {
+    if is_help_or_version(args) {
+        return Ok(None);
+    }
+    mrg::select_vdb(who, None, None, readonly).map_err(|(message, code)| {
+        eprintln!("{message}");
+        ExitCode::from(code)
+    })
+}
+
+fn run_emerge(args: &[String]) -> ExitCode {
+    // Held for the whole run: the redb parent pipe stops when it drops.
+    let _vdb_ipc = match select_vdb_for("emerge", args, emerge_is_pretend(args)) {
+        Ok(server) => server,
+        Err(code) => return code,
+    };
+    let code = pretend::run(args);
+    if std::env::var_os("PORTUALE_REPORT_UNPARSED_DEP_TOKENS").is_some() {
+        eprintln!(
+            "portuale: unparsed dependency tokens: {}",
+            portage_repo::unparsed_dep_tokens()
+        );
+    }
+    code
+}
+
+fn run_ebuild(args: &[String]) -> ExitCode {
+    // Read-write even for a build-only command: its phases' `has_version`
+    // reach a redb file only through the parent pipe a read-write open starts.
+    let _vdb_ipc = match select_vdb_for("ebuild", args, false) {
+        Ok(server) => server,
+        Err(code) => return code,
+    };
+    ebuild::run(args)
+}
+
+fn run_mrg(args: &[String]) -> ExitCode {
+    mrg::run(args)
+}
+
 /// The Rust runtime ignores SIGPIPE, so `portuale ... | head` would make the
 /// next `println!` panic; turn that one panic into the quiet exit 141 a
 /// SIGPIPE death shows a shell. The ignored disposition stays (the remote

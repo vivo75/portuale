@@ -44,6 +44,165 @@ impl Cmd {
     }
 }
 
+pub fn run(args: &[String]) -> ExitCode {
+    let Some(first) = args.first().map(String::as_str) else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(EX_USAGE);
+    };
+    let cmd = match first {
+        "has_version" => Cmd::HasVersion,
+        "best_version" => Cmd::BestVersion,
+        "-h" | "--help" => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        other => {
+            eprintln!("not implemented by portuale portageq: {other}");
+            return ExitCode::from(1);
+        }
+    };
+    ExitCode::from(run_query(cmd, &args[1..]))
+}
+
+fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
+    if let Some(eroot) = rest.first()
+        && !Path::new(eroot).is_dir()
+    {
+        eprintln!("Not a directory: '{eroot}'");
+        eprintln!("Run portageq with --help for info");
+        return EX_USAGE;
+    }
+    // Rule 1.
+    if rest.len() < 2 {
+        println!("ERROR: insufficient parameters!");
+        return 3;
+    }
+    let root = PathBuf::from(&rest[0]);
+    let raw = rest[1].as_str();
+    // Decided at the first lookup, so argument/atom errors never depend on it.
+    let mut lookup: Option<Lookup> = None;
+
+    // Strict iff EBUILD_PHASE is set; EAPI then decides.
+    let strict = std::env::var_os("EBUILD_PHASE").is_some();
+    let eapi: Option<String> = if strict {
+        std::env::var("EAPI").ok()
+    } else {
+        None
+    };
+    let allow_repo = !strict || eapi_has_repo_deps(eapi.as_deref());
+
+    let parsed = portage_dep::parse_atom(raw).filter(|a| a.repo.is_none() || allow_repo);
+
+    let (atom, unevaluated): (String, Option<String>) = match parsed {
+        Some(a) => {
+            if strict && let Some(msg) = eapi_violation(&a, raw, eapi.as_deref()) {
+                // Rule 5.
+                eqawarn(&[format!("QA Notice: {}: {msg}", cmd.name())]);
+            }
+            // Rule 2: only when USE is present in the environment.
+            let evaluated = match std::env::var("USE") {
+                Ok(use_str) => {
+                    let set: HashSet<String> =
+                        use_str.split_whitespace().map(str::to_string).collect();
+                    portage_dep::evaluate_atom_conditionals(raw, &set)
+                        .unwrap_or_else(|| raw.to_string())
+                }
+                Err(_) => raw.to_string(),
+            };
+            (evaluated, Some(raw.to_string()))
+        }
+        None if strict => {
+            // Rule 4.
+            eprintln!("ERROR: Invalid atom: '{raw}'");
+            return 2;
+        }
+        None => {
+            // Rule 6: the raw string goes to `vardb.match()`, which runs
+            // `dep_expand` over it.
+            let source = match setup_backend(&root) {
+                Ok(s) => lookup.insert(s),
+                Err(e) => {
+                    eprintln!("portageq: {e}");
+                    return EX_INTERNAL;
+                }
+            };
+            match dep_expand(source, &root, raw) {
+                Ok(a) => (a, None),
+                Err(ExpandError::Invalid) => {
+                    eprintln!("ERROR: Invalid atom: '{raw}'");
+                    // `has_version` exits 2, `best_version` 1 (which dies
+                    // with a traceback under Portage; the line without the
+                    // traceback is a documented divergence).
+                    return match cmd {
+                        Cmd::HasVersion => 2,
+                        Cmd::BestVersion => 1,
+                    };
+                }
+                Err(ExpandError::Ambiguous(list)) => {
+                    // Uncaught under Portage too: exit 1.
+                    eprintln!("ERROR: ambiguous package name '{raw}': {}", list.join(" "));
+                    return 1;
+                }
+                Err(ExpandError::Internal(e)) => {
+                    eprintln!("portageq: {e}");
+                    return EX_INTERNAL;
+                }
+            }
+        }
+    };
+    let source = match lookup {
+        Some(s) => s,
+        None => match setup_backend(&root) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("portageq: {e}");
+                return EX_INTERNAL;
+            }
+        },
+    };
+
+    // Rule 7: the resolver's own installed-package matcher, here or in the
+    // parent `mrg`.
+    let implicit = || -> HashSet<String> {
+        crate::pretend::load_repos_and_config(&portage_repo::config_root_from_env(), &root)
+            .map(|(_, config)| config.iuse_effective)
+            .unwrap_or_default()
+    };
+    let best = match &source {
+        Lookup::Local => {
+            portage_repo::best_installed_match(&root, &atom, unevaluated.as_deref(), &implicit)
+        }
+        Lookup::Parent(socket) => {
+            match crate::vdb_ipc::query_match(
+                socket,
+                &root,
+                &atom,
+                unevaluated.as_deref(),
+                &implicit,
+            ) {
+                Ok(best) => best,
+                Err(e) => {
+                    eprintln!("portageq: {e}");
+                    return EX_INTERNAL;
+                }
+            }
+        }
+    };
+    match cmd {
+        // Rule 8.
+        Cmd::HasVersion => u8::from(best.is_none()),
+        // Rule 9.
+        Cmd::BestVersion => {
+            let line = match (&best, portage_dep::parse_atom(&atom)) {
+                (Some(version), Some(a)) => format!("{}/{}-{version}", a.category, a.package),
+                _ => String::new(),
+            };
+            println!("{line}");
+            0
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // Backend selection
 // ---------------------------------------------------------------------
@@ -293,6 +452,49 @@ pub(crate) fn installed_categories_of(root: &Path, pn: &str) -> Vec<String> {
         .into_iter()
         .filter(|c| !portage_repo::installed_candidates(root, c, pn).is_empty())
         .collect()
+}
+
+/// What `vardb.match()` does to a string the strict `Atom()` parse rejected:
+/// a missing `=` prefix is allowed, and a bare name expands to its installed
+/// category; none installed leaves `null/<pn>`, which matches nothing.
+fn dep_expand(source: &Lookup, root: &Path, raw: &str) -> Result<String, ExpandError> {
+    let orig = raw.strip_prefix('*').unwrap_or(raw);
+    if orig.is_empty() {
+        return Err(ExpandError::Invalid);
+    }
+    let has_cat = orig.split(':').next().is_some_and(|s| s.contains('/'));
+    let mut candidate = orig.to_string();
+    if !has_cat && let Some(i) = orig.find(|c: char| c.is_alphanumeric() || c == '_') {
+        candidate = format!("{}null/{}", &orig[..i], &orig[i..]);
+    }
+    let mut orig_dep = orig.to_string();
+    let atom = match portage_dep::parse_atom(&candidate) {
+        Some(a) => a,
+        None => {
+            let with_eq = format!("={candidate}");
+            let a = portage_dep::parse_atom(&with_eq).ok_or(ExpandError::Invalid)?;
+            candidate = with_eq;
+            orig_dep = format!("={orig_dep}");
+            a
+        }
+    };
+    if has_cat {
+        return Ok(candidate);
+    }
+    let pn = atom.package;
+    let cats = match source {
+        Lookup::Local => installed_categories_of(root, &pn),
+        Lookup::Parent(socket) => {
+            crate::vdb_ipc::query_categories(socket, root, &pn).map_err(ExpandError::Internal)?
+        }
+    };
+    match cats.as_slice() {
+        [] => Ok(orig_dep.replacen(&pn, &format!("null/{pn}"), 1)),
+        [one] => Ok(orig_dep.replacen(&pn, &format!("{one}/{pn}"), 1)),
+        many => Err(ExpandError::Ambiguous(
+            many.iter().map(|c| format!("{c}/{pn}")).collect(),
+        )),
+    }
 }
 
 #[cfg(test)]

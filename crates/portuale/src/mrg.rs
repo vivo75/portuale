@@ -1330,6 +1330,72 @@ fn join_optional_values(args: &[String]) -> Vec<String> {
     out
 }
 
+/// `mrg`'s entry point, dispatched from main.rs's multicall `run`. Parses
+/// `args` (already stripped of the applet name) with the clap command, then
+/// either runs the remote preflight/executor (`--remote-hostname` present)
+/// or translates the match into canonical long-form argv and hands it to the
+/// emerge codepath -- `pretend::run`, the exact function the `emerge` applet
+/// runs, so resolution output and exit codes are literally emerge's. clap
+/// keeps its own parser, help, and exit behaviour (help -> 0, usage
+/// error -> 2); everything else is the emerge codepath's.
+pub fn run(args: &[String]) -> ExitCode {
+    let bin = "mrg";
+    let joined = join_optional_values(args);
+    let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
+    match command().try_get_matches_from(argv) {
+        Ok(matches) => match crate::remote::check_remote(&matches) {
+            Ok(remote) => {
+                // A remote run whose VDB is `client:` (the default) keeps
+                // the files layout on the client; the backend options do not
+                // apply to it.
+                let client_vdb = matches!(&remote, Some(ctx)
+                    if !matches.get_flag("pretend")
+                        && matches!(ctx.vdb, crate::remote::ConfigPlacement::Client(_)));
+                // Held for the whole run: the redb parent pipe stops and its
+                // socket is removed when this drops.
+                let vdb_ipc = match setup_vdb(&matches, client_vdb) {
+                    Ok(server) => server,
+                    Err((message, code)) => {
+                        eprintln!("{message}");
+                        return ExitCode::from(code);
+                    }
+                };
+                let code = match remote {
+                    // `--pretend` stays local: the remote options drop
+                    // out in `to_emerge_argv` and the shared plan prints
+                    // as usual.
+                    Some(_) if matches.get_flag("pretend") => {
+                        crate::pretend::run(&to_emerge_argv(&matches))
+                    }
+                    Some(ctx) => {
+                        let argv = to_emerge_argv(&matches);
+                        crate::remote::run_remote_cli(&matches, ctx, argv)
+                    }
+                    None => crate::pretend::run(&to_emerge_argv(&matches)),
+                };
+                drop(vdb_ipc);
+                // Drop the registered backends: redb records a clean close
+                // only when its last handle drops, and the registry is a
+                // static that never would. Without this, the next
+                // read-only open (`--pretend`, `portuale vdb status`, a
+                // `portageq` outside mrg) refuses the file as "not closed
+                // cleanly" until a read-write open repairs it.
+                portage_vdb::reset();
+                code
+            }
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::from(2)
+            }
+        },
+        Err(err) => {
+            let code = err.exit_code() as u8;
+            let _ = err.print();
+            ExitCode::from(code)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // VDB backend selection
 // ---------------------------------------------------------------------
@@ -1618,6 +1684,110 @@ pub(crate) fn make_conf_lookup(root: &Path) -> impl FnMut(&str) -> Option<String
         });
         config.as_ref()?.other_vars.get(key).cloned()
     }
+}
+
+/// `mrg`'s backend selection: `--vdb-backend` / `--vdb-path`, then the
+/// shared rule [`select_vdb`] applies (environment, then make.conf).
+/// `client_vdb` is a remote run whose VDB is the client's own `client:`
+/// tree: it stays files, and the options are refused.
+fn setup_vdb(
+    matches: &ArgMatches,
+    client_vdb: bool,
+) -> Result<Option<crate::vdb_ipc::Server>, (String, u8)> {
+    let flag_backend = matches.get_one::<String>("vdb_backend").map(String::as_str);
+    let flag_path = matches.get_one::<String>("vdb_path").map(String::as_str);
+    if client_vdb {
+        if flag_backend.is_some() || flag_path.is_some() {
+            return Err((
+                "mrg: --vdb-backend/--vdb-path cannot be combined with a client: VDB \
+                 (--remote-vdb=client:...): the client's VDB stays a files tree; \
+                 use --remote-vdb=server:<path> to select a backend for the server's copy"
+                    .to_string(),
+                2,
+            ));
+        }
+        return Ok(None);
+    }
+    select_vdb("mrg", flag_backend, flag_path, matches.get_flag("pretend"))
+}
+
+/// Select, open and register the VDB backend for the target ROOT, then
+/// export it to child processes. `mrg` runs it before `pretend::run`;
+/// `emerge` and `ebuild` run it before their own work, from the environment
+/// and make.conf only. `who` prefixes every message.
+///
+/// The choice is always exported, `files` included: an ebuild phase's
+/// `portageq` then never has to resolve make.conf itself, and every process
+/// of the run agrees on one database.
+///
+/// redb (not `readonly`): this process now holds the file, so the ebuild
+/// phases' `has_version` / `best_version` cannot open it. The parent pipe
+/// (`vdb_ipc.rs`, redb only) is started here and its socket exported as
+/// `PORTUALE_VDB_IPC`; the returned guard keeps it running until the caller's
+/// run returns. Failing to start it is an error (exit 1) rather than a merge
+/// whose first `has_version` would fail half-way.
+///
+/// Only the target ROOT is registered: the running root (`/`, consulted for
+/// `--root-deps`/BDEPEND style lookups when ROOT is not `/`) keeps the files
+/// layout.
+pub(crate) fn select_vdb(
+    who: &str,
+    flag_backend: Option<&str>,
+    flag_path: Option<&str>,
+    readonly: bool,
+) -> Result<Option<crate::vdb_ipc::Server>, (String, u8)> {
+    let root = portage_repo::root_from_env();
+    let sel = resolve_vdb_selection(
+        flag_backend,
+        flag_path,
+        &|k| std::env::var(k).ok(),
+        &mut make_conf_lookup(&root),
+        &root,
+    )
+    .map_err(|(m, code)| (format!("{who}: {m}"), code))?;
+    if sel.backend == BackendKind::Files {
+        if flag_path.is_some() {
+            eprintln!("{who}: warning: --vdb-path is ignored with the files backend");
+        }
+        // Nothing else reads the environment yet (no thread started).
+        unsafe {
+            std::env::set_var(VDB_BACKEND_VAR, BackendKind::Files.as_str());
+            std::env::remove_var(crate::vdb_ipc::IPC_VAR);
+        }
+        return Ok(None);
+    }
+    let db = open_vdb_backend(&sel, &root, readonly).map_err(|m| (format!("{who}: {m}"), 1))?;
+    let mut server = None;
+    if let (Some(db), Some(path)) = (db, &sel.path) {
+        portage_vdb::register(&root, db);
+        if sel.backend == BackendKind::Redb && !readonly {
+            server = Some(crate::vdb_ipc::Server::start(&root).map_err(|e| {
+                (
+                    format!(
+                        "{who}: cannot start the {} server the ebuild phases need on redb: {e}",
+                        crate::vdb_ipc::IPC_VAR
+                    ),
+                    1,
+                )
+            })?);
+        }
+        // For the ebuild phases (and the native portageq).
+        // Nothing else reads the environment yet: the only other thread
+        // is the pipe's accept thread, blocked in `accept` (nobody knows
+        // the socket before this export).
+        unsafe {
+            std::env::set_var(VDB_BACKEND_VAR, sel.backend.as_str());
+            std::env::set_var(VDB_PATH_VAR, path);
+            std::env::set_var(VDB_ROOT_VAR, &root);
+            // Never let a variable inherited from an outer run point the
+            // children at another process's pipe.
+            match &server {
+                Some(s) => std::env::set_var(crate::vdb_ipc::IPC_VAR, s.socket()),
+                None => std::env::remove_var(crate::vdb_ipc::IPC_VAR),
+            }
+        }
+    }
+    Ok(server)
 }
 
 #[cfg(test)]
@@ -2324,6 +2494,18 @@ mod tests {
         // mrg's help names the options and the default.
         let help = command().render_long_help().to_string();
         assert!(help.contains("--vdb-backend") && help.contains("files (default"));
+    }
+
+    #[test]
+    fn a_client_vdb_refuses_the_backend_options_but_stays_files_otherwise() {
+        let m = parse(&["--vdb-backend=sqlite"]).unwrap();
+        let (msg, code) = setup_vdb(&m, true).unwrap_err();
+        assert_eq!(code, 2);
+        assert!(msg.contains("client: VDB"), "{msg}");
+        let m = parse(&["--vdb-path=/x"]).unwrap();
+        assert!(setup_vdb(&m, true).is_err());
+        let m = parse(&["--pretend"]).unwrap();
+        assert!(setup_vdb(&m, true).is_ok());
     }
 
     /// End to end: the fixture VDB, converted to sqlite, gives the same

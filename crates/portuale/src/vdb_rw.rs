@@ -26,8 +26,14 @@ use portage_vdb::{Counter, EntryFile, EntryImage, EntryKey, FileMeta, InstalledD
 
 use crate::vdb_view::{DirEnt, Kind, ViewError};
 
+type Res<T> = Result<T, ViewError>;
+
 /// Handles of this layer are numbered from here, above the view's own.
 const FH_BASE: u64 = 1 << 48;
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 fn now_ns() -> i128 {
     SystemTime::now()
@@ -63,6 +69,17 @@ pub struct Owner {
     pub gid: u32,
 }
 
+/// The directory a name lives in, for this layer's own names.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Parent {
+    Cat(String),
+    /// A staged `-MERGING-<pf>` directory (its object id).
+    Staged(u64),
+    /// A live entry: new names Portage creates in it (`write_atomic` temps,
+    /// `_umask_test` files) until they are renamed onto a field.
+    Live(EntryKey),
+}
+
 /// The prefix Portage gives an entry while it is being merged.
 // Portage: const.py, MERGING_IDENTIFIER
 const MERGING: &str = "-MERGING-";
@@ -88,6 +105,27 @@ enum Obj {
     /// A file inside a staged directory, or a new name inside a live
     /// entry: the scratch file holds the bytes, mode and mtime.
     StagedFile { path: PathBuf },
+}
+
+enum Fh {
+    /// A handle of the read-only view.
+    Base(u64),
+    /// A directory listing of this layer.
+    Dir(Arc<Vec<DirEnt>>),
+    /// A volatile file.
+    Vol(u64),
+    /// An open staged file.
+    Staged(std::fs::File),
+    /// A stored file of a live entry opened for writing: the new bytes
+    /// build up in a scratch copy and are stored with `replace_file` at
+    /// `flush` (the `close` Portage sees).
+    Live {
+        key: EntryKey,
+        name: String,
+        file: std::fs::File,
+        path: PathBuf,
+        dirty: bool,
+    },
 }
 
 fn io_err(e: std::io::Error) -> ViewError {

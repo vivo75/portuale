@@ -69,6 +69,66 @@ pub(crate) struct Server {
 }
 
 impl Server {
+    /// Serve the database registered for `root` (`portage_vdb::for_root`)
+    /// from a socket under `$TMPDIR`, or under `/tmp` when that path is
+    /// too long for a socket address.
+    pub(crate) fn start(root: &Path) -> std::io::Result<Server> {
+        let tmp = std::env::temp_dir();
+        match Server::start_in(&tmp, root) {
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput && tmp != Path::new("/tmp") => {
+                Server::start_in(Path::new("/tmp"), root)
+            }
+            other => other,
+        }
+    }
+
+    /// [`Server::start`] with the socket directory under `parent`.
+    pub(crate) fn start_in(parent: &Path, root: &Path) -> std::io::Result<Server> {
+        sweep_stale(parent);
+        let dir = make_private_dir(parent)?;
+        let socket = dir.join("s");
+        if socket.as_os_str().len() > MAX_SOCKET_PATH {
+            let _ = std::fs::remove_dir(&dir);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "socket path {} is too long for a Unix socket",
+                    socket.display()
+                ),
+            ));
+        }
+        let listener = match UnixListener::bind(&socket) {
+            Ok(l) => l,
+            Err(e) => {
+                let _ = std::fs::remove_dir(&dir);
+                return Err(e);
+            }
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let stop = stop.clone();
+            let root = root.to_path_buf();
+            std::thread::Builder::new()
+                .name("vdb-ipc".into())
+                .spawn(move || accept_loop(&listener, &root, &stop))
+        };
+        let thread = match thread {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = std::fs::remove_file(&socket);
+                let _ = std::fs::remove_dir(&dir);
+                return Err(e);
+            }
+        };
+        cleanup::register(&dir);
+        Ok(Server {
+            dir,
+            socket,
+            stop,
+            thread: Some(thread),
+        })
+    }
+
     /// The socket path (the value of `PORTUALE_VDB_IPC`).
     pub(crate) fn socket(&self) -> &Path {
         &self.socket
@@ -348,10 +408,36 @@ mod cleanup {
 
     static LIVE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
+    pub(super) fn register(dir: &Path) {
+        if let Ok(mut live) = LIVE.lock() {
+            live.push(dir.to_path_buf());
+        }
+        install_hook();
+    }
+
     pub(super) fn unregister(dir: &Path) {
         if let Ok(mut live) = LIVE.lock() {
             live.retain(|d| d != dir);
         }
+    }
+
+    /// Unit tests unwind (and run servers in parallel threads, where one
+    /// test's expected panic must not remove another's socket): there
+    /// `Drop` is enough, so no hook.
+    #[cfg(not(test))]
+    fn install_hook() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                if let Ok(live) = LIVE.try_lock() {
+                    for dir in live.iter() {
+                        let _ = std::fs::remove_dir_all(dir);
+                    }
+                }
+                previous(info);
+            }));
+        });
     }
 
     #[cfg(test)]
@@ -368,5 +454,183 @@ mod tests {
             .join("../../fixtures")
             .canonicalize()
             .unwrap()
+    }
+
+    /// Send raw bytes and read the raw reply.
+    #[cfg(feature = "vdb-redb")]
+    fn raw(socket: &Path, bytes: &[u8]) -> String {
+        let mut s = UnixStream::connect(socket).unwrap();
+        s.write_all(bytes).unwrap();
+        let _ = s.shutdown(std::net::Shutdown::Write);
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        out
+    }
+
+    /// The server answers like the direct lookup on a redb copy, and
+    /// survives garbage requests.
+    #[cfg(feature = "vdb-redb")]
+    #[test]
+    fn server_answers_like_the_direct_match_and_survives_garbage() {
+        let fx = fixtures();
+        let tmp = portage_util::TempDir::new("vdb_ipc");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let db = std::sync::Arc::new(portage_vdb::RedbDb::open(tmp.join("vdb.redb")).unwrap());
+        portage_vdb::copy_all(&portage_vdb::FilesDb::new(&fx), db.as_ref(), false).unwrap();
+        portage_vdb::register(&root, db.clone());
+        // Held read-write by this process, as under mrg.
+        assert!(matches!(
+            portage_vdb::RedbDb::open_readonly(tmp.join("vdb.redb")),
+            Err(portage_vdb::Error::Busy { .. })
+        ));
+
+        let server = Server::start_in(&tmp, &root).unwrap();
+        let socket = server.socket().to_path_buf();
+        let dir = socket.parent().unwrap().to_path_buf();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+
+        // `root` has no files VDB at all: a hit can only come from redb.
+        assert!(!root.join("var/db/pkg").exists());
+        let implicit = || HashSet::new();
+        let cases: &[(&str, Option<&str>)] = &[
+            ("dev-libs/keeper", None),
+            ("dev-libs/nonexistent", None),
+            (">=dev-libs/dualslotpkg-1.5", None),
+            (">dev-libs/dualslotpkg-2.0", None),
+            ("=dev-libs/unmergepkg-1.0", None),
+            ("~dev-libs/unmergepkg-2.0", None),
+            ("=dev-libs/unmergepkg-1*", None),
+            ("dev-libs/dualslotpkg:1", None),
+            ("dev-libs/dualslotpkg:3", None),
+            ("dev-libs/r25lib:0/1", None),
+            ("dev-libs/r25lib:0/2", None),
+            ("dev-libs/newrepopkg::oldrepo", None),
+            ("dev-libs/newrepopkg::testrepo", None),
+            ("dev-libs/infoinstpkg[alpha]", None),
+            ("dev-libs/infoinstpkg[beta]", None),
+            ("dev-libs/infoinstpkg[-beta]", None),
+            ("dev-libs/infoinstpkg[nosuchflag]", None),
+            ("dev-libs/infoinstpkg[nosuchflag(+)]", None),
+            // `[beta?]` evaluated with USE="" (the child's job), and the
+            // unevaluated original sent along.
+            ("dev-libs/infoinstpkg", Some("dev-libs/infoinstpkg[beta?]")),
+            (
+                "dev-libs/infoinstpkg",
+                Some("dev-libs/infoinstpkg[nosuchflag?]"),
+            ),
+            ("dev-libs/unmergepkg", None),
+            ("<dev-libs/unmergepkg-2", None),
+            ("dev-libs/blk0y", None),
+        ];
+        let mut hits = 0;
+        for (atom, unevaluated) in cases {
+            let direct = portage_repo::best_installed_match(&root, atom, *unevaluated, &implicit);
+            let piped = query_match(&socket, &root, atom, *unevaluated, &implicit).unwrap();
+            assert_eq!(piped, direct, "{atom} {unevaluated:?}");
+            hits += usize::from(direct.is_some());
+        }
+        assert!(hits > 10, "the redb copy answers (hits: {hits})");
+        assert_eq!(
+            query_match(&socket, &root, "dev-libs/unmergepkg", None, &implicit).unwrap(),
+            Some("2.0".into())
+        );
+        assert_eq!(
+            query_match(&socket, &root, "dev-libs/nonexistent", None, &implicit).unwrap(),
+            None
+        );
+        // dep_expand's lookup.
+        assert_eq!(
+            query_categories(&socket, &root, "keeper").unwrap(),
+            crate::portageq::installed_categories_of(&root, "keeper")
+        );
+        assert_eq!(
+            query_categories(&socket, &root, "keeper").unwrap(),
+            ["dev-libs"]
+        );
+        assert!(
+            query_categories(&socket, &root, "no-such-pn")
+                .unwrap()
+                .is_empty()
+        );
+        // Another spelling of the root is the same root; another root is
+        // refused.
+        assert!(query_match(&socket, &root.join("."), "dev-libs/keeper", None, &implicit).is_ok());
+        let e = query_match(&socket, &fx, "dev-libs/keeper", None, &implicit).unwrap_err();
+        assert!(e.contains("this pipe serves"), "{e}");
+
+        // (d) Garbage: an `err` reply each time, and the server still
+        // answers afterwards.
+        for bad in [
+            &b"hello\n"[..],
+            b"match\tonly-two\n",
+            b"match\t/x\tnot an atom\t\t\n",
+            b"\xff\xfe\n",
+            b"match\t/\tdev-libs/keeper\t\t",
+            b"\n",
+        ] {
+            let reply = raw(&socket, bad);
+            assert!(reply.starts_with("err\t"), "{bad:?}: {reply:?}");
+            assert!(reply.ends_with('\n'), "{bad:?}: {reply:?}");
+        }
+        let reply = raw(
+            &socket,
+            format!("match\t{}\tdev-libs/[[[\t\t\n", root.display()).as_bytes(),
+        );
+        assert!(reply.starts_with("err\tinvalid atom"), "{reply:?}");
+        // Over-long request: refused once the bound is crossed. (Exactly
+        // one byte over, so the server has read everything the client
+        // sent: closing with unread input would reset the connection
+        // before the client reads the reply.)
+        let long = vec![b'a'; MAX_REQUEST as usize + 1];
+        let reply = raw(&socket, &long);
+        assert!(reply.starts_with("err\trequest longer"), "{reply:?}");
+        // A client that connects and says nothing does not stop others.
+        let idle = UnixStream::connect(&socket).unwrap();
+        assert_eq!(
+            query_match(&socket, &root, "dev-libs/keeper", None, &implicit).unwrap(),
+            Some("1.0".into())
+        );
+        drop(idle);
+        // The client refuses fields that would break the framing.
+        assert!(request(&socket, &["match", "a\tb"]).is_err());
+
+        // (c) Cleanup.
+        drop(server);
+        assert!(!socket.exists());
+        assert!(!dir.exists());
+        let e = query_match(&socket, &root, "dev-libs/keeper", None, &implicit).unwrap_err();
+        assert!(e.contains("cannot reach the parent mrg"), "{e}");
+        portage_vdb::register(&root, std::sync::Arc::new(portage_vdb::FilesDb::new(&root)));
+    }
+
+    /// The stale sweep removes a dead pid's directory and keeps a live
+    /// one's.
+    #[test]
+    fn stale_directories_of_dead_processes_are_swept() {
+        let tmp = portage_util::TempDir::new("vdb_ipc_sweep");
+        let dead = tmp.join(format!("{DIR_PREFIX}{}-1", u32::MAX - 1));
+        let live = tmp.join(format!("{DIR_PREFIX}{}-1", std::process::id()));
+        std::fs::create_dir_all(dead.join("x")).unwrap();
+        std::fs::create_dir_all(&live).unwrap();
+        sweep_stale(&tmp);
+        assert!(!dead.exists());
+        assert!(live.exists());
+    }
+
+    /// A socket path longer than `sun_path` is refused before binding,
+    /// leaving nothing behind.
+    #[test]
+    fn too_long_socket_path_is_refused() {
+        let tmp = portage_util::TempDir::new("vdb_ipc_long");
+        let deep = tmp.join("d".repeat(120));
+        std::fs::create_dir_all(&deep).unwrap();
+        let e = Server::start_in(&deep, Path::new("/")).err().unwrap();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(std::fs::read_dir(&deep).unwrap().count(), 0);
     }
 }
