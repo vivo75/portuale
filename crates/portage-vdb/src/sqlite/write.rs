@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 
-use super::db_err;
+use super::{BUSY_TIMEOUT_MS, blob, db_err, entry_row, installed_row};
 use crate::dep_cp::dep_index_key;
 use crate::files::{normalise_aux_bytes, translate_aux_slot};
 use crate::{

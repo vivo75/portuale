@@ -497,6 +497,8 @@ fn check_version(handle: &Handle, path: &Path) -> Result<()> {
     }
 }
 
+mod write;
+
 // ---------------------------------------------------------------------
 // Reads inside one transaction.
 
