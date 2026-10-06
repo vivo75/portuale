@@ -1983,7 +1983,7 @@ mod tests {
         );
         assert_eq!(
             f.rdb.aux_get(a, "DESCRIPTION").unwrap().as_deref(),
-            Some("")
+            Some("caf\u{fffd} x")
         );
         let b = &f.keys[1];
         assert_eq!(

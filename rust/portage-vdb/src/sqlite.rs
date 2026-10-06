@@ -1470,8 +1470,8 @@ mod tests {
         let e = EntryKey::new("sys-apps", "e-1");
         let p = EntryKey::new("dev-libs", "p-1");
         let owned: &[u8] = b"dir /usr\nobj /usr/bin/x abc 1\nsym /usr/bin/y -> x 1\nfoo /usr/z\n";
-        // a: sealed (valid stamp); a non-UTF-8 field is dropped from the
-        // snapshot, so aux_get serves "" (the pinned oddity).
+        // a: sealed (valid stamp); a non-UTF-8 field is sealed as its
+        // lossy text, like an unsealed one (#309).
         put_files(
             &fdb,
             &a,
@@ -1663,7 +1663,7 @@ mod tests {
         );
         assert_eq!(
             f.sdb.aux_get(a, "DESCRIPTION").unwrap().as_deref(),
-            Some("")
+            Some("caf\u{fffd} x")
         );
         let b = &f.keys[1];
         assert_eq!(
