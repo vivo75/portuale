@@ -147,8 +147,19 @@ assert_rc() {
     return 0
 }
 
-echo "Building ${IMAGE} with ${ENGINE} (context: ${REPO_DIR})"
-"${ENGINE}" build --no-cache -f "${CONTAINERFILE}" -t "${TAG}" "${REPO_DIR}"
+# Build context: rust/ plus the fixture tree. `fixtures/` is a symlink to
+# ../pmtest/fixtures, outside any build context rooted at the repo, so the
+# Containerfile's `COPY fixtures/` would fail on it (#311). Stage a real
+# copy: `cp -a fixtures/.` follows the top-level link but keeps the tree's
+# own inner symlinks (e.g. make.profile) as they are.
+CONTEXT="$(mktemp -d "${TMPDIR:-/var/tmp}/musl-smoke-ctx.XXXXXX")"
+trap 'rm -rf "${CONTEXT}"' EXIT
+tar -C "${REPO_DIR}" --exclude=rust/target -cf - rust | tar -C "${CONTEXT}" -xf -
+mkdir "${CONTEXT}/fixtures"
+cp -a "${REPO_DIR}/fixtures/." "${CONTEXT}/fixtures/"
+
+echo "Building ${IMAGE} with ${ENGINE} (context: ${CONTEXT})"
+"${ENGINE}" build --no-cache -f "${CONTAINERFILE}" -t "${TAG}" "${CONTEXT}"
 
 # versions-harness (default ENTRYPOINT): correctness spot check.
 actual=$("${ENGINE}" run --rm "${IMAGE}" vercmp 1.0-r1 1.0)

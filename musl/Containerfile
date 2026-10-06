@@ -5,7 +5,8 @@
 # also gates on a musl static build smoke-tested inside a minimal
 # (scratch/busybox-level) container").
 #
-# Build context is the repo root (not rust/) so the fixture tree at
+# Build context is a staged copy of rust/ + fixtures/ (smoke_test.sh makes it:
+# fixtures/ is a symlink out of the repo, #311), so the fixture tree at
 # fixtures/ can be copied into the runtime image too, letting the smoke
 # test exercise real `emerge --pretend` against it.
 #
