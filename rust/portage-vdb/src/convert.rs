@@ -20,6 +20,7 @@
 //! mask the first one's. The round trip files -> sqlite -> files is
 //! still checked by running `verify` on the two ends.
 
+use crate::types::DIR_MODE_MASK;
 use std::collections::BTreeMap;
 
 use crate::{
@@ -233,10 +234,13 @@ fn without_stamp(data: &[u8]) -> Vec<u8> {
 
 fn compare_images(rep: &mut VerifyReport, a: &EntryImage, b: &EntryImage) {
     let k = &a.key;
-    if a.dir_mode != b.dir_mode {
+    // Permission bits only: a database converted before #307 holds the full
+    // `st_mode` (`0o40755`) a `files` reader used to report.
+    if a.dir_mode & DIR_MODE_MASK != b.dir_mode & DIR_MODE_MASK {
         rep.push(format!(
             "{k}: directory mode {:o} != {:o}",
-            a.dir_mode, b.dir_mode
+            a.dir_mode & DIR_MODE_MASK,
+            b.dir_mode & DIR_MODE_MASK
         ));
     }
     if a.dir_mtime_ns != b.dir_mtime_ns {

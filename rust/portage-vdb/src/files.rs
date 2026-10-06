@@ -11,6 +11,7 @@
 //! doc item 19; S1.5 moved `owners`, `read_file_all`, `delete_entry`
 //! `replace_file`; S1.6 moved `world` / `world_sets`).
 
+use crate::types::DIR_MODE_MASK;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
@@ -723,7 +724,7 @@ impl InstalledDb for FilesDb {
         Ok(Some(EntryImage {
             key: key.clone(),
             files,
-            dir_mode: dst.mode(),
+            dir_mode: dst.mode() & DIR_MODE_MASK,
             dir_mtime_ns,
             metadata_stamp,
         }))
@@ -760,7 +761,7 @@ impl InstalledDb for FilesDb {
         };
         Ok(Some(EntryStat {
             files,
-            dir_mode: dst.mode(),
+            dir_mode: dst.mode() & DIR_MODE_MASK,
             dir_mtime_ns,
             metadata_stamp,
         }))
