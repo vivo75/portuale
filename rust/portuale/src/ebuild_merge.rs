@@ -2762,11 +2762,10 @@ fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
 /// records the new value from the temporary entry). The directory itself
 /// must already exist (see [`create_vdb_tmp`]).
 ///
-/// The counter is `WriteTxn::next_counter` (on `files` portuale's
-/// historic rule, kept in S1: the `counter` file only, `-1` when missing
-/// or corrupt, plus one, no lock, no scan of the installed `COUNTER`s;
-/// real `get_counter_tick_core()` also takes the max over every
-/// installed package's own `COUNTER`, plan §0.7 residue).
+/// The counter is `WriteTxn::next_counter` (on `files` real's
+/// `counter_tick_core` since #306: under the VDB lock, the max of the
+/// `counter` file and every installed package's own `COUNTER`, plus one,
+/// written atomically).
 fn populate_vdb_tmp(
     root: &Path,
     category: &str,

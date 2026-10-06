@@ -291,7 +291,7 @@ impl FilesDb {
     /// callers default individually and that parity question is a filed
     /// residue. The invalid-`SLOT` -> `"0"` half *is* here
     /// ([`translate_aux_slot`], #115 S1).
-    fn aux_get_field(&self, key: &EntryKey, field: &str) -> Option<String> {
+    pub(crate) fn aux_get_field(&self, key: &EntryKey, field: &str) -> Option<String> {
         // #112: one `statx` for both the existence test and the
         // `st_mtime_ns` validity check below.
         let dir = self.entry_dir(key);

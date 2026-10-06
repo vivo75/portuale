@@ -1715,6 +1715,7 @@ version = "0.1.0"
 name = "portage-vdb"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "portage-util",
  "redb",
  "rusqlite",

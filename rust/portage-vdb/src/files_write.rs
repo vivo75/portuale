@@ -25,7 +25,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use crate::files::{FilesDb, is_absent, parse_metadata_text};
 use crate::{
-    ConfigMemory, Counter, EntryImage, EntryKey, Error, METADATA_FILE_FIELDS,
+    ConfigMemory, Counter, EntryImage, EntryKey, Error, InstalledDb as _, METADATA_FILE_FIELDS,
     METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result, World,
     WorldSets, WriteTxn,
 };
@@ -334,6 +334,99 @@ impl FilesTxn<'_> {
 }
 
 /// `std::fs::create_dir_all` of `path`'s parent, error on the parent.
+/// Real `lockdir(<vdb>)` (`locks.py:167`, `lockfile(..., wantnewlockfile=1)`):
+/// a blocking exclusive `flock(2)` on `<parent>/.<basename>.portage_lockfile`
+/// (for `/var/db/pkg`, `/var/db/.pkg.portage_lockfile`). `wantnewlockfile`
+/// implies `unlinkfile` (`locks.py:247-251`), so the file is removed again
+/// on release; because a waiter may hold an fd on the removed inode, the
+/// acquirer re-checks, once it has the lock, that the path still names the
+/// file it locked and starts over when it does not. Scoped here to one
+/// counter tick; real's `vardbapi.lock()` is reentrant and held across a
+/// whole merge, which `files` does not model (no other portuale holder of
+/// this lock exists, so this cannot self-deadlock).
+struct VdbLock {
+    _file: fs::File,
+    path: PathBuf,
+}
+
+impl VdbLock {
+    fn acquire(vdb: &Path) -> Result<Self> {
+        use std::os::unix::io::AsRawFd as _;
+        let parent = vdb.parent().unwrap_or_else(|| Path::new("."));
+        let base = vdb
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let path = parent.join(format!(".{base}.portage_lockfile"));
+        fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+        loop {
+            let file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&path)
+                .map_err(|e| Error::io(&path, e))?;
+            // SAFETY: `flock` takes only the fd, which `file` keeps valid.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(Error::io(path, std::io::Error::last_os_error()));
+            }
+            let (Ok(held), Ok(named)) = (file.metadata(), fs::metadata(&path)) else {
+                continue; // unlinked by the previous holder: start over
+            };
+            if held.ino() == named.ino() && held.dev() == named.dev() {
+                return Ok(Self { _file: file, path });
+            }
+        }
+    }
+}
+
+impl Drop for VdbLock {
+    /// Unlink while still holding the lock (real `unlockfile` with
+    /// `unlinkfile`), then the fd closes and the lock is released.
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Real `write_atomic` (`util/__init__.py`, `atomic_ofstream`): follow
+/// symlinks, write a temporary file (`<basename>` + suffix) in the same
+/// directory, copy the mode of the file it replaces (a new file keeps the
+/// umask-derived default), then `rename` over the target.
+fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    create_parent(&target)?;
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let base = target
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mut n = 0u32;
+    let (tmp, mut file) = loop {
+        let tmp = parent.join(format!("{base}.{}.{n}", std::process::id()));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(f) => break (tmp, f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(Error::io(tmp, e)),
+        }
+    };
+    let result = (|| {
+        file.write_all(data)?;
+        if let Ok(st) = fs::metadata(&target) {
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(st.mode() & 0o7777))?;
+        }
+        drop(file);
+        fs::rename(&tmp, &target)
+    })();
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp);
+        return Err(Error::io(target, e));
+    }
+    Ok(())
+}
+
 fn create_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
@@ -385,18 +478,32 @@ impl WriteTxn for FilesTxn<'_> {
         Ok(())
     }
 
-    /// Moved from `ebuild_merge::next_counter`: read the `counter` file
-    /// (`-1` when missing or unparsable), add one, `create_dir_all` its
-    /// parent, `std::fs::write` the number with no newline. **No lock and
-    /// no max over the entries' `COUNTER`s**, unlike real
-    /// `counter_tick_core` (`vartree.py:1304-1397`); plan §0.7 keeps that
-    /// in S1 and files it as a residue.
+    /// Real `counter_tick_core` (`vartree.py:1372-1397`) over
+    /// `get_counter_tick_core` (`1304-1370`): under the VDB lock
+    /// (`vardbapi.lock()` -> `lockdir(<vdb>)`, a `.<basename>.portage_lockfile`
+    /// sibling, [`VdbLock`]), the next value is **the larger of the
+    /// `counter` file (`-1` when missing or unparsable) and every installed
+    /// entry's `COUNTER`**, plus one -- a counter file that fell behind
+    /// (corrupt, restored, lost) cannot hand out a value below an installed
+    /// package's, which would trip AUTOCLEAN -- and the file is replaced
+    /// atomically ([`write_atomic`], real `write_atomic`), no newline.
     fn next_counter(&mut self) -> Result<Counter> {
         let counter_path = self.db.store_path(COUNTER_PATH)?;
-        let previous = self.db.read_counter().map_or(-1, |c| c.0);
-        let next = previous + 1;
-        create_parent(&counter_path)?;
-        fs::write(&counter_path, next.to_string()).map_err(|e| Error::io(&counter_path, e))?;
+        let _lock = VdbLock::acquire(self.db.vdb_path())?;
+        let mut max = self.db.read_counter().map_or(-1, |c| c.0);
+        for key in self.db.entries()? {
+            // Real: `int(aux_get(cpv, ["COUNTER"])[0])`, skipping a missing
+            // entry, field or a value that is not an integer.
+            if let Some(Ok(c)) = self
+                .db
+                .aux_get_field(&key, "COUNTER")
+                .map(|v| v.trim().parse::<i64>())
+            {
+                max = max.max(c);
+            }
+        }
+        let next = max + 1;
+        write_atomic(&counter_path, next.to_string().as_bytes())?;
         Ok(Counter(next))
     }
 
@@ -845,6 +952,120 @@ mod tests {
         let st = fs::metadata(&live).unwrap();
         let ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
         assert!(meta.ends_with(&format!("#dir_mtime={ns}\n")));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn installed(root: &Path, cpv: &str, counter: Option<&str>) {
+        let dir = root.join("var/db/pkg").join(cpv);
+        fs::create_dir_all(&dir).unwrap();
+        if let Some(c) = counter {
+            fs::write(dir.join("COUNTER"), c).unwrap();
+        }
+    }
+
+    fn tick(db: &FilesDb) -> i64 {
+        let mut txn = db.begin_write().unwrap();
+        let c = txn.next_counter().unwrap();
+        txn.commit().unwrap();
+        c.0
+    }
+
+    /// Real `get_counter_tick_core` (`vartree.py:1304-1370`): the next
+    /// counter is above every installed entry's `COUNTER` even when the
+    /// `counter` file is behind (or missing), and entries whose `COUNTER`
+    /// is absent or not an integer are skipped (`except (KeyError,
+    /// OverflowError, ValueError): continue`). Value derived from the real
+    /// source (`max_counter + 1`), checked by hand against it.
+    #[test]
+    fn next_counter_is_above_every_installed_entry_counter() {
+        let root = scratch("counter-max");
+        installed(&root, "dev-libs/a-1", Some("41\n"));
+        installed(&root, "dev-libs/b-1", Some("7"));
+        installed(&root, "dev-libs/c-1", Some("junk"));
+        installed(&root, "dev-libs/d-1", None);
+        let db = FilesDb::new(&root);
+        // No counter file at all: -1, so the entries decide.
+        assert_eq!(tick(&db), 42);
+        assert_eq!(db.counter().unwrap(), Some(Counter(42)));
+        // A counter file behind the entries is overridden...
+        fs::write(root.join("var/cache/edb/counter"), "5").unwrap();
+        assert_eq!(tick(&db), 42);
+        // ...one ahead of them wins.
+        fs::write(root.join("var/cache/edb/counter"), "100\n").unwrap();
+        assert_eq!(tick(&db), 101);
+        // An unparsable counter file counts as -1, like real.
+        fs::write(root.join("var/cache/edb/counter"), "corrupt").unwrap();
+        assert_eq!(tick(&db), 42);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `write_atomic` keeps the replaced file's mode and leaves no
+    /// temporary behind, and writes the bare integer, no newline.
+    #[test]
+    fn next_counter_replaces_the_file_atomically_keeping_its_mode() {
+        let root = scratch("counter-mode");
+        let path = root.join("var/cache/edb/counter");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "3").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(tick(&FilesDb::new(&root)), 4);
+        assert_eq!(fs::read(&path).unwrap(), b"4");
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o640);
+        let leftovers: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers.len(), 1, "{leftovers:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The tick takes real's VDB lock (`<vdb parent>/.<basename>.portage_lockfile`):
+    /// while another holder has it, `next_counter` blocks.
+    #[test]
+    fn next_counter_waits_for_the_vdb_lock() {
+        let root = scratch("counter-lock");
+        let vdb = root.join("var/db/pkg");
+        fs::create_dir_all(&vdb).unwrap();
+        let held = VdbLock::acquire(&vdb).unwrap();
+        let lockfile = root.join("var/db/.pkg.portage_lockfile");
+        assert!(lockfile.exists());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let r2 = root.clone();
+        let t = std::thread::spawn(move || {
+            tx.send(tick(&FilesDb::new(&r2))).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the tick must wait for the lock"
+        );
+        drop(held);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(30)).unwrap(), 0);
+        t.join().unwrap();
+        // Real unlinks it on release (`wantnewlockfile` implies `unlinkfile`).
+        assert!(!lockfile.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Concurrent ticks (threads here, processes in real) never hand out
+    /// the same value: the read-max-write is one critical section.
+    #[test]
+    fn concurrent_ticks_are_unique() {
+        let root = scratch("counter-race");
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let r = root.clone();
+                std::thread::spawn(move || {
+                    let db = FilesDb::new(&r);
+                    (0..10).map(|_| tick(&db)).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let mut all: Vec<i64> = handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
+        all.sort_unstable();
+        assert_eq!(all, (0..80).collect::<Vec<_>>());
         let _ = fs::remove_dir_all(&root);
     }
 

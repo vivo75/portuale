@@ -91,8 +91,9 @@
 //! 11. **Counter store access for converters:** [`InstalledDb::counter`]
 //!     and [`WriteTxn::set_counter`]. [`Counter`] is `i64`: a missing or
 //!     corrupt `counter` file reads as `-1` today, so the first merge
-//!     gets `0` (`next_counter`). S1 keeps portuale's rule (file only, no
-//!     max over entry `COUNTER`s, no lock); §0.7 files that as a residue.
+//!     gets `0` (`next_counter`). On `files` the tick is real's
+//!     `counter_tick_core` since #306: under the VDB lock, max of the file
+//!     and every entry's `COUNTER`, plus one, written atomically.
 //! 12. **Whole-entry copy for converters:** [`InstalledDb::entry_image`]
 //!     and [`WriteTxn::insert_entry`] with [`EntryImage`], which carries
 //!     exact bytes, modes, mtimes and the `metadata` stamp state
@@ -171,12 +172,12 @@
 //!     replaced same-slot entries are still deleted by
 //!     `ebuild_unmerge::delete_vdb_dir` between the last two steps (S1.5
 //!     routes it to [`WriteTxn::delete_entry`]), so the replace order of
-//!     item 4 holds. **`files` makes no write atomic and takes no lock:
-//!     every call is applied when it is made, [`WriteTxn::commit`] is a
+//!     item 4 holds. **`files` makes no write atomic and takes no lock
+//!     (the counter tick alone does, #306): every call is applied when it is made, [`WriteTxn::commit`] is a
 //!     no-op ordering point, and a failure leaves what was written,
 //!     exactly as before S1.4.** [`InstalledDb::begin_write`] does no I/O.
-//!     The counter keeps portuale's rule (item 11: `counter` file only,
-//!     no lock, no max over entry `COUNTER`s, non-atomic write).
+//!     The counter tick is real's (item 11, #306): VDB lock, max over the
+//!     entries' `COUNTER`s, atomic write.
 //!     The preserved-libs registry and the config memory are read and
 //!     written through [`InstalledDb::preserved_libs`] /
 //!     [`WriteTxn::set_preserved_libs`] and
@@ -838,8 +839,9 @@ pub trait WriteTxn {
     fn copy_entry_file(&mut self, key: &EntryKey, name: &str, src: &Path) -> Result<()>;
 
     /// Tick the counter store and return the new value (W5, N1). `files`:
-    /// read the `counter` file (`-1` when missing or unparsable), add
-    /// one, write it back, no lock. The caller writes the entry's
+    /// under the VDB lock, take the larger of the `counter` file (`-1`
+    /// when missing or unparsable) and every entry's `COUNTER`, add one,
+    /// write it back atomically (real `counter_tick_core`). The caller writes the entry's
     /// `COUNTER` file with [`WriteTxn::put_entry_file`].
     fn next_counter(&mut self) -> Result<Counter>;
 
