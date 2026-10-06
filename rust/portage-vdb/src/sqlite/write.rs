@@ -266,9 +266,8 @@ impl WriteTxn for SqliteTxn<'_> {
             let Some(raw) = blob(&self.conn, id, field).be(&p)? else {
                 continue;
             };
-            let Ok(text) = String::from_utf8(raw) else {
-                continue;
-            };
+            // Lossy, like real's consolidation (`errors="replace"`, #309).
+            let text = String::from_utf8_lossy(&raw);
             data.push((
                 field.to_string(),
                 text.split_whitespace().collect::<Vec<_>>().join(" "),

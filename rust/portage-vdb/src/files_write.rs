@@ -519,9 +519,13 @@ impl WriteTxn for FilesTxn<'_> {
         let mut data: Vec<(String, String)> = Vec::new();
         for &field in METADATA_FILE_FIELDS {
             let path = dbdir.join(field);
-            let Ok(raw) = fs::read_to_string(&path) else {
+            // Real `_consolidate_to_metadata_file` opens with
+            // `errors="replace"` (`vartree.py:268`), so a non-UTF-8 field
+            // is sealed as its lossy text, like an unsealed read (#309).
+            let Ok(raw) = fs::read(&path) else {
                 continue;
             };
+            let raw = String::from_utf8_lossy(&raw);
             data.push((
                 field.to_string(),
                 raw.split_whitespace().collect::<Vec<_>>().join(" "),

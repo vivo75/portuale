@@ -258,9 +258,8 @@ impl WriteTxn for RedbTxn<'_> {
                 let Some(raw) = read_file(t, rec.id, field)? else {
                     continue;
                 };
-                let Ok(text) = String::from_utf8(raw) else {
-                    continue;
-                };
+                // Lossy, like real's consolidation (`errors="replace"`, #309).
+                let text = String::from_utf8_lossy(&raw);
                 data.push((
                     field.to_string(),
                     text.split_whitespace().collect::<Vec<_>>().join(" "),

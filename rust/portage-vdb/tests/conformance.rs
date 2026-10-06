@@ -2081,22 +2081,45 @@ mod files_only {
         assert_eq!(aux(&ctx, &k, "SLOT").as_deref(), Some("0"));
     }
 
-    /// ODDITY (FilesDb, found by S2.2; documents current behaviour, update when fixed): `seal_entry` skips a field file that is not UTF-8, and
-    /// a valid snapshot is complete, so a sealed entry serves `""` where an
-    /// unsealed one serves the lossy text.
+    /// #309: a sealed entry serves the lossy text of a non-UTF-8 field,
+    /// like an unsealed one (real's consolidation reads with
+    /// `errors="replace"`, `vartree.py:268`; `_aux_get` too, `:1029`).
     #[test]
-    fn oddity_sealed_entry_drops_a_non_utf8_field_from_aux_get() {
+    fn sealed_entry_serves_a_non_utf8_field_lossily_like_an_unsealed_one() {
         let ctx = files_ctx("fprobe");
         let a = key("dev-libs", "a-1");
         let b = key("dev-libs", "b-1");
         let files: &[(&str, &[u8])] = &[("SLOT", b"0\n"), ("DESCRIPTION", b"caf\xe9 x\n")];
         put(&ctx, &a, files, false);
         put(&ctx, &b, files, true);
-        assert_eq!(
-            aux(&ctx, &a, "DESCRIPTION").as_deref(),
-            Some("caf\u{fffd} x")
-        );
-        assert_eq!(aux(&ctx, &b, "DESCRIPTION").as_deref(), Some(""));
+        for k in [&a, &b] {
+            assert_eq!(
+                aux(&ctx, k, "DESCRIPTION").as_deref(),
+                Some("caf\u{fffd} x")
+            );
+        }
+    }
+
+    /// #309: the `aux_get` memo is validated by the entry directory's
+    /// mtime only, so an in-place `replace_file` of a field file is not
+    /// seen until the directory changes -- real's own property
+    /// (`vartree.py:938-951`; its `aux_update` calls `_bump_mtime` for
+    /// that reason). Pinned so a change is deliberate.
+    #[test]
+    fn an_in_place_field_rewrite_is_served_stale_until_the_dir_mtime_moves() {
+        let ctx = files_ctx("fstale");
+        let a = key("dev-libs", "a-1");
+        put(&ctx, &a, &[("SLOT", b"0\n")], false);
+        assert_eq!(aux(&ctx, &a, "SLOT").as_deref(), Some("0"));
+        let dir = ctx.root.join("var/db/pkg/dev-libs/a-1");
+        let before = fs::metadata(&dir).unwrap().modified().unwrap();
+        let mut txn = ctx.db.begin_write().unwrap();
+        txn.replace_file(&a, "SLOT", b"3\n").unwrap();
+        assert_eq!(fs::metadata(&dir).unwrap().modified().unwrap(), before);
+        assert_eq!(aux(&ctx, &a, "SLOT").as_deref(), Some("0"));
+        let later = before + Duration::from_secs(5);
+        fs::File::open(&dir).unwrap().set_modified(later).unwrap();
+        assert_eq!(aux(&ctx, &a, "SLOT").as_deref(), Some("3"));
     }
 
     /// A bare VDB directory has no D4 stores: reads are empty, writes
