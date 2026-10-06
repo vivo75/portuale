@@ -381,10 +381,12 @@ impl FilesDb {
 /// first two words are a kind (`obj`, `sym`, `dir`, `dev`, `fif`, `bin`)
 /// and a path claims that path; one leading `/` is ignored on both sides.
 /// Each claim pairs the first of `paths` it matches with `key`.
+/// `wanted` is [`owner_wanted`] of `paths`, built once per `owners` call:
+/// a lookup per line instead of a scan of every queried path (#314).
 pub(crate) fn claim_paths(
     text: &str,
     key: &EntryKey,
-    paths: &[&[u8]],
+    wanted: &HashMap<&[u8], &[u8]>,
     out: &mut Vec<(Vec<u8>, EntryKey)>,
 ) {
     for line in text.lines() {
@@ -395,20 +397,16 @@ pub(crate) fn claim_paths(
             }
             _ => continue,
         };
-        let claimed = paths
-            .iter()
-            .find(|p| p.strip_prefix(b"/").unwrap_or(p) == path.as_bytes());
-        if let Some(p) = claimed {
+        if let Some(p) = wanted.get(path.as_bytes()) {
             out.push((p.to_vec(), key.clone()));
         }
     }
 }
 
-/// For the indexed `owners` of the database backends (S8.2): each distinct
+/// For `owners` on every backend (S8.2; the `files` scan since #314): each distinct
 /// normal form (one leading `/` stripped, as [`claim_paths`] compares) of
 /// `paths`, with the first input path that has it, which is the one
 /// `claim_paths` reports.
-#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 pub(crate) fn owner_wanted<'a>(paths: &[&'a [u8]]) -> HashMap<&'a [u8], &'a [u8]> {
     let mut m: HashMap<&[u8], &[u8]> = HashMap::new();
     for p in paths {
@@ -790,6 +788,7 @@ impl InstalledDb for FilesDb {
     /// not split). `find_owners` applies the split to the result.
     fn owners(&self, paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
         let mut out = Vec::new();
+        let wanted = owner_wanted(paths);
         let Ok(categories) = portage_util::read_dir_entries(&self.vdb) else {
             return Ok(out);
         };
@@ -822,7 +821,7 @@ impl InstalledDb for FilesDb {
                 else {
                     continue;
                 };
-                claim_paths(&text, &key, paths, &mut out);
+                claim_paths(&text, &key, &wanted, &mut out);
             }
         }
         Ok(out)
