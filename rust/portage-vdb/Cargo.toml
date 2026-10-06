@@ -11,6 +11,7 @@ rust-version.workspace = true
 # behind an optional feature (plan S2.1, S5.1, S7.1).
 [dependencies]
 portage-util = { path = "../portage-util" }
+libc = "0.2"
 rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
 redb = { version = "4.3.0", optional = true }
 
