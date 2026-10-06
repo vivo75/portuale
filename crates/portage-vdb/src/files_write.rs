@@ -906,6 +906,80 @@ mod tests {
         c.0
     }
 
+    /// The next counter is above every installed entry's `COUNTER` even
+    /// when the `counter` file is behind (or missing); absent or
+    /// non-integer `COUNTER`s are skipped.
+    // Portage: lib/portage/vartree.py, get_counter_tick_core
+    #[test]
+    fn next_counter_is_above_every_installed_entry_counter() {
+        let root = scratch("counter-max");
+        installed(&root, "dev-libs/a-1", Some("41\n"));
+        installed(&root, "dev-libs/b-1", Some("7"));
+        installed(&root, "dev-libs/c-1", Some("junk"));
+        installed(&root, "dev-libs/d-1", None);
+        let db = FilesDb::new(&root);
+        // No counter file at all: -1, so the entries decide.
+        assert_eq!(tick(&db), 42);
+        assert_eq!(db.counter().unwrap(), Some(Counter(42)));
+        // A counter file behind the entries is overridden...
+        fs::write(root.join("var/cache/edb/counter"), "5").unwrap();
+        assert_eq!(tick(&db), 42);
+        // ...one ahead of them wins.
+        fs::write(root.join("var/cache/edb/counter"), "100\n").unwrap();
+        assert_eq!(tick(&db), 101);
+        // An unparsable counter file counts as -1, like Portage's.
+        fs::write(root.join("var/cache/edb/counter"), "corrupt").unwrap();
+        assert_eq!(tick(&db), 42);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `write_atomic` keeps the replaced file's mode and leaves no
+    /// temporary behind, and writes the bare integer, no newline.
+    #[test]
+    fn next_counter_replaces_the_file_atomically_keeping_its_mode() {
+        let root = scratch("counter-mode");
+        let path = root.join("var/cache/edb/counter");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "3").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(tick(&FilesDb::new(&root)), 4);
+        assert_eq!(fs::read(&path).unwrap(), b"4");
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o640);
+        let leftovers: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers.len(), 1, "{leftovers:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The tick takes Portage's VDB lock: while another holder has it,
+    /// `next_counter` blocks.
+    #[test]
+    fn next_counter_waits_for_the_vdb_lock() {
+        let root = scratch("counter-lock");
+        let vdb = root.join("var/db/pkg");
+        fs::create_dir_all(&vdb).unwrap();
+        let held = VdbLock::acquire(&vdb).unwrap();
+        let lockfile = root.join("var/db/.pkg.portage_lockfile");
+        assert!(lockfile.exists());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let r2 = root.clone();
+        let t = std::thread::spawn(move || {
+            tx.send(tick(&FilesDb::new(&r2))).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the tick must wait for the lock"
+        );
+        drop(held);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(30)).unwrap(), 0);
+        t.join().unwrap();
+        // Portage unlinks it on release.
+        assert!(!lockfile.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// Concurrent ticks (threads here, processes in Portage) never hand
     /// out the same value: the read-max-write is one critical section.
     #[test]

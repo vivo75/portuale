@@ -30,6 +30,43 @@ fn scan_xpaksize(file: &Path) -> std::io::Result<u64> {
     Ok(infosize + 8)
 }
 
+/// Portage `recompose_mem`'s hardlink break: a content-only copy into a
+/// new file in the same directory, renamed over.
+fn break_hardlink(file: &Path) -> std::io::Result<()> {
+    let dir = file.parent().filter(|p| !p.as_os_str().is_empty());
+    let dir = dir.unwrap_or_else(|| Path::new("."));
+    let base = file
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    let mut n = 0u32;
+    let (tmp, mut dst): (PathBuf, std::fs::File) = loop {
+        let mut name = base.clone().into_vec();
+        name.extend_from_slice(format!(".{}{n}", std::process::id()).as_bytes());
+        let candidate = dir.join(OsString::from_vec(name));
+        // Default creation mode 0o666, filtered by the umask.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(f) => break (candidate, f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(e),
+        }
+    };
+    let result = (|| {
+        // Content only: `std::fs::copy` would also copy the permissions.
+        std::io::copy(&mut std::fs::File::open(file)?, &mut dst)?;
+        drop(dst);
+        std::fs::rename(&tmp, file)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use portage_util::TempDir;
