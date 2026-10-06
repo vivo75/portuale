@@ -1597,6 +1597,24 @@ mod suite {
         );
     }
 
+    /// #307: `dir_mode` is permission bits on every backend -- a merged
+    /// entry's directory reports `0o7xx`, never `0o040xxx`, in both the
+    /// image and the stat -- so `verify` of a files VDB against a natively
+    /// merged sqlite/redb one has no "directory mode" finding.
+    pub fn dir_mode_is_permission_bits_on_every_backend(f: Factory, caps: &Caps) {
+        if caps.entry_image.is_some() {
+            return;
+        }
+        let ctx = Ctx::new(f, "dirmode");
+        let k = key("dev-libs", "a-1");
+        put(&ctx, &k, &[("SLOT", b"0\n")], false);
+        let image = ctx.db.entry_image(&k).unwrap().expect("entry exists");
+        let stat = ctx.db.entry_stat(&k).unwrap().expect("entry exists");
+        assert_eq!(image.dir_mode & !0o7777, 0, "{:o}", image.dir_mode);
+        assert_eq!(stat.dir_mode, image.dir_mode);
+        assert_ne!(image.dir_mode & 0o700, 0, "{:o}", image.dir_mode);
+    }
+
     /// The registry is process-global: one test, serialised, resets
     /// around itself so no other test of this binary sees its state.
     pub fn registry_hands_out_the_registered_backend(f: Factory, _c: &Caps) {
@@ -1670,6 +1688,7 @@ macro_rules! conformance_suite {
                 snapshot_is_supported_or_names_its_step
                 entry_image_and_insert_entry_are_supported_or_name_their_step
                 entry_stat_is_the_entry_image_without_bytes
+                dir_mode_is_permission_bits_on_every_backend
                 registry_hands_out_the_registered_backend
                 rebuild_index_recomputes_the_same_index_or_names_its_step
             );
@@ -2209,7 +2228,7 @@ mod files_only {
 
     fn assert_same_image(a: &EntryImage, b: &EntryImage) {
         assert_eq!(a.dir_mtime_ns, b.dir_mtime_ns, "dir mtime");
-        assert_eq!(a.dir_mode & 0o7777, b.dir_mode & 0o7777, "dir mode");
+        assert_eq!(a.dir_mode, b.dir_mode, "dir mode");
         assert_eq!(a.metadata_stamp, b.metadata_stamp, "stamp state");
         assert_eq!(a.files.len(), b.files.len());
         for (x, y) in a.files.iter().zip(&b.files) {
@@ -2234,7 +2253,7 @@ mod files_only {
         assert_eq!(stale.metadata_stamp, MetadataStamp::Stale);
         let (_c3, absent) = fixture("fimg-absent", &k, false, false);
         assert_eq!(absent.metadata_stamp, MetadataStamp::Absent);
-        assert_eq!(valid.dir_mode & 0o7777, 0o750);
+        assert_eq!(valid.dir_mode, 0o750, "permission bits only, no S_IFDIR");
         let names: Vec<_> = valid.files.iter().map(|f| f.meta.name.as_str()).collect();
         assert_eq!(
             names,

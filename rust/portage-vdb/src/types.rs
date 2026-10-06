@@ -111,6 +111,9 @@ pub enum MetadataStamp {
     Stale,
 }
 
+/// Mask that turns a directory's `st_mode` into [`EntryImage::dir_mode`].
+pub(crate) const DIR_MODE_MASK: u32 = 0o7777;
+
 /// An entry without its bytes ([`InstalledDb::entry_stat`]): what a
 /// read-only view (FUSE, S7) needs for `getattr` and `readdir`. The same
 /// facts as [`EntryImage`] minus the file contents.
@@ -120,7 +123,9 @@ pub enum MetadataStamp {
 pub struct EntryStat {
     /// Every file, sorted by name.
     pub files: Vec<FileMeta>,
-    /// The entry directory's mode.
+    /// The entry directory's permission bits (`st_mode & 0o7777`, no
+    /// file-type bits): every backend reports it this way, so a files
+    /// entry and a natively merged sqlite/redb one compare equal (#307).
     pub dir_mode: u32,
     /// The entry directory's mtime in nanoseconds.
     pub dir_mtime_ns: i128,
@@ -149,7 +154,9 @@ pub struct EntryImage {
     pub key: EntryKey,
     /// Every file, `metadata` included when present, in name order.
     pub files: Vec<EntryFile>,
-    /// The entry directory's mode.
+    /// The entry directory's permission bits (`st_mode & 0o7777`, no
+    /// file-type bits): every backend reports it this way, so a files
+    /// entry and a natively merged sqlite/redb one compare equal (#307).
     pub dir_mode: u32,
     /// The entry directory's mtime in nanoseconds.
     pub dir_mtime_ns: i128,

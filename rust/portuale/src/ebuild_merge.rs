@@ -10418,10 +10418,11 @@ mod tests {
         /// mtime field of `obj` / `sym` lines of `CONTENTS` (the payload
         /// files' mtimes); the `BUILD_TIME` file and the `BUILD_TIME=` line of
         /// `metadata` (a source merge records the time of its build); the entry
-        /// directory's mode (`files` records the merge's `mkdir` under the
-        /// process umask, so 0o40755, or 0o40775 after another test changed
-        /// the umask; a sqlite merge stores the schema default 0o755 with no
-        /// type bits); the group and other write bits of entry file modes
+        /// directory's mode, down to its umask bits (`files` records the
+        /// merge's `mkdir` under the process umask, 0o755, or 0o775 under
+        /// another umask; a sqlite merge stores the schema default 0o755;
+        /// both are permission bits since #307); the group and other write
+        /// bits of entry file modes
         /// (a file written under another umask: 0o664 vs 0o644); the modes
         /// of the payload tree (the same umask race,
         /// as `payload_bytes` notes). Nothing else is dropped: not
@@ -10568,17 +10569,21 @@ mod tests {
             for line in &rep.differences {
                 let (name, what) = line.split_once(": ").unwrap_or((line, ""));
                 let file = name.rsplit_once('/').map_or("", |(_, f)| f);
-                // "mode <a> != <b>" (octal): only the umask bits may differ.
-                let mode_ok = what.strip_prefix("mode ").is_some_and(|m| {
-                    let v: Vec<u32> = m
-                        .split(" != ")
-                        .filter_map(|x| u32::from_str_radix(x, 8).ok())
-                        .collect();
-                    v.len() == 2 && (v[0] ^ v[1]) & !0o022 == 0
-                });
+                // "mode <a> != <b>" / "directory mode <a> != <b>" (octal,
+                // permission bits both since #307): only the umask bits may
+                // differ.
+                let mode_ok = what
+                    .strip_prefix("mode ")
+                    .or_else(|| what.strip_prefix("directory mode "))
+                    .is_some_and(|m| {
+                        let v: Vec<u32> = m
+                            .split(" != ")
+                            .filter_map(|x| u32::from_str_radix(x, 8).ok())
+                            .collect();
+                        v.len() == 2 && (v[0] ^ v[1]) & !0o022 == 0
+                    });
                 let ok = what.starts_with("mtime")
                     || what.starts_with("directory mtime")
-                    || what.starts_with("directory mode")
                     || mode_ok
                     || (what.starts_with("bytes differ")
                         && ["CONTENTS", "metadata", "BUILD_TIME"].contains(&file));
