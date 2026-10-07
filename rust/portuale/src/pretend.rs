@@ -7059,8 +7059,7 @@ fn run_list_sets(config_root: &Path) -> ExitCode {
 /// `run_search`'s own set-name matching.
 fn defined_set_names(config_root: &Path) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    let conf = crate::ebuild_phases::portage_checkout().join("cnf/sets/portage.conf");
-    if let Ok(text) = std::fs::read_to_string(&conf) {
+    if let Some(text) = crate::ebuild_phases::package_sets_conf() {
         let mut section: Option<String> = None;
         let mut multiset = false;
         for line in text.lines() {

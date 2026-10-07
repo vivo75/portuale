@@ -27,6 +27,10 @@ FROM docker.io/library/alpine:3.24.1 AS builder
 RUN apk add --no-cache rust cargo
 WORKDIR /work
 COPY rust/ rust/
+# backlog #322 S2: `build.rs` embeds the vendored phase runtime and the package-set
+# definitions, so they must be in the build context.
+COPY bin/ bin/
+COPY cnf/ cnf/
 # feat#157 (#305) S2.1: Q6 default, vdb-sqlite and vdb-redb are OFF in the
 # minimal static build profile. Use --no-default-features to exclude them.
 RUN cd rust && cargo build --release --target x86_64-alpine-linux-musl \

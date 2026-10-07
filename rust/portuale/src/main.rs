@@ -24,6 +24,7 @@ mod ebuild_package;
 mod ebuild_phases;
 mod ebuild_unmerge;
 mod elog;
+mod embedded_runtime;
 mod emerge_build;
 mod emerge_getbinpkg;
 mod emerge_options;

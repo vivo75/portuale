@@ -686,6 +686,20 @@ pub(crate) fn portage_checkout() -> PathBuf {
     repo_root().join("3rdparty/portage")
 }
 
+/// The text of Portage's `cnf/sets/portage.conf` (the built-in package-set
+/// definitions behind `--list-sets` and set-name search): the checkout's
+/// file when there is one (a developer tree, byte-identical to before), else
+/// the copy compiled into the binary (backlog #322), so a relocated binary
+/// lists the same sets instead of silently listing none.
+pub(crate) fn package_sets_conf() -> Option<String> {
+    std::fs::read_to_string(portage_checkout().join("cnf/sets/portage.conf"))
+        .ok()
+        .or_else(|| {
+            crate::embedded_runtime::file("cnf/sets/portage.conf")
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        })
+}
+
 /// The directory `PORTAGE_BIN_PATH` points at for real phase execution.
 ///
 /// `bin/` (repo root) is a tracked, vendored copy of upstream Portage's
@@ -716,17 +730,15 @@ pub(crate) fn portage_checkout() -> PathBuf {
 pub(crate) fn bin_dir() -> Result<&'static Path, String> {
     use std::sync::OnceLock;
     static DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-    // Backlog #88: the overlay this process created (if any), removed
-    // at process exit. `DIR` itself cannot own the cleanup: statics
-    // never run destructors, and `bin_dir()` has seven call sites
-    // across three files with independent exit paths, so per-site
-    // removal would both sprawl and rot. One `atexit` registration,
-    // made exactly where the directory is created, covers every
-    // command (and the test harness's subprocess runs) on all normal
-    // exits; signal kills still leak, like any tmp dir.
-    static CREATED: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        let vendored = resolve_bin_dir(std::env::var(BIN_DIR_VAR).ok().as_deref(), &repo_root())?;
+        let vendored = match resolve_bin_dir(
+            std::env::var(BIN_DIR_VAR).ok().as_deref(),
+            &repo_root(),
+            true,
+        )? {
+            BinSource::Dir(dir) => dir,
+            BinSource::Embedded => extract_embedded_runtime()?,
+        };
         let checkout = portage_checkout().join("bin");
         if !checkout.is_dir() {
             return Ok(vendored);
@@ -734,17 +746,7 @@ pub(crate) fn bin_dir() -> Result<&'static Path, String> {
         let overlay = std::env::temp_dir().join(format!("portuale-bin.{}", std::process::id()));
         match build_bin_overlay(&overlay, &checkout, &vendored) {
             Ok(()) => {
-                let _ = CREATED.set(overlay.to_path_buf());
-                // `extern "C"`, no closure capture: the handler reads
-                // `CREATED` itself. A failed registration keeps the
-                // old leak rather than breaking the run (best effort,
-                // like the overlay fallback below it).
-                extern "C" fn cleanup_created_bin_overlay() {
-                    if let Some(dir) = CREATED.get() {
-                        remove_bin_overlay_dir(dir);
-                    }
-                }
-                let _ = unsafe { libc::atexit(cleanup_created_bin_overlay) };
+                register_cleanup(overlay.clone());
                 Ok(overlay)
             }
             Err(e) => {
@@ -767,22 +769,35 @@ pub(crate) fn bin_dir() -> Result<&'static Path, String> {
 /// the tree it was built in (backlog #322).
 pub(crate) const BIN_DIR_VAR: &str = "PORTUALE_BIN_DIR";
 
+/// Where [`resolve_bin_dir`] found the phase runtime.
+#[derive(Debug, PartialEq)]
+pub(crate) enum BinSource {
+    /// A directory on disk that already holds it.
+    Dir(PathBuf),
+    /// Nowhere on disk: use the copy compiled into this binary.
+    Embedded,
+}
+
 /// Where the vendored phase runtime (`bin/ebuild.sh` and friends) is,
-/// first hit wins: `$PORTUALE_BIN_DIR` when set and non-empty, else the
-/// `bin/` of the tree this binary was built in. A set override that is
-/// wrong is an error and never falls through to the build tree: a silent
-/// fallback would hide a typo. The message carries no program prefix;
-/// every caller prints it behind its own (`emerge: `, `ebuild: `).
+/// first hit wins: `$PORTUALE_BIN_DIR` when set and non-empty; the `bin/`
+/// of the tree this binary was built in when it still has one (every
+/// developer and bed flow, unchanged); the copy compiled into the binary.
+/// A set override that is wrong is an error and never falls through: a
+/// silent fallback would hide a typo. With no embedded copy and nothing on
+/// disk the error says what was looked for and how to fix it. The message
+/// carries no program prefix; every caller prints it behind its own
+/// (`emerge: `, `ebuild: `).
 ///
-/// Pure (both inputs are parameters) so the order is unit-testable.
+/// Pure (all inputs are parameters) so the order is unit-testable.
 pub(crate) fn resolve_bin_dir(
     override_dir: Option<&str>,
     build_root: &Path,
-) -> Result<PathBuf, String> {
+    has_embedded: bool,
+) -> Result<BinSource, String> {
     if let Some(dir) = override_dir.filter(|d| !d.is_empty()) {
         let dir = PathBuf::from(dir);
         return if dir.join("ebuild.sh").is_file() {
-            Ok(dir)
+            Ok(BinSource::Dir(dir))
         } else {
             Err(format!(
                 "{BIN_DIR_VAR}={} has no ebuild.sh: it must name a copy of the \
@@ -793,7 +808,10 @@ pub(crate) fn resolve_bin_dir(
     }
     let tree = build_root.join("bin");
     if tree.join("ebuild.sh").is_file() {
-        return Ok(tree);
+        return Ok(BinSource::Dir(tree));
+    }
+    if has_embedded {
+        return Ok(BinSource::Embedded);
     }
     Err(format!(
         "cannot find the ebuild phase runtime (bin/ebuild.sh): {BIN_DIR_VAR} is not set \
@@ -801,6 +819,53 @@ pub(crate) fn resolve_bin_dir(
          or set {BIN_DIR_VAR} to a copy of the repository's bin/ directory",
         build_root.display()
     ))
+}
+
+/// Writes the embedded `bin/` to `<tmp>/portuale-rt.<pid>/bin` and returns
+/// that directory; the parent is removed at process exit. Per process, so
+/// concurrent runs never share (or race on) a tree.
+fn extract_embedded_runtime() -> Result<PathBuf, String> {
+    let root = std::env::temp_dir().join(format!("portuale-rt.{}", std::process::id()));
+    let bin = root.join("bin");
+    let _ = std::fs::remove_dir_all(&root);
+    register_cleanup(root.clone());
+    crate::embedded_runtime::extract("bin", &bin).map_err(|e| {
+        format!(
+            "could not extract the embedded ebuild phase runtime to {}: {e} \
+             (set {BIN_DIR_VAR} to a copy of the repository's bin/ directory, \
+             or point TMPDIR at a writable directory)",
+            bin.display()
+        )
+    })?;
+    Ok(bin)
+}
+
+/// Directories this process created under `$TMPDIR` (the `bin/` overlay of
+/// backlog #88, the extracted runtime of #322), removed at process exit.
+/// Statics never run destructors and `bin_dir()` has call sites in three
+/// files with independent exit paths, so per-site removal would sprawl and
+/// rot: one `atexit` registration, made on the first directory created,
+/// covers every command (and the test harness's subprocess runs) on all
+/// normal exits; signal kills still leak, like any tmp dir.
+fn register_cleanup(dir: PathBuf) {
+    use std::sync::{Mutex, Once};
+    static DIRS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    static REGISTER: Once = Once::new();
+    // `extern "C"`, no closure capture: the handler reads `DIRS` itself. A
+    // failed registration keeps the old leak rather than breaking the run.
+    extern "C" fn cleanup_created_dirs() {
+        if let Ok(dirs) = DIRS.lock() {
+            for dir in dirs.iter() {
+                remove_bin_overlay_dir(dir);
+            }
+        }
+    }
+    if let Ok(mut dirs) = DIRS.lock() {
+        dirs.push(dir);
+    }
+    REGISTER.call_once(|| {
+        let _ = unsafe { libc::atexit(cleanup_created_dirs) };
+    });
 }
 
 /// Fails with [`bin_dir`]'s message when the phase runtime cannot be
@@ -5260,15 +5325,24 @@ mod tests {
         let other = fake_runtime(&tmp.join("other"));
         let none = tmp.join("none");
 
-        assert_eq!(
-            resolve_bin_dir(Some(other.to_str().unwrap()), &tree).unwrap(),
-            other
-        );
-        assert_eq!(resolve_bin_dir(None, &tree).unwrap(), tree_bin);
-        assert_eq!(resolve_bin_dir(Some(""), &tree).unwrap(), tree_bin);
+        for embedded in [false, true] {
+            assert_eq!(
+                resolve_bin_dir(Some(other.to_str().unwrap()), &tree, embedded).unwrap(),
+                BinSource::Dir(other.clone())
+            );
+            assert_eq!(
+                resolve_bin_dir(None, &tree, embedded).unwrap(),
+                BinSource::Dir(tree_bin.clone())
+            );
+            assert_eq!(
+                resolve_bin_dir(Some(""), &tree, embedded).unwrap(),
+                BinSource::Dir(tree_bin.clone())
+            );
+        }
 
-        // A wrong override is refused even though the build tree is fine.
-        let err = resolve_bin_dir(Some(none.to_str().unwrap()), &tree).unwrap_err();
+        // A wrong override is refused even though the build tree is fine,
+        // and even though an embedded copy could stand in.
+        let err = resolve_bin_dir(Some(none.to_str().unwrap()), &tree, true).unwrap_err();
         assert!(
             err.contains(BIN_DIR_VAR) && err.contains("ebuild.sh"),
             "{err}"
@@ -5276,7 +5350,7 @@ mod tests {
         assert!(err.contains(none.to_str().unwrap()), "{err}");
         // A directory without ebuild.sh is wrong too.
         std::fs::create_dir_all(tmp.join("empty")).unwrap();
-        assert!(resolve_bin_dir(Some(tmp.join("empty").to_str().unwrap()), &tree).is_err());
+        assert!(resolve_bin_dir(Some(tmp.join("empty").to_str().unwrap()), &tree, true).is_err());
     }
 
     /// Backlog #322: neither source present is a message with the three
@@ -5286,7 +5360,8 @@ mod tests {
     fn resolve_bin_dir_with_nothing_found_explains_itself() {
         let tmp = TempDir::new("resolve-bin-dir-missing");
         let gone = tmp.join("gone");
-        let err = resolve_bin_dir(None, &gone).unwrap_err();
+        // No embedded copy: nothing on disk is an error that explains itself.
+        let err = resolve_bin_dir(None, &gone, false).unwrap_err();
         assert!(err.contains("bin/ebuild.sh"), "{err}");
         assert!(err.contains(gone.to_str().unwrap()), "{err}");
         assert!(err.contains(BIN_DIR_VAR), "{err}");
@@ -5295,6 +5370,28 @@ mod tests {
             "{err}"
         );
         assert!(!err.contains('\n'), "one line: {err}");
+    }
+
+    /// Backlog #322 S2.3: with no override and no build tree, the embedded
+    /// copy is the answer (never an error); a build tree that has the
+    /// runtime still wins over it.
+    #[test]
+    fn resolve_bin_dir_falls_back_to_the_embedded_copy_only_when_nothing_is_on_disk() {
+        let tmp = TempDir::new("resolve-bin-dir-embedded");
+        let gone = tmp.join("gone");
+        assert_eq!(
+            resolve_bin_dir(None, &gone, true).unwrap(),
+            BinSource::Embedded
+        );
+        assert_eq!(
+            resolve_bin_dir(Some(""), &gone, true).unwrap(),
+            BinSource::Embedded
+        );
+        let tree_bin = fake_runtime(&tmp.join("tree"));
+        assert_eq!(
+            resolve_bin_dir(None, &tmp.join("tree"), true).unwrap(),
+            BinSource::Dir(tree_bin)
+        );
     }
 
     /// The `portuale` binary built next to this test binary.

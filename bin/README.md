@@ -36,3 +36,16 @@ each file here over from the new upstream tree, then re-apply the local
 change noted in `phase-functions.sh`'s header. A plain
 `diff -r 3rdparty/portage/bin bin` (ignoring `phase-functions.sh` and
 this README) should otherwise be empty.
+
+## Embedded in the binary (backlog #322)
+
+`rust/portuale/build.rs` compiles this whole directory, and the sibling
+`cnf/sets/portage.conf` (a vendored copy of upstream's package-set
+definitions, same ref), into the `portuale` binary. Resolution order for the
+runtime (`ebuild_phases::resolve_bin_dir`): `$PORTUALE_BIN_DIR` (a set but wrong
+value is an error), then this directory in the tree the binary was built in,
+then the embedded copy extracted to `$TMPDIR/portuale-rt.<pid>/bin` and
+removed at exit. So a lone binary in a container or on a minimal host runs
+phases and remote merges. `cargo` reruns the script when anything under `bin/`
+or `cnf/` changes; a container build needs `COPY bin/ bin/` and
+`COPY cnf/ cnf/` next to `rust/` (see `musl/Containerfile`).
