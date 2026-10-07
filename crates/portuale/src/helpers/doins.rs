@@ -390,4 +390,28 @@ mod tests {
             .unwrap_or_else(|e| panic!("{} should have been installed: {e}", installed.display()));
         assert_eq!(contents, "hello from packagepkg\n");
     }
+
+    /// Re-run the in-process install in a child with no checkout and
+    /// no Python, so only the native `doins.py` can install the file.
+    #[test]
+    fn doins_installs_packagepkg_files_without_the_checkout() {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "helpers::doins::tests::doins_installs_packagepkg_files_in_process",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .env("PORTUALE_REAL_PYTHON", "/nonexistent/python")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "rerun: {text}");
+        assert!(text.contains("1 passed"), "rerun did not run: {text}");
+    }
 }

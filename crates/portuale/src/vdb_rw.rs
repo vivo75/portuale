@@ -1873,6 +1873,32 @@ mod tests {
         }
     }
 
+    /// A package move through the mount equals the same move on files:
+    /// the database holds the entry under its new key only.
+    #[test]
+    fn a_package_move_through_the_view_equals_the_same_move_on_files() {
+        for env in envs("moveent") {
+            let mut ops = script("merge-new");
+            ops.extend(script("move-ent"));
+            apply_fs(&env.files_vdb, &ops);
+            let v = rw(&env);
+            apply_rw(&v, &ops);
+            assert_same(&env.files_root, &*env.db);
+            let old = EntryKey::new("app-misc", "foo-1.0");
+            let new = EntryKey::new("sys-apps", "bar-1.0");
+            assert!(!env.db.has_entry(&old).unwrap(), "{}", env.label);
+            assert!(env.db.has_entry(&new).unwrap(), "{}", env.label);
+            assert_eq!(
+                env.db.read_file(&new, "CATEGORY").unwrap().as_deref(),
+                Some(&b"sys-apps\n"[..])
+            );
+            assert!(env.db.read_file(&new, "bar-1.0.ebuild").unwrap().is_some());
+            assert!(env.db.read_file(&new, "foo-1.0.ebuild").unwrap().is_none());
+            assert!(resolve(&v, "sys-apps/bar-1.0/PF").is_ok(), "{}", env.label);
+            assert!(resolve(&v, "app-misc/foo-1.0").is_err(), "{}", env.label);
+        }
+    }
+
     #[test]
     fn a_rename_in_a_stamped_live_entry_leaves_the_stamp_stale_as_on_disk() {
         for env in envs("w4stamp") {

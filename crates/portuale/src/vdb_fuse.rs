@@ -860,3 +860,48 @@ fn detach_from_terminal(log: Option<&Path>) {
     }
     let _ = std::env::set_current_dir("/");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_unmount_report_file_sits_beside_the_scratch_directory() {
+        assert_eq!(
+            rw_log_path(Path::new("/var/tmp/portuale-vdb-rw-00ab")),
+            PathBuf::from("/var/tmp/portuale-vdb-rw-00ab.log")
+        );
+    }
+
+    /// A detached daemon's stderr goes to the log file, so the line
+    /// printed after `session.run()` returns is not lost. Run in a child
+    /// (the redirect replaces the process's own descriptors).
+    #[test]
+    fn a_detached_daemon_writes_its_stderr_to_the_log_file() {
+        if let Some(log) = std::env::var_os("PORTUALE_DETACH_CHILD") {
+            detach_from_terminal(Some(Path::new(&log)));
+            eprintln!("portuale vdb mount: imported nothing");
+            return;
+        }
+        let dir = portage_util::TempDir::new("portuale-detach-test").keep();
+        let log = dir.join("mount.log");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--test-threads=1",
+                "--exact",
+                "vdb_fuse::tests::a_detached_daemon_writes_its_stderr_to_the_log_file",
+                "--nocapture",
+            ])
+            .env("PORTUALE_DETACH_CHILD", &log)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        // (The test harness's own result line follows it in the file.)
+        assert!(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .starts_with("portuale vdb mount: imported nothing\n")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
