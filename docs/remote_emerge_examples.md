@@ -36,7 +36,6 @@ merge), [`feat-157-authoritative-vdb-database.md`](feat-157-authoritative-vdb-da
 ```bash
 cd portuale/rust && cargo build --release      # default features: vdb-sqlite, vdb-redb, vdb-fuse
 BIN=$PWD/target/release                        # portuale + mrg/emerge/ebuild symlinks
-REPO=$(git rev-parse --show-toplevel)           # the checkout the binary was built in (see §3)
 K=/var/tmp/rm-keys; mkdir -p $K
 ssh-keygen -t ed25519 -N '' -q -f $K/id && cp $K/id.pub $K/authorized_keys
 IMG=localhost/test-portuale:latest             # any image with sshd, ssh, bash >= 5.3, tar works
@@ -114,7 +113,7 @@ is cleaner than unmerging.
 ```bash
 podman rm -f server 2>/dev/null
 podman run -d --name server --network rmnet --entrypoint /bin/bash \
-  -v $BIN:/usr/local/bin:ro -v $REPO:$REPO:ro \
+  -v $BIN:/usr/local/bin:ro \
   -v $K:/keys:ro -v rm-pkgs:/var/cache/binpkgs $IMG -c '
   mkdir -p /var/empty /run/sshd; chown root:root /var/empty; chmod 755 /var/empty
   rm -f /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf
@@ -128,15 +127,11 @@ podman exec server ssh -i /root/id -o StrictHostKeyChecking=accept-new root@clie
   'bash --version | head -1; tar --version | head -1'
 ```
 
-**The checkout must be mounted at the same absolute path (`-v $REPO:$REPO:ro`).**
-The binary locates its vendored phase runtime (`bin/`, plus the optional
-`3rdparty/portage`) through the path of the tree it was *built* in
-(`ebuild_phases.rs`, `repo_root()` uses `env!("CARGO_MANIFEST_DIR")`). Without
-the mount, the run resolves, prints the plan, then panics in
-`run_binpkg_flow` with `repo root resolves (portuale is always built from
-within the checkout): … NotFound`. The server also ships that `bin/` to the
-client with each unit, so the client needs no checkout. A relocatable binary
-(embedding `bin/`) is not implemented and has no backlog entry.
+The binary carries its vendored phase runtime (`bin/`), so the server needs no
+checkout: only the executable is mounted. To use a different copy of `bin/`,
+set `PORTUALE_BIN_DIR` (a set but wrong value is an error, never a silent
+fallback). The server also ships that `bin/` to the client with each unit, so
+the client needs no checkout either (backlog #322).
 
 ## 4. Build the eix gpkg on the server (once)
 
