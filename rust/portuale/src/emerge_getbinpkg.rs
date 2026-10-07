@@ -666,6 +666,21 @@ pub fn run_merge_plan(
     // plan are a later slice.
     mode: crate::emerge_build::StatusMode,
 ) -> Result<(), String> {
+    // Backlog #322: a source build always runs ebuild phases, so a binary
+    // that cannot find the vendored runtime says so before anything is
+    // fetched. Binary merges are not gated here: a hookless gpkg never
+    // spawns a shell, and one with hooks reports the same message at its
+    // first phase.
+    if entries.iter().any(|e| {
+        e.source != portage_repo::CandidateSource::Binary
+            && !matches!(
+                e.outcome,
+                portage_repo::PretendOutcome::AlreadyInstalled { .. }
+                    | portage_repo::PretendOutcome::NoVisibleCandidate
+            )
+    }) {
+        crate::ebuild_phases::require_phase_runtime()?;
+    }
     // Real `Scheduler._pkg_count` for this run (backlog #177): every
     // entry below prints its own snapshot of these counters.
     let progress = crate::emerge_build::merge_progress_map(entries);

@@ -1366,6 +1366,18 @@ pub(crate) fn run_remote_plan(
 ) -> Result<(), String> {
     use portage_repo::PretendOutcome;
     use std::collections::HashMap;
+    // Backlog #322: every shipped unit carries the vendored phase runtime
+    // (`build_bundle`), so a binary that cannot find it fails here -- the
+    // gate stage, before the vdb shadow, the ledger gate, any ssh and any
+    // write -- instead of panicking after the plan is printed.
+    if entries.iter().any(|e| {
+        !matches!(
+            e.outcome,
+            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+        )
+    }) {
+        crate::ebuild_phases::require_phase_runtime()?;
+    }
     let control_dir = control_dir();
     let control = control_dir.as_deref();
     // Vdb shadow for the pre-ship pre-check (plan §7): pulled once for
@@ -1611,6 +1623,15 @@ fn run_one_remote_unit(
 /// Slice 2+ entry point with `--remote-binpkg`: preflight, then bundle,
 /// stream, unpack and verify one explicit binpkg file.
 pub fn run_remote(ctx: &RemoteContext) -> ExitCode {
+    // Backlog #322: an explicit `--remote-binpkg` bundles the phase
+    // runtime into the unit, so a binary with no runtime fails here, with
+    // one message, before the first connection -- not after the preflight.
+    if ctx.binpkg.is_some()
+        && let Err(message) = crate::ebuild_phases::require_phase_runtime()
+    {
+        eprintln!("mrg: {message}");
+        return ExitCode::from(1);
+    }
     let control_dir = control_dir();
     let control = control_dir.as_deref();
     // Before the first connection: afterwards the key is present even on
@@ -5071,7 +5092,7 @@ mod tests {
         // The real runtime, as shipped in bundles.
         let status = std::process::Command::new("cp")
             .args(["-a"])
-            .arg(crate::ebuild_phases::bin_dir())
+            .arg(crate::ebuild_phases::bin_dir().unwrap())
             .arg(unit.join("bin"))
             .status()
             .expect("cp -a bin");
@@ -5206,7 +5227,7 @@ mod tests {
         }
         let status = std::process::Command::new("cp")
             .args(["-a"])
-            .arg(crate::ebuild_phases::bin_dir())
+            .arg(crate::ebuild_phases::bin_dir().unwrap())
             .arg(unit.join("bin"))
             .status()
             .expect("cp -a bin");
@@ -6808,7 +6829,7 @@ mod tests {
         std::fs::create_dir_all(&unit).unwrap();
         let status = std::process::Command::new("cp")
             .args(["-a"])
-            .arg(crate::ebuild_phases::bin_dir())
+            .arg(crate::ebuild_phases::bin_dir().unwrap())
             .arg(unit.join("bin"))
             .status()
             .expect("cp -a bin");
@@ -6875,7 +6896,7 @@ mod tests {
         std::fs::create_dir_all(&unit).unwrap();
         let status = std::process::Command::new("cp")
             .args(["-a"])
-            .arg(crate::ebuild_phases::bin_dir())
+            .arg(crate::ebuild_phases::bin_dir().unwrap())
             .arg(unit.join("bin"))
             .status()
             .expect("cp -a bin");
@@ -6926,7 +6947,7 @@ mod tests {
         std::fs::create_dir_all(&unit).unwrap();
         let status = std::process::Command::new("cp")
             .args(["-a"])
-            .arg(crate::ebuild_phases::bin_dir())
+            .arg(crate::ebuild_phases::bin_dir().unwrap())
             .arg(unit.join("bin"))
             .status()
             .expect("cp -a bin");

@@ -434,7 +434,7 @@ pub fn build_bundle(
     // <phase>`, same files the local merge drives). Per unit for now; a
     // per-session ship is the obvious later optimization (note the ~500K
     // in the trial logs if it ever matters).
-    let bin_dir = crate::ebuild_phases::bin_dir();
+    let bin_dir = crate::ebuild_phases::bin_dir()?;
     let status = std::process::Command::new("cp")
         .args(["-a"])
         .arg(bin_dir)

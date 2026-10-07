@@ -648,12 +648,25 @@ fn create_directories(env: &Environment) -> Result<(), String> {
     Ok(())
 }
 
+/// The tree this binary was compiled in (two levels above the manifest
+/// directory), canonical when it still exists, else the same path as
+/// compiled in.
+///
+/// Never panics (backlog #322): a binary copied out of its build tree
+/// (a container, a minimal host) has no such directory, and every
+/// consumer below only ever *joins* a path onto this and checks the
+/// result exists, so a missing tree degrades exactly like a missing
+/// `3rdparty/portage` always has. The consumer that cannot degrade --
+/// the vendored `bin/` -- reports it through [`bin_dir`].
 pub(crate) fn repo_root() -> PathBuf {
     // portuale/src/ebuild_phases.rs -> portuale -> rust -> repo root
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../")
+    let lexical = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap_or(Path::new("/"));
+    lexical
         .canonicalize()
-        .expect("repo root resolves (portuale is always built from within the checkout)")
+        .unwrap_or_else(|_| lexical.to_path_buf())
 }
 
 /// The gitignored working checkout of upstream Portage (`3rdparty/portage/`
@@ -700,9 +713,9 @@ pub(crate) fn portage_checkout() -> PathBuf {
 /// Resolved once per process. `bin/ebuild.sh` only ever uses
 /// `${PORTAGE_BIN_PATH}` as a literal string prefix for `source`, never
 /// `realpath`s it, so a symlinked entry resolves to the vendored file.
-pub(crate) fn bin_dir() -> &'static Path {
+pub(crate) fn bin_dir() -> Result<&'static Path, String> {
     use std::sync::OnceLock;
-    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    static DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     // Backlog #88: the overlay this process created (if any), removed
     // at process exit. `DIR` itself cannot own the cleanup: statics
     // never run destructors, and `bin_dir()` has seven call sites
@@ -713,10 +726,10 @@ pub(crate) fn bin_dir() -> &'static Path {
     // exits; signal kills still leak, like any tmp dir.
     static CREATED: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        let vendored = repo_root().join("bin");
+        let vendored = resolve_bin_dir(std::env::var(BIN_DIR_VAR).ok().as_deref(), &repo_root())?;
         let checkout = portage_checkout().join("bin");
         if !checkout.is_dir() {
-            return vendored;
+            return Ok(vendored);
         }
         let overlay = std::env::temp_dir().join(format!("portuale-bin.{}", std::process::id()));
         match build_bin_overlay(&overlay, &checkout, &vendored) {
@@ -732,7 +745,7 @@ pub(crate) fn bin_dir() -> &'static Path {
                     }
                 }
                 let _ = unsafe { libc::atexit(cleanup_created_bin_overlay) };
-                overlay
+                Ok(overlay)
             }
             Err(e) => {
                 eprintln!(
@@ -740,11 +753,62 @@ pub(crate) fn bin_dir() -> &'static Path {
                      falling back to {} (vendored bin/ changes not applied)",
                     checkout.display()
                 );
-                checkout
+                Ok(checkout)
             }
         }
     })
-    .as_path()
+    .as_ref()
+    .map(PathBuf::as_path)
+    .map_err(Clone::clone)
+}
+
+/// Environment variable naming a directory that holds the vendored phase
+/// runtime (a copy of the repository's `bin/`), for a binary run outside
+/// the tree it was built in (backlog #322).
+pub(crate) const BIN_DIR_VAR: &str = "PORTUALE_BIN_DIR";
+
+/// Where the vendored phase runtime (`bin/ebuild.sh` and friends) is,
+/// first hit wins: `$PORTUALE_BIN_DIR` when set and non-empty, else the
+/// `bin/` of the tree this binary was built in. A set override that is
+/// wrong is an error and never falls through to the build tree: a silent
+/// fallback would hide a typo. The message carries no program prefix;
+/// every caller prints it behind its own (`emerge: `, `ebuild: `).
+///
+/// Pure (both inputs are parameters) so the order is unit-testable.
+pub(crate) fn resolve_bin_dir(
+    override_dir: Option<&str>,
+    build_root: &Path,
+) -> Result<PathBuf, String> {
+    if let Some(dir) = override_dir.filter(|d| !d.is_empty()) {
+        let dir = PathBuf::from(dir);
+        return if dir.join("ebuild.sh").is_file() {
+            Ok(dir)
+        } else {
+            Err(format!(
+                "{BIN_DIR_VAR}={} has no ebuild.sh: it must name a copy of the \
+                 repository's bin/ directory (the vendored ebuild phase runtime)",
+                dir.display()
+            ))
+        };
+    }
+    let tree = build_root.join("bin");
+    if tree.join("ebuild.sh").is_file() {
+        return Ok(tree);
+    }
+    Err(format!(
+        "cannot find the ebuild phase runtime (bin/ebuild.sh): {BIN_DIR_VAR} is not set \
+         and the tree this binary was built in ({}) is not there. Run from that tree, \
+         or set {BIN_DIR_VAR} to a copy of the repository's bin/ directory",
+        build_root.display()
+    ))
+}
+
+/// Fails with [`bin_dir`]'s message when the phase runtime cannot be
+/// found. Called at the top of a real run, before anything is shipped,
+/// fetched or written, so a missing runtime is reported up front and
+/// never half-way through a plan (backlog #322).
+pub(crate) fn require_phase_runtime() -> Result<(), String> {
+    bin_dir().map(|_| ())
 }
 
 /// Removes a `bin_dir()` overlay directory, ignoring every failure
@@ -3360,7 +3424,7 @@ async fn run_one_phase(
     shell: ShellBackend,
     log_file: Option<&Path>,
 ) -> Result<i32, String> {
-    let bin_dir = bin_dir().to_path_buf();
+    let bin_dir = bin_dir()?.to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
     // `FEATURES={network,ipc,mount,pid}-sandbox` / `FEATURES=sandbox`:
@@ -3806,7 +3870,9 @@ pub(crate) fn run_depend_phase(
     config_root: &Path,
     debug: bool,
 ) -> Result<std::collections::HashMap<String, String>, DependError> {
-    let bin_dir = bin_dir().to_path_buf();
+    let bin_dir = bin_dir()
+        .map_err(|message| DependError { code: 1, message })?
+        .to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
     // Builddir setup happens before any phase spawns -- real's
     // `doebuild`-before-spawn int retval, code 1, never retried.
@@ -4067,7 +4133,7 @@ async fn run_misc_functions(
     shell: ShellBackend,
     log_file: Option<&Path>,
 ) -> Result<i32, String> {
-    let bin_dir = bin_dir().to_path_buf();
+    let bin_dir = bin_dir()?.to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
     // Real `_emerge.MiscFunctionsProcess`: `bin/misc-functions.sh` runs
@@ -5173,6 +5239,143 @@ mod tests {
         assert!(shim.contains("ip link set lo up"));
         assert!(shim.contains("ip addr add 10.0.0.1/8 dev lo"));
         assert!(shim.contains("ip -6 addr add fd::1/8 dev lo"));
+    }
+
+    /// A directory shaped like a vendored runtime: just `ebuild.sh`.
+    fn fake_runtime(root: &Path) -> PathBuf {
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("ebuild.sh"), "").unwrap();
+        bin
+    }
+
+    /// Backlog #322, `resolve_bin_dir`'s order: a set override wins over
+    /// the build tree; an override that is wrong is an error naming the
+    /// variable and never falls through; an empty one is unset.
+    #[test]
+    fn resolve_bin_dir_override_beats_the_build_tree_and_never_falls_through() {
+        let tmp = TempDir::new("resolve-bin-dir-order");
+        let tree = tmp.join("tree");
+        let tree_bin = fake_runtime(&tree);
+        let other = fake_runtime(&tmp.join("other"));
+        let none = tmp.join("none");
+
+        assert_eq!(
+            resolve_bin_dir(Some(other.to_str().unwrap()), &tree).unwrap(),
+            other
+        );
+        assert_eq!(resolve_bin_dir(None, &tree).unwrap(), tree_bin);
+        assert_eq!(resolve_bin_dir(Some(""), &tree).unwrap(), tree_bin);
+
+        // A wrong override is refused even though the build tree is fine.
+        let err = resolve_bin_dir(Some(none.to_str().unwrap()), &tree).unwrap_err();
+        assert!(
+            err.contains(BIN_DIR_VAR) && err.contains("ebuild.sh"),
+            "{err}"
+        );
+        assert!(err.contains(none.to_str().unwrap()), "{err}");
+        // A directory without ebuild.sh is wrong too.
+        std::fs::create_dir_all(tmp.join("empty")).unwrap();
+        assert!(resolve_bin_dir(Some(tmp.join("empty").to_str().unwrap()), &tree).is_err());
+    }
+
+    /// Backlog #322: neither source present is a message with the three
+    /// facts the user needs (what, where it looked, how to fix it) and no
+    /// program prefix (callers add their own).
+    #[test]
+    fn resolve_bin_dir_with_nothing_found_explains_itself() {
+        let tmp = TempDir::new("resolve-bin-dir-missing");
+        let gone = tmp.join("gone");
+        let err = resolve_bin_dir(None, &gone).unwrap_err();
+        assert!(err.contains("bin/ebuild.sh"), "{err}");
+        assert!(err.contains(gone.to_str().unwrap()), "{err}");
+        assert!(err.contains(BIN_DIR_VAR), "{err}");
+        assert!(
+            !err.starts_with("portuale:") && !err.starts_with("emerge:"),
+            "{err}"
+        );
+        assert!(!err.contains('\n'), "one line: {err}");
+    }
+
+    /// The `portuale` binary built next to this test binary.
+    fn portuale_exe() -> PathBuf {
+        let mut exe = std::env::current_exe().expect("current test exe");
+        exe.pop();
+        if exe.ends_with("deps") {
+            exe.pop();
+        }
+        exe.push("portuale");
+        exe
+    }
+
+    /// Backlog #322, end to end: a run that needs the phase runtime but
+    /// is pointed at a directory without one exits 1 with one message --
+    /// no panic, no abort (the release profile aborts on panic, which is
+    /// what produced the core dump) -- and `mrg --remote-binpkg` does so
+    /// before touching the client (here the local-transport ROOT).
+    #[test]
+    fn a_missing_phase_runtime_is_an_error_not_a_panic_for_remote_and_ebuild() {
+        let tmp = TempDir::new("missing-phase-runtime-e2e");
+        let far = tmp.join("far");
+        std::fs::create_dir_all(far.join("var/db/pkg")).unwrap();
+        let gpkg = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar");
+        let nowhere = tmp.join("nowhere");
+        let assert_clean_failure = |what: &str, out: &std::process::Output| {
+            let all = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(out.status.code(), Some(1), "{what}: {all}");
+            assert!(
+                all.contains(BIN_DIR_VAR) && all.contains("ebuild.sh"),
+                "{what}: {all}"
+            );
+            for bad in ["panicked", "backtrace", "RUST_BACKTRACE"] {
+                assert!(!all.contains(bad), "{what}: {bad:?} in {all}");
+            }
+        };
+
+        let out = std::process::Command::new(portuale_exe())
+            .env(BIN_DIR_VAR, &nowhere)
+            .args(["mrg", "--getbinpkgonly", "--remote-hostname=localhost"])
+            .args(["--remote-transport=local"])
+            .arg(format!("--remote-root={}", far.display()))
+            .arg(format!("--remote-binpkg={}", gpkg.display()))
+            .output()
+            .unwrap();
+        assert_clean_failure("mrg --remote-binpkg", &out);
+        assert!(
+            !String::from_utf8_lossy(&out.stdout).contains("Remote preflight"),
+            "the check must run before the client is contacted"
+        );
+        let touched: Vec<_> = std::fs::read_dir(far.join("var/db/pkg")).unwrap().collect();
+        assert!(
+            touched.is_empty(),
+            "nothing may reach the client ROOT: {touched:?}"
+        );
+
+        let pkg_dir = tmp.join("pkg/dev-libs/p");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("p-1.0.ebuild");
+        std::fs::write(&ebuild, "EAPI=8\nSLOT=\"0\"\n").unwrap();
+        let out = std::process::Command::new(portuale_exe())
+            .env(BIN_DIR_VAR, &nowhere)
+            .env("ROOT", far.to_str().unwrap())
+            .env("PORTAGE_TMPDIR", tmp.join("pt"))
+            .args(["ebuild", ebuild.to_str().unwrap(), "setup"])
+            .output()
+            .unwrap();
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_ne!(out.status.code(), Some(0), "{all}");
+        assert_ne!(out.status.code(), Some(134), "must not abort: {all}");
+        assert!(all.contains(BIN_DIR_VAR), "{all}");
+        assert!(!all.contains("panicked"), "{all}");
     }
 
     #[test]
@@ -6441,8 +6644,8 @@ mod tests {
             Path::new("/"),
             "install",
             false,
-            bin_dir(),
-            &bin_dir().join("ebuild-helpers"),
+            bin_dir().unwrap(),
+            &bin_dir().unwrap().join("ebuild-helpers"),
             Path::new("/dev/null/no-config-root"),
             &[("FEATURES".to_string(), "resolved one".to_string())],
         );
@@ -7259,7 +7462,7 @@ mod tests {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
         let repo = fixtures.join("repo");
         let portage_tmpdir = TempDir::new("ebuild-phases-test-standalone-penv").keep();
-        let bin_dir = bin_dir().to_path_buf();
+        let bin_dir = bin_dir().unwrap().to_path_buf();
         let vars_for = |pkg: &str, pf: &str, phase: &str| {
             let env = compute_environment(
                 &repo.join(format!("dev-libs/{pkg}/{pf}.ebuild")),
