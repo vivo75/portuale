@@ -149,7 +149,24 @@ fn run(applet: Applet, args: &[String]) -> ExitCode {
     }
 }
 
+/// The Rust runtime ignores SIGPIPE, so `portuale ... | head` makes the next
+/// `println!` panic ("failed printing to stdout: Broken pipe"), and with
+/// `panic = "abort"` that is a core dump. Leave SIGPIPE ignored (the remote
+/// transport relies on `EPIPE` errors when ssh dies) and instead turn that one
+/// panic into the exit a SIGPIPE death would have shown a shell: 141, silently.
+fn exit_quietly_on_broken_pipe() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info.to_string();
+        if msg.contains("failed printing to std") && msg.contains("Broken pipe") {
+            std::process::exit(141);
+        }
+        previous(info);
+    }));
+}
+
 fn main() -> ExitCode {
+    exit_quietly_on_broken_pipe();
     let argv: Vec<String> = std::env::args().collect();
     let invoked_as = basename(&argv[0]);
 
@@ -186,5 +203,40 @@ fn main() -> ExitCode {
             );
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod broken_pipe_tests {
+    /// Backlog #323: output into a closed pipe is a quiet 141, not a panic
+    /// message and an abort (SIGABRT, 134).
+    #[test]
+    fn a_closed_stdout_pipe_exits_141_without_a_panic() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut exe = std::env::current_exe().unwrap();
+        exe.pop();
+        if exe.ends_with("deps") {
+            exe.pop();
+        }
+        exe.push("portuale");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let mut child = std::process::Command::new(exe)
+            .args(["emerge", "--list-sets"])
+            .env("PORTAGE_CONFIGROOT", &root)
+            .env("ROOT", &root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(child.stdout.take()); // the reader goes away before the first write
+        let out = child.wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!err.contains("panicked"), "stderr: {err}");
+        assert_eq!(out.status.signal(), None, "killed by a signal: {out:?}");
+        assert!(
+            matches!(out.status.code(), Some(0) | Some(141)),
+            "unexpected exit: {:?}",
+            out.status
+        );
     }
 }
