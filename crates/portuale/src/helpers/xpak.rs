@@ -73,6 +73,11 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
     use std::path::{Path, PathBuf};
 
+    /// The `portuale` binary next to the test binary (child processes).
+    fn portuale_exe() -> PathBuf {
+        crate::self_exe::built_portuale_bin()
+    }
+
     fn fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/xpak")
     }

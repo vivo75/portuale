@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn a_missing_phase_runtime_is_an_error_not_a_panic_for_remote_and_ebuild() {
+    let tmp = TempDir::new("missing-phase-runtime-e2e");
+    let far = tmp.join("far");
+    std::fs::create_dir_all(far.join("var/db/pkg")).unwrap();
+    let gpkg = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar");
+    let nowhere = tmp.join("nowhere");
+    let assert_clean_failure = |what: &str, out: &std::process::Output| {
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(1), "{what}: {all}");
+        assert!(
+            all.contains(BIN_DIR_VAR) && all.contains("ebuild.sh"),
+            "{what}: {all}"
+        );
+        for bad in ["panicked", "backtrace", "RUST_BACKTRACE"] {
+            assert!(!all.contains(bad), "{what}: {bad:?} in {all}");
+        }
+    };
+
+    let out = std::process::Command::new(portuale_exe())
+        .env(BIN_DIR_VAR, &nowhere)
+        .args(["mrg", "--getbinpkgonly", "--remote-hostname=localhost"])
+        .args(["--remote-transport=local"])
+        .arg(format!("--remote-root={}", far.display()))
+        .arg(format!("--remote-binpkg={}", gpkg.display()))
+        .output()
+        .unwrap();
+    assert_clean_failure("mrg --remote-binpkg", &out);
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("Remote preflight"),
+        "the check must run before the client is contacted"
+    );
+    let touched: Vec<_> = std::fs::read_dir(far.join("var/db/pkg")).unwrap().collect();
+    assert!(
+        touched.is_empty(),
+        "nothing may reach the client ROOT: {touched:?}"
+    );
+
+    let pkg_dir = tmp.join("pkg/dev-libs/p");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let ebuild = pkg_dir.join("p-1.0.ebuild");
+    std::fs::write(&ebuild, "EAPI=8\nSLOT=\"0\"\n").unwrap();
+    let out = std::process::Command::new(portuale_exe())
+        .env(BIN_DIR_VAR, &nowhere)
+        .env("ROOT", far.to_str().unwrap())
+        .env("PORTAGE_TMPDIR", tmp.join("pt"))
+        .args(["ebuild", ebuild.to_str().unwrap(), "setup"])
+        .output()
+        .unwrap();
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(out.status.code(), Some(0), "{all}");
+    assert_ne!(out.status.code(), Some(134), "must not abort: {all}");
+    assert!(all.contains(BIN_DIR_VAR), "{all}");
+    assert!(!all.contains("panicked"), "{all}");
+}
+
+#[test]
 fn features_test_passthrough_actually_runs_src_test() {
     // A subprocess per invocation: mutating process-global env vars is
     // unsound from parallel test threads.

@@ -13,6 +13,58 @@ fn remove_bin_overlay_dir_is_idempotent() {
     assert!(!dir.exists());
 }
 
+/// A set override wins over the build tree; a wrong override errors
+/// naming the variable and never falls through; an empty one is unset.
+#[test]
+fn resolve_bin_dir_override_beats_the_build_tree_and_never_falls_through() {
+    let tmp = TempDir::new("resolve-bin-dir-order");
+    let tree = tmp.join("tree");
+    let tree_bin = fake_runtime(&tree);
+    let other = fake_runtime(&tmp.join("other"));
+    let none = tmp.join("none");
+
+    for embedded in [false, true] {
+        assert_eq!(
+            resolve_bin_dir(Some(other.to_str().unwrap()), &tree, embedded).unwrap(),
+            BinSource::Dir(other.clone())
+        );
+        assert_eq!(
+            resolve_bin_dir(None, &tree, embedded).unwrap(),
+            BinSource::Dir(tree_bin.clone())
+        );
+        assert_eq!(
+            resolve_bin_dir(Some(""), &tree, embedded).unwrap(),
+            BinSource::Dir(tree_bin.clone())
+        );
+    }
+
+    let err = resolve_bin_dir(Some(none.to_str().unwrap()), &tree, true).unwrap_err();
+    assert!(
+        err.contains(BIN_DIR_VAR) && err.contains("ebuild.sh"),
+        "{err}"
+    );
+    assert!(err.contains(none.to_str().unwrap()), "{err}");
+    std::fs::create_dir_all(tmp.join("empty")).unwrap();
+    assert!(resolve_bin_dir(Some(tmp.join("empty").to_str().unwrap()), &tree, true).is_err());
+}
+
+/// With neither source present the error carries what was sought,
+/// where it looked, and how to fix it, with no program prefix.
+#[test]
+fn resolve_bin_dir_with_nothing_found_explains_itself() {
+    let tmp = TempDir::new("resolve-bin-dir-missing");
+    let gone = tmp.join("gone");
+    let err = resolve_bin_dir(None, &gone, false).unwrap_err();
+    assert!(err.contains("bin/ebuild.sh"), "{err}");
+    assert!(err.contains(gone.to_str().unwrap()), "{err}");
+    assert!(err.contains(BIN_DIR_VAR), "{err}");
+    assert!(
+        !err.starts_with("portuale:") && !err.starts_with("emerge:"),
+        "{err}"
+    );
+    assert!(!err.contains('\n'), "one line: {err}");
+}
+
 /// `extra_env` `FEATURES` is exported last so it wins over the
 /// process-env base.
 #[test]

@@ -327,6 +327,13 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
+    /// The `portuale` binary next to the test binary (child processes).
+    /// Needs `cargo build --release -p portuale` first: `cargo test`
+    /// does not rebuild it, and these tests spawn it.
+    fn portuale_exe() -> PathBuf {
+        crate::self_exe::built_portuale_bin()
+    }
+
     // ---- oracle (one test per case dir) -------------------------------
 
     /// pmtest's `fixtures/helpers/doins/` (the oracle from running the

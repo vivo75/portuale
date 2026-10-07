@@ -15,9 +15,34 @@ pub(crate) use doins::xattr_set;
 pub(crate) use doins::{copy_xattr, xattr_excluded, xattr_get, xattr_list};
 mod filter_env;
 mod gpkg;
+mod locale;
 mod xattr;
 mod xpak;
 
 /// The fixed answer of the `ping` helper (D8: proves `$PORTUALE_BIN`
 /// reaches a phase as a working binary, never the libtest harness).
 pub(crate) const PING_TOKEN: &str = "portuale-helper-ping-1";
+
+#[cfg(test)]
+mod dispatcher_tests {
+    /// The `portuale` binary built next to this test binary (child
+    /// processes: the helpers run across a real process boundary).
+    fn portuale_exe() -> std::path::PathBuf {
+        crate::self_exe::built_portuale_bin()
+    }
+
+    /// `-c` with the exact QA probe program answers natively
+    /// (the full locale table is `locale::table_tests`).
+    #[test]
+    fn python_c_with_the_exact_probe_program_answers_natively() {
+        let out = std::process::Command::new(portuale_exe())
+            .args(["__helper", "python", "-c", super::locale::PROBE_PROGRAM])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .output()
+            .expect("portuale __helper spawns");
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "UTF-8");
+    }
+}
