@@ -1447,11 +1447,12 @@ fn register_preserved_libs(
 /// to scan (backlog #178's second bump is the first merge that ever
 /// has anything to scan).
 ///
-/// `exclude_cpv` is real `LinkageMap.rebuild()`'s own `exclude_pkgs` (a
+/// `exclude_cpvs` is real `LinkageMap.rebuild()`'s own `exclude_pkgs` (a
 /// package being unmerged contributes neither `NEEDED.ELF.2` lines nor
 /// registry orphans -- its data "would only serve to corrupt the
-/// `LinkageMap`"): the unmerged instance in replacement mode, `None`
-/// everywhere else. `replacement_preserved` is real `preserve_paths`
+/// `LinkageMap`"): the unmerged instance in replacement mode (plus, on a
+/// database backend, the earlier-unmerged same-slot instances, #310),
+/// empty everywhere else. `replacement_preserved` is real `preserve_paths`
 /// (the merge-side just-preserved set, owner -> paths, not yet
 /// registered at prune time, so it must be passed explicitly): scanned
 /// under the replacing cpv -- real indexes it with owner `None` (and
@@ -1482,14 +1483,14 @@ fn register_preserved_libs(
 fn linkage_owner_entries(
     root: &Path,
     preserved: &BTreeMap<String, Vec<String>>,
-    exclude_cpv: Option<&str>,
+    exclude_cpvs: &[String],
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Vec<(String, Vec<crate::needed_elf::NeededEntry>)> {
     let mut owner_entries: Vec<(String, Vec<crate::needed_elf::NeededEntry>)> =
         crate::needed_elf::read_all_needed_entries(root)
             .into_iter()
-            .filter(|(cpv, _)| Some(cpv.as_str()) != exclude_cpv)
+            .filter(|(cpv, _)| !exclude_cpvs.contains(cpv))
             .collect();
     for (owner, entries) in replacement_needed {
         if let Some(slot) = owner_entries.iter_mut().find(|(o, _)| o == owner) {
@@ -1505,7 +1506,7 @@ fn linkage_owner_entries(
             .or_default()
             .extend(paths.iter().cloned());
     }
-    if let Some(excluded) = exclude_cpv {
+    for excluded in exclude_cpvs {
         scan_input.remove(excluded);
     }
     if scan_input.is_empty() {
@@ -1525,7 +1526,7 @@ fn owner_entries_with_preserved_orphans(
     root: &Path,
     preserved: &BTreeMap<String, Vec<String>>,
 ) -> Vec<(String, Vec<crate::needed_elf::NeededEntry>)> {
-    linkage_owner_entries(root, preserved, None, &BTreeMap::new(), &[])
+    linkage_owner_entries(root, preserved, &[], &BTreeMap::new(), &[])
 }
 
 /// Real `dblink.treewalk()`'s own `needed = os.path.join(inforoot,
@@ -1627,13 +1628,8 @@ fn find_preserve_paths_for_merge(
     // instance whose only consumer is the replacing package is
     // preserved only because of this feed.
     let replacement_needed = replacement_needed_entries(root, category, new_pf);
-    let owner_entries = linkage_owner_entries(
-        root,
-        &preserved,
-        None,
-        &BTreeMap::new(),
-        &replacement_needed,
-    );
+    let owner_entries =
+        linkage_owner_entries(root, &preserved, &[], &BTreeMap::new(), &replacement_needed);
     let map = crate::needed_elf::rebuild(root, &owner_entries);
     let defpath =
         crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
@@ -1941,7 +1937,7 @@ pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> 
 /// consumers survive through the replacing package, so they still
 /// count. `being_unmerged` returns true for such a path.
 ///
-/// `exclude_cpv` + `replacement_preserved`: real `exclude_pkgs` +
+/// `exclude_cpvs` + `replacement_preserved`: real `exclude_pkgs` +
 /// `preserve_paths` (see `linkage_owner_entries`): in replacement mode
 /// the unmerged instance's own linkmap data is excluded while the
 /// merge-side just-preserved set is scanned in, so a preserved library
@@ -1967,7 +1963,7 @@ pub(crate) fn find_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
     being_unmerged: &dyn Fn(&str) -> bool,
-    exclude_cpv: Option<&str>,
+    exclude_cpvs: &[String],
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> BTreeMap<String, BTreeSet<String>> {
@@ -1976,7 +1972,7 @@ pub(crate) fn find_unused_preserved_libs(
         read_plib_registry(root),
         unmerge_no_replacement,
         being_unmerged,
-        exclude_cpv,
+        exclude_cpvs,
         replacement_preserved,
         replacement_needed,
     )
@@ -1989,7 +1985,7 @@ fn find_unused_preserved_libs_in(
     registry: PlibRegistry,
     unmerge_no_replacement: bool,
     being_unmerged: &dyn Fn(&str) -> bool,
-    exclude_cpv: Option<&str>,
+    exclude_cpvs: &[String],
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> BTreeMap<String, BTreeSet<String>> {
@@ -2001,7 +1997,7 @@ fn find_unused_preserved_libs_in(
     let owner_entries = linkage_owner_entries(
         root,
         &plib_dict,
-        exclude_cpv,
+        exclude_cpvs,
         replacement_preserved,
         replacement_needed,
     );
@@ -2067,16 +2063,16 @@ fn find_unused_preserved_libs_in(
 /// `<<< !needed  {obj|sym} <path>` per removed file. Returns the removed
 /// `ROOT`-relative paths.
 ///
-/// `unmerge_no_replacement` / `being_unmerged` / `exclude_cpv` /
+/// `unmerge_no_replacement` / `being_unmerged` / `exclude_cpvs` /
 /// `replacement_preserved` / `replacement_needed` are passed straight
 /// through to `find_unused_preserved_libs` (see its own doc comment
 /// for the real grounding); every caller except the replace-loop
-/// unmerge passes `exclude_cpv=None` and empty feeds.
+/// unmerge passes `exclude_cpvs=&[]` and empty feeds.
 pub(crate) fn prune_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
     being_unmerged: &dyn Fn(&str) -> bool,
-    exclude_cpv: Option<&str>,
+    exclude_cpvs: &[String],
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<Vec<String>, String> {
@@ -2084,7 +2080,7 @@ pub(crate) fn prune_unused_preserved_libs(
         root,
         unmerge_no_replacement,
         being_unmerged,
-        exclude_cpv,
+        exclude_cpvs,
         replacement_preserved,
         replacement_needed,
         None,
@@ -2100,7 +2096,7 @@ pub(crate) fn prune_unused_preserved_libs_into(
     root: &Path,
     unmerge_no_replacement: bool,
     being_unmerged: &dyn Fn(&str) -> bool,
-    exclude_cpv: Option<&str>,
+    exclude_cpvs: &[String],
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
     mut retire: Option<&mut RetireWrites>,
@@ -2110,7 +2106,7 @@ pub(crate) fn prune_unused_preserved_libs_into(
         plib_registry_for(root, retire.as_deref()),
         unmerge_no_replacement,
         being_unmerged,
-        exclude_cpv,
+        exclude_cpvs,
         replacement_preserved,
         replacement_needed,
     );
@@ -4288,7 +4284,7 @@ fn merge_after_install(
         // and gets deleted + unregistered (real `_prune_plib_registry()`).
         // No include feed: the new entry is already renamed into place,
         // so its own lines are enumerated (backlog #224).
-        prune_unused_preserved_libs(root, false, &|_| false, None, &BTreeMap::new(), &[])?;
+        prune_unused_preserved_libs(root, false, &|_| false, &[], &BTreeMap::new(), &[])?;
     }
 
     // Real `dblink.merge()`: `self._elog_process()` runs here, after the
@@ -5105,7 +5101,7 @@ pub fn merge_binpkg(
         // (identical to `merge_after_install`). No include feed: the new
         // entry is already renamed into place, so its own lines are
         // enumerated (backlog #224).
-        prune_unused_preserved_libs(root, false, &|_| false, None, &BTreeMap::new(), &[])?;
+        prune_unused_preserved_libs(root, false, &|_| false, &[], &BTreeMap::new(), &[])?;
     }
 
     // Real `dblink.merge()`'s `_elog_process()`, before the builddir
@@ -7733,7 +7729,7 @@ mod tests {
         unregister_preserved_libs(&root, "dev-libs/plain-1.0", registry, &BTreeMap::new()).unwrap();
 
         let removed =
-            prune_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new(), &[])
+            prune_unused_preserved_libs(&root, false, &|_| false, &[], &BTreeMap::new(), &[])
                 .unwrap();
         assert!(removed.is_empty());
 
@@ -7818,7 +7814,7 @@ mod tests {
             &root,
             true,
             &|p| being.contains(p),
-            None,
+            &[],
             &BTreeMap::new(),
             &[],
         )
@@ -8327,7 +8323,7 @@ mod tests {
             &root,
             true,
             &|p| being.contains(p),
-            None,
+            &[],
             &BTreeMap::new(),
             &[],
         );
@@ -8344,7 +8340,7 @@ mod tests {
             &root,
             false,
             &|p| being.contains(p),
-            None,
+            &[],
             &BTreeMap::new(),
             &[],
         );
@@ -8617,7 +8613,7 @@ mod tests {
             &root,
             false,
             &|_| false,
-            Some("dev-libs/oldapp-1.0"),
+            &["dev-libs/oldapp-1.0".to_string()],
             &BTreeMap::new(),
             &[],
         );
@@ -8631,7 +8627,7 @@ mod tests {
         );
 
         let unneeded =
-            find_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new(), &[]);
+            find_unused_preserved_libs(&root, false, &|_| false, &[], &BTreeMap::new(), &[]);
         assert!(
             unneeded.is_empty(),
             "without the exclusion the stale consumer keeps it (the corruption real excludes): {unneeded:?}"
@@ -8742,7 +8738,7 @@ mod tests {
         .expect("seeding the registry succeeds");
 
         let unneeded =
-            find_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new(), &[]);
+            find_unused_preserved_libs(&root, false, &|_| false, &[], &BTreeMap::new(), &[]);
         assert_eq!(
             unneeded,
             BTreeMap::from([(
@@ -8756,7 +8752,7 @@ mod tests {
             "dev-libs/newapp-2.0".to_string(),
             vec!["/usr/lib/libB.so.1.0.0".to_string()],
         )]);
-        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, None, &feed, &[]);
+        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, &[], &feed, &[]);
         assert!(
             unneeded.is_empty(),
             "the just-preserved consumer keeps the lib alive: {unneeded:?}"
@@ -10614,6 +10610,83 @@ mod tests {
                 #[cfg(feature = "vdb-redb")]
                 portage_vdb::BackendKind::Redb,
             ]
+        }
+
+        /// #310: with two replaced same-slot instances (a broken VDB), the
+        /// later one's replace-loop prune must not see the earlier one's
+        /// `NEEDED.ELF.2`: on `files` its directory is already gone, on a
+        /// database it stays installed until the publishing commit. Both
+        /// old instances consume `libkeep.so.1`, so the preserved
+        /// `keepA.so` survives the first prune (the second still needs it)
+        /// and must be pruned by the second, whose own and whose
+        /// predecessor's consumers are both gone; before the fix a
+        /// database kept it alive through the first instance's lines.
+        #[test]
+        fn a_later_replaced_instance_does_not_see_the_earlier_ones_needed_on_a_database() {
+            let run = |kind: Option<portage_vdb::BackendKind>| {
+                let tmp = tempdir();
+                let (root, _) = seed_old_owned_consumer_root(&tmp);
+                let twin = root.join("var/db/pkg/dev-libs/oldapp-0.9");
+                std::fs::create_dir_all(&twin).unwrap();
+                std::fs::write(twin.join("CONTENTS"), "obj /usr/bin/cprog2 abc 1\n").unwrap();
+                // The replacing package ships `cprog2` too (the pending
+                // entry's `CONTENTS` is `also_keep`'s ownership source), so
+                // the file stays on disk through both unmerges and only the
+                // visibility of the instances' `NEEDED.ELF.2` decides.
+                std::fs::write(
+                    twin.join("NEEDED.ELF.2"),
+                    "X86_64;/usr/bin/cprog2;;;libkeep.so.1\n",
+                )
+                .unwrap();
+                std::fs::write(root.join("usr/bin/cprog2"), b"fake elf").unwrap();
+                for pf in ["oldapp-0.9", "oldapp-1.0"] {
+                    std::fs::write(
+                        root.join("var/db/pkg/dev-libs").join(pf).join("SLOT"),
+                        "0\n",
+                    )
+                    .unwrap();
+                }
+                let _db = kind.map(|k| use_db(k, &root, &tmp.join("vdb.db")));
+                let new = EntryKey::new("dev-libs", "newapp-1.0");
+                let handle = portage_vdb::for_root(&root);
+                let mut txn = handle.begin_write().unwrap();
+                txn.begin_entry(&new).unwrap();
+                txn.put_entry_file(&new, "CONTENTS", b"obj /usr/bin/cprog2 abc 1\n")
+                    .unwrap();
+                txn.commit().unwrap();
+                let scratch = tmp.join("scratch");
+                let portage_tmpdir = tmp.join("tmp");
+                std::fs::create_dir_all(&scratch).unwrap();
+                std::fs::create_dir_all(&portage_tmpdir).unwrap();
+                let replaced = unmerge_replaced_same_slot(
+                    &root,
+                    "dev-libs",
+                    "oldapp",
+                    "newapp-1.0",
+                    "0",
+                    &scratch,
+                    &portage_tmpdir,
+                    &MergeOptions::default(),
+                    &BTreeMap::new(),
+                )
+                .expect("the replace loop succeeds");
+                assert_eq!(replaced.len(), 2, "both instances are replaced");
+                (
+                    root.join("usr/lib/keepA.so").exists(),
+                    read_plib_registry(&root)
+                        .entries
+                        .contains_key("dev-libs/provider:0"),
+                )
+            };
+            let on_files = run(None);
+            assert_eq!(
+                on_files,
+                (false, false),
+                "files: the orphaned lib is pruned"
+            );
+            for kind in db_kinds() {
+                assert_eq!(run(Some(kind)), on_files, "{kind}");
+            }
         }
 
         /// feat#157 S8.2: the collision scenario on a database backend
