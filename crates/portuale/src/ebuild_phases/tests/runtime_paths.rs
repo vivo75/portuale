@@ -86,6 +86,25 @@ fn resolve_bin_dir_falls_back_to_the_embedded_copy_only_when_nothing_is_on_disk(
     );
 }
 
+/// The scratch base skips noexec directories; with nothing usable
+/// the first candidate is returned so the caller's error names it.
+#[test]
+fn the_scratch_base_skips_noexec_directories() {
+    let c = [
+        PathBuf::from("/a"),
+        PathBuf::from("/b"),
+        PathBuf::from("/c"),
+    ];
+    assert_eq!(
+        pick_scratch_base(&c, |d| d != Path::new("/a")),
+        PathBuf::from("/b")
+    );
+    assert_eq!(pick_scratch_base(&c, |_| true), PathBuf::from("/a"));
+    assert_eq!(pick_scratch_base(&c, |_| false), PathBuf::from("/a"));
+    // A directory that cannot be inspected counts as unusable.
+    assert!(is_noexec(Path::new("/nonexistent-dir-xyz")));
+}
+
 /// `extra_env` `FEATURES` is exported last so it wins over the
 /// process-env base.
 #[test]
