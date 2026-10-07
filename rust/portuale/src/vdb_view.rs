@@ -52,7 +52,9 @@
 //     file's size and mtime; once the generation has moved on, each read
 //     first checks that they still match and answers `ESTALE` if the file
 //     changed or went away, rather than mixing two generations.
-//     (Residue: a rewrite with the same size and mtime is not noticed.)
+//     The check runs on every read (an in-place rewrite on `files` does
+//     not move the generation). Residue, by the nature of a stat: a
+//     rewrite with the same size *and* the same mtime is not noticed.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -340,6 +342,9 @@ enum Handle {
         listing: Arc<Vec<DirEnt>>,
     },
     File {
+        /// The generation the handle opened on; only the tests ask (a read
+        /// no longer compares it, #316).
+        #[cfg_attr(not(test), allow(dead_code))]
         generation: u64,
         attr: Attr,
         key: EntryKey,
@@ -557,7 +562,25 @@ impl View {
             Node::Obj(_) => Err(ViewError::NoEnt),
             Node::File(key, name) => {
                 let e = self.entry_snap(gn, key)?.ok_or(ViewError::NoEnt)?;
-                let meta = e.file(name).ok_or(ViewError::NoEnt)?;
+                let snap_meta = e.file(name).ok_or(ViewError::NoEnt)?;
+                // `files`: an in-place `replace_file` moves neither the
+                // directory mtimes nor so the generation, so the cached
+                // stat of an ordinary field file is re-read (one stat; a
+                // database commit moves the generation instead, and this
+                // is then the same value). `metadata` is served from its
+                // own rewritten bytes (#316).
+                let fresh;
+                let meta = if name == METADATA {
+                    snap_meta
+                } else {
+                    match self.db.file_meta(key, name)? {
+                        Some(m) => {
+                            fresh = m;
+                            &fresh
+                        }
+                        None => return Err(ViewError::NoEnt),
+                    }
+                };
                 let size = if name == METADATA && e.stat.metadata_stamp == MetadataStamp::Valid {
                     match self.metadata_bytes(key, &e)? {
                         Some(b) => b.len() as u64,
@@ -754,15 +777,10 @@ impl View {
     /// the end of the file.
     pub fn read(&self, fh: u64, off: u64, size: usize) -> Res<Vec<u8>> {
         // Copy what is needed so no lock is held across a backend call.
-        let (generation, key, name, pinned) = match lock(&self.handles).get(&fh) {
+        let (key, name, pinned) = match lock(&self.handles).get(&fh) {
             Some(Handle::File {
-                generation,
-                key,
-                name,
-                pinned,
-                ..
+                key, name, pinned, ..
             }) => (
-                *generation,
                 key.clone(),
                 name.clone(),
                 match pinned {
@@ -783,11 +801,12 @@ impl View {
                 Ok(b[start..end].to_vec())
             }
             Pinned::Stat { len, mtime_ns } => {
-                if self.db.generation()? != generation {
-                    match self.db.file_meta(&key, &name)? {
-                        Some(m) if m.len == len && m.mtime_ns == mtime_ns => {}
-                        _ => return Err(ViewError::Stale),
-                    }
+                // Checked on every read, not only once the generation has
+                // moved: on `files` an in-place rewrite does not move it
+                // (#316). One stat (a query on a database) per read.
+                match self.db.file_meta(&key, &name)? {
+                    Some(m) if m.len == len && m.mtime_ns == mtime_ns => {}
+                    _ => return Err(ViewError::Stale),
                 }
                 self.db
                     .read_file_at(&key, &name, off, size)?
@@ -1392,6 +1411,50 @@ mod tests {
             assert_eq!(v.lookup(e, "CONTENTS"), Err(ViewError::NoEnt));
             assert_eq!(v.getattr(contents.ino), Err(ViewError::NoEnt));
         }
+    }
+
+    /// #316: on `files` an in-place `replace_file` moves no directory
+    /// mtime, so the generation stays; the view must still report the new
+    /// size of a rewritten file, and a big file's open handle must go
+    /// stale instead of mixing the old and the new bytes.
+    #[test]
+    fn an_in_place_rewrite_on_files_is_seen_by_getattr_and_by_an_open_big_handle() {
+        let env = envs("inplace")
+            .into_iter()
+            .find(|e| e.label == "files")
+            .unwrap();
+        let v = View::with_pin_max(env.db.clone(), 64);
+        let big_old = vec![b'o'; 5000];
+        let big_new = vec![b'n'; 6000];
+        let k = key("app-misc", "inplace-1");
+        add_entry(
+            &*env.db,
+            &k,
+            &[("CONTENTS", b"old contents\n"), ("BIG", &big_old)],
+        );
+        let cat = v.lookup(ROOT_INO, "app-misc").unwrap().ino;
+        let e = v.lookup(cat, "inplace-1").unwrap().ino;
+        let contents = v.lookup(e, "CONTENTS").unwrap();
+        let big = v.lookup(e, "BIG").unwrap();
+        assert_eq!((contents.size, big.size), (13, 5000));
+        let fh_big = v.open(big.ino, false).unwrap();
+        let g0 = env.db.generation().unwrap();
+
+        let mut txn = env.db.begin_write().unwrap();
+        txn.replace_file(&k, "CONTENTS", b"new contents, longer\n")
+            .unwrap();
+        txn.replace_file(&k, "BIG", &big_new).unwrap();
+        txn.commit().unwrap();
+        assert_eq!(
+            env.db.generation().unwrap(),
+            g0,
+            "an in-place write keeps it"
+        );
+
+        assert_eq!(v.getattr(contents.ino).unwrap().size, 21);
+        assert_eq!(v.lookup(e, "BIG").unwrap().size, 6000);
+        assert_eq!(read_all(&v, contents.ino), b"new contents, longer\n");
+        assert_eq!(v.read(fh_big, 0, 100), Err(ViewError::Stale));
     }
 
     #[test]
