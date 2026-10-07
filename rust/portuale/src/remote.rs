@@ -454,6 +454,34 @@ fn is_transport_error(code: Option<i32>, stderr: &str) -> bool {
             || stderr.contains("Permission denied"))
 }
 
+/// The local transport's `bash -s`: the client side of a `local` run is
+/// this same host, so the child would inherit the server process's
+/// environment. Two things must not ride along or be missing (#313):
+/// the server's own VDB selection (`PORTUALE_VDB_*`, set by `mrg` for a
+/// `--remote-vdb=server:` copy) -- a client phase's `has_version` /
+/// `best_version` must read the *client's* VDB, which stays a files tree
+/// (`mrg.rs` `setup_vdb`) -- and `PORTUALE_BIN`, which the vendored
+/// `portageq-wrapper` shim execs: without it the shim falls back to a
+/// `portuale` on `PATH`, absent in a minimal client. Over ssh neither is
+/// forwarded (the client's `PATH` provides `portuale`), so only this
+/// transport needs it.
+fn local_client_bash() -> std::process::Command {
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg("-s");
+    for var in [
+        "PORTUALE_VDB_BACKEND",
+        "PORTUALE_VDB_PATH",
+        "PORTUALE_VDB_ROOT",
+        crate::vdb_ipc::IPC_VAR,
+    ] {
+        cmd.env_remove(var);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        cmd.env("PORTUALE_BIN", exe);
+    }
+    cmd
+}
+
 /// Run `bash -s` with `script` on stdin; stdout/stderr captured
 /// separately (machine log vs. human log). Over ssh, or as a local
 /// subprocess when the transport is `local` (same driver, no network).
@@ -476,8 +504,7 @@ fn run_script_stdin(
                 .spawn()
                 .map_err(|e| format!("mrg: cannot spawn ssh: {e}"))?
         }
-        RemoteTransport::Local => std::process::Command::new("bash")
-            .args(["-s"])
+        RemoteTransport::Local => local_client_bash()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -3846,6 +3873,28 @@ fn run_phases_stage(
 mod tests {
     use super::*;
     use portage_util::TempDir;
+
+    /// #313: a local-transport client script gets `PORTUALE_BIN` (the shim's
+    /// target) and has the server's `PORTUALE_VDB_*` removed from its
+    /// inherited environment (`get_envs` reports a removal as `None`).
+    #[test]
+    fn local_client_bash_exports_the_binary_and_scrubs_the_servers_vdb_selection() {
+        let cmd = local_client_bash();
+        let envs: std::collections::BTreeMap<_, _> = cmd.get_envs().collect();
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new("PORTUALE_BIN")),
+            Some(&Some(exe.as_os_str()))
+        );
+        for var in [
+            "PORTUALE_VDB_BACKEND",
+            "PORTUALE_VDB_PATH",
+            "PORTUALE_VDB_ROOT",
+            crate::vdb_ipc::IPC_VAR,
+        ] {
+            assert_eq!(envs.get(std::ffi::OsStr::new(var)), Some(&None), "{var}");
+        }
+    }
 
     #[test]
     fn sh_quote_wraps_and_escapes() {
