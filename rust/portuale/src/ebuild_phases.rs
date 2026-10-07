@@ -743,7 +743,7 @@ pub(crate) fn bin_dir() -> Result<&'static Path, String> {
         if !checkout.is_dir() {
             return Ok(vendored);
         }
-        let overlay = std::env::temp_dir().join(format!("portuale-bin.{}", std::process::id()));
+        let overlay = exec_scratch_base().join(format!("portuale-bin.{}", std::process::id()));
         match build_bin_overlay(&overlay, &checkout, &vendored) {
             Ok(()) => {
                 register_cleanup(overlay.clone());
@@ -821,11 +821,53 @@ pub(crate) fn resolve_bin_dir(
     ))
 }
 
+/// True when `dir` is on a filesystem mounted `noexec` (or cannot be
+/// inspected, which is treated the same: do not run helpers from it).
+fn is_noexec(dir: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+        return true;
+    };
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return true;
+    }
+    st.f_flag & libc::ST_NOEXEC != 0
+}
+
+/// First of `candidates` that `usable` accepts, else the first one (the
+/// caller then fails with its own, more specific message).
+fn pick_scratch_base(candidates: &[PathBuf], usable: impl Fn(&Path) -> bool) -> PathBuf {
+    candidates
+        .iter()
+        .find(|d| usable(d))
+        .or_else(|| candidates.first())
+        .cloned()
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+/// Where the per-process runtime directories (extracted `bin/`, the #88
+/// overlay) go. The helpers in them are executed by name from `PATH`, so a
+/// `noexec` `$TMPDIR` (hardened hosts mount `/tmp` that way) would make every
+/// `doins`/`ecompress`/`estrip` fail with "Permission denied" (backlog #324):
+/// prefer `$TMPDIR`, then fall back to directories that allow execution.
+fn exec_scratch_base() -> PathBuf {
+    let mut candidates = vec![
+        std::env::temp_dir(),
+        PathBuf::from("/var/tmp"),
+        PathBuf::from("/dev/shm"),
+    ];
+    if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR") {
+        candidates.push(PathBuf::from(run));
+    }
+    pick_scratch_base(&candidates, |d| d.is_dir() && !is_noexec(d))
+}
+
 /// Writes the embedded `bin/` to `<tmp>/portuale-rt.<pid>/bin` and returns
 /// that directory; the parent is removed at process exit. Per process, so
 /// concurrent runs never share (or race on) a tree.
 fn extract_embedded_runtime() -> Result<PathBuf, String> {
-    let root = std::env::temp_dir().join(format!("portuale-rt.{}", std::process::id()));
+    let root = exec_scratch_base().join(format!("portuale-rt.{}", std::process::id()));
     let bin = root.join("bin");
     let _ = std::fs::remove_dir_all(&root);
     register_cleanup(root.clone());
@@ -5410,6 +5452,24 @@ mod tests {
     /// no panic, no abort (the release profile aborts on panic, which is
     /// what produced the core dump) -- and `mrg --remote-binpkg` does so
     /// before touching the client (here the local-transport ROOT).
+    #[test]
+    fn the_scratch_base_skips_noexec_directories() {
+        let c = [
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            PathBuf::from("/c"),
+        ];
+        assert_eq!(
+            pick_scratch_base(&c, |d| d != Path::new("/a")),
+            PathBuf::from("/b")
+        );
+        assert_eq!(pick_scratch_base(&c, |_| true), PathBuf::from("/a"));
+        // Nothing usable: the first candidate, so the caller's error names it.
+        assert_eq!(pick_scratch_base(&c, |_| false), PathBuf::from("/a"));
+        // The real probe treats a directory it cannot inspect as unusable.
+        assert!(is_noexec(Path::new("/nonexistent-dir-xyz")));
+    }
+
     #[test]
     fn a_missing_phase_runtime_is_an_error_not_a_panic_for_remote_and_ebuild() {
         let tmp = TempDir::new("missing-phase-runtime-e2e");
