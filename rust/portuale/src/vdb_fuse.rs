@@ -720,6 +720,10 @@ pub fn serve_background(
     allow_other: bool,
     rw: Option<&RwOpts>,
 ) -> Result<(), String> {
+    // `--rw`: the daemon's last words (the store import at unmount) go to
+    // a file next to the scratch directory, which the next mount of the
+    // same database clears but this file survives (#320).
+    let log = rw.map(|o| rw_log_path(&o.scratch));
     let mut fds = [0i32; 2];
     // SAFETY: `fds` is a valid two-element array.
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
@@ -744,7 +748,16 @@ pub fn serve_background(
         let mut buf = Vec::new();
         let _ = f.read_to_end(&mut buf);
         return match buf.first() {
-            Some(b'0') => Ok(()),
+            Some(b'0') => {
+                if let Some(log) = &log {
+                    eprintln!(
+                        "portuale vdb mount: the unmount report (stores imported, or why not) \
+                         goes to {}",
+                        log.display()
+                    );
+                }
+                Ok(())
+            }
             Some(_) => Err(String::from_utf8_lossy(&buf[1..]).into_owned()),
             None => Err("the mount process exited before the mount was ready".into()),
         };
@@ -777,7 +790,7 @@ pub fn serve_background(
         Ok(db) => {
             let r = serve(db, mountpoint, fsname, allow_other, rw, || {
                 report(true, "");
-                detach_from_terminal();
+                detach_from_terminal(log.as_deref());
             });
             match r {
                 Ok(()) => 0,
@@ -794,19 +807,89 @@ pub fn serve_background(
     unsafe { libc::_exit(code) }
 }
 
-/// Point stdin/stdout/stderr at `/dev/null` and leave the working
-/// directory, so the daemon holds neither the terminal nor a directory.
-fn detach_from_terminal() {
+/// The unmount-report file of a `--rw` mount: the scratch directory's
+/// name plus `.log`, beside it (the scratch directory itself is emptied
+/// by the next mount).
+fn rw_log_path(scratch: &Path) -> PathBuf {
+    let mut name = scratch.as_os_str().to_os_string();
+    name.push(".log");
+    PathBuf::from(name)
+}
+
+/// Point stdin at `/dev/null` and stdout/stderr at `log` (truncated; or
+/// `/dev/null` when there is none or it cannot be opened), and leave the
+/// working directory, so the daemon holds neither the terminal nor a
+/// directory.
+fn detach_from_terminal(log: Option<&Path>) {
     use std::os::fd::AsRawFd as _;
-    if let Ok(null) = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/null")
-    {
-        for fd in 0..=2 {
-            // SAFETY: duplicating an open descriptor onto a standard one.
-            unsafe { libc::dup2(null.as_raw_fd(), fd) };
+    let open_null = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+    };
+    if let Ok(null) = open_null() {
+        // SAFETY: duplicating an open descriptor onto a standard one.
+        unsafe { libc::dup2(null.as_raw_fd(), 0) };
+        let out = log
+            .and_then(|p| {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(p)
+                    .ok()
+            })
+            .unwrap_or(null);
+        for fd in 1..=2 {
+            // SAFETY: as above.
+            unsafe { libc::dup2(out.as_raw_fd(), fd) };
         }
     }
     let _ = std::env::set_current_dir("/");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_unmount_report_file_sits_beside_the_scratch_directory() {
+        assert_eq!(
+            rw_log_path(Path::new("/var/tmp/portuale-vdb-rw-00ab")),
+            PathBuf::from("/var/tmp/portuale-vdb-rw-00ab.log")
+        );
+    }
+
+    /// #320: a detached daemon's stderr goes to the log file, so the line
+    /// printed after `session.run()` returns is not lost. Run in a child
+    /// (the redirect replaces the process's own descriptors).
+    #[test]
+    fn a_detached_daemon_writes_its_stderr_to_the_log_file() {
+        if let Some(log) = std::env::var_os("PORTUALE_DETACH_CHILD") {
+            detach_from_terminal(Some(Path::new(&log)));
+            eprintln!("portuale vdb mount: imported nothing");
+            return;
+        }
+        let dir = portage_util::TempDir::new("portuale-detach-test").keep();
+        let log = dir.join("mount.log");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--test-threads=1",
+                "--exact",
+                "vdb_fuse::tests::a_detached_daemon_writes_its_stderr_to_the_log_file",
+                "--nocapture",
+            ])
+            .env("PORTUALE_DETACH_CHILD", &log)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        // (The test harness's own result line follows it in the file.)
+        assert!(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .starts_with("portuale vdb mount: imported nothing\n")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
