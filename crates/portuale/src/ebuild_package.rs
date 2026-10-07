@@ -1559,6 +1559,14 @@ mod tests {
     }
 
     #[test]
+    fn is_package_command_covers_exactly_package() {
+        assert!(is_package_command("package"));
+        assert!(!is_package_command("qmerge"));
+        assert!(!is_package_command("merge"));
+        assert!(!is_package_command("install"));
+    }
+
+    #[test]
     fn compress_template_covers_exactly_the_real_six_compressors() {
         for name in ["bzip2", "gzip", "lz4", "lzip", "lzop", "xz", "zstd"] {
             assert!(

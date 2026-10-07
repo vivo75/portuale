@@ -94,6 +94,119 @@ mod tests {
         Link(String),
     }
 
+    fn live(root: &Path, rel: &str, out: &mut BTreeMap<String, Node>) {
+        out.insert(rel.to_string(), Node::Dir);
+        for e in std::fs::read_dir(root.join(rel)).unwrap() {
+            let e = e.unwrap();
+            let rel = format!("{rel}/{}", e.file_name().to_string_lossy());
+            let ft = e.file_type().unwrap();
+            if ft.is_dir() {
+                live(root, &rel, out);
+            } else if ft.is_symlink() {
+                let t = std::fs::read_link(e.path()).unwrap();
+                out.insert(rel, Node::Link(t.to_string_lossy().into_owned()));
+            } else {
+                let exec = e.metadata().unwrap().permissions().mode() & 0o111 != 0;
+                out.insert(
+                    rel,
+                    Node::File {
+                        exec,
+                        bytes: std::fs::read(e.path()).unwrap(),
+                    },
+                );
+            }
+        }
+    }
+
+    fn live_tree(rel: &str) -> BTreeMap<String, Node> {
+        let mut m = BTreeMap::new();
+        live(&repo(), rel, &mut m);
+        m
+    }
+
+    fn embedded_tree(prefix: &str) -> BTreeMap<String, Node> {
+        ENTRIES
+            .iter()
+            .filter(|e| e.path == prefix || e.path.starts_with(&format!("{prefix}/")))
+            .map(|e| {
+                let node = match &e.kind {
+                    Kind::Dir => Node::Dir,
+                    Kind::File(b) => Node::File {
+                        exec: e.mode & 0o111 != 0,
+                        bytes: b.to_vec(),
+                    },
+                    Kind::Symlink(t) => Node::Link((*t).to_string()),
+                };
+                (e.path.to_string(), node)
+            })
+            .collect()
+    }
+
+    /// The embedded table is exactly the live `bin/` and `cnf/` trees.
+    #[test]
+    fn the_embedded_table_is_exactly_the_live_bin_and_cnf_trees() {
+        for prefix in ["bin", "cnf"] {
+            assert_eq!(embedded_tree(prefix), live_tree(prefix), "{prefix}");
+        }
+        assert!(file("bin/ebuild.sh").is_some_and(|b| !b.is_empty()));
+        assert!(file("cnf/sets/portage.conf").is_some_and(|b| !b.is_empty()));
+        assert!(
+            file("bin/ebuild-helpers").is_none(),
+            "a directory is not a file"
+        );
+    }
+
+    /// Extraction reproduces `bin/` and is idempotent.
+    #[test]
+    fn extracting_the_embedded_bin_reproduces_the_live_tree_and_is_idempotent() {
+        let tmp = TempDir::new("embedded-runtime-extract");
+        let dest = tmp.join("rt/bin");
+        extract("bin", &dest).unwrap();
+        extract("bin", &dest).unwrap();
+
+        let mut got = BTreeMap::new();
+        let mut raw = BTreeMap::new();
+        live(&tmp.join("rt"), "bin", &mut raw);
+        got.extend(raw);
+        assert_eq!(got, live_tree("bin"));
+
+        let mode = |p: &str| {
+            std::fs::metadata(dest.join(p))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        assert_eq!(mode("ebuild.sh"), 0o755);
+        assert_eq!(mode("isolated-functions.sh"), 0o644);
+        assert_eq!(mode("ebuild-helpers"), 0o755);
+        assert_eq!(
+            std::fs::read_link(dest.join("ebuild-helpers/ewarn")).unwrap(),
+            Path::new("elog")
+        );
+    }
+
+    /// The extracted portuale-owned helpers are executable.
+    #[test]
+    fn the_extracted_portuale_owned_helpers_are_executable() {
+        let tmp = TempDir::new("embedded-runtime-helpers-exec");
+        let dest = tmp.join("rt/bin");
+        extract("bin", &dest).unwrap();
+        for name in [
+            "portuale-python",
+            "chmod-lite",
+            "ebuild-ipc",
+            "ecompress-file",
+            "portageq-wrapper",
+        ] {
+            let mode = std::fs::metadata(dest.join(name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0, "{name} is not executable");
+        }
+    }
+
     /// A phase-running merge works from an extracted runtime, never the
     /// live `bin/`.
     #[test]
@@ -137,5 +250,17 @@ mod tests {
             std::fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap(),
             "setup-1.0\npreinst-1.0\npostinst-1.0\n"
         );
+    }
+
+    /// Set definitions fall back to the embedded copy, which matches the
+    /// checkout file when both exist.
+    #[test]
+    fn the_embedded_package_sets_conf_equals_the_checkout_file() {
+        let embedded = file("cnf/sets/portage.conf").expect("embedded");
+        if let Ok(checkout) = std::fs::read(repo().join("3rdparty/portage/cnf/sets/portage.conf")) {
+            assert_eq!(embedded, checkout.as_slice(), "vendored cnf/ copy is stale");
+        }
+        let text = crate::ebuild_phases::package_sets_conf().expect("a source");
+        assert_eq!(text.as_bytes(), embedded);
     }
 }

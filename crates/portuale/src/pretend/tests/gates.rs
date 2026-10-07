@@ -1,6 +1,76 @@
 use super::*;
 
 #[test]
+fn nonpretend_merge_list_shown_only_when_portage_shows_it() {
+    // Portage: actions.py, mergelist_shown branch. Non-pretend shows only with
+    // `--ask`/`--tree`/`--verbose`, never under `--quiet` unless `--ask` too.
+    // (pretend, ask, tree, verbose, quiet) -> shown
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: true,
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: true,
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: true
+    }));
+    assert!(!merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: true,
+        tree: false,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: true,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: false
+    }));
+    assert!(!merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: true
+    }));
+    assert!(!merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: true
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: true,
+        tree: false,
+        verbose: false,
+        quiet: true
+    }));
+}
+
+#[test]
 fn autounmask_only_reshows_the_merge_list_under_pretend() {
     // Portage: depgraph.py, _display_autounmask. Re-shows only with changes
     // on the `--pretend --autounmask-only` early-return path.

@@ -65,3 +65,25 @@ impl From<portage_repo::Error> for Error {
         Error::new("resolve", e)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn new_debug_and_display_keep_text() {
+        let e = Error::new("resolve", "boom");
+        assert_eq!(e.to_string(), "boom");
+        assert_eq!(
+            format!("{e:?}"),
+            "Error { kind: \"resolve\", detail: [\"boom\"] }"
+        );
+    }
+
+    #[test]
+    fn strings_cross_as_portuale_kind() {
+        assert_eq!(Error::from("boom".to_string()).to_string(), "boom");
+        assert_eq!(Error::from("boom").to_string(), "boom");
+        assert_eq!(Error::from(std::io::Error::other("x")).to_string(), "x");
+    }
+}

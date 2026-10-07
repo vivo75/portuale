@@ -652,6 +652,14 @@ mod tests {
     }
 
     #[test]
+    fn is_unmerge_command_covers_exactly_unmerge() {
+        assert!(is_unmerge_command("unmerge"));
+        assert!(!is_unmerge_command("merge"));
+        assert!(!is_unmerge_command("qmerge"));
+        assert!(!is_unmerge_command("install"));
+    }
+
+    #[test]
     fn parse_contents_reads_type_and_path_ignoring_trailing_fields() {
         let text = "dir /usr\nobj /usr/hello.txt abc123 100\nsym /usr/link -> hello.txt 100\n";
         let entries = parse_contents(text);

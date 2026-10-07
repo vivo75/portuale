@@ -65,6 +65,27 @@ fn resolve_bin_dir_with_nothing_found_explains_itself() {
     assert!(!err.contains('\n'), "one line: {err}");
 }
 
+/// With no override and no build tree the embedded copy is the
+/// answer; a build tree that has the runtime still wins over it.
+#[test]
+fn resolve_bin_dir_falls_back_to_the_embedded_copy_only_when_nothing_is_on_disk() {
+    let tmp = TempDir::new("resolve-bin-dir-embedded");
+    let gone = tmp.join("gone");
+    assert_eq!(
+        resolve_bin_dir(None, &gone, true).unwrap(),
+        BinSource::Embedded
+    );
+    assert_eq!(
+        resolve_bin_dir(Some(""), &gone, true).unwrap(),
+        BinSource::Embedded
+    );
+    let tree_bin = fake_runtime(&tmp.join("tree"));
+    assert_eq!(
+        resolve_bin_dir(None, &tmp.join("tree"), true).unwrap(),
+        BinSource::Dir(tree_bin)
+    );
+}
+
 /// `extra_env` `FEATURES` is exported last so it wins over the
 /// process-env base.
 #[test]

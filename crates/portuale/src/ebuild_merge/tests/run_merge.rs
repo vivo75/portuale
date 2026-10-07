@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn is_merge_command_covers_exactly_merge() {
+    assert!(is_merge_command("merge"));
+    assert!(!is_merge_command("qmerge"));
+    assert!(!is_merge_command("unmerge"));
+    assert!(!is_merge_command("install"));
+}
+
+#[test]
+fn is_qmerge_command_covers_exactly_qmerge() {
+    assert!(is_qmerge_command("qmerge"));
+    assert!(!is_qmerge_command("merge"));
+    assert!(!is_qmerge_command("unmerge"));
+    assert!(!is_qmerge_command("install"));
+}
+
+#[test]
 fn real_merge_lands_files_and_a_symlink_and_writes_a_real_vdb_entry() {
     let tmp = tempdir();
     let root = tmp.join("root");
