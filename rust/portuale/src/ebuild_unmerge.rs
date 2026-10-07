@@ -761,12 +761,28 @@ pub(crate) fn unmerge_pkgfiles_into(
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
         .collect();
-    let exclude_cpv = is_replacement.then(|| format!("{category}/{pf}"));
+    // Real `exclude_pkgs`: the unmerged instance itself, plus (database
+    // backends, #310) the same-slot instances this replace loop already
+    // unmerged -- their entries stay installed until the publishing
+    // commit, where `files` has already removed their directories, so
+    // they must not feed the linkage map of the later instances' prune.
+    let exclude_cpvs: Vec<String> = if is_replacement {
+        std::iter::once(format!("{category}/{pf}"))
+            .chain(
+                options
+                    .already_unmerged
+                    .iter()
+                    .map(|gone| format!("{category}/{gone}")),
+            )
+            .collect()
+    } else {
+        Vec::new()
+    };
     ebuild_merge::prune_unused_preserved_libs_into(
         root,
         !is_replacement,
         &|p| being_unmerged.contains(p),
-        exclude_cpv.as_deref(),
+        &exclude_cpvs,
         replacement_preserved,
         replacement_needed,
         retire,
