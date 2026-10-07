@@ -979,11 +979,116 @@ impl RwView {
             // `write_atomic` inside a live entry (W4 `removeFromContents`,
             // `aux_update`): the temp's bytes replace the stored file.
             (Parent::Live(a), Parent::Live(b)) if a == b => {
-                self.replace_from_temp(a, name, newname)
+                let is_temp = lock(&self.st)
+                    .names
+                    .contains_key(&(Parent::Live(a.clone()), name.to_string()));
+                if is_temp {
+                    self.replace_from_temp(a, name, newname)
+                } else {
+                    self.rename_stored_file(a, name, newname)
+                }
+            }
+            // Real `vardbapi.move_ent` (`vartree.py:626-683`, #319): the
+            // entry directory moves, possibly into another category.
+            (Parent::Cat(c1), Parent::Cat(c2))
+                if !name.starts_with(MERGING)
+                    && !newname.starts_with(MERGING)
+                    && !is_volatile_name(name)
+                    && !is_volatile_name(newname)
+                    && !newname.is_empty() =>
+            {
+                self.move_entry(c1, name, c2, newname)
             }
             // Live-entry rewrites are S3.
             _ => Err(ViewError::Perm),
         }
+    }
+
+    /// `move_ent`'s `_movefile(origpath, newpath)`: one transaction that
+    /// deletes the live entry and inserts its image under the new key
+    /// (counters stay as they are). The category directory the move
+    /// leaves behind is real's to keep (or remove); like on disk, a
+    /// destination that exists is `ENOTEMPTY`. Inodes follow the rename.
+    fn move_entry(&self, cat: &str, pf: &str, new_cat: &str, new_pf: &str) -> Res<()> {
+        let old = EntryKey::new(cat, pf);
+        let new = EntryKey::new(new_cat, new_pf);
+        let mut st = lock(&self.st);
+        let cat_ino = self.view.ino_of(&Node::Cat(cat.to_string()));
+        self.view.lookup(cat_ino, pf)?;
+        let new_cat_ino = self.view.ino_of(&Node::Cat(new_cat.to_string()));
+        if self.view.lookup(new_cat_ino, new_pf).is_ok() {
+            return Err(ViewError::NotEmpty);
+        }
+        // Temps in the entry, or files real already unlinked (a removal
+        // in progress), have no meaning across a move.
+        if Self::removing(&st, &old)
+            || st
+                .names
+                .keys()
+                .any(|(p, _)| *p == Parent::Live(old.clone()))
+        {
+            return Err(ViewError::Perm);
+        }
+        let mut image = self.db.entry_image(&old)?.ok_or(ViewError::NoEnt)?;
+        let names: Vec<String> = image.files.iter().map(|f| f.meta.name.clone()).collect();
+        image.key = new.clone();
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.delete_entry(&old)?;
+            txn.insert_entry(&image)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        st.vol_cats.remove(new_cat);
+        drop(st);
+        // Every inode the kernel may hold follows the entry.
+        self.view.rebind(
+            self.view.ino_of(&Node::Entry(old.clone())),
+            Node::Entry(new.clone()),
+        );
+        for name in names {
+            let ino = self.view.ino_of(&Node::File(old.clone(), name.clone()));
+            self.view.rebind(ino, Node::File(new.clone(), name));
+        }
+        Ok(())
+    }
+
+    /// `os.rename(<old_pf>.ebuild, <new_pf>.ebuild)` inside a live entry
+    /// (`move_ent`): a stored file takes a new name (the whole entry is
+    /// rewritten in one transaction, stamp turned stale as any change of
+    /// the directory does).
+    fn rename_stored_file(&self, key: &EntryKey, name: &str, newname: &str) -> Res<()> {
+        let st = lock(&self.st);
+        if Self::removing(&st, key) {
+            return Err(ViewError::NoEnt);
+        }
+        let mut image = self.db.entry_image(key)?.ok_or(ViewError::NoEnt)?;
+        let Some(pos) = image.files.iter().position(|f| f.meta.name == name) else {
+            return Err(ViewError::NoEnt);
+        };
+        image.files.retain(|f| f.meta.name != newname);
+        let pos = image
+            .files
+            .iter()
+            .position(|f| f.meta.name == name)
+            .unwrap_or(pos);
+        image.files[pos].meta.name = newname.to_string();
+        image.files.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
+        image.dir_mtime_ns = now_ns();
+        if image.metadata_stamp == MetadataStamp::Valid {
+            image.metadata_stamp = MetadataStamp::Stale;
+        }
+        let commit = || -> portage_vdb::Result<()> {
+            let mut txn = self.db.begin_write()?;
+            txn.insert_entry(&image)?;
+            txn.commit()
+        };
+        commit().map_err(|e| ViewError::Io(e.to_string()))?;
+        drop(st);
+        let ino = self.view.ino_of(&Node::File(key.clone(), name.to_string()));
+        self.view
+            .rebind(ino, Node::File(key.clone(), newname.to_string()));
+        Ok(())
     }
 
     /// Rename one of this layer's names (volatile files, staged files),
@@ -1456,6 +1561,7 @@ mod tests {
             "unmerge" => include_str!("vdb_rw/testdata/unmerge.ops"),
             "replace-same-pf" => include_str!("vdb_rw/testdata/replace-same-pf.ops"),
             "live-rewrites" => include_str!("vdb_rw/testdata/live-rewrites.ops"),
+            "move-ent" => include_str!("vdb_rw/testdata/move-ent.ops"),
             _ => unreachable!("{name}"),
         };
         parse(text)
@@ -1770,6 +1876,34 @@ mod tests {
             let fh = v.open(tmp_ino, libc::O_RDONLY).unwrap();
             assert_eq!(v.read(fh, 0, 16).unwrap(), b"1\n");
             v.release(fh).unwrap();
+        }
+    }
+
+    /// #319: a package move through the mount. The op sequence is real's
+    /// (`move_ent`, strace capture in `testdata/move-ent.ops`); the files
+    /// run on a real directory is the reference, the view must leave the
+    /// database equal to it, the entry under its new key only.
+    #[test]
+    fn a_package_move_through_the_view_equals_the_same_move_on_files() {
+        for env in envs("moveent") {
+            let mut ops = script("merge-new");
+            ops.extend(script("move-ent"));
+            apply_fs(&env.files_vdb, &ops);
+            let v = rw(&env);
+            apply_rw(&v, &ops);
+            assert_same(&env.files_root, &*env.db);
+            let old = EntryKey::new("app-misc", "foo-1.0");
+            let new = EntryKey::new("sys-apps", "bar-1.0");
+            assert!(!env.db.has_entry(&old).unwrap(), "{}", env.label);
+            assert!(env.db.has_entry(&new).unwrap(), "{}", env.label);
+            assert_eq!(
+                env.db.read_file(&new, "CATEGORY").unwrap().as_deref(),
+                Some(&b"sys-apps\n"[..])
+            );
+            assert!(env.db.read_file(&new, "bar-1.0.ebuild").unwrap().is_some());
+            assert!(env.db.read_file(&new, "foo-1.0.ebuild").unwrap().is_none());
+            assert!(resolve(&v, "sys-apps/bar-1.0/PF").is_ok(), "{}", env.label);
+            assert!(resolve(&v, "app-misc/foo-1.0").is_err(), "{}", env.label);
         }
     }
 
