@@ -82,6 +82,18 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/xpak")
     }
 
+    /// `portuale __helper python xpak-helper.py recompose <args>` with
+    /// no Portage checkout reachable.
+    fn run_helper(args: &[std::ffi::OsString]) -> std::process::Output {
+        std::process::Command::new(portuale_exe())
+            .args(["__helper", "python", "xpak-helper.py"])
+            .args(args)
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .env("PORTUALE_REAL_PYTHON", "/nonexistent/python")
+            .output()
+            .expect("portuale __helper spawns")
+    }
+
     /// Re-run package tests with no checkout and no Python, so only the
     /// native `xpak-helper.py` can pack the metadata.
     fn rerun_without_checkout(test: &str) {

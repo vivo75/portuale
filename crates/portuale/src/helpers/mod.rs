@@ -16,6 +16,7 @@ pub(crate) use doins::{copy_xattr, xattr_excluded, xattr_get, xattr_list};
 mod filter_env;
 mod gpkg;
 mod locale;
+mod python;
 mod xattr;
 mod xpak;
 
@@ -23,12 +24,83 @@ mod xpak;
 /// reaches a phase as a working binary, never the libtest harness).
 pub(crate) const PING_TOKEN: &str = "portuale-helper-ping-1";
 
+/// The D1 unknown-helper message: `argv` joined by spaces (lossy), exit
+/// 127. For the `python` dispatcher the caller passes the full
+/// `["python", ...]` argv so the message reads
+/// `portuale: no native helper for: python <argv>`.
+fn no_native_helper(argv: &[std::ffi::OsString]) {
+    let joined = argv
+        .iter()
+        .map(|s| s.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    eprintln!("portuale: no native helper for: {joined}");
+}
+
 #[cfg(test)]
 mod dispatcher_tests {
     /// The `portuale` binary built next to this test binary (child
     /// processes: the helpers run across a real process boundary).
     fn portuale_exe() -> std::path::PathBuf {
         crate::self_exe::built_portuale_bin()
+    }
+
+    fn helper(args: &[&str]) -> std::process::Output {
+        std::process::Command::new(portuale_exe())
+            .arg("__helper")
+            .args(args)
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .output()
+            .expect("portuale __helper spawns")
+    }
+
+    /// An unknown helper name exits 127 with the message naming the full argv.
+    #[test]
+    fn an_unknown_helper_name_exits_127_with_the_message() {
+        let out = helper(&["frobnicate", "a", "b"]);
+        assert_eq!(out.status.code(), Some(127), "{out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("portuale: no native helper for: frobnicate a b"),
+            "{err}"
+        );
+    }
+
+    /// `ebuild-ipc` always exits 127 (never 1: that would make
+    /// `has_version` silently answer "not installed").
+    #[test]
+    fn ebuild_ipc_always_exits_127() {
+        let out = helper(&["ebuild-ipc", "has_version", "/", "x"]);
+        assert_eq!(out.status.code(), Some(127), "{out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("portuale: ebuild-ipc is not supported (no IPC daemon)"),
+            "{err}"
+        );
+    }
+
+    /// `ping` prints the fixed token and exits 0.
+    #[test]
+    fn ping_prints_the_fixed_token() {
+        let out = helper(&["ping"]);
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            super::PING_TOKEN
+        );
+    }
+
+    /// `python` with anything but the probe program or a known script
+    /// exits 127 with the `python <argv>` message.
+    #[test]
+    fn python_with_an_unknown_program_exits_127() {
+        let out = helper(&["python", "-c", "print(1)"]);
+        assert_eq!(out.status.code(), Some(127), "{out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("portuale: no native helper for: python -c print(1)"),
+            "{err}"
+        );
     }
 
     /// Helper scripts route without any interpreter or checkout

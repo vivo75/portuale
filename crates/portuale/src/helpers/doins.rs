@@ -334,6 +334,16 @@ mod tests {
         crate::self_exe::built_portuale_bin()
     }
 
+    fn helper(args: &[&str]) -> std::process::Output {
+        Command::new(portuale_exe())
+            .args(["__helper", "python", "doins.py"])
+            .args(args)
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .env("PORTUALE_REAL_PYTHON", "/nonexistent/python")
+            .output()
+            .expect("portuale __helper spawns")
+    }
+
     // ---- oracle (one test per case dir) -------------------------------
 
     /// pmtest's `fixtures/helpers/doins/` (the oracle from running the

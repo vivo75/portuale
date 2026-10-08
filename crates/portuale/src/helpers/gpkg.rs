@@ -94,6 +94,16 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/gpkg")
     }
 
+    fn run_helper(args: &[&str]) -> std::process::Output {
+        Command::new(portuale_exe())
+            .args(["__helper", "python", "gpkg-helper.py"])
+            .args(args)
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .env("PORTUALE_REAL_PYTHON", "/nonexistent/python")
+            .output()
+            .expect("portuale __helper spawns")
+    }
+
     fn unsigned_verify() -> crate::binpkg::GpgVerify {
         crate::binpkg::GpgVerify {
             verify_signature: true,
