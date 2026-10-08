@@ -14,8 +14,9 @@
 // With no script or no interpreter, exit 127 with the unknown-helper
 // message, the same as an unknown name (D1). `exec` semantics keep the
 // exit status and stdio the interpreter's. `filter-bash-environment.py`
-// is natively ported (`helpers/filter_env.rs`, S3) and routes before
-// this table; each of S4-S7 deletes its own row; the last asserts the
+// is natively ported (`helpers/filter_env.rs`, S3) and so is
+// `xpak-helper.py` (`helpers/xpak.rs`, S5); both route before this
+// table; each of S4, S6, S7 deletes its own row; the last asserts the
 // table is empty.
 
 use std::ffi::OsString;
@@ -24,10 +25,10 @@ use std::path::{Path, PathBuf};
 
 /// Every script of 0.3 still awaiting its native port: each is
 /// re-executed until its own slice ports it (`filter-bash-environment.py`
-/// went native in S3 and routes before this table).
+/// went native in S3 and `xpak-helper.py` in S5; both route before this
+/// table).
 const TRANSITION_SCRIPTS: &[&str] = &[
     "gpkg-helper.py",
-    "xpak-helper.py",
     "doins.py",
     "dohtml.py",
     "xattr-helper.py",
@@ -60,6 +61,14 @@ pub(crate) fn run(argv: &[OsString]) -> i32 {
         .find_map(|(i, arg)| (basename(arg) == b"filter-bash-environment.py").then_some((arg, i)))
     {
         return super::filter_env::run(script, &argv[index + 1..]);
+    }
+    // S5: `xpak-helper.py` is natively ported (`helpers/xpak.rs`).
+    if let Some((script, index)) = argv
+        .iter()
+        .enumerate()
+        .find_map(|(i, arg)| (basename(arg) == b"xpak-helper.py").then_some((arg, i)))
+    {
+        return super::xpak::run(script, &argv[index + 1..]);
     }
     // The first argument whose basename is a transition script.
     let found = argv.iter().enumerate().find_map(|(i, arg)| {

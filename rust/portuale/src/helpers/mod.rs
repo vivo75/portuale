@@ -17,6 +17,7 @@ mod chmod_lite;
 mod filter_env;
 mod locale;
 mod python;
+mod xpak;
 
 /// The fixed answer of the `ping` helper (D8: proves `$PORTUALE_BIN`
 /// reaches a phase as a working binary, never the libtest harness).

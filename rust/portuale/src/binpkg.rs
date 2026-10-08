@@ -862,25 +862,11 @@ pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>,
         .collect())
 }
 
-/// The raw bytes of one xpak-segment member (real `tbz2.getfile(name)`),
-/// or `None` when the binpkg doesn't carry it. Used for the two
-/// non-scalar members `read_xpak_metadata` can only return lossily: the
-/// saved `environment.bz2` (needed verbatim so it can be `bunzip2`'d
-/// into `${T}/environment` for a real `pkg_preinst`/`pkg_postinst`) and
-/// the `<pf>.ebuild` source. Reads only the bounded `infosize + 8` tail.
-fn read_xpak_member_raw(binpkg_path: &Path, want: &str) -> Result<Option<Vec<u8>>, BinpkgError> {
-    let seg = read_xpak_segment(binpkg_path)?;
-    Ok(parse_xpak_members(&seg)?
-        .into_iter()
-        .find(|(key, _)| key == want)
-        .map(|(_, bytes)| bytes.to_vec()))
-}
-
 /// The `"XPAKPACK" … "XPAKSTOP"` segment bytes (real `tbz2.scan`): read
 /// the last 16 bytes (`"XPAKSTOP" be32(infosize) "STOP"`), then the
 /// `infosize + 8` byte segment they point back to. Only this bounded
 /// tail of the file is ever touched.
-fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, BinpkgError> {
+pub(crate) fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, BinpkgError> {
     use std::io::{Read, Seek, SeekFrom};
 
     // Every xpak read error is Fatal: real's `tbz2.scan()` swallows the
@@ -931,7 +917,7 @@ fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, BinpkgError> {
 /// `while startpos + 8 < len` over `be32(namelen) name be32(datapos)
 /// be32(datalen)` records into `<data>`). Returns every member as
 /// `(name, &data bytes)`, borrowing from `seg`.
-fn parse_xpak_members(seg: &[u8]) -> Result<Vec<(String, &[u8])>, BinpkgError> {
+pub(crate) fn parse_xpak_members(seg: &[u8]) -> Result<Vec<(String, &[u8])>, BinpkgError> {
     if seg.len() < 16 || &seg[0..8] != b"XPAKPACK" {
         return Err(BinpkgError::Fatal(
             "not an xpak binary package (no XPAKPACK header)".to_string(),
@@ -1301,23 +1287,46 @@ pub fn extract_binpkg(
         return Ok(());
     }
 
-    // xpak (`.tbz2`/`.xpak`): the image tarball prefix, then the XPAK
-    // trailer's scalar segments + the two raw members.
+    // xpak (`.tbz2`/`.xpak`): the image tarball prefix, then real
+    // `bintree.dbapi.unpack_metadata` -> `tbz2.unpackinfo`
+    // (`xpak.py:486-524`): every XPAK member written VERBATIM. It is not a
+    // scalar parse plus reserialize. That turned an empty `DEBUGBUILD`
+    // into `"\n"` and trimmed the trailing space real keeps on the last
+    // `NEEDED` line (L2 xpak control, #326 S5), the same bug the gpkg
+    // branch above fixed.
     extract_xpak_image(binpkg_path, image_dest)?;
-    let metadata = read_xpak_metadata(binpkg_path)?;
-    for (key, value) in &metadata {
-        if key == "environment.bz2" || key.ends_with(".ebuild") {
-            if let Some(bytes) = read_xpak_member_raw(binpkg_path, key)? {
-                fs::write(build_info_dest.join(key), bytes)
-                    .map_err(|e| format!("{}: {e}", build_info_dest.join(key).display()))?;
-            }
+    let seg = read_xpak_segment(binpkg_path)?;
+    for (name, bytes) in parse_xpak_members(&seg)? {
+        let Some(dest) = xpak_member_dest(build_info_dest, &name) else {
             continue;
+        };
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        let dest = build_info_dest.join(key);
-        fs::write(&dest, format!("{}\n", value.trim()))
-            .map_err(|e| format!("{}: {e}", dest.display()))?;
+        fs::write(&dest, bytes).map_err(|e| format!("{}: {e}", dest.display()))?;
     }
     Ok(())
+}
+
+/// Real `unpackinfo`'s target path for one member: the name with
+/// leading `/` stripped, joined under `dest` and normalized. A name
+/// whose `..` components climb out of `dest` is skipped (`None`), as
+/// real's `if not filename.startswith(mydest): continue` does.
+fn xpak_member_dest(dest: &Path, name: &str) -> Option<PathBuf> {
+    let mut parts: Vec<&str> = Vec::new();
+    for comp in name.trim_start_matches('/').split('/') {
+        match comp {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            c => parts.push(c),
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.iter().fold(dest.to_path_buf(), |p, c| p.join(c)))
 }
 
 /// `#58` K2: the metadata half of `extract_gpkg_member` -- real
@@ -2845,6 +2854,51 @@ mod tests {
                 .unwrap()
                 .contains("EAPI=8")
         );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// #326 S5 (L2 xpak control): real `tbz2.unpackinfo` writes every
+    /// XPAK member verbatim. An empty `DEBUGBUILD` stays empty, and the
+    /// trailing space real's `NEEDED` keeps survives. A name that climbs
+    /// out with `..` is skipped, a leading `/` is stripped, and a
+    /// `sub/x` member gets its directory (`xpak.py:486-524`).
+    #[test]
+    fn extract_binpkg_writes_xpak_members_verbatim_like_real_unpackinfo() {
+        let real = fs::read(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
+        let tmp = TempDir::new("binpkg-xpak-verbatim").keep();
+        // The image payload ends where the trailer's `infosize + 8` starts.
+        let n = real.len();
+        let infosize = u32::from_be_bytes(real[n - 8..n - 4].try_into().unwrap()) as usize;
+        let prefix = &real[..n - infosize - 8];
+        let bytes = make_xpak_binpkg(
+            prefix,
+            &[
+                ("DEBUGBUILD", b""),
+                ("NEEDED", b"/usr/bin/x libc.so.6 \n"),
+                ("SLOT", b"0"),
+                ("/abs", b"a"),
+                ("sub/x", b"s"),
+                ("../escape", b"e"),
+            ],
+        );
+        let pkg = tmp.join("pkg.tbz2");
+        fs::write(&pkg, bytes).unwrap();
+        let image = tmp.join("image");
+        let bi = tmp.join("bi");
+        extract_binpkg(&pkg, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
+        assert_eq!(fs::read(bi.join("DEBUGBUILD")).unwrap(), b"");
+        assert_eq!(
+            fs::read(bi.join("NEEDED")).unwrap(),
+            b"/usr/bin/x libc.so.6 \n"
+        );
+        assert_eq!(fs::read(bi.join("SLOT")).unwrap(), b"0");
+        assert_eq!(fs::read(bi.join("abs")).unwrap(), b"a");
+        assert_eq!(fs::read(bi.join("sub/x")).unwrap(), b"s");
+        assert!(
+            !tmp.join("escape").exists(),
+            "`..` must not escape build-info"
+        );
+        assert!(image.join("usr/share/packagepkg/hello.txt").is_file());
         let _ = fs::remove_dir_all(&tmp);
     }
 
