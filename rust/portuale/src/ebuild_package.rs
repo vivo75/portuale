@@ -1309,7 +1309,6 @@ fn invoke_dyn_package(
     build_id: Option<u64>,
 ) -> Result<i32, String> {
     let binpkg_format = options.binpkg_format.as_str();
-    let repo_lib_path = ebuild_phases::portage_checkout().join("lib");
     let mut extra_env = vec![
         ("PKGDIR".to_string(), options.pkgdir.display().to_string()),
         (
@@ -1317,18 +1316,17 @@ fn invoke_dyn_package(
             binpkg_path.display().to_string(),
         ),
         ("BINPKG_FORMAT".to_string(), binpkg_format.to_string()),
-        // Real `bin/misc-functions.sh`'s own `xpak-helper.py`/
-        // `gpkg-helper.py` invocation prefers `PORTAGE_PYTHONPATH` over
-        // `PORTAGE_PYM_PATH` (which portuale deliberately leaves unset
-        // -- see `ebuild_phases`'s own module doc comment) -- set
-        // directly so the real, unmodified helper subprocess imports
-        // `portage` from *this* checkout, not whatever else might be
-        // system-installed.
-        (
-            "PORTAGE_PYTHONPATH".to_string(),
-            repo_lib_path.display().to_string(),
-        ),
     ];
+    // Real `bin/misc-functions.sh`'s own `xpak-helper.py`/`gpkg-helper.py`
+    // invocation prefers `PORTAGE_PYTHONPATH` over `PORTAGE_PYM_PATH`
+    // (`PYTHONPATH=${PORTAGE_PYTHONPATH:-${PORTAGE_PYM_PATH}}`) -- set
+    // directly so the real, unmodified helper subprocess imports `portage`
+    // from *this* checkout, not whatever else might be system-installed.
+    // Without a checkout nothing is pushed (`pythonpath_value`).
+    let checkout = ebuild_phases::portage_checkout();
+    if let Some(pythonpath) = ebuild_phases::pythonpath_value(&checkout) {
+        extra_env.push(("PORTAGE_PYTHONPATH".to_string(), pythonpath));
+    }
     if let Some(id) = build_id {
         extra_env.push(("BUILD_ID".to_string(), id.to_string()));
     }

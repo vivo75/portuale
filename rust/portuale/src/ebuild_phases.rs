@@ -151,8 +151,11 @@
 //       works non-root -- an unavailable user namespace degrades with a
 //       warning (real "Unable to unshare").
 //   - `PORTAGE_PYM_PATH` (real portage's own Python-package import path)
-//     is set to `<checkout>/lib` when the portage checkout exists (see
-//     `phase_env_vars`'s own comment). It was originally left unset --
+//     is always set (see `phase_env_vars`'s own comment and
+//     `pym_path_value`): `<checkout>/lib` when the portage checkout
+//     exists, else `/` so `__dyn_clean`'s unconditional
+//     `cd "${PORTAGE_PYM_PATH}"` still has a valid cwd. It was originally
+//     left unset --
 //     `create_directories` pre-creates `${PORTAGE_BUILDDIR}/empty` so
 //     `bin/ebuild.sh`'s own "safe cwd" logic (EAPI 8's own comment:
 //     "requires us to use an empty directory here") takes *that* branch
@@ -623,10 +626,9 @@ fn create_directories(env: &Environment) -> Result<(), String> {
         // as soon as it's sourced, EAPI 8's own comment: "requires us to
         // use an empty directory here"): `cd`s into `${PORTAGE_BUILDDIR}/
         // empty` if it exists, falling back to `${PORTAGE_PYM_PATH}`
-        // (unset in portuale -- no Python-package-path concept at all)
-        // otherwise, `die`-ing if neither works. Always pre-created here
-        // so that fallback path, which portuale can't satisfy, is
-        // never reached at all.
+        // (always set in portuale, see `pym_path_value`) otherwise,
+        // `die`-ing if neither works. Always pre-created here
+        // so that fallback path is never reached at all.
         env.portage_builddir.join("empty"),
         // Real `prepare_build_dirs` creates `${T}/logging`;
         // `bin/isolated-functions.sh::__elog_base` silently drops every
@@ -684,6 +686,49 @@ pub(crate) fn portage_checkout() -> PathBuf {
         return PathBuf::from(p);
     }
     repo_root().join("3rdparty/portage")
+}
+
+/// Value for `PORTAGE_PYM_PATH` given a Portage checkout dir: `<checkout>/lib`
+/// when `<checkout>/lib/portage` is a dir, else `/`.
+///
+/// Real Portage always sets the variable (never empty): it is the realpath of
+/// its own `lib/` (`const.py:102`,
+/// `PORTAGE_PYM_PATH = os.path.realpath(os.path.join(__file__, "../.."))`),
+/// exported through the config as a constant key
+/// (`package/ebuild/config.py:3157`, `if mykey == "PORTAGE_PYM_PATH": return
+/// portage._pym_path`). The shell dies on a non-existent value: real
+/// `__dyn_clean` (`bin/phase-functions.sh:316`, `cd "${PORTAGE_PYM_PATH}" ||
+/// die "PORTAGE_PYM_PATH does not exist: ..."` at `:331-332`) runs that `cd`
+/// unconditionally (a cwd outside the build dir, since the dir is removed),
+/// and `bin/ebuild.sh:211-212` has the same `die`. `/` is always a valid cwd.
+/// Without a checkout no `.py` helper that imports portage can run yet
+/// (#326 D1/Q7).
+pub(crate) fn pym_path_value(checkout: &Path) -> String {
+    let lib = checkout.join("lib");
+    if lib.join("portage").is_dir() {
+        lib.display().to_string()
+    } else {
+        "/".to_string()
+    }
+}
+
+/// Value for `PORTAGE_PYTHONPATH` given a Portage checkout dir:
+/// `Some("<checkout>/lib")` under the same condition as [`pym_path_value`],
+/// else `None` (the caller pushes nothing).
+///
+/// Real `bin/misc-functions.sh:600,621` prefers `PORTAGE_PYTHONPATH` over
+/// `PORTAGE_PYM_PATH` (`PYTHONPATH=${PORTAGE_PYTHONPATH:-${PORTAGE_PYM_PATH}}`)
+/// for the `gpkg-helper.py`/`xpak-helper.py` invocation, so with a checkout
+/// the real helper imports `portage` from this checkout. Without a checkout
+/// no `.py` helper that imports portage can run yet (#326 D1/Q7), so no
+/// entry is pushed at all.
+pub(crate) fn pythonpath_value(checkout: &Path) -> Option<String> {
+    let lib = checkout.join("lib");
+    if lib.join("portage").is_dir() {
+        Some(lib.display().to_string())
+    } else {
+        None
+    }
 }
 
 /// The text of Portage's `cnf/sets/portage.conf` (the built-in package-set
@@ -3308,15 +3353,13 @@ fn phase_env_vars(
     // cwd choice still prefers `${PORTAGE_BUILDDIR}/empty` (pre-created
     // by `create_directories`), so setting this does not regress the
     // "safe cwd for bug #469338" branch it was originally left unset for.
-    // Only set when the checkout (hence a real `lib/portage`) exists --
-    // with no checkout the `.py` helpers can't run regardless.
-    let pym_path = portage_checkout().join("lib");
-    if pym_path.join("portage").is_dir() {
-        vars.push((
-            "PORTAGE_PYM_PATH".to_string(),
-            pym_path.display().to_string(),
-        ));
-    }
+    // Always set: `<checkout>/lib` with a checkout (see `pym_path_value`),
+    // else `/` so `__dyn_clean`'s unconditional
+    // `cd "${PORTAGE_PYM_PATH}"` still has a valid cwd.
+    vars.push((
+        "PORTAGE_PYM_PATH".to_string(),
+        pym_path_value(&portage_checkout()),
+    ));
 
     // The phase process is spawned with a cleared environment, so the
     // database selection `mrg` exported for its children
@@ -5831,6 +5874,92 @@ mod tests {
             restrict_and_properties(&env, &std::collections::HashSet::new()),
             (String::new(), String::new())
         );
+    }
+
+    /// Backlog #326 S1: the `PORTAGE_PYM_PATH` / `PORTAGE_PYTHONPATH`
+    /// decision factored out of `phase_env_vars` / `invoke_dyn_package` --
+    /// a checkout whose `lib/portage` is a dir yields that `lib`, anything
+    /// else yields the `/` fallback (resp. no `PORTAGE_PYTHONPATH`). No
+    /// process-env mutation: the checkout path is passed in directly.
+    #[test]
+    fn pym_path_and_pythonpath_values_follow_the_checkout() {
+        let tmp = TempDir::new("ebuild-phases-test-pym-path-values");
+        // A checkout with `lib/portage/` -> both return the lib path.
+        let with = tmp.join("with");
+        std::fs::create_dir_all(with.join("lib/portage")).unwrap();
+        let lib = with.join("lib").display().to_string();
+        assert_eq!(pym_path_value(&with), lib);
+        assert_eq!(pythonpath_value(&with), Some(lib));
+        // A temp dir without it -> "/" and None.
+        let without = tmp.join("without");
+        std::fs::create_dir_all(&without).unwrap();
+        assert_eq!(pym_path_value(&without), "/");
+        assert_eq!(pythonpath_value(&without), None);
+        // A dir with `lib/` but no `lib/portage` -> "/" and None.
+        let bare_lib = tmp.join("bare-lib");
+        std::fs::create_dir_all(bare_lib.join("lib")).unwrap();
+        assert_eq!(pym_path_value(&bare_lib), "/");
+        assert_eq!(pythonpath_value(&bare_lib), None);
+        // A nonexistent path -> "/" and None.
+        let gone = tmp.join("gone");
+        assert!(!gone.exists());
+        assert_eq!(pym_path_value(&gone), "/");
+        assert_eq!(pythonpath_value(&gone), None);
+    }
+
+    /// Backlog #326 S1, env-level: with no Portage checkout, a real phase
+    /// still runs without any `PORTAGE_PYM_PATH` complaint -- without
+    /// `PORTAGE_PYM_PATH does not exist` or `null directory`.
+    ///
+    /// `clean` would be the obvious probe (real `__dyn_clean`,
+    /// `bin/phase-functions.sh:316`, `cd`s into it unconditionally at
+    /// `:331-332` upstream / `:401-402` vendored), but standalone
+    /// `portuale ebuild … clean` is a recognized-but-unimplemented dry-run
+    /// stub (`ebuild.rs`'s own test names it) that never executes a phase.
+    /// `setup` is implemented and reaches the same variable twice: real
+    /// `bin/ebuild.sh`'s own top-level cwd choice, and the end-of-phase
+    /// env-save `cd "${PORTAGE_PYM_PATH}"` (vendored
+    /// `bin/phase-functions.sh:1260`, upstream `:1189`).
+    #[test]
+    fn ebuild_setup_without_a_checkout_has_no_pym_path_complaint() {
+        // A real subprocess invocation, not `std::env::set_var` (see
+        // `features_test_passthrough_actually_runs_src_test`): each run
+        // gets its own environment. `PORTUALE_BIN_DIR` is left unset so
+        // the normal runtime (build tree or embedded) is used.
+        let tmp = TempDir::new("ebuild-phases-test-setup-without-checkout").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/setuppkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("setuppkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild,
+            "EAPI=8\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nS=\"${WORKDIR}\"\n",
+        )
+        .unwrap();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let out = std::process::Command::new(portuale_exe())
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("HOME", std::env::var("HOME").unwrap_or_default())
+            .env("ROOT", &root)
+            .env("PORTAGE_TMPDIR", &portage_tmpdir)
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .args(["ebuild", ebuild.to_str().unwrap(), "setup"])
+            .output()
+            .expect("portuale ebuild spawns");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "ebuild setup failed: {all}");
+        for bad in ["PORTAGE_PYM_PATH does not exist", "null directory"] {
+            assert!(!all.contains(bad), "{bad:?} in {all}");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
