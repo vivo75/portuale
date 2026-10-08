@@ -414,6 +414,126 @@ fn portage_python_is_the_shim_unless_real_mode() {
     assert!(all.lines().any(|l| l == "helpers=real"), "{all}");
 }
 
+/// A relocated run uses only native or vendored helpers for `unpack`
+/// and `docompress`, with no checkout present.
+#[test]
+fn relocated_unpack_and_docompress_use_only_native_or_vendored_helpers() {
+    let tmp = TempDir::new("ebuild-phases-test-relocated-helpers").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let bin = tmp.join("rt/bin");
+    crate::embedded_runtime::extract("bin", &bin).unwrap();
+    let pkg_dir = tmp.join("pkg/dev-libs/relocpkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let ebuild = pkg_dir.join("relocpkg-1.0.ebuild");
+    // No `dodoc`/`doins`: those route through `doins.py` with no native
+    // port yet; `cp` keeps this probe on the unpack/docompress helpers.
+    std::fs::write(
+        &ebuild,
+        "EAPI=8\nDESCRIPTION=\"test\"\nSLOT=\"0\"\nS=\"${WORKDIR}\"\n\
+         src_unpack() {\n\
+         \tlocal t=\"${T}/odd-src\"\n\
+         \tmkdir -p \"${t}/sub0700\" \"${t}/sub0775\" || die\n\
+         \tprintf 'mode0600\\n' > \"${t}/file0600\" || die\n\
+         \tchmod 0600 \"${t}/file0600\" || die\n\
+         \tprintf '#!/bin/sh\\necho hi\\n' > \"${t}/file0777\" || die\n\
+         \tchmod 0777 \"${t}/file0777\" || die\n\
+         \tchmod 0700 \"${t}/sub0700\" || die\n\
+         \tchmod 0775 \"${t}/sub0775\" || die\n\
+         \tprintf 'nested\\n' > \"${t}/sub0700/nested0640\" || die\n\
+         \tchmod 0640 \"${t}/sub0700/nested0640\" || die\n\
+         \ttar -cf \"${T}/odd.tar\" -C \"${t}\" file0600 file0777 sub0700 sub0775 || die\n\
+         \tcd \"${WORKDIR}\" || die\n\
+         \tunpack \"${T}/odd.tar\"\n\
+         \tstat -c '%a %n' file0600 file0777 sub0700 sub0700/nested0640 sub0775 \\\n\
+         \t\t> \"${T}/modes.txt\" || die\n\
+         }\n\
+         src_install() {\n\
+         \tlocal src=\"${WORKDIR}/docsrc\"\n\
+         \tmkdir -p \"${src}\" || die\n\
+         \tlocal i=1\n\
+         \twhile [[ ${i} -le 80 ]]; do\n\
+         \t\tprintf 'payload line %04d abcdefghijklmnopqrstuvwxyz\\n' \"${i}\" \\\n\
+         \t\t\t>> \"${src}/BIG-doc.txt\" || die\n\
+         \t\ti=$(( i + 1 ))\n\
+         \tdone\n\
+         \tmkdir -p \"${ED}/usr/share/doc/${PF}\" || die\n\
+         \tcp \"${src}/BIG-doc.txt\" \"${ED}/usr/share/doc/${PF}/\" || die\n\
+         \tdocompress /usr/share/doc/${PF}\n\
+         }\n",
+    )
+    .unwrap();
+    let portuale_bin = crate::self_exe::built_portuale_bin();
+    let portage_tmpdir = tmp.join("tmp");
+    let run = |phase: &str| {
+        std::process::Command::new(&portuale_bin)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", std::env::var("HOME").unwrap_or_default())
+            .env("ROOT", tmp.join("root"))
+            .env("PORTAGE_TMPDIR", &portage_tmpdir)
+            .env("PORTAGE_COMPRESS", "bzip2")
+            .env("FEATURES", "binpkg-docompress")
+            .env(crate::ebuild_phases::BIN_DIR_VAR, &bin)
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .args(["ebuild", ebuild.to_str().unwrap(), phase])
+            .output()
+            .expect("portuale ebuild spawns")
+    };
+    fn find(root: &Path, name: &str) -> PathBuf {
+        let mut hits = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                if e.file_name().to_string_lossy() == name {
+                    hits.push(e.path());
+                } else if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    stack.push(e.path());
+                }
+            }
+        }
+        assert_eq!(hits.len(), 1, "expected one {name}: {hits:?}");
+        hits.pop().unwrap()
+    }
+    let out = run("unpack");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    // A missing `chmod-lite` is silent in Portage (`find:` on stderr,
+    // exit unexamined) and leaves odd modes: both halves are pinned.
+    assert!(!all.contains("No such file"), "{all}");
+    let modes = std::fs::read_to_string(find(&portage_tmpdir, "modes.txt")).unwrap();
+    assert_eq!(
+        modes.lines().collect::<Vec<_>>(),
+        [
+            "644 file0600",
+            "755 file0777",
+            "755 sub0700",
+            "644 sub0700/nested0640",
+            "755 sub0775",
+        ],
+        "{modes}"
+    );
+    let out = run("install");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    // A missing `ecompress-file` is fatal in Portage (`__helpers_die`);
+    // pin both the absence of its error and the compressed result.
+    assert!(!all.contains("No such file"), "{all}");
+    assert!(!all.contains("ecompress-file"), "{all}");
+    let bz2 = find(&portage_tmpdir, "BIG-doc.txt.bz2");
+    assert!(!bz2.parent().unwrap().join("BIG-doc.txt").exists());
+}
+
 /// With no checkout a phase still runs with no `PORTAGE_PYM_PATH`
 /// complaint; `setup` reaches the variable twice, so it is the probe.
 #[test]
