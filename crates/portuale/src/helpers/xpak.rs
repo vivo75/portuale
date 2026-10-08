@@ -81,4 +81,22 @@ mod tests {
     fn fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/xpak")
     }
+
+    /// Re-run package tests with no checkout and no Python, so only the
+    /// native `xpak-helper.py` can pack the metadata.
+    fn rerun_without_checkout(test: &str) {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .env("PORTUALE_REAL_PYTHON", "/nonexistent/python")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{test}: {text}");
+        assert!(text.contains("1 passed"), "{test} did not run: {text}");
+    }
 }

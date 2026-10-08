@@ -31,6 +31,21 @@ mod dispatcher_tests {
         crate::self_exe::built_portuale_bin()
     }
 
+    /// Helper scripts route without any interpreter or checkout
+    /// (`xattr-helper.py --help` answers natively even with both disabled).
+    #[test]
+    fn python_xattr_helper_routes_natively_without_interpreter_or_checkout() {
+        let out = std::process::Command::new(portuale_exe())
+            .args(["__helper", "python", "xattr-helper.py", "--help"])
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .env("PORTUALE_REAL_PYTHON", "/nonexistent")
+            .output()
+            .expect("portuale __helper spawns");
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.starts_with("usage: xattr-helper.py"), "{stdout}");
+    }
+
     /// `-c` with the exact QA probe program answers natively
     /// (the full locale table is `locale::table_tests`).
     #[test]

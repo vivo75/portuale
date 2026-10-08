@@ -105,6 +105,30 @@ fn the_scratch_base_skips_noexec_directories() {
     assert!(is_noexec(Path::new("/nonexistent-dir-xyz")));
 }
 
+/// A checkout whose `lib/portage` is a dir yields that `lib`, anything
+/// else yields the `/` fallback (resp. no `PORTAGE_PYTHONPATH`).
+#[test]
+fn pym_path_and_pythonpath_values_follow_the_checkout() {
+    let tmp = TempDir::new("ebuild-phases-test-pym-path-values");
+    let with = tmp.join("with");
+    std::fs::create_dir_all(with.join("lib/portage")).unwrap();
+    let lib = with.join("lib").display().to_string();
+    assert_eq!(pym_path_value(&with), lib);
+    assert_eq!(pythonpath_value(&with), Some(lib));
+    let without = tmp.join("without");
+    std::fs::create_dir_all(&without).unwrap();
+    assert_eq!(pym_path_value(&without), "/");
+    assert_eq!(pythonpath_value(&without), None);
+    let bare_lib = tmp.join("bare-lib");
+    std::fs::create_dir_all(bare_lib.join("lib")).unwrap();
+    assert_eq!(pym_path_value(&bare_lib), "/");
+    assert_eq!(pythonpath_value(&bare_lib), None);
+    let gone = tmp.join("gone");
+    assert!(!gone.exists());
+    assert_eq!(pym_path_value(&gone), "/");
+    assert_eq!(pythonpath_value(&gone), None);
+}
+
 /// `extra_env` `FEATURES` is exported last so it wins over the
 /// process-env base.
 #[test]
