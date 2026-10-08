@@ -160,3 +160,10 @@ vdb-fuse = ["dep:fuser"]
 # hasher rather than pre-baked constants. Already vendored
 # (portage-fetch depends on it at this version) -- no new fetch.
 blake2 = "0.10"
+# Test-only (#326 S3): decompress the `fixtures/helpers/filter-env`
+# `in.bz2`/`out.bz2` oracle sides in-process. Same zero-C-linkage
+# discipline as portage-repo's own `bzip2` dependency (0.6's default
+# backend is trifectatechfoundation's pure-Rust libbz2-rs-sys; the C
+# `bzip2-sys` backend is opt-in and NOT enabled): keep
+# `grep -c bzip2-sys Cargo.lock` at 0 after any bump.
+bzip2 = "0.6"

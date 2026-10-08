@@ -1735,6 +1735,7 @@ dependencies = [
  "blake2",
  "brush-builtins",
  "brush-core",
+ "bzip2",
  "clap",
  "filetime",
  "flate2",

@@ -6,13 +6,15 @@
 // extraction, no atexit), loads no config, and writes only its own
 // outputs (D7).
 //
-// Names: `python` (the D1 dispatcher with the transition table holding
-// every script of 0.3), `chmod-lite` (D2/D3), `ebuild-ipc` (always 127,
-// D6), `ping` (a fixed token, D8). Anything unknown exits 127 with
-// `portuale: no native helper for: <argv>`, so an upstream re-sync that
-// adds a Python call fails loudly (D1).
+// Names: `python` (the D1 dispatcher: the native
+// `filter-bash-environment` (S3) plus the transition table holding
+// every not-yet-ported script of 0.3), `chmod-lite` (D2/D3),
+// `ebuild-ipc` (always 127, D6), `ping` (a fixed token, D8). Anything
+// unknown exits 127 with `portuale: no native helper for: <argv>`, so
+// an upstream re-sync that adds a Python call fails loudly (D1).
 
 mod chmod_lite;
+mod filter_env;
 mod locale;
 mod python;
 

@@ -8,22 +8,24 @@
 // Transition table: a script with no native port yet is re-executed with
 // the real interpreter (`$PORTUALE_REAL_PYTHON`, else `/usr/bin/python`)
 // with the original argv, except that the script path is resolved per
-// Q7: the original path when it exists (the vendored
-// `filter-bash-environment.py`); else `<checkout>/bin/<name>` when that
-// exists (`<checkout>/lib` on `PYTHONPATH` when not already set); else
-// the first `/usr/lib/portage/python*/<name>` that exists. With no
-// script or no interpreter, exit 127 with the unknown-helper message,
-// the same as an unknown name (D1). `exec` semantics keep the exit
-// status and stdio the interpreter's. Each of S3-S7 deletes its own row;
-// the last asserts the table is empty.
+// Q7: the original path when it exists; else `<checkout>/bin/<name>`
+// when that exists (`<checkout>/lib` on `PYTHONPATH` when not already
+// set); else the first `/usr/lib/portage/python*/<name>` that exists.
+// With no script or no interpreter, exit 127 with the unknown-helper
+// message, the same as an unknown name (D1). `exec` semantics keep the
+// exit status and stdio the interpreter's. `filter-bash-environment.py`
+// is natively ported (`helpers/filter_env.rs`, S3) and routes before
+// this table; each of S4-S7 deletes its own row; the last asserts the
+// table is empty.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-/// Every script of 0.3: each is re-executed until its own slice ports it.
+/// Every script of 0.3 still awaiting its native port: each is
+/// re-executed until its own slice ports it (`filter-bash-environment.py`
+/// went native in S3 and routes before this table).
 const TRANSITION_SCRIPTS: &[&str] = &[
-    "filter-bash-environment.py",
     "gpkg-helper.py",
     "xpak-helper.py",
     "doins.py",
@@ -47,6 +49,17 @@ pub(crate) fn run(argv: &[OsString]) -> i32 {
     {
         super::locale::print_answer();
         return 0;
+    }
+    // S3: `filter-bash-environment.py` is natively ported
+    // (`helpers/filter_env.rs`): the script element keeps real's
+    // `sys.argv[0]` role (the usage basename) and everything after it
+    // is the filter's argv (real's `sys.argv[1:]`).
+    if let Some((script, index)) = argv
+        .iter()
+        .enumerate()
+        .find_map(|(i, arg)| (basename(arg) == b"filter-bash-environment.py").then_some((arg, i)))
+    {
+        return super::filter_env::run(script, &argv[index + 1..]);
     }
     // The first argument whose basename is a transition script.
     let found = argv.iter().enumerate().find_map(|(i, arg)| {
