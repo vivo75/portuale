@@ -20,6 +20,32 @@ use std::process::{ChildStdin, Command, Stdio};
 use blake2::Blake2b512;
 use sha2::{Digest, Sha512};
 
+const DESCRIPTION: &str = "Perform metadata operations on a binary package.";
+
+// ---------------------------------------------------------------------
+// Entry point and argv
+// ---------------------------------------------------------------------
+
+fn raw(arg: &OsString) -> &[u8] {
+    arg.as_os_str().as_bytes()
+}
+
+fn err_bytes(parts: &[&[u8]]) {
+    let mut buf = Vec::new();
+    for p in parts {
+        buf.extend_from_slice(p);
+    }
+    let _ = std::io::stderr().write_all(&buf);
+}
+
+fn basename_bytes(arg: &OsString) -> &[u8] {
+    let b = raw(arg);
+    match b.iter().rposition(|c| *c == b'/') {
+        Some(i) => &b[i + 1..],
+        None => b,
+    }
+}
+
 // ---------------------------------------------------------------------
 // tarfile.TarInfo.tobuf
 // ---------------------------------------------------------------------
@@ -94,6 +120,32 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/gpkg")
     }
 
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            let dest = to.join(e.file_name());
+            if e.file_type().unwrap().is_symlink() {
+                std::os::unix::fs::symlink(std::fs::read_link(e.path()).unwrap(), dest).unwrap();
+            } else if e.file_type().unwrap().is_dir() {
+                copy_tree(&e.path(), &dest);
+            } else {
+                std::fs::copy(e.path(), dest).unwrap();
+            }
+        }
+    }
+
+    macro_rules! oracle_case {
+        ($name:ident, $case:literal, [$($comp:literal),+]) => {
+            #[test]
+            fn $name() {
+                for comp in [$($comp),+] {
+                    check_oracle($case, comp);
+                }
+            }
+        };
+    }
+
     fn run_helper(args: &[&str]) -> std::process::Output {
         Command::new(portuale_exe())
             .args(["__helper", "python", "gpkg-helper.py"])
@@ -111,5 +163,46 @@ mod tests {
             base_command: crate::binpkg::DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string(),
             gpg_home: "/nonexistent-gnupg".to_string(),
         }
+    }
+
+    // ---- no checkout: the package scenarios as child test processes ----
+
+    /// Re-run an `ebuild_package` test with no checkout and no Python,
+    /// so only the native `gpkg-helper.py` can build the gpkg.
+    fn rerun_without_checkout(test: &str) {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .env("PORTUALE_REAL_PYTHON", "/nonexistent/python")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{test}: {text}");
+        assert!(text.contains("1 passed"), "{test} did not run: {text}");
+    }
+
+    #[test]
+    fn real_package_gpkg_works_without_the_checkout() {
+        rerun_without_checkout(
+            "ebuild_package::tests::real_package_with_gpkg_format_builds_a_real_gpkg_tar_this_pilots_reader_round_trips",
+        );
+    }
+
+    #[test]
+    fn real_multi_instance_gpkg_works_without_the_checkout() {
+        rerun_without_checkout(
+            "ebuild_package::tests::real_package_with_binpkg_multi_instance_writes_the_cat_pn_subdir_layout",
+        );
+    }
+
+    #[test]
+    fn quickpkg_from_vdb_gpkg_works_without_the_checkout() {
+        rerun_without_checkout(
+            "ebuild_package::tests::quickpkg_from_vdb_with_gpkg_format_builds_a_readable_gpkg",
+        );
     }
 }

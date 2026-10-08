@@ -19,6 +19,23 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------
+
+fn raw(arg: &OsString) -> &[u8] {
+    arg.as_os_str().as_bytes()
+}
+
+/// The raw basename of an argv element (bytes after the last `/`).
+fn argv_basename(arg: &OsString) -> &[u8] {
+    let b = raw(arg);
+    match b.iter().rposition(|c| *c == b'/') {
+        Some(i) => &b[i + 1..],
+        None => b,
+    }
+}
+
+// ---------------------------------------------------------------------
 // Python `repr()` helpers (pinned lines match Portage's byte for byte)
 // ---------------------------------------------------------------------
 
@@ -379,6 +396,15 @@ mod tests {
             }
         }
         out
+    }
+
+    macro_rules! oracle_case {
+        ($name:ident, $case:literal) => {
+            #[test]
+            fn $name() {
+                check_oracle($case);
+            }
+        };
     }
 
     // ---- end to end: a real package whose src_install uses doins ----

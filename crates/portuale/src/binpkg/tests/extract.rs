@@ -35,6 +35,57 @@ fn extract_binpkg_unpacks_an_xpak_image_and_build_info() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// XPAK members are written verbatim: empty stays empty, trailing
+/// spaces survive, `..` is skipped, a leading `/` is stripped, and
+/// `sub/x` gets its directory.
+// Portage: xpak.py, tbz2.unpackinfo
+#[test]
+fn extract_binpkg_writes_xpak_members_verbatim_like_portage_unpackinfo() {
+    let real = fs::read(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
+    let tmp = TempDir::new("binpkg-xpak-verbatim").keep();
+    // The image payload ends where the trailer's `infosize + 8` starts.
+    let n = real.len();
+    let infosize = u32::from_be_bytes(real[n - 8..n - 4].try_into().unwrap()) as usize;
+    let prefix = &real[..n - infosize - 8];
+    let bytes = make_xpak_binpkg(
+        prefix,
+        &[
+            ("DEBUGBUILD", b""),
+            ("NEEDED", b"/usr/bin/x libc.so.6 \n"),
+            ("SLOT", b"0"),
+            ("/abs", b"a"),
+            ("sub/x", b"s"),
+            ("../escape", b"e"),
+        ],
+    );
+    let pkg = tmp.join("pkg.tbz2");
+    fs::write(&pkg, bytes).unwrap();
+    let image = tmp.join("image");
+    let bi = tmp.join("bi");
+    extract_binpkg(
+        &pkg,
+        &image,
+        &bi,
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .expect("extract succeeds");
+    assert_eq!(fs::read(bi.join("DEBUGBUILD")).unwrap(), b"");
+    assert_eq!(
+        fs::read(bi.join("NEEDED")).unwrap(),
+        b"/usr/bin/x libc.so.6 \n"
+    );
+    assert_eq!(fs::read(bi.join("SLOT")).unwrap(), b"0");
+    assert_eq!(fs::read(bi.join("abs")).unwrap(), b"a");
+    assert_eq!(fs::read(bi.join("sub/x")).unwrap(), b"s");
+    assert!(
+        !tmp.join("escape").exists(),
+        "`..` must not escape build-info"
+    );
+    assert!(image.join("usr/share/packagepkg/hello.txt").is_file());
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn extract_binpkg_unpacks_a_real_gpkg_image_and_build_info() {
     let tmp = TempDir::new("binpkg-gpkg").keep();

@@ -20,6 +20,23 @@ use std::os::unix::ffi::OsStrExt;
 
 use super::doins::{copy_xattr, errno_line, xattr_get, xattr_list, xattr_set};
 
+// ---------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------
+
+fn raw(arg: &OsString) -> &[u8] {
+    arg.as_os_str().as_bytes()
+}
+
+/// The raw basename of an argv element (bytes after the last `/`).
+fn argv_basename(arg: &OsString) -> &[u8] {
+    let b = raw(arg);
+    match b.iter().rposition(|c| *c == b'/') {
+        Some(i) => &b[i + 1..],
+        None => b,
+    }
+}
+
 /// Read all of stdin as raw bytes.
 fn read_stdin() -> Vec<u8> {
     let mut buf = Vec::new();
