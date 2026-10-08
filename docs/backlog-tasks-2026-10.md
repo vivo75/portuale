@@ -98,6 +98,8 @@ live"). The Python mirror was removed 2026-09-15 —
 
 318. **OPEN (filed 2026-10-05, #305 plan S9, optional) — `emerge` selects the VDB backend.** Plan `02.305-vdb-backends.opus.md` S9.1: `emerge` reads a `make.conf` variable (`PORTUALE_VDB_BACKEND`); the beds stay on `files` and the conformance suite runs through `emerge`. Owner's call whether to do it.
 
+326. **OPEN (filed 2026-10-08, from a container `--buildpkg` run that died in `clean` with `PORTAGE_PYM_PATH does not exist: ''`) — portuale without Portage: every `import portage` / `${PORTAGE_PYTHON}` helper of the vendored runtime becomes native, locally and on `mrg` clients.** Helpers: `filter-bash-environment.py`, `gpkg-helper.py compress`, `xpak-helper.py recompose`, `doins.py`, `chmod-lite`, `xattr-helper.py`/`install.py`, the `90config-impl-decl` locale probe; `ecompress-file` (bash) is vendored; `ebuild-ipc` and `dohtml` are documented as unreachable. Remote clients get the server's own binary, installed and verified by SHA-256 under `/opt/bin` or `/usr/local/bin` and called by absolute path (owner, 2026-10-08). `lu-zero/portage-cli` is read as a reference only; real Portage stays the oracle. Plan: [`02.326-no-portage-runtime.opus.md`](02.326-no-portage-runtime.opus.md) (P0, S1–S9, Z). Branch `backlog/326` in both repos.
+
 ---
 
 ## Deliberate cuts — do NOT pick these
