@@ -202,6 +202,29 @@ mod tests {
         );
     }
 
+    /// #326 S2.2: the extracted shims and `ecompress-file` are executable
+    /// (the `bin/chmod-lite` call at the end of every unpack and the
+    /// `ecompress-file` call in `docompress` both exec them).
+    #[test]
+    fn the_extracted_portuale_owned_helpers_are_executable() {
+        let tmp = TempDir::new("embedded-runtime-helpers-exec");
+        let dest = tmp.join("rt/bin");
+        extract("bin", &dest).unwrap();
+        for name in [
+            "portuale-python",
+            "chmod-lite",
+            "ebuild-ipc",
+            "ecompress-file",
+            "portageq-wrapper",
+        ] {
+            let mode = std::fs::metadata(dest.join(name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0, "{name} is not executable");
+        }
+    }
+
     /// S2.5 in-process half: a phase-running remote merge (the hook-ordering
     /// fixture: `pkg_setup`, `pkg_preinst`, `pkg_postinst` on the client) driven
     /// by the binary with `PORTUALE_BIN_DIR` at an *extracted* copy of the

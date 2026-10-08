@@ -18,7 +18,11 @@ MANIFEST
 rust/target
 .pytest_cache/
 .claude/settings.local.json
-helpers
+# Local scratch (owner's untracked notes/scripts), not source: scoped to
+# these paths so the `rust/portuale/src/helpers` module (#326 S2) stays
+# tracked (a bare `helpers` would match it too).
+/helpers
+.claude/helpers
 
 # ...but the vendored Portage helpers named `*.so` are shell scripts /
 # symlinks (dolib.so, newlib.so), not compiled objects.

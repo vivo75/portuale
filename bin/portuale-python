@@ -1,0 +1,6 @@
+#!/bin/bash
+# portuale (#326 D1): PORTAGE_PYTHON points here in native mode; the real
+# call sites stay byte-for-byte upstream and this shim execs the native
+# `portuale __helper python` dispatcher (which ports each script in turn
+# and re-execs the real interpreter for the rest, D1 transition table).
+exec "${PORTUALE_BIN:?portuale: PORTUALE_BIN unset}" __helper python "$@"

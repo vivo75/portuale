@@ -749,19 +749,29 @@ pub(crate) fn package_sets_conf() -> Option<String> {
 ///
 /// `bin/` (repo root) is a tracked, vendored copy of upstream Portage's
 /// own `bin/` runtime -- all the `.sh` (`ebuild.sh` and its whole source
-/// closure), every `ebuild-helpers/` script, `estrip`/`ecompress`, the
-/// `*-qa-check.d/` sets and the stdlib-only `filter-bash-environment.py`
-/// -- so `emerge` runs on a host with no Portage installed. Only the
-/// `.py` helpers that `import portage` (`doins.py`, `xpak-helper.py`,
-/// `gpkg-helper.py`, `dohtml.py`, `chmod-lite`, `xattr-helper.py`) are
-/// not vendored; they need `lib/portage` and are still read from the
-/// `portage_checkout()` tree when it exists.
+/// closure), every `ebuild-helpers/` script, `estrip`/`ecompress`,
+/// `ecompress-file`, the `*-qa-check.d/` sets and the stdlib-only
+/// `filter-bash-environment.py` -- so `emerge` runs on a host with no
+/// Portage installed. Portuale-owned shims live next to them:
+/// `portuale-python` (`PORTAGE_PYTHON` in native mode, #326 D1),
+/// `chmod-lite` (the native helper, or the upstream script in `real`
+/// mode, #326 D2), `ebuild-ipc` (always 127, #326 D6) and
+/// `portageq-wrapper` (the native `portuale portageq`, feat#157 S6).
+/// See `bin/README.md`'s portuale-owned list: a re-sync must not
+/// overwrite them.
 ///
-/// So: when the checkout exists, `PORTAGE_BIN_PATH` is a symlink overlay
-/// -- vendored `bin/` entries win, the not-vendored `.py` helpers fall
-/// through to `<checkout>/bin/`. With no checkout it's the vendored
-/// `bin/` directly (the `.py`-helper phases then degrade the same way a
-/// missing binary already does).
+/// The `.py` helpers that `import portage` (`doins.py`, `xpak-helper.py`,
+/// `gpkg-helper.py`, `dohtml.py`, `xattr-helper.py`, `install.py`) are
+/// not vendored and are reached only through the D1 transition table,
+/// which resolves them from an installed Portage (Q7).
+///
+/// So: in native mode (unset or `native` `PORTUALE_PYTHON_HELPERS`, the
+/// default) `PORTAGE_BIN_PATH` is the vendored `bin/` directly and no
+/// overlay is built at all. Only with
+/// `PORTUALE_PYTHON_HELPERS=real` (the D2 oracle handle for differential
+/// tests, which needs an installed Portage) is it a symlink overlay --
+/// vendored `bin/` entries win, the not-vendored `.py` helpers fall
+/// through to `<checkout>/bin/`.
 ///
 /// `portageq-wrapper` is deliberately vendored too (feat#157 S6, #151): the
 /// tracked `bin/portageq-wrapper` shim execs the native `portuale portageq`
@@ -785,7 +795,11 @@ pub(crate) fn bin_dir() -> Result<&'static Path, String> {
             BinSource::Embedded => extract_embedded_runtime()?,
         };
         let checkout = portage_checkout().join("bin");
-        if !checkout.is_dir() {
+        // #326 D2: the checkout overlay exists only in `real` mode (the
+        // oracle handle for differential tests). In native mode (unset or
+        // `native`) the vendored dir is the whole runtime.
+        let real_helpers = std::env::var("PORTUALE_PYTHON_HELPERS").as_deref() == Ok("real");
+        if !real_helpers || !checkout.is_dir() {
             return Ok(vendored);
         }
         let overlay = exec_scratch_base().join(format!("portuale-bin.{}", std::process::id()));
@@ -3156,11 +3170,38 @@ fn eclass_locations_value(pkg_dir: &Path, config_root: &Path) -> String {
 }
 
 /// Absolute path of the running binary, exported as `PORTUALE_BIN` for
-/// the vendored `bin/portageq-wrapper` shim.
+/// the vendored `bin/portageq-wrapper` shim and the `__helper` shims.
+/// Under `cfg(test)` this resolves to the real `portuale` binary next
+/// to `deps/` (#326 D8: never the libtest harness, whose stdout banner
+/// would otherwise become the shim's answer).
 fn portuale_bin_value() -> String {
-    std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "portuale".to_string())
+    #[cfg(test)]
+    {
+        let mut exe = std::env::current_exe().expect("current test exe");
+        exe.pop();
+        if exe.ends_with("deps") {
+            exe.pop();
+        }
+        exe.push("portuale");
+        exe.display().to_string()
+    }
+    #[cfg(not(test))]
+    {
+        std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "portuale".to_string())
+    }
+}
+
+/// Value for `PORTAGE_PYTHON` in a phase (#326 S2.3/D2): the
+/// `portuale-python` shim next to the phase runtime in native mode,
+/// `/usr/bin/python` with `PORTUALE_PYTHON_HELPERS=real`.
+fn portage_python_value(bin_dir: &Path) -> String {
+    if std::env::var("PORTUALE_PYTHON_HELPERS").as_deref() == Ok("real") {
+        "/usr/bin/python".to_string()
+    } else {
+        bin_dir.join("portuale-python").display().to_string()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3244,7 +3285,7 @@ fn phase_env_vars(
             "PORTAGE_ECLASS_LOCATIONS".to_string(),
             eclass_locations_value(&env.pkg_dir, config_root),
         ),
-        ("PORTAGE_PYTHON".to_string(), "/usr/bin/python".to_string()),
+        ("PORTAGE_PYTHON".to_string(), portage_python_value(bin_dir)),
         // Real `doebuild.py:543`: `PORTAGE_COLORMAP = colormap()` -- bash
         // source `bin/isolated-functions.sh` `eval`s so an ebuild's
         // `elog`/`einfo` use the same (`color.map`-aware) colours.
@@ -3368,10 +3409,14 @@ fn phase_env_vars(
     // sqlite/redb ROOT. `PORTUALE_VDB_IPC` is the parent pipe of a redb run
     // (S6.3, `vdb_ipc.rs`). `bin/phase-functions.sh` keeps all of them out
     // of the saved environment (`PORTUALE_.*`).
+    //
+    // `PORTUALE_PYTHON_HELPERS` rides along so the `chmod-lite` shim
+    // sees the D2 `real` mode inside the phase too.
     for k in [
         "PORTUALE_VDB_BACKEND",
         "PORTUALE_VDB_PATH",
         "PORTUALE_VDB_ROOT",
+        "PORTUALE_PYTHON_HELPERS",
         crate::vdb_ipc::IPC_VAR,
     ] {
         if let Some(v) = std::env::var_os(k).filter(|v| !v.is_empty()) {
@@ -3401,6 +3446,12 @@ fn phase_env_vars(
     // shell; the category exports below override it for every
     // subprocess the phase spawns.)
     vars.retain(|(k, _)| k != "LC_ALL");
+    // #326 D6: no IPC daemon. `PORTAGE_IPC_DAEMON` is whitelisted by
+    // real's `environ_whitelist` (mirrored above), so a value in the
+    // calling environment or `extra_env` would otherwise reach the phase
+    // and `has_version` would take the `ebuild-ipc` branch. Drop it from
+    // the computed vars here; the two spawn sites filter it as well.
+    vars.retain(|(k, _)| k != "PORTAGE_IPC_DAEMON");
     let lc_all = extra_env
         .iter()
         .rev()
@@ -3844,8 +3895,13 @@ fn run_one_phase_bash(
     // `LC_ALL` never reaches a real phase (see `phase_env_vars`' own
     // locale split): real `split_LC_ALL` blanks it, so even a
     // whitelisted process-env entry is dropped here and the `LC_*`
-    // category exports stand alone.
-    cmd.envs(std::env::vars().filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL"));
+    // category exports stand alone. #326 D6 drops `PORTAGE_IPC_DAEMON`
+    // the same way: there is no IPC daemon, and a leaked value would
+    // send `has_version` down the `ebuild-ipc` branch.
+    cmd.envs(
+        std::env::vars()
+            .filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL" && k != "PORTAGE_IPC_DAEMON"),
+    );
     cmd.envs(vars);
     if let Some(path) = log_file {
         // `sink.pump` MUST outlive `cmd`: the guard joins the gzip
@@ -4446,9 +4502,13 @@ fn run_misc_functions_bash(
     // `environment.raw` marker is present -- so an unfiltered inherited
     // env (the calling `cargo test`/shell process) would leak into the
     // regenerated vdb env. See `run_one_phase_bash`'s own `env_clear`
-    // for the phase-side equivalent.
+    // for the phase-side equivalent. #326 D6 also drops
+    // `PORTAGE_IPC_DAEMON` here (no IPC daemon).
     cmd.env_clear();
-    cmd.envs(std::env::vars().filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL"));
+    cmd.envs(
+        std::env::vars()
+            .filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL" && k != "PORTAGE_IPC_DAEMON"),
+    );
     cmd.envs(vars);
     if let Some(path) = log_file {
         let sink = open_log_file(path)?;
@@ -5744,6 +5804,296 @@ mod tests {
             }
             assert_eq!(lines[3], format!("bin={}", portuale_bin.display()), "{got}");
         }
+    }
+
+    /// #326 S2/D6: `PORTAGE_IPC_DAEMON=1` in the calling environment must
+    /// not reach the phase, so `has_version` keeps going through
+    /// `portageq-wrapper` (`phase-helpers.sh:911-915`) and answers for
+    /// real. (Without the drop, the phase would take the `ebuild-ipc`
+    /// branch and die on its 127.)
+    #[test]
+    fn portage_ipc_daemon_in_the_calling_env_never_reaches_a_phase() {
+        let tmp = TempDir::new("ebuild-phases-test-no-ipc-daemon").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/ipcpkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("ipcpkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild,
+            "EAPI=8\nSLOT=\"0\"\npkg_setup() {\n\
+             \techo \"ipc=${PORTAGE_IPC_DAEMON:-unset}\"\n\
+             \thas_version sys-apps/definitely-nonexistent-xyz && echo \"rc=0\" || echo \"rc=1\"\n\
+             }\n",
+        )
+        .unwrap();
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+        // `has_version` without `-r` reads the vdb at ROOT: an existing
+        // but empty tree answers 1 (a missing one exits 64).
+        std::fs::create_dir_all(tmp.join("root/var/db/pkg")).unwrap();
+        let out = std::process::Command::new(&portuale_bin)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", std::env::var("HOME").unwrap_or_default())
+            .env("ROOT", tmp.join("root"))
+            .env("PORTAGE_TMPDIR", tmp.join("tmp"))
+            .env("PORTAGE_IPC_DAEMON", "1")
+            .args(["ebuild", ebuild.to_str().unwrap(), "setup"])
+            .output()
+            .expect("portuale ebuild spawns");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0), "{all}");
+        assert!(all.contains("ipc=unset"), "{all}");
+        assert!(all.contains("rc=1"), "{all}");
+        assert!(!all.contains("ebuild-ipc"), "{all}");
+    }
+
+    /// #326 S2/D8: `$PORTUALE_BIN __helper ping` from inside a phase
+    /// prints the fixed token (proves `PORTUALE_BIN` is a working
+    /// binary, never the libtest harness).
+    #[test]
+    fn portuale_bin_runs_helper_ping_inside_a_phase() {
+        let tmp = TempDir::new("ebuild-phases-test-ping").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/pingpkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("pingpkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild,
+            "EAPI=8\nSLOT=\"0\"\npkg_setup() {\n\
+             \t\"${PORTUALE_BIN}\" __helper ping\n\
+             }\n",
+        )
+        .unwrap();
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+        let out = std::process::Command::new(&portuale_bin)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", std::env::var("HOME").unwrap_or_default())
+            .env("ROOT", tmp.join("root"))
+            .env("PORTAGE_TMPDIR", tmp.join("tmp"))
+            .args(["ebuild", ebuild.to_str().unwrap(), "setup"])
+            .output()
+            .expect("portuale ebuild spawns");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0), "{all}");
+        assert!(all.contains(crate::helpers::PING_TOKEN), "{all}");
+    }
+
+    /// #326 S2.3/D2: `PORTAGE_PYTHON` in the phase env is the
+    /// `portuale-python` shim in native mode and `/usr/bin/python` with
+    /// `PORTUALE_PYTHON_HELPERS=real` (which is also forwarded).
+    #[test]
+    fn portage_python_is_the_shim_unless_real_mode() {
+        let tmp = TempDir::new("ebuild-phases-test-portage-python").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/pypkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("pypkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild,
+            "EAPI=8\nSLOT=\"0\"\npkg_setup() {\n\
+             \techo \"py=${PORTAGE_PYTHON}\"\n\
+             \techo \"helpers=${PORTUALE_PYTHON_HELPERS:-unset}\"\n\
+             }\n",
+        )
+        .unwrap();
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+        let run = |helpers: Option<&str>, tag: &str| {
+            // Fresh builddir per run: a finished phase leaves its marker
+            // behind and is then skipped (so the second run would print
+            // nothing).
+            let portage_tmpdir = tmp.join(format!("tmp-{tag}"));
+            let mut c = std::process::Command::new(&portuale_bin);
+            c.env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", std::env::var("HOME").unwrap_or_default())
+                .env("ROOT", tmp.join("root"))
+                .env("PORTAGE_TMPDIR", &portage_tmpdir)
+                .args(["ebuild", ebuild.to_str().unwrap(), "setup"]);
+            if let Some(h) = helpers {
+                c.env("PORTUALE_PYTHON_HELPERS", h);
+            }
+            c.output().expect("portuale ebuild spawns")
+        };
+        let out = run(None, "native");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0), "{all}");
+        assert!(
+            all.lines()
+                .any(|l| l.starts_with("py=") && l.ends_with("/portuale-python")),
+            "{all}"
+        );
+        assert!(all.lines().any(|l| l == "helpers=unset"), "{all}");
+        let out = run(Some("real"), "real");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0), "{all}");
+        assert!(all.lines().any(|l| l == "py=/usr/bin/python"), "{all}");
+        assert!(all.lines().any(|l| l == "helpers=real"), "{all}");
+    }
+
+    /// #326 S2 relocated e2e (the #322 shape): the phase runtime comes
+    /// from the embedded copy (`PORTUALE_BIN_DIR` at an extracted tree,
+    /// which is what a relocated binary extracts; in-tree an unset
+    /// `PORTUALE_BIN_DIR` would resolve to the live tree instead) with
+    /// `PORTUALE_PORTAGE_CHECKOUT=/nonexistent`, so every helper the
+    /// phases reach is native or vendored. `unpack` of an odd-mode
+    /// tarball must leave the real-Portage oracle modes (the
+    /// `helper-unpack` probe shape), and `docompress` must compress
+    /// through the vendored `ecompress-file`.
+    #[test]
+    fn relocated_unpack_and_docompress_use_only_native_or_vendored_helpers() {
+        let tmp = TempDir::new("ebuild-phases-test-relocated-helpers").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let bin = tmp.join("rt/bin");
+        crate::embedded_runtime::extract("bin", &bin).unwrap();
+        let pkg_dir = tmp.join("pkg/dev-libs/relocpkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("relocpkg-1.0.ebuild");
+        // No `dodoc`/`doins`: those route through `doins.py`, which has
+        // no native port yet (a later slice); `cp` keeps this probe on
+        // the S2 helpers only, like the pmtest `helper-unpack` and
+        // `helper-docompress` probes.
+        std::fs::write(
+            &ebuild,
+            "EAPI=8\nDESCRIPTION=\"test\"\nSLOT=\"0\"\nS=\"${WORKDIR}\"\n\
+             src_unpack() {\n\
+             \tlocal t=\"${T}/odd-src\"\n\
+             \tmkdir -p \"${t}/sub0700\" \"${t}/sub0775\" || die\n\
+             \tprintf 'mode0600\\n' > \"${t}/file0600\" || die\n\
+             \tchmod 0600 \"${t}/file0600\" || die\n\
+             \tprintf '#!/bin/sh\\necho hi\\n' > \"${t}/file0777\" || die\n\
+             \tchmod 0777 \"${t}/file0777\" || die\n\
+             \tchmod 0700 \"${t}/sub0700\" || die\n\
+             \tchmod 0775 \"${t}/sub0775\" || die\n\
+             \tprintf 'nested\\n' > \"${t}/sub0700/nested0640\" || die\n\
+             \tchmod 0640 \"${t}/sub0700/nested0640\" || die\n\
+             \ttar -cf \"${T}/odd.tar\" -C \"${t}\" file0600 file0777 sub0700 sub0775 || die\n\
+             \tcd \"${WORKDIR}\" || die\n\
+             \tunpack \"${T}/odd.tar\"\n\
+             \tstat -c '%a %n' file0600 file0777 sub0700 sub0700/nested0640 sub0775 \\\n\
+             \t\t> \"${T}/modes.txt\" || die\n\
+             }\n\
+             src_install() {\n\
+             \tlocal src=\"${WORKDIR}/docsrc\"\n\
+             \tmkdir -p \"${src}\" || die\n\
+             \tlocal i=1\n\
+             \twhile [[ ${i} -le 80 ]]; do\n\
+             \t\tprintf 'payload line %04d abcdefghijklmnopqrstuvwxyz\\n' \"${i}\" \\\n\
+             \t\t\t>> \"${src}/BIG-doc.txt\" || die\n\
+             \t\ti=$(( i + 1 ))\n\
+             \tdone\n\
+             \tmkdir -p \"${ED}/usr/share/doc/${PF}\" || die\n\
+             \tcp \"${src}/BIG-doc.txt\" \"${ED}/usr/share/doc/${PF}/\" || die\n\
+             \tdocompress /usr/share/doc/${PF}\n\
+             }\n",
+        )
+        .unwrap();
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+        let portage_tmpdir = tmp.join("tmp");
+        let run = |phase: &str| {
+            std::process::Command::new(&portuale_bin)
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", std::env::var("HOME").unwrap_or_default())
+                .env("ROOT", tmp.join("root"))
+                .env("PORTAGE_TMPDIR", &portage_tmpdir)
+                .env("PORTAGE_COMPRESS", "bzip2")
+                .env("FEATURES", "binpkg-docompress")
+                .env(crate::ebuild_phases::BIN_DIR_VAR, &bin)
+                .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+                .args(["ebuild", ebuild.to_str().unwrap(), phase])
+                .output()
+                .expect("portuale ebuild spawns")
+        };
+        fn find(root: &Path, name: &str) -> PathBuf {
+            let mut hits = Vec::new();
+            let mut stack = vec![root.to_path_buf()];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for e in entries.flatten() {
+                    if e.file_name().to_string_lossy() == name {
+                        hits.push(e.path());
+                    } else if e.file_type().is_ok_and(|t| t.is_dir()) {
+                        stack.push(e.path());
+                    }
+                }
+            }
+            assert_eq!(hits.len(), 1, "expected one {name}: {hits:?}");
+            hits.pop().unwrap()
+        }
+        let out = run("unpack");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0), "{all}");
+        // A missing `chmod-lite` is silent in real (`find:` on stderr,
+        // exit unexamined) and leaves odd modes: both halves are pinned.
+        assert!(!all.contains("No such file"), "{all}");
+        let modes = std::fs::read_to_string(find(&portage_tmpdir, "modes.txt")).unwrap();
+        assert_eq!(
+            modes.lines().collect::<Vec<_>>(),
+            [
+                "644 file0600",
+                "755 file0777",
+                "755 sub0700",
+                "644 sub0700/nested0640",
+                "755 sub0775",
+            ],
+            "{modes}"
+        );
+        let out = run("install");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0), "{all}");
+        // A missing `ecompress-file` is fatal in real (`__helpers_die`);
+        // pin both the absence of its error and the compressed result.
+        assert!(!all.contains("No such file"), "{all}");
+        assert!(!all.contains("ecompress-file"), "{all}");
+        let bz2 = find(&portage_tmpdir, "BIG-doc.txt.bz2");
+        assert!(!bz2.parent().unwrap().join("BIG-doc.txt").exists());
     }
 
     #[test]

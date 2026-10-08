@@ -31,6 +31,7 @@ mod emerge_options;
 mod env_update;
 mod error;
 mod fetch;
+mod helpers;
 mod info_files;
 mod install_mask;
 mod merge_engines;
@@ -167,6 +168,13 @@ fn exit_quietly_on_broken_pipe() {
 
 fn main() -> ExitCode {
     exit_quietly_on_broken_pipe();
+    // #326 D7: the helper entry runs first, from `args_os()` (helpers
+    // receive raw filenames that may not be UTF-8), before anything else:
+    // no config, no `bin_dir()`, no extraction, no atexit.
+    let argv_os: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if argv_os.get(1).is_some_and(|s| s == "__helper") {
+        return ExitCode::from(helpers::run(&argv_os[2..]) as u8);
+    }
     let argv: Vec<String> = std::env::args().collect();
     let invoked_as = basename(&argv[0]);
 

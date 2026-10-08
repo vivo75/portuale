@@ -3,5 +3,6 @@
 # has_version/best_version exec ${PORTAGE_BIN_PATH}/portageq-wrapper. Upstream's
 # wrapper needs a Python portage checkout; portuale answers natively.
 # PORTUALE_BIN (absolute path, exported into every phase by portuale) keeps
-# this independent of PATH.
-exec "${PORTUALE_BIN:-portuale}" portageq "$@"
+# this independent of PATH. #326 D5: no `:-portuale` PATH fallback; every
+# generated script exports an absolute PORTUALE_BIN.
+exec "${PORTUALE_BIN:?portuale: PORTUALE_BIN unset}" portageq "$@"
