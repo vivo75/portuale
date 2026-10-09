@@ -3439,9 +3439,9 @@ mod tests {
     /// multi-instance ON, a per-entry `-binpkg-multi-instance`
     /// negation still takes the multi path (layout ignores it) but
     /// exports no `BUILD_ID` (the gate honors it) -- S0 A2 shape.
-    /// Needs `PORTUALE_PORTAGE_CHECKOUT` pointing at a real
-    /// `3rdparty/portage` tree (the phase helpers import
-    /// `portage`), like the compression test below.
+    /// Needs no Portage checkout: the install/package phases run through
+    /// the native helpers (#326 S2-S7), verified live with
+    /// `PORTUALE_PORTAGE_CHECKOUT=/nonexistent`.
     #[test]
     fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() {
         let config_root = fixtures_root();
@@ -3544,9 +3544,10 @@ mod tests {
     /// proves gzip magic with a zstd run-wide). The observable is
     /// the archive magic: the matched entry compresses with its own
     /// codec, its unmatched neighbour in the same run keeps the
-    /// run-wide one. Needs `PORTUALE_PORTAGE_CHECKOUT` pointing at a
-    /// real `3rdparty/portage` tree (the phase helpers import
-    /// `portage`), like the multi-instance test above.
+    /// run-wide one. Needs no Portage checkout: the install/package
+    /// phases run through the native helpers (#326 S2-S7), verified live
+    /// with `PORTUALE_PORTAGE_CHECKOUT=/nonexistent`, like the
+    /// multi-instance test above.
     #[test]
     fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
         let config_root = fixtures_root();

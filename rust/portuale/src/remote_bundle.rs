@@ -127,7 +127,7 @@ pub struct StagedBundle {
 /// pass-through the bundle ships in the runtime `bin` dir. Real's
 /// `phase-functions.sh` `PORTAGE_UPDATE_ENV` block runs
 /// `${PORTAGE_BZIP2_COMMAND} -c -f9 > "${PORTAGE_UPDATE_ENV}"`
-/// (`bin/phase-functions.sh:1072-1082`), and the client must have no
+/// (`bin/phase-functions.sh:1141-1153`), and the client must have no
 /// `bzip2` (`docs/remote-merge.md` §6, §14.1) -- so this ignores its
 /// arguments and copies stdin to stdout (`cat` itself would choke on
 /// `-c -f9`), leaving the regen'd environment plain text for the server

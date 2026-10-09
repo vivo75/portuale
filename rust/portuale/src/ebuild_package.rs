@@ -5,8 +5,8 @@
 // `bin/misc-functions.sh`'s own `__dyn_package` (real, unmodified bash --
 // `ebuild_phases::run_misc_functions`'s own doc comment explains why this
 // is a *separate* script invocation, not a `bin/ebuild.sh` phase), which
-// itself shells out to the real, unmodified `bin/xpak-helper.py
-// recompose` (real Python, no reimplementation needed at all) to tar
+// itself shells out to the native `xpak recompose` helper (#326 S5,
+// `helpers/xpak.rs`, reached through `bin/portuale-python`) to tar
 // `${D}` and append real XPAK metadata, producing a genuine
 // `${PKGDIR}/${CATEGORY}/${PF}.tbz2`. `portage_repo`'s own binary-package
 // reader (task #53/#63) never parses a `.tbz2`/XPAK file's own content at
@@ -20,10 +20,11 @@
 //   - `BINPKG_FORMAT` (real default `"gpkg"` -- real `cnf/make.globals:43`
 //     -- with `"xpak"`, the predecessor format, still selectable) is
 //     honored at package time: for `"gpkg"`, real, unmodified `bin/misc-functions.sh
-//     __dyn_package` shells out to real, unmodified `bin/gpkg-helper.py
-//     compress` (real `portage.gpkg.gpkg().compress()`, no
-//     reimplementation) exactly the way the `"xpak"` branch already
-//     shells out to `bin/xpak-helper.py recompose`, producing a genuine
+//     __dyn_package` shells out to the native `gpkg compress` helper
+//     (#326 S4, `helpers/gpkg.rs` -- a field-for-field port of real
+//     `portage.gpkg.gpkg().compress()`, reached through
+//     `bin/portuale-python`) exactly the way the `"xpak"` branch already
+//     reaches the native `xpak recompose`, producing a genuine
 //     `${PKGDIR}/${CATEGORY}/${PF}.gpkg.tar` portuale's own
 //     `binpkg::read_gpkg_metadata` reader round-trips. Anything other
 //     than those two values is `Err("Unknown BINPKG_FORMAT ...")`, real

@@ -160,9 +160,9 @@
 //     `bin/ebuild.sh`'s own "safe cwd" logic (EAPI 8's own comment:
 //     "requires us to use an empty directory here") takes *that* branch
 //     rather than `cd "${PORTAGE_PYM_PATH}" || die`, and it still does --
-//     but the `bin/` helper scripts that `import portage`
-//     (`portageq-wrapper`, `ebuild-pyhelper`, `save-ebuild-env.sh`) each
-//     `cd "${PORTAGE_PYM_PATH}" || exit 1` unconditionally, so with it
+//     but upstream's `bin/` helper script that `import`s portage
+//     (`ebuild-pyhelper`, reached in `real` oracle mode) `cd`s
+//     `"${PORTAGE_PYM_PATH}" || exit 1` unconditionally, so with it
 //     unset every `has_version`/`best_version` an eclass runs failed.
 //   - `__source_all_bashrcs` (real per-profile/package bashrc hook
 //     support, `/etc/portage/bashrc` and friends) is left unimplemented
@@ -674,11 +674,15 @@ pub(crate) fn repo_root() -> PathBuf {
 /// The gitignored working checkout of upstream Portage (`3rdparty/portage/`
 /// by default, overridable with `$PORTUALE_PORTAGE_CHECKOUT`).
 ///
-/// `portuale` vendors the whole *bash* phase runtime into `bin/`, but a
-/// handful of pieces still come from here: the `.py` helpers that
-/// `import portage` (`doins.py`, `xpak-helper.py`, …) and their
-/// `lib/portage` import path, and `cnf/sets/portage.conf` (real
-/// `--list-sets`). Absent when nobody cloned it -- callers degrade the
+/// Since #326 S2–S7 nothing at runtime needs it: every helper is native
+/// (`helpers/`, reached through `bin/portuale-python`), and
+/// `has_version`/`best_version` go through the vendored
+/// `portageq-wrapper` shim (the native `portuale portageq`). What still
+/// reads this path: the D2 oracle overlay (`bin_dir()` overlays `bin/`
+/// on `<checkout>/bin/` only with `PORTUALE_PYTHON_HELPERS=real`),
+/// `package_sets_conf()`'s first choice (falling back to the copy
+/// compiled into the binary), and the re-sync / fixture-generator
+/// source of record. Absent when nobody cloned it -- callers degrade the
 /// same way a missing binary already does. See `3rdparty/repos.toml` for
 /// the pinned ref.
 pub(crate) fn portage_checkout() -> PathBuf {
@@ -701,8 +705,9 @@ pub(crate) fn portage_checkout() -> PathBuf {
 /// die "PORTAGE_PYM_PATH does not exist: ..."` at `:331-332`) runs that `cd`
 /// unconditionally (a cwd outside the build dir, since the dir is removed),
 /// and `bin/ebuild.sh:211-212` has the same `die`. `/` is always a valid cwd.
-/// Without a checkout no `.py` helper that imports portage can run yet
-/// (#326 D1/Q7).
+/// Without a checkout the value is `/`; no helper needs the real path any
+/// more (all native, #326 S7) -- the variable only preserves real's
+/// invariant that it is never empty.
 pub(crate) fn pym_path_value(checkout: &Path) -> String {
     let lib = checkout.join("lib");
     if lib.join("portage").is_dir() {
@@ -720,8 +725,8 @@ pub(crate) fn pym_path_value(checkout: &Path) -> String {
 /// `PORTAGE_PYM_PATH` (`PYTHONPATH=${PORTAGE_PYTHONPATH:-${PORTAGE_PYM_PATH}}`)
 /// for the `gpkg-helper.py`/`xpak-helper.py` invocation, so with a checkout
 /// the real helper imports `portage` from this checkout. Without a checkout
-/// no `.py` helper that imports portage can run yet (#326 D1/Q7), so no
-/// entry is pushed at all.
+/// no entry is pushed at all -- and none is needed, since every helper is
+/// native (#326 S7).
 pub(crate) fn pythonpath_value(checkout: &Path) -> Option<String> {
     let lib = checkout.join("lib");
     if lib.join("portage").is_dir() {
@@ -3404,14 +3409,17 @@ fn phase_env_vars(
     }
 
     // Real portage's `PORTAGE_PYM_PATH`: the `lib/` dir of the portage
-    // checkout, where the `portage` python package lives. The vendored
-    // `bin/` helper scripts that import portage -- `portageq-wrapper`,
-    // `ebuild-pyhelper` (and its `chmod-lite`/`doins`/`ebuild-ipc`/…
-    // symlinks), `save-ebuild-env.sh` -- each begin with
-    // `cd "${PORTAGE_PYM_PATH}" || exit 1`, so leaving it unset makes
-    // every one of them abort, which breaks eclass `has_version` /
-    // `best_version` (they shell out to `portageq`) for any real ebuild
-    // (e.g. `autotools.eclass`'s automake probe). `bin/ebuild.sh`'s own
+    // checkout, where the `portage` python package lives. Upstream's
+    // `bin/` helper scripts that import portage -- `ebuild-pyhelper`
+    // (and its `chmod-lite`/`ebuild-ipc` symlinks) -- begin with
+    // `cd "${PORTAGE_PYM_PATH}" || exit 1`, so
+    // leaving it unset makes every one of them abort, which breaks
+    // eclass `has_version` / `best_version` (they shell out to
+    // `portageq`) for any real ebuild (e.g. `autotools.eclass`'s
+    // automake probe). (The vendored `bin/portageq-wrapper` shim is
+    // native since feat#157 S6 and never touches this variable; the
+    // `cd` above is what upstream's scripts do in `real` oracle mode.)
+    // `bin/ebuild.sh`'s own
     // cwd choice still prefers `${PORTAGE_BUILDDIR}/empty` (pre-created
     // by `create_directories`), so setting this does not regress the
     // "safe cwd for bug #469338" branch it was originally left unset for.

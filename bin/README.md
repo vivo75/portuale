@@ -24,18 +24,22 @@ change (see its own header comment — brush strategy #2).
 | `portageq-wrapper` | **portuale-owned** (not upstream): execs `$PORTUALE_BIN portageq` (feat#157 S6); no `PATH` fallback (#326 D5) |
 | `ecompress-file` | upstream's bash helper, vendored verbatim (it is not in the `3rdparty` checkout overlay path; a missing copy is fatal in `ecompress`) |
 
-## What's *not* here
+## What's *not* here (and needs no checkout)
 
 The `.py` helpers that `import portage` — `doins.py` (so `doins` /
 `newins` / `dodoc` / `newbin` / …), `dohtml.py`, `install.py`,
-`xpak-helper.py`, `gpkg-helper.py`, `chmod-lite.py`, `xattr-helper.py`.
-They need `lib/portage` on `PYTHONPATH`, so they're still read from a
-surrounding Portage checkout (`ebuild_phases::bin_dir()` overlays this
-dir on top of the checkout's `bin/`, but only with
-`PORTUALE_PYTHON_HELPERS=real`; in native mode there is no overlay).
-With no checkout, phases that call those helpers fail with the native
-`no native helper` message. `chmod-lite`/`ebuild-ipc` above are shims,
-not the upstream scripts.
+`xpak-helper.py`, `gpkg-helper.py`, `xattr-helper.py` (and the old
+`chmod-lite.py`) — are **not vendored because they are all answered
+natively** (`rust/portuale/src/helpers/`, #326 S2–S7): in native mode
+`PORTAGE_PYTHON` points at `portuale-python`, which execs
+`$PORTUALE_BIN __helper python`. The D1 transition table is gone, so
+anything unrecognised — `dohtml.py` included, which is never in scope
+(`dohtml` dies first for EAPI ≥ 7) — exits 127 like any unknown
+helper. `chmod-lite`/`ebuild-ipc` above are shims, not the upstream
+scripts. With no checkout, phases run exactly as with one; only
+`PORTUALE_PYTHON_HELPERS=real` (the D2 oracle handle for differential
+tests) builds the symlink overlay onto `<checkout>/bin/` and needs
+`3rdparty/portage` present.
 
 ## Re-syncing from upstream
 
@@ -44,7 +48,10 @@ each file here over from the new upstream tree, then re-apply the local
 change noted in `phase-functions.sh`'s header. A plain
 `diff -r 3rdparty/portage/bin bin` (ignoring `phase-functions.sh`,
 `portageq-wrapper`, the other portuale-owned files listed below, and
-this README) should otherwise be empty.
+this README) should otherwise be empty. A re-sync that adds or changes
+a Python call site needs its helper ported first — unknown names exit
+127 by design (#326 D1), so a new upstream helper would fail loudly
+until `rust/portuale/src/helpers/` answers it.
 
 ## Portuale-owned files (a re-sync must not overwrite)
 

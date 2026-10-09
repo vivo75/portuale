@@ -14,7 +14,7 @@
 # Update this file in the same commit that changes a pin.
 
 [portage]
-description = "Upstream Gentoo Portage. portuale vendors the whole bash phase runtime into ./bin/ (see bin/README.md), but the .py helpers that `import portage` (doins.py, xpak-helper.py, ...), their lib/portage import path, and cnf/sets/portage.conf still come from this checkout. The primitive harnesses (python/*_harness.py) import the real portage.versions / portage.dep from here."
+description = "Upstream Gentoo Portage. portuale vendors the whole bash phase runtime into ./bin/ (see bin/README.md) and answers every portage-importing .py helper natively (rust/portuale/src/helpers/, #326 S2-S7), so nothing at runtime comes from this checkout any more. It remains: the PORTUALE_PYTHON_HELPERS=real oracle (bin_dir() overlays bin/ on <checkout>/bin/), the D4 fixture generators' source (pmtest fixtures/helpers/generate*.sh), the bin/ + cnf/sets/portage.conf re-sync source, and the real portage.versions / portage.dep modules the primitive harnesses (pmtest python-harness/) import."
 url = "https://github.com/gentoo/portage"
 kind = "reference-checkout"
 checkout_path = "3rdparty/portage"
@@ -28,10 +28,21 @@ pinned_at = "2026-09-01"
 #   bin/  -- ebuild.sh + its whole source closure, every ebuild-helpers/
 #            script, estrip/ecompress, the *-qa-check.d/ sets, and the
 #            stdlib-only filter-bash-environment.py. Only bin/phase-functions.sh
-#            diverges (brush strategy #2 -- see its header). Re-sync on a
-#            `commit` bump by copying the upstream files over + re-applying
-#            that one change; `diff -r 3rdparty/portage/bin bin` should
-#            then be empty bar phase-functions.sh + bin/README.md.
+#            diverges (brush strategy #2 -- see its header). The
+#            portuale-owned shims next to them (portuale-python,
+#            chmod-lite, ebuild-ipc, portageq-wrapper) answer natively, so
+#            no portage-importing .py helper is vendored or needed (#326
+#            S2-S7). Re-sync on a `commit` bump by copying the upstream
+#            files over + re-applying that one change; `diff -r
+#            3rdparty/portage/bin bin` should then be empty bar
+#            phase-functions.sh + bin/README.md. A re-sync that adds or
+#            changes a Python call site needs its helper ported first --
+#            unknown names exit 127 by design (#326 D1).
+#   cnf/sets/portage.conf -- tracked vendored copy of upstream's
+#            built-in package-set definitions (same ref), compiled into
+#            the binary as the no-checkout fallback (`package_sets_conf`
+#            prefers the checkout file when one exists). Re-sync it with
+#            the same `commit` bump.
 vendored_paths = ["bin/"]
 
 [brush]

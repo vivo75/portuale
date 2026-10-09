@@ -18,9 +18,11 @@
 // `${ROOT}`, runs pkg_postrm, then removes the vdb entry itself), and
 // `package` (see `ebuild_package`'s own module doc comment: runs the
 // real `install` chain, then really invokes `bin/misc-functions.sh`'s
-// own `__dyn_package` -- real, unmodified bash shelling out to the real,
-// unmodified `bin/xpak-helper.py` -- producing a genuine XPAK-tagged
-// `.tbz2` at `PKGDIR`, plus a real `Packages` index entry for it), PLUS,
+// own `__dyn_package` -- real, unmodified bash shelling out to the
+// native `portuale` helpers (`xpak recompose` / `gpkg compress`, #326
+// S4-S5, through `bin/portuale-python`) -- producing a genuine
+// XPAK-tagged `.tbz2` at `PKGDIR`, plus a real `Packages` index entry
+// for it), PLUS,
 // as of two slices ago, real execution for `qmerge` too (see
 // `ebuild_merge::run_qmerge`'s own doc comment: `merge`'s own body,
 // minus the `install` phase re-run, gated on the same real

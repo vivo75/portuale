@@ -130,9 +130,13 @@ testing less, on both sides: `fixtures_tree_is_the_pmtest_checkout`
 pmtest's conftest check the symlink resolves *and* that what it points
 at really is the fixture tree.
 
-`3rdparty/` is the one thing that stays here, and pmtest symlinks to it
-— it is where the pinned real-Portage checkout and its gpg test keyring
-come from. The two repos therefore expect to sit next to each other.
+`3rdparty/` is the one thing that stays here (pmtest keeps a separate
+`3rdparty/` of its own for its harness checkouts) — it is where the
+pinned real-Portage checkout lives (the `PORTUALE_PYTHON_HELPERS=real`
+oracle and the fixture-generator / re-sync source since #326 S2–S7; the
+gpg test keyring the signing tests use is vendored in pmtest's own
+fixture tree, `fixtures/helpers/gpg-keyring/`). The two repos therefore
+expect to sit next to each other.
 
 pmtest never builds against a stale binary: every run rebuilds the PM
 from the `repo` in its registry entry. Nothing in pmtest is edited to
@@ -402,16 +406,24 @@ L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
   differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
 ```
 
-The gate needs the gitignored Portage checkout (**`3rdparty/portage`**
-in the portuale checkout under test) present in the execution tree, or
-it dies with an opaque `has_version: unexpected portageq exit code: 127`
-in `pkg_preinst` (#151): `ebuild_phases::bin_dir()` serves the
+The gate runs with **no Portage checkout**: every phase helper is
+native since #326 S2–S7 (the `portuale-python` dispatcher,
+`chmod-lite`, `filter-bash-environment`, the gpkg/xpak writers,
+`doins`, the xattr helpers), and `has_version`/`best_version` go
+through the vendored `bin/portageq-wrapper` shim, which execs the
+native `portuale portageq` (feat#157 S6). The old death — an opaque
+`has_version: unexpected portageq exit code: 127` in `pkg_preinst`
+(backlog #151), from when `ebuild_phases::bin_dir()` served the
 portage-importing bin helpers (`portageq-wrapper`, `portageq`,
 `ebuild-pyhelper`) only from that checkout, never from the vendored
-`bin/`. The L1 runner now pre-flights this (`portuale_phase_helpers_preflight`)
-and exits 2 with `!!! [preflight] …` before any container starts; a
-fresh clone or a worktree without the checkout (it is gitignored) trips
-it — fix with `./3rdparty/setup.sh portage` in that tree, or
+`bin/` — is gone with it. The checkout (`3rdparty/portage` in the
+portuale checkout under test, gitignored) is now only the
+`PORTUALE_PYTHON_HELPERS=real` oracle and the fixture-generator /
+re-sync source. The L1 runner still pre-flights it
+(`portuale_phase_helpers_preflight`), but only in `real` mode, exiting
+2 with `!!! [preflight] …` before any container starts; a fresh clone
+or a worktree without the checkout runs the gate as-is. Only an
+oracle run needs `./3rdparty/setup.sh portage` in that tree, or
 `PORTUALE_PORTAGE_CHECKOUT=…` (the L1 container mounts `$PM_REPO` only,
 so it must point under it).
 
