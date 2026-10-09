@@ -530,9 +530,7 @@ fn local_client_bash() -> std::process::Command {
     ] {
         cmd.env_remove(var);
     }
-    if let Ok(exe) = std::env::current_exe() {
-        cmd.env("PORTUALE_BIN", exe);
-    }
+    cmd.env("PORTUALE_BIN", crate::self_exe::self_exe());
     cmd
 }
 
@@ -1294,12 +1292,7 @@ pub(crate) fn elf_machine(bytes: &[u8]) -> Result<u16, String> {
 pub(crate) fn server_bin_info(ctx: &RemoteContext) -> Result<ServerBinInfo, String> {
     let (path, named) = match &ctx.portuale_binary {
         Some(custom) => (std::path::PathBuf::from(custom), true),
-        None => (
-            std::env::current_exe().map_err(|e| {
-                format!("mrg: cannot locate the running binary for the client install: {e}")
-            })?,
-            false,
-        ),
+        None => (crate::self_exe::self_exe().to_path_buf(), false),
     };
     let bytes = std::fs::read(&path).map_err(|e| {
         if named {
@@ -2009,11 +2002,7 @@ pub fn run_remote_resolve(
             ctx.bin_plan = plan;
         }
         None => {
-            let exe = std::env::current_exe().map(|p| p.display().to_string());
-            match exe {
-                Ok(path) => ctx.bin_plan = ClientBinPlan::Local(path),
-                Err(e) => failures.push(format!("mrg: cannot locate the running binary: {e}")),
-            }
+            ctx.bin_plan = ClientBinPlan::Local(crate::self_exe::self_exe().display().to_string());
         }
     }
     let first_contact =
@@ -2399,10 +2388,10 @@ pub fn run_remote(ctx: &RemoteContext) -> ExitCode {
                 }
                 ctx.bin_plan = plan;
             }
-            None => match std::env::current_exe().map(|p| p.display().to_string()) {
-                Ok(path) => ctx.bin_plan = ClientBinPlan::Local(path),
-                Err(e) => failures.push(format!("mrg: cannot locate the running binary: {e}")),
-            },
+            None => {
+                ctx.bin_plan =
+                    ClientBinPlan::Local(crate::self_exe::self_exe().display().to_string());
+            }
         }
     }
     if !failures.is_empty() {

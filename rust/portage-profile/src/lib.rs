@@ -451,6 +451,45 @@ pub struct Config {
     /// (`other_vars["PATH"]`) -- "this allows packages to update our PATH
     /// as they get installed".
     pub envd_sets_path: bool,
+    /// The raw text of `<eroot>/etc/profile.env` as last read (`""` when
+    /// the file is missing). `env_d_changed` compares the live file
+    /// against this, so per-package-task reloads (`reload_env_d`, real
+    /// `config.reload()`, `config.py:2691-2699`) only pay for a re-read
+    /// when `env-update` actually rewrote it mid-run.
+    pub envd_raw: String,
+    /// The `eroot` `resolve_config` read `profile.env` from (empty on a
+    /// `Config::default()`): the per-package-task reload
+    /// (`entry_build_env`) re-reads the same file without a root
+    /// parameter. Empty disables the reload.
+    pub envd_eroot: PathBuf,
+    /// The env.d scalar layer as last read: every `profile.env` key to
+    /// its substituted value, **after** the `_env_d_blacklist` pop (real
+    /// `config.py:724-743`). Keys a higher layer (`make.globals`, the
+    /// profile chain, `make.conf`, the calling env) also assigned stay
+    /// listed here when that higher value is what `other_vars` holds --
+    /// `envd_higher_keys` tells `reload_env_d` which those are.
+    pub envd_vars: HashMap<String, String>,
+    /// Every key a higher config layer assigned during `resolve_config`,
+    /// whether or not env.d held it then (plus `"USE"` when the
+    /// globals/profile `USE`-reset dropped env.d's scalar --
+    /// `resolve_config`'s own `scalars.remove("USE")`). `reload_env_d`
+    /// never touches `other_vars` for these keys: the higher layer wins,
+    /// exactly like real's layered `configdict` lookup, where replacing
+    /// `configdict["env.d"]` cannot move a key a higher db owns.
+    pub envd_higher_keys: HashSet<String>,
+    /// The env.d incremental layer per [`TRACKED_INCREMENTALS`] key as
+    /// last read (the file's final assignment's tokens, missing when the
+    /// file never assigned the key). `reload_env_d` replaces index 0 of
+    /// `incremental_sources[key]` with the re-read layer -- env.d is the
+    /// lowest db-stack layer, so its contribution is always first.
+    pub envd_incremental_layers: HashMap<String, Vec<String>>,
+    /// The `PROFILE_ONLY_VARIABLES` fold as of `resolve_config`, the
+    /// profile half of real `_env_d_blacklist`
+    /// (`profile_only_variables + _env_blacklist`, `config.py:734-743`).
+    /// Frozen here because real computes the blacklist once at init and
+    /// `reload()` reuses it -- a re-read env.d layer must not change
+    /// which keys the blacklist drops.
+    pub envd_profile_only: Vec<String>,
     pub accept_keywords: HashSet<String>,
     /// Raw atom or bounded-wildcard-atom strings (see
     /// `portage_dep::parse_wildcard_atom`) from `package.mask`, with
@@ -1010,6 +1049,93 @@ impl Config {
         }
         Some(set.into_iter().collect())
     }
+
+    /// Whether `<eroot>/etc/profile.env` changed since this config was
+    /// resolved (or last reloaded): the live file's text differs from the
+    /// recorded [`Config::envd_raw`]. A missing file reads as `""`, so a
+    /// deleted file counts as changed unless nothing was ever recorded.
+    /// The per-package-task gate (`entry_build_env`): when this is false
+    /// the caller keeps the old code path byte for byte.
+    pub fn env_d_changed(&self, eroot: &Path) -> bool {
+        std::fs::read_to_string(eroot.join("etc/profile.env")).unwrap_or_default() != self.envd_raw
+    }
+
+    /// Real `config.reload()` (`config.py:2691-2699`): re-read `env.d`
+    /// and replace that layer, leaving every higher layer alone. For
+    /// every re-read key a higher layer owns ([`Config::envd_higher_keys`])
+    /// or the blacklist drops, `other_vars` is untouched; every other key
+    /// is set, changed, or removed to match the new file. The env.d
+    /// incremental layer per tracked key is replaced the same way, and
+    /// `envd_sets_path`/`envd_use_tokens` are recomputed. Higher-layer
+    /// expansions are deliberately not redone (they were computed against
+    /// the old env.d at resolve time -- real's `expand=False` env.d read
+    /// likewise never re-expands them). The USE-context fingerprint is
+    /// refreshed so the `portage-repo` memos keyed on it see the new
+    /// `envd_use_tokens`.
+    pub fn reload_env_d(&mut self, eroot: &Path) {
+        let text = std::fs::read_to_string(eroot.join("etc/profile.env")).unwrap_or_default();
+        let blacklist: HashSet<String> = self
+            .envd_profile_only
+            .iter()
+            .cloned()
+            .chain(ENV_BLACKLIST.iter().map(|s| s.to_string()))
+            .collect();
+        let parsed = parse_envd_text(&text);
+        for (key, value) in &parsed.vars {
+            if blacklist.contains(key) || self.envd_higher_keys.contains(key) {
+                continue;
+            }
+            self.other_vars.insert(key.clone(), value.clone());
+        }
+        for key in self.envd_vars.keys() {
+            if !parsed.vars.contains_key(key) && !self.envd_higher_keys.contains(key) {
+                self.other_vars.remove(key);
+            }
+        }
+        for key in TRACKED_INCREMENTALS {
+            let new_layer = parsed
+                .incremental_layers
+                .get(key)
+                .filter(|_| !blacklist.contains(key));
+            let had_old = self.envd_incremental_layers.contains_key(key);
+            if new_layer.is_none() && !had_old {
+                continue;
+            }
+            // Nothing post-resolve mutates these lists, so a recorded
+            // env.d layer is still index 0 (the lowest db-stack layer).
+            let sources = self.incremental_sources.entry(key.to_string()).or_default();
+            if had_old && !sources.is_empty() {
+                match new_layer {
+                    Some(tokens) => sources[0] = (*tokens).clone(),
+                    None => {
+                        sources.remove(0);
+                    }
+                }
+                if sources.is_empty() {
+                    self.incremental_sources.remove(key);
+                }
+            } else if let Some(tokens) = new_layer {
+                // No recorded layer (or its trace is gone, which is
+                // unreachable -- see above): the new env.d layer goes
+                // first regardless.
+                sources.insert(0, (*tokens).clone());
+            }
+        }
+        self.envd_raw = text;
+        self.envd_vars = parsed
+            .vars
+            .into_iter()
+            .filter(|(k, _)| !blacklist.contains(k))
+            .collect();
+        self.envd_incremental_layers = parsed
+            .incremental_layers
+            .into_iter()
+            .filter(|(k, _)| !blacklist.contains(k))
+            .collect();
+        self.envd_sets_path = parsed.sets_path && !blacklist.contains("PATH");
+        self.envd_use_tokens = read_envd_use_tokens_text(&self.envd_raw);
+        self.use_context_base = Some(use_context_base_fingerprint(self));
+    }
 }
 
 /// The `const.INCREMENTALS` variables [`Config::incremental_sources`]
@@ -1100,6 +1226,15 @@ fn logical_lines(text: &str) -> Vec<String> {
 /// when `key` is a [`TRACKED_INCREMENTALS`] variable. `value` is the
 /// already-`${VAR}`-substituted string (matching real, whose per-db
 /// value is what `getconfig` expanded it to).
+/// Records that a layer above env.d assigned `key` (see
+/// [`Config::envd_higher_keys`]). Every key, not only the ones the first
+/// env.d read held: a `profile.env` rewritten mid-run can introduce a key
+/// `make.conf` or the profile already sets, and that higher value must
+/// still win after `reload_env_d`.
+fn note_higher(config: &mut Config, key: &str) {
+    config.envd_higher_keys.insert(key.to_string());
+}
+
 fn note_incremental(config: &mut Config, key: &str, value: &str) {
     if TRACKED_INCREMENTALS.contains(&key) {
         config
@@ -1661,6 +1796,7 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
             "IUSE_IMPLICIT" => apply_incremental(&value, &mut config.iuse_implicit),
             _ => {}
         }
+        note_higher(config, name);
         scalars.insert(name.to_string(), value);
     }
     for &name in ENV_SCALAR_VARS {
@@ -1675,6 +1811,7 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
             if TRACKED_INCREMENTALS.contains(&name) {
                 note_incremental(config, name, &value);
             }
+            note_higher(config, name);
             scalars.insert(name.to_string(), value);
         }
     }
@@ -1689,6 +1826,7 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
     for name in ["CONFIG_PROTECT", "CONFIG_PROTECT_MASK", "ENV_UNSET"] {
         if let Some(value) = config_env_var(name) {
             note_incremental(config, name, &value);
+            note_higher(config, name);
             scalars.insert(name.to_string(), value);
         }
     }
@@ -1720,6 +1858,7 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
         };
         let value = substitute(&raw_value, scalars);
         note_incremental(config, key, &value);
+        note_higher(config, key);
         match key {
             "USE" => {
                 apply_use_incremental(&value, &mut config.use_flags);
@@ -1982,6 +2121,7 @@ fn process_make_conf_file(
         };
         let value = substitute(&raw_value, scalars);
         note_incremental(config, key, &value);
+        note_higher(config, key);
         match key {
             "USE" => {
                 apply_use_incremental(&value, &mut config.use_flags);
@@ -2098,6 +2238,54 @@ fn read_repo_make_defaults_use(path: &Path, scalars: &HashMap<String, String>) -
         .collect()
 }
 
+/// One `<eroot>/etc/profile.env` read: the scalar layer, the tracked
+/// incremental layers, and whether `PATH` was assigned. Shared by the
+/// first load in `resolve_config` and by `Config::reload_env_d`, so the
+/// two can never drift apart in what "reading env.d" means.
+///
+/// Parsing mirrors the first load's long-standing semantics (real
+/// `_get_env_d`'s `getconfig(..., expand=False)` plus portuale's eager
+/// within-file `${VAR}` chaining): each line's optional leading
+/// `export ` is stripped, the value is [`shlex_token`]-processed by
+/// [`parse_kv_line`] and `${VAR}`-substituted against the earlier lines
+/// of this same file (plus the process env fallback [`substitute`]
+/// already has), seeding every later line -- real's `expand_map =
+/// env_d.copy()` seeding. A real sourced `profile.env` re-assigning a
+/// key keeps the last assignment (bash semantics), as does each tracked
+/// incremental's recorded layer. The caller applies `_env_d_blacklist`.
+struct EnvdParse {
+    vars: HashMap<String, String>,
+    incremental_layers: HashMap<String, Vec<String>>,
+    sets_path: bool,
+}
+
+fn parse_envd_text(text: &str) -> EnvdParse {
+    let mut seed: HashMap<String, String> = HashMap::new();
+    let mut vars: HashMap<String, String> = HashMap::new();
+    let mut incremental_layers: HashMap<String, Vec<String>> = HashMap::new();
+    for line in logical_lines(text) {
+        let t = line.trim();
+        let l = t.strip_prefix("export ").unwrap_or(t);
+        if let Some((key, raw_value)) = parse_kv_line(l) {
+            let value = substitute(&raw_value, &seed);
+            seed.insert(key.to_string(), value.clone());
+            if TRACKED_INCREMENTALS.contains(&key) {
+                incremental_layers.insert(
+                    key.to_string(),
+                    value.split_whitespace().map(String::from).collect(),
+                );
+            }
+            vars.insert(key.to_string(), value);
+        }
+    }
+    let sets_path = vars.contains_key("PATH");
+    EnvdParse {
+        vars,
+        incremental_layers,
+        sets_path,
+    }
+}
+
 /// Real `config.py`'s `configdict["env.d"]["USE"]` -- every `USE=` value
 /// in `<eroot>/etc/profile.env` (real `_get_env_d`'s
 /// `getconfig(..., expand=False)`: an optional leading `export ` keyword,
@@ -2108,6 +2296,12 @@ fn read_envd_use_tokens(eroot: &Path) -> Vec<String> {
     let Ok(text) = fs::read_to_string(eroot.join("etc/profile.env")) else {
         return Vec::new();
     };
+    read_envd_use_tokens_text(&text)
+}
+
+/// [`read_envd_use_tokens`] over already-read text, so `reload_env_d`
+/// derives the tokens from the same read as the scalar layer.
+fn read_envd_use_tokens_text(text: &str) -> Vec<String> {
     text.lines()
         .filter_map(|line| {
             let line = line.trim();
@@ -2689,7 +2883,10 @@ pub fn resolve_config(
     repo_masters: &HashMap<String, Vec<PathBuf>>,
     eroot: &Path,
 ) -> Result<Config, Error> {
-    let mut config = Config::default();
+    let mut config = Config {
+        envd_eroot: eroot.to_path_buf(),
+        ..Config::default()
+    };
     let mut scalars: HashMap<String, String> = HashMap::new();
 
     let all_repos: Vec<(String, PathBuf)> =
@@ -2723,37 +2920,63 @@ pub fn resolve_config(
     // (`CONFIG_PROTECT` / `CONFIG_PROTECT_MASK`, written there by
     // packages' `/etc/env.d/*` fragments) feed `emerge --info`; the rest
     // is build-phase env portuale doesn't model.
+    //
+    // Eager (portuale resolves eagerly where real expands lazily on
+    // access): values already known -- earlier lines of this file --
+    // substitute, matching real's on-access result for backward
+    // references; forward references to later files stay literal here
+    // and pick up their values when those files are read (the eager
+    // approximation portuale uses throughout). Either way the values
+    // seed `scalars`, so every later file (globals, profile chain,
+    // `make.conf`, `package.env` files) expands against them -- real's
+    // `expand_map = env_d.copy()` seeding.
+    //
+    // `parse_envd_text` is the one function both the first load and
+    // `Config::reload_env_d` read through. The static half of real
+    // `_env_d_blacklist` (`_env_blacklist`, real `config.py:734-743`;
+    // portuale's `ENV_BLACKLIST`) is popped here; the profile half
+    // (`PROFILE_ONLY_VARIABLES`) is not known until the chain resolves,
+    // so those keys are popped right after the chain loop below. env.d
+    // is a real scalar db too (real `configdict["env.d"]`): its `LANG`
+    // / `LEX` / … surface in `emerge --info`. Lowest priority --
+    // `make.globals`, the profile chain and `make.conf` all override.
     if let Ok(text) = fs::read_to_string(eroot.join("etc/profile.env")) {
-        let snapshot = IncrementalSnapshot::take(&config);
-        for line in logical_lines(&text) {
-            let t = line.trim();
-            let l = t.strip_prefix("export ").unwrap_or(t);
-            if let Some((key, raw_value)) = parse_kv_line(l) {
-                // Eager (portuale resolves eagerly where real expands
-                // lazily on access): values already known -- earlier
-                // lines of this file -- substitute, matching real's
-                // on-access result for backward references; forward
-                // references to later files stay literal here and pick
-                // up their values when those files are read (the eager
-                // approximation portuale uses throughout). Either way
-                // the values seed `scalars`, so every later file
-                // (globals, profile chain, `make.conf`, `package.env`
-                // files) expands against them -- real's
-                // `expand_map = env_d.copy()` seeding.
-                let value = substitute(&raw_value, &scalars);
-                note_incremental(&mut config, key, &value);
-                if key == "PATH" {
-                    config.envd_sets_path = true;
-                }
-                // env.d is a real scalar db too (real `configdict["env.d"]`):
-                // its `LANG` / `LEX` / … surface in `emerge --info`. Lowest
-                // priority -- `make.globals`, the profile chain and
-                // `make.conf` all override.
-                scalars.insert(key.to_string(), value);
+        let parsed = parse_envd_text(&text);
+        for (key, value) in &parsed.vars {
+            if ENV_BLACKLIST.contains(&key.as_str()) {
+                continue;
             }
+            scalars.insert(key.clone(), value.clone());
         }
-        snapshot.restore(&mut config);
+        for (key, tokens) in &parsed.incremental_layers {
+            if ENV_BLACKLIST.contains(&key.as_str()) {
+                continue;
+            }
+            config
+                .incremental_sources
+                .entry(key.clone())
+                .or_default()
+                .push(tokens.clone());
+        }
+        config.envd_sets_path = parsed.sets_path;
+        config.envd_raw = text;
+        config.envd_vars = parsed
+            .vars
+            .into_iter()
+            .filter(|(k, _)| !ENV_BLACKLIST.contains(&k.as_str()))
+            .collect();
+        config.envd_incremental_layers = parsed
+            .incremental_layers
+            .into_iter()
+            .filter(|(k, _)| !ENV_BLACKLIST.contains(&k.as_str()))
+            .collect();
     }
+    // Which `scalars` keys the env.d read owned, for the higher-layer
+    // recording at every insert site below (`process_lines`,
+    // `process_make_conf_file`, `apply_env_layer`, the `USE_EXPAND`
+    // env-value loop): a key the env.d map holds that a later layer
+    // assigns joins `envd_higher_keys`, so `reload_env_d` leaves the
+    // higher value standing.
 
     // `globals`: `cnf/make.globals`, always sourced -- the base layer
     // under the profile chain (real config.py:532). Real portage ships it
@@ -2769,6 +2992,7 @@ pub fn resolve_config(
             source: e,
         })?;
         scalars.remove("USE");
+        note_higher(&mut config, "USE");
         let snapshot = IncrementalSnapshot::take(&config);
         process_lines(&text, &mut scalars, &mut config);
         snapshot.restore(&mut config);
@@ -2799,6 +3023,7 @@ pub fn resolve_config(
             // Real config.py quirk: USE is excluded from cross-level
             // substitution -- see the module doc comment.
             scalars.remove("USE");
+            note_higher(&mut config, "USE");
             let text = fs::read_to_string(&make_defaults).map_err(|e| Error::ReadFile {
                 path: make_defaults.display().to_string(),
                 source: e,
@@ -2826,6 +3051,37 @@ pub fn resolve_config(
     // USE_EXPAND variable still at this value below has had its final say
     // from the profile (`defaults` tier) and is folded per-level here, not
     // again in the global `conf`-tier loop.
+    // Profile half of real `_env_d_blacklist` (`profile_only_variables`,
+    // `config.py:734-743`): the profile's own `PROFILE_ONLY_VARIABLES`
+    // fold (env.d's own assignment, source 0, excluded) names keys env.d
+    // must not supply. A key the globals/profile chain also assigned
+    // keeps that value; one only env.d held is dropped from `scalars`.
+    if !config.envd_vars.is_empty() {
+        let skip = usize::from(
+            config
+                .envd_incremental_layers
+                .contains_key("PROFILE_ONLY_VARIABLES"),
+        );
+        let mut only: Vec<String> = config
+            .incremental_sources
+            .get("PROFILE_ONLY_VARIABLES")
+            .map(|src| src.iter().skip(skip).flatten().cloned().collect())
+            .unwrap_or_default();
+        only.sort();
+        only.dedup();
+        for key in &only {
+            if config.envd_vars.remove(key).is_some() && !config.envd_higher_keys.remove(key) {
+                scalars.remove(key);
+            }
+            if config.envd_incremental_layers.remove(key).is_some()
+                && let Some(src) = config.incremental_sources.get_mut(key)
+                && !src.is_empty()
+            {
+                src.remove(0);
+            }
+        }
+        config.envd_profile_only = only;
+    }
     let profile_scalars = scalars.clone();
 
     let make_conf = config_root.join("etc/portage/make.conf");
@@ -2897,6 +3153,7 @@ pub fn resolve_config(
         .collect();
     for var in env_expand_names {
         if let Some(value) = config_env_var(&var) {
+            note_higher(&mut config, &var);
             scalars.insert(var, value);
         }
     }
@@ -4102,6 +4359,154 @@ sync-uri = https://plain.example.org/amd64/
         fs::create_dir_all(&bare).unwrap();
         assert_eq!(args(&bare).envd_use_tokens, Vec::<String>::new());
         let _ = fs::remove_dir_all(&bare);
+    }
+
+    /// Backlog #332: real `_emerge/Scheduler.py:1899-1913`
+    /// (`_allocate_config`) calls `config.reload()` before every package
+    /// task (`portage/package/ebuild/config.py:2691-2699`), so a package
+    /// built after a merge that installed an `/etc/env.d/*` file sees the
+    /// new variables. `Config::reload_env_d` is portuale's `reload()` for
+    /// the eroot-only `profile.env` it reads (see `resolve_config`'s doc
+    /// comment for the broot cut): re-reading replaces the env.d scalar
+    /// layer and incremental layer without touching higher layers.
+    #[test]
+    fn reload_env_d_picks_up_a_rewritten_profile_env() {
+        let root = TempDir::new("portage-profile-test-envd-reload").keep();
+        let repo = root.join("repo");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(portage_dir.join("env")).unwrap();
+        fs::create_dir_all(root.join("etc")).unwrap();
+        // `make.conf` sets one key: the higher layer `reload_env_d` must
+        // not override. `CONFIG_PROTECT` has an env.d layer and a
+        // `make.conf` layer so the test can tell replacement from append.
+        fs::write(
+            portage_dir.join("make.conf"),
+            "ENVDRELOAD_KEEP=\"from-make-conf\"\nENVDRELOAD_LATE=\"from-make-conf\"\n\
+             CONFIG_PROTECT=\"/conf-protect\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("etc/profile.env"),
+            "export ENVDRELOAD_KEEP='from-envd'\n\
+             export ENVDRELOAD_GONE='bye'\n\
+             export CONFIG_PROTECT='/envd-protect'\n\
+             export EAPI='9999'\n",
+        )
+        .unwrap();
+        let resolve = || {
+            with_test_env(&[], || {
+                resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+                    .expect("resolves")
+            })
+        };
+        let mut config = resolve();
+        // The first load applies the env blacklist too (real
+        // `config.py:724-743` pops `_env_d_blacklist` from `env.d`):
+        // `EAPI` (in `ENV_BLACKLIST`) never enters `other_vars`.
+        assert_eq!(config.other_vars.get("EAPI"), None);
+        assert_eq!(
+            config.other_vars.get("ENVDRELOAD_KEEP").map(String::as_str),
+            Some("from-make-conf")
+        );
+        assert_eq!(
+            config.other_vars.get("ENVDRELOAD_GONE").map(String::as_str),
+            Some("bye")
+        );
+        assert!(!config.env_d_changed(&root));
+        assert_eq!(
+            config.resolved_incremental("CONFIG_PROTECT"),
+            Some(vec![
+                "/conf-protect".to_string(),
+                "/envd-protect".to_string()
+            ])
+        );
+
+        // A merge ran `env-update`: a new key appears, the
+        // `make.conf`-owned key changes upstream, a key disappears, and
+        // the blacklisted key is still filtered.
+        fs::write(
+            root.join("etc/profile.env"),
+            "export ENVDRELOAD_KEEP='changed-envd'\n\
+             export ENVDRELOAD_VAR='1'\n\
+             export ENVDRELOAD_LATE='late-envd'\n\
+             export CONFIG_PROTECT='/new-protect'\n\
+             export EAPI='9999'\n",
+        )
+        .unwrap();
+        assert!(config.env_d_changed(&root));
+        config.reload_env_d(&root);
+        assert!(!config.env_d_changed(&root));
+        assert_eq!(
+            config.other_vars.get("ENVDRELOAD_VAR").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            config.other_vars.get("ENVDRELOAD_KEEP").map(String::as_str),
+            Some("from-make-conf")
+        );
+        // A key env.d only starts setting mid-run still loses to the
+        // `make.conf` value it lies under (real's layered lookup).
+        assert_eq!(
+            config.other_vars.get("ENVDRELOAD_LATE").map(String::as_str),
+            Some("from-make-conf")
+        );
+        assert_eq!(config.other_vars.get("ENVDRELOAD_GONE"), None);
+        assert_eq!(config.other_vars.get("EAPI"), None);
+        // The env.d incremental layer is replaced, not appended: the old
+        // token is gone while the `make.conf` layer survives.
+        assert_eq!(
+            config.resolved_incremental("CONFIG_PROTECT"),
+            Some(vec![
+                "/conf-protect".to_string(),
+                "/new-protect".to_string()
+            ])
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Backlog #332: the profile half of real `_env_d_blacklist`
+    /// (`profile_only_variables`, `config.py:734-743`) drops env.d keys the
+    /// profile's `PROFILE_ONLY_VARIABLES` names, on the first load and on
+    /// every reload alike (`reload()` reuses the init-time blacklist).
+    #[test]
+    fn reload_env_d_never_admits_a_profile_only_variable() {
+        let root = TempDir::new("portage-profile-test-envd-profile-only").keep();
+        let repo = root.join("repo");
+        let profile = root.join("etc/portage/make.profile");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(
+            profile.join("make.defaults"),
+            "PROFILE_ONLY_VARIABLES=\"ENVDRELOAD_PO\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("etc/profile.env"),
+            "export ENVDRELOAD_PO='first'\nexport ENVDRELOAD_OK='first'\n",
+        )
+        .unwrap();
+        let mut config = with_test_env(&[], || {
+            resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+                .expect("resolves")
+        });
+        assert_eq!(config.other_vars.get("ENVDRELOAD_PO"), None);
+        assert_eq!(
+            config.other_vars.get("ENVDRELOAD_OK").map(String::as_str),
+            Some("first")
+        );
+        fs::write(
+            root.join("etc/profile.env"),
+            "export ENVDRELOAD_PO='second'\nexport ENVDRELOAD_OK='second'\n",
+        )
+        .unwrap();
+        config.reload_env_d(&root);
+        assert_eq!(config.other_vars.get("ENVDRELOAD_PO"), None);
+        assert_eq!(
+            config.other_vars.get("ENVDRELOAD_OK").map(String::as_str),
+            Some("second")
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -5887,7 +6292,7 @@ sync-uri = https://plain.example.org/amd64/
     /// (`TEST_ENV_OVERRIDE`), so it never touches real `std::env` and
     /// can't race the many other test threads calling `resolve_config`
     /// concurrently.
-    fn with_test_env(vars: &[(&str, &str)], f: impl FnOnce()) {
+    fn with_test_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
         let map: HashMap<String, String> = vars
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -5895,8 +6300,9 @@ sync-uri = https://plain.example.org/amd64/
         TEST_ENV_OVERRIDE.with(|o| *o.borrow_mut() = Some(map));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         TEST_ENV_OVERRIDE.with(|o| *o.borrow_mut() = None);
-        if let Err(e) = result {
-            std::panic::resume_unwind(e);
+        match result {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
         }
     }
 

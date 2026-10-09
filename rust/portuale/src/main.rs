@@ -46,6 +46,7 @@ mod privileges;
 mod regen;
 mod remote;
 mod remote_bundle;
+mod self_exe;
 mod vdb_cmd;
 #[cfg(feature = "vdb-fuse")]
 mod vdb_fuse;
@@ -175,6 +176,9 @@ fn main() -> ExitCode {
     if argv_os.get(1).is_some_and(|s| s == "__helper") {
         return ExitCode::from(helpers::run(&argv_os[2..]) as u8);
     }
+    // #331: pin the binary's path before any phase can run, so a file
+    // replaced mid-run never surfaces as `<path> (deleted)`.
+    self_exe::self_exe();
     let argv: Vec<String> = std::env::args().collect();
     let invoked_as = basename(&argv[0]);
 
