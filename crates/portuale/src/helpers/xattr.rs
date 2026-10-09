@@ -756,6 +756,117 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    // ---- quoting unit tests (pinned by the dump-escapes oracle) -----
+
+    /// `quote` escapes exactly NUL, `"`, newline, CR and backslash in
+    /// values (plus `=` in names, plus path chars in paths); 0xff and
+    /// UTF-8 pass through raw.
+    /// `parse_args` against Portage's: each expected files list,
+    /// `target_directory` and `directory` was probed by calling Portage
+    /// `install.py`'s `parse_args` (Python 3.14).
+    #[test]
+    fn install_parse_args_matches_portages() {
+        // (argv, files, target_directory, directory)
+        type Case<'a> = (&'a [&'a str], &'a [&'a str], Option<&'a str>, bool);
+        let cases: &[Case] = &[
+            (
+                &["-m", "0644", "src", "dest"],
+                &["src", "dest"],
+                None,
+                false,
+            ),
+            (&["-m0644", "src", "dest"], &["src", "dest"], None, false),
+            (&["-t", "dest", "a", "b"], &["a", "b"], Some("dest"), false),
+            (&["-tdest", "a"], &["a"], Some("dest"), false),
+            (
+                &["--target-directory=dest", "a"],
+                &["a"],
+                Some("dest"),
+                false,
+            ),
+            (
+                &["--target-directory", "dest", "a"],
+                &["a"],
+                Some("dest"),
+                false,
+            ),
+            (&["-Dm", "0755", "a", "b"], &["a", "b"], None, false),
+            (&["-d", "x", "y"], &["x", "y"], None, true),
+            (
+                &["-o", "root", "-g", "root", "a", "b"],
+                &["a", "b"],
+                None,
+                false,
+            ),
+            (&["-Z", "a", "b"], &["a", "b"], None, false),
+            (
+                &["--backup", "numbered", "a", "b"],
+                &["a", "b"],
+                None,
+                false,
+            ),
+            (&["-v", "--", "-x", "b"], &["-x", "b"], None, false),
+            (&["--suffix=.bak", "a", "b"], &["a", "b"], None, false),
+            (&["-m=0644", "a", "b"], &["a", "b"], None, false),
+            (&["--dir", "a"], &["a"], None, true),
+        ];
+        for (argv, files, target, directory) in cases {
+            let args: Vec<OsString> = argv.iter().map(OsString::from).collect();
+            let (opts, got) = parse_install_args(&args);
+            let want: Vec<Vec<u8>> = files.iter().map(|f| f.as_bytes().to_vec()).collect();
+            assert_eq!(got, want, "{argv:?}: files");
+            assert_eq!(
+                opts.target_directory.as_deref(),
+                target.map(str::as_bytes),
+                "{argv:?}: target_directory"
+            );
+            assert_eq!(opts.directory, *directory, "{argv:?}: directory");
+        }
+    }
+
+    #[test]
+    fn quote_escapes_only_the_getfattr_set() {
+        let value_chars = b"\0\"\n\r\\";
+        assert_eq!(
+            quote(b"a\"b\\c\nd\0e\xff\xc3\xa9", value_chars),
+            b"a\\042b\\134c\\012d\\000e\xff\xc3\xa9".to_vec(),
+        );
+        // `=` is escaped in attr names only.
+        assert_eq!(quote(b"a=b", b"=\n\r\\"), b"a\\075b".to_vec());
+        assert_eq!(quote(b"a=b", value_chars), b"a=b".to_vec());
+        // Paths: backslash, newline, CR.
+        assert_eq!(
+            quote(b"/x y\\z\nq\rw", b"\n\r\\"),
+            b"/x y\\134z\\012q\\015w".to_vec(),
+        );
+        // Empty input, and a byte needing no escape, stay as is.
+        assert_eq!(quote(b"", value_chars), b"".to_vec());
+        assert_eq!(quote(b"plain", value_chars), b"plain".to_vec());
+    }
+
+    /// `unquote` turns `\` + 3 octal digits into the byte and leaves
+    /// everything else (short escapes included) literal.
+    #[test]
+    fn unquote_processes_only_three_digit_octal_escapes() {
+        assert_eq!(
+            unquote(b"a\\042b\\134c\\012d\\000e\xff\xc3\xa9"),
+            b"a\"b\\c\nd\0e\xff\xc3\xa9".to_vec(),
+        );
+        // Round trip with `quote`.
+        for v in [
+            b"".to_vec(),
+            b"a=b \"q\"\\\n\r\0".to_vec(),
+            b"\xff\xfe\xc3\xa9".to_vec(),
+        ] {
+            assert_eq!(unquote(&quote(&v, b"\0\"=\n\r\\")), v);
+        }
+        // `\12` (two digits) and `\8` are NOT escapes: literal.
+        assert_eq!(unquote(b"a\\12b"), b"a\\12b".to_vec());
+        assert_eq!(unquote(b"a\\8b"), b"a\\8b".to_vec());
+        // `\\101` is a literal backslash + `A` (leftmost match wins).
+        assert_eq!(unquote(b"\\\\101"), b"\\A".to_vec());
+    }
+
     // ---- fixture plumbing --------------------------------------------
 
     /// The `portuale` binary next to the test binary (child processes).

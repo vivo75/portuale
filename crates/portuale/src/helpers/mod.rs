@@ -128,6 +128,26 @@ mod dispatcher_tests {
         );
     }
 
+    /// A never-in-scope script like `dohtml.py` exits 127 like any other
+    /// unknown name (`dohtml` dies first for EAPI >= 7, so it has no port).
+    #[test]
+    fn python_with_a_non_native_script_exits_127() {
+        for argv in [&["dohtml.py", "x"][..], &["frobnicate.py", "--dump"][..]] {
+            let mut full = vec!["python"];
+            full.extend(argv);
+            let out = helper(&full);
+            assert_eq!(out.status.code(), Some(127), "{out:?}");
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                err.contains(&format!(
+                    "portuale: no native helper for: {}",
+                    full.join(" ")
+                )),
+                "{err}"
+            );
+        }
+    }
+
     /// Helper scripts route without any interpreter or checkout
     /// (`xattr-helper.py --help` answers natively even with both disabled).
     #[test]
