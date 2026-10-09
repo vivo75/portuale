@@ -230,6 +230,15 @@ pub(super) fn errno_line(errno: i32, path: &[u8]) -> Vec<u8> {
     out
 }
 
+/// `ExcType: [Errno n] strerror: b'src' -> b'dst'` (a two-filename
+/// `OSError`, e.g. `os.symlink`).
+fn errno_line2(errno: i32, src: &[u8], dst: &[u8]) -> Vec<u8> {
+    let mut out = errno_line(errno, src);
+    out.extend_from_slice(b" -> ");
+    out.extend_from_slice(&py_bytes_repr(dst));
+    out
+}
+
 fn last_errno() -> i32 {
     std::io::Error::last_os_error()
         .raw_os_error()
