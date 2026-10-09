@@ -2,6 +2,78 @@ use super::*;
 
 use portage_util::TempDir;
 
+// --- Client-binary gates: digest, architecture, preflight facts ------------------
+
+/// Fake (but well-formed) full SHA-256 hex for gate tests: any 64-hex
+/// string decides the same way a genuine digest would.
+const S8_DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+const S8_SHORT: &str = "0123456789abcdef";
+
+const S8_WRONG: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+fn s8_pre(dirs: &[&str], machine: u16) -> BinPreflight {
+    let dirs: Vec<String> = dirs.iter().map(|s| s.to_string()).collect();
+    BinPreflight {
+        candidates: bin_candidates(&dirs, S8_SHORT),
+        digest: S8_DIGEST.to_string(),
+        bin_path: "/server/portuale".to_string(),
+        machine,
+        dirs,
+    }
+}
+
+/// Parsed preflight values for the binary gates: `cands` are the
+/// `CAND_<i>_SHA` facts in D5 order, `dir_states` the
+/// `(EXISTS, WRITABLE, MODE)` triple per directory.
+fn s8_values(
+    cands: &[&str],
+    dir_states: &[(&str, &str, &str)],
+    uname: &str,
+) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for (i, sha) in cands.iter().enumerate() {
+        map.insert(format!("CAND_{i}_SHA"), sha.to_string());
+    }
+    for (j, (exists, writable, mode)) in dir_states.iter().enumerate() {
+        map.insert(format!("DIR_{j}_EXISTS"), exists.to_string());
+        map.insert(format!("DIR_{j}_WRITABLE"), writable.to_string());
+        map.insert(format!("DIR_{j}_MODE"), mode.to_string());
+    }
+    map.insert("UNAME_M".to_string(), uname.to_string());
+    map
+}
+
+/// `portuale` must never be invoked by bare name in generated client
+/// scripts -- only through `$PORTUALE_BIN`, an absolute path, or a
+/// non-command token. Returns the offending lines.
+fn bare_portuale_hits(script: &str) -> Vec<String> {
+    let mut scrubbed = script.to_string();
+    for token in [
+        "portuale-python",
+        "portuale-remote",
+        ".portuale.",
+        "portuale-helper-ping-1",
+        "(portuale #",
+    ] {
+        scrubbed = scrubbed.replace(token, "########");
+    }
+    // `portuale-<hex>` install names.
+    while let Some(start) = scrubbed.find("portuale-") {
+        let rest = &scrubbed[start + "portuale-".len()..];
+        let hex_len = rest.chars().take_while(|c| c.is_ascii_hexdigit()).count();
+        if hex_len == 0 {
+            break;
+        }
+        scrubbed.replace_range(start..start + "portuale-".len() + hex_len, "########");
+    }
+    scrubbed
+        .lines()
+        .filter(|line| line.contains("portuale"))
+        .map(str::to_string)
+        .collect()
+}
+
 fn ctx_with_args(hostname: &str, ssh_args: Option<&str>) -> RemoteContext {
     RemoteContext {
         hostname: hostname.to_string(),

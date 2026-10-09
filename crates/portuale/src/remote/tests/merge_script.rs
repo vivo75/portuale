@@ -1,5 +1,106 @@
 use super::*;
 
+/// Every generated script kind exports the resolved absolute
+/// `PORTUALE_BIN` and resolves `PORTAGE_PYTHON` through `$UNITBIN`;
+/// no `portuale` command runs by bare name.
+#[test]
+fn generated_scripts_use_absolute_portuale_bin() {
+    const ABS: &str = "/opt/bin/portuale-0123456789abcdef";
+    let staged = render_test_staged();
+    let phase = phase_script(PhaseScriptArgs {
+        unit_dir: "/work/probe-1.0",
+        staged: &staged,
+        phase: "setup",
+        root: "/",
+        workdir_parent: "/work",
+        colormap: "",
+        portuale_bin: ABS,
+    });
+    let regen = postinst_regen_script(PostinstRegenScriptArgs {
+        unit_dir: "/work/probe-1.0",
+        staged: &staged,
+        root: "/",
+        workdir_parent: "/work",
+        colormap: "",
+        features: None,
+        locale: &[],
+        portuale_bin: ABS,
+    });
+    let merge = merge_script(MergeScriptArgs {
+        unit_dir: "/work/probe-1.0",
+        staged: &staged,
+        root: "/",
+        vdb: "/var/db/pkg",
+        stateless: false,
+        protect_list: "/etc",
+        mask_list: "/etc/env.d",
+        ledger: None,
+        portuale_bin: ABS,
+    })
+    .expect("merge script renders");
+    let helpers_flow = format!("{MERGE_HELPERS}\n{MERGE_FLOW}");
+    let unpack = unpack_script("/work", "probe-1.0", 1234);
+    let preflight = preflight_script("/", "/work", None);
+    // The three rendered kinds export the absolute path (the old hooks
+    // inherit the merge header's export at runtime); the read-only
+    // unpack/preflight drivers invoke no binary at all.
+    for (name, script) in [
+        ("phase", phase.as_str()),
+        ("regen", regen.as_str()),
+        ("merge", merge.as_str()),
+    ] {
+        assert!(
+            script.contains(&format!("export PORTUALE_BIN='{ABS}'")),
+            "{name} must export the absolute PORTUALE_BIN:\n{script}"
+        );
+    }
+    for (name, script) in [
+        ("phase", phase.as_str()),
+        ("regen", regen.as_str()),
+        ("merge", merge.as_str()),
+        ("old-hook", helpers_flow.as_str()),
+    ] {
+        assert!(
+            script.contains("export PORTAGE_PYM_PATH=/"),
+            "{name} must pin PORTAGE_PYM_PATH=/:\n{script}"
+        );
+        assert!(
+            script.contains("unset PORTAGE_IPC_DAEMON"),
+            "{name} must drop PORTAGE_IPC_DAEMON (no IPC daemon):\n{script}"
+        );
+        assert!(
+            !script.contains("PORTAGE_IPC_DAEMON="),
+            "{name} must not export PORTAGE_IPC_DAEMON:\n{script}"
+        );
+        assert!(
+            script.contains("PORTAGE_PYTHON=\"$UNITBIN/portuale-python\""),
+            "{name} must resolve PORTAGE_PYTHON through $UNITBIN:\n{script}"
+        );
+        assert!(
+            !script.contains("/usr/bin/python"),
+            "{name} must not point at a system python:\n{script}"
+        );
+    }
+    assert!(
+        !merge.contains(":-portuale"),
+        "portageq-wrapper's PATH fallback must be gone:\n{merge}"
+    );
+    for (name, script) in [
+        ("phase", phase.as_str()),
+        ("regen", regen.as_str()),
+        ("merge", merge.as_str()),
+        ("old-hook", helpers_flow.as_str()),
+        ("unpack", unpack.as_str()),
+        ("preflight", preflight.as_str()),
+    ] {
+        assert_eq!(
+            bare_portuale_hits(script),
+            Vec::<String>::new(),
+            "{name} invokes portuale by bare name"
+        );
+    }
+}
+
 /// `phase_exports` carries `MERGE_TYPE=binary` exactly when
 /// `eapi_exports_merge_type` holds (expected value from Portage).
 #[test]
