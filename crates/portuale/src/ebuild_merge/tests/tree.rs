@@ -35,6 +35,98 @@ fn repository_name_for_is_none_when_no_ancestor_has_one() {
     assert_eq!(repository_name_for(&pkg_dir), None);
 }
 
+/// Merged files carry xattrs like Portage's `movefile`: same-device renames keep
+/// everything; cross-device copies apply them only under `FEATURES=xattr`.
+#[test]
+fn merge_tree_carries_xattrs_like_portage_movefile() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let b = |p: &Path| p.as_os_str().as_bytes().to_vec();
+    let get = |p: &Path, a: &[u8]| crate::helpers::xattr_get(&b(p), a).ok();
+    let image = |base: &Path| -> PathBuf {
+        let d = base.join("D");
+        std::fs::create_dir_all(d.join("usr/share/xa")).unwrap();
+        let f = d.join("usr/share/xa/f");
+        std::fs::write(&f, b"payload").unwrap();
+        crate::helpers::xattr_set(&b(&f), b"user.keep", b"k").unwrap();
+        crate::helpers::xattr_set(&b(&f), b"user.skip", b"s").unwrap();
+        d
+    };
+    let merge = |d: &Path, root: &Path, policy: &XattrPolicy| {
+        std::fs::create_dir_all(root).unwrap();
+        merge_tree(MergeTreeArgs {
+            d,
+            root,
+            category: "dev-libs",
+            installed_instance_pf: None,
+            protect_if_modified: false,
+            config_protect: "/etc",
+            config_protect_mask: "/etc/env.d",
+            noconfmem: false,
+            cfgfiledict: &mut BTreeMap::new(),
+            xattrs: policy,
+        })
+        .expect("merge_tree succeeds");
+    };
+    let on = XattrPolicy {
+        enabled: true,
+        exclude: "user.sk*".to_string(),
+    };
+    let off = XattrPolicy {
+        enabled: false,
+        exclude: "user.sk*".to_string(),
+    };
+
+    let tmp = tempdir();
+    let probe = tmp.join("probe");
+    std::fs::write(&probe, b"").unwrap();
+    if crate::helpers::xattr_set(&b(&probe), b"user.probe", b"1").is_err() {
+        eprintln!("skipped: no user xattrs on {}", tmp.display());
+        return;
+    }
+
+    let d = image(&tmp);
+    let root = tmp.join("ROOT");
+    merge(&d, &root, &off);
+    let dest = root.join("usr/share/xa/f");
+    assert_eq!(get(&dest, b"user.keep"), Some(b"k".to_vec()));
+    assert_eq!(get(&dest, b"user.skip"), Some(b"s".to_vec()));
+
+    // `needs_move`: same bytes and mode, the xattr dropped on `dest`.
+    let src = d.join("usr/share/xa/f");
+    let bare = tmp.join("bare");
+    std::fs::copy(&src, &bare).unwrap();
+    std::fs::set_permissions(&bare, std::fs::metadata(&src).unwrap().permissions()).unwrap();
+    assert!(needs_move(&src, &bare, &on));
+    assert!(!needs_move(&src, &bare, &off));
+    crate::helpers::xattr_set(&b(&bare), b"user.keep", b"k").unwrap();
+    assert!(!needs_move(&src, &bare, &on));
+
+    // Cross device: the image on another filesystem than `ROOT`.
+    let other = std::path::PathBuf::from("/dev/shm")
+        .join(format!("portuale-xattr-merge-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&other);
+    std::fs::create_dir_all(&other).unwrap();
+    let same_fs =
+        std::fs::metadata(&other).unwrap().dev() == std::fs::metadata(&tmp).unwrap().dev();
+    let other_probe = other.join("probe");
+    std::fs::write(&other_probe, b"").unwrap();
+    let xattrs_there = crate::helpers::xattr_set(&b(&other_probe), b"user.probe", b"1").is_ok();
+    if !same_fs && xattrs_there {
+        for (name, policy, keep) in [("on", &on, true), ("off", &off, false)] {
+            let d = image(&other.join(name));
+            let root = tmp.join(format!("ROOT-x-{name}"));
+            merge(&d, &root, policy);
+            let dest = root.join("usr/share/xa/f");
+            assert_eq!(get(&dest, b"user.keep").is_some(), keep, "{name}");
+            assert_eq!(get(&dest, b"user.skip"), None, "{name}");
+        }
+    } else {
+        eprintln!("cross-device half skipped (same fs or no xattrs on /dev/shm)");
+    }
+    let _ = std::fs::remove_dir_all(&other);
+}
+
 #[test]
 fn merge_tree_copies_files_dirs_and_symlinks_and_writes_matching_contents() {
     let tmp = tempdir();

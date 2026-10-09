@@ -456,6 +456,75 @@ fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
     let _ = std::fs::remove_dir_all(&distdir);
 }
 
+/// End to end in a phase: under `FEATURES=xattr` installs reach
+/// `ebuild-helpers/xattr/install` first and keep `user.*` xattr;
+/// without `xattr` they lose it.
+#[test]
+fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
+    use std::os::unix::ffi::OsStrExt;
+    if !Path::new("/usr/bin/setfattr").exists() {
+        eprintln!("skipped: no setfattr");
+        return;
+    }
+    let tmp = TempDir::new("ebuild-phases-test-xattr-install").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let pkg_dir = tmp.join("pkg/dev-libs/xattrinstpkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let ebuild = pkg_dir.join("xattrinstpkg-1.0.ebuild");
+    std::fs::write(
+        &ebuild,
+        "EAPI=8\nSLOT=\"0\"\nS=\"${WORKDIR}\"\n\
+         src_unpack() {\n\
+         \tfor f in viaexe viainstall; do\n\
+         \t\tprintf '#!/bin/sh\\n' > \"$f\" || die\n\
+         \t\tsetfattr -n user.portuale329 -v \"$f\" \"$f\" || die\n\
+         \tdone\n}\n\
+         src_install() {\n\
+         \texport PORTAGE_INSTALL_XATTR_IMPLEMENTATION=python\n\
+         \texeinto /usr/libexec/xa; doexe viaexe\n\
+         \tinstall -D -m 0755 viainstall \"${ED}/usr/libexec/xa/viainstall\" || die\n}\n",
+    )
+    .unwrap();
+    let probe = tmp.join("probe");
+    std::fs::write(&probe, b"x").unwrap();
+    if std::process::Command::new("setfattr")
+        .args(["-n", "user.probe", "-v", "1"])
+        .arg(&probe)
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        eprintln!("skipped: no user xattrs on {}", tmp.display());
+        return;
+    }
+    for (i, (features, expect)) in [("xattr", true), ("", false)].into_iter().enumerate() {
+        let portage_tmpdir = tmp.join(format!("tmp{i}"));
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild,
+            commands: &["install"],
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &tmp.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell: ShellBackend::Brush,
+            build_env: &[("FEATURES".to_string(), features.to_string())],
+        })
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should succeed (FEATURES={features:?})");
+        let image = portage_tmpdir.join("portage/dev-libs/xattrinstpkg-1.0/image");
+        for name in ["viaexe", "viainstall"] {
+            let file = image.join("usr/libexec/xa").join(name);
+            let got =
+                crate::helpers::xattr_get(file.as_os_str().as_bytes(), b"user.portuale329").ok();
+            let want = expect.then(|| name.as_bytes().to_vec());
+            assert_eq!(got, want, "{name} with FEATURES={features:?}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// End-to-end proof of `eclass_locations_value`: the fixture ebuild
 /// inherits `pilotcheck.eclass` via `bin/ebuild.sh`'s `inherit()` and
 /// calls a function it defines.

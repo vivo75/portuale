@@ -28,6 +28,22 @@ fn phase_path_prefixes_helpers_onto_the_threaded_path() {
     );
 }
 
+/// The xattr helper dir goes in front of the helpers dir only when
+/// `xattr` is in `FEATURES`.
+#[test]
+fn phase_path_puts_the_xattr_wrapper_first_under_features_xattr() {
+    let helpers = Path::new("/bin/ebuild-helpers");
+    let extra = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
+    assert_eq!(
+        phase_path(helpers, &extra, "sandbox xattr userpriv"),
+        "/bin/ebuild-helpers/xattr:/bin/ebuild-helpers:/usr/bin:/bin"
+    );
+    assert_eq!(
+        phase_path(helpers, &extra, "sandbox userpriv"),
+        "/bin/ebuild-helpers:/usr/bin:/bin"
+    );
+}
+
 /// Every brush `export` value is single-quoted, so config-derived
 /// values can neither word-split nor command-substitute.
 #[test]

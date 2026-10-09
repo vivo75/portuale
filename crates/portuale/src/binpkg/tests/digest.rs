@@ -24,6 +24,77 @@ fn read_gpkg_metadata_rejects_a_non_gpkg_tar() {
     assert!(err.message().contains("gpkg-1"), "{err}");
 }
 
+/// End to end: an xpak packed with `tar --xattrs` restores attributes
+/// under `xattr` (minus the exclude list) and none without it.
+// Portage: BinpkgExtractorAsync._xpak_start
+#[test]
+fn extract_binpkg_restores_xpak_xattrs_under_features_xattr() {
+    use std::os::unix::ffi::OsStrExt;
+    if !tar_supports_xattrs() {
+        eprintln!("skipped: tar has no --xattrs");
+        return;
+    }
+    let tmp = TempDir::new("binpkg-xpak-xattrs").keep();
+    let _ = fs::remove_dir_all(&tmp);
+    let stage = tmp.join("stage");
+    fs::create_dir_all(stage.join("usr/share/xa")).unwrap();
+    let f = stage.join("usr/share/xa/f");
+    fs::write(&f, b"payload").unwrap();
+    let fb = f.as_os_str().as_bytes();
+    if crate::helpers::xattr_set(fb, b"user.keep", b"k").is_err() {
+        eprintln!("skipped: no user xattrs on {}", tmp.display());
+        return;
+    }
+    crate::helpers::xattr_set(fb, b"user.skip", b"s").unwrap();
+    let tar_path = tmp.join("image.tar");
+    run_tar(&[
+        "-cf",
+        &lossy(&tar_path),
+        "--xattrs",
+        "-C",
+        &lossy(&stage),
+        ".",
+    ])
+    .unwrap();
+    let pkg = tmp.join("xa-1.tbz2");
+    fs::write(
+        &pkg,
+        make_xpak_binpkg(&fs::read(&tar_path).unwrap(), &[("SLOT", b"0\n")]),
+    )
+    .unwrap();
+
+    let on = crate::ebuild_merge::XattrPolicy {
+        enabled: true,
+        exclude: "user.sk*".to_string(),
+    };
+    let off = crate::ebuild_merge::XattrPolicy::default();
+    for (name, policy, keep) in [("on", &on, true), ("off", &off, false)] {
+        let image = tmp.join(format!("image-{name}"));
+        extract_binpkg(
+            &pkg,
+            &image,
+            &tmp.join(format!("bi-{name}")),
+            &GpgVerify::default(),
+            policy,
+        )
+        .expect("extract succeeds");
+        let got = image.join("usr/share/xa/f");
+        let gb = got.as_os_str().as_bytes();
+        assert_eq!(fs::read(&got).unwrap(), b"payload");
+        assert_eq!(
+            crate::helpers::xattr_get(gb, b"user.keep").ok(),
+            keep.then(|| b"k".to_vec()),
+            "{name}"
+        );
+        assert_eq!(
+            crate::helpers::xattr_get(gb, b"user.skip").ok(),
+            None,
+            "{name}"
+        );
+    }
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn verify_binpkg_against_index_reports_size_then_digest_like_portage() {
     // The stat size is checked against the index `SIZE` first, then
