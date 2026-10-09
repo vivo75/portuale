@@ -88,3 +88,25 @@ fn newer_dep(bin: &Path, bin_mtime: std::time::SystemTime) -> Option<PathBuf> {
         })
         .clone()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_deleted_drops_only_the_kernel_marker() {
+        assert_eq!(
+            strip_deleted(PathBuf::from("/usr/local/bin/portuale (deleted)")),
+            PathBuf::from("/usr/local/bin/portuale")
+        );
+        assert_eq!(
+            strip_deleted(PathBuf::from("/usr/bin/portuale")),
+            PathBuf::from("/usr/bin/portuale")
+        );
+        // A name that merely contains the words keeps them.
+        assert_eq!(
+            strip_deleted(PathBuf::from("/opt/x (deleted)/portuale")),
+            PathBuf::from("/opt/x (deleted)/portuale")
+        );
+    }
+}

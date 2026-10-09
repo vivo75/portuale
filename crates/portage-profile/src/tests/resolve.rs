@@ -29,6 +29,161 @@ fn envd_use_tokens_follow_eroot_not_config_root() {
     let _ = fs::remove_dir_all(&bare);
 }
 
+/// `Config::reload_env_d` re-reads the eroot-only `profile.env`,
+/// replacing the env.d scalar and incremental layers without touching higher
+/// layers. Expected behavior from Portage's per-package `config.reload()`.
+#[test]
+fn reload_env_d_picks_up_a_rewritten_profile_env() {
+    let root = TempDir::new("portage-profile-test-envd-reload").keep();
+    let repo = root.join("repo");
+    let portage_dir = root.join("etc/portage");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(portage_dir.join("env")).unwrap();
+    fs::create_dir_all(root.join("etc")).unwrap();
+    // make.conf owns one key (reload must not override it); CONFIG_PROTECT has
+    // both an env.d and a make.conf layer to tell replacement from append.
+    fs::write(
+        portage_dir.join("make.conf"),
+        "ENVDRELOAD_KEEP=\"from-make-conf\"\nENVDRELOAD_LATE=\"from-make-conf\"\n\
+         CONFIG_PROTECT=\"/conf-protect\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("etc/profile.env"),
+        "export ENVDRELOAD_KEEP='from-envd'\n\
+         export ENVDRELOAD_GONE='bye'\n\
+         export CONFIG_PROTECT='/envd-protect'\n\
+         export EAPI='9999'\n",
+    )
+    .unwrap();
+    let resolve = || {
+        with_test_env(&[], || {
+            resolve_config(ResolveConfigArgs {
+                config_root: &root,
+                main_repo_location: &repo,
+                overlay_repos: &[],
+                repo_aliases: &[],
+                main_repo_name: "testrepo",
+                repo_masters: &HashMap::new(),
+                eroot: &root,
+            })
+            .expect("resolves")
+        })
+    };
+    let mut config = resolve();
+    // The first load applies the env blacklist too (Portage config.py):
+    // `EAPI` (in `ENV_BLACKLIST`) never enters `other_vars`.
+    assert_eq!(config.other_vars.get("EAPI"), None);
+    assert_eq!(
+        config.other_vars.get("ENVDRELOAD_KEEP").map(String::as_str),
+        Some("from-make-conf")
+    );
+    assert_eq!(
+        config.other_vars.get("ENVDRELOAD_GONE").map(String::as_str),
+        Some("bye")
+    );
+    assert!(!config.env_d_changed(&root));
+    assert_eq!(
+        config.resolved_incremental("CONFIG_PROTECT"),
+        Some(vec![
+            "/conf-protect".to_string(),
+            "/envd-protect".to_string()
+        ])
+    );
+
+    // A merge ran `env-update`: a new key appears, the `make.conf`-owned key
+    // changes upstream, a key disappears, the blacklisted key stays filtered.
+    fs::write(
+        root.join("etc/profile.env"),
+        "export ENVDRELOAD_KEEP='changed-envd'\n\
+         export ENVDRELOAD_VAR='1'\n\
+         export ENVDRELOAD_LATE='late-envd'\n\
+         export CONFIG_PROTECT='/new-protect'\n\
+         export EAPI='9999'\n",
+    )
+    .unwrap();
+    assert!(config.env_d_changed(&root));
+    config.reload_env_d(&root);
+    assert!(!config.env_d_changed(&root));
+    assert_eq!(
+        config.other_vars.get("ENVDRELOAD_VAR").map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        config.other_vars.get("ENVDRELOAD_KEEP").map(String::as_str),
+        Some("from-make-conf")
+    );
+    // A key env.d only starts setting mid-run still loses to the `make.conf`
+    // value it lies under (Portage's layered lookup).
+    assert_eq!(
+        config.other_vars.get("ENVDRELOAD_LATE").map(String::as_str),
+        Some("from-make-conf")
+    );
+    assert_eq!(config.other_vars.get("ENVDRELOAD_GONE"), None);
+    assert_eq!(config.other_vars.get("EAPI"), None);
+    // The env.d incremental layer is replaced, not appended: the old
+    // token is gone while the `make.conf` layer survives.
+    assert_eq!(
+        config.resolved_incremental("CONFIG_PROTECT"),
+        Some(vec![
+            "/conf-protect".to_string(),
+            "/new-protect".to_string()
+        ])
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The profile half of the env.d blacklist drops env.d keys the
+/// profile's `PROFILE_ONLY_VARIABLES` names, on first load and every reload.
+/// Expected behavior from Portage config.py blacklist.
+#[test]
+fn reload_env_d_never_admits_a_profile_only_variable() {
+    let root = TempDir::new("portage-profile-test-envd-profile-only").keep();
+    let repo = root.join("repo");
+    let profile = root.join("etc/portage/make.profile");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&profile).unwrap();
+    fs::write(
+        profile.join("make.defaults"),
+        "PROFILE_ONLY_VARIABLES=\"ENVDRELOAD_PO\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("etc/profile.env"),
+        "export ENVDRELOAD_PO='first'\nexport ENVDRELOAD_OK='first'\n",
+    )
+    .unwrap();
+    let mut config = with_test_env(&[], || {
+        resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves")
+    });
+    assert_eq!(config.other_vars.get("ENVDRELOAD_PO"), None);
+    assert_eq!(
+        config.other_vars.get("ENVDRELOAD_OK").map(String::as_str),
+        Some("first")
+    );
+    fs::write(
+        root.join("etc/profile.env"),
+        "export ENVDRELOAD_PO='second'\nexport ENVDRELOAD_OK='second'\n",
+    )
+    .unwrap();
+    config.reload_env_d(&root);
+    assert_eq!(config.other_vars.get("ENVDRELOAD_PO"), None);
+    assert_eq!(
+        config.other_vars.get("ENVDRELOAD_OK").map(String::as_str),
+        Some("second")
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn resolves_fixture_profile_chain_and_make_conf() {
     let root = fixtures_root();
