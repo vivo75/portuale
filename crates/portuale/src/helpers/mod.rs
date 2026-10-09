@@ -24,6 +24,31 @@ mod xpak;
 /// reaches a phase as a working binary, never the libtest harness).
 pub(crate) const PING_TOKEN: &str = "portuale-helper-ping-1";
 
+/// Run the helper named by `argv[0]`; `argv` is everything after
+/// `__helper`. Returns the process exit code.
+pub(crate) fn run(argv: &[std::ffi::OsString]) -> i32 {
+    let name = argv
+        .first()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match name.as_str() {
+        "python" => python::run(&argv[1..]),
+        "chmod-lite" => chmod_lite::run(&argv[1..]),
+        "ebuild-ipc" => {
+            eprintln!("portuale: ebuild-ipc is not supported (no IPC daemon)");
+            127
+        }
+        "ping" => {
+            println!("{PING_TOKEN}");
+            0
+        }
+        _ => {
+            no_native_helper(argv);
+            127
+        }
+    }
+}
+
 /// The D1 unknown-helper message: `argv` joined by spaces (lossy), exit
 /// 127. For the `python` dispatcher the caller passes the full
 /// `["python", ...]` argv so the message reads

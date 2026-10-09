@@ -683,6 +683,70 @@ fn copy_xattrs_after_install(opts: &InstallOpts, files: &[Vec<u8>], argv: &[Vec<
     }
 }
 
+/// Entry point: `script` is the `install.py` element (Portage's
+/// `sys.argv[0]`), `args` everything after it.
+pub(crate) fn run_install(_script: &OsString, args: &[OsString]) -> i32 {
+    // `os.chdir(os.environ["__PORTAGE_HELPER_CWD"])` first (bug 469338:
+    // after the imports — here there are none, so first).
+    let cwd = match std::env::var_os("__PORTAGE_HELPER_CWD") {
+        Some(c) if !c.is_empty() => c,
+        _ => {
+            stderr_write(b"KeyError: '__PORTAGE_HELPER_CWD'\n");
+            return 1;
+        }
+    };
+    if std::env::set_current_dir(&cwd).is_err() {
+        let line = errno_line(last_errno(), cwd.as_os_str().as_bytes());
+        stderr_write(&line);
+        stderr_write(b"\n");
+        return 1;
+    }
+    let (opts, files) = parse_install_args(args);
+    let helper_path = match std::env::var_os("__PORTAGE_HELPER_PATH") {
+        Some(c) if !c.is_empty() => c,
+        _ => {
+            stderr_write(b"KeyError: '__PORTAGE_HELPER_PATH'\n");
+            return 1;
+        }
+    };
+    let install_binary = match which_install(helper_path.as_os_str().as_bytes()) {
+        Ok(b) => b,
+        Err(line) => {
+            // `install: command not found` (rc 127) is already the
+            // full message; any stat failure prints its final line.
+            if line == b"install: command not found" {
+                stderr_write(&line);
+                stderr_write(b"\n");
+                return 127;
+            }
+            stderr_write(&line);
+            stderr_write(b"\n");
+            return 1;
+        }
+    };
+    // `cmdline = [install_binary] + args`, verbatim, stdio inherited.
+    let mut cmd = std::process::Command::new(OsStr::from_bytes(&install_binary));
+    for a in args {
+        cmd.arg(a);
+    }
+    let rc = match cmd.status() {
+        Ok(st) => st.code().unwrap_or(1),
+        Err(e) => {
+            // Portage's `subprocess.call` has no `try` here either; the
+            // final line stands in for the traceback.
+            let line = errno_line(e.raw_os_error().unwrap_or(libc::ENOENT), b"install");
+            stderr_write(&line);
+            stderr_write(b"\n");
+            return 1;
+        }
+    };
+    if rc != 0 {
+        return rc;
+    }
+    let raw_argv: Vec<Vec<u8>> = args.iter().map(|a| raw(a).to_vec()).collect();
+    copy_xattrs_after_install(&opts, &files, &raw_argv)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

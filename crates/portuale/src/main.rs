@@ -196,9 +196,49 @@ fn exit_quietly_on_broken_pipe() {
 }
 
 fn main() -> ExitCode {
-    // Applets are wired in here as they become usable.
-    eprintln!("portuale: no applet is wired in yet");
-    ExitCode::FAILURE
+    exit_quietly_on_broken_pipe();
+    // The helper entry runs first, from `args_os()` (raw filenames may not
+    // be UTF-8), before anything else: no config, no extraction, no atexit.
+    let argv_os: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if argv_os.get(1).is_some_and(|s| s == "__helper") {
+        return ExitCode::from(helpers::run(&argv_os[2..]) as u8);
+    }
+    // Pin the binary's path before any phase can run, so a file replaced
+    // mid-run never surfaces as `<path> (deleted)`.
+    self_exe::self_exe();
+    let argv: Vec<String> = std::env::args().collect();
+    let invoked_as = basename(&argv[0]);
+
+    // The binary that owns ebuild-phase execution registers the
+    // cache-miss metadata provider (the ebuild fallback when
+    // `metadata/md5-cache` lacks the entry).
+    portage_repo::register_aux_metadata_provider(ebuild_phases::depend_phase_metadata);
+
+    // Primary dispatch: argv[0] (symlink invocation). Fallback: an explicit
+    // first argument, e.g. `portuale emerge --pretend ...`, so the binary
+    // is exercisable without symlinks set up.
+    if let Some(applet) = Applet::from_name(invoked_as) {
+        return run(applet, &argv[1..]);
+    }
+
+    let sub = argv.get(1).map(String::as_str);
+    if let Some(applet) = sub.and_then(Applet::from_name) {
+        return run(applet, &argv[2..]);
+    }
+    match sub {
+        None | Some("-h") | Some("--help") => {
+            print_applets();
+            ExitCode::SUCCESS
+        }
+        Some(other) => {
+            eprintln!(
+                "portuale: unrecognized applet {other:?} (invoked as {invoked_as:?}); \
+                 expected a symlink named 'emerge', 'ebuild', or 'mrg', or \
+                 `portuale <emerge|ebuild|mrg|vdb|portageq> ...` -- run `portuale --help` for the applet list"
+            );
+            ExitCode::from(1)
+        }
+    }
 }
 
 #[cfg(test)]
