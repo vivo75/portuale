@@ -14,6 +14,7 @@
 // an upstream re-sync that adds a Python call fails loudly (D1).
 
 mod chmod_lite;
+mod doins;
 mod filter_env;
 mod gpkg;
 mod locale;
@@ -143,7 +144,7 @@ mod dispatcher_tests {
     #[test]
     fn a_transition_row_without_interpreter_or_checkout_exits_127() {
         let out = std::process::Command::new(portuale_exe())
-            .args(["__helper", "python", "doins.py", "x"])
+            .args(["__helper", "python", "dohtml.py", "x"])
             .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
             .env("PORTUALE_REAL_PYTHON", "/nonexistent")
             .output()
@@ -151,7 +152,7 @@ mod dispatcher_tests {
         assert_eq!(out.status.code(), Some(127), "{out:?}");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
-            err.contains("portuale: no native helper for: python doins.py x"),
+            err.contains("portuale: no native helper for: python dohtml.py x"),
             "{err}"
         );
     }
@@ -171,7 +172,7 @@ mod dispatcher_tests {
             std::fs::set_permissions(&interp, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         // The script path exists, so Q7 keeps it verbatim.
-        let script = tmp.join("doins.py");
+        let script = tmp.join("dohtml.py");
         std::fs::write(&script, "# stand-in\n").unwrap();
         let out = std::process::Command::new(portuale_exe())
             .args(["__helper", "python"])
