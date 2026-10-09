@@ -15,6 +15,11 @@
 
 mod chmod_lite;
 mod doins;
+// #329: the merge copies xattrs through the same `_copyxattr` /
+// `_cmpxattr` port the helpers use.
+#[cfg(test)]
+pub(crate) use doins::xattr_set;
+pub(crate) use doins::{copy_xattr, xattr_excluded, xattr_get, xattr_list};
 mod filter_env;
 mod gpkg;
 mod locale;

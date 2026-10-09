@@ -3336,7 +3336,7 @@ fn phase_env_vars(
     let d = eapi_path_var(&env.eapi, &format!("{}/", env.d().display()));
     let root_value = eapi_path_var(&env.eapi, &format!("{}/", root.display()));
     let resolved_features = features_string(extra_env);
-    let path = phase_path(helpers_dir, extra_env);
+    let path = phase_path(helpers_dir, extra_env, &resolved_features);
     // Config-derived base env for standalone runs (USE + the whole
     // resolved config env), computed once here so the single config load
     // serves both the `USE` entry below and the base pairs seeding
@@ -3642,12 +3642,21 @@ fn eapi_path_var(eapi: &str, value: &str) -> String {
 
 /// Real `_doebuild_path` (`doebuild.py:332-378`), narrowed to the
 /// `ebuild-helpers` prefix portuale's runner needs: the helper dir first,
-/// then every entry of the base `PATH` not already listed. The base is
+/// then every entry of the base `PATH` not already listed. Under
+/// `FEATURES=xattr` (on by default: `make.globals` appends it), real puts
+/// `<bin>/ebuild-helpers/xattr` in front of the helper dir
+/// (`doebuild.py:344-346`, #329). That directory holds the `install`
+/// wrapper, so every `install` a phase runs (`doexe`, `dobin`, ebuild
+/// code) goes through `install-xattr`, or `install.py` (portuale's
+/// native one via `portuale-python`), and keeps xattrs. Neither can loop
+/// back into the wrapper: `install-xattr` runs `/usr/bin/install` (or
+/// `$REAL_INSTALL`), and `install.py`'s `Which("install", exclude=
+/// __PORTAGE_HELPER_PATH)` skips the wrapper itself. The base is
 /// the resolved config's `PATH` when the caller threaded one (the last
 /// `extra_env` pair -- `portage_profile::phase_environ` exports it only
 /// when `env.d` sets `PATH`, real's "ignore PATH from the calling
 /// environment" rule), else the calling env's.
-fn phase_path(helpers_dir: &Path, extra_env: &[(String, String)]) -> String {
+fn phase_path(helpers_dir: &Path, extra_env: &[(String, String)], features: &str) -> String {
     let base = extra_env
         .iter()
         .rev()
@@ -3655,9 +3664,13 @@ fn phase_path(helpers_dir: &Path, extra_env: &[(String, String)]) -> String {
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
     let helpers = helpers_dir.display().to_string();
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    seen.insert(helpers.as_str());
-    let mut parts = vec![helpers.as_str()];
+    let xattr = helpers_dir.join("xattr").display().to_string();
+    let mut parts = Vec::new();
+    if feature_token_present(features, "xattr") {
+        parts.push(xattr.as_str());
+    }
+    parts.push(helpers.as_str());
+    let mut seen: std::collections::HashSet<&str> = parts.iter().copied().collect();
     for p in base.split(':') {
         if seen.insert(p) {
             parts.push(p);
@@ -7489,8 +7502,101 @@ mod tests {
             ),
         ];
         assert_eq!(
-            phase_path(helpers, &extra),
+            phase_path(helpers, &extra, ""),
             "/bin/ebuild-helpers:/usr/local/bin:/usr/bin"
+        );
+    }
+
+    /// #329 end to end in a phase: under `FEATURES=xattr` a phase's
+    /// `doexe` and plain `install` reach `ebuild-helpers/xattr/install`
+    /// first, and with `PORTAGE_INSTALL_XATTR_IMPLEMENTATION=python` (set
+    /// by the ebuild; real does not whitelist it) the wrapper runs
+    /// `install.py` through `portuale-python`, portuale's native one. The
+    /// image files keep the source's `user.*` xattr; without `xattr`
+    /// they lose it. Real Portage does the same in the bed image (pmtest
+    /// `differential-test-bed/scripts/329-xattr.sh`, both with and
+    /// without `-xattr`).
+    #[test]
+    fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
+        use std::os::unix::ffi::OsStrExt;
+        if !Path::new("/usr/bin/setfattr").exists() {
+            eprintln!("skipped: no setfattr");
+            return;
+        }
+        let tmp = TempDir::new("ebuild-phases-test-xattr-install").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/xattrinstpkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("xattrinstpkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild,
+            "EAPI=8\nSLOT=\"0\"\nS=\"${WORKDIR}\"\n\
+             src_unpack() {\n\
+             \tfor f in viaexe viainstall; do\n\
+             \t\tprintf '#!/bin/sh\\n' > \"$f\" || die\n\
+             \t\tsetfattr -n user.portuale329 -v \"$f\" \"$f\" || die\n\
+             \tdone\n}\n\
+             src_install() {\n\
+             \texport PORTAGE_INSTALL_XATTR_IMPLEMENTATION=python\n\
+             \texeinto /usr/libexec/xa; doexe viaexe\n\
+             \tinstall -D -m 0755 viainstall \"${ED}/usr/libexec/xa/viainstall\" || die\n}\n",
+        )
+        .unwrap();
+        let probe = tmp.join("probe");
+        std::fs::write(&probe, b"x").unwrap();
+        if std::process::Command::new("setfattr")
+            .args(["-n", "user.probe", "-v", "1"])
+            .arg(&probe)
+            .status()
+            .map(|s| !s.success())
+            .unwrap_or(true)
+        {
+            eprintln!("skipped: no user xattrs on {}", tmp.display());
+            return;
+        }
+        for (i, (features, expect)) in [("xattr", true), ("", false)].into_iter().enumerate() {
+            let portage_tmpdir = tmp.join(format!("tmp{i}"));
+            std::fs::create_dir_all(&portage_tmpdir).unwrap();
+            let status = run_commands(
+                &ebuild,
+                &["install"],
+                Path::new("/"),
+                &portage_tmpdir,
+                &tmp.join("distfiles"),
+                false,
+                Path::new("/dev/null/no-config-root"),
+                ShellBackend::Brush,
+                &[("FEATURES".to_string(), features.to_string())],
+            )
+            .expect("run_commands should not itself error");
+            assert_eq!(status, 0, "install should succeed (FEATURES={features:?})");
+            let image = portage_tmpdir.join("portage/dev-libs/xattrinstpkg-1.0/image");
+            for name in ["viaexe", "viainstall"] {
+                let file = image.join("usr/libexec/xa").join(name);
+                let got =
+                    crate::helpers::xattr_get(file.as_os_str().as_bytes(), b"user.portuale329")
+                        .ok();
+                let want = expect.then(|| name.as_bytes().to_vec());
+                assert_eq!(got, want, "{name} with FEATURES={features:?}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// #329: real `_doebuild_path` (`doebuild.py:344-346`) puts
+    /// `<bin>/ebuild-helpers/xattr` in front of `<bin>/ebuild-helpers`
+    /// when `xattr` is in `FEATURES`, and only then.
+    #[test]
+    fn phase_path_puts_the_xattr_wrapper_first_under_features_xattr() {
+        let helpers = Path::new("/bin/ebuild-helpers");
+        let extra = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
+        assert_eq!(
+            phase_path(helpers, &extra, "sandbox xattr userpriv"),
+            "/bin/ebuild-helpers/xattr:/bin/ebuild-helpers:/usr/bin:/bin"
+        );
+        assert_eq!(
+            phase_path(helpers, &extra, "sandbox userpriv"),
+            "/bin/ebuild-helpers:/usr/bin:/bin"
         );
     }
 
