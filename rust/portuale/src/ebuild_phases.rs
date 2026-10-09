@@ -762,8 +762,10 @@ pub(crate) fn package_sets_conf() -> Option<String> {
 ///
 /// The `.py` helpers that `import portage` (`doins.py`, `xpak-helper.py`,
 /// `gpkg-helper.py`, `dohtml.py`, `xattr-helper.py`, `install.py`) are
-/// not vendored and are reached only through the D1 transition table,
-/// which resolves them from an installed Portage (Q7).
+/// not vendored. In native mode `portuale-python` answers them all
+/// natively (`helpers/`, #326 S3-S7) except `dohtml.py`, which is never
+/// in scope (`dohtml` dies first for EAPI >= 7) and exits 127 like any
+/// unknown helper; the D1 transition table is gone (S7).
 ///
 /// So: in native mode (unset or `native` `PORTUALE_PYTHON_HELPERS`, the
 /// default) `PORTAGE_BIN_PATH` is the vendored `bin/` directly and no

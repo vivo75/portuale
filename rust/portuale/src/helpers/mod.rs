@@ -19,6 +19,7 @@ mod filter_env;
 mod gpkg;
 mod locale;
 mod python;
+mod xattr;
 mod xpak;
 
 /// The fixed answer of the `ping` helper (D8: proves `$PORTUALE_BIN`
@@ -65,11 +66,9 @@ fn no_native_helper(argv: &[std::ffi::OsString]) {
 
 #[cfg(test)]
 mod dispatcher_tests {
-    use portage_util::TempDir;
-
     /// The `portuale` binary built next to this test binary (child
-    /// processes, never in-process: the transition rows `exec`, which
-    /// only works across a real process boundary).
+    /// processes, never in-process: the native helpers run across a
+    /// real process boundary).
     fn portuale_exe() -> std::path::PathBuf {
         let mut exe = std::env::current_exe().expect("current test exe");
         exe.pop();
@@ -139,57 +138,43 @@ mod dispatcher_tests {
         );
     }
 
-    /// S2 dispatcher table: a transition row with no interpreter and no
-    /// checkout exits 127 (Q7: rows need an installed Portage).
+    /// S7 dispatcher table: the transition table is empty (every 0.3
+    /// script is natively ported), so a never-in-scope script like
+    /// `dohtml.py` exits 127 with the `python <argv>` message — the same
+    /// as any other unknown name. (`dohtml` dies first for EAPI >= 7,
+    /// the ebuild floor, so it has no native port and never will.)
     #[test]
-    fn a_transition_row_without_interpreter_or_checkout_exits_127() {
+    fn python_with_a_non_native_script_exits_127() {
+        for argv in [&["dohtml.py", "x"][..], &["frobnicate.py", "--dump"][..]] {
+            let mut full = vec!["python"];
+            full.extend(argv);
+            let out = helper(&full);
+            assert_eq!(out.status.code(), Some(127), "{out:?}");
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                err.contains(&format!(
+                    "portuale: no native helper for: {}",
+                    full.join(" ")
+                )),
+                "{err}"
+            );
+        }
+    }
+
+    /// S7 dispatcher table: the last native rows route without any
+    /// interpreter or checkout (`xattr-helper.py --help` answers
+    /// natively even with both disabled).
+    #[test]
+    fn python_xattr_helper_routes_natively_without_interpreter_or_checkout() {
         let out = std::process::Command::new(portuale_exe())
-            .args(["__helper", "python", "dohtml.py", "x"])
+            .args(["__helper", "python", "xattr-helper.py", "--help"])
             .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
             .env("PORTUALE_REAL_PYTHON", "/nonexistent")
             .output()
             .expect("portuale __helper spawns");
-        assert_eq!(out.status.code(), Some(127), "{out:?}");
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            err.contains("portuale: no native helper for: python dohtml.py x"),
-            "{err}"
-        );
-    }
-
-    /// S2 dispatcher table: a transition row re-executes the real
-    /// interpreter with the original argv (here a tiny script standing
-    /// in for python, so no real interpreter is needed).
-    #[test]
-    fn a_transition_row_re_executes_the_real_interpreter() {
-        let tmp = TempDir::new("helper-python-transition");
-        // The stand-in interpreter echoes the argv it was exec'ed with.
-        let interp = tmp.join("fake-python.sh");
-        std::fs::write(&interp, "#!/bin/sh\necho \"real-python-got: $*\"\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&interp, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        // The script path exists, so Q7 keeps it verbatim.
-        let script = tmp.join("dohtml.py");
-        std::fs::write(&script, "# stand-in\n").unwrap();
-        let out = std::process::Command::new(portuale_exe())
-            .args(["__helper", "python"])
-            .arg(&script)
-            .args(["--helper", "x"])
-            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
-            .env("PORTUALE_REAL_PYTHON", &interp)
-            .output()
-            .expect("portuale __helper spawns");
         assert_eq!(out.status.code(), Some(0), "{out:?}");
         let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            stdout.contains(&script.display().to_string())
-                && stdout.contains("--helper")
-                && stdout.contains('x'),
-            "{stdout}"
-        );
+        assert!(stdout.starts_with("usage: xattr-helper.py"), "{stdout}");
     }
 
     /// S2 dispatcher table: `-c` with the exact QA probe program answers

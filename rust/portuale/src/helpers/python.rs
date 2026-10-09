@@ -1,39 +1,22 @@
-// The `$PORTAGE_PYTHON` dispatcher (#326 D1 + Q7): the vendored `bin/`
+// The `$PORTAGE_PYTHON` dispatcher (#326 D1 + Q7, S7): the vendored `bin/`
 // keeps upstream's call sites byte for byte, and `PORTAGE_PYTHON` points
 // at `bin/portuale-python`, which execs `"$PORTUALE_BIN" __helper python
 // "$@"`. This dispatcher picks the helper from the script basename (the
 // first argument at every 0.3 call site), or, for `-c`, from the exact
 // `90config-impl-decl` program string.
 //
-// Transition table: a script with no native port yet is re-executed with
-// the real interpreter (`$PORTUALE_REAL_PYTHON`, else `/usr/bin/python`)
-// with the original argv, except that the script path is resolved per
-// Q7: the original path when it exists; else `<checkout>/bin/<name>`
-// when that exists (`<checkout>/lib` on `PYTHONPATH` when not already
-// set); else the first `/usr/lib/portage/python*/<name>` that exists.
-// With no script or no interpreter, exit 127 with the unknown-helper
-// message, the same as an unknown name (D1). `exec` semantics keep the
-// exit status and stdio the interpreter's. `filter-bash-environment.py`
-// is natively ported (`helpers/filter_env.rs`, S3), and so are
-// `xpak-helper.py` (`helpers/xpak.rs`, S5), `gpkg-helper.py`
-// (`helpers/gpkg.rs`, S4) and `doins.py` (`helpers/doins.rs`, S6);
-// all route before this table; S7 deletes its own rows; the last
-// asserts the table is empty.
+// Every script of 0.3 is natively ported now (S7 was the last one, so the
+// D1 transition table is empty and gone): `filter-bash-environment.py`
+// (`helpers/filter_env.rs`, S3), `xpak-helper.py` (`helpers/xpak.rs`,
+// S5), `gpkg-helper.py` (`helpers/gpkg.rs`, S4), `doins.py`
+// (`helpers/doins.rs`, S6), `xattr-helper.py` + `install.py`
+// (`helpers/xattr.rs`, S7). Anything else — `dohtml.py` included
+// (`dohtml` dies first for EAPI >= 7, the ebuild floor, so it is never
+// in scope) — exits 127 with the unknown-helper message, so an upstream
+// re-sync that adds a Python call fails loudly (D1).
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
-
-/// Every script of 0.3 still awaiting its native port: each is
-/// re-executed until its own slice ports it (`filter-bash-environment.py`
-/// went native in S3, `xpak-helper.py` in S5, `gpkg-helper.py` in S4 and
-/// `doins.py` in S6; all route before this table).
-const TRANSITION_SCRIPTS: &[&str] = &["dohtml.py", "xattr-helper.py", "install.py"];
-
-/// The real interpreter: `$PORTUALE_REAL_PYTHON`, else `/usr/bin/python`.
-fn real_interpreter() -> OsString {
-    std::env::var_os("PORTUALE_REAL_PYTHON").unwrap_or_else(|| OsString::from("/usr/bin/python"))
-}
 
 /// Run the `python` helper on `argv` (everything after `__helper
 /// python`, exactly as the shell passed it to `$PORTAGE_PYTHON`).
@@ -81,19 +64,26 @@ pub(crate) fn run(argv: &[OsString]) -> i32 {
     {
         return super::doins::run(script, &argv[index + 1..]);
     }
-    // The first argument whose basename is a transition script.
-    let found = argv.iter().enumerate().find_map(|(i, arg)| {
-        let base = basename(arg);
-        TRANSITION_SCRIPTS
-            .iter()
-            .find(|name| base == name.as_bytes())
-            .map(|name| (*name, i))
-    });
-    let Some((name, index)) = found else {
-        super::no_native_helper(&join_head(argv));
-        return 127;
-    };
-    run_transition(name, index, argv)
+    // S7: `xattr-helper.py` is natively ported (`helpers/xattr.rs`).
+    if let Some((script, index)) = argv
+        .iter()
+        .enumerate()
+        .find_map(|(i, arg)| (basename(arg) == b"xattr-helper.py").then_some((arg, i)))
+    {
+        return super::xattr::run_xattr_helper(script, &argv[index + 1..]);
+    }
+    // S7: `install.py` is natively ported (`helpers/xattr.rs`).
+    if let Some((script, index)) = argv
+        .iter()
+        .enumerate()
+        .find_map(|(i, arg)| (basename(arg) == b"install.py").then_some((arg, i)))
+    {
+        return super::xattr::run_install(script, &argv[index + 1..]);
+    }
+    // No transition rows remain (S7 deleted the last ones): anything
+    // else is an unknown helper (D1).
+    super::no_native_helper(&join_head(argv));
+    127
 }
 
 /// The raw basename of an argv path (bytes after the last `/`).
@@ -111,71 +101,4 @@ fn join_head(argv: &[OsString]) -> Vec<OsString> {
     full.push(OsString::from("python"));
     full.extend(argv.iter().cloned());
     full
-}
-
-/// Re-exec the real interpreter for a transition row (Q7).
-fn run_transition(name: &str, index: usize, argv: &[OsString]) -> i32 {
-    let Some((resolved, pythonpath)) = resolve_script(name, &argv[index]) else {
-        super::no_native_helper(&join_head(argv));
-        return 127;
-    };
-    let interpreter = real_interpreter();
-    if !Path::new(&interpreter).exists() {
-        super::no_native_helper(&join_head(argv));
-        return 127;
-    }
-    use std::os::unix::process::CommandExt;
-    let mut cmd = std::process::Command::new(&interpreter);
-    for (i, arg) in argv.iter().enumerate() {
-        if i == index {
-            cmd.arg(&resolved);
-        } else {
-            cmd.arg(arg);
-        }
-    }
-    if let Some(lib) = pythonpath
-        && std::env::var_os("PYTHONPATH").is_none()
-    {
-        cmd.env("PYTHONPATH", lib);
-    }
-    let err = cmd.exec();
-    eprintln!(
-        "portuale: cannot exec {}: {err}",
-        Path::new(&interpreter).display()
-    );
-    127
-}
-
-/// Resolve a transition script per Q7: the original path when it exists;
-/// else `<checkout>/bin/<name>` (with `<checkout>/lib` for `PYTHONPATH`
-/// when not already set); else the first `/usr/lib/portage/python*/<name>`.
-/// Returns the path plus an optional `PYTHONPATH` value.
-fn resolve_script(name: &str, script_arg: &OsString) -> Option<(PathBuf, Option<PathBuf>)> {
-    if Path::new(script_arg).exists() {
-        return Some((PathBuf::from(script_arg), None));
-    }
-    // `portage_checkout()` reads only env and the build path (D7-safe).
-    let checkout = crate::ebuild_phases::portage_checkout();
-    let checkout_script = checkout.join("bin").join(name);
-    if checkout_script.is_file() {
-        return Some((checkout_script, Some(checkout.join("lib"))));
-    }
-    if let Ok(dir) = std::fs::read_dir("/usr/lib/portage") {
-        let mut candidates: Vec<PathBuf> = dir
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with("python"))
-            })
-            .collect();
-        candidates.sort();
-        for dir in candidates {
-            let script = dir.join(name);
-            if script.is_file() {
-                return Some((script, None));
-            }
-        }
-    }
-    None
 }

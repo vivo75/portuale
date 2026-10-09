@@ -501,7 +501,8 @@ fn fnmatch_glob(pat: &[u8], name: &[u8]) -> bool {
 }
 
 /// `_xattr_excluder(pattern)`: `None`/empty never excludes.
-fn xattr_excluded(pattern: &str, attr: &[u8]) -> bool {
+/// Shared with `helpers/xattr.rs` (#326 S7).
+pub(super) fn xattr_excluded(pattern: &str, attr: &[u8]) -> bool {
     for pat in pattern.split_whitespace() {
         if fnmatch_glob(pat.as_bytes(), attr) {
             return true;
@@ -1264,7 +1265,7 @@ fn type_error_line(msg: &str) -> Vec<u8> {
 }
 
 /// `ExcType: [Errno n] strerror: b'path'`.
-fn errno_line(errno: i32, path: &[u8]) -> Vec<u8> {
+pub(super) fn errno_line(errno: i32, path: &[u8]) -> Vec<u8> {
     let mut out = Vec::from(exc_name(errno).as_bytes());
     out.extend_from_slice(format!(": [Errno {errno}] {}: ", c_strerror(errno)).as_bytes());
     out.extend_from_slice(&py_bytes_repr(path));
@@ -1296,7 +1297,8 @@ fn c_path(p: &[u8]) -> Result<std::ffi::CString, ()> {
 }
 
 /// `xattr.list(src)`: ENOTSUP/EOPNOTSUPP means "none" (`attrs = ()`).
-fn xattr_list(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
+/// Shared with `helpers/xattr.rs` (#326 S7: one copier, not two).
+pub(super) fn xattr_list(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     let c = c_path(path).map_err(|_| libc::EINVAL)?;
     let n = unsafe { libc::listxattr(c.as_ptr(), std::ptr::null_mut(), 0) };
     if n < 0 {
@@ -1322,7 +1324,7 @@ fn xattr_list(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
         .collect())
 }
 
-fn xattr_get(path: &[u8], name: &[u8]) -> Result<Vec<u8>, i32> {
+pub(super) fn xattr_get(path: &[u8], name: &[u8]) -> Result<Vec<u8>, i32> {
     let c = c_path(path).map_err(|_| libc::EINVAL)?;
     let n = std::ffi::CString::new(name).map_err(|_| libc::EINVAL)?;
     let len = unsafe { libc::getxattr(c.as_ptr(), n.as_ptr(), std::ptr::null_mut(), 0) };
@@ -1338,7 +1340,8 @@ fn xattr_get(path: &[u8], name: &[u8]) -> Result<Vec<u8>, i32> {
     Ok(buf)
 }
 
-fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i32> {
+/// Shared with `helpers/xattr.rs` (#326 S7).
+pub(super) fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i32> {
     let c = c_path(path).map_err(|_| libc::EINVAL)?;
     let n = std::ffi::CString::new(name).map_err(|_| libc::EINVAL)?;
     let r = unsafe {
@@ -1356,7 +1359,9 @@ fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i32> {
 /// `_copyxattr(src, dest, exclude)`. `Err` is either an errno line
 /// (list/get failures other than ENOTSUP) or the full
 /// `OperationNotSupported: ...` line (set failures).
-fn copy_xattr(src: &[u8], dest: &[u8], exclude: &[u8]) -> Result<(), Vec<u8>> {
+/// Shared with `helpers/xattr.rs` (#326 S7: `install.py` copies through
+/// this, never its own).
+pub(super) fn copy_xattr(src: &[u8], dest: &[u8], exclude: &[u8]) -> Result<(), Vec<u8>> {
     let attrs = xattr_list(src).map_err(|e| errno_line(e, src))?;
     if attrs.is_empty() {
         return Ok(());
