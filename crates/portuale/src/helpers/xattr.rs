@@ -174,6 +174,112 @@ fn match_long(name: &[u8], cands: &[&str]) -> Result<usize, Vec<usize>> {
     }
 }
 
+fn xattr_arg_error(prog: &str, msg: &[u8]) -> XattrParse {
+    let mut out = xattr_usage(prog);
+    out.extend_from_slice(prog.as_bytes());
+    out.extend_from_slice(b": error: ");
+    out.extend_from_slice(msg);
+    out.push(b'\n');
+    stderr_write(&out);
+    XattrParse::Done(2)
+}
+
+fn parse_xattr_argv(prog: &str, argv: &[OsString]) -> XattrParse {
+    const LONGS: &[&str] = &["dump", "restore", "help"];
+    let mut dump = false;
+    let mut restore = false;
+    let mut paths: Vec<Vec<u8>> = Vec::new();
+    let mut end_opts = false;
+    for arg in argv {
+        let tok = raw(arg);
+        if end_opts {
+            paths.push(tok.to_vec());
+            continue;
+        }
+        if tok == b"--" {
+            end_opts = true;
+            continue;
+        }
+        if tok.len() > 1 && tok.starts_with(b"-") && tok != b"-" {
+            if tok.starts_with(b"--") {
+                let body = &tok[2..];
+                let (name, inline) = match body.iter().position(|c| *c == b'=') {
+                    Some(p) => (&body[..p], Some(&body[p + 1..])),
+                    None => (body, None),
+                };
+                match match_long(name, LONGS) {
+                    Ok(idx) if LONGS[idx] == "help" => {
+                        if let Some(v) = inline {
+                            let mut m = Vec::from(
+                                b"argument -h/--help: ignored explicit argument ".as_slice(),
+                            );
+                            m.extend_from_slice(b"'");
+                            m.extend_from_slice(v);
+                            m.extend_from_slice(b"'");
+                            return xattr_arg_error(prog, &m);
+                        }
+                        stdout_write(&xattr_help(prog));
+                        return XattrParse::Help;
+                    }
+                    Ok(idx) => {
+                        if let Some(v) = inline {
+                            let m = format!(
+                                "argument --{}: ignored explicit argument '{}'",
+                                LONGS[idx],
+                                String::from_utf8_lossy(v)
+                            );
+                            return xattr_arg_error(prog, m.as_bytes());
+                        }
+                        if LONGS[idx] == "dump" {
+                            dump = true;
+                        } else {
+                            restore = true;
+                        }
+                    }
+                    Err(hits) if hits.is_empty() => {
+                        let m = [b"unrecognized arguments: ".as_slice(), tok].concat();
+                        return xattr_arg_error(prog, &m);
+                    }
+                    Err(hits) => {
+                        let list: Vec<String> =
+                            hits.iter().map(|h| format!("--{}", LONGS[*h])).collect();
+                        let m = format!(
+                            "ambiguous option: {} could match {}",
+                            String::from_utf8_lossy(tok),
+                            list.join(", ")
+                        );
+                        return xattr_arg_error(prog, m.as_bytes());
+                    }
+                }
+                continue;
+            }
+            // Single dash: only `-h` exists.
+            if tok == b"-h" || (tok.starts_with(b"-h") && !tok.contains(&b'=')) {
+                stdout_write(&xattr_help(prog));
+                return XattrParse::Help;
+            }
+            if tok.starts_with(b"-h=") {
+                let v = &tok[3..];
+                let mut m =
+                    Vec::from(b"argument -h/--help: ignored explicit argument '".as_slice());
+                m.extend_from_slice(v);
+                m.extend_from_slice(b"'");
+                return xattr_arg_error(prog, &m);
+            }
+            let m = [b"unrecognized arguments: ".as_slice(), tok].concat();
+            return xattr_arg_error(prog, &m);
+        }
+        paths.push(tok.to_vec());
+    }
+    if dump {
+        XattrParse::Dump(paths)
+    } else if restore {
+        XattrParse::Restore
+    } else {
+        xattr_arg_error(prog, b"missing action!")
+    }
+}
+
 // ---------------------------------------------------------------------
 // `dump_xattrs` / `restore_xattrs`
 // ---------------------------------------------------------------------
@@ -251,6 +357,46 @@ fn restore_xattrs(data: &[u8]) -> Result<(), Vec<u8>> {
         }
     }
     Ok(())
+}
+
+/// Entry point: `script` is the `xattr-helper.py` element (Portage's
+/// `sys.argv[0]`), `args` everything after it.
+pub(crate) fn run_xattr_helper(script: &OsString, args: &[OsString]) -> i32 {
+    let prog = String::from_utf8_lossy(argv_basename(script)).into_owned();
+    match parse_xattr_argv(&prog, args) {
+        XattrParse::Help => 0,
+        XattrParse::Done(c) => c,
+        XattrParse::Dump(paths) => {
+            let paths = if paths.is_empty() {
+                read_stdin()
+                    .split(|b| *b == 0)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| p.to_vec())
+                    .collect()
+            } else {
+                paths
+            };
+            match dump_xattrs(&paths) {
+                Ok(()) => 0,
+                Err(line) => {
+                    stderr_write(&line);
+                    stderr_write(b"\n");
+                    1
+                }
+            }
+        }
+        XattrParse::Restore => {
+            let data = read_stdin();
+            match restore_xattrs(&data) {
+                Ok(()) => 0,
+                Err(line) => {
+                    stderr_write(&line);
+                    stderr_write(b"\n");
+                    1
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -385,6 +531,26 @@ fn parse_install_args(args: &[OsString]) -> (InstallOpts, Vec<Vec<u8>>) {
     }
     files.extend(extras[i..].iter().cloned());
     (opts, files)
+}
+
+/// `os.path.basename` (bytes after the last `/`).
+fn basename_of(p: &[u8]) -> &[u8] {
+    match p.iter().rposition(|c| *c == b'/') {
+        Some(i) => &p[i + 1..],
+        None => p,
+    }
+}
+
+/// `os.path.join(a, b)` for the copy landing.
+fn join_path(a: &[u8], b: &[u8]) -> Vec<u8> {
+    if a.is_empty() {
+        return b.to_vec();
+    }
+    let mut head = a;
+    while head.len() > 1 && head.ends_with(b"/") {
+        head = &head[..head.len() - 1];
+    }
+    [head, b"/", b].concat()
 }
 
 /// `shlex.join(args)`: quote for the `copy_xattrs failed` note.
