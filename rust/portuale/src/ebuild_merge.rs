@@ -706,6 +706,104 @@ fn unique_sibling_path(dest: &Path) -> Result<PathBuf, String> {
     unreachable!("the counter loop always finds a free name")
 }
 
+/// What real `movefile()` does with a merged file's extended attributes
+/// (#329). Real renames the image file into place when both sides share
+/// a device (`movefile.py:326-330`), so every xattr survives whatever
+/// `FEATURES` says. Across devices it copies, then `_copyxattr`s
+/// (`movefile.py:351-358`) only under `FEATURES=xattr`, skipping
+/// `PORTAGE_XATTR_EXCLUDE` patterns. `_needs_move` (`vartree.py:6376-6379`)
+/// also compares xattrs (`_cmpxattr`) under `FEATURES=xattr`. portuale
+/// always copies (see [`replace_file_atomic`]), so it reproduces both
+/// outcomes explicitly.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct XattrPolicy {
+    /// `"xattr" in settings.features`.
+    pub enabled: bool,
+    /// `settings.get("PORTAGE_XATTR_EXCLUDE", "")`.
+    pub exclude: String,
+}
+
+impl XattrPolicy {
+    /// From the merge's resolved `FEATURES` (the raw `$FEATURES` when the
+    /// options carry none, as everywhere else in this module) and the
+    /// resolved config's `PORTAGE_XATTR_EXCLUDE` (`make.globals` sets
+    /// it), else the process env's.
+    pub(crate) fn from_options(options: &MergeOptions) -> Self {
+        let features = if options.features.is_empty() {
+            std::env::var("FEATURES").unwrap_or_default()
+        } else {
+            options.features.clone()
+        };
+        let exclude = options
+            .resolved_config
+            .as_deref()
+            .and_then(|c| c.other_vars.get("PORTAGE_XATTR_EXCLUDE").cloned())
+            .or_else(|| std::env::var("PORTAGE_XATTR_EXCLUDE").ok())
+            .unwrap_or_default();
+        Self {
+            enabled: features.split_whitespace().any(|t| t == "xattr"),
+            exclude,
+        }
+    }
+}
+
+/// Real `_cmpxattr(src, dest, exclude)` (`movefile.py:111-136`): the
+/// non-excluded attribute names and values are equal on both files, or
+/// the filesystem does not support xattrs at all.
+fn xattrs_equal(src: &Path, dest: &Path, exclude: &str) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let (s, d) = (src.as_os_str().as_bytes(), dest.as_os_str().as_bytes());
+    let (Ok(src_attrs), Ok(dest_attrs)) =
+        (crate::helpers::xattr_list(s), crate::helpers::xattr_list(d))
+    else {
+        // Real re-raises anything but ENOTSUP; `xattr_list` already maps
+        // ENOTSUP to an empty list, so an error here is unreadable --
+        // treat it as "differs" so the file is replaced.
+        return false;
+    };
+    let keep = |attrs: Vec<Vec<u8>>| -> std::collections::BTreeSet<Vec<u8>> {
+        attrs
+            .into_iter()
+            .filter(|a| !crate::helpers::xattr_excluded(exclude, a))
+            .collect()
+    };
+    let (src_attrs, dest_attrs) = (keep(src_attrs), keep(dest_attrs));
+    src_attrs == dest_attrs
+        && src_attrs
+            .iter()
+            .all(|a| crate::helpers::xattr_get(s, a).ok() == crate::helpers::xattr_get(d, a).ok())
+}
+
+/// Carries `src`'s xattrs onto the not-yet-renamed temporary `tmp`, the
+/// way real's move would have left them on `dest` (see [`XattrPolicy`]).
+fn carry_xattrs(src: &Path, tmp: &Path, dest: &Path, xattrs: &XattrPolicy) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let src_dev = std::fs::metadata(src).map(|m| m.dev()).ok();
+    let dest_dev = dest
+        .parent()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.dev());
+    let (s, t) = (src.as_os_str().as_bytes(), tmp.as_os_str().as_bytes());
+    if src_dev.is_some() && src_dev == dest_dev {
+        // Real's same-device `rename` keeps every attribute and cannot
+        // fail on one, so neither does this copy: a failure only warns.
+        if let Err(line) = crate::helpers::copy_xattr(s, t, b"") {
+            eprintln!("!!! {}", String::from_utf8_lossy(&line));
+        }
+        return Ok(());
+    }
+    if xattrs.enabled {
+        crate::helpers::copy_xattr(s, t, xattrs.exclude.as_bytes()).map_err(|line| {
+            format!(
+                "{}\n!!! Failed to copy extended attributes. In order to avoid this error, set FEATURES=\"-xattr\" in make.conf.",
+                String::from_utf8_lossy(&line)
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Real `movefile()`'s own **atomic replacement** for a regular file:
 /// copy the source's bytes to [`unique_sibling_path`]'s temporary, apply
 /// real `movefile()`'s `_apply_stat` (owner/group, mode) and the
@@ -725,7 +823,12 @@ fn unique_sibling_path(dest: &Path) -> Result<PathBuf, String> {
 /// caller will record -- never a second stat that could disagree. On any
 /// failure the temporary is removed before returning; the destination is
 /// left untouched.
-fn replace_file_atomic(src: &Path, dest: &Path, mtime: i64) -> Result<(), String> {
+fn replace_file_atomic(
+    src: &Path,
+    dest: &Path,
+    mtime: i64,
+    xattrs: &XattrPolicy,
+) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = unique_sibling_path(dest)?;
@@ -744,6 +847,7 @@ fn replace_file_atomic(src: &Path, dest: &Path, mtime: i64) -> Result<(), String
         .map_err(|e| format!("{}: {e}", tmp.display()))?;
         filetime::set_file_mtime(&tmp, filetime::FileTime::from_unix_time(mtime, 0))
             .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        carry_xattrs(src, &tmp, dest, xattrs)?;
         std::fs::rename(&tmp, dest)
             .map_err(|e| format!("{} -> {}: {e}", tmp.display(), dest.display()))
     })();
@@ -2289,6 +2393,7 @@ fn merge_tree(
     config_protect_mask: &str,
     noconfmem: bool,
     cfgfiledict: &mut BTreeMap<String, String>,
+    xattrs: &XattrPolicy,
 ) -> Result<String, String> {
     let mut contents = String::new();
     let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
@@ -2476,7 +2581,7 @@ fn merge_tree(
                     // `_protect` diverts (`vartree.py:5645-5647`), so it
                     // always moves there, and `write_dest != dest` says
                     // the same thing here.
-                    if write_dest == dest && !needs_move(&src, &write_dest) {
+                    if write_dest == dest && !needs_move(&src, &write_dest, xattrs) {
                         filetime::set_file_mtime(
                             &write_dest,
                             filetime::FileTime::from_unix_time(mtime, 0),
@@ -2489,7 +2594,7 @@ fn merge_tree(
                         // `replace_file_atomic`'s own doc comment for why
                         // that is a safety requirement, not an
                         // optimization.
-                        replace_file_atomic(&src, &write_dest, mtime)?;
+                        replace_file_atomic(&src, &write_dest, mtime, xattrs)?;
                     }
                 }
                 // Real CONTENTS always records the package's own logical
@@ -2677,12 +2782,11 @@ fn lchown_or_chown(dest: &Path, uid: u32, gid: u32, is_symlink: bool) -> Result<
 /// rebuilt ones, so real leaves them alone while a fresh copy would
 /// come out `0:0`.
 ///
-/// Narrowing: real also compares xattrs when `FEATURES=xattr`
-/// (`_cmpxattr`, `PORTAGE_XATTR_EXCLUDE`-aware); portuale's merge copies
-/// no xattrs, so xattrs are treated as equal (the ordinary no-xattr
-/// case). Real's `filecmp.cmp(shallow=False)` is a byte compare after
+/// Under `FEATURES=xattr` real also compares xattrs (`_cmpxattr`,
+/// `PORTAGE_XATTR_EXCLUDE`-aware, `vartree.py:6376-6379`):
+/// [`xattrs_equal`] (#329). Real's `filecmp.cmp(shallow=False)` is a byte compare after
 /// the mode check; [`files_equal`] does the same in fixed chunks.
-fn needs_move(src: &Path, dest: &Path) -> bool {
+fn needs_move(src: &Path, dest: &Path, xattrs: &XattrPolicy) -> bool {
     use std::os::unix::fs::PermissionsExt;
     let Ok(src_meta) = std::fs::symlink_metadata(src) else {
         return true;
@@ -2691,6 +2795,9 @@ fn needs_move(src: &Path, dest: &Path) -> bool {
         return true;
     };
     if !dest_meta.is_file() || src_meta.permissions().mode() != dest_meta.permissions().mode() {
+        return true;
+    }
+    if xattrs.enabled && !xattrs_equal(src, dest, &xattrs.exclude) {
         return true;
     }
     !files_equal(src, dest).unwrap_or(false)
@@ -4152,6 +4259,7 @@ fn merge_after_install(
         &options.config_protect_mask,
         options.noconfmem,
         &mut cfgfiledict,
+        &XattrPolicy::from_options(options),
     )?;
     // Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
     // block: the replaced same-slot instance's
@@ -5018,6 +5126,7 @@ pub fn merge_binpkg(
         &options.config_protect_mask,
         options.noconfmem,
         &mut cfgfiledict,
+        &XattrPolicy::from_options(options),
     )?;
     // Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
     // block (identical to `merge_after_install`): the replaced same-slot instance's
@@ -5329,6 +5438,105 @@ mod tests {
         assert_eq!(repository_name_for(&pkg_dir), None);
     }
 
+    /// #329: the merged file's xattrs follow real `movefile()`. Same
+    /// device: real renames, so every attribute survives, excluded
+    /// patterns and `-xattr` included. Cross device: real copies, then
+    /// `_copyxattr`s only under `FEATURES=xattr`, minus
+    /// `PORTAGE_XATTR_EXCLUDE` (`movefile.py:326-358`). `_needs_move`
+    /// (`vartree.py:6376-6379`) re-merges a byte-identical file whose
+    /// xattrs differ, but only under `FEATURES=xattr`.
+    #[test]
+    fn merge_tree_carries_xattrs_like_real_movefile() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+        let b = |p: &Path| p.as_os_str().as_bytes().to_vec();
+        let get = |p: &Path, a: &[u8]| crate::helpers::xattr_get(&b(p), a).ok();
+        let image = |base: &Path| -> PathBuf {
+            let d = base.join("D");
+            std::fs::create_dir_all(d.join("usr/share/xa")).unwrap();
+            let f = d.join("usr/share/xa/f");
+            std::fs::write(&f, b"payload").unwrap();
+            crate::helpers::xattr_set(&b(&f), b"user.keep", b"k").unwrap();
+            crate::helpers::xattr_set(&b(&f), b"user.skip", b"s").unwrap();
+            d
+        };
+        let merge = |d: &Path, root: &Path, policy: &XattrPolicy| {
+            std::fs::create_dir_all(root).unwrap();
+            merge_tree(
+                d,
+                root,
+                "dev-libs",
+                None,
+                false,
+                "/etc",
+                "/etc/env.d",
+                false,
+                &mut BTreeMap::new(),
+                policy,
+            )
+            .expect("merge_tree succeeds");
+        };
+        let on = XattrPolicy {
+            enabled: true,
+            exclude: "user.sk*".to_string(),
+        };
+        let off = XattrPolicy {
+            enabled: false,
+            exclude: "user.sk*".to_string(),
+        };
+
+        let tmp = tempdir();
+        let probe = tmp.join("probe");
+        std::fs::write(&probe, b"").unwrap();
+        if crate::helpers::xattr_set(&b(&probe), b"user.probe", b"1").is_err() {
+            eprintln!("skipped: no user xattrs on {}", tmp.display());
+            return;
+        }
+
+        // Same device, `-xattr`: rename semantics, everything survives.
+        let d = image(&tmp);
+        let root = tmp.join("ROOT");
+        merge(&d, &root, &off);
+        let dest = root.join("usr/share/xa/f");
+        assert_eq!(get(&dest, b"user.keep"), Some(b"k".to_vec()));
+        assert_eq!(get(&dest, b"user.skip"), Some(b"s".to_vec()));
+
+        // `needs_move`: same bytes and mode, the xattr dropped on `dest`.
+        let src = d.join("usr/share/xa/f");
+        let bare = tmp.join("bare");
+        std::fs::copy(&src, &bare).unwrap();
+        std::fs::set_permissions(&bare, std::fs::metadata(&src).unwrap().permissions()).unwrap();
+        assert!(needs_move(&src, &bare, &on));
+        assert!(!needs_move(&src, &bare, &off));
+        // An excluded-only difference never forces a move.
+        crate::helpers::xattr_set(&b(&bare), b"user.keep", b"k").unwrap();
+        assert!(!needs_move(&src, &bare, &on));
+
+        // Cross device: the image on another filesystem than `ROOT`.
+        let other = std::path::PathBuf::from("/dev/shm")
+            .join(format!("portuale-xattr-merge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        std::fs::create_dir_all(&other).unwrap();
+        let same_fs =
+            std::fs::metadata(&other).unwrap().dev() == std::fs::metadata(&tmp).unwrap().dev();
+        let other_probe = other.join("probe");
+        std::fs::write(&other_probe, b"").unwrap();
+        let xattrs_there = crate::helpers::xattr_set(&b(&other_probe), b"user.probe", b"1").is_ok();
+        if !same_fs && xattrs_there {
+            for (name, policy, keep) in [("on", &on, true), ("off", &off, false)] {
+                let d = image(&other.join(name));
+                let root = tmp.join(format!("ROOT-x-{name}"));
+                merge(&d, &root, policy);
+                let dest = root.join("usr/share/xa/f");
+                assert_eq!(get(&dest, b"user.keep").is_some(), keep, "{name}");
+                assert_eq!(get(&dest, b"user.skip"), None, "{name}");
+            }
+        } else {
+            eprintln!("cross-device half skipped (same fs or no xattrs on /dev/shm)");
+        }
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
     #[test]
     fn merge_tree_copies_files_dirs_and_symlinks_and_writes_matching_contents() {
         let tmp = tempdir();
@@ -5350,6 +5558,7 @@ mod tests {
             "/etc/env.d",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -5411,6 +5620,7 @@ mod tests {
             "/etc/env.d",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -5506,6 +5716,7 @@ mod tests {
             "/etc/env.d",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         );
 
         let alive = child.try_wait().expect("try_wait").is_none();
@@ -5563,6 +5774,7 @@ mod tests {
             "/etc/env.d",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -5664,6 +5876,7 @@ mod tests {
             "/etc/env.d",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -5695,6 +5908,7 @@ mod tests {
             "/etc/env.d",
             false,
             &mut cfgfiledict2,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
         let meta = std::fs::symlink_metadata(root.join("usr/share/x")).unwrap();
@@ -5858,6 +6072,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -5889,6 +6104,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -5920,6 +6136,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -5985,6 +6202,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -6037,6 +6255,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -6088,6 +6307,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -6129,6 +6349,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("first merge_tree succeeds");
         assert!(root.join("etc/._cfg0000_foo.conf").exists());
@@ -6147,6 +6368,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("second merge_tree succeeds");
         assert_eq!(
@@ -6190,6 +6412,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("first merge_tree succeeds");
         assert!(root.join("etc/._cfg0000_foo.conf").exists());
@@ -6215,6 +6438,7 @@ mod tests {
             "",
             true,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("second merge_tree succeeds");
         assert!(!root.join("etc/._cfg0001_foo.conf").exists());
@@ -6249,6 +6473,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -6291,6 +6516,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -6328,6 +6554,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -6372,6 +6599,7 @@ mod tests {
             "",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
@@ -7496,6 +7724,7 @@ mod tests {
             "/etc/env.d",
             false,
             &mut cfgfiledict,
+            &XattrPolicy::default(),
         )
         .expect("merge_tree succeeds");
 
