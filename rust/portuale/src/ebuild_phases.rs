@@ -534,6 +534,11 @@ impl Environment {
     fn filesdir(&self) -> PathBuf {
         self.portage_builddir.join("files")
     }
+    /// Real `${PORTAGE_BUILDDIR}/distdir` (`config.py:3408`): the
+    /// per-package fake `DISTDIR`.
+    fn fake_distdir(&self) -> PathBuf {
+        self.portage_builddir.join("distdir")
+    }
     /// Real `${PORTAGE_BUILDDIR}/build-info`: created as a side effect of
     /// every real `unpack|prepare|configure|compile|test|clean|install`
     /// phase already run by the time `ebuild_package::run_package`'s own
@@ -614,6 +619,58 @@ fn ensure_fake_filesdir_link(target: &Path, link_path: &Path) {
             let _ = std::os::unix::fs::symlink(target, link_path);
         }
     }
+}
+
+/// Real `prepare_build_dirs._prepare_fake_distdir`
+/// (`lib/portage/package/ebuild/prepare_build_dirs.py:518-549`):
+/// `${PORTAGE_BUILDDIR}/distdir` holds exactly one symlink per file of the
+/// package's own `A`, each pointing at `<actual>/<file>` -- so a phase
+/// sees only the distfiles it declared. Anything else in it (a stale
+/// symlink, a stray file, a directory) is removed; a symlink with the wrong
+/// target is recreated. Real also chowns the directory to the portage gid
+/// when privileged; portuale does not model that for any builddir
+/// directory (see `create_directories`), so it is left out here too.
+fn prepare_fake_distdir(env: &Environment, actual: &Path, alist: &[String]) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let fake = env.fake_distdir();
+    let io = |path: &Path, e: std::io::Error| format!("{}: {e}", path.display());
+    if !std::fs::symlink_metadata(&fake).is_ok_and(|m| m.is_dir()) {
+        // A non-directory squatter (real's `ensure_dirs` would fail on it).
+        if std::fs::symlink_metadata(&fake).is_ok() {
+            std::fs::remove_file(&fake).map_err(|e| io(&fake, e))?;
+        }
+        std::fs::create_dir_all(&fake).map_err(|e| io(&fake, e))?;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| io(&fake, e))?;
+    }
+    for entry in std::fs::read_dir(&fake).map_err(|e| io(&fake, e))? {
+        let entry = entry.map_err(|e| io(&fake, e))?;
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| io(&path, e))?;
+        let keep = meta.file_type().is_symlink()
+            && alist
+                .iter()
+                .any(|x| std::ffi::OsStr::new(x) == entry.file_name());
+        if keep {
+            continue;
+        }
+        if meta.is_dir() {
+            std::fs::remove_dir_all(&path).map_err(|e| io(&path, e))?;
+        } else {
+            std::fs::remove_file(&path).map_err(|e| io(&path, e))?;
+        }
+    }
+    for x in alist {
+        let link = fake.join(x);
+        let target = actual.join(x);
+        match std::fs::read_link(&link) {
+            Ok(current) if current == target => continue,
+            Ok(_) => std::fs::remove_file(&link).map_err(|e| io(&link, e))?,
+            Err(_) => {}
+        }
+        std::os::unix::fs::symlink(&target, &link).map_err(|e| io(&link, e))?;
+    }
+    Ok(())
 }
 
 fn create_directories(env: &Environment) -> Result<(), String> {
@@ -1976,6 +2033,45 @@ fn resolved_ro_distdirs(
     .unwrap_or_default()
 }
 
+/// The distfile names `src_uri` lists once each, in first-seen order, for
+/// the `flag?` groups `active` keeps (real `_parse_uri_map`'s keys). The
+/// one place both `AA` (every group) and `A` (the phase `USE`) are read
+/// from.
+fn distfile_names(
+    env: &Environment,
+    src_uri: &str,
+    active: impl Fn(bool, &str) -> bool,
+) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in portage_fetch::flatten_src_uri(src_uri, active)
+        .map_err(|e| format!("{}: {e}", env.pkg_dir.display()))?
+    {
+        if !names.contains(&entry.filename) {
+            names.push(entry.filename);
+        }
+    }
+    Ok(names)
+}
+
+/// The package's own `A` without fetching anything: its md5-cache
+/// `SRC_URI` reduced against the phase `USE` (real `A` is the
+/// `use_reduce(SRC_URI, uselist=USE)` distfile list, the same set
+/// `fetch_src_uri` returns). Empty for an ebuild outside any repo or with
+/// no `SRC_URI`. Feeds `prepare_fake_distdir` on chains with no `unpack`.
+fn package_a(env: &Environment, use_flags: &str) -> Result<Vec<String>, String> {
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return Ok(Vec::new());
+    };
+    let src_uri = portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf)
+        .ok()
+        .and_then(|m| m.get("SRC_URI").cloned())
+        .unwrap_or_default();
+    let flags: std::collections::HashSet<&str> = use_flags.split_whitespace().collect();
+    distfile_names(env, &src_uri, |negated, flag| {
+        flags.contains(flag) != negated
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn fetch_sources(
     env: &Environment,
@@ -2009,14 +2105,7 @@ async fn fetch_sources(
         .map(|r| restrict_primaryuri_from_restrict(r))
         .unwrap_or(false);
     // Real `AA`: the keys of `_parse_uri_map` -- each distfile once.
-    let mut aa: Vec<String> = Vec::new();
-    for entry in portage_fetch::flatten_src_uri(&src_uri, |_, _| true)
-        .map_err(|e| format!("{}: {e}", env.pkg_dir.display()))?
-    {
-        if !aa.contains(&entry.filename) {
-            aa.push(entry.filename);
-        }
-    }
+    let aa = distfile_names(env, &src_uri, |_, _| true)?;
     // Real `fetch.py` reads its commands and `PORTAGE_SSH_OPTS` out of
     // the same settings object the phases use; resolve the chain once.
     let fetch_config = resolved_fetch_config(env, config_root, root);
@@ -3466,6 +3555,27 @@ fn phase_env_vars(
             .cloned(),
     );
 
+    // Real `config.environ()` (`config.py:3403-3409`): when both
+    // `PORTAGE_BUILDDIR` and `DISTDIR` are set, the real distfiles
+    // directory moves to `PORTAGE_ACTUAL_DISTDIR` and `DISTDIR` becomes the
+    // per-package fake `${PORTAGE_BUILDDIR}/distdir` (filled by
+    // `prepare_fake_distdir`). Applied to every phase environment, after
+    // the pairs above so the remapped values are the last ones set (#330).
+    // No `DISTDIR` at all: real's `KeyError` guard leaves both untouched.
+    if let Some(actual) = vars
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "DISTDIR")
+        .map(|(_, v)| v.clone())
+    {
+        vars.retain(|(k, _)| k != "DISTDIR" && k != "PORTAGE_ACTUAL_DISTDIR");
+        vars.push(("PORTAGE_ACTUAL_DISTDIR".to_string(), actual));
+        vars.push((
+            "DISTDIR".to_string(),
+            env.fake_distdir().display().to_string(),
+        ));
+    }
+
     // Real `EbuildPhase._start` (`EbuildPhase.py:52-56`) calls
     // `split_LC_ALL(settings)` (`portage/util/locale.py:160`) before
     // spawning any phase: a set `LC_ALL` is copied to every
@@ -4675,21 +4785,25 @@ async fn run_commands_async(
         .iter()
         .flat_map(|&c| phase_prerequisites(c))
         .collect();
-    // Real `config.environ()` (config.py:3403-3409) also exports the real
-    // distdir as `PORTAGE_ACTUAL_DISTDIR`; `doins` passes it as `--distdir`,
-    // and without it every absolute symlink under `doins -r` is
-    // dereferenced. Real then points `DISTDIR` at a per-package fake
-    // distdir (doebuild.py `_prepare_fake_distdir`); portuale keeps the
-    // real one (#330).
-    let mut extra_env = vec![
-        ("DISTDIR".to_string(), distdir.display().to_string()),
-        (
-            "PORTAGE_ACTUAL_DISTDIR".to_string(),
-            distdir.display().to_string(),
-        ),
-    ];
+    // The real distdir goes in as `DISTDIR`; `phase_env_vars` remaps it the
+    // way real `config.environ()` does (`config.py:3403-3409`): the real
+    // directory becomes `PORTAGE_ACTUAL_DISTDIR` (`doins` passes it as
+    // `--distdir`, so absolute symlinks under `doins -r` stay symlinks) and
+    // `DISTDIR` the per-package fake `${PORTAGE_BUILDDIR}/distdir`, filled
+    // by `prepare_fake_distdir` below (#330).
+    let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
     extra_env.extend(build_env.iter().cloned());
-    if chain.contains(&"unpack") {
+    // The resolved `USE` threaded by the caller (last `USE` pair, the value
+    // the phases themselves see), so `A` names exactly the distfiles
+    // `use()` will expect.
+    let use_flags = extra_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "USE")
+        .map_or("", |(_, v)| v.as_str())
+        .to_string();
+    let features = features_string(&extra_env);
+    let a = if chain.contains(&"unpack") {
         let (a, _aa) = fetch_sources(
             &env,
             root,
@@ -4697,15 +4811,8 @@ async fn run_commands_async(
             debug,
             config_root,
             shell,
-            &features_string(&extra_env),
-            // The resolved `USE` threaded by the caller (last `USE` pair,
-            // the value the phases themselves see), so `A` names exactly
-            // the distfiles `use()` will expect.
-            extra_env
-                .iter()
-                .rev()
-                .find(|(k, _)| k == "USE")
-                .map_or("", |(_, v)| v.as_str()),
+            &features,
+            &use_flags,
         )
         .await?;
         // Real `config.environ()` exports `A` but pops `AA` for every
@@ -4713,6 +4820,25 @@ async fn run_commands_async(
         // EAPI floor here is 5+, so `AA` is never exported (S0 finding
         // `l2-env-aa-exported`).
         extra_env.push(("A".to_string(), a.join(" ")));
+        Some(a)
+    } else {
+        None
+    };
+    // Real `doebuild.py:1463-1469`: the fake distdir is prepared when the
+    // requested `mydo` is not `setup` (unless `FEATURES=noauto`), or is
+    // `install`/`unpack`. The first test is over the *command*, not the
+    // chain: `setup`'s own prerequisite chain starts with `pretend`. The
+    // second looks at the whole chain, because portuale's `noauto` still
+    // runs the prerequisites and `unpack` needs `${DISTDIR}/<A>`.
+    if (commands.iter().any(|&c| c != "setup")
+        && !features.split_whitespace().any(|f| f == "noauto"))
+        || chain.iter().any(|&p| p == "install" || p == "unpack")
+    {
+        let alist = match a {
+            Some(a) => a,
+            None => package_a(&env, &use_flags)?,
+        };
+        prepare_fake_distdir(&env, distdir, &alist)?;
     }
 
     for &command in commands {
@@ -8172,6 +8298,154 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Real gives every phase `DISTDIR=${PORTAGE_BUILDDIR}/distdir` -- one
+    /// symlink per file of the package's own `A` (`_prepare_fake_distdir`,
+    /// `prepare_build_dirs.py:518-549`) -- and the real directory in
+    /// `PORTAGE_ACTUAL_DISTDIR` (`config.py:3403-3409`). A distfile that is
+    /// in the real distdir but not in this package's `A` is not visible
+    /// through `DISTDIR`. Expected values: real Portage's source above, and
+    /// real `ebuild --skip-manifest <fixture> install` (Portage 3.0.82.2 on
+    /// the dev host, same two distfiles) writing the same four lines.
+    #[test]
+    fn phases_see_the_per_package_fake_distdir() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/fakedistdirpkg/fakedistdirpkg-1.0.ebuild");
+        let name = format!("ebuild-phases-test-{}-fake-distdir", std::process::id());
+        let portage_tmpdir = TempDir::new(&name);
+        let distdir = TempDir::new(&format!("{name}-distfiles"));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let _ = std::fs::remove_dir_all(&distdir);
+        std::fs::create_dir_all(&distdir).unwrap();
+        std::fs::write(
+            distdir.join("fakedistdirpkg-1.0.tar.gz"),
+            b"hello from fakedistdirpkg\n",
+        )
+        .unwrap();
+        // In the real distdir, not in this package's SRC_URI.
+        std::fs::write(distdir.join("frs-1.0.tar.gz"), b"unrelated\n").unwrap();
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &distdir,
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Brush,
+            &[],
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let builddir = portage_tmpdir.join("portage/dev-libs/fakedistdirpkg-1.0");
+        let observed = std::fs::read_to_string(builddir.join("temp/fake-distdir.txt"))
+            .expect("the install phase should record its DISTDIR view");
+        assert_eq!(
+            observed,
+            format!(
+                "DISTDIR={}\nPORTAGE_ACTUAL_DISTDIR={}\nLINK={}\nUNLISTED=absent\n",
+                builddir.join("distdir").display(),
+                distdir.display(),
+                distdir.join("fakedistdirpkg-1.0.tar.gz").display(),
+            )
+        );
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let _ = std::fs::remove_dir_all(&distdir);
+    }
+
+    /// Real `_prepare_fake_distdir` (`prepare_build_dirs.py:518-549`):
+    /// entries that are not a symlink named in `A` (a stale symlink, a
+    /// stray directory, a plain file) are removed, a symlink with the wrong
+    /// target is recreated, a correct one is kept.
+    #[test]
+    fn prepare_fake_distdir_prunes_and_relinks_like_real() {
+        use std::os::unix::fs::symlink;
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+        let portage_tmpdir = TempDir::new(&format!(
+            "ebuild-phases-test-{}-prep-fake",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let env = compute_environment(&ebuild_path, &portage_tmpdir).unwrap();
+        let fake = env.fake_distdir();
+        std::fs::create_dir_all(fake.join("stray-dir/inner")).unwrap();
+        std::fs::write(fake.join("stray-file"), b"x").unwrap();
+        symlink("/real/stale", fake.join("stale")).unwrap();
+        symlink("/old/wrong", fake.join("wrong")).unwrap();
+        symlink("/real/keep", fake.join("keep")).unwrap();
+        let before = std::fs::symlink_metadata(fake.join("keep")).unwrap();
+
+        let alist = vec!["keep".to_string(), "wrong".to_string(), "new".to_string()];
+        prepare_fake_distdir(&env, Path::new("/real"), &alist).unwrap();
+
+        let mut names: Vec<String> = std::fs::read_dir(&fake)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["keep", "new", "wrong"]);
+        for x in ["keep", "new", "wrong"] {
+            assert_eq!(
+                std::fs::read_link(fake.join(x)).unwrap(),
+                Path::new("/real").join(x)
+            );
+        }
+        // The correct link was left alone, not recreated.
+        use std::os::unix::fs::MetadataExt;
+        let after = std::fs::symlink_metadata(fake.join("keep")).unwrap();
+        assert_eq!(before.ino(), after.ino());
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Real `doebuild.py:1463-1469`: the fake distdir is prepared for a
+    /// command other than `setup` unless `FEATURES=noauto`; a
+    /// `setup`-only chain, or any chain under `noauto` that has no
+    /// `install`/`unpack`, creates none.
+    #[test]
+    fn fake_distdir_is_prepared_only_when_real_prepares_it() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+        let noauto = vec![("FEATURES".to_string(), "noauto".to_string())];
+        for (commands, build_env, expect_distdir) in [
+            (vec!["setup"], vec![], false),
+            (vec!["setup"], noauto.clone(), false),
+            (vec!["pretend"], noauto, false),
+            (vec!["pretend"], vec![], true),
+        ] {
+            let portage_tmpdir = TempDir::new(&format!(
+                "ebuild-phases-test-{}-fake-distdir-{}-{}",
+                std::process::id(),
+                commands[0],
+                expect_distdir
+            ));
+            let _ = std::fs::remove_dir_all(&portage_tmpdir);
+            let status = run_commands(
+                &ebuild_path,
+                &commands,
+                Path::new("/"),
+                &portage_tmpdir,
+                &portage_tmpdir.join("distfiles"),
+                false,
+                Path::new("/dev/null/no-config-root"),
+                ShellBackend::Brush,
+                &build_env,
+            )
+            .expect("run_commands should not itself error");
+            assert_eq!(status, 0, "{commands:?} {build_env:?}");
+            let distdir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0/distdir");
+            assert_eq!(
+                distdir.is_dir(),
+                expect_distdir,
+                "{commands:?} {build_env:?}"
+            );
+            let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        }
     }
 
     /// `pretend` alone (the shortest real prerequisite chain -- see
