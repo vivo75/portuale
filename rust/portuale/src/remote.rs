@@ -176,6 +176,18 @@ pub struct RemoteContext {
     /// (`--remote-require-ledger-match`, plan §8): abort before merging
     /// anything unless the client's and server's newest ledger line agree.
     pub require_ledger_match: bool,
+    /// Binary the server ships to the client (`--remote-portuale-binary`,
+    /// #326 D5/Q3): `None` = this process's own binary (`current_exe()`).
+    pub portuale_binary: Option<String>,
+    /// Client directory holding the portuale binary
+    /// (`--remote-portuale-dir`, #326 Q1): `None` = the default pair
+    /// (`/opt/bin`, then `/usr/local/bin`). Must be absolute when given.
+    pub portuale_dir: Option<String>,
+    /// Resolved client binary placement (post-preflight, #326 S8.1):
+    /// `Unresolved` until the preflight facts decide it. Local transport
+    /// without the override never resolves past `Unresolved` -- it keeps
+    /// `current_exe()` and installs nothing (#326 D5).
+    pub bin_plan: ClientBinPlan,
     /// Space-separated CONFIG_PROTECT list for the client merge (real
     /// default `/etc`; the resolve path derives it from the placed
     /// config unless explicitly flagged -- slice 6).
@@ -187,6 +199,34 @@ pub struct RemoteContext {
     pub config_protect_mask: String,
     /// Whether `--remote-config-protect-mask` was passed explicitly.
     pub config_protect_mask_explicit: bool,
+}
+
+/// Resolved client binary placement (#326 S8.1 gates): the absolute client
+/// path every generated script exports as `PORTUALE_BIN`, however it got
+/// there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientBinPlan {
+    /// No preflight ran yet (fresh CLI parse, or local transport without
+    /// `--remote-portuale-dir`, which skips the gates by design).
+    Unresolved,
+    /// The running binary itself (local transport without the override,
+    /// #326 D5): no preflight checks, no install.
+    Local(String),
+    /// A client path whose full SHA-256 already matches: use it, install
+    /// nothing.
+    Use(String),
+    /// No candidate matches: install there (as `portuale-<hash>`).
+    Install(String),
+}
+
+impl ClientBinPlan {
+    /// The absolute path the plan settled on, if any.
+    pub fn abs(&self) -> Option<&str> {
+        match self {
+            Self::Unresolved => None,
+            Self::Local(path) | Self::Use(path) | Self::Install(path) => Some(path),
+        }
+    }
 }
 
 /// `--remote-*` ids besides `remote_hostname`, in OPTIONS-table order --
@@ -210,6 +250,8 @@ const REMOTE_OPTION_IDS: &[&str] = &[
     "remote_edb",
     "remote_ledger_dir",
     "remote_require_ledger_match",
+    "remote_portuale_binary",
+    "remote_portuale_dir",
 ];
 
 fn get(matches: &ArgMatches, id: &str) -> Option<String> {
@@ -303,6 +345,15 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
             Some(raw) => (raw, true),
             None => ("/etc/env.d".to_string(), false),
         };
+    let portuale_binary = get(matches, "remote_portuale_binary").filter(|b| !b.is_empty());
+    let portuale_dir = match get(matches, "remote_portuale_dir").filter(|d| !d.is_empty()) {
+        Some(raw) if !raw.starts_with('/') => {
+            return Err(format!(
+                "mrg: --remote-portuale-dir must be an absolute client path, got {raw:?}"
+            ));
+        }
+        other => other,
+    };
     Ok(Some(RemoteContext {
         hostname,
         user: get(matches, "remote_user").filter(|u| !u.is_empty()),
@@ -329,6 +380,9 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
         config_protect_explicit,
         config_protect_mask,
         config_protect_mask_explicit,
+        portuale_binary,
+        portuale_dir,
+        bin_plan: ClientBinPlan::Unresolved,
     }))
 }
 
@@ -461,10 +515,10 @@ fn is_transport_error(code: Option<i32>, stderr: &str) -> bool {
 /// `--remote-vdb=server:` copy) -- a client phase's `has_version` /
 /// `best_version` must read the *client's* VDB, which stays a files tree
 /// (`mrg.rs` `setup_vdb`) -- and `PORTUALE_BIN`, which the vendored
-/// `portageq-wrapper` shim execs: without it the shim falls back to a
-/// `portuale` on `PATH`, absent in a minimal client. Over ssh neither is
-/// forwarded (the client's `PATH` provides `portuale`), so only this
-/// transport needs it.
+/// `portageq-wrapper` shim execs (`#326 S8.3`: every generated script
+/// exports the resolved absolute path, and local transport keeps
+/// `current_exe()` with no install). Over ssh neither is forwarded, so
+/// only this transport needs it.
 fn local_client_bash() -> std::process::Command {
     let mut cmd = std::process::Command::new("bash");
     cmd.arg("-s");
@@ -852,6 +906,10 @@ pub(crate) fn place_config_root(
 
 /// Run an arbitrary remote command (`tar`, …), not just `bash -s`.
 /// stdout bytes come back to the caller (used by the config pull).
+/// `remote_argv` is an argv, never shell text: over ssh, which joins its
+/// trailing words with spaces for the remote shell, each word is
+/// `sh_quote`d, so a client path with spaces or metacharacters (e.g. a
+/// `--remote-portuale-dir`) stays one word (#326 S8 review).
 fn run_raw_command(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -872,7 +930,7 @@ fn run_raw_command(
         }
         RemoteTransport::Ssh => {
             let mut argv = ssh_argv(ctx, control);
-            argv.extend(remote_argv.iter().cloned());
+            argv.extend(remote_argv.iter().map(|word| sh_quote(word)));
             std::process::Command::new(&argv[0])
                 .args(&argv[1..])
                 .stdin(std::process::Stdio::null())
@@ -1012,12 +1070,17 @@ fn send_bytes(
 /// Read-only gates, generated bash (no arrays, no `set -e` -- every gate
 /// reports instead of aborting). `KEY=VALUE` on stdout, human log on
 /// stderr. `@ROOT@`/`@WORKDIR@` are substituted server-side, pre-quoted.
-fn preflight_script(root: &str, workdir: &str) -> String {
-    format!(
+/// `bin` is `(dirs, candidates)` from the S8.1 search (#326 D5): per
+/// candidate the full digest or `missing`, plus `uname -m` and each
+/// directory's existence, writability and octal mode. `None` skips the
+/// binary section (local transport without the override installs
+/// nothing, so there is nothing to report).
+fn preflight_script(root: &str, workdir: &str, bin: Option<(&[String], &[String])>) -> String {
+    let mut script = format!(
         r#"echo "PREFLIGHT=1"
 echo "BASH_MAJOR=${{BASH_VERSINFO[0]}}"
 echo "BASH_MINOR=${{BASH_VERSINFO[1]}}"
-for t in tar mkdir rm cat chmod ln find grep sed cmp stat readlink id tail; do
+for t in tar mkdir rm cat chmod ln find grep sed cmp stat readlink id tail sha256sum mv uname mktemp; do
   if command -v "$t" >/dev/null 2>&1; then echo "TOOL_$t=yes"; else echo "TOOL_$t=no"; fi
 done
 ROOT={root}
@@ -1036,7 +1099,34 @@ echo "CLIENT_TIME=$(date +%s)"
 "#,
         root = sh_quote(root),
         workdir = sh_quote(workdir),
-    )
+    );
+    if let Some((dirs, candidates)) = bin {
+        script.push_str("echo \"UNAME_M=$(uname -m)\"\n");
+        for (i, candidate) in candidates.iter().enumerate() {
+            script.push_str(&format!(
+                concat!(
+                    "CAND={cand}\n",
+                    "if [ -f \"$CAND\" ]; then echo \"CAND_{i}_SHA=$(sha256sum -- \"$CAND\" 2>/dev/null | cut -d' ' -f1)\"; ",
+                    "else echo \"CAND_{i}_SHA=missing\"; fi\n",
+                ),
+                cand = sh_quote(candidate),
+                i = i,
+            ));
+        }
+        for (j, dir) in dirs.iter().enumerate() {
+            script.push_str(&format!(
+                concat!(
+                    "BINDIR={dir}\n",
+                    "if [ -d \"$BINDIR\" ]; then echo \"DIR_{j}_EXISTS=yes\"; else echo \"DIR_{j}_EXISTS=no\"; fi\n",
+                    "if [ -w \"$BINDIR\" ]; then echo \"DIR_{j}_WRITABLE=yes\"; else echo \"DIR_{j}_WRITABLE=no\"; fi\n",
+                    "if [ -d \"$BINDIR\" ]; then echo \"DIR_{j}_MODE=$(stat -c %a -- \"$BINDIR\" 2>/dev/null || echo unknown)\"; fi\n",
+                ),
+                dir = sh_quote(dir),
+                j = j,
+            ));
+        }
+    }
+    script
 }
 
 /// Parse `KEY=VALUE` stdout lines into a map (anything else ignored).
@@ -1073,8 +1163,24 @@ fn preflight_gates(values: &HashMap<String, String>) -> (Vec<String>, Vec<String
         ));
     }
     for tool in [
-        "tar", "mkdir", "rm", "cat", "chmod", "ln", "find", "grep", "sed", "cmp", "stat",
-        "readlink", "id", "tail",
+        "tar",
+        "mkdir",
+        "rm",
+        "cat",
+        "chmod",
+        "ln",
+        "find",
+        "grep",
+        "sed",
+        "cmp",
+        "stat",
+        "readlink",
+        "id",
+        "tail",
+        "sha256sum",
+        "mv",
+        "uname",
+        "mktemp",
     ] {
         if values
             .get(format!("TOOL_{tool}").as_str())
@@ -1115,6 +1221,593 @@ fn clock_gate(client_time: Option<&str>, server_time: u64, max_skew: u64) -> Opt
     } else {
         None
     }
+}
+
+// --- Client portuale binary (slice 8, #326 D5/Q1-Q3/Q5) ----------------------
+//
+// The server installs and verifies its own binary on the client: the file
+// it ships is `current_exe()`, or `--remote-portuale-binary=<path>` (e.g.
+// a static musl build when the server itself runs a dynamic dev build).
+// The client must hold a file with the same full SHA-256; whatever file
+// is found, the full digest is always what gets compared. `<hash>` in
+// `portuale-<hash>` is the first 16 hex digits of that digest (Q5).
+// Different server builds get different names, so they never overwrite
+// each other; a plain `portuale` whose digest differs is never touched
+// (it may be an operator's own install).
+
+/// Default client search directories, in D5 order.
+pub(crate) fn default_bin_dirs() -> Vec<String> {
+    vec!["/opt/bin".to_string(), "/usr/local/bin".to_string()]
+}
+
+/// Candidate directories: only the `--remote-portuale-dir=<abs>` pair
+/// when that option is given (Q1), else the default pair.
+pub(crate) fn bin_search_dirs(ctx: &RemoteContext) -> Vec<String> {
+    match &ctx.portuale_dir {
+        Some(dir) => vec![dir.clone()],
+        None => default_bin_dirs(),
+    }
+}
+
+/// Candidate files in D5 order: per directory, `portuale` then
+/// `portuale-<hash>`. The first file whose full digest matches is used.
+pub(crate) fn bin_candidates(dirs: &[String], short_hash: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for dir in dirs {
+        out.push(format!("{dir}/portuale"));
+        out.push(format!("{dir}/portuale-{short_hash}"));
+    }
+    out
+}
+
+/// The server-side identity of the binary to ship.
+pub(crate) struct ServerBinInfo {
+    /// The file to stream (`--remote-portuale-binary`, or `current_exe()`).
+    pub path: std::path::PathBuf,
+    /// Full SHA-256 hex of the file.
+    pub digest_hex: String,
+    /// First 16 hex digits of the digest (the `<hash>` in file names).
+    pub short_hash: String,
+    /// ELF `e_machine` of the file.
+    pub machine: u16,
+}
+
+/// Read the shipped binary's ELF `e_machine`: bytes 18-19, in the
+/// endianness byte 5 names. Header bytes are read directly; no new crate.
+pub(crate) fn elf_machine(bytes: &[u8]) -> Result<u16, String> {
+    if bytes.len() < 20 {
+        return Err("not an ELF binary (shorter than the 20-byte header prefix)".to_string());
+    }
+    if &bytes[0..4] != b"\x7fELF" {
+        return Err("not an ELF binary (bad magic)".to_string());
+    }
+    match bytes[5] {
+        1 => Ok(u16::from_le_bytes([bytes[18], bytes[19]])),
+        2 => Ok(u16::from_be_bytes([bytes[18], bytes[19]])),
+        other => Err(format!("unknown ELF data encoding {other}")),
+    }
+}
+
+/// Hash the binary the server will ship and read its ELF machine (Q3).
+/// Errors name `--remote-portuale-binary` when that option selected the
+/// file.
+pub(crate) fn server_bin_info(ctx: &RemoteContext) -> Result<ServerBinInfo, String> {
+    let (path, named) = match &ctx.portuale_binary {
+        Some(custom) => (std::path::PathBuf::from(custom), true),
+        None => (
+            std::env::current_exe().map_err(|e| {
+                format!("mrg: cannot locate the running binary for the client install: {e}")
+            })?,
+            false,
+        ),
+    };
+    let bytes = std::fs::read(&path).map_err(|e| {
+        if named {
+            format!("mrg: --remote-portuale-binary {}: {e}", path.display())
+        } else {
+            format!(
+                "mrg: cannot read the running binary {} for the client install: {e}",
+                path.display()
+            )
+        }
+    })?;
+    use sha2::Digest as _;
+    let digest_hex = format!("{:x}", sha2::Sha256::digest(&bytes));
+    let machine = elf_machine(&bytes).map_err(|e| {
+        if named {
+            format!("mrg: --remote-portuale-binary {}: {e}", path.display())
+        } else {
+            format!("mrg: the running binary {}: {e}", path.display())
+        }
+    })?;
+    Ok(ServerBinInfo {
+        short_hash: digest_hex[..16].to_string(),
+        digest_hex,
+        machine,
+        path,
+    })
+}
+
+/// `e_machine` values the gate knows, with the `uname -m` names each
+/// maps to.
+fn machine_unames(machine: u16) -> Option<&'static [&'static str]> {
+    match machine {
+        // EM_386: the 32-bit x86 spellings `uname -m` prints.
+        3 => Some(&["i386", "i486", "i586", "i686"]),
+        // EM_PPC64: both endians run the same instruction set name here.
+        21 => Some(&["ppc64", "ppc64le"]),
+        // EM_S390.
+        22 => Some(&["s390x"]),
+        // EM_ARM.
+        40 => Some(&["armv5tel", "armv6l", "armv7l", "armv8l", "arm"]),
+        // EM_X86_64 (`amd64` is the FreeBSD `uname -m` spelling).
+        62 => Some(&["x86_64", "amd64"]),
+        // EM_AARCH64 (`arm64` is the macOS spelling).
+        183 => Some(&["aarch64", "arm64"]),
+        // EM_RISCV.
+        243 => Some(&["riscv64"]),
+        _ => None,
+    }
+}
+
+/// Human name for an `e_machine` in gate messages.
+pub(crate) fn machine_name(machine: u16) -> String {
+    match machine_unames(machine) {
+        Some(names) => names[0].to_string(),
+        None => format!("e_machine {machine}"),
+    }
+}
+
+/// Whether the shipped binary runs on the client (Q3): `Some(true)` when
+/// the client's `uname -m` is one of the machine's names, `Some(false)`
+/// on a definite mismatch, `None` when either side is unknown -- an
+/// unknown pair is a mismatch only when both are known.
+pub(crate) fn arch_matches(machine: u16, uname_m: &str) -> Option<bool> {
+    let names = machine_unames(machine)?;
+    if uname_m.is_empty() {
+        return None;
+    }
+    Some(names.contains(&uname_m))
+}
+
+/// Server-side preflight facts for the binary gates: what to look for
+/// and what to compare against. `None` for local transport without
+/// `--remote-portuale-dir`, which keeps `current_exe()` and installs
+/// nothing (D5).
+pub(crate) struct BinPreflight {
+    /// `bin_search_dirs(ctx)`.
+    pub dirs: Vec<String>,
+    /// `bin_candidates(&dirs, &short)`, in D5 order.
+    pub candidates: Vec<String>,
+    /// Full expected SHA-256 hex.
+    pub digest: String,
+    /// The file the digest (and bytes) come from, for messages.
+    pub bin_path: String,
+    /// ELF `e_machine` of that file.
+    pub machine: u16,
+}
+
+/// Compute the binary preflight facts, unless this run skips the gates
+/// by design (local transport without the override).
+pub(crate) fn bin_preflight(ctx: &RemoteContext) -> Result<Option<BinPreflight>, String> {
+    if ctx.transport == RemoteTransport::Local && ctx.portuale_dir.is_none() {
+        return Ok(None);
+    }
+    let info = server_bin_info(ctx)?;
+    let dirs = bin_search_dirs(ctx);
+    let candidates = bin_candidates(&dirs, &info.short_hash);
+    Ok(Some(BinPreflight {
+        dirs,
+        candidates,
+        digest: info.digest_hex,
+        bin_path: info.path.display().to_string(),
+        machine: info.machine,
+    }))
+}
+
+/// Whether `dir` (preflight index `j`) may receive the install: it must
+/// exist and be writable, and a world-writable directory without the
+/// sticky bit is refused (D5). `Err` names the reason for the report.
+fn dir_writable_for_install(
+    values: &HashMap<String, String>,
+    j: usize,
+    dir: &str,
+) -> Result<(), String> {
+    let yes = "yes".to_string();
+    if values.get(&format!("DIR_{j}_EXISTS")) != Some(&yes) {
+        return Err(format!("client directory {dir} does not exist"));
+    }
+    if values.get(&format!("DIR_{j}_WRITABLE")) != Some(&yes) {
+        return Err(format!("client directory {dir} is not writable"));
+    }
+    let mode_text = values
+        .get(&format!("DIR_{j}_MODE"))
+        .map(String::as_str)
+        .unwrap_or("");
+    let mode = u32::from_str_radix(mode_text.trim(), 8)
+        .map_err(|_| format!("client directory {dir}: cannot read its mode ({mode_text:?})"))?;
+    if mode & 0o002 != 0 && mode & 0o1000 == 0 {
+        return Err(format!(
+            "client directory {dir} is world-writable without the sticky bit (refused)"
+        ));
+    }
+    Ok(())
+}
+
+/// Evaluate the S8.1 gates over parsed preflight values: `(plan,
+/// failures, notes)`. The first digest match wins; no match plans an
+/// install as `<dir>/portuale-<hash>` in the first usable directory; a
+/// mismatched plain `portuale` is a note (reported, left alone); an
+/// arch mismatch or no usable directory fails.
+pub(crate) fn evaluate_bin_gates(
+    values: &HashMap<String, String>,
+    pre: &BinPreflight,
+    override_given: bool,
+) -> (ClientBinPlan, Vec<String>, Vec<String>) {
+    let mut failures = Vec::new();
+    let mut notes = Vec::new();
+    let uname_m = values.get("UNAME_M").map(String::as_str).unwrap_or("");
+    if arch_matches(pre.machine, uname_m) == Some(false) {
+        failures.push(format!(
+            "client architecture is {uname_m:?} but the shipped binary (--remote-portuale-binary {}) is built for {}: build the client architecture and pass it with --remote-portuale-binary",
+            pre.bin_path,
+            machine_name(pre.machine),
+        ));
+        return (ClientBinPlan::Unresolved, failures, notes);
+    }
+    let short: String = pre.digest.chars().take(16).collect();
+    let mut corrupted_hashed: Vec<String> = Vec::new();
+    for (i, path) in pre.candidates.iter().enumerate() {
+        let sha = values
+            .get(&format!("CAND_{i}_SHA"))
+            .map(String::as_str)
+            .unwrap_or("missing");
+        if sha == pre.digest {
+            return (ClientBinPlan::Use(path.clone()), failures, notes);
+        }
+        let plain = path.rsplit('/').next().unwrap_or(path) == "portuale";
+        if !plain && sha != "missing" && !sha.is_empty() {
+            corrupted_hashed.push(path.clone());
+        }
+        if plain && sha != "missing" && !sha.is_empty() {
+            notes.push(format!(
+                "client {path} has a different SHA-256 (an operator install?); left alone"
+            ));
+        }
+    }
+    // No match: the first usable directory takes `<dir>/portuale-<hash>`.
+    let mut reasons = Vec::new();
+    for (j, dir) in pre.dirs.iter().enumerate() {
+        match dir_writable_for_install(values, j, dir) {
+            Ok(()) => {
+                let target = format!("{dir}/portuale-{short}");
+                if corrupted_hashed.contains(&target) {
+                    notes.push(format!(
+                        "client {target} does not match its name (corrupted); planned for replacement"
+                    ));
+                }
+                return (ClientBinPlan::Install(target), failures, notes);
+            }
+            Err(reason) => reasons.push(reason),
+        }
+    }
+    if override_given {
+        failures.push(format!(
+            "mrg: --remote-portuale-dir {}: {}",
+            pre.dirs.first().map(String::as_str).unwrap_or("?"),
+            reasons
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "no usable directory".to_string()),
+        ));
+    } else {
+        failures.push(
+            "mrg: no writable client directory for the portuale binary (/opt/bin and /usr/local/bin are missing, unwritable, or world-writable without the sticky bit): pass --remote-portuale-dir=<abs dir> pointing at a directory the client login can write, or run as a root login".to_string(),
+        );
+    }
+    (ClientBinPlan::Unresolved, failures, notes)
+}
+
+/// Run the install stage when the plan says so (S8.2): `Use`/`Local`
+/// are no-ops (no status line -- a reuse prints nothing);
+/// `Unresolved` is an internal error (preflight never ran).
+pub(crate) fn ensure_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<(), String> {
+    match &ctx.bin_plan {
+        ClientBinPlan::Install(target) => {
+            let pre = bin_preflight(ctx)?.ok_or_else(|| {
+                "mrg: internal error: the client binary plan needs an install but preflight skipped the binary gates".to_string()
+            })?;
+            install_client_binary(ctx, control, target, &pre.digest, &pre.bin_path)
+        }
+        ClientBinPlan::Use(_) | ClientBinPlan::Local(_) => Ok(()),
+        ClientBinPlan::Unresolved => Err(
+            "mrg: internal error: the client binary was never resolved (preflight did not run)"
+                .to_string(),
+        ),
+    }
+}
+
+/// Digest of a client path, if it exists: `None` when missing. Only a
+/// transport failure is an `Err`; a missing file is not one.
+fn client_file_digest(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    path: &str,
+) -> Result<Option<String>, String> {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(format!("mrg: reading {path}: {e}")),
+            };
+            use sha2::Digest as _;
+            Ok(Some(format!("{:x}", sha2::Sha256::digest(&bytes))))
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &["sha256sum".to_string(), "--".to_string(), path.to_string()],
+            )?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                if is_transport_error(code, &stderr) {
+                    return Err(format!(
+                        "mrg: client {} unreachable:\n{stderr}",
+                        ctx.hostname
+                    ));
+                }
+                return Ok(None);
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(stdout
+                .split_whitespace()
+                .next()
+                .map(String::from)
+                .filter(|hex| hex.len() == 64))
+        }
+    }
+}
+
+/// Best-effort removal of a client temp path (the install's failure
+/// cleanup, S8.2).
+fn remove_client_path(ctx: &RemoteContext, control: Option<&std::path::Path>, path: &str) {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            let _ = std::fs::remove_file(path);
+        }
+        RemoteTransport::Ssh => {
+            let _ = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "rm".to_string(),
+                    "-f".to_string(),
+                    "--".to_string(),
+                    path.to_string(),
+                ],
+            );
+        }
+    }
+}
+
+/// Run `"<abs>" __helper ping` on the client and require the D8 token on
+/// stdout: the installed binary really executes there.
+fn ping_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    abs: &str,
+) -> Result<(), String> {
+    let output = run_raw_command(
+        ctx,
+        control,
+        &[abs.to_string(), "__helper".to_string(), "ping".to_string()],
+    )
+    .map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local client binary ping failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        if ctx.transport == RemoteTransport::Ssh && is_transport_error(code, &stderr) {
+            return Err(format!(
+                "mrg: client {} unreachable:\n{stderr}",
+                ctx.hostname
+            ));
+        }
+        return Err(format!(
+            "mrg: client binary {abs} failed its __helper ping (exit {}):\n{stderr}",
+            code.unwrap_or(-1)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim() != crate::helpers::PING_TOKEN {
+        return Err(format!(
+            "mrg: client binary {abs} did not answer the __helper ping (no D8 token)"
+        ));
+    }
+    Ok(())
+}
+
+/// The S8.2 install: `mktemp <dir>/.portuale.XXXXXX`, stream the server
+/// binary over the existing connection (the way bundles stream), `chmod
+/// 0755`, re-check the digest, `mv` to `<dir>/portuale-<hash>`, then
+/// `"<abs>" __helper ping` (which must print the D8 token). On any
+/// failure the temp file is removed and the run fails before any unit
+/// is consumed. Prints the status line `portuale-remote: install-bin
+/// <rc>`.
+fn install_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    target: &str,
+    expected: &str,
+    bin_path: &str,
+) -> Result<(), String> {
+    // Idempotent: a matching target only needs its ping (a reuse, so no
+    // status line -- the second run reports no `install-bin` line).
+    match client_file_digest(ctx, control, target)? {
+        Some(digest) if digest == expected => {
+            ping_client_binary(ctx, control, target)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+    let bytes = std::fs::read(bin_path)
+        .map_err(|e| format!("mrg: reading the shipped binary {bin_path}: {e}"))?;
+    let dir = std::path::Path::new(target)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| format!("mrg: install target {target} has no parent directory"))?;
+    // `mktemp <dir>/.portuale.XXXXXX`.
+    let tmp: String = match ctx.transport {
+        RemoteTransport::Local => {
+            let mut attempt = 0;
+            loop {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|t| t.as_nanos())
+                    .unwrap_or(0);
+                let candidate = format!(
+                    "{dir}/.portuale.{}.{attempt}.{nanos}.tmp",
+                    std::process::id()
+                );
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&candidate)
+                {
+                    Ok(_) => break candidate,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 8 => {
+                        attempt += 1;
+                    }
+                    Err(e) => {
+                        return Err(format!("mrg: creating the client temp file: {e}"));
+                    }
+                }
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &["mktemp".to_string(), format!("{dir}/.portuale.XXXXXX")],
+            )?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                if is_transport_error(code, &stderr) {
+                    return Err(format!(
+                        "mrg: client {} unreachable:\n{stderr}",
+                        ctx.hostname
+                    ));
+                }
+                return Err(format!(
+                    "mrg: client mktemp in {dir} failed (exit {}):\n{stderr}",
+                    code.unwrap_or(-1)
+                ));
+            }
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if name.is_empty() || !name.starts_with(&dir) {
+                remove_client_path(ctx, control, &name);
+                return Err(format!(
+                    "mrg: client mktemp answered unexpectedly: {name:?}"
+                ));
+            }
+            name
+        }
+    };
+    let fail = |step: &str, detail: String| {
+        remove_client_path(ctx, control, &tmp);
+        format!("mrg: client binary install failed at {step}: {detail}")
+    };
+    // Write from stdin (streamed over the existing connection).
+    if let Err(message) = send_bytes(ctx, control, &bytes, &tmp) {
+        return Err(fail("stream", message));
+    }
+    // `chmod 0755`.
+    match ctx.transport {
+        RemoteTransport::Local => {
+            use std::os::unix::fs::PermissionsExt as _;
+            if let Err(e) = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)) {
+                return Err(fail("chmod", e.to_string()));
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "chmod".to_string(),
+                    "0755".to_string(),
+                    "--".to_string(),
+                    tmp.clone(),
+                ],
+            )
+            .map_err(|message| fail("chmod", message))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(fail(
+                    "chmod",
+                    format!("exit {}:\n{stderr}", output.status.code().unwrap_or(-1)),
+                ));
+            }
+        }
+    }
+    // Re-check the digest before the rename (never an in-place write).
+    match client_file_digest(ctx, control, &tmp)? {
+        Some(digest) if digest == expected => {}
+        other => {
+            return Err(fail(
+                "digest",
+                format!("the streamed bytes do not match (got {other:?})"),
+            ));
+        }
+    }
+    // `mv` to `<dir>/portuale-<hash>`.
+    match ctx.transport {
+        RemoteTransport::Local => {
+            if let Err(e) = std::fs::rename(&tmp, target) {
+                return Err(fail("mv", e.to_string()));
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "mv".to_string(),
+                    "--".to_string(),
+                    tmp.clone(),
+                    target.to_string(),
+                ],
+            )
+            .map_err(|message| fail("mv", message))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(fail(
+                    "mv",
+                    format!("exit {}:\n{stderr}", output.status.code().unwrap_or(-1)),
+                ));
+            }
+        }
+    }
+    // The install must execute: `"<abs>" __helper ping` prints D8's token.
+    if let Err(message) = ping_client_binary(ctx, control, target) {
+        remove_client_path(ctx, control, target);
+        return Err(message);
+    }
+    println!("portuale-remote: install-bin 0");
+    Ok(())
 }
 
 /// `ssh-keygen -F <id>` output, if the id is already known (empty =
@@ -1268,7 +1961,11 @@ fn repo_position(
 /// mrg atoms-mode entry point: enforce `--getbinpkgonly`, place
 /// `/etc/portage`, hand the resolve to `pretend::run` with the remote
 /// execution published. Exit 2 = usage error, else pretend's own code.
-pub fn run_remote_resolve(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<String>) -> ExitCode {
+pub fn run_remote_resolve(
+    matches: &ArgMatches,
+    mut ctx: RemoteContext,
+    argv: Vec<String>,
+) -> ExitCode {
     if !matches.get_flag("getbinpkgonly") {
         eprintln!("mrg: remote execution requires --getbinpkgonly (no source build on client)");
         return ExitCode::from(2);
@@ -1288,14 +1985,37 @@ pub fn run_remote_resolve(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<St
     let control_dir = control_dir();
     let control = control_dir.as_deref();
     // Fail-early stage 2 (plan §5.5): client sanity before resolving.
-    let values = match run_preflight_inner(&ctx, control) {
-        Ok(values) => values,
+    let (values, bin) = match run_preflight_inner(&ctx, control) {
+        Ok(pair) => pair,
         Err(message) => {
             eprintln!("{message}");
             return ExitCode::from(1);
         }
     };
-    let (failures, warnings) = evaluate_preflight(&ctx, &values);
+    let (mut failures, mut warnings) = evaluate_preflight(&ctx, &values);
+    // S8.1 binary gates (read-only): the plan rides the handoff into
+    // `run_remote_plan`, which installs only when units ship. Local
+    // transport without the override skips the gates and keeps
+    // `current_exe()` (#326 D5).
+    match bin {
+        Some(pre) => {
+            let override_given = ctx.portuale_dir.is_some();
+            let (plan, mut bin_failures, bin_notes) =
+                evaluate_bin_gates(&values, &pre, override_given);
+            failures.append(&mut bin_failures);
+            for note in bin_notes {
+                warnings.push(note);
+            }
+            ctx.bin_plan = plan;
+        }
+        None => {
+            let exe = std::env::current_exe().map(|p| p.display().to_string());
+            match exe {
+                Ok(path) => ctx.bin_plan = ClientBinPlan::Local(path),
+                Err(e) => failures.push(format!("mrg: cannot locate the running binary: {e}")),
+            }
+        }
+    }
     let first_contact =
         ctx.strict_host_key_checking == StrictHostKeyChecking::AcceptNew && is_first_contact(&ctx);
     if !failures.is_empty() {
@@ -1434,6 +2154,23 @@ pub(crate) fn run_remote_plan(
     // scrubbed vdb env records the client's configured compressor
     // (e.g. `lbzip2`), not always the `make.globals` default.
     let regen_bzip2 = crate::pretend::config_bzip2_command(config);
+    // S8.2 install (a client mutation, so after the read-only stages --
+    // the shadow, the ledger gate and the resolve above): one stage per
+    // invocation, only when at least one unit ships, never with an
+    // empty plan. `--pretend` never reaches here (`mrg` routes it
+    // locally with the remote options dropped).
+    let ships = entries.iter().any(|e| {
+        matches!(
+            e.outcome,
+            PretendOutcome::New { .. }
+                | PretendOutcome::Reinstall { .. }
+                | PretendOutcome::Upgrade { .. }
+                | PretendOutcome::Downgrade { .. }
+        )
+    });
+    if ships {
+        ensure_client_binary(ctx, control)?;
+    }
     for entry in entries {
         let version = match &entry.outcome {
             // #72 B3: a removal is not remotely merged (execution is a
@@ -1638,32 +2375,65 @@ pub fn run_remote(ctx: &RemoteContext) -> ExitCode {
     // first contact, so this decision cannot be made later.
     let first_contact =
         ctx.strict_host_key_checking == StrictHostKeyChecking::AcceptNew && is_first_contact(ctx);
-    let values = match run_preflight_inner(ctx, control) {
-        Ok(values) => values,
+    let (values, bin) = match run_preflight_inner(ctx, control) {
+        Ok(pair) => pair,
         Err(message) => {
             eprintln!("{message}");
             return ExitCode::from(1);
         }
     };
-    let (failures, warnings) = evaluate_preflight(ctx, &values);
-    if !failures.is_empty() {
-        return print_preflight_report(ctx, &failures, &warnings, first_contact);
+    let (mut failures, mut warnings) = evaluate_preflight(ctx, &values);
+    // The trial path ships one unit, so it enforces the S8.1 binary
+    // gates like the resolve path; the preflight-only run ships nothing
+    // and skips them (like `--pretend`, which installs nothing).
+    let mut ctx = ctx.clone();
+    if ctx.binpkg.is_some() {
+        match bin {
+            Some(pre) => {
+                let override_given = ctx.portuale_dir.is_some();
+                let (plan, mut bin_failures, bin_notes) =
+                    evaluate_bin_gates(&values, &pre, override_given);
+                failures.append(&mut bin_failures);
+                for note in bin_notes {
+                    warnings.push(note);
+                }
+                ctx.bin_plan = plan;
+            }
+            None => match std::env::current_exe().map(|p| p.display().to_string()) {
+                Ok(path) => ctx.bin_plan = ClientBinPlan::Local(path),
+                Err(e) => failures.push(format!("mrg: cannot locate the running binary: {e}")),
+            },
+        }
     }
-    print_preflight_report(ctx, &failures, &warnings, first_contact);
+    if !failures.is_empty() {
+        return print_preflight_report(&ctx, &failures, &warnings, first_contact);
+    }
+    print_preflight_report(&ctx, &failures, &warnings, first_contact);
     match &ctx.binpkg {
         None => ExitCode::from(0),
-        Some(path) => run_bundle_stage(ctx, control, Path::new(path)),
+        Some(path) => {
+            let path = Path::new(path).to_path_buf();
+            run_bundle_stage(&ctx, control, &path)
+        }
     }
 }
 
 /// Connect and run the preflight script: parsed `KEY=VALUE` gates on
 /// success, `mrg: …`-prefixed message on transport or command failure.
 /// Human log lines (client stderr) print straight through on success.
+/// The binary facts (`bin_preflight`) are computed before the first
+/// connection, so an unreadable `--remote-portuale-binary` fails fast.
+/// Returns the parsed values plus the binary facts the S8.1 gates decide
+/// on (`None` when the run skips those gates by design).
 fn run_preflight_inner(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
-) -> Result<HashMap<String, String>, String> {
-    let script = preflight_script(&ctx.root, &ctx.workdir);
+) -> Result<(HashMap<String, String>, Option<BinPreflight>), String> {
+    let bin = bin_preflight(ctx)?;
+    let script = match &bin {
+        Some(pre) => preflight_script(&ctx.root, &ctx.workdir, Some((&pre.dirs, &pre.candidates))),
+        None => preflight_script(&ctx.root, &ctx.workdir, None),
+    };
     let output = run_script_stdin(ctx, control, &script).map_err(|message| {
         if ctx.transport == RemoteTransport::Local {
             format!("mrg: local preflight command failed: {message}")
@@ -1693,7 +2463,7 @@ fn run_preflight_inner(
     for line in stderr.lines() {
         println!("{line}");
     }
-    Ok(parse_kv(&String::from_utf8_lossy(&output.stdout)))
+    Ok((parse_kv(&String::from_utf8_lossy(&output.stdout)), bin))
 }
 
 /// Gates + clock over parsed preflight values. Pure (unit-tested).
@@ -2442,6 +3212,13 @@ fn run_bundle_stage(
         crate::pretend::config_install_mask(&config);
     let regen_features = crate::pretend::config_features_string(&config);
     let regen_bzip2 = crate::pretend::config_bzip2_command(&config);
+    // S8.2 install, like the resolve path: the trial ships exactly one
+    // unit, so the stage always runs here (never under `--pretend`,
+    // which never reaches this executor).
+    if let Err(message) = ensure_client_binary(ctx, control) {
+        eprintln!("{message}");
+        return ExitCode::from(1);
+    }
     match run_binpkg_flow(
         ctx,
         control,
@@ -2490,6 +3267,13 @@ fn eapi_exports_merge_type(eapi: &str) -> bool {
 /// `MERGE_TYPE=binary` rides the same line as `EMERGE_FROM` (real
 /// `_emerge/Binpkg.py:92` sets it for every binpkg merge; `mrg` only
 /// merges binpkgs), gated on [`eapi_exports_merge_type`].
+/// `portuale_bin` is the S8.1-resolved absolute client path (#326 D5):
+/// every client call uses it, never `$PATH` -- `PORTAGE_PYTHON` is the
+/// shipped `portuale-python` shim through the script's own `$UNITBIN`
+/// (`$UNIT/bin`, defined by each script header), `PORTAGE_PYM_PATH` is
+/// `/` (no checkout on the client), and `PORTAGE_IPC_DAEMON` is unset
+/// (no IPC daemon, #326 D6 -- this also scrubs a value inherited over
+/// the local transport).
 #[allow(clippy::too_many_arguments)]
 fn phase_exports(
     ebuild: &str,
@@ -2505,6 +3289,7 @@ fn phase_exports(
     colormap: &str,
     staged: &crate::remote_bundle::StagedBundle,
     phase: &str,
+    portuale_bin: &str,
 ) -> String {
     format!(
         concat!(
@@ -2517,7 +3302,10 @@ fn phase_exports(
             "export T={temp} HOME={home} FILESDIR={filesdir}\n",
             "export PORTAGE_BIN_PATH={bindir}\n",
             "export PORTAGE_ECLASS_LOCATIONS=\"\"\n",
-            "export PORTAGE_PYTHON=/usr/bin/python\n",
+            "export PORTUALE_BIN={portuale_bin}\n",
+            "export PORTAGE_PYM_PATH=/\n",
+            "unset PORTAGE_IPC_DAEMON\n",
+            "export PORTAGE_PYTHON=\"$UNITBIN/portuale-python\"\n",
             "export PORTAGE_COLORMAP={colormap}\n",
             "export PORTAGE_TMPDIR={tmpdir}\n",
             "export SANDBOX_LOG={temp}/sandbox.log\n",
@@ -2549,6 +3337,7 @@ fn phase_exports(
         tmpdir = sh_quote(tmpdir),
         colormap = sh_quote(colormap),
         phase = phase,
+        portuale_bin = sh_quote(portuale_bin),
     )
 }
 
@@ -2572,11 +3361,15 @@ fn phase_script(
     root: &str,
     workdir_parent: &str,
     colormap: &str,
+    portuale_bin: &str,
 ) -> String {
-    // D keeps local's trailing slash.
+    // D keeps local's trailing slash. `UNITBIN` is the shipped runtime
+    // dir (`$UNIT/bin`): `phase_exports` resolves `PORTAGE_PYTHON`
+    // through it, so no shim falls back to `PATH` (#326 D5/S8.3).
     format!(
         concat!(
             "UNIT={unit}\n",
+            "UNITBIN=\"$UNIT/bin\"\n",
             "T=\"$UNIT/temp\"\n",
             "mkdir -p \"$T\" \"$UNIT/work\" \"$UNIT/homedir\" \"$UNIT/files\" \"$UNIT/empty\"\n",
             "cp \"$UNIT/environment\" \"$T/environment\"\n",
@@ -2603,6 +3396,7 @@ fn phase_script(
             colormap,
             staged,
             phase,
+            portuale_bin,
         ),
         phase = phase,
     )
@@ -2772,6 +3566,7 @@ fn split_server_locale(locale: &[(String, String)], eapi: &str) -> Vec<(String, 
 /// and the forwarded locale arrives pre-split (see
 /// `split_server_locale`); the unset also kills any `LC_ALL` leaking
 /// in from the sourced build-time environment.
+#[allow(clippy::too_many_arguments)]
 fn postinst_regen_script(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
@@ -2780,6 +3575,7 @@ fn postinst_regen_script(
     colormap: &str,
     features: Option<&str>,
     locale: &[(String, String)],
+    portuale_bin: &str,
 ) -> String {
     let mut extra = String::new();
     if let Some(list) = features.filter(|f| !f.is_empty()) {
@@ -2817,6 +3613,7 @@ fn postinst_regen_script(
     format!(
         concat!(
             "UNIT={unit}\n",
+            "UNITBIN=\"$UNIT/bin\"\n",
             "T=\"$UNIT/temp\"\n",
             "mkdir -p \"$T\" \"$UNIT/work\" \"$UNIT/homedir\" \"$UNIT/files\" \"$UNIT/empty\"\n",
             "if [ ! -f \"$UNIT/build-info/{pf}.ebuild\" ] || [ ! -f \"$UNIT/environment\" ]; then\n",
@@ -2851,6 +3648,7 @@ fn postinst_regen_script(
             colormap,
             staged,
             "postinst",
+            portuale_bin,
         ),
         extra = extra,
     )
@@ -2938,7 +3736,9 @@ run_old_hook() {
   export T="$OTMP/temp" HOME="$OTMP/homedir" FILESDIR="$OTMP/files"
   export PORTAGE_BIN_PATH="$UNITBIN"
   export PORTAGE_ECLASS_LOCATIONS=""
-  export PORTAGE_PYTHON=/usr/bin/python
+  export PORTAGE_PYTHON="$UNITBIN/portuale-python"
+  export PORTAGE_PYM_PATH=/
+  unset PORTAGE_IPC_DAEMON
   export PORTAGE_COLORMAP="$COLORMAP"
   export PORTAGE_TMPDIR="$WORKDIR"
   export SANDBOX_LOG="$OTMP/temp/sandbox.log"
@@ -3214,6 +4014,10 @@ echo "STATUS=merged"
 /// Client ledger destination + line baked into the merge driver.
 /// `None` file skips the client record (the `--remote-binpkg` trial path
 /// keeps no ledger; the resolve path always records).
+/// `portuale_bin` is the S8.1-resolved absolute client path (#326 D5),
+/// exported for the whole driver (including the old hooks, which inherit
+/// the header's exports); `PORTAGE_PYM_PATH` is `/` and
+/// `PORTAGE_IPC_DAEMON` is unset, like the phase scripts.
 #[derive(Debug, Clone)]
 pub(crate) struct LedgerSpec {
     pub file: String,
@@ -3230,6 +4034,7 @@ fn merge_script(
     protect_list: &str,
     mask_list: &str,
     ledger: Option<&LedgerSpec>,
+    portuale_bin: &str,
 ) -> Result<String, String> {
     // A placed client vdb must stay inside the unit's world: reject the
     // degenerate empty path before it becomes `//var/db/pkg`.
@@ -3254,6 +4059,9 @@ fn merge_script(
             "ROOT={root}\n",
             "WORKDIR={workdir}\n",
             "UNITBIN=\"$UNIT/bin\"\n",
+            "export PORTUALE_BIN={portuale_bin}\n",
+            "export PORTAGE_PYM_PATH=/\n",
+            "unset PORTAGE_IPC_DAEMON\n",
             "COLORMAP={colormap}\n",
             "PROTECT={protect}\n",
             "MASK={mask}\n",
@@ -3289,6 +4097,7 @@ fn merge_script(
         ledger_line = sh_quote(&ledger.map(|l| l.line.clone()).unwrap_or_default()),
         helpers = MERGE_HELPERS,
         flow = MERGE_FLOW,
+        portuale_bin = sh_quote(portuale_bin),
     ))
 }
 
@@ -3340,6 +4149,7 @@ fn run_merge_stage(
     ledger: Option<&LedgerSpec>,
 ) -> Result<Vec<String>, String> {
     let (vdb, stateless) = client_vdb_placement(ctx);
+    let portuale_bin = client_bin_abs(ctx)?.to_string();
     let script = merge_script(
         unit_dir,
         staged,
@@ -3349,6 +4159,7 @@ fn run_merge_stage(
         &ctx.config_protect,
         &ctx.config_protect_mask,
         ledger,
+        &portuale_bin,
     )?;
     let output = run_script_stdin(ctx, control, &script).map_err(|message| {
         if ctx.transport == RemoteTransport::Local {
@@ -3426,6 +4237,7 @@ fn run_postinst_regen_stage(
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/var/tmp".to_string());
+    let portuale_bin = client_bin_abs(ctx)?.to_string();
     let script = postinst_regen_script(
         unit_dir,
         staged,
@@ -3434,6 +4246,7 @@ fn run_postinst_regen_stage(
         &colormap,
         features,
         locale,
+        &portuale_bin,
     );
     let output = run_script_stdin(ctx, control, &script).map_err(|message| {
         if ctx.transport == RemoteTransport::Local {
@@ -3833,6 +4646,15 @@ fn ship_old_hook_envs(
     shipment
 }
 
+/// The S8.1-resolved absolute client binary for generated scripts
+/// (#326 D5/S8.3): every script exports this as `PORTUALE_BIN`.
+fn client_bin_abs(ctx: &RemoteContext) -> Result<&str, String> {
+    ctx.bin_plan.abs().ok_or_else(|| {
+        "mrg: internal error: the client binary was never resolved (preflight did not run)"
+            .to_string()
+    })
+}
+
 /// Run the staged phases in order, stopping at the first non-zero
 /// (pretend/setup/preinst are all fatal -- local rule kept). Returns the
 /// per-phase `ok` markers for the report line.
@@ -3842,6 +4664,7 @@ fn run_phases_stage(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
 ) -> Result<Vec<String>, String> {
+    let portuale_bin = client_bin_abs(ctx)?.to_string();
     let colormap = crate::color::phase_colormap_export();
     let workdir_parent = std::path::Path::new(&ctx.workdir)
         .parent()
@@ -3856,6 +4679,7 @@ fn run_phases_stage(
             &ctx.root,
             &workdir_parent,
             &colormap,
+            &portuale_bin,
         );
         let output = run_script_stdin(ctx, control, &script).map_err(|message| {
             if ctx.transport == RemoteTransport::Local {
@@ -3983,6 +4807,10 @@ mod tests {
             ("TOOL_readlink", "yes"),
             ("TOOL_id", "yes"),
             ("TOOL_tail", "yes"),
+            ("TOOL_sha256sum", "yes"),
+            ("TOOL_mv", "yes"),
+            ("TOOL_uname", "yes"),
+            ("TOOL_mktemp", "yes"),
             ("ROOT_WRITABLE", "yes"),
             ("VDB_DIR", "yes"),
             ("WORKDIR", "writable"),
@@ -3999,10 +4827,11 @@ mod tests {
         let mut missing = ok.clone();
         missing.insert("TOOL_tar".to_string(), "no".to_string());
         missing.insert("TOOL_tail".to_string(), "no".to_string());
+        missing.insert("TOOL_sha256sum".to_string(), "no".to_string());
         missing.insert("ROOT_WRITABLE".to_string(), "no".to_string());
         missing.insert("WORKDIR".to_string(), "uncreatable".to_string());
         let (failures, _) = preflight_gates(&missing);
-        assert_eq!(failures.len(), 4, "{failures:?}");
+        assert_eq!(failures.len(), 5, "{failures:?}");
 
         // A missing vdb warns (slice-5 placement matrix owns the degrade),
         // never fails.
@@ -4011,6 +4840,492 @@ mod tests {
         let (failures, warnings) = preflight_gates(&novdb);
         assert!(failures.is_empty());
         assert_eq!(warnings.len(), 1);
+    }
+
+    // --- #326 S8.1: digest, architecture, binary preflight gates ----------
+
+    /// Fake (but well-formed) full SHA-256 hex for gate tests: the
+    /// preflight values carry hex text, so any 64-hex string decides the
+    /// same way a real digest would.
+    const S8_DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const S8_SHORT: &str = "0123456789abcdef";
+    const S8_WRONG: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+    fn s8_pre(dirs: &[&str], machine: u16) -> BinPreflight {
+        let dirs: Vec<String> = dirs.iter().map(|s| s.to_string()).collect();
+        BinPreflight {
+            candidates: bin_candidates(&dirs, S8_SHORT),
+            digest: S8_DIGEST.to_string(),
+            bin_path: "/server/portuale".to_string(),
+            machine,
+            dirs,
+        }
+    }
+
+    /// Parsed preflight values for the binary gates: `cands` are the
+    /// `CAND_<i>_SHA` facts in D5 order, `dir_states` the
+    /// `(EXISTS, WRITABLE, MODE)` triple per directory.
+    fn s8_values(
+        cands: &[&str],
+        dir_states: &[(&str, &str, &str)],
+        uname: &str,
+    ) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for (i, sha) in cands.iter().enumerate() {
+            map.insert(format!("CAND_{i}_SHA"), sha.to_string());
+        }
+        for (j, (exists, writable, mode)) in dir_states.iter().enumerate() {
+            map.insert(format!("DIR_{j}_EXISTS"), exists.to_string());
+            map.insert(format!("DIR_{j}_WRITABLE"), writable.to_string());
+            map.insert(format!("DIR_{j}_MODE"), mode.to_string());
+        }
+        map.insert("UNAME_M".to_string(), uname.to_string());
+        map
+    }
+
+    #[test]
+    fn elf_machine_reads_both_endians_and_rejects_garbage() {
+        // Little-endian x86-64 (EM_X86_64 = 62).
+        let mut le = vec![0u8; 24];
+        le[0..4].copy_from_slice(b"\x7fELF");
+        le[4] = 2;
+        le[5] = 1;
+        le[18] = 62;
+        le[19] = 0;
+        assert_eq!(elf_machine(&le), Ok(62));
+        // Big-endian short (EM_PPC64 = 21 reads byte-swapped).
+        let mut be = vec![0u8; 24];
+        be[0..4].copy_from_slice(b"\x7fELF");
+        be[4] = 2;
+        be[5] = 2;
+        be[18] = 0;
+        be[19] = 21;
+        assert_eq!(elf_machine(&be), Ok(21));
+        assert!(elf_machine(&le[..10]).is_err());
+        let mut bad = le.clone();
+        bad[0] = b'X';
+        assert!(
+            bad.get(0..4)
+                .is_some_and(|magic| elf_machine(&bad).is_err() && magic != b"\x7fELF")
+        );
+        let mut enc = le.clone();
+        enc[5] = 9;
+        assert!(elf_machine(&enc).is_err());
+    }
+
+    #[test]
+    fn arch_matches_maps_machines_to_uname_names() {
+        assert_eq!(arch_matches(62, "x86_64"), Some(true));
+        assert_eq!(arch_matches(62, "amd64"), Some(true));
+        assert_eq!(arch_matches(183, "aarch64"), Some(true));
+        assert_eq!(arch_matches(183, "arm64"), Some(true));
+        assert_eq!(arch_matches(3, "i686"), Some(true));
+        assert_eq!(arch_matches(3, "i386"), Some(true));
+        assert_eq!(arch_matches(40, "armv7l"), Some(true));
+        assert_eq!(arch_matches(243, "riscv64"), Some(true));
+        assert_eq!(arch_matches(21, "ppc64le"), Some(true));
+        assert_eq!(arch_matches(22, "s390x"), Some(true));
+        // Definite mismatches.
+        assert_eq!(arch_matches(62, "aarch64"), Some(false));
+        assert_eq!(arch_matches(183, "x86_64"), Some(false));
+        assert_eq!(arch_matches(3, "x86_64"), Some(false));
+        // Unknown pairs pass (a mismatch only when both are known).
+        assert_eq!(arch_matches(9999, "x86_64"), None);
+        assert_eq!(arch_matches(62, ""), None);
+        assert_eq!(arch_matches(9999, ""), None);
+    }
+
+    #[test]
+    fn bin_search_dirs_prefers_the_override_pair() {
+        let mut ctx = ctx_with_args("h", None);
+        assert_eq!(bin_search_dirs(&ctx), vec!["/opt/bin", "/usr/local/bin"]);
+        ctx.portuale_dir = Some("/srv/bin".to_string());
+        assert_eq!(bin_search_dirs(&ctx), vec!["/srv/bin"]);
+        // D5 order: per directory, `portuale` then `portuale-<hash>`.
+        assert_eq!(
+            bin_candidates(&bin_search_dirs(&ctx), S8_SHORT),
+            vec![
+                "/srv/bin/portuale".to_string(),
+                format!("/srv/bin/portuale-{S8_SHORT}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn bin_gates_use_the_first_match_in_d5_order() {
+        let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 62);
+        // Both a plain and a hashed candidate match: the first in D5
+        // order (the plain `/opt/bin/portuale`) wins.
+        let values = s8_values(
+            &[S8_DIGEST, "missing", S8_DIGEST, "missing"],
+            &[("yes", "yes", "755"), ("yes", "yes", "755")],
+            "x86_64",
+        );
+        let (plan, failures, _) = evaluate_bin_gates(&values, &pre, false);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(plan, ClientBinPlan::Use("/opt/bin/portuale".to_string()));
+        // Only the hashed name matches.
+        let values = s8_values(
+            &["missing", S8_DIGEST, "missing", "missing"],
+            &[("yes", "yes", "755"), ("yes", "yes", "755")],
+            "x86_64",
+        );
+        let (plan, failures, _) = evaluate_bin_gates(&values, &pre, false);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            plan,
+            ClientBinPlan::Use(format!("/opt/bin/portuale-{S8_SHORT}"))
+        );
+        // A later directory's match wins when nothing earlier matches.
+        let values = s8_values(
+            &["missing", "missing", S8_DIGEST, "missing"],
+            &[("yes", "yes", "755"), ("yes", "yes", "755")],
+            "x86_64",
+        );
+        let (plan, failures, _) = evaluate_bin_gates(&values, &pre, false);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            plan,
+            ClientBinPlan::Use("/usr/local/bin/portuale".to_string())
+        );
+    }
+
+    #[test]
+    fn bin_gates_plan_an_install_when_nothing_matches() {
+        let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 62);
+        let values = s8_values(
+            &["missing", "missing", "missing", "missing"],
+            &[("yes", "yes", "755"), ("yes", "yes", "755")],
+            "x86_64",
+        );
+        let (plan, failures, notes) = evaluate_bin_gates(&values, &pre, false);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(
+            plan,
+            ClientBinPlan::Install(format!("/opt/bin/portuale-{S8_SHORT}"))
+        );
+        // An unwritable first directory falls through to the second.
+        let values = s8_values(
+            &["missing", "missing", "missing", "missing"],
+            &[("yes", "no", "755"), ("yes", "yes", "755")],
+            "x86_64",
+        );
+        let (plan, failures, _) = evaluate_bin_gates(&values, &pre, false);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            plan,
+            ClientBinPlan::Install(format!("/usr/local/bin/portuale-{S8_SHORT}"))
+        );
+    }
+
+    #[test]
+    fn bin_gates_report_a_mismatched_plain_portuale_and_leave_it_alone() {
+        let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 62);
+        // A non-matching plain `portuale` is reported and left alone:
+        // the install goes next to it as `portuale-<hash>`, never over
+        // it.
+        let values = s8_values(
+            &[S8_WRONG, "missing", "missing", "missing"],
+            &[("yes", "yes", "755"), ("yes", "yes", "755")],
+            "x86_64",
+        );
+        let (plan, failures, notes) = evaluate_bin_gates(&values, &pre, false);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            plan,
+            ClientBinPlan::Install(format!("/opt/bin/portuale-{S8_SHORT}"))
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("/opt/bin/portuale") && n.contains("left alone")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn bin_gates_replace_a_corrupted_hashed_binary() {
+        let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 62);
+        // A `portuale-<hash>` whose content does not match its name is
+        // planned for replacement at the same path.
+        let values = s8_values(
+            &["missing", S8_WRONG, "missing", "missing"],
+            &[("yes", "yes", "755"), ("yes", "yes", "755")],
+            "x86_64",
+        );
+        let (plan, failures, notes) = evaluate_bin_gates(&values, &pre, false);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            plan,
+            ClientBinPlan::Install(format!("/opt/bin/portuale-{S8_SHORT}"))
+        );
+        assert!(
+            notes.iter().any(|n| n.contains("planned for replacement")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn bin_gates_fail_an_arch_mismatch_naming_the_binary_option() {
+        let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 183);
+        let values = s8_values(
+            &["missing", "missing", "missing", "missing"],
+            &[("yes", "yes", "755"), ("yes", "yes", "755")],
+            "x86_64",
+        );
+        let (_, failures, _) = evaluate_bin_gates(&values, &pre, false);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(
+            failures[0].contains("--remote-portuale-binary"),
+            "{failures:?}"
+        );
+        assert!(failures[0].contains("x86_64"), "{failures:?}");
+        // Unknown pairs pass (both sides must be known to mismatch).
+        let unknown = s8_pre(&["/opt/bin"], 9999);
+        let values = s8_values(&["missing", "missing"], &[("yes", "yes", "755")], "x86_64");
+        let (plan, failures, _) = evaluate_bin_gates(&values, &unknown, false);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(matches!(plan, ClientBinPlan::Install(_)), "{plan:?}");
+    }
+
+    #[test]
+    fn bin_gates_fail_without_a_writable_dir() {
+        let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 62);
+        // Neither default directory usable, no override: the message
+        // names the option and the root-login alternative (Q1).
+        let values = s8_values(
+            &["missing", "missing", "missing", "missing"],
+            &[("no", "no", "unknown"), ("yes", "no", "755")],
+            "x86_64",
+        );
+        let (_, failures, _) = evaluate_bin_gates(&values, &pre, false);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(
+            failures[0].contains("--remote-portuale-dir"),
+            "{failures:?}"
+        );
+        assert!(failures[0].contains("root"), "{failures:?}");
+        // With the override, the failure names the override directory.
+        let over = s8_pre(&["/srv/bin"], 62);
+        let values = s8_values(
+            &["missing", "missing"],
+            &[("no", "no", "unknown")],
+            "x86_64",
+        );
+        let (_, failures, _) = evaluate_bin_gates(&values, &over, true);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(
+            failures[0].contains("--remote-portuale-dir") && failures[0].contains("/srv/bin"),
+            "{failures:?}"
+        );
+    }
+
+    #[test]
+    fn bin_gates_refuse_a_world_writable_dir_without_the_sticky_bit() {
+        let pre = s8_pre(&["/srv/bin"], 62);
+        // `0777`: world-writable, no sticky bit -- refused even though
+        // the directory exists and is writable.
+        let values = s8_values(&["missing", "missing"], &[("yes", "yes", "777")], "x86_64");
+        let (_, failures, _) = evaluate_bin_gates(&values, &pre, true);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].contains("sticky"), "{failures:?}");
+        // `1777` (sticky) and `0755` (not world-writable) are usable.
+        for mode in ["1777", "755", "775"] {
+            let values = s8_values(&["missing", "missing"], &[("yes", "yes", mode)], "x86_64");
+            let (plan, failures, _) = evaluate_bin_gates(&values, &pre, true);
+            assert!(failures.is_empty(), "{mode}: {failures:?}");
+            assert_eq!(
+                plan,
+                ClientBinPlan::Install(format!("/srv/bin/portuale-{S8_SHORT}")),
+                "{mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_script_reports_candidates_dirs_and_uname() {
+        // Render level with real temp dirs: the script's candidate
+        // digests, writability and mode facts must match `sha256sum` /
+        // `stat` run directly.
+        let tmp = TempDir::new("portuale-remote-binscript").keep();
+        let dir = tmp.join("bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        let present = dir.join("portuale");
+        std::fs::write(&present, b"client binary bytes").unwrap();
+        let missing = dir.join("portuale-0123456789abcdef");
+        assert!(!missing.exists());
+        let dirs = vec![dir.to_string_lossy().into_owned()];
+        let candidates = vec![
+            present.to_string_lossy().into_owned(),
+            missing.to_string_lossy().into_owned(),
+        ];
+        let script = preflight_script(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+            Some((&dirs, &candidates)),
+        );
+        assert!(script.contains("sha256sum"), "tool floor:\n{script}");
+        assert!(script.contains("UNAME_M"), "uname fact:\n{script}");
+        let output = std::process::Command::new("bash")
+            .args(["-s"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(script.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("local bash runs the preflight script");
+        assert!(output.status.success());
+        let values = parse_kv(&String::from_utf8_lossy(&output.stdout));
+        use sha2::Digest as _;
+        let expected = format!("{:x}", sha2::Sha256::digest(b"client binary bytes"));
+        assert_eq!(
+            values.get("CAND_0_SHA").map(String::as_str),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            values.get("CAND_1_SHA").map(String::as_str),
+            Some("missing")
+        );
+        assert!(
+            values.get("UNAME_M").is_some_and(|m| !m.is_empty()),
+            "{values:?}"
+        );
+        assert_eq!(values.get("DIR_0_EXISTS").map(String::as_str), Some("yes"));
+        assert_eq!(
+            values.get("DIR_0_WRITABLE").map(String::as_str),
+            Some("yes")
+        );
+        let mode = values.get("DIR_0_MODE").map(String::as_str).unwrap_or("?");
+        assert!(
+            u32::from_str_radix(mode.trim(), 8).is_ok(),
+            "DIR_0_MODE must be octal: {values:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `portuale` must never be invoked by bare name in generated client
+    /// scripts -- only through `$PORTUALE_BIN`, an absolute path, or a
+    /// non-command token (`portuale-python`, `portuale-<hash>`,
+    /// `portuale-remote:`, `.portuale.` mktemp names, the ping token,
+    /// `(portuale #nn)` code comments).
+    /// Returns the offending lines.
+    fn bare_portuale_hits(script: &str) -> Vec<String> {
+        let mut scrubbed = script.to_string();
+        for token in [
+            "portuale-python",
+            "portuale-remote",
+            ".portuale.",
+            "portuale-helper-ping-1",
+            "(portuale #",
+        ] {
+            scrubbed = scrubbed.replace(token, "########");
+        }
+        // `portuale-<hex>` install names.
+        while let Some(start) = scrubbed.find("portuale-") {
+            let rest = &scrubbed[start + "portuale-".len()..];
+            let hex_len = rest.chars().take_while(|c| c.is_ascii_hexdigit()).count();
+            if hex_len == 0 {
+                break;
+            }
+            scrubbed.replace_range(start..start + "portuale-".len() + hex_len, "########");
+        }
+        scrubbed
+            .lines()
+            .filter(|line| line.contains("portuale"))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// #326 S8.3: every generated script kind exports the resolved
+    /// absolute `PORTUALE_BIN` (and `PORTAGE_PYM_PATH=/`, unsetting
+    /// `PORTAGE_IPC_DAEMON`), resolves `PORTAGE_PYTHON` through the
+    /// bundle's own `$UNITBIN/portuale-python`, and invokes no
+    /// `portuale` command by bare name.
+    #[test]
+    fn generated_scripts_use_absolute_portuale_bin() {
+        const ABS: &str = "/opt/bin/portuale-0123456789abcdef";
+        let staged = render_test_staged();
+        let phase = phase_script("/work/probe-1.0", &staged, "setup", "/", "/work", "", ABS);
+        let regen =
+            postinst_regen_script("/work/probe-1.0", &staged, "/", "/work", "", None, &[], ABS);
+        let merge = merge_script(
+            "/work/probe-1.0",
+            &staged,
+            "/",
+            "/var/db/pkg",
+            false,
+            "/etc",
+            "/etc/env.d",
+            None,
+            ABS,
+        )
+        .expect("merge script renders");
+        let helpers_flow = format!("{MERGE_HELPERS}\n{MERGE_FLOW}");
+        let unpack = unpack_script("/work", "probe-1.0", 1234);
+        let preflight = preflight_script("/", "/work", None);
+        // The three rendered kinds export the absolute path (the old
+        // hooks inherit the merge header's export at runtime); the
+        // read-only unpack/preflight drivers invoke no binary at all.
+        for (name, script) in [
+            ("phase", phase.as_str()),
+            ("regen", regen.as_str()),
+            ("merge", merge.as_str()),
+        ] {
+            assert!(
+                script.contains(&format!("export PORTUALE_BIN='{ABS}'")),
+                "{name} must export the absolute PORTUALE_BIN:\n{script}"
+            );
+        }
+        for (name, script) in [
+            ("phase", phase.as_str()),
+            ("regen", regen.as_str()),
+            ("merge", merge.as_str()),
+            ("old-hook", helpers_flow.as_str()),
+        ] {
+            assert!(
+                script.contains("export PORTAGE_PYM_PATH=/"),
+                "{name} must pin PORTAGE_PYM_PATH=/:\n{script}"
+            );
+            assert!(
+                script.contains("unset PORTAGE_IPC_DAEMON"),
+                "{name} must drop PORTAGE_IPC_DAEMON (no IPC daemon):\n{script}"
+            );
+            assert!(
+                !script.contains("PORTAGE_IPC_DAEMON="),
+                "{name} must not export PORTAGE_IPC_DAEMON:\n{script}"
+            );
+            assert!(
+                script.contains("PORTAGE_PYTHON=\"$UNITBIN/portuale-python\""),
+                "{name} must resolve PORTAGE_PYTHON through $UNITBIN:\n{script}"
+            );
+            assert!(
+                !script.contains("/usr/bin/python"),
+                "{name} must not point at a system python:\n{script}"
+            );
+        }
+        assert!(
+            !merge.contains(":-portuale"),
+            "portageq-wrapper's PATH fallback must be gone:\n{merge}"
+        );
+        for (name, script) in [
+            ("phase", phase.as_str()),
+            ("regen", regen.as_str()),
+            ("merge", merge.as_str()),
+            ("old-hook", helpers_flow.as_str()),
+            ("unpack", unpack.as_str()),
+            ("preflight", preflight.as_str()),
+        ] {
+            assert_eq!(
+                bare_portuale_hits(script),
+                Vec::<String>::new(),
+                "{name} invokes portuale by bare name"
+            );
+        }
     }
 
     #[test]
@@ -4069,6 +5384,9 @@ mod tests {
             edb: ConfigPlacement::Server("/var/cache/edb".to_string()),
             ledger_dir: None,
             require_ledger_match: false,
+            portuale_binary: None,
+            portuale_dir: None,
+            bin_plan: ClientBinPlan::Unresolved,
         }
     }
 
@@ -4733,6 +6051,21 @@ mod tests {
     static PLACED_CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
+        // Unit tests run stages directly (no preflight): the scripts
+        // still need a resolved absolute path, so the fixture context
+        // carries the built `portuale` binary next to `deps/` -- a real
+        // binary, never the libtest harness (#326 D8: the phase shims
+        // exec `$PORTUALE_BIN`, and a harness would answer its test
+        // banner). `cargo build -p portuale` before `cargo test`.
+        let abs = {
+            let mut exe = std::env::current_exe().expect("current test exe");
+            exe.pop();
+            if exe.ends_with("deps") {
+                exe.pop();
+            }
+            exe.push("portuale");
+            exe.display().to_string()
+        };
         RemoteContext {
             hostname: "localtest".to_string(),
             user: None,
@@ -4755,6 +6088,12 @@ mod tests {
             edb: ConfigPlacement::Server(format!("{root}/var/cache/edb")),
             ledger_dir: None,
             require_ledger_match: false,
+            portuale_binary: None,
+            portuale_dir: None,
+            // Unit tests run stages directly (no preflight): the scripts
+            // still need a resolved absolute path, so the fixture context
+            // carries a fake-but-absolute one.
+            bin_plan: ClientBinPlan::Local(abs),
         }
     }
 
@@ -5041,6 +6380,7 @@ mod tests {
                 "",
                 &staged,
                 "setup",
+                "/opt/bin/portuale-0123456789abcdef",
             )
         }
         assert!(eapi_exports_merge_type("4"));
@@ -5128,6 +6468,10 @@ mod tests {
             root.to_str().unwrap(),
             tmp.to_str().unwrap(),
             "",
+            // The phase may invoke the shipped `portuale-python` shim,
+            // which execs `$PORTUALE_BIN`: a real binary, never the
+            // libtest harness (#326 D8).
+            s8_portuale_bin().to_str().unwrap(),
         );
         let output = std::process::Command::new("bash")
             .args(["-s"])
@@ -5480,6 +6824,7 @@ mod tests {
             "never",
             Some("sandbox merge-time"),
             &locale,
+            "/opt/bin/portuale-0123456789abcdef",
         );
         assert!(
             script.contains("unset O\n"),
@@ -6758,9 +8103,21 @@ mod tests {
         farm_path: &str,
         oldvdb: &str,
     ) -> String {
+        // #326 S8.3: the old hooks resolve `PORTAGE_PYTHON` through
+        // `$UNITBIN/portuale-python`, whose shim execs `$PORTUALE_BIN` --
+        // the header of a real merge driver exports the resolved client
+        // binary, so this snippet exports the built binary directly
+        // (never the libtest harness, #326 D8).
+        let mut exe = std::env::current_exe().expect("current test exe");
+        exe.pop();
+        if exe.ends_with("deps") {
+            exe.pop();
+        }
+        exe.push("portuale");
         let script = format!(
             concat!(
                 "export PATH={farm}\n",
+                "export PORTUALE_BIN={bin}\n",
                 "command -v bzip2 >/dev/null 2>&1 && echo BZIP2-PRESENT || echo BZIP2-ABSENT\n",
                 "UNIT={unit}\n",
                 "ROOT={root}\n",
@@ -6774,6 +8131,7 @@ mod tests {
                 "echo \"RC=$?\"\n",
             ),
             farm = sh_quote(farm_path),
+            bin = sh_quote(exe.to_str().unwrap()),
             unit = sh_quote(unit),
             root = sh_quote(root),
             work = sh_quote(work),
@@ -6968,5 +8326,416 @@ mod tests {
             "prerm-ok\npostrm-ok\n"
         );
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // --- #326 S8 e2e: install and reuse over the local transport --------
+    //
+    // Local transport installs nothing by design (D5) -- except through
+    // `--remote-portuale-dir`, which names local paths the test owns, so
+    // the ssh-shaped install path (mktemp, stream, chmod, digest, mv,
+    // ping) runs without sshd. The shipped file is the built `portuale`
+    // binary itself (via `--remote-portuale-binary`), so the install's
+    // `__helper ping` answers the D8 token for real.
+
+    /// The `portuale` binary next to the current test executable (the
+    /// same layout `pretend.rs`'s remote test relies on; `cargo
+    /// build --release -p portuale` before `cargo test --release`).
+    fn s8_portuale_bin() -> std::path::PathBuf {
+        let mut exe = std::env::current_exe().expect("current test exe");
+        exe.pop();
+        if exe.ends_with("deps") {
+            exe.pop();
+        }
+        exe.push("portuale");
+        exe
+    }
+
+    fn s8_fixtures() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    /// Full SHA-256 hex of a file.
+    fn s8_sha256(path: &std::path::Path) -> String {
+        use sha2::Digest as _;
+        format!(
+            "{:x}",
+            sha2::Sha256::digest(std::fs::read(path).expect("test file reads"))
+        )
+    }
+
+    /// One S8 e2e tree: a client root + workdir, a `--remote-portuale-dir`
+    /// bin dir, and a minimal `server:` config (a main repo over an empty
+    /// dir, like `placed_config_root_covers_both_placements`).
+    struct S8Tree {
+        tmp: std::path::PathBuf,
+        root: std::path::PathBuf,
+        work: std::path::PathBuf,
+        bindir: std::path::PathBuf,
+        clientetc: std::path::PathBuf,
+    }
+
+    impl S8Tree {
+        fn fresh(tag: &str) -> Self {
+            let tmp = TempDir::new(&format!("portuale-remote-s8-{tag}")).keep();
+            let root = tmp.join("root");
+            let work = tmp.join("work");
+            let bindir = tmp.join("bin");
+            std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+            std::fs::create_dir_all(&work).unwrap();
+            std::fs::create_dir_all(&bindir).unwrap();
+            let clientetc = tmp.join("clientetc");
+            let repo = tmp.join("repo");
+            std::fs::create_dir_all(clientetc.join("etc/portage/repos.conf")).unwrap();
+            std::fs::create_dir_all(&repo).unwrap();
+            std::fs::write(
+                clientetc.join("etc/portage/repos.conf/testrepo.conf"),
+                format!(
+                    "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                    repo.display()
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                clientetc.join("etc/portage/make.conf"),
+                "FEATURES=\"sandbox\"\n",
+            )
+            .unwrap();
+            Self {
+                tmp,
+                root,
+                work,
+                bindir,
+                clientetc,
+            }
+        }
+    }
+
+    impl Drop for S8Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.tmp);
+        }
+    }
+
+    /// Run the child `portuale mrg` trial flow against the tree: local
+    /// transport, the built binary as the shipped file, one fixture
+    /// binpkg. `extra` appends argv (e.g. `--pretend`).
+    fn s8_run(tree: &S8Tree, extra: &[&str]) -> std::process::Output {
+        let binpkg = s8_fixtures().join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2");
+        assert!(
+            binpkg.is_file(),
+            "fixture binpkg missing: {}",
+            binpkg.display()
+        );
+        let shipped = s8_portuale_bin();
+        let etc = format!("server:{}", tree.clientetc.display());
+        let mut args = vec![
+            "mrg",
+            "--getbinpkgonly",
+            "--remote-hostname",
+            "localtest",
+            "--remote-transport",
+            "local",
+            "--remote-root",
+            tree.root.to_str().unwrap(),
+            "--remote-workdir",
+            tree.work.to_str().unwrap(),
+            "--remote-etc-portage",
+            etc.as_str(),
+            "--remote-portuale-dir",
+            tree.bindir.to_str().unwrap(),
+            "--remote-portuale-binary",
+            shipped.to_str().unwrap(),
+            "--remote-binpkg",
+            binpkg.to_str().unwrap(),
+        ];
+        args.extend(extra.iter().copied());
+        std::process::Command::new(s8_portuale_bin())
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("PORTAGE_CONFIGROOT", &tree.clientetc)
+            .env("ROOT", &tree.root)
+            .env("DISTDIR", s8_fixtures().join("distfiles"))
+            .env("PORTAGE_TMPDIR", tree.tmp.join("pt"))
+            .env("FEATURES", "sandbox")
+            .output()
+            .expect("portuale mrg spawns")
+    }
+
+    fn s8_stdout(output: &std::process::Output) -> String {
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// #326 S8 e2e: the first run installs `portuale-<hash>` (with the
+    /// `install-bin 0` line) and merges the unit; the second run reuses
+    /// it with no `install-bin` line.
+    #[test]
+    fn s8_install_then_reuse_over_local_transport() {
+        let tree = S8Tree::fresh("install-reuse");
+        let bin = s8_portuale_bin();
+        assert!(bin.is_file(), "run cargo build --release -p portuale first");
+        let digest = s8_sha256(&bin);
+        let short: String = digest.chars().take(16).collect();
+        let installed = tree.bindir.join(format!("portuale-{short}"));
+
+        let first = s8_run(&tree, &[]);
+        let stdout = s8_stdout(&first);
+        assert_eq!(
+            first.status.code(),
+            Some(0),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        assert!(
+            stdout.contains("portuale-remote: install-bin 0"),
+            "first run must report the install:\n{stdout}"
+        );
+        assert!(
+            stdout.contains(">>> Remote merged dev-libs/binpkgrmpkg-1.0"),
+            "the unit merges after the install:\n{stdout}"
+        );
+        assert_eq!(s8_sha256(&installed), digest);
+
+        let second = s8_run(&tree, &[]);
+        let stdout = s8_stdout(&second);
+        assert_eq!(
+            second.status.code(),
+            Some(0),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&second.stderr)
+        );
+        assert!(
+            !stdout.contains("install-bin"),
+            "a reuse must print no install-bin line:\n{stdout}"
+        );
+        assert_eq!(s8_sha256(&installed), digest);
+    }
+
+    /// #326 S8 e2e (Q5/D5): a matching plain `portuale` placed first is
+    /// reused -- nothing is installed next to it.
+    #[test]
+    fn s8_matching_plain_portuale_is_reused() {
+        let tree = S8Tree::fresh("plain-match");
+        let bin = s8_portuale_bin();
+        let digest = s8_sha256(&bin);
+        let short: String = digest.chars().take(16).collect();
+        std::fs::copy(&bin, tree.bindir.join("portuale")).unwrap();
+
+        let run = s8_run(&tree, &[]);
+        let stdout = s8_stdout(&run);
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert!(
+            !stdout.contains("install-bin"),
+            "a matching plain binary installs nothing:\n{stdout}"
+        );
+        assert!(
+            !tree.bindir.join(format!("portuale-{short}")).exists(),
+            "no portuale-<hash> may appear next to a matching plain binary"
+        );
+    }
+
+    /// #326 S8 e2e (Q5/D5): a non-matching plain `portuale` is left
+    /// byte-identical, and `portuale-<hash>` is installed next to it.
+    #[test]
+    fn s8_mismatched_plain_portuale_is_left_alone() {
+        let tree = S8Tree::fresh("plain-mismatch");
+        let bin = s8_portuale_bin();
+        let digest = s8_sha256(&bin);
+        let short: String = digest.chars().take(16).collect();
+        let plain = tree.bindir.join("portuale");
+        std::fs::write(&plain, b"an operator's own install").unwrap();
+
+        let run = s8_run(&tree, &[]);
+        let stdout = s8_stdout(&run);
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert!(
+            stdout.contains("portuale-remote: install-bin 0"),
+            "the hashed binary still installs:\n{stdout}"
+        );
+        assert_eq!(
+            std::fs::read(&plain).unwrap(),
+            b"an operator's own install",
+            "the mismatched plain binary must be byte-identical"
+        );
+        assert_eq!(
+            s8_sha256(&tree.bindir.join(format!("portuale-{short}"))),
+            digest
+        );
+    }
+
+    /// #326 S8 e2e (D5): a corrupted `portuale-<hash>` (wrong digest) is
+    /// replaced.
+    #[test]
+    fn s8_corrupted_hashed_binary_is_replaced() {
+        let tree = S8Tree::fresh("corrupt-replace");
+        let bin = s8_portuale_bin();
+        let digest = s8_sha256(&bin);
+        let short: String = digest.chars().take(16).collect();
+        let hashed = tree.bindir.join(format!("portuale-{short}"));
+        std::fs::write(&hashed, b"corrupted bytes").unwrap();
+
+        let run = s8_run(&tree, &[]);
+        let stdout = s8_stdout(&run);
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert!(
+            stdout.contains("portuale-remote: install-bin 0"),
+            "the corrupted binary is reinstalled:\n{stdout}"
+        );
+        assert_eq!(s8_sha256(&hashed), digest);
+    }
+
+    /// #326 S8 e2e (S8.2): `--pretend` installs nothing. Pretend stays
+    /// local (`mrg` routes it to `pretend::run` with the remote options
+    /// dropped), so the client bin dir is untouched even for a run that
+    /// resolves. Setup mirrors `pretend.rs`'s local-transport remote
+    /// test: a `file://` binhost plus the fixture client config.
+    #[test]
+    fn s8_pretend_installs_nothing() {
+        fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
+            std::fs::create_dir_all(dst).unwrap();
+            for entry in std::fs::read_dir(src).unwrap() {
+                let entry = entry.unwrap();
+                let dst_path = dst.join(entry.file_name());
+                let ft = entry.file_type().unwrap();
+                if ft.is_symlink() {
+                    let target = std::fs::read_link(entry.path()).unwrap();
+                    std::os::unix::fs::symlink(target, dst_path).unwrap();
+                } else if ft.is_dir() {
+                    copy_tree(&entry.path(), &dst_path);
+                } else if ft.is_file() {
+                    std::fs::copy(entry.path(), dst_path).unwrap();
+                }
+            }
+        }
+
+        let fixtures = s8_fixtures();
+        let base = TempDir::new("portuale-remote-s8-pretend").keep();
+        let root = base.join("root");
+        copy_tree(&fixtures.join("var"), &root.join("var"));
+        let bindir = base.join("bin");
+        std::fs::create_dir_all(&bindir).unwrap();
+        let binhost = base.join("binhost");
+        std::fs::create_dir_all(binhost.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures.join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+            binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"),
+        )
+        .unwrap();
+        let size = std::fs::metadata(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"))
+            .unwrap()
+            .len();
+        std::fs::write(
+            binhost.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\nDEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\nREPO: testrepo\nSIZE: {size}\nSLOT: 0\nUSE:\n"
+            ),
+        )
+        .unwrap();
+        let clientetc = base.join("clientetc");
+        copy_tree(
+            &fixtures.join("etc/portage"),
+            &clientetc.join("etc/portage"),
+        );
+        let profile_link = clientetc.join("etc/portage/make.profile");
+        let _ = std::fs::remove_file(&profile_link);
+        std::os::unix::fs::symlink(fixtures.join("repo/profiles/default"), &profile_link).unwrap();
+        std::fs::write(
+            clientetc.join("etc/portage/binrepos.conf"),
+            format!(
+                "[tmpbinhost]\nsync-uri = file://{}\npriority = 1\n",
+                binhost.display()
+            ),
+        )
+        .unwrap();
+        for entry in std::fs::read_dir(clientetc.join("etc/portage/repos.conf")).unwrap() {
+            let entry = entry.unwrap();
+            if !entry.file_type().unwrap().is_file() {
+                continue;
+            }
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            let mut lines = Vec::new();
+            for line in text.lines() {
+                let mut line = line.to_string();
+                if line.trim_start().starts_with("location") && line.contains('=') {
+                    let value = line
+                        .split('=')
+                        .nth(1)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    if !value.is_empty() && !value.starts_with('/') {
+                        line = line.replace(
+                            value.as_str(),
+                            fixtures.join(&value).display().to_string().as_str(),
+                        );
+                    }
+                }
+                lines.push(line);
+            }
+            lines.push(String::new());
+            std::fs::write(entry.path(), lines.join("\n")).unwrap();
+        }
+        let output = std::process::Command::new(s8_portuale_bin())
+            .args([
+                "mrg",
+                "--pretend",
+                "--getbinpkgonly",
+                "--remote-hostname",
+                "localtest",
+                "--remote-transport",
+                "local",
+                "--remote-root",
+                root.to_str().unwrap(),
+                "--remote-workdir",
+                base.join("work").to_str().unwrap(),
+                "--remote-etc-portage",
+                &format!("server:{}", clientetc.display()),
+                "--remote-portuale-dir",
+                bindir.to_str().unwrap(),
+                "dev-libs/binpkgrmpkg",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("PORTAGE_CONFIGROOT", &clientetc)
+            .env("ROOT", &root)
+            .env("PORTAGE_RUNNING_ROOT", &fixtures)
+            .env("DISTDIR", fixtures.join("distfiles"))
+            .env("PORTAGE_TMPDIR", base.join("pt"))
+            .env("FEATURES", "sandbox")
+            .output()
+            .expect("portuale mrg spawns");
+        let stdout = s8_stdout(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let entries: Vec<String> = std::fs::read_dir(&bindir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "--pretend must install nothing: {entries:?}\n{stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

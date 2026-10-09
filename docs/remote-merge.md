@@ -9,8 +9,12 @@ lines below say so).
 
 Install portuale-built **gpkg** binary packages (`*.gpkg.tar`) on a
 **client** machine over SSH from the **server** machine running
-portuale, with **no Portage (and no portuale binary) on the client** and
+portuale, with **no Portage on the client** and
 **no internet on the client** — its only remote contact is the server.
+The client needs no portuale binary beforehand: the server installs
+and verifies its own binary there (same-SHA-256 preflight plus an
+`install-bin` stage, §5.5–§6), and every client call after that uses
+its absolute path, never `$PATH`.
 **xpak (`.tbz2`) is out of scope for `mrg`**: it is the old format, and
 `mrg` targets the modern gpkg format, not full binary-format
 compatibility. (The shared server-side binpkg reader happens to open
@@ -35,7 +39,13 @@ Non-goals for v1: source builds on the client (forever out -- the
 client has no toolchain by design), multi-client fan-out in one
 invocation (one `--remote-hostname` per run; orchestration loops in
 shell), privilege escalation on the client beyond the SSH login user
-(no sudo/become layer -- the remote user must own the target ROOT),
+(no sudo/become layer -- the remote user must own the target ROOT;
+the usual client login is root, otherwise it could not install
+packages into `/`, so `/opt/bin` and `/usr/local/bin` are writable --
+a non-root login that owns its target ROOT stays supported, but only
+through `--remote-portuale-dir=<abs dir>` pointing at a directory it
+can write; without a writable default directory and without the
+option, preflight fails and says so),
 gpkg `.sig` verification on the client (the server verifies at
 bundle-build time -- `build_bundle` runs the same merge-time
 `GpgVerify` policy `merge_binpkg` does -- and the SSH channel is the
@@ -47,9 +57,14 @@ integrity boundary -- see §9).
   the SSH client binary. Builds nothing new during a remote run when
   the binpkgs already exist (plain `--getbinpkgonly` semantics).
 - **client**: receives and merges. Has **bash ≥ 5.3**, POSIX `/bin`
-  (`tar`, `mkdir`, `rm`, `cat`, `chmod`, `ln` -- see §6, deliberately
-  no `bzip2`), an SSH server, and
-  nothing else. Never Python (the hard difference from Ansible).
+  (see §6 for the exact tool floor, deliberately no `bzip2`), an SSH
+  server, and -- after the first run -- the server's own portuale
+  binary at an absolute path (`/opt/bin`, `/usr/local/bin`, or
+  `--remote-portuale-dir`), verified by SHA-256 before anything
+  merges. Portuale's own machinery needs no system Python on the
+  client: hook phases run through the installed binary's native
+  helpers. (Ebuilds that themselves need Python still need it --
+  that is an ebuild requirement, not a Portage one.)
 - **unit**: one resolved `Binary` `GraphEntry` = one tarball + one
   client-side merge, executed in the resolver's merge order.
 
@@ -185,9 +200,16 @@ lines on a dedicated fd (stderr stays the human log):
 
 0. **Preflight** (once per invocation, not per unit): `bash --version`
    ≥ 5.3 (`BASH_VERSINFO`, same gate style as `bin/ebuild.sh`'s own
-   `__check_bash_version`), `tar`/`mkdir`/`rm`/`cat`/`chmod`/`ln`
-   present, workdir creatable, target ROOT writable, `${ROOT}/var/db/pkg`
-   reachable per §7 placement. **Clock check**: `date +%s` on both
+   `__check_bash_version`), the §6 tool floor present, workdir
+   creatable, target ROOT writable, `${ROOT}/var/db/pkg`
+   reachable per §7 placement. **Client binary** (read-only): the
+   server's own binary identity (SHA-256 + ELF machine, from
+   `current_exe()` or `--remote-portuale-binary`) is compared against
+   `portuale` / `portuale-<hash>` in `/opt/bin` then `/usr/local/bin`
+   (or only the `--remote-portuale-dir` pair): the first full-digest
+   match wins, a mismatched plain `portuale` is reported and left
+   alone, an arch mismatch or no writable directory fails here.
+   **Clock check**: `date +%s` on both
    sides; `|server - client| > 900s` aborts the run (see §5.5 for why
    time matters; `--remote-max-clock-skew` overrides). Any failure →
    transport-ok/unit-fatal before touching anything.
@@ -220,7 +242,11 @@ lines on a dedicated fd (stderr stays the human log):
 
 Client tool floor (preflight-enforced): `bash` ≥ 5.3, GNU-or-BusyBox
 `tar` (no `--selinux`/`--xattrs` flags used -- portable subset only),
-`mkdir`/`rm`/`cat`/`chmod`/`ln` from POSIX `/bin`. Deliberately **no
+`mkdir`/`rm`/`cat`/`chmod`/`ln`/`find`/`grep`/`sed`/`cmp`/`stat`/
+`readlink`/`id`/`tail` from POSIX `/bin`, plus `sha256sum`, `mv`,
+`uname` and `mktemp` for the client-binary install. Exactly the tools
+the preflight `command -v` loop checks -- no more, no fewer.
+Deliberately **no
 `bzip2`**: the server pre-decompresses `environment.bz2` (the exact
 `bzip2 -dc` step `run_phase_from_saved_env` already runs locally) and
 ships a plain `environment` file in the bundle -- start uncompressed,
@@ -297,7 +323,13 @@ rule as elsewhere).
 - **Client trusts the server completely** (it executes server-rendered
   bash as the login user, typically root). No sandboxing on the
   client beyond "only the target ROOT is writable and only unit files
-  are written" -- stated, not enforced, in v1.
+  are written" -- stated, not enforced, in v1 -- except the binary
+  install itself, which is a write *outside* the target ROOT by
+  design (`<dir>/portuale-<hash>` under `/opt/bin`,
+  `/usr/local/bin`, or `--remote-portuale-dir`). On a client with
+  `ROOT=/` that file sits inside the managed system with no vdb entry
+  owning it; old `portuale-<hash>` files from earlier server builds
+  accumulate the same way and are never cleaned up.
 - **Server trusts the client's status lines partially**: exit codes +
   `STATUS=` trailers drive the report, but the *merge record*
   (ledger append, world-file updates if any) is keyed off them --
@@ -346,6 +378,8 @@ Required values are clap-required; unknown values exit 2 via clap.
 | `--remote-config-protect-mask` | Value | `/etc/env.d` | space-separated CONFIG_PROTECT_MASK list (same derivation rule). |
 | `--remote-ledger-dir` | Value | `<placed-PKGDIR>/remote-ledger` | server ledger directory override (slice 6). |
 | `--remote-require-ledger-match` | Flag | off | strict-mode ledger provenance enforcement (§8): abort before anything ships unless the client's and server's newest ledger line agree (shipped 2026-09-09). |
+| `--remote-portuale-binary` | Value | this binary | portuale binary the server installs and verifies on the client: its SHA-256 names `portuale-<hash>` and its ELF machine is compared with the client's `uname -m` (mismatch fails); e.g. a static musl build when the server itself runs a dynamic dev build. |
+| `--remote-portuale-dir` | Value | first writable of `/opt/bin`, `/usr/local/bin` | absolute client directory holding the portuale binary: the same two names are searched there, and an install goes there. A non-root login needs this pointing at a directory it can write; without a writable directory and without the option, preflight fails. |
 | `--remote-transport` | Value `ssh\|local` | `ssh` | how driver scripts and files reach the client; `local` runs the identical generated driver against local paths (offline debugging, SSH-free driver tests). |
 | `--remote-binpkg` | Value | — | bundle, stream and unpack one explicit binpkg file, bypassing resolution (slices 2-4 trials; later an escape hatch). |
 
@@ -358,21 +392,32 @@ discovered mid-merge. `--pretend` stays local and ignores `--remote-*`
 ### 5.5. Fail-early ordering (no partial mutation on predictable errors)
 
 Gates run in this order; each stage passes only if every check in it
-passes, and **nothing on the client changes before stage 4**:
+passes, and **nothing on the client changes before stage 3b**:
 
 1. **Server config sanity** (local, before any connection): remote
    options validate (hostname present, key file readable, `server:`/
    `client:` placements well-formed), `--getbinpkgonly` in effect.
 2. **Client config pull + parse**: `/etc/portage` (per §7 placement)
    is pulled and must parse as a usable resolver config; the client
-   preflight (§6.0, incl. the clock check) passes. A dead host
-   (rc 255), an old bash, an unwritable ROOT, or >900s clock skew
-   aborts here -- zero client writes so far.
+   preflight (§6.0, incl. the clock check and the read-only client-
+   binary digest/arch gates) passes. A dead host
+   (rc 255), an old bash, an unwritable ROOT, >900s clock skew, an
+   arch mismatch, or no writable binary directory aborts here --
+   zero client writes so far.
 3. **Resolve + verify, still read-only**: `--getbinpkgonly` resolve
    against the pulled config; every `Binary` entry's tarball located
    (`$PKGDIR` or binhost) with `SIZE`+`MD5` verified; ledgers readable
    both sides. The first failure aborts the whole plan (or, under a
    future keep-going mode, drops just that unit -- still pre-mutation).
+3b. **Client binary install** (one stage per invocation, the first and
+   only client mutation outside the target ROOT): runs only when at
+   least one unit ships -- never under `--pretend`, never with an
+   empty plan. `mktemp <dir>/.portuale.XXXXXX`, stream the server
+   binary over the existing connection, `chmod 0755`, re-check the
+   digest, `mv` to `<dir>/portuale-<hash>`, then `"<abs>" __helper
+   ping` (which must print the helper token). Any failure removes the
+   temp file and fails the run before any unit streams. Status line:
+   `portuale-remote: install-bin <rc>`; a reuse prints no such line.
 4. **Per unit, mutation order**: stream bundle → byte-count check →
    `pkg_pretend` (aborts *this unit* pre-copy) → setup → preinst →
    collision check → copy+vdb → postinst. A failure anywhere stops

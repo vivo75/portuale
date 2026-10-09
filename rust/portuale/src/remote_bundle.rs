@@ -135,6 +135,24 @@ pub struct StagedBundle {
 /// in the phase run resolves through it.
 pub const BZIP2_PASSTHROUGH: &str = "#!/bin/sh\n# Backlog #171: PORTAGE_BZIP2_COMMAND stand-in -- ignore flags, pass stdin through.\nexec cat\n";
 
+/// Copy the ebuild runtime into the bundle: always the real files, never
+/// an overlay's symlinks (`cp -aL` dereferences them). `bin_dir()` may be
+/// a symlink overlay of absolute links into the checkout
+/// (`build_bin_overlay`); a client on another host would get dangling
+/// links from a plain `cp -a` (l31 hid this: its client is the same
+/// container with the repo mounted at the same path).
+pub(crate) fn copy_bin_runtime(bin_dir: &Path, dest: &Path) -> Result<(), String> {
+    let status = std::process::Command::new("cp")
+        .args(["-aL"])
+        .arg(bin_dir)
+        .arg(dest)
+        .status()
+        .map_err(|e| format!("failed to spawn cp: {e}"))?;
+    if !status.success() {
+        return Err(format!("cp -aL {} failed ({status})", bin_dir.display()));
+    }
+    Ok(())
+}
 /// Split `PVR` into `(PV, PR)`: trailing `-r<digits>` is the revision,
 /// else `PR` is real portage's own `"r0"` default.
 pub fn split_pvr(pvr: &str) -> (String, String) {
@@ -435,15 +453,7 @@ pub fn build_bundle(
     // per-session ship is the obvious later optimization (note the ~500K
     // in the trial logs if it ever matters).
     let bin_dir = crate::ebuild_phases::bin_dir()?;
-    let status = std::process::Command::new("cp")
-        .args(["-a"])
-        .arg(bin_dir)
-        .arg(unit.join("bin"))
-        .status()
-        .map_err(|e| format!("failed to spawn cp: {e}"))?;
-    if !status.success() {
-        return Err(format!("cp -a {} failed ({status})", bin_dir.display()));
-    }
+    copy_bin_runtime(bin_dir, &unit.join("bin"))?;
     // Backlog #171: the `PORTAGE_BZIP2_COMMAND` pass-through rides the
     // shipped runtime `bin` dir (see `BZIP2_PASSTHROUGH`). `0o755` must
     // survive the tar below (`tar -cf` preserves modes).
@@ -824,6 +834,46 @@ mod tests {
             .expect("passthrough runs");
         assert!(output.status.success());
         assert_eq!(output.stdout, b"regen-bytes\n");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// #326 S8.5: the bundle ships real files, never an overlay's
+    /// symlinks. A runtime dir holding an absolute symlink (the
+    /// `build_bin_overlay` shape: absolute links into a checkout that a
+    /// client on another host cannot resolve) copies as the target's
+    /// bytes -- a regular file, not a dangling link.
+    #[test]
+    fn copy_bin_runtime_dereferences_symlinks() {
+        let tmp = tempdir("dereference");
+        let runtime = tmp.join("runtime");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(runtime.join("ebuild.sh"), "#!/bin/bash\n").unwrap();
+        // An absolute symlink elsewhere, like an overlay entry pointing
+        // into the checkout.
+        let elsewhere = tmp.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("helper.sh"), "helper bytes\n").unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("helper.sh"), runtime.join("helper.sh")).unwrap();
+        assert!(
+            std::fs::symlink_metadata(runtime.join("helper.sh"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        let dest = tmp.join("unit").join("bin");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        copy_bin_runtime(&runtime, &dest).expect("runtime copies");
+        let copied = dest.join("helper.sh");
+        assert!(
+            !std::fs::symlink_metadata(&copied)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the bundle must carry the target's bytes, not the link"
+        );
+        assert_eq!(std::fs::read_to_string(&copied).unwrap(), "helper bytes\n");
+        assert!(dest.join("ebuild.sh").is_file());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

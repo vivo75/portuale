@@ -1101,6 +1101,26 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "enforce that the client's ledger provenance matches the server's record for this hostname (abort on mismatch, before anything merges)",
     },
+    Opt {
+        id: "remote_portuale_binary",
+        long: "--remote-portuale-binary",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "portuale binary to install and verify on the client (default: this binary); preflight compares its SHA-256 and ELF machine with the client's, and the install streams this file",
+    },
+    Opt {
+        id: "remote_portuale_dir",
+        long: "--remote-portuale-dir",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "absolute client directory holding the portuale binary (default: first writable of /opt/bin, /usr/local/bin); a non-root login needs this pointing at a directory it can write",
+    },
     // mrg-only (feat#157, backlog #305 S3.1): which installed-package
     // database backend the run reads. Never reaches `to_emerge_argv`
     // (ids start with `vdb_`) and is not an `emerge` option.
@@ -2126,6 +2146,10 @@ mod tests {
             "/target",
             "--remote-workdir",
             "/tmp/work",
+            "--remote-portuale-binary",
+            "/tmp/static-portuale",
+            "--remote-portuale-dir",
+            "/srv/bin",
         ])
         .unwrap();
         let get = |id: &str| m.get_one::<String>(id).map(String::as_str);
@@ -2139,6 +2163,8 @@ mod tests {
         assert_eq!(get("remote_max_clock_skew"), Some("60"));
         assert_eq!(get("remote_root"), Some("/target"));
         assert_eq!(get("remote_workdir"), Some("/tmp/work"));
+        assert_eq!(get("remote_portuale_binary"), Some("/tmp/static-portuale"));
+        assert_eq!(get("remote_portuale_dir"), Some("/srv/bin"));
         assert_eq!(get("remote_transport"), None);
         assert_eq!(get("remote_binpkg"), None);
 
@@ -2189,6 +2215,8 @@ mod tests {
         assert!(!emerge_handles("--remote-edb"));
         assert!(!emerge_handles("--remote-ledger-dir"));
         assert!(!emerge_handles("--remote-require-ledger-match"));
+        assert!(!emerge_handles("--remote-portuale-binary"));
+        assert!(!emerge_handles("--remote-portuale-dir"));
     }
 
     /// `check_remote` validation: hostname selects remote mode with
@@ -2231,6 +2259,11 @@ mod tests {
         assert!(!ctx.require_ledger_match);
         assert!(!ctx.config_protect_explicit);
         assert!(!ctx.config_protect_mask_explicit);
+        // Slice-8 binary placement: ship this binary, default dirs,
+        // unresolved until preflight.
+        assert_eq!(ctx.portuale_binary, None);
+        assert_eq!(ctx.portuale_dir, None);
+        assert_eq!(ctx.bin_plan, crate::remote::ClientBinPlan::Unresolved);
 
         let m = parse(&["--pretend", "cat/pkg"]).unwrap();
         assert!(check_remote(&m).unwrap().is_none());
@@ -2283,6 +2316,35 @@ mod tests {
         let m = parse(&["--remote-hostname", "h", "--remote-require-ledger-match"]).unwrap();
         let ctx = check_remote(&m).unwrap().expect("remote mode");
         assert!(ctx.require_ledger_match);
+
+        // Slice-8 binary placement: the shipped file rides along, the
+        // dir must be absolute, and both options require the hostname.
+        let m = parse(&[
+            "--remote-hostname",
+            "h",
+            "--remote-portuale-binary=/tmp/static-portuale",
+            "--remote-portuale-dir=/srv/bin",
+        ])
+        .unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert_eq!(ctx.portuale_binary.as_deref(), Some("/tmp/static-portuale"));
+        assert_eq!(ctx.portuale_dir.as_deref(), Some("/srv/bin"));
+
+        let m = parse(&[
+            "--remote-hostname",
+            "h",
+            "--remote-portuale-dir=relative/bin",
+        ])
+        .unwrap();
+        assert!(
+            check_remote(&m)
+                .unwrap_err()
+                .contains("--remote-portuale-dir")
+        );
+        let m = parse(&["--remote-portuale-binary", "/tmp/x"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+        let m = parse(&["--remote-portuale-dir", "/srv/bin"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
 
         let m = parse(&["--remote-require-ledger-match"]).unwrap();
         assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
