@@ -340,6 +340,30 @@ fn env_d_reloaded(config: &portage_profile::Config) -> Option<portage_profile::C
     Some(reloaded)
 }
 
+/// Backlog #333 on top of #332: real's per-task `config.reload()` also
+/// feeds the task's `dblink`, whose protect object reads
+/// `settings["CONFIG_PROTECT"]` / `["CONFIG_PROTECT_MASK"]`
+/// (`vartree.py:2063-2072`), so a path an earlier merge of the same run
+/// added to `CONFIG_PROTECT` through `/etc/env.d` is protected for the
+/// later merges. The new `(config_protect, config_protect_mask)` pair
+/// when `profile.env` changed since `options.resolved_config` was
+/// resolved, `None` otherwise (the run-wide values stand).
+pub(crate) fn reloaded_config_protect(
+    options: &ebuild_merge::MergeOptions,
+) -> Option<(String, String)> {
+    let reloaded = options
+        .resolved_config
+        .as_deref()
+        .and_then(env_d_reloaded)?;
+    let mut probe = ebuild_merge::MergeOptions {
+        config_protect: options.config_protect.clone(),
+        config_protect_mask: options.config_protect_mask.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    probe.apply_config_protect(&reloaded);
+    Some((probe.config_protect, probe.config_protect_mask))
+}
+
 /// [`run_buildpkgonly`]'s per-entry `config.environ()` (backlog #129):
 /// `run_wide` plus `entry`'s matched `package.env` build vars
 /// ([`matched_package_env_vars`], layered before the tail so an
@@ -808,6 +832,10 @@ pub(crate) fn merge_one_source_entry(
     // not the implicit/arch part of the effective set.
     let mut per_entry = options.clone();
     per_entry.build_env = entry_build_env(options, entry, repos);
+    if let Some((protect, mask)) = reloaded_config_protect(options) {
+        per_entry.config_protect = protect;
+        per_entry.config_protect_mask = mask;
+    }
     // Real per-package `FEATURES` (#98): this entry's gates (Rust-side
     // `feature_enabled` and the vdb-environment regeneration) read the
     // per-entry folded list. `None` (no match) keeps the run-wide value.
@@ -2205,6 +2233,10 @@ fn merge_one_built_entry(
     // entry's resolved `USE` too (see `merge_one_source_entry`).
     let mut per_entry = options.clone();
     per_entry.build_env = entry_build_env(options, entry, repos);
+    if let Some((protect, mask)) = reloaded_config_protect(options) {
+        per_entry.config_protect = protect;
+        per_entry.config_protect_mask = mask;
+    }
     // Real per-package `FEATURES` (#98): the merge half's gates
     // (`feature_enabled`, the vdb-environment regeneration) read the
     // per-entry folded list, not the run-wide one. `set_resolved_features`
@@ -4211,6 +4243,79 @@ mod tests {
         let seen =
             portage_tmpdir.join("portage/dev-libs/envdreload-b-1.0/temp/envdreload-seen.txt");
         assert_eq!(fs::read_to_string(seen).unwrap(), "ENVDRELOAD_VAR=1\n");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// #333: a two-entry source merge with `CONFIG_PROTECT` resolved
+    /// from the config (`/etc /usr/share/cfgprotme`), none in the
+    /// process env. `cfgprotlate-a` installs `/etc/env.d/99cfgprotlate`
+    /// (`CONFIG_PROTECT="/usr/share/cfgprotlate"`) and its merge runs
+    /// env-update; `cfgprotlate-b` then installs one file under each path
+    /// over a locally modified copy. Real (Portage 3.0.82.2 in the bed
+    /// image, `env -i emerge`, same shape: pmtest
+    /// `differential-test-bed/scripts/333-config-protect.sh`) keeps both
+    /// local files and writes `._cfg0000_x` /
+    /// `._cfg0000_y`: the config's fold protects `x`
+    /// (`dblink._get_protect_obj`, `vartree.py:2063-2072`), and the
+    /// per-task `config.reload()` (`Scheduler.py:1899-1913`) protects
+    /// `y`.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn source_merge_protects_the_config_fold_and_env_d_added_paths() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        for (dir, name) in [("usr/share/cfgprotme", "x"), ("usr/share/cfgprotlate", "y")] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+            fs::write(root.join(dir).join(name), "local\n").unwrap();
+        }
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["amd64".to_string()];
+        config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
+        config.envd_eroot = root.clone();
+        config.incremental_sources.insert(
+            "CONFIG_PROTECT".to_string(),
+            vec![vec!["/etc".to_string(), "/usr/share/cfgprotme".to_string()]],
+        );
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.apply_config_protect(&config);
+        options.build_env = run_wide_phase_env(&config);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+        options.features = "noclean".to_string();
+        let entries = ["cfgprotlate-a", "cfgprotlate-b"].map(|p| {
+            source_entry(
+                p,
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            )
+        });
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("source merge succeeds");
+        let read = |p: &str| fs::read_to_string(root.join(p)).unwrap_or_else(|e| format!("<{e}>"));
+        assert_eq!(read("usr/share/cfgprotme/x"), "local\n");
+        assert_eq!(read("usr/share/cfgprotme/._cfg0000_x"), "from-package\n");
+        assert_eq!(read("usr/share/cfgprotlate/y"), "local\n");
+        assert_eq!(read("usr/share/cfgprotlate/._cfg0000_y"), "from-package\n");
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&portage_tmpdir);
     }
