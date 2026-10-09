@@ -9125,6 +9125,8 @@ fn run_info(
                         &image,
                         &build_info,
                         &crate::binpkg::GpgVerify::from_env(),
+                        // `pkg_info` installs nothing: no xattr handling.
+                        &crate::ebuild_merge::XattrPolicy::default(),
                     ) {
                         Ok(()) => {
                             let extracted = portage_util::read_dir_entries(&build_info)

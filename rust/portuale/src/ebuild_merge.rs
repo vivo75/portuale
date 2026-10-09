@@ -4916,7 +4916,13 @@ pub fn merge_binpkg(
     }
     let image = builddir.join("image");
     let build_info = builddir.join("build-info");
-    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info, &options.gpg_verify)?;
+    crate::binpkg::extract_binpkg(
+        binpkg_path,
+        &image,
+        &build_info,
+        &options.gpg_verify,
+        &XattrPolicy::from_options(options),
+    )?;
 
     // Real `_emerge/Binpkg._start_task`: "Store the md5sum in the vdb."
     // It prefers the `MD5` field from the package index, else
