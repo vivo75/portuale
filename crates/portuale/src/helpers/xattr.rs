@@ -156,6 +156,58 @@ enum XattrParse {
     Restore,
 }
 
+/// Unique-prefix match (`--du` -> `--dump`); exact match wins.
+fn match_long(name: &[u8], cands: &[&str]) -> Result<usize, Vec<usize>> {
+    if let Some(i) = cands.iter().position(|c| c.as_bytes() == name) {
+        return Ok(i);
+    }
+    let hits: Vec<usize> = cands
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.as_bytes().starts_with(name))
+        .map(|(i, _)| i)
+        .collect();
+    if hits.len() == 1 {
+        Ok(hits[0])
+    } else {
+        Err(hits)
+    }
+}
+
+// ---------------------------------------------------------------------
+// `dump_xattrs` / `restore_xattrs`
+// ---------------------------------------------------------------------
+
+/// Each file's section is written as produced, so a later failure leaves
+/// partial stdout. `Err` is the final `ExceptionType: message` line (rc 1).
+fn dump_xattrs(paths: &[Vec<u8>]) -> Result<(), Vec<u8>> {
+    // NOTE: always quote backslashes (Portage's comment).
+    let path_chars = b"\n\r\\";
+    let mut name_chars = vec![b'='];
+    name_chars.extend_from_slice(path_chars);
+    let mut value_chars = vec![b'\0', b'"'];
+    value_chars.extend_from_slice(path_chars);
+    for path in paths {
+        let attrs = xattr_list(path).map_err(|e| errno_line(e, path))?;
+        if attrs.is_empty() {
+            continue;
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(b"# file: ");
+        out.extend_from_slice(&quote(path, path_chars));
+        out.extend_from_slice(b"\n");
+        for attr in &attrs {
+            let value = xattr_get(path, attr).map_err(|e| errno_line(e, path))?;
+            out.extend_from_slice(&quote(attr, &name_chars));
+            out.extend_from_slice(b"=\"");
+            out.extend_from_slice(&quote(&value, &value_chars));
+            out.extend_from_slice(b"\"\n");
+        }
+        stdout_write(&out);
+    }
+    Ok(())
+}
+
 /// `restore_xattrs(file_in)`: `data` is the raw stdin bytes.
 fn restore_xattrs(data: &[u8]) -> Result<(), Vec<u8>> {
     let mut pathname: Option<Vec<u8>> = None;
