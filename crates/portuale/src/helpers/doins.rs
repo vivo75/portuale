@@ -3312,6 +3312,60 @@ mod tests {
         };
     }
 
+    oracle_case!(oracle_files_no_r, "files-no-r");
+    oracle_case!(oracle_dirs_only_no_r, "dirs-only-no-r");
+    oracle_case!(oracle_recursive, "recursive");
+    oracle_case!(oracle_newins, "newins");
+    oracle_case!(oracle_insopts_mode, "insopts-mode");
+    oracle_case!(oracle_insopts_preserve, "insopts-preserve");
+    oracle_case!(oracle_diropts_mode, "diropts-mode");
+    oracle_case!(oracle_owner_root, "owner-root");
+    oracle_case!(oracle_unknown_lax, "unknown-lax");
+    oracle_case!(oracle_unknown_strict, "unknown-strict");
+    oracle_case!(oracle_dodoc_r, "dodoc-r");
+    oracle_case!(oracle_doheader, "doheader");
+    oracle_case!(oracle_doconfd, "doconfd");
+    oracle_case!(oracle_xattr_exclude, "xattr-exclude");
+    oracle_case!(oracle_missing_source, "missing-source");
+    oracle_case!(oracle_die_eapi8, "die-eapi8");
+    oracle_case!(oracle_nodie_eapi3, "nodie-eapi3");
+    oracle_case!(oracle_distdir_deref, "distdir-deref");
+    oracle_case!(oracle_eapi3_copy, "eapi3-copy");
+    oracle_case!(oracle_empty_dir_r, "empty-dir-r");
+    oracle_case!(oracle_phase_defaults_r, "phase-defaults-r");
+    oracle_case!(oracle_phase_defaults_files, "phase-defaults-files");
+    oracle_case!(oracle_phase_defaults_distfile, "phase-defaults-distfile");
+    oracle_case!(oracle_dangling_abs_kept, "dangling-abs-kept");
+    oracle_case!(oracle_dangling_abs_nodistdir, "dangling-abs-nodistdir");
+
+    /// A failing `os.symlink(linkto, dest)` prints both filenames; the
+    /// last stderr line is the two-filename `FileNotFoundError`, rc 1.
+    #[test]
+    fn symlink_failure_names_target_and_dest_like_portage() {
+        let tmp = TempDir::new("doins-symlink-fail");
+        std::fs::create_dir_all(tmp.join("src/p")).unwrap();
+        std::os::unix::fs::symlink("/nonexistent/abs", tmp.join("src/p/abs-link")).unwrap();
+        let out = Command::new(portuale_exe())
+            .args(["__helper", "python", "doins.py"])
+            .args(["--recursive", "--preserve_symlinks", "--distdir=/x"])
+            .args(["--helper", "doins", "--dest", "/proc/x", "src/p"])
+            .current_dir(&*tmp)
+            .env_clear()
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .output()
+            .expect("portuale __helper spawns");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "stderr:\n{stderr}");
+        assert_eq!(
+            stderr.lines().last(),
+            Some(
+                "FileNotFoundError: [Errno 2] No such file or directory: \
+                 b'/nonexistent/abs' -> b'/proc/x/p/abs-link'"
+            ),
+            "stderr:\n{stderr}"
+        );
+    }
+
     // ---- end to end: a real package whose src_install uses doins ----
 
     /// `dev-libs/packagepkg`'s `src_install` is `insinto` + `doins`
@@ -3337,6 +3391,12 @@ mod tests {
         let contents = std::fs::read_to_string(&installed)
             .unwrap_or_else(|e| panic!("{} should have been installed: {e}", installed.display()));
         assert_eq!(contents, "hello from packagepkg\n");
+    }
+
+    #[test]
+    fn doins_installs_packagepkg_files_in_process() {
+        let tmp = TempDir::new("doins-packagepkg");
+        install_packagepkg(&tmp);
     }
 
     /// Re-run the in-process install in a child with no checkout and
