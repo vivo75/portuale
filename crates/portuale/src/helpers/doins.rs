@@ -336,6 +336,12 @@ pub(crate) fn copy_xattr(src: &[u8], dest: &[u8], exclude: &[u8]) -> Result<(), 
     Ok(())
 }
 
+fn path_is_link(p: &[u8]) -> bool {
+    std::fs::symlink_metadata(OsStr::from_bytes(p))
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +375,31 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/doins")
     }
 
+    /// `materialise.py`'s `%XX` unescaping (uppercase hex only).
+    fn unesc(s: &str) -> Vec<u8> {
+        let b = s.as_bytes();
+        let hex = |c: u8| match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        };
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%'
+                && i + 2 < b.len()
+                && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+            {
+                out.push(h * 16 + l);
+                i += 3;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
     /// Decode one `args` line (`\\` → `\`, `\n` → newline).
     fn decode_arg(line: &str) -> Vec<u8> {
         let b = line.as_bytes();
@@ -396,6 +427,20 @@ mod tests {
             }
         }
         out
+    }
+
+    /// `%XX` escaping for dump paths (bytes outside
+    /// `[A-Za-z0-9._/+-]`, uppercase hex).
+    fn qesc(b: &[u8]) -> String {
+        b.iter()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || b"._/+-".contains(c) {
+                    (*c as char).to_string()
+                } else {
+                    format!("%{c:02X}")
+                }
+            })
+            .collect()
     }
 
     macro_rules! oracle_case {
