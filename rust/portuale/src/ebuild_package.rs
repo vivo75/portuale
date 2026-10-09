@@ -1296,6 +1296,19 @@ fn binpkg_checksums(path: &Path) -> Option<(String, String)> {
     Some((md5, sha1))
 }
 
+/// `MAKEOPTS` for the package step's native gpkg compressor (`{JOBS}`,
+/// #326 S4): the ebuild's own resolved chain, else the global one
+/// (#328). The global fallback serves `quickpkg_from_vdb`, whose scratch
+/// copy of the vdb ebuild has no repo above it, so the ebuild-path chain
+/// resolves nothing there.
+fn package_makeopts(ebuild_path: &Path, config_root: &Path, root: &Path) -> Option<String> {
+    ebuild_phases::resolve_standalone_chain_scalar(ebuild_path, config_root, root, "MAKEOPTS")
+        .or_else(|| {
+            ebuild_phases::resolve_unmerge_config(config_root, root)
+                .and_then(|config| config.other_vars.get("MAKEOPTS").cloned())
+        })
+}
+
 /// Runs the real, unmodified `bin/misc-functions.sh __dyn_package`
 /// against `ebuild_path` (tars `${D}` + appends `${PORTAGE_BUILDDIR}/
 /// build-info` as the xpak segment / hands both to `gpkg-helper.py`),
@@ -1391,13 +1404,17 @@ fn invoke_dyn_package(
         // here, from the same global (not `package.env`-matched) chain
         // as the other scalars above. Left unset when nothing resolves:
         // the helper then counts CPUs, as real does.
+        //
+        // #328: the ebuild-path chain needs a repo above the ebuild, and
+        // `quickpkg_from_vdb` (unmerge-backup, the replaced-instance
+        // backup) packages a scratch copy of the vdb ebuild that has
+        // none. `MAKEOPTS` is a global scalar, so it then comes from the
+        // global chain (`resolve_unmerge_config`, as `BINPKG_FORMAT` does
+        // on that path, #173): real reads `settings["MAKEOPTS"]` there
+        // too, and logs `zstd -T5` for a `make.conf` `MAKEOPTS=-j5`
+        // (pmtest `differential-test-bed/scripts/328-quickpkg-makeopts.sh`).
         if portage_profile::config_env_var("MAKEOPTS").is_none()
-            && let Some(makeopts) = ebuild_phases::resolve_standalone_chain_scalar(
-                ebuild_path,
-                &options.config_root,
-                root,
-                "MAKEOPTS",
-            )
+            && let Some(makeopts) = package_makeopts(ebuild_path, &options.config_root, root)
         {
             extra_env.push(("MAKEOPTS".to_string(), makeopts));
         }
@@ -1818,6 +1835,48 @@ mod tests {
 
     fn tempdir() -> std::path::PathBuf {
         TempDir::new("portuale-ebuild-package-test").keep()
+    }
+
+    /// #328: `quickpkg_from_vdb` packages a scratch copy of the vdb ebuild
+    /// with no repo above it, so the ebuild-path chain resolves no
+    /// `MAKEOPTS`, and the native gpkg compressor counted CPUs
+    /// (`zstd -T<ncpu>`). Real reads `settings["MAKEOPTS"]` there
+    /// (`gpkg._get_binary_cmd`) and runs `zstd -T5` for a `make.conf`
+    /// `MAKEOPTS=-j5` (pmtest `differential-test-bed/scripts/
+    /// 328-quickpkg-makeopts.sh`, Portage 3.0.82.2 in the bed image).
+    /// The global chain fallback gives the same value.
+    #[test]
+    fn package_makeopts_falls_back_to_the_global_chain_outside_a_repo() {
+        let probe = tempdir();
+        let repo = probe.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = probe.join("etc/portage");
+        std::fs::create_dir_all(&prof).unwrap();
+        std::fs::create_dir_all(&portage_dir).unwrap();
+        std::fs::write(prof.join("make.defaults"), "ARCH=\"amd64\"\n").unwrap();
+        std::fs::write(portage_dir.join("make.conf"), "MAKEOPTS=\"-j5\"\n").unwrap();
+        std::fs::write(
+            portage_dir.join("repos.conf"),
+            "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = repo\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&prof, portage_dir.join("make.profile")).unwrap();
+        // The scratch layout `quickpkg_from_vdb` uses: no repo ancestor.
+        let scratch = probe.join("scratch/qp/q");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let ebuild = scratch.join("q-1.ebuild");
+        std::fs::write(&ebuild, "EAPI=8\nSLOT=0\n").unwrap();
+
+        assert_eq!(
+            ebuild_phases::resolve_standalone_chain_scalar(&ebuild, &probe, &probe, "MAKEOPTS"),
+            None,
+            "the ebuild-path chain resolves nothing outside a repo"
+        );
+        assert_eq!(
+            package_makeopts(&ebuild, &probe, &probe).as_deref(),
+            Some("-j5")
+        );
+        let _ = std::fs::remove_dir_all(&probe);
     }
 
     /// Backlog #130: `set_resolved_features` re-derives the
