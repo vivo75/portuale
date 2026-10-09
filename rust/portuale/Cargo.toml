@@ -130,6 +130,12 @@ libc = "0.2"
 # (ownership/permission/xattr/sparse semantics); `#58` S5 moves the
 # outer container over too.
 tar = { version = "0.4", default-features = false }
+# Real `gpkg._record_checksum` writes `BLAKE2B` (+ `SHA512`, `sha2`
+# above) into the container `Manifest` (#326 S4's native
+# `helpers/gpkg.rs`). Pure Rust, already vendored and locked
+# (portage-fetch depends on it at this version, and the gpkg Manifest
+# tests used it as a dev-dependency) -- no new fetch.
+blake2 = "0.10"
 # The `mrg` applet (module mrg.rs) is deliberately allowed to use major,
 # mainstream crates -- its requirements are NOT the tight emerge/ebuild
 # ones (see mrg.rs's own module doc comment for the full waiver): clap
@@ -155,11 +161,6 @@ vdb-redb = ["portage-vdb/vdb-redb"]
 vdb-fuse = ["dep:fuser"]
 
 [dev-dependencies]
-# Test-only: assemble gpkg `Manifest` `DATA` lines with real BLAKE2B
-# digests so `binpkg::verify_gpkg_manifest`'s tests exercise the real
-# hasher rather than pre-baked constants. Already vendored
-# (portage-fetch depends on it at this version) -- no new fetch.
-blake2 = "0.10"
 # Test-only (#326 S3): decompress the `fixtures/helpers/filter-env`
 # `in.bz2`/`out.bz2` oracle sides in-process. Same zero-C-linkage
 # discipline as portage-repo's own `bzip2` dependency (0.6's default

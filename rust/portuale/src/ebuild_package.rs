@@ -269,7 +269,7 @@ impl PackageOptions {
 /// plain, non-`${...}`, pre-`varexpand` substitution (real
 /// `doebuild.py:721-724`/`:740-743`); `${...}` placeholders are resolved
 /// afterward by `resolve_compression_command`.
-fn compress_template(name: &str) -> Option<&'static str> {
+pub(crate) fn compress_template(name: &str) -> Option<&'static str> {
     Some(match name {
         "bzip2" => "${PORTAGE_BZIP2_COMMAND} ${BINPKG_COMPRESS_FLAGS}",
         "gzip" => "gzip ${BINPKG_COMPRESS_FLAGS}",
@@ -284,7 +284,7 @@ fn compress_template(name: &str) -> Option<&'static str> {
 
 /// Real `find_binary()` (`lib/portage/process.py`): the first `PATH`
 /// entry containing an executable file named `name`.
-fn find_binary(name: &str) -> bool {
+pub(crate) fn find_binary(name: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else {
         return false;
     };
@@ -337,7 +337,7 @@ fn resolve_compression_command(
 /// optional whitespace and a number -- the greedy `.*(j|--jobs=\s)\s*
 /// ([0-9]+)` match -- else the CPU count (`get_cpu_count()` =
 /// `sched_getaffinity`). Returned as the matched text, as real does.
-fn makeopts_to_job_count(makeopts: &str) -> String {
+pub(crate) fn makeopts_to_job_count(makeopts: &str) -> String {
     let cpu_count = || {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -1364,6 +1364,26 @@ fn invoke_dyn_package(
             "PORTAGE_BZIP2_COMMAND".to_string(),
             options.portage_bzip2_command.clone(),
         ));
+        // The native `gpkg-helper.py` (#326 S4) takes `{JOBS}` for
+        // `zstd -T{JOBS}` / `xz -T{JOBS}` from `MAKEOPTS` (real
+        // `gpkg._get_binary_cmd`: `makeopts_to_job_count(settings.get(
+        // "MAKEOPTS", "1"))`, from the helper's own `portage.settings`,
+        // i.e. `make.conf` included). A calling-env `MAKEOPTS` is
+        // whitelisted and already reaches the helper through the phase
+        // env; the `make.conf`/profile side does not, so it is exported
+        // here, from the same global (not `package.env`-matched) chain
+        // as the other scalars above. Left unset when nothing resolves:
+        // the helper then counts CPUs, as real does.
+        if portage_profile::config_env_var("MAKEOPTS").is_none()
+            && let Some(makeopts) = ebuild_phases::resolve_standalone_chain_scalar(
+                ebuild_path,
+                &options.config_root,
+                root,
+                "MAKEOPTS",
+            )
+        {
+            extra_env.push(("MAKEOPTS".to_string(), makeopts));
+        }
         // Real `FEATURES=binpkg-signing` (`gpkg.gpkg.create_signature`,
         // `gpkg.py:790`): the real, unmodified helper signs the
         // `metadata.tar`/`image.tar` members (detached `.sig` sidecars)
@@ -2719,6 +2739,75 @@ mod tests {
             !packages.lines().any(|l| l.starts_with("_mtime_:")),
             "internal _mtime_ key must never be written: {packages:?}"
         );
+    }
+
+    /// `FEATURES=unmerge-backup` / `quickpkg` with `BINPKG_FORMAT=gpkg`:
+    /// the installed files and the vdb entry become a real gpkg through
+    /// the `gpkg-helper.py compress` the dispatcher routes natively
+    /// (#326 S4). Re-run as a child process with no checkout by
+    /// `helpers::gpkg::tests::quickpkg_from_vdb_gpkg_works_without_the_checkout`.
+    #[test]
+    fn quickpkg_from_vdb_with_gpkg_format_builds_a_readable_gpkg() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let scratch = tmp.join("scratch");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            // not the `Default` zstd: the test must not need zstd installed
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_format: "gpkg".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        std::fs::write(root.join("etc/probe.conf"), "probe\n").unwrap();
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/probe-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        std::fs::copy(
+            repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild"),
+            vdb_dir.join("probe-1.0.ebuild"),
+        )
+        .unwrap();
+        for (name, content) in [
+            ("EAPI", "8\n"),
+            ("SLOT", "0\n"),
+            ("CATEGORY", "dev-libs\n"),
+            ("PF", "probe-1.0\n"),
+            ("KEYWORDS", "amd64\n"),
+            ("LICENSE", "GPL-2\n"),
+            ("USE", "amd64\n"),
+            ("BUILD_TIME", "1790541998\n"),
+            ("REPO_REVISIONS", "{}\n"),
+            ("repository", "testrepo\n"),
+            ("CONTENTS", "obj /etc/probe.conf\n"),
+        ] {
+            std::fs::write(vdb_dir.join(name), content).unwrap();
+        }
+
+        let built = quickpkg_from_vdb(
+            &root,
+            "dev-libs",
+            "probe",
+            "probe-1.0",
+            &scratch,
+            &portage_tmpdir,
+            &options,
+            "",
+            "",
+        )
+        .expect("quickpkg_from_vdb succeeds")
+        .expect("archive built");
+        assert_eq!(built, options.pkgdir.join("dev-libs/probe-1.0.gpkg.tar"));
+        let meta = crate::binpkg::read_gpkg_metadata(&built)
+            .expect("portuale's gpkg reader parses the native writer's output");
+        assert_eq!(meta.get("PF").map(String::as_str), Some("probe-1.0"));
+        assert_eq!(meta.get("CATEGORY").map(String::as_str), Some("dev-libs"));
     }
 
     #[test]

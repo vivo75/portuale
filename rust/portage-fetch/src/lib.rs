@@ -655,7 +655,7 @@ fn varexpand(template: &str, vars: &HashMap<String, String>) -> String {
 /// (`fetch.py:1813-1820`): the variables are substituted, then the string
 /// is split into argv with POSIX quoting rules -- real never runs it
 /// through a shell.
-fn expand_and_split(command: &str, vars: &HashMap<String, String>) -> Vec<String> {
+pub fn expand_and_split(command: &str, vars: &HashMap<String, String>) -> Vec<String> {
     shell_split(&varexpand(command, vars))
 }
 

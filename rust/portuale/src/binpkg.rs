@@ -185,9 +185,9 @@ fn trusted_outer_member_name(name: &str) -> bool {
 /// name real's `Manifest` records and `#56` trusts); `raw_name` is the
 /// full member name bytes the crate reports, used by
 /// [`outer_member_read`] to re-open and stream the member.
-struct OuterMember {
+pub(crate) struct OuterMember {
     raw_name: Vec<u8>,
-    name: String,
+    pub(crate) name: String,
 }
 
 /// `#58` S5: read the outer container in process with the `tar` crate.
@@ -200,7 +200,7 @@ struct OuterMember {
 /// tar or a `.sig` sidecar is an error naming the member and its type,
 /// and the member's data is never read through it. Returns the members
 /// and whether the `gpkg-1` marker is present.
-fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool), BinpkgError> {
+pub(crate) fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool), BinpkgError> {
     let file =
         fs::File::open(gpkg).map_err(|e| BinpkgError::Fatal(format!("{}: {e}", gpkg.display())))?;
     let mut archive = tar::Archive::new(file);
@@ -999,7 +999,7 @@ fn be32(b: &[u8]) -> u32 {
 /// tests run unprivileged and production merges already run as root
 /// throughout); `[PORTAGE_CONFIG]`/`[SIGNATURE]` substitution is plain
 /// whitespace splitting, not real's `shlex` + `varexpand`.
-fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<(), String> {
+pub(crate) fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<(), String> {
     if !gpkg_path.is_file() {
         return Err(format!("{}: not a file", gpkg_path.display()));
     }
@@ -3426,9 +3426,11 @@ mod tests {
 
     // ---- GPG binpkg signatures (`FEATURES=binpkg-signing`) ----
 
-    /// Portage's own committed GnuPG test keyring
-    /// (`3rdparty/portage/lib/portage/tests/.gnupg` -- the same keys
-    /// real's own `test_gpkg_gpg.py` signs with): trusted
+    /// Portage's own committed GnuPG test keyring, copied verbatim into
+    /// pmtest (`fixtures/helpers/gpg-keyring/`, from
+    /// `lib/portage/tests/.gnupg` -- the same keys real's own
+    /// `test_gpkg_gpg.py` signs with; #326 S4, so these tests run with
+    /// no Portage checkout): trusted
     /// `0x5D90EA06352177F6`, untrusted `0x8812797DDF1DD192`, both with
     /// passphrase `GentooTest`. Neither key expires, so a container
     /// signed with them verifies deterministically for the life of the
@@ -3455,8 +3457,7 @@ mod tests {
         }
         let dest = TempDir::new(&format!("portuale-gpg-{tag}")).keep();
         copy_dir(
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../3rdparty/portage/lib/portage/tests/.gnupg"),
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/gpg-keyring"),
             &dest,
         );
         use std::os::unix::fs::PermissionsExt;

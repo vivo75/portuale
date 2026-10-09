@@ -2717,6 +2717,25 @@ pub(crate) fn environ_whitelisted(key: &str) -> bool {
     ENVIRON_WHITELIST.contains(&key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
 }
 
+/// The settings the native `gpkg-helper.py compress` (#326 S4) reads from
+/// its environment: `BINPKG_COMPRESS`, `BINPKG_COMPRESS_FLAGS[_<NAME>]`
+/// and `BINPKG_GPG_SIGNING_*`. Real's helper rebuilds `portage.settings`
+/// from the config files; the native one has no config loader (D7), so
+/// `ebuild_package::invoke_dyn_package` exports the already-resolved
+/// values (files-only for `gpkg`, the Q6 rule) and they must survive the
+/// calling-env filter below in the `package` phase -- the one phase that
+/// runs `__dyn_package`, hence the one place real's own helper would
+/// have read them. The compression three are on real's `environ_filter`
+/// (so absent from a real phase env); they never reach any other phase
+/// and `bin/phase-functions.sh` saves no `package`-phase environment.
+fn gpkg_helper_setting(phase: &str, key: &str) -> bool {
+    phase == "package"
+        && (key == "BINPKG_COMPRESS"
+            || key == "BINPKG_COMPRESS_FLAGS"
+            || key.starts_with("BINPKG_COMPRESS_FLAGS_")
+            || key.starts_with("BINPKG_GPG_SIGNING_"))
+}
+
 /// Real `config.environ()`'s `filter_calling_env`
 /// (`lib/portage/package/ebuild/config.py:3275-3305`, bug #189417): once a
 /// phase's own `${T}/environment` exists -- i.e. every phase after the
@@ -3429,7 +3448,12 @@ fn phase_env_vars(
     vars.extend(
         extra_env
             .iter()
-            .filter(|(k, _)| k != "PATH" && (!calling_env_filtered || environ_whitelisted(k)))
+            .filter(|(k, _)| {
+                k != "PATH"
+                    && (!calling_env_filtered
+                        || environ_whitelisted(k)
+                        || gpkg_helper_setting(ebuild_phase_value, k))
+            })
             .cloned(),
     );
 

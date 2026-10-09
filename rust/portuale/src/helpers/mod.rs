@@ -15,6 +15,7 @@
 
 mod chmod_lite;
 mod filter_env;
+mod gpkg;
 mod locale;
 mod python;
 mod xpak;

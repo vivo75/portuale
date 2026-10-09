@@ -1804,7 +1804,7 @@ mod tests {
         let dest = tempdir().join("gpg-home");
         copy_dir(
             &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../3rdparty/portage/lib/portage/tests/.gnupg"),
+                .join("../../fixtures/helpers/gpg-keyring"),
             &dest,
         );
         use std::os::unix::fs::PermissionsExt;
