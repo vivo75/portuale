@@ -775,4 +775,39 @@ mod tests {
         assert_eq!(output.stdout, b"regen-bytes\n");
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    /// The bundle ships files, never an overlay's symlinks: an absolute
+    /// symlink copies as the target's bytes.
+    #[test]
+    fn copy_bin_runtime_dereferences_symlinks() {
+        let tmp = tempdir("dereference");
+        let runtime = tmp.join("runtime");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(runtime.join("ebuild.sh"), "#!/bin/bash\n").unwrap();
+        let elsewhere = tmp.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("helper.sh"), "helper bytes\n").unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("helper.sh"), runtime.join("helper.sh")).unwrap();
+        assert!(
+            std::fs::symlink_metadata(runtime.join("helper.sh"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        let dest = tmp.join("unit").join("bin");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        copy_bin_runtime(&runtime, &dest).expect("runtime copies");
+        let copied = dest.join("helper.sh");
+        assert!(
+            !std::fs::symlink_metadata(&copied)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the bundle must carry the target's bytes, not the link"
+        );
+        assert_eq!(std::fs::read_to_string(&copied).unwrap(), "helper bytes\n");
+        assert!(dest.join("ebuild.sh").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
