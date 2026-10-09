@@ -19415,3 +19415,17 @@ Real puts the xattr `install` wrapper on the phase `PATH` under `FEATURES=xattr`
 - **Install.** When a unit ships, the binary goes in through `mktemp`, stream, `chmod 0755`, a digest re-check, `mv`, and `__helper ping`. The status line is `portuale-remote: install-bin 0`; a reuse prints nothing.
 - **Absolute path.** Every generated client script exports that absolute `PORTUALE_BIN`, `PORTAGE_PYM_PATH=/`, and `PORTAGE_PYTHON=$UNITBIN/portuale-python`, so the client needs no Python and no portuale on `PATH`.
 - **Proof.** The new pmtest two-container cell `run/l31b-two-container.sh` uses a bare client: bash, coreutils and sshd, with no Portage, no python, no portuale and no repo. It merges the l31 gpkgs with 0 hard / 0 unexplained against real Portage. It shows exactly one `install-bin 0`, and the client then holds `/usr/local/bin/portuale-<hash>` with the server's digest; a re-run installs nothing, with the same inode (`docs/evidence/2026-10-09-326-s8.md`).
+
+**#326 Z — the no-Portage close-out against real Portage, and two fixes it found (2026-10-09).** pmtest `run/z326-closeout.sh` builds two lists from source with `--buildpkg`, re-merges them with `--usepkgonly`, and compares the result against real Portage building the same atoms:
+- [nopy]: `eix`, `bash` and the P0 probe ebuilds, on an image with no Python.
+- [noportage]: glibc and bash, on an image with Python but no Portage.
+
+A phase-env audit shows that no helper reached a real interpreter. The [gate] pair, its reinstall cell and the S8 two-container cell are 0 hard / 0 unexplained.
+
+Z found and fixed two portuale bugs:
+- **`PORTAGE_ACTUAL_DISTDIR`.** The phase environment did not export it. Real `config.environ()` (`config.py:3403-3409`) does, and `ebuild-helpers/doins:80-82` passes `--distdir` only when it is set. Without it, `doins -r` dereferences every absolute symlink and dies on a dangling one.
+- **`BINPKGMD5`.** A `--buildpkg` source merge did not record it. Real `_record_binpkg_info` (`EbuildBuild.py:502-523`, also `doebuild.py:1522-1544`) writes `build-info/BINPKGMD5`, plus `BUILD_ID`, after the package step.
+
+The remaining rows are build nondeterminism (glibc `.a` archives, and the getconf hardlink debuglink race) or are filed: #330 (fake distdir), #331 (binary replaced mid-run) and #332 (env.d reload per task) (`docs/evidence/2026-10-09-326-z.md`).
+
+Run (from the repo root): `P=$PWD; d=$(mktemp -d -p /dev/shm); mkdir -p $d/s/p; ln -s /nonexistent/abs $d/s/p/abs-link; cd $d/s; $P/rust/target/release/portuale __helper python doins.py --recursive --preserve_symlinks --helper=doins --distdir=/x/ --dest=$d/img p; echo rc=$?; readlink $d/img/p/abs-link` prints `rc=0` and `/nonexistent/abs`. Real `doins.py` keeps the link the same way. Drop `--distdir` and both fail with `FileNotFoundError: [Errno 2] No such file or directory: b'p/abs-link'` (pmtest oracle cases `doins/dangling-abs-{kept,nodistdir}`).

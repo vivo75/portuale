@@ -4676,7 +4676,19 @@ async fn run_commands_async(
         .iter()
         .flat_map(|&c| phase_prerequisites(c))
         .collect();
-    let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
+    // Real `config.environ()` (config.py:3403-3409) also exports the real
+    // distdir as `PORTAGE_ACTUAL_DISTDIR`; `doins` passes it as `--distdir`,
+    // and without it every absolute symlink under `doins -r` is
+    // dereferenced. Real then points `DISTDIR` at a per-package fake
+    // distdir (doebuild.py `_prepare_fake_distdir`); portuale keeps the
+    // real one (#330).
+    let mut extra_env = vec![
+        ("DISTDIR".to_string(), distdir.display().to_string()),
+        (
+            "PORTAGE_ACTUAL_DISTDIR".to_string(),
+            distdir.display().to_string(),
+        ),
+    ];
     extra_env.extend(build_env.iter().cloned());
     if chain.contains(&"unpack") {
         let (a, _aa) = fetch_sources(
@@ -8031,6 +8043,52 @@ mod tests {
 
             let _ = std::fs::remove_dir_all(&portage_tmpdir);
         }
+    }
+
+    /// Real `config.environ()` (`lib/portage/package/ebuild/config.py:3403-3409`)
+    /// exports `PORTAGE_ACTUAL_DISTDIR` as the real `DISTDIR`, and
+    /// `bin/ebuild-helpers/doins:80-82` passes it as `doins.py --distdir`.
+    /// Without it `--distdir` defaults to `""`, which `_parse_args` turns
+    /// into `b"/"`, so `doins -r` dereferences every absolute symlink.
+    /// A dangling one (porttest/helper-doins's `abs-link`, found by the
+    /// #326 Z nopy leg) then fails with `FileNotFoundError`, while real
+    /// Portage installs the link as a link.
+    #[test]
+    fn phases_export_portage_actual_distdir_so_doins_keeps_absolute_symlinks() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/actualdistdirpkg/actualdistdirpkg-1.0.ebuild");
+        let portage_tmpdir = TempDir::new(&format!(
+            "ebuild-phases-test-{}-actual-distdir",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let distdir = portage_tmpdir.join("distfiles");
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &distdir,
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Brush,
+            &[],
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0);
+
+        let builddir = portage_tmpdir.join("portage/dev-libs/actualdistdirpkg-1.0");
+        let observed = std::fs::read_to_string(builddir.join("temp/portage-actual-distdir.txt"))
+            .expect("the install phase should record PORTAGE_ACTUAL_DISTDIR");
+        assert_eq!(observed, distdir.display().to_string());
+        let link = builddir.join("image/usr/share/actualdistdirpkg/payload/abs-link");
+        assert_eq!(
+            std::fs::read_link(&link).expect("abs-link should be installed as a symlink"),
+            Path::new("/usr/share/actualdistdirpkg/not-installed-yet")
+        );
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
 
     /// `pretend` alone (the shortest real prerequisite chain -- see

@@ -1272,6 +1272,15 @@ pub(super) fn errno_line(errno: i32, path: &[u8]) -> Vec<u8> {
     out
 }
 
+/// `ExcType: [Errno n] strerror: b'src' -> b'dst'` (a two-filename
+/// `OSError`, e.g. `os.symlink`).
+fn errno_line2(errno: i32, src: &[u8], dst: &[u8]) -> Vec<u8> {
+    let mut out = errno_line(errno, src);
+    out.extend_from_slice(b" -> ");
+    out.extend_from_slice(&py_bytes_repr(dst));
+    out
+}
+
 /// `ExcType: [Errno n] strerror: 'str-path'` (for the `install`
 /// fallback's `FileNotFoundError: ...: 'install'`).
 fn errno_line_str(errno: i32, path: &str) -> Vec<u8> {
@@ -1882,7 +1891,9 @@ impl Ctx {
             Err(_) => {}
         }
         self.guard.check_parent(dest).map_err(Fatal::Guard)?;
-        c_symlink(linkto, dest).map_err(|e| Fatal::Uncaught(errno_line(e, dest)))
+        // `os.symlink(linkto, dest)` raises with both filenames, which
+        // Python prints as `b'linkto' -> b'dest'`.
+        c_symlink(linkto, dest).map_err(|e| Fatal::Uncaught(errno_line2(e, linkto, dest)))
     }
 
     fn symlink_failed_first_line(&self, relpath: &[u8], source_root: &[u8]) -> Vec<u8> {
@@ -3406,6 +3417,41 @@ mod tests {
     oracle_case!(oracle_phase_defaults_r, "phase-defaults-r");
     oracle_case!(oracle_phase_defaults_files, "phase-defaults-files");
     oracle_case!(oracle_phase_defaults_distfile, "phase-defaults-distfile");
+    oracle_case!(oracle_dangling_abs_kept, "dangling-abs-kept");
+    oracle_case!(oracle_dangling_abs_nodistdir, "dangling-abs-nodistdir");
+
+    /// A failing `os.symlink(linkto, dest)` prints both filenames. Real,
+    /// probed 2026-10-09 (`doins.py --recursive --preserve_symlinks
+    /// --distdir=/x --helper doins --dest /proc/x src/p`, `src/p/abs-link
+    /// -> /nonexistent/abs`): `os.makedirs` under `/proc` fails silently
+    /// to the caller, then the last stderr line is
+    /// `FileNotFoundError: [Errno 2] No such file or directory:
+    /// b'/nonexistent/abs' -> b'/proc/x/p/abs-link'`, rc 1.
+    #[test]
+    fn symlink_failure_names_target_and_dest_like_real() {
+        let tmp = TempDir::new("doins-symlink-fail");
+        std::fs::create_dir_all(tmp.join("src/p")).unwrap();
+        std::os::unix::fs::symlink("/nonexistent/abs", tmp.join("src/p/abs-link")).unwrap();
+        let out = Command::new(portuale_exe())
+            .args(["__helper", "python", "doins.py"])
+            .args(["--recursive", "--preserve_symlinks", "--distdir=/x"])
+            .args(["--helper", "doins", "--dest", "/proc/x", "src/p"])
+            .current_dir(&*tmp)
+            .env_clear()
+            .env("PORTUALE_PORTAGE_CHECKOUT", "/nonexistent")
+            .output()
+            .expect("portuale __helper spawns");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "stderr:\n{stderr}");
+        assert_eq!(
+            stderr.lines().last(),
+            Some(
+                "FileNotFoundError: [Errno 2] No such file or directory: \
+                 b'/nonexistent/abs' -> b'/proc/x/p/abs-link'"
+            ),
+            "stderr:\n{stderr}"
+        );
+    }
 
     // ---- end to end: a real package whose src_install uses doins ----
 
