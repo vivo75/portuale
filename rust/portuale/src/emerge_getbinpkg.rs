@@ -1000,14 +1000,23 @@ pub(crate) fn merge_one_binary_entry(
     display.status(&crate::emerge_build::installing_line(
         entry, &version, progress, root, &color,
     ));
+    // #333: a binary merge is a package task too; real's per-task
+    // `config.reload()` refreshes the protect lists its `dblink` reads
+    // (`emerge_build::reloaded_config_protect`).
+    let reloaded_protect = crate::emerge_build::reloaded_config_protect(merge_options);
     let mut entry_options;
-    let merge_options = match fetched_verify {
-        Some(gpg) => {
-            entry_options = merge_options.clone();
+    let merge_options = if fetched_verify.is_some() || reloaded_protect.is_some() {
+        entry_options = merge_options.clone();
+        if let Some(gpg) = fetched_verify {
             entry_options.gpg_verify = gpg;
-            &entry_options
         }
-        None => merge_options,
+        if let Some((protect, mask)) = reloaded_protect {
+            entry_options.config_protect = protect;
+            entry_options.config_protect_mask = mask;
+        }
+        &entry_options
+    } else {
+        merge_options
     };
     let status = ebuild_merge::merge_binpkg(&binpkg_path, root, portage_tmpdir, merge_options)?;
     if status != 0 {

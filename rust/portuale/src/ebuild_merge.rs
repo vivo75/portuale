@@ -528,6 +528,27 @@ impl MergeOptions {
         self.gpg_verify = crate::binpkg::GpgVerify::from_features(features);
         self.features = features.to_string();
     }
+
+    /// Apply the **resolved** `CONFIG_PROTECT` / `CONFIG_PROTECT_MASK`
+    /// (backlog #333). Real `dblink._get_protect_obj` (`vartree.py:2063-
+    /// 2072`) and quickpkg's `include_config` filter (`vartree.py:2340-
+    /// 2350`) read `settings["CONFIG_PROTECT"]`: the incremental fold of
+    /// env.d, `make.globals`, the profile chain, `make.conf` and the
+    /// calling env (`config.py:2735-2736`), which
+    /// `Config::resolved_incremental` already computes (`emerge --info`
+    /// prints it byte-identical to real). `from_env` read only the
+    /// process env, so a merge started without the login shell's exported
+    /// `CONFIG_PROTECT` protected `/etc` alone. A fold that resolves to
+    /// nothing (`-*`) protects nothing, as in real; a config where no
+    /// layer assigns the key at all keeps the `from_env` value.
+    pub fn apply_config_protect(&mut self, config: &portage_profile::Config) {
+        if let Some(v) = config.resolved_incremental("CONFIG_PROTECT") {
+            self.config_protect = v.join(" ");
+        }
+        if let Some(v) = config.resolved_incremental("CONFIG_PROTECT_MASK") {
+            self.config_protect_mask = v.join(" ");
+        }
+    }
 }
 
 /// Real `ConfigProtect.isprotected()` (`lib/portage/util/__init__.py`):
@@ -7167,6 +7188,47 @@ mod tests {
     /// relying on `MergeOptions::default()` -- see
     /// `protect_owned_alone_aborts_when_an_owner_is_identified` for the
     /// real-default (`protect_owned: true`) case.
+    /// #333: the merge's protect lists are the resolved
+    /// `CONFIG_PROTECT[_MASK]` fold (real `dblink._get_protect_obj`,
+    /// `vartree.py:2063-2072`, reading `settings`), not the raw process
+    /// env `from_env` read. A fold that resolves to nothing (`-*`)
+    /// protects nothing; a key no layer assigned keeps the `from_env`
+    /// value.
+    #[test]
+    fn apply_config_protect_takes_the_resolved_fold() {
+        let layers = |v: &[&[&str]]| -> Vec<Vec<String>> {
+            v.iter()
+                .map(|l| l.iter().map(|t| t.to_string()).collect())
+                .collect()
+        };
+        let mut config = portage_profile::Config::default();
+        config.incremental_sources.insert(
+            "CONFIG_PROTECT".to_string(),
+            layers(&[
+                &["/etc", "/usr/share/gnupg/qualified.txt"],
+                &["/usr/share/cfgprotme"],
+            ]),
+        );
+        let mut options = MergeOptions {
+            config_protect: "/from-env".to_string(),
+            config_protect_mask: "/from-env-mask".to_string(),
+            ..MergeOptions::default()
+        };
+        options.apply_config_protect(&config);
+        assert_eq!(
+            options.config_protect,
+            "/etc /usr/share/cfgprotme /usr/share/gnupg/qualified.txt"
+        );
+        // No layer assigned `CONFIG_PROTECT_MASK`: the `from_env` value stands.
+        assert_eq!(options.config_protect_mask, "/from-env-mask");
+
+        config
+            .incremental_sources
+            .insert("CONFIG_PROTECT".to_string(), layers(&[&["/etc"], &["-*"]]));
+        options.apply_config_protect(&config);
+        assert_eq!(options.config_protect, "");
+    }
+
     #[test]
     fn set_resolved_features_rederives_the_merge_tokens() {
         // #37 S3: the emerge paths replace `from_env`'s raw-FEATURES

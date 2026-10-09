@@ -5749,6 +5749,9 @@ fn run_resume(
         merge_options.install_mask_prunes_usr_share,
     ) = config_install_mask(config);
     merge_options.set_resolved_features(&config_features_string(config));
+    // #333: `CONFIG_PROTECT[_MASK]` from the resolved config, as the
+    // non-resume `emerge` path does.
+    merge_options.apply_config_protect(config);
     // The run-wide phase env and `package.env` vars the non-resume
     // `emerge` path resolves (see `run_wide_phase_env` there):
     // a resumed source build is a real build and needs the same phase
@@ -5923,7 +5926,11 @@ fn execute_unmerge(
     config: &portage_profile::Config,
 ) -> ExitCode {
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
-    let options = ebuild_merge::MergeOptions::from_env(shell, debug);
+    let mut options = ebuild_merge::MergeOptions::from_env(shell, debug);
+    // #333: `FEATURES=unmerge-orphans` keeps what the resolved
+    // `CONFIG_PROTECT` protects (real `dblink.isprotected`), not the
+    // process env's value.
+    options.apply_config_protect(config);
     // Real `dblink._pre_unmerge_backup`: `FEATURES=unmerge-backup` -> a
     // `quickpkg` of each package before it's removed. Its `BINPKG_FORMAT`
     // follows the same resolved chain as every other `PackageOptions`
@@ -15743,6 +15750,10 @@ pub fn run(args: &[String]) -> ExitCode {
             merge_options.install_mask_prunes_usr_share,
         ) = config_install_mask(&config);
         merge_options.set_resolved_features(&config_features_string(&config));
+        // #333: real `dblink` protects `settings["CONFIG_PROTECT"]`, the
+        // resolved fold (calling env included), not the raw process env
+        // `from_env` read (`MergeOptions::apply_config_protect`).
+        merge_options.apply_config_protect(&config);
         // Real `_grab_pkg_env` into `configdict["pkg"]`: a `package.env`
         // entry matching a build-bound package layers its env file's
         // build vars over the run-wide set above.
