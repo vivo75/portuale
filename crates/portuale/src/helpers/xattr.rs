@@ -580,8 +580,108 @@ fn shlex_join(args: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
+fn last_errno() -> i32 {
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(libc::EIO)
+}
+
 /// `os.EX_OSERR` (Portage's `return os.EX_OSERR` on xattr-copy failure).
 const EX_OSERR: i32 = 71;
+
+/// `Which(filename, exclude)`: the first `PATH` entry with an
+/// executable regular file that is not the helper itself ((ino, dev)
+/// comparison, `stat` following links, as Portage's does).
+fn which_install(exclude: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+    let c_excl = std::ffi::CString::new(exclude).map_err(|_| errno_line(libc::EINVAL, exclude))?;
+    let mut st_excl: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::stat(c_excl.as_ptr(), &mut st_excl) } != 0 {
+        return Err(errno_line(last_errno(), exclude));
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join("install");
+        let cand_b = cand.as_os_str().as_bytes();
+        let Ok(c_cand) = std::ffi::CString::new(cand_b) else {
+            continue;
+        };
+        if unsafe { libc::access(c_cand.as_ptr(), libc::X_OK) } != 0 {
+            continue;
+        }
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::stat(c_cand.as_ptr(), &mut st) } != 0 {
+            continue;
+        }
+        // A regular file, and not the excluded helper itself.
+        if (st.st_mode & libc::S_IFMT) != libc::S_IFREG {
+            continue;
+        }
+        if st.st_ino == st_excl.st_ino && st.st_dev == st_excl.st_dev {
+            continue;
+        }
+        return Ok(cand_b.to_vec());
+    }
+    Err(b"install: command not found".to_vec())
+}
+
+/// `copy_xattrs(opts, files)`: 0 on success, else the rc. Prints the
+/// failure line plus Portage's `!!! install:` note.
+fn copy_xattrs_after_install(opts: &InstallOpts, files: &[Vec<u8>], argv: &[Vec<u8>]) -> i32 {
+    if opts.directory || files.is_empty() {
+        return 0;
+    }
+    let (sources, target, target_is_dir) = match &opts.target_directory {
+        None => {
+            let target = files[files.len() - 1].clone();
+            let is_dir = std::fs::metadata(OsStr::from_bytes(&target))
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
+            (files[..files.len() - 1].to_vec(), target, is_dir)
+        }
+        Some(t) => (files.to_vec(), t.clone(), true),
+    };
+    // `PORTAGE_XATTR_EXCLUDE`: missing means empty (Portage's
+    // `os.environ.get(..., "")`).
+    let exclude = std::env::var_os("PORTAGE_XATTR_EXCLUDE").unwrap_or_default();
+    let exclude_b = exclude.as_os_str().as_bytes();
+    // Only `OperationNotSupported` is caught (`EX_OSERR` plus `main`'s
+    // `!!! install:` note). Any other error escapes uncaught: rc 1, no note.
+    let copy = |src: &[u8], dest: &[u8]| -> Result<(), i32> {
+        match copy_xattr(src, dest, exclude_b) {
+            Ok(()) => Ok(()),
+            Err(line) => {
+                stderr_write(&line);
+                stderr_write(b"\n");
+                Err(if line.starts_with(b"OperationNotSupported") {
+                    EX_OSERR
+                } else {
+                    1
+                })
+            }
+        }
+    };
+    let result = if target_is_dir {
+        sources
+            .iter()
+            .try_for_each(|s| copy(s, &join_path(&target, basename_of(s))))
+    } else {
+        copy(&files[0], &target)
+    };
+    match result {
+        Ok(()) => 0,
+        Err(EX_OSERR) => {
+            // `portage.util.writemsg(..., noiselevel=-1)`: plain stderr.
+            let mut note = Vec::from(
+                b"!!! install: copy_xattrs failed with the following arguments: ".as_slice(),
+            );
+            note.extend_from_slice(&shlex_join(argv));
+            note.push(b'\n');
+            stderr_write(&note);
+            EX_OSERR
+        }
+        Err(rc) => rc,
+    }
+}
 
 #[cfg(test)]
 mod tests {
