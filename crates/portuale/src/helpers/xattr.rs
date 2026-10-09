@@ -262,6 +262,131 @@ struct InstallOpts {
     target_directory: Option<Vec<u8>>,
 }
 
+/// `parse_args`: argparse (`add_help=False`, `parse_known_args`) for the
+/// known options, then the files loop over the extras. A known option's
+/// value is consumed, so never a file. Only `--directory` and
+/// `--target-directory` matter downstream.
+fn parse_install_args(args: &[OsString]) -> (InstallOpts, Vec<Vec<u8>>) {
+    // Long options in `add_argument` order, and whether each takes a
+    // value (`action="store"`).
+    const LONGS: &[(&str, bool)] = &[
+        ("backup", true),
+        ("compare", false),
+        ("directory", false),
+        ("owner", true),
+        ("group", true),
+        ("mode", true),
+        ("preserve-timestamps", false),
+        ("strip", false),
+        ("strip-program", true),
+        ("suffix", true),
+        ("target-directory", true),
+        ("no-target-directory", false),
+        ("verbose", false),
+        ("help", false),
+        ("version", false),
+    ];
+    // Short options: flags, and the ones taking a value.
+    const SHORT_FLAGS: &[u8] = b"bcCdDpsTv";
+    const SHORT_VALUED: &[u8] = b"ogmSt";
+    let mut opts = InstallOpts {
+        directory: false,
+        target_directory: None,
+    };
+    let raw_args: Vec<Vec<u8>> = args.iter().map(|a| raw(a).to_vec()).collect();
+    let long_names: Vec<&str> = LONGS.iter().map(|(n, _)| *n).collect();
+    let mut extras: Vec<Vec<u8>> = Vec::new();
+    let mut pos = 0;
+    while pos < raw_args.len() {
+        let tok = &raw_args[pos];
+        if tok == b"--" {
+            extras.extend(raw_args[pos..].iter().cloned());
+            break;
+        }
+        if tok.len() > 1 && tok.starts_with(b"-") {
+            if tok.starts_with(b"--") {
+                let body = &tok[2..];
+                let (name, inline) = match body.iter().position(|c| *c == b'=') {
+                    Some(p) => (&body[..p], Some(&body[p + 1..])),
+                    None => (body, None),
+                };
+                match match_long(name, &long_names) {
+                    Ok(idx) => {
+                        let (lname, valued) = LONGS[idx];
+                        let value = if valued && inline.is_none() {
+                            pos += 1;
+                            raw_args.get(pos).cloned()
+                        } else {
+                            inline.map(<[u8]>::to_vec)
+                        };
+                        match lname {
+                            "directory" => opts.directory = true,
+                            "target-directory" => opts.target_directory = value,
+                            _ => {}
+                        }
+                    }
+                    // Unknown (or ambiguous) longs: extras.
+                    Err(_) => extras.push(tok.clone()),
+                }
+                pos += 1;
+                continue;
+            }
+            // A short cluster: flags, then possibly one valued option
+            // taking the rest of the token or the next token. An
+            // unknown first short is an extra; the files loop skips
+            // dash tokens either way.
+            let rest = &tok[1..];
+            if !SHORT_FLAGS.contains(&rest[0]) && !SHORT_VALUED.contains(&rest[0]) {
+                extras.push(tok.clone());
+                pos += 1;
+                continue;
+            }
+            let mut off = 0;
+            while off < rest.len() {
+                let c = rest[off];
+                if SHORT_VALUED.contains(&c) {
+                    let inline = &rest[off + 1..];
+                    let inline = inline.strip_prefix(b"=").unwrap_or(inline);
+                    let value = if inline.is_empty() {
+                        pos += 1;
+                        raw_args.get(pos).cloned()
+                    } else {
+                        Some(inline.to_vec())
+                    };
+                    if c == b't' {
+                        opts.target_directory = value;
+                    }
+                    break;
+                }
+                if c == b'd' {
+                    opts.directory = true;
+                }
+                off += 1;
+            }
+            pos += 1;
+            continue;
+        }
+        extras.push(tok.clone());
+        pos += 1;
+    }
+    // Portage's files loop, verbatim, over the extras: non-dash args
+    // before a `--`, everything after it.
+    let mut files: Vec<Vec<u8>> = Vec::new();
+    let mut i = 0;
+    while i < extras.len() {
+        if extras[i] == b"--" {
+            i += 1;
+            break;
+        }
+        if !extras[i].starts_with(b"-") {
+            files.push(extras[i].clone());
+        }
+        i += 1;
+    }
+    files.extend(extras[i..].iter().cloned());
+    (opts, files)
+}
+
 /// `shlex.join(args)`: quote for the `copy_xattrs failed` note.
 fn shlex_join(args: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
