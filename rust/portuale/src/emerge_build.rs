@@ -323,6 +323,23 @@ pub fn run_buildpkgonly(
     }
 }
 
+/// Real `Scheduler._allocate_config` (`Scheduler.py:1899-1913`) calls
+/// `config.reload()` for every package task, and `reload()` re-reads
+/// `env.d` (`config.py:2691-2699`), so a package built after a merge that
+/// installed an `/etc/env.d/*` file (and ran `env-update`) sees the new
+/// variables (backlog #332). Returns the reloaded config when
+/// `<eroot>/etc/profile.env` changed since `config` was resolved (or last
+/// reloaded), `None` otherwise -- the caller then keeps its old code path
+/// byte for byte. A config without a recorded `eroot` never reloads.
+fn env_d_reloaded(config: &portage_profile::Config) -> Option<portage_profile::Config> {
+    if config.envd_eroot.as_os_str().is_empty() || !config.env_d_changed(&config.envd_eroot) {
+        return None;
+    }
+    let mut reloaded = config.clone();
+    reloaded.reload_env_d(&config.envd_eroot);
+    Some(reloaded)
+}
+
 /// [`run_buildpkgonly`]'s per-entry `config.environ()` (backlog #129):
 /// `run_wide` plus `entry`'s matched `package.env` build vars
 /// ([`matched_package_env_vars`], layered before the tail so an
@@ -340,6 +357,15 @@ fn buildpkgonly_entry_build_env(
     cpv_slot: &str,
     run_wide: &[(String, String)],
 ) -> Vec<(String, String)> {
+    // Backlog #332: a package task re-reads env.d (`env_d_reloaded`).
+    // `run_wide` was computed once at the top of the run; when
+    // `profile.env` changed since, recompute it from the reloaded config.
+    let reloaded = env_d_reloaded(config);
+    let (config, run_wide) = match &reloaded {
+        Some(r) => (r, run_wide_phase_env(r)),
+        None => (config, run_wide.to_vec()),
+    };
+    let run_wide = run_wide.as_slice();
     let profile_only_variables = config
         .resolved_incremental("PROFILE_ONLY_VARIABLES")
         .unwrap_or_default();
@@ -1155,7 +1181,13 @@ fn entry_build_env(
 ) -> Vec<(String, String)> {
     let candidate = entry_version(&entry.outcome)
         .and_then(|version| locate_candidate(repos, &entry.category, &entry.package, version));
-    let mut env = options.build_env.clone();
+    // Backlog #332: re-read env.d for this package task
+    // (`env_d_reloaded`); unchanged `profile.env` keeps the old path.
+    let reloaded = options.resolved_config.as_deref().and_then(env_d_reloaded);
+    let mut env = match &reloaded {
+        Some(r) => run_wide_phase_env(r),
+        None => options.build_env.clone(),
+    };
     env.extend(entry_package_env_vars(options, entry));
     // Per-package `FEATURES` (#98): the folded per-entry list overrides
     // the run-wide `FEATURES`/`PORTAGE_FEATURES` pair downstream
@@ -1168,7 +1200,7 @@ fn entry_build_env(
         env.push(("PORTAGE_FEATURES".to_string(), features));
     }
     env.extend(entry_phase_env_tail(
-        options.resolved_config.as_deref(),
+        reloaded.as_ref().or(options.resolved_config.as_deref()),
         repos,
         entry,
         candidate.as_ref(),
@@ -1181,7 +1213,7 @@ fn entry_build_env(
     // on the config-less paths (`None`: pairs-then-env only).
     crate::ebuild_package::refresh_entry_compression_command(
         &mut env,
-        options.resolved_config.as_deref(),
+        reloaded.as_ref().or(options.resolved_config.as_deref()),
     );
     env
 }
@@ -4054,6 +4086,133 @@ mod tests {
             let _ = fs::remove_dir_all(&root);
             let _ = fs::remove_dir_all(&portage_tmpdir);
         }
+    }
+
+    /// Backlog #332: real `Scheduler._allocate_config`
+    /// (`Scheduler.py:1899-1913`) calls `config.reload()` for every
+    /// package task, which re-reads `env.d` (`config.py:2691-2699`).
+    /// `entry_build_env` is portuale's `_allocate_config` point: once
+    /// `<eroot>/etc/profile.env` changes after the config was resolved,
+    /// the env it returns carries the new variable; with `profile.env`
+    /// untouched it equals the pre-#332 env exactly (fast path).
+    /// Expected value from real source (`config.py:2691-2699`), the bed
+    /// finding being `PT_HELPER_DOINS` missing from later packages.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn entry_build_env_rereads_profile_env_changed_after_resolve() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let eroot = tempdir();
+        fs::create_dir_all(eroot.join("etc")).unwrap();
+        fs::write(eroot.join("etc/profile.env"), "export ENVDRELOAD_OLD='x'\n").unwrap();
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["amd64".to_string()];
+        config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
+        config.envd_eroot = eroot.clone();
+        config.envd_raw = "export ENVDRELOAD_OLD='x'\n".to_string();
+        config
+            .envd_vars
+            .insert("ENVDRELOAD_OLD".to_string(), "x".to_string());
+        config
+            .other_vars
+            .insert("ENVDRELOAD_OLD".to_string(), "x".to_string());
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.build_env = run_wide_phase_env(&config);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+        let entry = source_entry(
+            "archusepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let before = entry_build_env(&options, &entry, &repos);
+        assert_eq!(before, entry_build_env(&options, &entry, &repos));
+        assert!(before.iter().all(|(k, _)| k != "ENVDRELOAD_VAR"));
+
+        // A merge ran `env-update`: the file now carries a new variable.
+        fs::write(
+            eroot.join("etc/profile.env"),
+            "export ENVDRELOAD_OLD='x'\nexport ENVDRELOAD_VAR='1'\n",
+        )
+        .unwrap();
+        let after = entry_build_env(&options, &entry, &repos);
+        let last = |k: &str| {
+            after
+                .iter()
+                .rev()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(last("ENVDRELOAD_VAR"), Some("1"));
+        assert_eq!(last("ENVDRELOAD_OLD"), Some("x"));
+        assert_eq!(last("SLOT"), Some("0"));
+        let _ = fs::remove_dir_all(&eroot);
+    }
+
+    /// Backlog #332 end to end: `envdreload-a` installs
+    /// `/etc/env.d/99envdreload` (`ENVDRELOAD_VAR=1`); the merge's
+    /// `env-update` rewrites `<root>/etc/profile.env`; `envdreload-b`,
+    /// built afterwards in the same run, must see the variable in its
+    /// `src_install` (real reloads config before every package task,
+    /// `Scheduler._allocate_config`), as the bed's `helper-doins` /
+    /// `PT_HELPER_DOINS` pair showed.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn source_merge_second_package_sees_env_d_installed_by_the_first() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["amd64".to_string()];
+        config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
+        config.envd_eroot = root.clone();
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.build_env = run_wide_phase_env(&config);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+        options.features = "noclean".to_string();
+        let entries = vec![
+            source_entry(
+                "envdreload-a",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "envdreload-b",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("source merge succeeds");
+        let seen =
+            portage_tmpdir.join("portage/dev-libs/envdreload-b-1.0/temp/envdreload-seen.txt");
+        assert_eq!(fs::read_to_string(seen).unwrap(), "ENVDRELOAD_VAR=1\n");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
     }
 
     /// #160: real `config.environ()`'s `filter_calling_env`
