@@ -3211,11 +3211,10 @@ fn portuale_bin_value() -> String {
         exe.push("portuale");
         exe.display().to_string()
     }
+    // #331: resolved once at startup, never `<path> (deleted)`.
     #[cfg(not(test))]
     {
-        std::env::current_exe()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "portuale".to_string())
+        crate::self_exe::self_exe().display().to_string()
     }
 }
 
@@ -5850,6 +5849,90 @@ mod tests {
             }
             assert_eq!(lines[3], format!("bin={}", portuale_bin.display()), "{got}");
         }
+    }
+
+    /// #331: replacing the running binary's file mid-run must not break
+    /// the later phases. `pkg_setup` atomically replaces `PORTUALE_BIN`
+    /// (a private copy of the release binary, the way `cargo build` or a
+    /// merge of a new portuale does), then `src_unpack` calls
+    /// `has_version` through `portageq-wrapper`. Before the fix the
+    /// second phase got `PORTUALE_BIN=<path> (deleted)` from
+    /// `current_exe()` and the shim died with `No such file or
+    /// directory`. Real Portage has no self-exec: its helpers are files
+    /// under `PORTAGE_BIN_PATH` that a portage merge replaces in place,
+    /// and later phases run the new files, which is what a path resolved
+    /// once gives too.
+    #[test]
+    fn replacing_the_running_binary_mid_run_keeps_later_phases_working() {
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let fx = fx.canonicalize().unwrap();
+        let tmp = TempDir::new("ebuild-phases-test-self-replace").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/selfreplacepkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let out = tmp.join("out");
+        std::fs::write(
+            pkg_dir.join("selfreplacepkg-1.0.ebuild"),
+            format!(
+                "EAPI=8\nSLOT=\"0\"\nS=\"${{WORKDIR}}\"\n\
+                 pkg_setup() {{\n\
+                 \tcp \"${{PORTUALE_BIN}}\" \"${{PORTUALE_BIN}}.new\" || die\n\
+                 \tmv -f \"${{PORTUALE_BIN}}.new\" \"${{PORTUALE_BIN}}\" || die\n}}\n\
+                 src_unpack() {{\n\
+                 \techo \"bin=${{PORTUALE_BIN}}\" >> {o}\n\
+                 \thas_version -r dev-libs/samepkg && echo yes >> {o} || echo no >> {o}\n}}\n",
+                o = out.display()
+            ),
+        )
+        .unwrap();
+
+        let mut release = std::env::current_exe().expect("current test exe");
+        release.pop();
+        if release.ends_with("deps") {
+            release.pop();
+        }
+        release.push("portuale");
+        let bin = tmp.join("bin/portuale");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        // An external `cp`, not `std::fs::copy`: a sibling test thread that
+        // forks while this process holds the copy open for writing would
+        // keep that fd until its exec, and exec'ing the copy then fails
+        // with ETXTBSY.
+        let cp = std::process::Command::new("cp")
+            .arg(&release)
+            .arg(&bin)
+            .status()
+            .unwrap();
+        assert!(cp.success());
+
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let o = std::process::Command::new(&bin)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", std::env::var("HOME").unwrap_or_default())
+            .env("ROOT", &fx)
+            .env("PORTAGE_TMPDIR", &portage_tmpdir)
+            .args([
+                "ebuild",
+                pkg_dir.join("selfreplacepkg-1.0.ebuild").to_str().unwrap(),
+                "unpack",
+            ])
+            .output()
+            .expect("portuale ebuild spawns");
+        let got = std::fs::read_to_string(&out).unwrap_or_default();
+        assert!(
+            o.status.success(),
+            "{:?}\n{got}\n{}",
+            o.status,
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert_eq!(
+            got,
+            format!("bin={}\nyes\n", bin.display()),
+            "{}",
+            String::from_utf8_lossy(&o.stderr)
+        );
     }
 
     /// #326 S2/D6: `PORTAGE_IPC_DAEMON=1` in the calling environment must
