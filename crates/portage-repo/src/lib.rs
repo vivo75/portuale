@@ -13547,44 +13547,28 @@ fn resolve_root_deps_build_entries(
         return Vec::new();
     }
     let Ok(outcome) = resolve_pretend(
-        repos,
-        running_root,
+        &SelectSource {
+            repos,
+            root: running_root,
+            config,
+            local_binpkg,
+        },
         atom_str,
-        config,
-        false,
-        false,
-        false,
-        &[],
-        false,
-        true,
-        false,
-        true,
-        false,
-        false,
-        false,
-        false,
-        &[],
-        &[],
-        false,
-        None,
-        false,
-        // `--emptytree` deliberately does not reach `--root-deps`
-        // running-root build entries -- a narrow, documented
-        // non-interaction (this resolver is its own path, and
-        // `-e --root-deps` is an exotic combination).
-        false,
-        // Likewise `--getbinpkg`: a `--root-deps` build entry is always
-        // an ebuild built against the running root.
-        false,
-        // `--autounmask` keyword / USE resolution is a target-`ROOT`
-        // concern (`resolve_pretend_graph`); a `--root-deps` running-root
-        // build entry never applies either.
-        false,
-        false,
-        false,
-        false,
-        &[],
-        local_binpkg,
+        &SelectOptions {
+            // `--emptytree` deliberately does not reach `--root-deps`
+            // running-root build entries -- a narrow, documented
+            // non-interaction (this resolver is its own path, and
+            // `-e --root-deps` is an exotic combination).
+            empty: false,
+            // Likewise `--getbinpkg`: a `--root-deps` build entry is always
+            // an ebuild built against the running root.
+            getbinpkg: false,
+            // `--autounmask` keyword / USE resolution is a target-`ROOT`
+            // concern (`resolve_pretend_graph`); a `--root-deps` running-root
+            // build entry never applies either.
+            autounmask_keywords: false,
+            ..SelectOptions::default()
+        },
     ) else {
         return Vec::new();
     };
@@ -13973,97 +13957,149 @@ fn is_instance_only_mask(constraint: &str) -> bool {
 // and test) for a single-slice-sized addition of one more CLI flag
 // alongside six already threaded the same way -- not worth it, same
 // reasoning as resolve_pretend_graph's own identical allow below.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
+/// Where [`resolve_pretend`] selects from: the repos, the target root,
+/// its config and the local binary-package index.
+#[derive(Clone, Copy)]
+pub struct SelectSource<'a> {
+    pub repos: &'a [RepoConfig],
+    pub root: &'a Path,
+    pub config: &'a portage_profile::Config,
+    pub local_binpkg: &'a std::sync::Arc<BinaryIndex>,
+}
+
+/// The emerge options that shape one [`resolve_pretend`] selection.
+/// `Default` is emerge with no option given (`--with-bdeps` and
+/// `--selective` on, everything else off) for a dependency atom.
+#[derive(Debug, Clone, Copy)]
+pub struct SelectOptions<'a> {
+    pub newuse: bool,
+    pub changed_use: bool,
+    pub update: bool,
+    pub excluded: &'a [String],
+    pub changed_deps: bool,
+    pub with_bdeps: bool,
+    pub changed_slot: bool,
+    pub selective: bool,
+    pub is_top_level: bool,
+    pub usepkg: bool,
+    pub usepkgonly: bool,
+    pub binpkg_respect_use: bool,
+    pub usepkg_exclude: &'a [String],
+    pub usepkg_include: &'a [String],
+    pub rebuilt_binaries: bool,
+    pub rebuilt_binaries_timestamp: Option<u64>,
+    pub newrepo: bool,
+    pub empty: bool,
+    pub getbinpkg: bool,
+    pub autounmask_keywords: bool,
+    pub autounmask_use: bool,
+    pub autounmask_license: bool,
+    pub autounmask_masks: bool,
+    pub extra_constraints: &'a [String],
+}
+
+impl Default for SelectOptions<'_> {
+    fn default() -> Self {
+        Self {
+            newuse: false,
+            changed_use: false,
+            update: false,
+            excluded: &[],
+            changed_deps: false,
+            with_bdeps: true,
+            changed_slot: false,
+            selective: true,
+            is_top_level: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: &[],
+            usepkg_include: &[],
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            empty: false,
+            getbinpkg: false,
+            autounmask_keywords: false,
+            autounmask_use: false,
+            autounmask_license: false,
+            autounmask_masks: false,
+            extra_constraints: &[],
+        }
+    }
+}
+
+impl ResolveCtx<'_> {
+    /// The selection options this walk passes for every atom, with
+    /// `bp`'s autounmask switches; callers set `is_top_level` and
+    /// `extra_constraints` per atom.
+    fn select_options(&self, bp: &BacktrackParams) -> SelectOptions<'_> {
+        SelectOptions {
+            newuse: self.newuse,
+            changed_use: self.changed_use,
+            update: self.update,
+            excluded: self.excluded,
+            changed_deps: self.changed_deps,
+            with_bdeps: self.with_bdeps,
+            changed_slot: self.changed_slot,
+            selective: self.selective,
+            usepkg: self.usepkg,
+            usepkgonly: self.usepkgonly,
+            binpkg_respect_use: self.binpkg_respect_use,
+            usepkg_exclude: self.usepkg_exclude,
+            usepkg_include: self.usepkg_include,
+            rebuilt_binaries: self.rebuilt_binaries,
+            rebuilt_binaries_timestamp: self.rebuilt_binaries_timestamp,
+            newrepo: self.newrepo,
+            empty: self.empty,
+            getbinpkg: self.getbinpkg,
+            autounmask_keywords: bp.autounmask_suggest_keywords,
+            autounmask_use: bp.autounmask_suggest_use,
+            autounmask_license: bp.autounmask_suggest_license,
+            autounmask_masks: bp.autounmask_suggest_masks,
+            is_top_level: false,
+            extra_constraints: &[],
+        }
+    }
+}
+
 pub fn resolve_pretend(
-    repos: &[RepoConfig],
-    root: &Path,
+    source: &SelectSource,
     atom_str: &str,
-    config: &portage_profile::Config,
-    newuse: bool,
-    changed_use: bool,
-    update: bool,
-    excluded: &[String],
-    changed_deps: bool,
-    with_bdeps: bool,
-    changed_slot: bool,
-    selective: bool,
-    is_top_level: bool,
-    usepkg: bool,
-    usepkgonly: bool,
-    binpkg_respect_use: bool,
-    usepkg_exclude: &[String],
-    usepkg_include: &[String],
-    rebuilt_binaries: bool,
-    rebuilt_binaries_timestamp: Option<u64>,
-    newrepo: bool,
-    // `--emptytree`/`-e` (real `create_depgraph_params.py:176-179`:
-    // `myparams["empty"] = True; myparams["deep"] = True;
-    // myparams.pop("selective")`). Real portage stops selecting
-    // installed packages as candidates (`depgraph.py:7889`), so every
-    // atom in the (now forced-deep) tree resolves to a merge. This
-    // portuale's candidate pool is already tree-only; `empty` just (a)
-    // clears `selective` locally and (b) turns every "already
-    // installed at the resolved version" result into a bare
-    // `Reinstall` (real `output.py`: `attr_display.replace` from
-    // `vardb.cpv_exists` -> the `R` column, no `[oldver]`, no reason).
-    empty: bool,
-    // `--getbinpkg`/`-g` -- also pull *remote* binary candidates from
-    // `config.binrepos` (see `resolve_pretend_graph`'s own doc comment).
-    getbinpkg: bool,
-    // Real `--autounmask` keyword resolution (`--autounmask-keep-keywords=n`,
-    // default only once `--autounmask` is explicit -- see
-    // `resolve_pretend_graph`'s `autounmask_suggest_keywords`): when set, a
-    // candidate masked by `KEYWORDS` *alone* (`keyword_masked_only`) is
-    // treated as visible -- real portage's implicit `=cpv ~arch` change.
-    // The resulting entry's `[ebuild N ~]` marker (`keyword_mask_marker`,
-    // which already keys off the candidate's own `~<arch>` token, not
-    // `package.accept_keywords`) reflects it, and the caller records the
-    // change for the `The following keyword changes are necessary to
-    // proceed:` block.
-    autounmask_keywords: bool,
-    // Real `--autounmask-use` USE resolution (`resolve_pretend_graph`'s
-    // `autounmask_suggest_use`, on by default): when set, a candidate
-    // that is `is_visible` but whose atom use-deps don't match its
-    // default USE state is kept anyway *if* a `package.use` flip would
-    // fix it (`suggested_use_flip` is `Some`) -- real portage applies
-    // the implicit `=cpv <flags>` change and re-resolves. The caller
-    // then re-detects the flip, applies it to the entry's effective USE
-    // (so `-pv`'s `USE="…"` line, REQUIRED_USE and the dep walk all see
-    // the adjusted state), and records the change for the `The following
-    // USE changes are necessary to proceed:` block.
-    autounmask_use: bool,
-    // Real `--autounmask-license` (`resolve_pretend_graph`'s
-    // `autounmask_suggest_license`; real default `"y"` only once
-    // `--autounmask` itself is explicit): when set, a candidate masked
-    // by its `LICENSE` *alone* (`license_masked_only`) is treated as
-    // visible -- real portage's implicit `package.license` accept. The
-    // caller records the missing licenses for the `The following license
-    // changes are necessary to proceed:` block.
-    autounmask_license: bool,
-    // Real `--autounmask-keep-masks=n` (`resolve_pretend_graph`'s
-    // `autounmask_suggest_masks`; real keeps masks by DEFAULT, only `=n`
-    // unmasks): when set, a candidate masked by `package.mask` *alone*
-    // (`mask_masked_only`) is treated as visible -- real portage's
-    // implicit `package.unmask` entry. The caller records the `=<cpv>`
-    // for the `The following mask changes are necessary to proceed:`
-    // block.
-    autounmask_masks: bool,
-    // Slot-conflict reconciliation (real `_process_slot_conflicts`): extra
-    // atom texts the winning candidate must ALSO satisfy, beyond
-    // `atom_str` itself. `resolve_pretend_graph` supplies the other parent
-    // atoms that targeted the same `cat/pkg:slot` when re-resolving a
-    // conflicted package. An entry beginning with `!` is a *negative*
-    // constraint (real backtracking's `runtime_pkg_mask`): the winning
-    // candidate must NOT match the atom after the `!`. Empty (`&[]`) at
-    // every ordinary call site.
-    extra_constraints: &[String],
-    // The run's already-built local `$PKGDIR` binary index (backlog #123:
-    // threaded as an `Arc` from `ResolveCtx`, never re-derived from
-    // `&Config` here -- the old per-call memo keyed on the scanned
-    // `Vec`'s raw pointer). Consulted only under `--usepkg`/`--usepkgonly`.
-    local_binpkg: &std::sync::Arc<BinaryIndex>,
+    opts: &SelectOptions,
 ) -> Result<PretendOutcome, Error> {
+    let SelectSource {
+        repos,
+        root,
+        config,
+        local_binpkg,
+    } = *source;
+    let SelectOptions {
+        newuse,
+        changed_use,
+        update,
+        excluded,
+        changed_deps,
+        with_bdeps,
+        changed_slot,
+        selective,
+        is_top_level,
+        usepkg,
+        usepkgonly,
+        binpkg_respect_use,
+        usepkg_exclude,
+        usepkg_include,
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        newrepo,
+        empty,
+        getbinpkg,
+        autounmask_keywords,
+        autounmask_use,
+        autounmask_license,
+        autounmask_masks,
+        extra_constraints,
+    } = *opts;
     // Real `create_depgraph_params.py:179`: `--emptytree` does
     // `myparams.pop("selective", None)`.
     let selective = selective && !empty;
@@ -25784,35 +25820,17 @@ fn delta_atom_cleanly_reuses_resolved_slot(
         ctx.root
     };
     let Ok(outcome) = resolve_pretend(
-        &ctx.repos,
-        select_root,
+        &SelectSource {
+            repos: &ctx.repos,
+            root: select_root,
+            config,
+            local_binpkg: &ctx.local_binpkg,
+        },
         evaluated,
-        config,
-        ctx.newuse,
-        ctx.changed_use,
-        ctx.update,
-        ctx.excluded,
-        ctx.changed_deps,
-        ctx.with_bdeps,
-        ctx.changed_slot,
-        ctx.selective,
-        false,
-        ctx.usepkg,
-        ctx.usepkgonly,
-        ctx.binpkg_respect_use,
-        ctx.usepkg_exclude,
-        ctx.usepkg_include,
-        ctx.rebuilt_binaries,
-        ctx.rebuilt_binaries_timestamp,
-        ctx.newrepo,
-        ctx.empty,
-        ctx.getbinpkg,
-        bp.autounmask_suggest_keywords,
-        bp.autounmask_suggest_use,
-        bp.autounmask_suggest_license,
-        bp.autounmask_suggest_masks,
-        extra_constraints,
-        &ctx.local_binpkg,
+        &SelectOptions {
+            extra_constraints,
+            ..ctx.select_options(bp)
+        },
     ) else {
         return false;
     };
@@ -28834,35 +28852,18 @@ fn arg_pinned_installed_reuse(
                 continue;
             }
             let Ok(outcome) = resolve_pretend(
-                &ctx.repos,
-                atom_root,
+                &SelectSource {
+                    repos: &ctx.repos,
+                    root: atom_root,
+                    config,
+                    local_binpkg: &ctx.local_binpkg,
+                },
                 t,
-                config,
-                ctx.newuse,
-                ctx.changed_use,
-                ctx.update,
-                ctx.excluded,
-                ctx.changed_deps,
-                ctx.with_bdeps,
-                ctx.changed_slot,
-                ctx.selective,
-                true,
-                ctx.usepkg,
-                ctx.usepkgonly,
-                ctx.binpkg_respect_use,
-                ctx.usepkg_exclude,
-                ctx.usepkg_include,
-                ctx.rebuilt_binaries,
-                ctx.rebuilt_binaries_timestamp,
-                ctx.newrepo,
-                ctx.empty,
-                ctx.getbinpkg,
-                bp.autounmask_suggest_keywords,
-                bp.autounmask_suggest_use,
-                bp.autounmask_suggest_license,
-                bp.autounmask_suggest_masks,
-                extra_constraints,
-                &ctx.local_binpkg,
+                &SelectOptions {
+                    is_top_level: true,
+                    extra_constraints,
+                    ..ctx.select_options(bp)
+                },
             ) else {
                 continue;
             };
@@ -29279,35 +29280,18 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 ctx.root
             };
             resolve_pretend(
-                &ctx.repos,
-                select_root,
+                &SelectSource {
+                    repos: &ctx.repos,
+                    root: select_root,
+                    config,
+                    local_binpkg: &ctx.local_binpkg,
+                },
                 a,
-                config,
-                ctx.newuse,
-                ctx.changed_use,
-                ctx.update,
-                ctx.excluded,
-                ctx.changed_deps,
-                ctx.with_bdeps,
-                ctx.changed_slot,
-                ctx.selective,
-                depth == 0,
-                ctx.usepkg,
-                ctx.usepkgonly,
-                ctx.binpkg_respect_use,
-                ctx.usepkg_exclude,
-                ctx.usepkg_include,
-                ctx.rebuilt_binaries,
-                ctx.rebuilt_binaries_timestamp,
-                ctx.newrepo,
-                ctx.empty,
-                ctx.getbinpkg,
-                bp.autounmask_suggest_keywords,
-                bp.autounmask_suggest_use,
-                bp.autounmask_suggest_license,
-                bp.autounmask_suggest_masks,
-                extra_constraints,
-                &ctx.local_binpkg,
+                &SelectOptions {
+                    is_top_level: depth == 0,
+                    extra_constraints,
+                    ..ctx.select_options(bp)
+                },
             )
         };
         let complete_locked = ctx.complete
@@ -29706,35 +29690,17 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 break 'parent_flip (current_atom, atom);
             };
             let re_outcome = resolve_pretend(
-                &ctx.repos,
-                ctx.root,
+                &SelectSource {
+                    repos: &ctx.repos,
+                    root: ctx.root,
+                    config,
+                    local_binpkg: &ctx.local_binpkg,
+                },
                 &re_atom,
-                config,
-                ctx.newuse,
-                ctx.changed_use,
-                ctx.update,
-                ctx.excluded,
-                ctx.changed_deps,
-                ctx.with_bdeps,
-                ctx.changed_slot,
-                ctx.selective,
-                depth == 0,
-                ctx.usepkg,
-                ctx.usepkgonly,
-                ctx.binpkg_respect_use,
-                ctx.usepkg_exclude,
-                ctx.usepkg_include,
-                ctx.rebuilt_binaries,
-                ctx.rebuilt_binaries_timestamp,
-                ctx.newrepo,
-                ctx.empty,
-                ctx.getbinpkg,
-                bp.autounmask_suggest_keywords,
-                bp.autounmask_suggest_use,
-                bp.autounmask_suggest_license,
-                bp.autounmask_suggest_masks,
-                &[],
-                &ctx.local_binpkg,
+                &SelectOptions {
+                    is_top_level: depth == 0,
+                    ..ctx.select_options(bp)
+                },
             )?;
             if matches!(re_outcome, PretendOutcome::NoVisibleCandidate) {
                 break 'parent_flip (current_atom, atom);
@@ -38001,35 +37967,17 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
             &atom_str,
-            &test_config(),
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&test_config()),
+            &SelectOptions {
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -38040,35 +37988,18 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
             &atom_str,
-            &test_config(),
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            /* empty: */ true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&test_config()),
+            &SelectOptions {
+                is_top_level: true,
+                empty: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -38086,35 +38017,19 @@ mod tests {
         // dev-libs/samepkg: installed (vdb), has an ebuild, has no binpkg.
         let call = |usepkgonly: bool, is_top_level: bool| {
             resolve_pretend(
-                &repos,
-                &root,
+                &SelectSource {
+                    repos: &repos,
+                    root: &root,
+                    config: &test_config(),
+                    local_binpkg: &build_local_binpkg_index(&test_config()),
+                },
                 "dev-libs/samepkg",
-                &test_config(),
-                false,
-                false,
-                false,
-                &[],
-                false,
-                true,
-                false,
-                false, // selective
-                is_top_level,
-                false, // usepkg
-                usepkgonly,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &build_local_binpkg_index(&test_config()),
+                &SelectOptions {
+                    selective: false,
+                    is_top_level,
+                    usepkgonly,
+                    ..SelectOptions::default()
+                },
             )
             .expect("resolve_pretend(dev-libs/samepkg) failed")
         };
@@ -38168,35 +38083,22 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let call = |is_top_level: bool| {
             resolve_pretend(
-                &repos,
-                &root,
+                &SelectSource {
+                    repos: &repos,
+                    root: &root,
+                    config: &test_config(),
+                    local_binpkg: &build_local_binpkg_index(&test_config()),
+                },
                 "dev-libs/reinstslottarget:0/1=",
-                &test_config(),
-                true,  // newuse
-                false, // changed_use
-                true,  // update
-                &[],
-                false, // changed_deps
-                false, // with_bdeps
-                true,  // changed_slot
-                true,  // selective (real sets it with --update)
-                is_top_level,
-                false, // usepkg
-                false, // usepkgonly
-                false, // binpkg_respect_use
-                &[],
-                &[],
-                false, // rebuilt_binaries
-                None,
-                false, // newrepo
-                false, // empty
-                false, // getbinpkg
-                false, // autounmask_keywords
-                false, // autounmask_use
-                false, // autounmask_license
-                false, // autounmask_masks
-                &[],
-                &build_local_binpkg_index(&test_config()),
+                &SelectOptions {
+                    newuse: true,
+                    update: true,
+                    with_bdeps: false,
+                    changed_slot: true,
+                    // selective (real sets it with --update)
+                    is_top_level,
+                    ..SelectOptions::default()
+                },
             )
             .expect("resolve_pretend(dev-libs/reinstslottarget:0/1=) failed")
         };
@@ -38218,35 +38120,20 @@ mod tests {
         // `dev-libs/flipinstdep[wantflag]`.
         let call = |autounmask_use: bool| {
             resolve_pretend(
-                &repos,
-                &root,
+                &SelectSource {
+                    repos: &repos,
+                    root: &root,
+                    config: &test_config(),
+                    local_binpkg: &build_local_binpkg_index(&test_config()),
+                },
                 "dev-libs/flipinstdep[wantflag]",
-                &test_config(),
-                false,
-                false,
-                false,
-                &[],
-                false,
-                true,
-                false,
-                false, // selective
-                false, // is_top_level (a dependency)
-                false, // usepkg
-                false, // usepkgonly
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                false,
-                false, // autounmask_keywords
-                autounmask_use,
-                false,
-                false,
-                &[],
-                &build_local_binpkg_index(&test_config()),
+                &SelectOptions {
+                    selective: false,
+                    // is_top_level (a dependency)
+                    usepkg: false,
+                    autounmask_use,
+                    ..SelectOptions::default()
+                },
             )
             .expect("resolve_pretend(flipinstdep[wantflag]) failed")
         };
@@ -39365,35 +39252,18 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
             &atom_str,
-            &test_config(),
-            false,
-            false,
-            true,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&test_config()),
+            &SelectOptions {
+                update: true,
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -39408,35 +39278,14 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
             &atom_str,
-            &test_config(),
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&test_config()),
+            &SelectOptions::default(),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -39451,35 +39300,18 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
             &atom_str,
-            &test_config(),
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&test_config()),
+            &SelectOptions {
+                selective: false,
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -39544,35 +39376,19 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
             &atom_str,
-            &test_config(),
-            false,
-            false,
-            true,
-            excluded,
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&test_config()),
+            &SelectOptions {
+                update: true,
+                excluded,
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -39636,35 +39452,18 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         assert_eq!(
             resolve_pretend(
-                &repos,
-                &root,
+                &SelectSource {
+                    repos: &repos,
+                    root: &root,
+                    config: &test_config(),
+                    local_binpkg: &build_local_binpkg_index(&test_config())
+                },
                 "dev-libs/newpkg",
-                &test_config(),
-                false,
-                false,
-                false,
-                &["dev-libs/newpkg".to_string()],
-                false,
-                true,
-                false,
-                true,
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &build_local_binpkg_index(&test_config()),
+                &SelectOptions {
+                    excluded: &["dev-libs/newpkg".to_string()],
+                    is_top_level: true,
+                    ..SelectOptions::default()
+                },
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -39922,35 +39721,17 @@ mod tests {
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &config,
+                local_binpkg: &build_local_binpkg_index(&config),
+            },
             &atom_str,
-            &config,
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&config),
+            &SelectOptions {
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -39972,35 +39753,18 @@ mod tests {
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &config,
+                local_binpkg: &build_local_binpkg_index(&config),
+            },
             &atom_str,
-            &config,
-            true,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&config),
+            &SelectOptions {
+                newuse: true,
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -40021,35 +39785,18 @@ mod tests {
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &config,
+                local_binpkg: &build_local_binpkg_index(&config),
+            },
             &atom_str,
-            &config,
-            false,
-            true,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&config),
+            &SelectOptions {
+                changed_use: true,
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -40138,35 +39885,19 @@ mod tests {
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &config,
+                local_binpkg: &build_local_binpkg_index(&config),
+            },
             &atom_str,
-            &config,
-            false,
-            false,
-            false,
-            &[],
-            true,
-            with_bdeps,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&config),
+            &SelectOptions {
+                changed_deps: true,
+                with_bdeps,
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -40431,35 +40162,18 @@ mod tests {
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &config,
+                local_binpkg: &build_local_binpkg_index(&config),
+            },
             &atom_str,
-            &config,
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            true,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&config),
+            &SelectOptions {
+                changed_slot: true,
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -40498,35 +40212,18 @@ mod tests {
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &config,
+                local_binpkg: &build_local_binpkg_index(&config),
+            },
             &atom_str,
-            &config,
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&config),
+            &SelectOptions {
+                is_top_level: true,
+                newrepo: true,
+                ..SelectOptions::default()
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -40614,35 +40311,18 @@ mod tests {
         .expect("fixture config resolves");
         assert_eq!(
             resolve_pretend(
-                &repos,
-                &root,
+                &SelectSource {
+                    repos: &repos,
+                    root: &root,
+                    config: &config,
+                    local_binpkg: &build_local_binpkg_index(&config)
+                },
                 "dev-libs/samepkg",
-                &config,
-                false,
-                false,
-                false,
-                &[],
-                false,
-                true,
-                true,
-                true,
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &build_local_binpkg_index(&config),
+                &SelectOptions {
+                    changed_slot: true,
+                    is_top_level: true,
+                    ..SelectOptions::default()
+                },
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -40684,35 +40364,17 @@ mod tests {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let outcome = resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
             "dev-libs/subslotpkg:0/2",
-            &test_config(),
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&test_config()),
+            &SelectOptions {
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -40731,35 +40393,17 @@ mod tests {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let outcome = resolve_pretend(
-            &repos,
-            &root,
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
             "dev-libs/subslotpkg:0/3",
-            &test_config(),
-            false,
-            false,
-            false,
-            &[],
-            false,
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &build_local_binpkg_index(&test_config()),
+            &SelectOptions {
+                is_top_level: true,
+                ..SelectOptions::default()
+            },
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
@@ -40787,35 +40431,19 @@ mod tests {
         .expect("fixture config resolves");
         assert_eq!(
             resolve_pretend(
-                &repos,
-                &root,
+                &SelectSource {
+                    repos: &repos,
+                    root: &root,
+                    config: &config,
+                    local_binpkg: &build_local_binpkg_index(&config)
+                },
                 "dev-libs/changedslotpkg",
-                &config,
-                false,
-                false,
-                false,
-                &[],
-                true,
-                true,
-                true,
-                true,
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &build_local_binpkg_index(&config),
+                &SelectOptions {
+                    changed_deps: true,
+                    changed_slot: true,
+                    is_top_level: true,
+                    ..SelectOptions::default()
+                },
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::Reinstall {
@@ -40944,35 +40572,17 @@ mod tests {
         .expect("fixture config resolves");
         assert_eq!(
             resolve_pretend(
-                &repos,
-                &root,
+                &SelectSource {
+                    repos: &repos,
+                    root: &root,
+                    config: &config,
+                    local_binpkg: &build_local_binpkg_index(&config)
+                },
                 "dev-libs/overlayonlypkg::overlay",
-                &config,
-                false,
-                false,
-                false,
-                &[],
-                false,
-                true,
-                false,
-                true,
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &build_local_binpkg_index(&config),
+                &SelectOptions {
+                    is_top_level: true,
+                    ..SelectOptions::default()
+                },
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -40981,35 +40591,17 @@ mod tests {
         );
         assert_eq!(
             resolve_pretend(
-                &repos,
-                &root,
+                &SelectSource {
+                    repos: &repos,
+                    root: &root,
+                    config: &config,
+                    local_binpkg: &build_local_binpkg_index(&config)
+                },
                 "dev-libs/overlayonlypkg::testrepo",
-                &config,
-                false,
-                false,
-                false,
-                &[],
-                false,
-                true,
-                false,
-                true,
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &build_local_binpkg_index(&config),
+                &SelectOptions {
+                    is_top_level: true,
+                    ..SelectOptions::default()
+                },
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -69351,35 +68943,39 @@ mod tests_163 {
         o: &RpOpts163,
     ) -> PretendOutcome {
         resolve_pretend(
-            repos,
-            root,
+            &SelectSource {
+                repos,
+                root,
+                config,
+                local_binpkg: &build_local_binpkg_index(config),
+            },
             atom,
-            config,
-            o.newuse,
-            o.changed_use,
-            o.update,
-            &o.excluded,
-            o.changed_deps,
-            o.with_bdeps,
-            o.changed_slot,
-            o.selective,
-            o.is_top_level,
-            o.usepkg,
-            o.usepkgonly,
-            o.binpkg_respect_use,
-            &o.usepkg_exclude,
-            &o.usepkg_include,
-            o.rebuilt_binaries,
-            o.rebuilt_binaries_timestamp,
-            o.newrepo,
-            o.empty,
-            o.getbinpkg,
-            o.autounmask_keywords,
-            o.autounmask_use,
-            o.autounmask_license,
-            o.autounmask_masks,
-            &o.extra_constraints,
-            &build_local_binpkg_index(config),
+            &SelectOptions {
+                newuse: o.newuse,
+                changed_use: o.changed_use,
+                update: o.update,
+                excluded: &o.excluded,
+                changed_deps: o.changed_deps,
+                with_bdeps: o.with_bdeps,
+                changed_slot: o.changed_slot,
+                selective: o.selective,
+                is_top_level: o.is_top_level,
+                usepkg: o.usepkg,
+                usepkgonly: o.usepkgonly,
+                binpkg_respect_use: o.binpkg_respect_use,
+                usepkg_exclude: &o.usepkg_exclude,
+                usepkg_include: &o.usepkg_include,
+                rebuilt_binaries: o.rebuilt_binaries,
+                rebuilt_binaries_timestamp: o.rebuilt_binaries_timestamp,
+                newrepo: o.newrepo,
+                empty: o.empty,
+                getbinpkg: o.getbinpkg,
+                autounmask_keywords: o.autounmask_keywords,
+                autounmask_use: o.autounmask_use,
+                autounmask_license: o.autounmask_license,
+                autounmask_masks: o.autounmask_masks,
+                extra_constraints: &o.extra_constraints,
+            },
         )
         .unwrap_or_else(|e| panic!("resolve_163({atom}) failed: {e}"))
     }

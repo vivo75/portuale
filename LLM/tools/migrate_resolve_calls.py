@@ -66,6 +66,13 @@ def split_args(text):
                 in_str = False
         elif c == '"':
             in_str = True; cur.append(c)
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            j = len(text) if j < 0 else j
+            cur.append(text[i:j]); i = j; continue
+        elif text.startswith("/*", i):
+            j = text.index("*/", i) + 2
+            cur.append(text[i:j]); i = j; continue
         elif c in "([{":
             depth += 1; cur.append(c)
         elif c in ")]}":
