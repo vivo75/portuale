@@ -1521,11 +1521,11 @@ const VDB_ROOT_VAR: &str = "PORTUALE_VDB_ROOT";
 
 /// What `resolve_vdb_selection` decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct VdbSelection {
-    backend: BackendKind,
+pub(crate) struct VdbSelection {
+    pub(crate) backend: BackendKind,
     /// The database file for `sqlite`/`redb` (absolute); `None` for
     /// `files`.
-    path: Option<PathBuf>,
+    pub(crate) path: Option<PathBuf>,
 }
 
 /// Default database file for `backend` under `root` (Q1):
@@ -1547,7 +1547,7 @@ fn default_vdb_path(root: &Path, backend: BackendKind) -> PathBuf {
 /// (environment, then make.conf) > the per-backend default under `root`.
 /// An empty value counts as unset. Errors carry the exit code (2 for a
 /// bad value, a usage error).
-fn resolve_vdb_selection(
+pub(crate) fn resolve_vdb_selection(
     flag_backend: Option<&str>,
     flag_path: Option<&str>,
     env: &dyn Fn(&str) -> Option<String>,
@@ -1568,7 +1568,7 @@ fn resolve_vdb_selection(
         None => BackendKind::Files,
         Some(v) => v.parse::<BackendKind>().map_err(|_| {
             (
-                format!("mrg: {origin}: {v:?} is not one of files, sqlite, redb"),
+                format!("{origin}: {v:?} is not one of files, sqlite, redb"),
                 2,
             )
         })?,
@@ -1675,7 +1675,7 @@ fn check_db_exists(path: &Path, root: &Path, kind: BackendKind) -> Result<(), St
         return Ok(());
     }
     Err(format!(
-        "mrg: the {kind} VDB {} does not exist (mrg never creates one implicitly); \
+        "the {kind} VDB {} does not exist (portuale never creates one implicitly); \
          convert first: portuale vdb convert --from files:{} --to {kind}:{}",
         path.display(),
         root.display(),
@@ -1716,11 +1716,9 @@ fn open_db_backend<D: portage_vdb::InstalledDb + 'static>(
             Ok(Some(std::sync::Arc::new(db)))
         }
         // `Busy` already names the file and the one-process rule.
-        Err(e @ portage_vdb::Error::Busy { .. }) => {
-            Err(format!("mrg: the {kind} VDB is busy: {e}"))
-        }
+        Err(e @ portage_vdb::Error::Busy { .. }) => Err(format!("the {kind} VDB is busy: {e}")),
         Err(e) => Err(format!(
-            "mrg: cannot open the {kind} VDB {}: {e}",
+            "cannot open the {kind} VDB {}: {e}",
             path.display()
         )),
     }
@@ -1748,7 +1746,7 @@ fn open_sqlite_backend(
     _readonly: bool,
 ) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
     Err(
-        "mrg: the sqlite VDB backend is not available: this portuale was built without the \
+        "the sqlite VDB backend is not available: this portuale was built without the \
          vdb-sqlite feature"
             .into(),
     )
@@ -1778,7 +1776,7 @@ fn open_redb_backend(
     _readonly: bool,
 ) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
     Err(
-        "mrg: the redb VDB backend is not available: this portuale was built without the \
+        "the redb VDB backend is not available: this portuale was built without the \
          vdb-redb feature"
             .into(),
     )
@@ -1791,34 +1789,21 @@ fn open_redb_backend(
 /// flag and the environment leave the choice open. A config that fails
 /// to load yields no value here; `pretend::run` reports that error
 /// itself.
-fn make_conf_lookup(root: &Path) -> impl FnMut(&str) -> Option<String> {
+pub(crate) fn make_conf_lookup(root: &Path) -> impl FnMut(&str) -> Option<String> {
     let mut loaded: Option<Option<portage_profile::Config>> = None;
     let root = root.to_path_buf();
     move |key: &str| {
         let config = loaded.get_or_insert_with(|| {
-            crate::pretend::load_repos_and_config(&portage_repo::config_root_from_env(), &root)
-                .ok()
-                .map(|(_, config)| config)
+            crate::pretend::load_config_quiet(&portage_repo::config_root_from_env(), &root).ok()
         });
         config.as_ref()?.other_vars.get(key).cloned()
     }
 }
 
-/// Select, open and register the VDB backend for the target ROOT, then
-/// export it to child processes. Runs before `pretend::run`.
-///
-/// redb (not `--pretend`): this process now holds the file, so the ebuild
-/// phases' `has_version` / `best_version` cannot open it. The parent pipe
-/// (S6.3, `vdb_ipc.rs`, Q5: redb only) is started here and its socket
-/// exported as `PORTUALE_VDB_IPC`; the returned guard keeps it running
-/// until `run` returns. Failing to start it is an error (exit 1) rather
-/// than a merge whose first `has_version` would fail half-way.
-///
-/// Only the target ROOT is registered: the running root (`/`, consulted
-/// for `--root-deps`/BDEPEND style lookups when ROOT is not `/`) keeps
-/// the files layout. `client_vdb` is a remote run whose VDB is the
-/// client's own `client:` tree: it stays files, and the options are
-/// refused.
+/// `mrg`'s backend selection: `--vdb-backend` / `--vdb-path`, then the
+/// shared rule [`select_vdb`] applies (environment, then make.conf).
+/// `client_vdb` is a remote run whose VDB is the client's own `client:`
+/// tree: it stays files, and the options are refused.
 fn setup_vdb(
     matches: &ArgMatches,
     client_vdb: bool,
@@ -1837,6 +1822,34 @@ fn setup_vdb(
         }
         return Ok(None);
     }
+    select_vdb("mrg", flag_backend, flag_path, matches.get_flag("pretend"))
+}
+
+/// Select, open and register the VDB backend for the target ROOT, then
+/// export it to child processes. `mrg` runs it before `pretend::run`;
+/// `emerge` and `ebuild` run it before their own work, from the
+/// environment and make.conf only (#318). `who` prefixes every message.
+///
+/// The choice is always exported, `files` included (#318): an ebuild
+/// phase's `portageq` then never has to resolve make.conf itself, and
+/// every process of the run agrees on one database.
+///
+/// redb (not `readonly`): this process now holds the file, so the ebuild
+/// phases' `has_version` / `best_version` cannot open it. The parent pipe
+/// (S6.3, `vdb_ipc.rs`, Q5: redb only) is started here and its socket
+/// exported as `PORTUALE_VDB_IPC`; the returned guard keeps it running
+/// until the caller's run returns. Failing to start it is an error (exit
+/// 1) rather than a merge whose first `has_version` would fail half-way.
+///
+/// Only the target ROOT is registered: the running root (`/`, consulted
+/// for `--root-deps`/BDEPEND style lookups when ROOT is not `/`) keeps
+/// the files layout.
+pub(crate) fn select_vdb(
+    who: &str,
+    flag_backend: Option<&str>,
+    flag_path: Option<&str>,
+    readonly: bool,
+) -> Result<Option<crate::vdb_ipc::Server>, (String, u8)> {
     let root = portage_repo::root_from_env();
     let sel = resolve_vdb_selection(
         flag_backend,
@@ -1844,23 +1857,28 @@ fn setup_vdb(
         &|k| std::env::var(k).ok(),
         &mut make_conf_lookup(&root),
         &root,
-    )?;
+    )
+    .map_err(|(m, code)| (format!("{who}: {m}"), code))?;
     if sel.backend == BackendKind::Files {
         if flag_path.is_some() {
-            eprintln!("mrg: warning: --vdb-path is ignored with the files backend");
+            eprintln!("{who}: warning: --vdb-path is ignored with the files backend");
+        }
+        // Nothing else reads the environment yet (no thread started).
+        unsafe {
+            std::env::set_var(VDB_BACKEND_VAR, BackendKind::Files.as_str());
+            std::env::remove_var(crate::vdb_ipc::IPC_VAR);
         }
         return Ok(None);
     }
-    let pretend = matches.get_flag("pretend");
-    let db = open_vdb_backend(&sel, &root, pretend).map_err(|m| (m, 1))?;
+    let db = open_vdb_backend(&sel, &root, readonly).map_err(|m| (format!("{who}: {m}"), 1))?;
     let mut server = None;
     if let (Some(db), Some(path)) = (db, &sel.path) {
         portage_vdb::register(&root, db);
-        if sel.backend == BackendKind::Redb && !pretend {
+        if sel.backend == BackendKind::Redb && !readonly {
             server = Some(crate::vdb_ipc::Server::start(&root).map_err(|e| {
                 (
                     format!(
-                        "mrg: cannot start the {} server the ebuild phases need on redb: {e}",
+                        "{who}: cannot start the {} server the ebuild phases need on redb: {e}",
                         crate::vdb_ipc::IPC_VAR
                     ),
                     1,
@@ -2603,6 +2621,157 @@ mod tests {
         assert!(setup_vdb(&m, true).is_err());
         let m = parse(&["--pretend"]).unwrap();
         assert!(setup_vdb(&m, true).is_ok());
+    }
+
+    /// #318: with `PORTUALE_VDB_BACKEND` / `PORTUALE_VDB_PATH` set only in
+    /// make.conf, `emerge`, `ebuild` (its phases' `has_version` too) and a
+    /// standalone `portageq` all read the sqlite database, not the files
+    /// tree. The database is the fixture root's VDB minus
+    /// `dev-libs/samepkg`, so each answer shows which one was read; the
+    /// same commands under the plain fixture config (no variable) read
+    /// the files tree, where `samepkg` is installed. `mrg` applies the
+    /// same rule (`resolve_vdb_selection`); Portage has no such
+    /// setting, so the expectation is portuale's own `mrg` behaviour.
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn make_conf_backend_reaches_emerge_ebuild_and_portageq() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures")
+            .canonicalize()
+            .unwrap();
+        let tmp = portage_util::TempDir::new("vdb_make_conf_select").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let sh = |cmd: &str| {
+            let ok = std::process::Command::new("sh")
+                .args(["-c", cmd])
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "{cmd}");
+        };
+        // A config root identical to the fixture one, plus the two
+        // make.conf lines.
+        let cr = tmp.join("cr");
+        std::fs::create_dir_all(cr.join("etc")).unwrap();
+        for entry in std::fs::read_dir(&fixtures).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name() != "etc" {
+                std::os::unix::fs::symlink(entry.path(), cr.join(entry.file_name())).unwrap();
+            }
+        }
+        for entry in std::fs::read_dir(fixtures.join("etc")).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name() != "portage" {
+                std::os::unix::fs::symlink(entry.path(), cr.join("etc").join(entry.file_name()))
+                    .unwrap();
+            }
+        }
+        sh(&format!(
+            "cp -a {} {}",
+            fixtures.join("etc/portage").display(),
+            cr.join("etc/portage").display()
+        ));
+        // The database: the fixture VDB without dev-libs/samepkg.
+        let src = tmp.join("src");
+        std::fs::create_dir_all(src.join("var/db")).unwrap();
+        sh(&format!(
+            "cp -a {} {} && rm -r {}",
+            fixtures.join("var/db/pkg").display(),
+            src.join("var/db/pkg").display(),
+            src.join("var/db/pkg/dev-libs/samepkg-1.0").display()
+        ));
+        let db_path = tmp.join("vdb.sqlite");
+        let db = portage_vdb::SqliteDb::open(&db_path).unwrap();
+        portage_vdb::copy_all(&portage_vdb::FilesDb::new(&src), &db, false).unwrap();
+        drop(db);
+        let make_conf = cr.join("etc/portage/make.conf");
+        let mut text = std::fs::read_to_string(&make_conf).unwrap();
+        text.push_str(&format!(
+            "\nPORTUALE_VDB_BACKEND=\"sqlite\"\nPORTUALE_VDB_PATH=\"{}\"\n",
+            db_path.display()
+        ));
+        std::fs::write(&make_conf, text).unwrap();
+        // An ebuild whose phase asks has_version.
+        let pkg = tmp.join("pkg/dev-libs/hvprobe");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let out = tmp.join("phase.out");
+        let ebuild = pkg.join("hvprobe-1.0.ebuild");
+        // One line: the `no_hand_built_vdb_paths` lint strips strings
+        // line by line, so a multi-line literal's braces would count.
+        let script = "EAPI=8\nSLOT=\"0\"\npkg_pretend() {\n\thas_version -r dev-libs/samepkg && echo yes > OUT || echo no > OUT\n}\n";
+        std::fs::write(&ebuild, script.replace("OUT", &out.display().to_string())).unwrap();
+
+        let mut bin = std::env::current_exe().unwrap();
+        bin.pop();
+        if bin.ends_with("deps") {
+            bin.pop();
+        }
+        bin.push("portuale");
+        let run = |config_root: &Path, args: &[&str]| {
+            std::process::Command::new(&bin)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .env("PORTAGE_CONFIGROOT", config_root)
+                .env("ROOT", &fixtures)
+                .env("PORTAGE_TMPDIR", tmp.join("pt"))
+                .env_remove("PORTUALE_VDB_BACKEND")
+                .env_remove("PORTUALE_VDB_PATH")
+                .env_remove("PORTUALE_VDB_ROOT")
+                .env_remove("PORTUALE_VDB_IPC")
+                .output()
+                .expect("portuale spawns")
+        };
+        let root = fixtures.to_str().unwrap();
+        for (config_root, installed) in [(&cr, false), (&fixtures, true)] {
+            let label = if installed {
+                "files"
+            } else {
+                "make.conf sqlite"
+            };
+            // Standalone portageq.
+            let o = run(
+                config_root,
+                &["portageq", "has_version", root, "dev-libs/samepkg"],
+            );
+            assert_eq!(
+                o.status.code(),
+                Some(if installed { 0 } else { 1 }),
+                "{label}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            // emerge: a reinstall on files, a new install from the database.
+            let o = run(
+                config_root,
+                &["emerge", "-p", "--nodeps", "dev-libs/samepkg"],
+            );
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            assert_eq!(o.status.code(), Some(0), "{label}: {stdout}");
+            let mark = if installed {
+                "[ebuild   R"
+            } else {
+                "[ebuild  N"
+            };
+            assert!(stdout.contains(mark), "{label}: want {mark:?} in\n{stdout}");
+            // ebuild: the phase's has_version.
+            let _ = std::fs::remove_dir_all(tmp.join("pt"));
+            std::fs::create_dir_all(tmp.join("pt")).unwrap();
+            let o = run(
+                config_root,
+                &["ebuild", ebuild.to_str().unwrap(), "pretend"],
+            );
+            assert_eq!(
+                o.status.code(),
+                Some(0),
+                "{label}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(&out).unwrap().trim(),
+                if installed { "yes" } else { "no" },
+                "{label}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// End to end: the fixture VDB, converted to sqlite, gives the same

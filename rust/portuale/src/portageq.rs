@@ -256,6 +256,26 @@ enum Lookup {
 /// the database `mrg` exported for this root, if any. The default (files)
 /// needs nothing: `portage_vdb::for_root` falls back to it.
 fn setup_backend(eroot: &Path) -> Result<Lookup, String> {
+    // #318: a standalone `portageq` (no `emerge`/`ebuild`/`mrg` above it
+    // exported a choice) follows make.conf's `PORTUALE_VDB_BACKEND` /
+    // `PORTUALE_VDB_PATH`, as those applets do, so every tool reads the
+    // database `emerge` writes. Any exported value, `files` included,
+    // wins without resolving the config: phases never pay for it.
+    if std::env::var_os("PORTUALE_VDB_BACKEND").is_none() {
+        let sel = crate::mrg::resolve_vdb_selection(
+            None,
+            None,
+            &|_| None,
+            &mut crate::mrg::make_conf_lookup(eroot),
+            eroot,
+        )
+        .map_err(|(m, _)| format!("portageq: {m}"))?;
+        if let (BackendKind::Sqlite | BackendKind::Redb, Some(path)) = (sel.backend, &sel.path) {
+            let db = open_readonly(sel.backend, path)?;
+            portage_vdb::register(eroot, db);
+        }
+        return Ok(Lookup::Local);
+    }
     let backend = std::env::var("PORTUALE_VDB_BACKEND")
         .ok()
         .filter(|v| !v.is_empty());

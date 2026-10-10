@@ -3540,6 +3540,12 @@ fn phase_env_vars(
             vars.push((k.to_string(), v.to_string_lossy().into_owned()));
         }
     }
+    // #318: the phase's `portageq` never resolves make.conf for the
+    // backend itself; with no choice exported (an in-process caller that
+    // ran no selection) it is the files tree, the default.
+    if !vars.iter().any(|(k, _)| k == "PORTUALE_VDB_BACKEND") {
+        vars.push(("PORTUALE_VDB_BACKEND".to_string(), "files".to_string()));
+    }
 
     // `PATH` is consumed above as the base behind the helper dirs; a
     // verbatim `extra_env` pair would drop them again.

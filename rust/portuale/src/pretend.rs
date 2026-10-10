@@ -9874,6 +9874,18 @@ pub(crate) fn load_repos_and_config(
     Ok((repos, config))
 }
 
+/// [`load_repos_and_config`] for an internal probe that runs before the
+/// CLI's own load (`mrg::make_conf_lookup`, #318): the repos.conf
+/// section-mismatch line stays the CLI's to print
+/// (`portage_repo::find_repos_quiet`).
+pub(crate) fn load_config_quiet(
+    config_root: &std::path::Path,
+    root: &std::path::Path,
+) -> Result<portage_profile::Config, String> {
+    let repos = portage_repo::find_repos_quiet(config_root).map_err(|e| e.to_string())?;
+    resolve_config_for_root(config_root, &repos, root)
+}
+
 /// `load_repos_and_config`'s profile half over an already-loaded repo
 /// list: resolve the `Config` for `root` (`eroot`) reading
 /// `config_root`'s `/etc/portage` overrides, with the SHARED repo set
