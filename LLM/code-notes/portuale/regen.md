@@ -1,0 +1,91 @@
+# crates/portuale/src/regen.rs
+`emerge --regen`: regenerate every repo's md5-cache from the `depend` phases.
+
+## module
+- Portage `_emerge/actions.py::action_regen` + `_emerge/MetadataRegen.py`: regenerate every repo's on-disk `metadata/md5-cache/<cat>/<pf>` by running each ebuild's `depend` phase and writing the result in Portage `portage.cache.flat_hash` (`md5_database`) format -- `KEY=value` lines, keys sorted, empty values omitted, `_md5_=<md5 of the ebuild file>` last.
+- Portage runs the `depend` phases through its scheduler, up to `--jobs` concurrently with the `--load-average` gate (Portage `action_regen(settings, portdb, max_jobs, max_load)` -> `MetadataRegen(portdb, max_jobs, max_load)` -> `AsyncScheduler` + `PollScheduler._can_add_job`: at most `max_jobs` tasks in flight, and no *additional* task while the 1-minute load average is at or above `max_load` -- the first task always runs so the scheduler can't deadlock; a bare `--jobs` is unlimited (`True`), `--jobs=0` means the CPU count (Portage `main.py:1023-1041`), absent means serial). Each ebuild's `depend` phase is independent, so the cache *content* a `--jobs`-threaded run writes is byte-identical to the serial one -- this port runs the same work list through a `std::thread::scope` dispatch loop with the same two gates (see `emerge_build.rs`'s own `--jobs` scheduler, which shares `system_loadavg_1min`).
+- Three deliberate, documented divergences, all in service of portuale's determinism (a hard constraint -- Portage interleaves completions nondeterministically on stderr): `Processing <cp>` lines print up front in `cp` order, before any work is dispatched (Portage prints them from its `_process_iter` generator while tasks run concurrently); failure lines (` * <err>`) report in work-list order after every worker joins, not in completion order (Portage `_task_exit` reports as each task exits; same failure set, same exit code, stable order); same-`(category, pf)` items never run concurrently: the builddir (`${PORTAGE_TMPDIR}/portage/<cat>/<pf>`, incl. `temp/.depend-metadata`) is keyed by cpv, not by repo, so an overlay and its master carrying the same version would share it. Portage serializes the same sharing the other way -- Portage `doebuild()` takes a per-builddir lock (`EbuildBuildDir.async_lock()`); portuale holds the second item back at dispatch instead of blocking inside the phase, same net effect with no lock machinery.
+- Stale-entry pruning and the eclass masters chain (below) *do* change on-disk output and are implemented.
+- The `_pull_valid_cache` shortcut (Portage `portage.dbapi.porttree::portdbapi._pull_valid_cache` called from `MetadataRegen._iter_metadata_processes`) is implemented too: when the on-disk `metadata/md5-cache/<cat>/<pf>` entry is already valid -- its `_md5_` matches the ebuild file, its `EAPI` is supported, and every `_eclasses_` `(name, md5)` pair still matches the eclass file that wins across the repo's masters chain (Portage `cache/template.py::validate_entry` + `eclass_cache.py::validate_and_rewrite_cache`, `md5_database` with `store_eclass_paths = False`) -- the `depend` phase is skipped and the file left untouched. Performance only: the bytes a skipped entry would get rewritten with are identical.
+- The `cp_retry` loop (Portage `metadata_regen_retry`, `MetadataRegen.py:15-52`) is implemented too: a `depend` phase that dies with an *unexpected* returncode (anything but 1 -- Portage `MetadataRegen._task_exit`) re-runs its whole cp, up to 3 passes total (Portage `max_tries=3`). One deliberate, documented divergence: Portage `emerge --regen`'s own `action_regen` runs a *single* `MetadataRegen` with no retry at all -- the retry loop above is the path `egencache` takes, and portuale (which has no egencache) folds it into its single regen path. The end state of a persistently-broken tree is identical either way (same failure set, exit 1); only the extra passes' `Processing <cp>` lines differ. A finally-failed cpv is dropped from the valid set before pruning (Portage `_task_exit`'s `_valid_pkgs.discard`), so a failed ebuild never leaves a (stale) cache entry behind.
+- #55 L3: a repo whose resolved `cache-formats` name another known format but not `md5-dict` (e.g. `pms`, including an auto-detected `metadata/cache`) is skipped (with a stderr message and exit 1) before any `depend` phase runs. Portage `egencache --update` writes every known resolved format, so `cache-formats = pms` would write `metadata/cache` -- a directory portuale has no writer for -- and never touches `metadata/md5-cache` (S0 cell h1); writing the md5-cache there would be the wrong directory. An empty list (a fresh tree) keeps egencache's `force=True` `("md5-dict",)` default. No repo-cache writer here runs on `FEATURES=metadata-transfer` (Portage `egencache` still writes the pregen targets; only the writable depcachedir changes).
+- Like every Portage filesystem-mutating `emerge` action, this rejects `--pretend` (Portage `actions.py:4106-4111`) at the CLI layer before reaching here.
+
+## const WRITE_KEYS
+- Portage `portage.dbapi.porttree`'s own md5-cache key set (`portage.auxdbkeys`), plus the two synthetic keys `portage.cache.flat_hash` always adds (`_eclasses_`, `_<chf>_` = `_md5_`). Portage `flat_hash.database.__init__` writes `sorted(known_keys | {"_eclasses_", "_md5_"})` -- and `_` (0x5F) sorts after every uppercase letter, so the two synthetic keys land last.
+
+## struct RegenWorkItem
+- One ebuild's `depend`-phase unit of `MetadataRegen` work: the ebuild file plus the repo whose cache entry it (re)writes. `category`/`pf` double as the dispatch key -- see `run_parallel`'s own section -- while `cp` (`cat/pkg`) is the retry unit -- see `run`'s own section on `cp_retry`.
+
+## struct RegenFailure
+- A failed `RegenWorkItem`: the message for the ` * ...` failure report plus the phase's own returncode, which is what `metadata_regen_retry`'s `cp_retry` decision keys off (Portage `MetadataRegen._task_exit`: an *unexpected* returncode -- anything but 1 -- re-runs the whole cp).
+
+## const MAX_TRIES
+- Portage `metadata_regen_retry`'s own default (`MetadataRegen.py:15`): one initial run plus up to two retries of the unexpectedly-failed cps.
+
+## fn is_retryable_returncode
+- Portage `MetadataRegen._task_exit` (`MetadataRegen.py:199-212`): a failed phase whose returncode is not 1 marks its whole cp for a re-run (`cp_retry`). Returncode 1 is the "expected" failure (Portage `EbuildMetadataPhase` sets exactly 1 for invalid metadata, and `doebuild`'s own pre-spawn failures surface as 1) -- never retried.
+
+## fn select_retry_cps
+- The retry set for the next pass, in first-seen cp order: every cp with at least one unexpectedly-failed item. Portage iterates a `set` (`cp_retry`), i.e. nondeterministic order; portuale keeps work-list order -- determinism is the hard constraint, and the set of retried cps (hence the final cache content and exit code) is the same either way.
+
+## fn run
+- `--debug`/`-d`: run each `depend` phase with `PORTAGE_DEBUG=1` (Portage `bin/ebuild.sh` `set -x`).
+- #55 L3: Portage `egencache --update` builds its write targets with `iter_pregenerated_caches(force=True)` -- every known resolved format, defaulting an empty list to `("md5-dict",)` (`bin/egencache:350-362`) -- so `cache-formats = pms` writes `metadata/cache` only and `pms md5-dict` writes both dirs (S0 cell h1/h3). Portuale has no `pms` writer (L1), so a repo whose resolved formats name `pms` (or only unknown names) without `md5-dict` is skipped with a message instead of writing a directory Portage would leave alone; it still exits non-zero because the requested regeneration was not performed.
+- Portage `MetadataRegen._iter_metadata_processes`: iterate `cp_all()` and, per `cat/pkg`, every ebuild version. Portage `metadata_regen_retry` (`MetadataRegen.py:15-52`, the path `egencache` runs its regen through -- plain `emerge --regen`'s own `action_regen` uses a single `MetadataRegen` with no retry): each pass prints `Regenerating cache entries...` then `Processing <cp>` per cp it iterates (stdout), and a pass whose phase died with an *unexpected* returncode re-runs the whole cp, up to `MAX_TRIES` passes total. Portuale folds that retry into its single regen path (there is no egencache here): the only divergence from `action_regen` is extra passes over broken cps -- a persistently-broken tree ends failed with exit 1 either way. `done!` prints once at the very end (`action_regen`). The full work list is still collected before any `depend` phase runs, and each pass's `Processing <cp>` lines still print up front -- see the module section for why the lines print up front rather than from the workers. Portage `MetadataRegen`'s own `_valid_pkgs`: every `(category, pf)` actually found on disk, per repo location -- fed to `_cleanup`'s "global cleanse" diff against the on-disk cache afterward (`MetadataRegen.py:142-189`). Plain `emerge --regen` (no explicit `cp` filter) always runs the global-cleanse variant.
+- One slot per work item, filled by whichever pass runs it last -- mirroring Portage's `cpv_failed`/`cpv_successful` bookkeeping (a cpv that fails and then succeeds on retry counts as successful: only the last outcome per item matters).
+- `MAX_TRIES` is always >= 1, so at least the initial full pass runs.
+- Portage `metadata_regen_retry`'s `while scheduler.cp_retry and tries > 0`: re-run the unexpectedly-failed cps while attempts remain.
+- Portage `_task_exit`'s `self._valid_pkgs.discard(...)`: a finally-failed cpv is not valid, so `_cleanup`'s global-cleanse diff deletes any (stale) on-disk entry for it -- a failed ebuild never leaves a cache entry behind.
+- Prune stale entries: an on-disk `metadata/md5-cache/<cat>/<pf>` whose ebuild no longer exists in that same repo (Portage `_cleanup`'s `dead_nodes` diff -- `del auxdb[y]` per repo location).
+
+## fn run_work_item
+- One `RegenWorkItem`'s `depend` phase + cache write (Portage `EbuildMetadataPhase` + `portdb._write_cache`, via `regen_one`).
+
+## struct RunParallelArgs
+- Arguments of [`run_parallel`].
+
+## fn run_parallel
+- Portage `AsyncScheduler._schedule_tasks` for the `MetadataRegen` case: dispatch one pass's work-list items (global indices into `work`, in order) onto up to `jobs` worker threads, holding off *additional* workers while the 1-minute load average is at or above `load_average` (Portage `PollScheduler._can_add_job` -- the first worker always runs, so this can't deadlock), and never running two items with the same `(category, pf)` concurrently (the builddir is shared per cpv across repos -- see the module section). Results come back as `(global index, outcome)` pairs, so the caller folds them into pass order deterministically regardless of completion order.
+- Dispatch in work-list order while there is capacity. The first pending item whose builddir key isn't already running goes next; anything key-blocked waits for a completion.
+- Progress is guaranteed: the load gate never blocks the first dispatch, and with nothing in flight no key is blocked -- so a pending item always dispatches, and a completion is always on its way when we wait here.
+
+## fn next_dispatchable_in
+- First dispatchable slot in `pending`: the first position whose builddir key isn't already running -- the "in work-list order, skip what would race" half of `run_parallel`'s dispatch (`pending` holds positions into `pass_indices`, whose entries are global work indices). Split out so the ordering/blocking rule is unit-testable without running a `depend` phase.
+
+## fn prune_stale_entries
+- Portage `MetadataRegen._cleanup`'s "global cleanse" (`MetadataRegen.py:142-166`): every on-disk cache entry under `repo_location`'s `metadata/md5-cache/<cat>/` not in `valid` (i.e. no matching ebuild was found this run) gets removed. `valid` is `None` when the repo had no `cp` at all this run -- every existing entry is then stale.
+
+## struct RegenOneArgs
+- Arguments of [`regen_one`].
+
+## fn regen_one
+- Every `Err` below carries the returncode Portage `EbuildMetadataPhase` would report for the same outcome, so the caller can replay `MetadataRegen._task_exit`'s `cp_retry` decision (`returncode != 1` re-runs the cp). Only the phase's own non-1 exit is retryable; every setup/IO failure is code 1 -- Portage's `doebuild`-before-spawn int retval and its metadata-invalid arm are both 1, never retried.
+- Portage `MetadataRegen._iter_metadata_processes`'s `portdb._pull_valid_cache(cpv, ebuild_path, repo_path)` shortcut: a valid on-disk entry skips the `depend` phase entirely (perf only -- the rewrite would be byte-identical). The file is left untouched, preserving its mtime.
+- The repo's pregen cache is `flat_hash.md5_database`: `_eclasses_` is `name\tmd5` pairs (`store_eclass_paths = False`).
+
+## fn render_entry
+- Render one `depend`-phase result as the bytes Portage `flat_hash._setitem` writes (`portage.cache.flat_hash.database`): `for k in self._write_keys: v = values.get(k); if not v: continue; write f"{k}={v}\n"` -- sorted keys, empty values skipped, with the two synthetic keys `_eclasses_`/`_md5_` added exactly like Portage's `EbuildMetadataPhase` + `_write_cache` do. Shared by `--regen` (the repo's `metadata/md5-cache`) and C3's depcachedir write-back (`ebuild_phases::depend_phase_metadata`): same key set, different destination directory *and* `_eclasses_` shape -- the repo cache is `flat_hash.md5_database` (pairs), the depcachedir `mtime_md5_database` (triples with the eclass dir, `store_eclass_paths = True`; S0 cell (a)).
+- Portage `flat_hash._setitem`: `for k in self._write_keys: v = values.get(k); if not v: continue; write f"{k}={v}\n"`. Sorted keys, empty values skipped.
+
+## fn write_entry
+- Write one rendered cache entry into `dir` (`<...>/<category>`), Portage `flat_hash._setitem`'s tempfile-then-`os.rename` dance: a unique temporary sibling first so concurrent writers (C3's provider can run in several `portuale` processes at once -- the C2 concurrency pin spawns sixteen) never collide, then an atomic rename over the final name. The caller decides whether a failure is fatal (`--regen`) or best-effort (the depcachedir write-back, whose fallback is the in-process memo).
+
+## fn eclasses_field
+- Portage `metadata.database._setitem`: `_eclasses_` is serialized as `name\tmd5\tname\tmd5...` (`serialize_eclasses(..., "md5")`). Built from the `depend` phase's own `INHERITED` list -- for each eclass name, the md5 of the file that wins across the repo's own masters chain.
+- Portage `eclass_cache.cache.update_eclasses` (`eclass_cache.py:108-148`) walks `porttrees` (`masters` in declared order, then the repo itself -- `repository/config.py:1267-1276`) and, for a same-named eclass present in more than one tree, keeps the *earliest* (most-master) copy only when a later tree's copy has the exact same `mtime` (treated as "identical to the master"); a later tree with a genuinely differing copy overrides it. Since `mtime` is a real-world proxy for "did the content change", and this crate only ever cares about the resulting content hash, the equivalent, simpler rule used here is: the *last* tree in `masters`-then-self order that has the file wins outright. This produces the identical MD5 in every case where content actually differs across the chain (Portage's whole mtime-equality dance only matters when content is identical anyway, in which case either copy's MD5 is the same) -- a documented, behavior-preserving simplification.
+- Portage `serialize_eclasses(..., paths=True)`: the eclass's own directory (no filename) between name and checksum.
+
+## tests: dispatch_takes_the_first_item_whose_key_is_not_running
+- Dispatch is work-list order, skipping only what would share a builddir with something already running (Portage `doebuild()`'s own per-builddir lock, held at dispatch instead of inside the phase).
+- Nothing running: the head goes. Head's key running: the same-key second item is skipped, the next key goes. Every key running: nothing is dispatchable (the caller waits for a completion instead of spinning). Empty queue: nothing to dispatch. A retry-pass subset mapping resolves keys through the pass indices, not the slot positions.
+
+## tests: retry_decision_matches_portage_task_exit
+- Portage `metadata_regen_retry`'s `cp_retry` (`MetadataRegen.py:15-52` + `_task_exit`, `MetadataRegen.py:199-212`). Only an *unexpected* returncode (anything but 1) re-runs the whole cp, up to `MAX_TRIES` passes total, in first-seen cp order (Portage iterates a set -- nondeterministic; the retried set is the same).
+- Returncode 1 is the "expected" failure: invalid metadata, pre-spawn `doebuild` retval -- never retried. (0/SUCCESS never reaches the retry decision at all.) Anything else (a real phase death: 2 for a sandbox hit or a bash syntax error, -1 for a signal) re-runs the cp. The pass budget is Portage's own `max_tries=3` default.
+
+## tests: retry_set_is_the_unexpectedly_failed_cps_in_first_seen_order
+- Only the unexpectedly-failed cps come back, in work-list order regardless of set order. Nothing unexpected: no retry pass.
+
+## tests: render_entry_writes_the_eclass_shape_of_each_rung
+- S0 cell (a): the two rungs serialize `_eclasses_` differently -- the repo cache (`md5_database`) as `name\tmd5` pairs, the depcachedir (`mtime_md5_database`, `store_eclass_paths = True`) as `name\tdir\tmd5` triples -- and `render_entry` serves both. The phase-env `INHERITED` is never written (Portage `EbuildMetadataPhase._async_start` pops it and records `_eclasses_` instead).

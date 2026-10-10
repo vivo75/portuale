@@ -3,26 +3,13 @@ use super::*;
 #[test]
 #[cfg(unix)]
 fn remote_success_prints_no_post_merge_notice_like_portage() {
-    // Backlog #231 (b): the remote-execution early return
-    // (`take_remote_exec` dispatch) skips `post_emerge`'s tail --
-    // correctly so. The remote plan merges onto the *remote* host;
-    // the local `${ROOT}/var/db/pkg` is never touched, so real's
-    // `_pkgs_changed` gate (`post_emerge.py:112-117`) evaluates
-    // false and -- the run being non-`--pretend` -- the tail would
-    // print nothing. Local-transport end to end (`mrg
-    // --remote-transport local`, the same shape the contract
-    // suite's `test_mrg_remote_resolve_merges_a_binhost_binary`
-    // uses): the pre-resolution notice still prints once, before
-    // `Calculating...`, and no second notice follows the merge.
+    // Portage: post_emerge.py. The remote early return skips the tail; the local
+    // vdb never changes, so the post notice stays silent. Exactly one notice fires.
     let portuale_bin = built_portuale_bin();
     let fixtures = fixtures_root();
     let base = TempDir::new("remote_news").keep();
-    // Client ROOT: a copy of the fixtures' `var` (the hermetic
-    // 5-count vdb), so the pre notice has something to print.
     let root = base.join("root");
     copy_tree(&fixtures.join("var"), &root.join("var"));
-    // Tmp `file://` binhost serving the hook-ordering fixture
-    // binary with a minimal `Packages` index.
     let binhost = base.join("binhost");
     std::fs::create_dir_all(binhost.join("dev-libs")).unwrap();
     std::fs::copy(
@@ -40,9 +27,6 @@ fn remote_success_prints_no_post_merge_notice_like_portage() {
         ),
     )
     .unwrap();
-    // Client `/etc/portage`: the fixture config repointed at the
-    // tmp binhost (absolute repo locations, like the contract
-    // suite's `_write_tmp_clientetc`).
     let clientetc = base.join("clientetc");
     copy_tree(
         &fixtures.join("etc/portage"),
@@ -132,8 +116,6 @@ fn remote_success_prints_no_post_merge_notice_like_portage() {
             .is_file(),
         "the remote unit really merged into the client root"
     );
-    // Exactly one notice: the pre-resolution one, standing before
-    // `Calculating...` -- no post-merge notice follows the merge.
     assert_eq!(
         stdout.matches("news items need reading").count(),
         1,

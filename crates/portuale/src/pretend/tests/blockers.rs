@@ -2,12 +2,8 @@ use super::*;
 
 #[test]
 fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
-    // #72 B1/B2: a `Replacement`-satisfied row is carried on the
-    // entry; it prints inline right after the replacement's line and
-    // counts only when the replacement waits on the owner's merge
-    // (`replacement_wait_index`); otherwise it contributes neither a
-    // `[blocks]` line nor a `Conflict:` count. An `Uninstall`-tagged
-    // row keeps its current trailing display.
+    // A `Replacement` row prints inline after the replacement it waits on and
+    // counts only then; otherwise it hides and is not counted.
     let nc = Colorizer::new(false);
     let replacement_owner = |entries: &[GraphEntry]| {
         let mut owner = entry_with_use(
@@ -61,8 +57,6 @@ fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
         e
     };
 
-    // The uninstall-tagged row trails, the replacement row hides
-    // (there is no replacement entry in this list at all).
     let mut entry = entry_with_use(
         PretendOutcome::New {
             version: "2.0".into(),
@@ -127,10 +121,6 @@ fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
         "the hidden row is not counted: {summary}"
     );
 
-    // The B0b p2c shape: the replacement's `~dev-libs/bparent-1.1`
-    // BDEPEND is unsatisfied (no installed bparent in
-    // `/nonexistent`), so the row prints inline after the replacement
-    // (display index 2) and counts.
     let entries = [
         replacement_owner(&[]),
         entry_with_use(
@@ -163,8 +153,7 @@ fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
         (1, 0)
     );
 
-    // `--columns` suppresses the line but the counter still sees it
-    // (real counts every Blocker node in the merge list).
+    // `--columns` suppresses the line but not the count.
     let entries = [replacement_owner(&[]), replacement()];
     assert!(
         collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
@@ -185,9 +174,8 @@ fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
 
 #[test]
 fn replacement_wait_follows_the_selected_disjunctive_branch() {
-    // #76 B2 / B0 q1-q3: `dep_zapdeps` collapses a `|| ( … )` group
-    // before the serializer runs, so a wait chain through the **kept**
-    // branch is a wait, and a suppressed branch is not followed.
+    // Portage: dep_check.py, dep_zapdeps. A wait through the kept `||`
+    // branch prints; a suppressed branch is not followed.
     let nc = Colorizer::new(false);
     let owner = || {
         let mut e = entry_with_use(
@@ -241,8 +229,6 @@ fn replacement_wait_follows_the_selected_disjunctive_branch() {
         key: 4,
     };
 
-    // `|| ( ~bparent-1.1 absent )`: the wait branch is the kept one
-    // (B0 q1), so the row prints inline after the replacement.
     let entries = [
         owner(),
         replacement(vec![
@@ -261,9 +247,6 @@ fn replacement_wait_follows_the_selected_disjunctive_branch() {
     assert_eq!(inline.len(), 1, "the kept disjunctive wait prints a row");
     assert_eq!(inline[0].0, 1, "after the replacement entry");
 
-    // `|| ( ~other-1.0 ~bparent-1.1 )`: both branches are in graph,
-    // the first wins (B0 q2's all-in-graph ranking), so the
-    // bparent alternative is suppressed and the row hides.
     let mut other = entry_with_use(
         PretendOutcome::New {
             version: "1.0".into(),
@@ -296,9 +279,8 @@ fn replacement_wait_follows_the_selected_disjunctive_branch() {
 
 #[test]
 fn kept_alt_for_display_is_derived_once_and_shared() {
-    // #84: the display list's shared kept set must equal the
-    // per-call `kept_alt_branches` derivation it replaces, and must
-    // stay empty (free) when no `Replacement` row can consult it.
+    // The shared kept set must equal the per-call derivation it replaces,
+    // and stays empty when no `Replacement` row can consult it.
     let root = Path::new("/nonexistent");
     let plain = entry_with_use(
         PretendOutcome::New {
@@ -359,8 +341,6 @@ fn kept_alt_for_display_is_derived_once_and_shared() {
     }];
     let entries = [owner, replacement];
     let shared = kept_alt_for_display(&entries, root, 0..entries.len(), &HashMap::new());
-    // The owner-restricted form (what `trailing_blocker_lines` uses)
-    // derives for the owner that carries the row and for nobody else.
     assert_eq!(
         kept_alt_for_display(&entries, root, [0], &HashMap::new()),
         shared
@@ -371,13 +351,10 @@ fn kept_alt_for_display_is_derived_once_and_shared() {
         shared, on_demand,
         "the shared set is the derivation it replaces"
     );
-    // The predicate consults exactly the shared set: the kept branch
-    // waits on the replacement.
     assert_eq!(
         replacement_wait_index(&entries, root, 0, &blocker, &shared),
         Some(1)
     );
-    // And an empty set (no derivation) suppresses the same edge.
     assert_eq!(
         replacement_wait_index(&entries, root, 0, &blocker, &[]),
         None

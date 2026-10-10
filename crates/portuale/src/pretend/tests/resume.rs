@@ -2,13 +2,7 @@ use super::*;
 
 #[test]
 fn resume_pretend_end_notice_prints_once_like_portage() {
-    // Backlog #231 (a): real reaches `post_emerge` after the
-    // `--resume --pretend` display too (`actions.py:4289-4297`),
-    // whose `not _pkgs_changed` arm prints the notice under
-    // `--pretend` (`post_emerge.py:112-117`) -- exactly once (the
-    // pre-resolution notice is itself `--pretend`-gated,
-    // `actions.py:4266`). A stale list + `FEATURES="news"` on an
-    // isolated ROOT; no merge runs.
+    // Portage: actions.py, post_emerge.py. `--resume --pretend` prints the end notice exactly once.
     let portuale_bin = built_portuale_bin();
     let (root, _) = stale_resume_root("news_pretend");
     let tmp = TempDir::new("resume_news_pretend").keep();
@@ -39,13 +33,8 @@ fn resume_pretend_end_notice_prints_once_like_portage() {
 
 #[test]
 fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage() {
-    // Backlog #231 (a): real's pre-resolution notice precedes all
-    // of `action_build`'s resume handling (`actions.py:4266` before
-    // `:4289`), so even a `--resume --skipfirst` that empties the
-    // list prints it -- while the post notice stays silent (the
-    // vdb never changed; real `post_emerge.py:112-117`
-    // early-returns on a non-`--pretend` run). Fast: a single-item
-    // stale list, no merge runs.
+    // Portage: actions.py. The pre-resolution notice precedes resume handling;
+    // the post notice needs a changed vdb.
     let portuale_bin = built_portuale_bin();
     let root = single_resume_root("news_empty");
     let tmp = TempDir::new("resume_news_empty").keep();
@@ -76,16 +65,11 @@ fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage() {
 
 #[test]
 fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
-    // #179: real `_emerge/actions.py` returns from the `--pretend`
-    // branch (`display(...)`, `return os.EX_OK`) before `Scheduler`
-    // exists -- and before the `resume_backup` rotation -- so a
-    // preview never touches `mtimedb`. A stale list must come back
-    // byte-identical, and no fresh list may appear on a bare root.
+    // Portage: actions.py. `--pretend` returns before the scheduler, so it
+    // never touches the resume list.
     let portuale_bin = built_portuale_bin();
     let tmp = TempDir::new("resume_no_write_pretend").keep();
 
-    // Bare root first: `--pretend` resolves and prints, and leaves
-    // no `mtimedb` behind at all.
     let bare = tmp.join("bare");
     let output = std::process::Command::new(&portuale_bin)
         .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
@@ -111,8 +95,6 @@ fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
         "--pretend must not create an mtimedb"
     );
 
-    // Stale list present: byte-identical afterwards (neither a fresh
-    // save nor the rotation may run).
     let (root, before) = stale_resume_root("pretend");
     let output = std::process::Command::new(&portuale_bin)
         .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
@@ -139,10 +121,7 @@ fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
 
 #[test]
 fn entries_not_merged_tags_and_includes_both_source_and_binary_entries() {
-    // Real portage's own resume mergelist can hold both a source
-    // and a binary entry together -- `source_entries_not_merged`
-    // (this function's own former name) used to silently drop
-    // every `Binary` entry instead of tagging and including it.
+    // The resume list can hold source and binary entries together; both are tagged.
     let root = TempDir::new("pretend-test-entries_not_merged_binary").keep();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -165,8 +144,6 @@ fn entries_not_merged_tags_and_includes_both_source_and_binary_entries() {
     });
     let entries = vec![source_entry, binary_entry];
 
-    // Neither has a real vdb CONTENTS under `root` -- both count as
-    // "not merged".
     let unmerged = entries_not_merged(&root, &entries);
     assert_eq!(unmerged.len(), 2);
     assert_eq!(
@@ -193,12 +170,7 @@ fn entries_not_merged_tags_and_includes_both_source_and_binary_entries() {
 
 #[test]
 fn up_front_save_covers_exactly_the_failure_path_tail_when_nothing_merged() {
-    // #168: the up-front save (`emerge_build::resume_cpv` over the
-    // whole plan) and the failure-path tail (`entries_not_merged`)
-    // agree when no merge has landed yet -- so keeping the failure
-    // writes alongside the new up-front save + per-merge shrink is
-    // provably a harmless redundancy, and failure behaviour is
-    // unchanged.
+    // The up-front save and the failure-path tail agree when nothing merged yet.
     let root = TempDir::new("pretend-test-up_front_matches_failure_tail").keep();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();

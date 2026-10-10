@@ -6,9 +6,8 @@ fn fixtures_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
 
-/// A [`NewsContext`] for the unit tests: the fixture tree's own
-/// `default` profile and `amd64`, owned by this process's own
-/// uid/gid (real's unprivileged mode) so no chown is ever needed.
+/// Test `NewsContext`: the fixture `default` profile on `amd64`, self-owned so no
+/// chown is ever needed.
 fn test_news_context() -> NewsContext {
     NewsContext {
         profile: Some("default".to_string()),
@@ -20,15 +19,8 @@ fn test_news_context() -> NewsContext {
     }
 }
 
-/// An isolated ROOT for the fix-round-1 notice tests: a temp dir
-/// sharing the fixtures' own vdb read-only (the same isolation
-/// `unread_news_counts_reuses_the_check_news_evaluation` and the
-/// contract suite's `_check_news_isolated_root` use) plus a config
-/// with `news` in the resolved `FEATURES`. Returns the scratch
-/// base (for cleanup), the ROOT, the two fixture repos, and the
-/// config. Prints from the notice helpers land in the test
-/// capture; assertions observe the state dir (evaluation ran) or
-/// its absence (gated off before any evaluation).
+/// An isolated ROOT sharing the fixtures' vdb read-only, with `news` in the
+/// resolved `FEATURES`. Returns the scratch base, the ROOT, the repos, and the config.
 fn news_notice_test_tree(
     tag: &str,
 ) -> (
@@ -70,8 +62,7 @@ fn news_notice_test_tree(
 }
 
 /// A scratch `ROOT` with a single-item stale resume list, so
-/// `--resume --skipfirst` empties it and takes the "nothing to do"
-/// exit without merging anything (fast, hermetic).
+/// `--resume --skipfirst` exits with nothing to do and no merge.
 fn single_resume_root(tag: &str) -> std::path::PathBuf {
     let root = TempDir::new(&format!("resume_single_{tag}")).keep();
     crate::mtimedb::write_resume_list(
@@ -89,9 +80,7 @@ fn single_resume_root(tag: &str) -> std::path::PathBuf {
     root
 }
 
-/// Plain recursive copy (files + dirs + symlinks) for fixture
-/// trees (`fixtures/var` has no symlinks; `fixtures/etc/portage`
-/// carries `make.profile`, repointed absolutely after the copy).
+/// Plain recursive copy (files + dirs + symlinks) for fixture trees.
 #[cfg(unix)]
 fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
     std::fs::create_dir_all(dst).unwrap();
@@ -110,8 +99,7 @@ fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
     }
 }
 
-/// `fixture_resolve_env` plus `FEATURES="news"` opted in -- the
-/// same layering the contract suite's `_news_env` uses.
+/// `fixture_resolve_env` with `FEATURES="news"` opted in.
 fn news_resolve_env(
     root: &std::path::Path,
     portage_tmpdir: &std::path::Path,
@@ -121,9 +109,8 @@ fn news_resolve_env(
     env
 }
 
-/// A stub `eselect` on `PATH`: an executable shell script logging
-/// its argv to a marker file. Returns the stub dir (to prepend to
-/// `PATH`) and the marker path.
+/// A stub `eselect` on `PATH`, logging its argv to a marker file. Returns the
+/// stub dir (to prepend to `PATH`) and the marker path.
 #[cfg(unix)]
 fn eselect_stub(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     use std::os::unix::fs::PermissionsExt;
@@ -138,10 +125,8 @@ fn eselect_stub(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     (dir, marker)
 }
 
-/// Runs `emerge <ask_flags> --oneshot dev-libs/schedok` on a pty and
-/// answers "No" to both the news prompt and the merge prompt. Asserts
-/// the shared outcome (exit 130, one news notice, no eselect spawn)
-/// and returns stdout for the caller's own checks.
+/// Runs `emerge <ask_flags> --oneshot dev-libs/schedok` on a pty, declining both
+/// the news prompt and the merge prompt. Returns stdout for the caller's checks.
 #[cfg(unix)]
 fn ask_read_news_declined(label: &str, ask_flags: [&str; 2]) -> String {
     use std::io::Write;
@@ -202,14 +187,8 @@ fn ask_read_news_declined(label: &str, ask_flags: [&str; 2]) -> String {
     stdout.into_owned()
 }
 
-/// `pre_exec` for the backlog #240 SIGINT tests: the child leaves
-/// the test's session and process group (`setsid`), takes the pty
-/// slave as its controlling terminal (`TIOCSCTTY`), and makes
-/// itself the foreground group (`tcsetpgrp`). Only then does the
-/// slave line discipline turn a `^C` byte written to the master
-/// into a real SIGINT for the child (a plain spawned child has no
-/// foreground group, so the byte is swallowed and the test would
-/// hang). Only async-signal-safe syscalls run here.
+/// `pre_exec` putting the child in the pty's foreground group, so a `^C` byte
+/// written to the master arrives as SIGINT. Only async-signal-safe syscalls run here.
 #[cfg(unix)]
 fn pty_foreground_pre_exec() -> std::io::Result<()> {
     // SAFETY: `setsid`/`ioctl`/`tcsetpgrp`/`getpid` are plain
@@ -229,12 +208,8 @@ fn pty_foreground_pre_exec() -> std::io::Result<()> {
     }
 }
 
-/// Drain the child's piped stdout until `marker` appears, with a
-/// hard deadline so a prompt regression fails loudly instead of
-/// hanging the suite. Returns every byte read so far; the caller
-/// keeps draining the pipe afterwards. EOF before the marker
-/// panics with the output so far (the child died before
-/// prompting).
+/// Drain the child's piped stdout until `marker` appears, with a hard deadline
+/// so a prompt regression fails instead of hanging. Returns every byte read so far.
 #[cfg(unix)]
 fn read_stdout_until_marker(
     pipe: &mut std::process::ChildStdout,
@@ -279,12 +254,9 @@ fn read_stdout_until_marker(
     }
 }
 
-/// Spawn `emerge --ask ...` for a backlog #240 SIGINT test: pty
-/// stdin in the child's foreground group (so `^C` raises SIGINT),
-/// both outputs piped, stderr drained on a thread from the start
-/// (so a chatty resolve can never block on a full pipe while the
-/// test polls stdout for the prompt). Returns the child, the
-/// master, the stdout pipe, and the stderr-drain handle.
+/// Spawn `emerge --ask ...` for a SIGINT test: pty stdin in the child's
+/// foreground group, both outputs piped, stderr drained on a thread from the
+/// start. Returns the child, the master, the stdout pipe, and the drain handle.
 #[cfg(unix)]
 fn sigint_prompt_child(
     portuale_bin: &std::path::Path,
@@ -327,15 +299,9 @@ fn sigint_prompt_child(
 }
 
 /// Spawns `args` on a pty with the env `make_env` builds, waits for
-/// `prompt` on stdout, then sends `^C` through the pty. Asserts what
-/// every interrupted prompt shares with Portage's `UserQuery.query`
-/// (`_emerge/UserQuery.py:74-76`): exit 130 by exit, not by signal,
-/// one `Interrupted.` and no `Quitting.`. Returns stdout.
-///
-/// The `^C` goes out only after the prompt text is seen, so it cannot
-/// strike during startup or the resolve, where SIGINT must still kill
-/// the process. Delivery needs the foreground group from
-/// `pty_foreground_pre_exec`.
+/// `prompt` on stdout, then sends `^C`. Asserts exit 130 with one
+/// `Interrupted.` and no `Quitting.`. Returns stdout.
+/// Portage: UserQuery.py, query.
 #[cfg(unix)]
 fn ctrl_c_at_prompt(
     label: &str,
@@ -386,15 +352,8 @@ fn ctrl_c_at_prompt(
     text
 }
 
-/// ROOT the test caller cannot own, so `privileges::is_privileged`
-/// is false for a non-root caller: `/usr` reliably exists, is
-/// root-owned and not world-writable, so its non-existent child is
-/// an unowned target (the same trick as
-/// `privileges::tests::a_dir_the_caller_cannot_write_is_not_privileged`
-/// and pmtest's `..._refuse_to_merge_into_a_root_owned_tree`).
-/// Every #246 pin returns early for a root caller -- the privilege
-/// gate only fires for a non-root caller, like those pins.
-/// Returns `None` for a root caller (the test returns early).
+/// An unowned ROOT for the privilege tests; `None` for a root caller, whose test
+/// returns early.
 #[cfg(unix)]
 fn ask_pretend_unowned_root() -> Option<std::path::PathBuf> {
     // SAFETY: `geteuid` has no preconditions.
@@ -407,20 +366,9 @@ fn ask_pretend_unowned_root() -> Option<std::path::PathBuf> {
 }
 
 /// Run the built binary twice under `--pretend` -- once with
-/// `--X=True`, once with the bare `--X` -- against the committed
-/// fixture tree on a shared scratch `ROOT`, and assert the two runs
-/// are byte-identical (exit code, stdout, stderr). Backlog #241:
-/// real's `true_y_or_n` choices
-/// (`_emerge/main.py:320-322,365-371,405-415,446-449,612-623,697,732-747`;
-/// normalized `in true_y` per option) admit `=True` for eleven
-/// options portuale parsed narrowly (`=y`/`=n` only, rc 2
-/// `unrecognized option` for nine of them and a wrong
-/// `(choose from "y", "n")` rejection for the two
-/// autounmask-keep options); `=True` must behave exactly like the
-/// bare flag. `expected_rc` pins the shared exit code (0 for the
-/// resolving shapes, 1 for the two autounmask-keep shapes whose
-/// fixtures fail like real). `--pretend` never writes, so sharing
-/// one `ROOT` across both runs is hermetic.
+/// `--X=True`, once with the bare `--X` -- and assert the two runs
+/// are byte-identical (exit code, stdout, stderr).
+/// Portage `true_y_or_n` admits `=True` for these options.
 fn true_spelling_matches_bare(flag_eq_true: &str, flag_bare: &str, atom: &str, expected_rc: i32) {
     let portuale_bin = built_portuale_bin();
     let base = TempDir::new("true_y_or_n").keep();
@@ -461,8 +409,7 @@ fn true_spelling_matches_bare(flag_eq_true: &str, flag_bare: &str, atom: &str, e
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// The `portuale` binary next to the current test executable (same
-/// layout `ask_without_a_tty_...` already relies on).
+/// The `portuale` binary next to the current test executable.
 fn built_portuale_bin() -> std::path::PathBuf {
     let mut portuale_bin = std::env::current_exe().expect("current test exe");
     portuale_bin.pop();
@@ -473,11 +420,8 @@ fn built_portuale_bin() -> std::path::PathBuf {
     portuale_bin
 }
 
-/// A scratch `ROOT` with nothing but a stale multi-item resume list
-/// (multi-item so the `resume_backup` rotation would *also* rewrite
-/// the file if it ran -- the byte comparison below pins the rotation
-/// stays out too). Returns the root plus the file's bytes before the
-/// run under test.
+/// A scratch `ROOT` with a stale multi-item resume list. Returns the root plus
+/// the file's bytes before the run under test.
 fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
     let root = TempDir::new(&format!("resume_no_write_{tag}")).keep();
     let stale = vec![
@@ -505,10 +449,8 @@ fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
     (root, before)
 }
 
-/// Fixture-config env for a spawned `portuale emerge` that resolves
-/// (never merges): the committed fixture tree as config, the scratch
-/// dir as `ROOT`, everything else absolute so the test holds from
-/// any working directory.
+/// Fixture-config env for a spawned `portuale emerge` that resolves: the
+/// committed fixture tree as config and the scratch dir as `ROOT`.
 fn fixture_resolve_env(
     root: &std::path::Path,
     portage_tmpdir: &std::path::Path,
@@ -531,11 +473,8 @@ fn fixture_resolve_env(
     ]
 }
 
-/// The slave path of `master`, through the reentrant `ptsname_r`:
-/// plain `ptsname` returns a pointer into one static buffer, so two
-/// tests creating ptys on parallel threads could open each other's
-/// slave -- crossed answers, `--ask should only be used in a
-/// terminal`, EIO at `TIOCSCTTY`, hung prompts (#321).
+/// The slave path of `master`, through the reentrant `ptsname_r`: plain
+/// `ptsname` shares one static buffer across threads.
 #[cfg(unix)]
 fn pty_slave_path(master: libc::c_int) -> std::ffi::CString {
     let mut buf = [0 as libc::c_char; 128];
@@ -546,10 +485,8 @@ fn pty_slave_path(master: libc::c_int) -> std::ffi::CString {
     unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_owned()
 }
 
-/// A pty pair without any external helper: the child answers `--ask`
-/// through the slave (its stdin), satisfying the up-front isatty
-/// gate, while the test writes the answer into the master. `libc`
-/// is already a dependency (`stdin_is_tty` uses it).
+/// A pty pair: the child answers `--ask` through the slave (its stdin), while
+/// the test writes the answer into the master.
 #[cfg(unix)]
 fn pty_pair() -> (std::fs::File, std::process::Stdio) {
     use std::os::fd::FromRawFd;
@@ -564,36 +501,16 @@ fn pty_pair() -> (std::fs::File, std::process::Stdio) {
             libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
         );
         assert!(slave >= 0, "pty slave open failed");
-        // Backlog #234 / #321: close-on-exec on both ends, set at open
-        // time (`O_CLOEXEC`), not by a later `fcntl`: a sibling test
-        // forking in that window keeps a private copy of the fd past its
-        // exec (a child's fd table is copied at fork), which under load
-        // holds this pty open. Without it the
-        // spawned child inherits the master, so dropping the test's
-        // `master` never delivers EOF to the child's slave read (the
-        // EOF test hung on exactly this). The stdio dup onto fd 0
-        // clears the flag on the dup, so the child's stdin survives.
+        // Both ends are `O_CLOEXEC` at open time, so a forked sibling never holds
+        // the pty open past its exec (the stdio dup onto fd 0 clears the flag).
         let master_file = std::fs::File::from_raw_fd(master);
         let slave_stdio = std::process::Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave));
         (master_file, slave_stdio)
     }
 }
 
-/// Backlog #259: bound every wait on a pty-driven child. Plain
-/// `wait_with_output`/`wait` has no timeout, so a child stuck in
-/// `read_prompt_line`'s blocking `libc::read` (the #259 hang: the
-/// slave sat in `wait_woken` and the test binary waited 20 hours)
-/// takes the whole `cargo test` run with it. Polls `try_wait`
-/// against a bound and kills the child when it expires.
-///
-/// The bound is 60 s by default -- orders of magnitude past these
-/// prompt tests' real runtime (sub-second) and still short enough
-/// to fail a CI job instead of hanging it.
-/// `PORTUALE_TEST_PTY_WATCHDOG_SECS` overrides it: set it low to
-/// reproduce a hang, or high to give a loaded machine room. The
-/// `watchdog:` prefix on the timeout message is the race-chase hook
-/// -- the first timeout's captured output is the evidence for why
-/// the child never woke.
+/// Bound every wait on a pty-driven child (default 60 s, overridable); on expiry
+/// kill the child and panic with a `watchdog:` prefix carrying its output so far.
 fn pty_watchdog_bound() -> std::time::Duration {
     let secs = std::env::var("PORTUALE_TEST_PTY_WATCHDOG_SECS")
         .ok()
@@ -602,11 +519,8 @@ fn pty_watchdog_bound() -> std::time::Duration {
     std::time::Duration::from_secs(secs.max(1))
 }
 
-/// Bounded wait collecting the child's piped stdout/stderr. The
-/// pty-driven `--ask`/`--read-news` tests answer through the
-/// master and read the merged result back; on timeout the child is
-/// killed and the panic carries whatever it had printed, which is
-/// what the #259 race chase reads.
+/// Bounded wait collecting the child's piped stdout/stderr; on timeout the child
+/// is killed and the panic carries whatever it had printed.
 #[cfg(unix)]
 fn wait_pty_output(mut child: std::process::Child) -> std::process::Output {
     let bound = pty_watchdog_bound();
@@ -635,12 +549,8 @@ fn wait_pty_output(mut child: std::process::Child) -> std::process::Output {
     }
 }
 
-/// Bounded wait for the `sigint_prompt_child` shape, whose stdout
-/// and stderr are already owned by the caller's drain threads --
-/// there is nothing left for `wait_with_output` to collect, so this
-/// returns the exit status alone. Same bound and `watchdog:`
-/// panic; the pre-wait marker text the caller already holds is the
-/// chase evidence for these tests.
+/// Bounded wait returning the exit status alone, for children whose outputs are
+/// already owned by the caller's drain threads.
 #[cfg(unix)]
 fn wait_pty_status(mut child: std::process::Child) -> std::process::ExitStatus {
     let bound = pty_watchdog_bound();

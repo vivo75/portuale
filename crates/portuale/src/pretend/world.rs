@@ -2,33 +2,10 @@
 
 use crate::pretend::*;
 
-/// Reads `<root>/var/lib/portage/world` (real portage's own `WORLD_FILE`
-/// -- `lib/portage/const.py`) into a list of atom strings, one per line,
-/// with the same comment/blank-line handling every other config file
-/// portuale already reads uses. A missing file is not an error -- an
-/// empty, or never-yet-created, world is a real, valid state (e.g. a
-/// fresh `ROOT`), not a mistake.
-///
-/// Only plain atom lines are read, via a leading `@` check -- this is
-/// real, not a simplification: real `WorldSelectedPackagesSet`'s own
-/// `ItemFileLoader` validates each line with a plain `isvalidatom`
-/// (`lib/portage/env/validators.py`'s own `ValidAtomValidator`, no `@`
-/// bypass), so a `@`-prefixed line in *this* file specifically really
-/// would just fail validation and be dropped in real portage too. A
-/// nested `@some-set` reference lives in a genuinely separate file --
-/// see `read_world_sets`'s own doc comment for the other half of real
-/// `@world`'s union (`WorldSelectedSet` in `lib/portage/_sets/files.py`).
-/// `@system` (the profile's own `packages` file -- see
-/// `portage_profile::Config::system_packages`) is a separate, different
-/// mechanism with its own expansion in `run` below, not handled by this
-/// function at all. Only the literal token `@world` triggers *this*
-/// expansion -- `@some-set`, `@another-random-name`, etc. as a top-level
-/// target fall through to the normal atom-parsing path and get a clear
-/// "invalid atom" error, not a silent no-op.
-///
-/// Read through the root's installed-database backend
-/// ([`portage_vdb::InstalledDb::world`], feat#157 S1.6; on `files` the
-/// same one `read_to_string`).
+/// Reads `<root>/var/lib/portage/world`, one atom per line. A missing file is
+/// empty, not an error. `@`-prefixed lines are dropped here; nested sets live
+/// in `world_sets` (see `read_world_sets`).
+/// Portage: files.py, WorldSelectedPackagesSet.
 pub(crate) fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
     portage_vdb::for_root(root)
         .world()
@@ -47,15 +24,9 @@ pub(crate) fn world_read_error(e: portage_vdb::Error) -> String {
     }
 }
 
-/// Real `@selected` (`WorldSelectedSet` -- `cnf/sets/portage.conf`): the
-/// world file's own package atoms unioned with every nested set named in
-/// `world_sets` (real `chain(WorldSelectedPackagesSet,
-/// WorldSelectedSetsSet)`). Real `@world` is `@profile ∪ @selected ∪
-/// @system` (`_sets/__init__.py:97-98`); the callers that expand `@world`
-/// add the `@profile` (`Config::profile_packages`) and `@system`
-/// (`Config::system_packages`) halves themselves, sorted per real's
-/// `_resolve` (`depgraph.py:5500`). Errors carry their own `emerge: `
-/// prefix so every caller can just `eprintln!("{e}")`.
+/// The world file's atoms plus every set named in `world_sets`. Callers add the
+/// `@profile`/`@system` halves themselves. Errors carry an `emerge: ` prefix.
+/// Portage: files.py, WorldSelectedSet.
 pub(crate) fn expand_selected(root: &Path, config_root: &Path) -> Result<Vec<String>, String> {
     let mut atoms = read_world_atoms(root).map_err(|e| format!("emerge: {e}"))?;
     for name in read_world_sets(root).map_err(|e| format!("emerge: {e}"))? {
@@ -65,12 +36,9 @@ pub(crate) fn expand_selected(root: &Path, config_root: &Path) -> Result<Vec<Str
     Ok(atoms)
 }
 
-/// Real `@installed` (`EverythingSet.load`, `_sets/dbapi.py`): a
-/// `cat/pkg:slot` atom for every package under `<root>/var/db/pkg` --
-/// always slot-qualified, even for a lone installed slot (bug #338959,
-/// "avoid the possibility of unwanted upgrades"). Deduplicated + sorted
-/// here for deterministic output; real portage's own `_setAtoms` is an
-/// unordered set.
+/// A `cat/pkg:slot` atom per installed package, sorted and deduplicated. Always
+/// slot-qualified, even a lone slot.
+/// Portage: dbapi.py, EverythingSet.
 pub(crate) fn installed_set_atoms(root: &Path) -> Vec<String> {
     let mut atoms: Vec<String> = portage_repo::all_installed_packages(root)
         .into_iter()
@@ -81,27 +49,9 @@ pub(crate) fn installed_set_atoms(root: &Path) -> Vec<String> {
     atoms
 }
 
-/// Real `@preserved-rebuild` (`PreservedLibraryConsumerSet.load`,
-/// `lib/portage/_sets/libs.py`): the installed packages that still link
-/// against a library only kept alive by `FEATURES=preserve-libs`. For
-/// every path in the `preserved_libs_registry`,
-/// `consumers |= linkmap.findConsumers(path, greedy=False)`; then
-/// `consumers -= <every preserved path>` ("Don't rebuild packages just
-/// because they contain preserved libs that happen to be consumers of
-/// other preserved libs"); then each surviving consumer path maps to
-/// `{cp}:{slot}` of its owning installed package (real
-/// `mapPathsToAtoms` via `linkmap.getOwners` -- here the linkmap object's
-/// own recorded `owner`, since every consumer is itself an indexed
-/// `NEEDED.ELF.2` object). A consumer path with no indexed owner is
-/// skipped (real: a preserved lib of an already-uninstalled package).
-/// Slot-qualified like `@installed`, sorted + deduplicated for
-/// deterministic output. Empty registry -> empty list.
-///
-/// A preserved library whose owning package has already left the vdb is
-/// no longer an indexed object, so `find_consumers` can't look it up --
-/// the same `basename == soname` fallback `ebuild_merge::find_unused_
-/// preserved_libs` uses (`needed_elf::soname_consumers`) stands in for
-/// real `LinkageMapELF.rebuild()`'s `scanelf`-of-the-registry branch.
+/// Installed packages still linking against a preserved library, as
+/// `cat/pkg:slot`, sorted and deduplicated. An empty registry gives empty.
+/// Portage: libs.py, PreservedLibraryConsumerSet.
 pub(crate) fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
     let plib_dict = ebuild_merge::preserved_lib_paths(root);
     if plib_dict.is_empty() {
@@ -150,18 +100,9 @@ pub(crate) fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
     atoms
 }
 
-/// Backlog #232: the pure "what would be added" half of
-/// `update_world_file` (real `Scheduler._world_atom` +
-/// `depgraph.saveNomergeFavorites` -- see the writer's own doc comment
-/// for the full grounding), split out so the
-/// selective-without-`--oneshot` deferral arm
-/// (`_emerge/actions.py:514-516` -- the prompt moves into
-/// `depgraph.saveNomergeFavorites`) can show real's
-/// `Would you like to add these packages to your world favorites?`
-/// prompt (`depgraph.py:11376-11386`) *before* anything is recorded.
-/// Returns the new world atoms in argument order (a duplicate argument
-/// repeats); both the writer and the `--ask` display sort their own
-/// print order like real (`depgraph.py:11373-11374`).
+/// The new world atoms in argument order, for the pre-record `--ask` prompt.
+/// `@set` targets belong in `world_sets`, not here.
+/// Portage: depgraph.py, saveNomergeFavorites.
 pub(crate) fn world_file_additions(
     current: &[String],
     target_atoms: &[&str],
@@ -174,22 +115,19 @@ pub(crate) fn world_file_additions(
 
     for raw in target_atoms {
         if raw.starts_with('@') {
-            // A `@set` target belongs in `world_sets`, not `world` --
-            // a v1 cut (see `read_world_sets`).
+            // A `@set` target belongs in `world_sets`, not `world`.
             continue;
         }
         let Some(atom) = parse_atom(raw) else {
             continue;
         };
-        // The resolved entry for this cp (a top-level `NoVisibleCandidate`
-        // aborts the whole resolve before we get here, so it's present).
         let Some(entry) = entries
             .iter()
             .find(|e| e.category == atom.category && e.package == atom.package)
         else {
             continue;
         };
-        // Real "unslotted system packages will not be stored in world".
+        // Unslotted `@system` members are never recorded.
         let cpv_any = format!("{}/{}-0", atom.category, atom.package);
         let in_system = system_atoms
             .iter()
@@ -199,11 +137,8 @@ pub(crate) fn world_file_additions(
             continue;
         }
 
-        // Real `create_world_atom`: keep the arg's `:slot` iff (a) the
-        // arg actually carried one and it matches the resolved slot, and
-        // (b) `cat/pkg` is "slotted" -- >1 SLOT in the repo, or a lone
-        // SLOT that isn't "0". `atom.slot` is the main slot only (a
-        // `:2/9` arg still records `cat/pkg:2`, matching `pkg.slot_atom`).
+        // The arg's `:slot` is kept only when it matches the resolved slot and the
+        // cp is slotted (several SLOTs, or one non-`"0"` SLOT).
         let slot_suffix = atom.slot.as_deref().filter(|s| {
             entry.slot.as_deref() == Some(s)
                 && portage_repo::list_candidates(repos, &atom.category, &atom.package)
@@ -243,27 +178,9 @@ pub(crate) struct UpdateWorldFileArgs<'a> {
     pub(crate) onlydeps: bool,
 }
 
-/// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
-/// a successful non-`--pretend` `emerge <atom>`, each directly-requested
-/// **plain** target atom (not a dependency, not a `@set`) is recorded in
-/// `<root>/var/lib/portage/world` -- whether it merged or was already
-/// installed. `--oneshot`/`--onlydeps` suppress this entirely (real
-/// `_world_atom`'s own early-return set). The recorded atom is the
-/// argument's own `cat/pkg` (plus `::repo` when the arg carried one),
-/// EXCEPT that a `cat/pkg:slot` argument is recorded slot-qualified when
-/// `cat/pkg` is genuinely slotted -- real `create_world_atom`: "If the
-/// argument atom is precise enough to identify a specific slot then a
-/// slot atom will be returned." "Slotted" here is real's own test: more
-/// than one `SLOT` available in the repo, or a single `SLOT` that isn't
-/// `"0"`. v1 cuts still: a *version*-pinned arg that identifies one slot
-/// (real records the slot atom there too); the vdb-only multislot
-/// fallback; system-virtual exclusion; and the `@set` target -> `world_sets`
-/// half (needs `emerge @set` build support, not implemented yet).
-/// An unslotted `@system` member is not recorded (real "unslotted system
-/// packages will not be stored in world"). Already-present atoms are
-/// left alone; when anything is added the file is rewritten sorted +
-/// deduplicated (real `WorldSelectedPackagesSet.write`). Prints the real
-/// `>>> Recording <atom> in "world" favorites file...` line per addition.
+/// Record directly-requested plain targets in the world file after a successful
+/// run. `--oneshot`/`--onlydeps` suppress it. Prints `>>> Recording ...` per addition.
+/// Portage: depgraph.py, saveNomergeFavorites.
 pub(crate) fn update_world_file(args: UpdateWorldFileArgs<'_>) -> Result<(), String> {
     let UpdateWorldFileArgs {
         root,
@@ -279,12 +196,7 @@ pub(crate) fn update_world_file(args: UpdateWorldFileArgs<'_>) -> Result<(), Str
     }
     let mut current = read_world_atoms(root)?;
     let mut added = world_file_additions(&current, target_atoms, entries, system_atoms, repos);
-    // Real sorts the combined additions before both the `--ask` prompt
-    // and the `>>> Recording` loop (`depgraph.py:11373-11374`); each
-    // file half sorts its own print order here (the file itself was
-    // always rewritten sorted; only multi-addition stdout order
-    // changes, which no pin records -- the cross-file interleave of a
-    // mixed world + world_sets run stays file-grouped, see the arm).
+    // Sorted before printing, like Portage.
     added.sort();
     for world_atom in &added {
         println!(">>> Recording {world_atom} in \"world\" favorites file...");
@@ -303,12 +215,9 @@ pub(crate) fn update_world_file(args: UpdateWorldFileArgs<'_>) -> Result<(), Str
     Ok(())
 }
 
-/// Backlog #232: the pure "what would be added" half of
-/// `update_world_sets_file` (see its doc comment for the grounding),
-/// split out for the same pre-record `--ask` prompt as
-/// `world_file_additions`. Takes the `@`-prefixed current lines and
-/// returns the new ones, in argument order; the writer sorts its own
-/// print order like real (`depgraph.py:11373-11374`).
+/// The new `@set` lines in argument order, for the same pre-record `--ask`
+/// prompt as `world_file_additions`.
+/// Portage: depgraph.py, saveNomergeFavorites.
 pub(crate) fn world_sets_additions(current: &[String], set_names: &[String]) -> Vec<String> {
     let before: std::collections::HashSet<String> = current.iter().cloned().collect();
     let mut added = Vec::new();
@@ -322,38 +231,9 @@ pub(crate) fn world_sets_additions(current: &[String], set_names: &[String]) -> 
     added
 }
 
-/// Backlog #232 review (Important-2): real's `[usersets]`
-/// `world-candidate` default -- every file set under
-/// `<config_root>/etc/portage/sets` is a world candidate
-/// (`lib/portage/_sets/__init__.py:133`, shipped as
-/// `cnf/sets/portage.conf`) unless the user overrides it in
-/// `sets.conf` (`man portage.5`: settings there override; same-named
-/// sections merge across files with later wins, via
-/// `util/configparser.py:read_configs`). Real applies the merged
-/// `[usersets]` flag to every set its multiset builds
-/// (`_sets/__init__.py:258-262`); the deferral gate
-/// (`actions.py:500-512`) and the record (`depgraph.py:11366`) then
-/// skip the non-candidates. Returns false only on an explicit
-/// `world-candidate = false` (real `ConfigParser.getboolean`
-/// spelling) in the `[usersets]` section of
-/// `<config_root>/etc/portage/sets.conf`, or of a file under
-/// `<config_root>/etc/portage/sets.conf/` (sorted walk, later wins --
-/// real's own `_getfiles` yields the directory form or the file form,
-/// never both). Section names are case-sensitive, option names are
-/// not (real `ConfigParser` semantics). Anything missing, unreadable,
-/// or unparsable stays a candidate -- portuale never suppresses a
-/// record it cannot prove real suppresses. That includes a
-/// `world-candidate` value `getboolean` rejects, where real's
-/// `_parse` (`_sets/__init__.py:259-262`) raises and aborts: a
-/// deliberate leniency, not fidelity. Cuts: per-set single
-/// sections (real routes those through `singleBuilder`, which needs a
-/// `filename`, and a same-named file set then takes the "Redefinition
-/// of set" error path), repo `sets.conf` files (portuale models no
-/// per-repo set config) and the host-global `sets.conf` real also
-/// merges (`_sets/__init__.py:352-359`) are not consulted, and the
-/// directory form is read one level deep with no skips, where real
-/// walks it recursively and skips dot, tilde and VCS entries
-/// (`:365-375`).
+/// Whether file sets are world candidates: true unless `sets.conf` says
+/// otherwise. Unparsable values are ignored (a leniency: Portage aborts).
+/// Portage: _sets/__init__.py.
 pub(crate) fn usersets_world_candidate(config_root: &Path) -> bool {
     fn files_in(dir: &Path) -> Vec<std::path::PathBuf> {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -372,8 +252,7 @@ pub(crate) fn usersets_world_candidate(config_root: &Path) -> bool {
     } else {
         return true;
     };
-    // Real `getboolean` vocabulary; anything else (or a missing `=`)
-    // leaves the running value alone (see the doc comment).
+    // Unknown spellings leave the running value alone.
     fn as_bool(value: &str) -> Option<bool> {
         match value.trim().to_ascii_lowercase().as_str() {
             "1" | "yes" | "true" | "on" => Some(true),
@@ -382,11 +261,7 @@ pub(crate) fn usersets_world_candidate(config_root: &Path) -> bool {
         }
     }
     let mut candidate = true;
-    // Section state carries across files. This is a leniency, not real's
-    // behaviour: real `read_configs` (`util/configparser.py:29-58`) calls
-    // `read_file` once per file, which resets the section, so bare keys at
-    // the top of a later fragment raise `MissingSectionHeaderError` and
-    // abort. Malformed input only.
+    // Section state carries across files (a leniency: Portage resets it per file).
     let mut in_usersets = false;
     for path in &paths {
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -416,24 +291,9 @@ pub(crate) fn usersets_world_candidate(config_root: &Path) -> bool {
     candidate
 }
 
-/// Real `depgraph.saveNomergeFavorites`'s own `@set` half: after a
-/// successful non-`--pretend` `emerge @name`, each directly-given
-/// user-defined set arg is recorded as `@name` in
-/// `<root>/var/lib/portage/world_sets` (real `WorldSelectedSetsSet`).
-/// `@world`/`@system` are never routed here (they resolve without a set
-/// file, so they never land in `set_names`). Same suppression set as the
-/// world file itself (`--oneshot`/`--onlydeps`; `--buildpkgonly` is
-/// gated at the call site). Already-present names are left alone; on any
-/// add the file is rewritten sorted + deduplicated (comment / non-`@`
-/// lines dropped, exactly like `WorldSelectedSetsSet.write`). Prints the
-/// real `>>> Recording @name in "world_sets" favorites file...` line per
-/// addition. v1 cut: the real `world_candidate` gate for built-in sets
-/// like `@security` -- portuale only knows `@world`/`@system` as
-/// built-ins, and everything reaching here already resolved via a real
-/// set file, so it's a user set by construction. The user-level
-/// `[usersets] world-candidate = false` override is filtered at the
-/// call sites instead (see `usersets_world_candidate`), which pass an
-/// already-filtered `set_names`.
+/// Record directly-given set args in `world_sets` after a successful run.
+/// Prints `>>> Recording ...` per addition.
+/// Portage: depgraph.py, saveNomergeFavorites.
 pub(crate) fn update_world_sets_file(
     root: &Path,
     set_names: &[String],
@@ -448,8 +308,7 @@ pub(crate) fn update_world_sets_file(
         .map(|n| format!("@{n}"))
         .collect();
     let mut added = world_sets_additions(&current, set_names);
-    // Sorted print order like real (`depgraph.py:11373-11374`) -- see the
-    // same comment in `update_world_file`.
+    // Sorted before printing, like Portage.
     added.sort();
     for line in &added {
         println!(">>> Recording {line} in \"world_sets\" favorites file...");
@@ -472,23 +331,9 @@ pub(crate) fn update_world_sets_file(
     Ok(())
 }
 
-/// Reads `<root>/var/lib/portage/world_sets` (real portage's own
-/// `WORLD_SETS_FILE` -- `lib/portage/const.py`), a file genuinely
-/// SEPARATE from the world file above, listing every `@name` set
-/// reference the user has directly selected (e.g. via a prior `emerge
-/// SEPARATE from the world file above, listing every `@name` set
-/// reference the user has directly selected (e.g. via a prior `emerge
-/// --noreplace @some-set`) -- real `WorldSelectedSetsSet`, whose own
-/// validator (`lib/portage/_sets/files.py`) just checks each line
-/// starts with `@`. Real `@world` is the union of `WorldSelectedSetsSet`
-/// (this) with `WorldSelectedPackagesSet` (`read_world_atoms` above) --
-/// see `WorldSelectedSet.load`'s own `chain(self._pkgset, self._setset)`.
-/// A missing file is not an error, same "absence is a real, valid
-/// state" precedent the world file itself already established. Returns
-/// each name with its own leading `@` stripped, ready for
-/// `resolve_custom_set`.
-///
-/// Read through [`portage_vdb::InstalledDb::world_sets`] (S1.6).
+/// The `@name` set references in `world_sets`, with the `@` stripped. A missing
+/// file is empty, not an error.
+/// Portage: files.py, WorldSelectedSetsSet.
 pub(crate) fn read_world_sets(root: &Path) -> Result<Vec<String>, String> {
     portage_vdb::for_root(root)
         .world_sets()
@@ -496,36 +341,9 @@ pub(crate) fn read_world_sets(root: &Path) -> Result<Vec<String>, String> {
         .map_err(world_read_error)
 }
 
-/// Resolves one custom, file-based package set by `name` (no leading
-/// `@`), real portage's own default `usersets` source
-/// (`lib/portage/_sets/__init__.py`'s own `_create_default_config`:
-/// `class = StaticFileSet`, `directory =
-/// <config_root>/etc/portage/sets`, one file per set, the file's own
-/// path relative to that directory becoming the set's name) -- reads
-/// `<config_root>/etc/portage/sets/<name>`, same line format as the
-/// world file itself (one atom per line, `#`-comment/blank-line
-/// handling identical), *except* a line starting with `@` is itself
-/// another nested set reference here, resolved recursively -- real
-/// `StaticFileSet`'s own validator (unlike `WorldSelectedPackagesSet`'s
-/// stricter one) explicitly accepts a `@`-prefixed line too, and real
-/// `SetConfig.getSetAtoms` walks every such non-atom entry, recursing
-/// into any that start with `@` (`lib/portage/_sets/__init__.py`).
-/// `seen` is that same recursion's own `ignorelist` -- a name already
-/// being expanded on the current path contributes nothing further
-/// (silently, not an error) rather than looping forever; a *fresh*
-/// `seen` set is used for each top-level name in `read_world_sets`'s
-/// own list, matching real `getSetAtoms(setname, ignorelist=None)`'s
-/// own per-top-level-call default.
-///
-/// A `name` with no matching file is a real, immediate error (real
-/// `PackageSetNotFound`, eventually surfaced and fatal at every real
-/// call site in `lib/_emerge/actions.py`/`depgraph.py`) -- deliberately
-/// NOT the same "absence is valid" tolerance `read_world_atoms`/
-/// `read_world_sets` give their own *files*: those are optional,
-/// implicitly-checked-for state (a fresh `ROOT` may simply never have
-/// either), but a name explicitly listed in `world_sets` (or referenced
-/// by another set) pointing at nothing is a real configuration error,
-/// not an absence to tolerate.
+/// Expand one file-based set, following nested `@` references with a cycle guard.
+/// A missing file is an error, not an absence.
+/// Portage: _sets/__init__.py, StaticFileSet.
 pub(crate) fn resolve_custom_set(
     config_root: &Path,
     name: &str,
@@ -552,15 +370,9 @@ pub(crate) fn resolve_custom_set(
     Ok(atoms)
 }
 
-/// Real `_unmerge_display`'s own `installed_sets` -- every custom set
-/// directly or indirectly selected via `world_sets` (real
-/// `WorldSelectedSetsSet`), paired with its *direct* atoms only (not
-/// recursively flattened, unlike `resolve_custom_set` -- the "still
-/// listed in the following package sets" warning names the set that
-/// *directly* contains the package). BFS over the `@`-references, cycle-
-/// guarded. A referenced-but-missing set is dropped silently here (real
-/// portage `eerror`s "Unknown set" and moves on) -- a documented
-/// narrowing.
+/// Every selected custom set with its direct atoms, for the unmerge
+/// "still listed" warning. Missing sets are dropped.
+/// Portage: unmerge.py, _unmerge_display.
 pub(crate) fn collect_installed_sets(
     config_root: &Path,
     root: &Path,
