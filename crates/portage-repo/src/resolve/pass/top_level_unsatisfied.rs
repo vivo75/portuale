@@ -42,7 +42,7 @@ pub(crate) fn step_top_level_unsatisfied(
     {
         // A `@world`/`@selected` set member that selects nothing is dropped into
         // `missing_args` and the walk continues; only explicit args abort.
-        // Portage: _resolve. Deduped across re-passes. Backlog #286.
+        // Portage: _resolve. Deduped across re-passes.
         if ctx.set_args.contains(current_atom) {
             if !state.missing_args.iter().any(|s| s == current_atom) {
                 state.missing_args.push(current_atom.to_string());
@@ -52,7 +52,6 @@ pub(crate) fn step_top_level_unsatisfied(
         // A top-level argument left with no mergeable candidate by an enforced
         // parent-atom pin stays installed instead of aborting (complete-mode
         // withhold). Gated on required-set semantics; otherwise the abort stands.
-        // Backlog #210.
         let withheld_version = (!ctx.slot_op_reachable.is_empty()
             && union_constraints
                 .get(key)

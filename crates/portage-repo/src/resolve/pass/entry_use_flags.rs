@@ -43,7 +43,7 @@ pub(crate) fn entry_use_flags(args: EntryUseFlagsArgs<'_>) -> HashSet<String> {
     let mut use_flags = if candidate_source == CandidateSource::Binary {
         resolved.binary_use.clone().unwrap_or_default()
     } else {
-        // Owned: adjusted in place below -- one clone, as before #103.
+        // Owned: adjusted in place below -- one clone.
         effective_use_flags(EffectiveUseFlagsArgs {
             config,
             iuse: metadata.get("IUSE").map(String::as_str).unwrap_or_default(),

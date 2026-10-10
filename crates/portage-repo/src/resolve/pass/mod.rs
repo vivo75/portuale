@@ -52,7 +52,7 @@ pub(crate) fn run_pass(
         // form (Portage never suggests a parent-flag fix for one either).
         // Reversed declaration order: Portage feeds same-level atoms through a
         // stack, so the last declared resolves first; selection reuses an
-        // already-graphed satisfier, making order visible. Backlog #90 (S1).
+        // already-graphed satisfier, making order visible.
         state.queue.push_back(QueueItem {
             atom: a.clone(),
             depth: 0,
@@ -67,7 +67,7 @@ pub(crate) fn run_pass(
     // The slot-operator auto-replace set rides as root nodes after the user args
     // (which is why the rebuilt consumer's deps re-walk at all). `owner: None`
     // mirrors a set arg having no parent; `depth: 1` keeps them out of `--deep`
-    // accounting and the `(Argument)` puller line. Backlog #24 (S3).
+    // accounting and the `(Argument)` puller line.
     // Portage: depgraph.py, _gen_reinstall_sets; _eliminate_rebuilds rule 5
     for (cat, pkg) in &bp.slot_operator_replace_installed {
         state.queue.push_back(QueueItem {
@@ -82,7 +82,7 @@ pub(crate) fn run_pass(
         });
     }
     // The probe's upgraded child rides the same auto set, seeded at the exact
-    // candidate the probe chose (Portage's `abi_reinstalls`). Backlog #236 (A).
+    // candidate the probe chose (Portage's `abi_reinstalls`).
     for (cat, pkg, ver) in &bp.slot_operator_forced_upgrade {
         state.queue.push_back(QueueItem {
             atom: format!("={cat}/{pkg}-{ver}"),
@@ -101,7 +101,7 @@ pub(crate) fn run_pass(
     // Portage pops its `_dep_stack` LIFO, so the last argument's whole subtree
     // walks before the previous argument's deps are looked at; a FIFO queue
     // would interleave the subtrees. Children each seed enqueues drain as one
-    // block, in seed order. Backlog #298. Portage: depgraph.py, _create_graph
+    // block, in seed order. Portage: depgraph.py, _create_graph
     let mut seeds_left = state.queue.len();
     let mut seed_split_at: Option<usize> = None;
     let mut held_blocks: VecDeque<VecDeque<QueueItem>> = VecDeque::new();
@@ -198,7 +198,7 @@ pub(crate) fn run_pass(
             // satisfied one (`DepPrioritySatisfiedRange` can ignore it) is not
             // unbreakable. Satisfaction honours use-deps against the installed
             // instance's USE and reads this atom's own resolving root.
-            // Portage: DepPriority.satisfied (vardb.match_pkgs); backlog #250.
+            // Portage: DepPriority.satisfied (vardb.match_pkgs).
             if buildtime_hard && best_installed_matching(atom_root, &current_atom, config).is_none()
             {
                 kinds.0 = true;
@@ -210,7 +210,6 @@ pub(crate) fn run_pass(
             // Already resolved, but Portage's live `--debug` trace still narrates
             // the re-visit: re-record the edge for the dump's bounded
             // re-narration. `--debug` only; production runs are bit-identical.
-            // Backlog #277.
             if resolver_debug()
                 && let Some(prior) = state
                     .parent_atoms
@@ -315,7 +314,7 @@ pub(crate) fn run_pass(
         // one (installed first, ascending). The collapse point: the owner's
         // contiguous same-cp siblings resolve as a group and pin every member.
         // `||`-chosen atoms stay out, like the per-disjunction call.
-        // Backlog #236 (B). Portage: depgraph.py, _minimize_children
+        // Portage: depgraph.py, _minimize_children
         if let Some(o) = owner.as_ref()
             && !from_disjunction
             && !state
@@ -399,7 +398,7 @@ pub(crate) fn run_pass(
 
         // An argument-pinned installed instance satisfying this atom reuses it
         // instead of scheduling a merge (fresh verdicts only, never `||`-chosen).
-        // See `arg_pinned_installed_reuse`. Backlog #285.
+        // See `arg_pinned_installed_reuse`.
         if !from_disjunction
             && let Some(fresh) = match &outcome {
                 PretendOutcome::New { version } => Some(version.clone()),
@@ -431,7 +430,6 @@ pub(crate) fn run_pass(
         // stay on the old path. Match requires the installed USE to satisfy the
         // atom's use-deps, and reads this atom's own resolving root.
         // Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp.
-        // Backlog #233.
         if matches!(outcome, PretendOutcome::NoVisibleCandidate)
             && owner.is_some()
             && depth != 0
@@ -464,10 +462,10 @@ pub(crate) fn run_pass(
         // The same flip point carries the auto slot-operator `force_reinstall`:
         // keyed on `cat/pkg` so whichever visit comes first flips (patching the
         // entry afterwards would leave its deps unenqueued).
-        // Portage: depgraph.py, _gen_reinstall_sets. Backlog #24 (S3).
+        // Portage: depgraph.py, _gen_reinstall_sets.
         // An installed child the update probe forced is never kept: the first visit
         // selects the probe's candidate (like `force_reinstall` excluding the
-        // installed instance). Backlog #236 (A).
+        // installed instance).
         if let PretendOutcome::AlreadyInstalled { version } = &outcome
             && let Some((_, _, target)) = bp
                 .slot_operator_forced_upgrade
@@ -515,7 +513,7 @@ pub(crate) fn run_pass(
         // Portage `_add_pkg`'s per-instance parent-atom record, taken after the
         // outcome flips and before the dedup below, so the child is what this
         // atom resolved to. A shadowed `AlreadyInstalled` keeps its own row.
-        // Portage: depgraph.py, _add_parent_atom. Backlog #59 (S1).
+        // Portage: depgraph.py, _add_parent_atom.
         if resolver_debug()
             && let Some((child_version, child_installed)) = match &outcome {
                 PretendOutcome::AlreadyInstalled { version } => Some((version.clone(), true)),
@@ -524,7 +522,7 @@ pub(crate) fn run_pass(
                     Some((to.clone(), false))
                 }
                 PretendOutcome::Reinstall { version, .. } => Some((version.clone(), false)),
-                // #72 B3: a removal never resolves a dependency atom.
+                // A removal never resolves a dependency atom.
                 PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
             }
         {
@@ -707,7 +705,6 @@ pub(crate) fn run_pass(
         // The mirror of the `AlreadyInstalled` check (opposite argv order): the
         // slot holds no merge but an installed node this atom rejects. Falls
         // through -- the merge still graphs, while the collision reports.
-        // Backlog #57, direction 2.
         if let Some(installed_version) = state.installed_slots.get(&slot_key).cloned() {
             let installed_sub = installed_refs(ctx.root, &key.0, &key.1)
                 .into_iter()
@@ -913,7 +910,7 @@ pub(crate) fn run_pass(
     // The direct solve runs on the walked graph before the blocker phases
     // (Portage solves first, then validates). One joint record per slot, so
     // the solver keeps the jointly-satisfying version; removals ride
-    // `skipped_updates` to the renderer. Backlogs #90 (S2), #142 (S2 F1).
+    // `skipped_updates` to the renderer.
     state.slot_conflicts = merge_same_slot_conflicts(MergeSameSlotConflictsArgs {
         conflicts: &state.slot_conflicts,
         pullers: &state.slot_pullers,
@@ -922,13 +919,13 @@ pub(crate) fn run_pass(
         root: ctx.root,
         // A lone record misses parents walked later; at `--backtrack=0` re-file
         // them from the live pullers, like the merged ones (Portage reads the
-        // final parent atoms). Backlog #270.
+        // final parent atoms).
         refile_singletons: ctx.backtrack_max == 0,
     });
     solve_pass_slot_conflicts(&mut state, ctx, bp, config);
 
     // Rows for the shadowed second instances of surviving conflicts (after the
-    // solve, before blocker collection, so the new nodes join it). Backlog #148.
+    // solve, before blocker collection, so the new nodes join it).
     synthesize_surviving_conflict_entries(SynthesizeSurvivingConflictEntriesArgs {
         entries: &mut state.entries,
         conflicts: &state.slot_conflicts,
@@ -940,7 +937,7 @@ pub(crate) fn run_pass(
 
     // The all-installed-packages blocker collection runs after the graph is
     // complete and before classification; `--nodeps` is its only early exit.
-    // Portage: depgraph.py. Backlog #77 (A1).
+    // Portage: depgraph.py.
     if !ctx.nodeps {
         collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
             repos: &ctx.repos,
@@ -965,7 +962,6 @@ pub(crate) fn run_pass(
         set_seed_atoms: &ctx.config.blocker_retry_seed_atoms,
     });
     // Unresolved rows whose owner has no display entry ride out on the result.
-    // Backlog #80.
     let mut orphan_blockers: Vec<OrphanBlocker> = Vec::new();
     file_blocker_conflicts(
         &mut state.entries,
@@ -977,7 +973,6 @@ pub(crate) fn run_pass(
     // Tree-mode solved verdicts: only Replacement rows can a scheduled uninstall
     // solve, and the simulation is gated on at least one existing, so the common
     // no-blocker resolve pays nothing. Flags ride into `GraphResult` for `--tree`.
-    // Backlog #81.
     let needs_tree_sim = state.entries.iter().any(|e| {
         e.blockers.iter().any(|b| {
             !b.unsolvable && matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. }))
@@ -1031,7 +1026,6 @@ pub(crate) fn run_pass(
         changed_deps_report_entries: state.changed_deps_report_entries,
         // The `WARNING: … package.provided:` block lists requested atoms in requested
         // order (not walk order); atoms absent from argv sort last, stably.
-        // Backlog #90 (S1).
         pprovided_atoms: {
             let mut v = state.pprovided_atoms;
             let pos = |a: &String| ctx.atoms.iter().position(|x| x == a).unwrap_or(usize::MAX);

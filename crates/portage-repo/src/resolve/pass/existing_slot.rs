@@ -79,7 +79,6 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
             // atom fails the new sub-slot is a scheduled rebuild, not a conflict --
             // but only with an installed instance the atom still accepts and a
             // backtrack budget (the record drives the ABI probe otherwise).
-            // Backlog #290, #214.
             let installed_accepts = installed_refs(ctx.root, &key.0, &key.1)
                 .iter()
                 .filter(|r| r.slot == slot)
@@ -118,7 +117,6 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
         // A matching bare `:=` can still hide a sub-slot shift when its built
         // binding points at an unrebuildable consumer: record the bound
         // installed instance alongside so the rebuild scan sees the parent.
-        // Backlog #90 (S1).
         if atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
             && atom.slot.is_none()
             && atom.sub_slot.is_none()
@@ -294,7 +292,6 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                                 dep_chain: Vec::new(),
                                 // This dep's owner IS the forcing parent (Portage's
                                 // `_get_dep_chain` starts at the requester).
-                                // Backlog #244.
                                 trigger: owner.clone(),
                             });
                         }
@@ -306,7 +303,7 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                         }
                         // Re-expand this pass's already-flattened deps under the flipped
                         // USE so newly-gated atoms queue in-walk (a no-op when the
-                        // flip reveals nothing new). Backlog #218.
+                        // flip reveals nothing new).
                         let mut delta_use: HashSet<String> = existing_use.as_ref().clone();
                         if let Some(overlay) = state.use_overlay.get(key) {
                             for (f, on) in overlay {

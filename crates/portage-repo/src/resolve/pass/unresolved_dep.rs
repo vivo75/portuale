@@ -76,7 +76,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             // An installed parent whose dep can't be satisfied masks its highest
             // instance instead (Portage masks by package object; `[installed]`
             // hides only that instance, so the same-version ebuild stays visible
-            // for the next pass). Backlog #276.
+            // for the next pass).
             if let Some(iv) = installed_candidates(ctx.root, &pc, &pp)
                 .into_iter()
                 .map(|(v, _, _)| v)
@@ -95,7 +95,6 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
     // under a different atom text is how the second constraint arrives. No
     // `continue`: the solvable/unsolvable split is the backtracker's
     // (`collect_feedback` reconciles a jointly-satisfiable slot on retry).
-    // Backlog #57.
     // The vdb `SLOT` file only (one read per installed node); the fuller lookup
     // is deferred to the rare branches that build a record.
     let installed_node_slot = match &outcome {
@@ -133,7 +132,6 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
                         // Rebuild-trigger forgiveness needs a backtrack budget (the scan
                         // schedules the consumer); at `--backtrack=0` Portage's in-pass
                         // solver sees the conflict and withholds the update.
-                        // Backlog #270.
                         && !(ctx.backtrack_max > 0
                             && built_slot_operator_rebuild_trigger(current_atom, &existing_str))
             {
@@ -163,7 +161,6 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
     // Repeats key by the installed instance's own slot (Portage's
     // `pkg.slot_atom` identity): a second installed instance in another slot is
     // a distinct node whose deps still walk. Misses keep cp-scoped dedup.
-    // Backlog #74 (S2a).
     let other_key = (
         key.0.clone(),
         key.1.clone(),
@@ -173,14 +170,13 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
     if !state.other_outcomes.insert(other_key) {
         // A deduped miss gets no entry, so under an active mask the pass must
         // still read as a dead end (Portage abandons the attempt for
-        // `get_best_run`). Gated on an active mask. Backlog #57.
+        // `get_best_run`). Gated on an active mask.
         if matches!(outcome, PretendOutcome::NoVisibleCandidate) && !bp.runtime_pkg_mask.is_empty()
         {
             state.suppressed_nvc = true;
         }
         // A deduped miss still refreshes the disclosure when its atom is the
         // live one Portage reports (see `live_miss_atom_supersedes`).
-        // Backlog #286.
         if matches!(outcome, PretendOutcome::NoVisibleCandidate) {
             let display_atom = unevaluated_atom.as_deref().unwrap_or(current_atom);
             if state
@@ -250,8 +246,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
         && ctx.deep.recurses_at(depth)
     {
         // `deps` reads the same installed-metadata view the recursion walks, so
-        // `--debug`/`--tree` can't contradict the queued child. Backlogs
-        // #25 (S1b), #26 (A2), #86.
+        // `--debug`/`--tree` can't contradict the queued child.
         if let Some(metadata) =
             live_metadata_for_installed(&ctx.repos, atom_root, &key.0, &key.1, version)
         {
@@ -402,7 +397,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             }
             // USE-unsatisfied disclosure: visible ebuilds that can't satisfy the
             // atom's `[use]` deps. Portage renders this block before the masked
-            // one (`show_missing_use` wins). Backlog #20.
+            // one (`show_missing_use` wins).
             if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
                 repos: &ctx.repos,
                 root: ctx.root,
@@ -446,7 +441,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             {
                 // Neither sibling claimed the miss: nothing version-matches, or no
                 // failure is a USE one (e.g. a profile-forced flag). Portage's
-                // `there are no ebuilds to satisfy` block. Backlog #135 (d).
+                // `there are no ebuilds to satisfy` block.
                 match state
                     .plain_miss_deps
                     .iter_mut()

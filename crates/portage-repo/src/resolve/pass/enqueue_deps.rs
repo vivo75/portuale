@@ -207,7 +207,7 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     // Portage: --root-deps branch selection; see `root_deps_satisfied_atoms`
     // No self-exclusion on the first pass: an in-graph self atom ranks
     // `preferred_in_graph` and the cycle map re-resolves it; only a self atom
-    // matching nothing refuses. Portage: dep_zapdeps. Backlog #216.
+    // matching nothing refuses. Portage: dep_zapdeps.
     let self_cp = (
         state.entries[entry_idx].category.clone(),
         state.entries[entry_idx].package.clone(),
@@ -221,12 +221,10 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     // Choice bins live in `disjunction_preference` (single shared copy).
     // The queued snapshot lets `atoms_all_in_graph` count queued-but-unresolved
     // deps as will-be-in-graph (Portage resolves `||` after the stack drains).
-    // Backlog #90 (S1).
     let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
     // A new-style virtual expands inline in its puller's dep_check; portuale walks
     // it as its own node, so the pullers' recorded cycle children join the
     // lookup (union over this pass's pullers). Portage: dep_check.py, dep_zapdeps.
-    // Backlog #249.
     let circ_with_pullers: Option<HashMap<RootCp, Vec<CircularDepChild>>> =
         if self_node.1 == "virtual" && !bp.circular_dependency.is_empty() {
             let mut extra: Vec<CircularDepChild> = Vec::new();

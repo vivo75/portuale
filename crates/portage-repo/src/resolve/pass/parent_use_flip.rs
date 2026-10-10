@@ -102,7 +102,7 @@ pub(crate) fn parent_use_flip(
         state.autounmask_use_changes.push(AutounmaskChange {
             atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
             token,
-            // No single forcing parent: legacy fill (backlog #205).
+            // No single forcing parent: legacy fill.
             trigger: None,
             // Pre-fill the chain for a top-level parent (Portage never prints
             // the start node); other parents keep the generic fill.
@@ -121,7 +121,7 @@ pub(crate) fn parent_use_flip(
                 .unwrap_or_default(),
         });
         // A parent-flip rescue pre-empts the `_success_without_autounmask`
-        // tail; the notice stays. Backlog #217.
+        // tail; the notice stays.
         state.parent_flip_rescued = true;
         state
             .parent_flip_recorded
@@ -178,7 +178,7 @@ pub(crate) fn parent_use_flip(
     } else {
         // `--autounmask-backtrack=y`: fold the flip into `autounmask_use_config`
         // and let the driver re-walk, so `flag?`-gated deps re-evaluate. A
-        // contradicting flip is `_autounmask_breakage` territory (Slice 3).
+        // contradicting flip is `_autounmask_breakage` territory.
         // Portage: _needed_use_config_changes, _backtrack_depgraph
         let key_pp = (pc.clone(), pp.clone());
         // The opposite-flip check reads the effective (overlay-then-`bp`) value.
@@ -231,7 +231,7 @@ pub(crate) fn parent_use_flip(
                 atom: atom_form,
                 token,
                 dep_chain: Vec::new(),
-                // No single forcing parent: legacy fill (backlog #205).
+                // No single forcing parent: legacy fill.
                 trigger: None,
             });
         }
