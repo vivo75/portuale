@@ -1,112 +1,18 @@
-// Rust port of a deliberately narrowed subset of `portage.dep.Atom` and
-// `portage.dep.match_from_list` (lib/portage/dep/__init__.py) -- the
-// "atom matching" slice from LLM/agent-context.md's depgraph/config
-// resolution follow-up work.
-//
-// KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (PMS chapter 8):
-// `Atom`/`parse_atom`/`match_from_list` support no extended/wildcard
-// atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), and no EAPI
-// parametrization (the real grammar changes shape per-EAPI --
-// slot-operator support itself is EAPI 5+, but since nothing here is
-// EAPI-parametrized in the first place, it's just always recognized, the
-// same way every other EAPI-gated feature already ported is). The Python
-// harness (python/atom_harness.py) explicitly rejects atoms
-// using any of the still-excluded features as INVALID, so both sides
-// agree on the same input language rather than Rust silently accepting a
-// narrower one. (A separate, bounded wildcard-atom API is further down
-// in this file, for package.mask/.unmask/.accept_keywords matching only
-// -- it doesn't change any of the above.)
-//
-// Slot operators (`:=`, `:*`, `:slot=` -- PMS 8.3.3) ARE supported: see
-// `SlotOperator`, `atom_regex`'s doc comment on the two-stage parse this
-// needed (mirroring real portage's own `_get_atom_re`/`_get_slot_dep_re`
-// split), and `matches_slot`'s doc comment on why *matching* needed zero
-// changes at all -- real `_match_slot` ignores `slot_operator` entirely,
-// consulting only `Atom.slot`/`.sub_slot`, both of which this crate
-// already modeled correctly before slot operators existed. This closed a
-// real, previously-silent bug in `portage-repo`'s dependency recursion:
-// any DEPEND/RDEPEND token using a slot operator (extremely common in
-// real ebuilds, e.g. `dev-libs/foo:0=` for ABI-rebuild tracking) failed
-// to parse under the old grammar and was silently dropped from the graph
-// entirely -- no entry, no `NoVisibleCandidate`, no warning -- since
-// `resolve_pretend_graph`'s BFS loop treats a parse failure as "not a
-// dependency at all" (`let Some(atom) = parse_atom(..) else { continue };`),
-// not as an unresolvable one.
-//
-// Candidates for match_from_list are plain strings shaped like
-// `category/package-version[-rN][:slot[/subslot]]` -- not full Package
-// objects (no USE/IUSE/repo metadata), since portuale has no
-// package-db/depgraph model yet. This mirrors how the real
-// match_from_list already supports plain strings (via dep_getslot's
-// ":slot" suffix convention) as a fallback when candidates aren't Package
-// objects.
-//
-// USE deps (`foo[bar]`, `foo[bar?,!baz=,qux(+)]` -- PMS 8.3.4, all 7
-// per-flag forms plus 4-style `(+)`/`(-)` defaults) ARE parsed -- see
-// `UseDep`/`UseDepOp`/`UseDepDefault` and `parse_use_deps` -- and, as of
-// `use_deps_satisfied` (see its own doc comment for the full algorithm,
-// ported from real `match_from_list`'s own USE-dep post-pass), CAN now
-// be enforced too, given real per-candidate IUSE/USE state -- but
-// `matches_version`/`matches_slot`/`match_from_list` themselves still
-// never consult `Atom::use_deps` at all, matching real `match_from_list`
-// exactly: its own USE-dep filtering is skipped entirely for any
-// candidate that isn't a real Package object with `.use`/`.iuse`
-// attributes (see the `hasattr` check in
-// `lib/portage/dep/__init__.py`'s `match_from_list`), which is exactly
-// the plain-string-candidate case `match_from_list` here always sees --
-// so leaving `match_from_list` itself unaware of use deps isn't a
-// divergence, just where real portage's own architecture already draws
-// this line. `portage-repo` calls `use_deps_satisfied` directly, as an
-// extra filter after `match_from_list`'s own version/slot/repo
-// filtering, once it already has each surviving candidate's own real
-// IUSE/effective-USE in hand (computed for other reasons already -- see
-// that crate's own doc comment). Before USE deps were parseable at all,
-// an atom using one wasn't just "under-enforced" -- it was rejected as
-// `INVALID` outright, which for a *dependency* atom extracted from
-// DEPEND/RDEPEND meant `resolve_pretend_graph`'s BFS silently dropped it
-// from the graph entirely (same class of bug the slot-operator follow-up
-// found and fixed -- see that doc comment).
-//
-// The `=*` glob version operator (PMS 8.3.1) IS supported: see
-// `Operator::EqGlob`, `atom_regex`'s doc comment on why the trailing "*"
-// is captured generically rather than as a second grammar alternative,
-// and `matches_version`'s own `EqGlob` arm (plus
-// `normalize_leading_zeros`/`glob_compare_string`) for the boundary-aware
-// prefix-match algorithm this needed -- real portage implements `=*` as
-// a literal string-prefix match, not a `vercmp`-based one (its own
-// comment: "Nasty special casing for leading zeros / Required as =* is a
-// literal prefix match, so can't use vercmp"), with a component-boundary
-// check fixing a real historical bug (560466: "1*" must not match "10").
-// Grounded against the PMS's own historical note on this operator too:
-// the component-wise "wildcard for any further components" semantic here
-// is the *current* one -- a raw string-prefix match (e.g. "=foo-5.2*"
-// matching "foo-5.22.0") was the original EAPI 0-5 behavior, retroactively
-// dropped in October 2015, well before this repo's EAPI 5+ floor.
-//
-// `::reponame` (the repo constraint, PMS 3.1.5 "Repository names") IS
-// supported now too: see `Atom::repo`/`Candidate::repo` and
-// `matches_repo`'s own doc comment for the exact matching semantics
-// (ported from real `match_from_list`'s own final post-pass filter --
-// only ever rejects a candidate that carries a KNOWN, different repo; a
-// repo-less candidate string always passes, matching real
-// `dep_getrepo`'s own "unknown, not absent" semantics for a plain
-// string). Portuale's own candidate strings never carried repo
-// identity before this slice -- `portage-repo` now appends `::reponame`
-// (using each repo's own `repos.conf` section name -- already tracked
-// as `RepoConfig::name`, reused as-is rather than reading a second,
-// separate `profiles/repo_name` file real portage also cross-checks
-// against) to every candidate string it builds for `match_from_list`
-// EXCEPT the two paths noted in that crate's own doc comment (blocker
-// matching and slot-conflict re-verification), a deliberate, narrower
-// scope cut than the rest of this feature's wiring.
-//
-// One easy-to-miss PMS rule that IS ported: a bare (no-operator) atom
-// whose package name is followed by something that looks like a version
-// (e.g. "foo-bar-2", which could be read as package "foo-bar" version "2")
-// is rejected as ambiguous, not silently accepted with the longest
-// possible package name. See the `ambiguous` capture group below and
-// Atom.__init__'s corresponding check on the "simple" branch in
-// lib/portage/dep/__init__.py.
+//! Rust port of Portage's `portage.dep` atom parsing and matching
+//! (`lib/portage/dep/__init__.py`): `Atom`, `match_from_list`, USE-dep
+//! evaluation and `extract_affecting_use`.
+//!
+//! Scope cuts a caller must know:
+//! - `parse_atom` takes no extended/wildcard atoms (`*/foo-1`; see
+//!   `WildcardAtom` for the bounded variant) and no build-ids (`foo-1.0@2`).
+//! - Not EAPI-parametrized: slot operators, USE deps, `=*` and `::repo` are
+//!   always recognized.
+//! - Candidates are plain strings `cat/pkg-ver[-rN][:slot[/subslot]][::repo]`,
+//!   not Package objects, so `match_from_list` never consults
+//!   `Atom::use_deps`; callers apply `use_deps_satisfied` afterwards.
+//! - A candidate without `::repo` always passes a repo constraint.
+//! - A bare atom whose name ends in something version-like (`foo-bar-2`) is
+//!   rejected as ambiguous, per PMS.
 
 use portage_versions::vercmp;
 use regex::Regex;
@@ -115,18 +21,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-// A single `emerge -puD` on a live tree calls `parse_atom` /
-// `parse_candidate` tens of millions of times, almost always on a string
-// it has already parsed (the same handful of `package.*` config atoms and
-// candidate `cat/pkg-ver:slot::repo` strings, re-checked once per package
-// per graph-walk visit). Both parsers run a ~15-group backtracking regex,
-// which `perf` puts at ~65% of the whole run. A plain thread-local
-// memo table collapses the repeats: a hit is one hash lookup + one clone
-// of the (small) parsed struct. Thread-local rather than a locked global
-// so the parse path stays lock-free -- the resolver is single-threaded,
-// and any other thread just gets its own table. Never invalidated: a
-// parse result is a pure function of the input string for the life of the
-// process. See docs/performances-tuning.md.
+// Memoizes parse results: parsing is a pure function of the string, and the
+// resolver re-parses the same few atoms/candidates millions of times.
+// Thread-local to stay lock-free; never invalidated.
 thread_local! {
     static ATOM_CACHE: RefCell<HashMap<String, Option<Atom>>> = RefCell::new(HashMap::new());
     static CANDIDATE_CACHE: RefCell<HashMap<String, Option<Candidate>>> =
@@ -134,21 +31,15 @@ thread_local! {
 }
 
 const CAT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
-// Non-greedy, like Python's `_pkg` in lib/portage/versions.py: lets the
-// following `-<version>` anchor decide where the package name ends,
-// e.g. "utf8-scanner-1.0" splits as pkg="utf8-scanner", version="1.0".
+// Non-greedy, like `_pkg` in lib/portage/versions.py: the following
+// `-<version>` decides where the package name ends.
 const PKG: &str = r"[A-Za-z0-9_][A-Za-z0-9+_-]*?";
 const VER: &str = r"\d+(?:\.\d+)*[a-z]?(?:_(?:pre|p|beta|alpha|rc)\d*)*";
 const SLOT: &str = r"[A-Za-z0-9][A-Za-z0-9+_.-]*";
-// Identical to real portage's own `_repo_name` (lib/portage/dep/__init__.py):
-// `[\w][\w-]*` -- `\w` is alnum-plus-underscore, so this is
-// `[A-Za-z0-9_][A-Za-z0-9_-]*`. Matches PMS 3.1.5's "Repository names"
-// prose ("may contain [A-Za-z0-9_-], must not begin with a hyphen").
+// Portage: lib/portage/dep/__init__.py, _repo_name
 const REPO: &str = r"[A-Za-z0-9_][A-Za-z0-9_-]*";
-// Identical to real portage's own `_useflag_re` (lib/portage/dep/__init__.py)
-// and already mirrored once in `portage-use-reduce`'s own `useflag_re` --
-// duplicated here rather than added as a cross-crate dependency, since
-// it's a single-line regex literal, not shared logic.
+// Portage: lib/portage/dep/__init__.py, _useflag_re (duplicated from
+// portage-use-reduce to avoid a cross-crate dependency).
 const USEFLAG: &str = r"[A-Za-z0-9][A-Za-z0-9+_@-]*";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,13 +53,7 @@ pub enum Blocker {
 pub enum Operator {
     None,
     Eq,
-    /// `=*` (PMS 8.3.1): "if the version specified has an asterisk
-    /// immediately following it, then only the given number of version
-    /// components is used for comparison, i.e. the asterisk acts as a
-    /// wildcard for any further components." A real, distinct operator
-    /// value in real portage too (`Atom.operator == "=*"`), not `Eq` with
-    /// a flag -- see `matches_version`'s own `EqGlob` arm for the
-    /// matching algorithm this enables.
+    /// `=*` (PMS 8.3.1): compare only the given version components; see `matches_version`.
     EqGlob,
     Gt,
     Ge,
@@ -204,31 +89,18 @@ impl Operator {
     }
 }
 
-/// A slot-operator dependency (PMS 8.3.3) -- `:*` (`Star`, any slot
-/// acceptable, no explicit slot) or `:=`/`:slot=` (`Equals`, any slot
-/// acceptable if no explicit slot is given, otherwise restricted to that
-/// slot -- see `Atom::slot`). Purely a rebuild-trigger signal in real
-/// portage (whether a dependency needs rebuilding when the matched
-/// package's sub-slot changes); irrelevant to whether an atom *matches* a
-/// candidate, which is exactly why `matches_slot` needs zero changes to
-/// support this -- see its doc comment.
+/// A slot operator (PMS 8.3.3): `:*` (`Star`) or `:=`/`:slot=` (`Equals`).
+/// A rebuild-trigger signal only; it never affects matching (see `matches_slot`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotOperator {
     Star,
     Equals,
 }
 
-/// A 2-style or 4-style USE dependency's operator (PMS 8.3.4) -- which of
-/// the 6 real `prefix`+`suffix` combinations (real portage's own
-/// `_usedep_re` groups) a single flag spec uses. `EqualParent`/
-/// `OppositeParent` and `IfParentEnabled`/`IfParentDisabled` are both
-/// conditional on the *atom-owning* package's own USE state, not just the
-/// candidate's -- `use_deps_satisfied` (see its own doc comment) still
-/// requires their own flag to be a real, declared IUSE flag on the
-/// candidate (same as any other use-dep flag), but, matching real
-/// `match_from_list` exactly, imposes no enabled/disabled constraint
-/// from them at all; only `Enabled`/`Disabled` (the two unconditional
-/// forms) actually constrain a candidate's own USE state.
+/// A USE dependency's operator (PMS 8.3.4): one of the six prefix+suffix forms.
+/// Only `Enabled`/`Disabled` constrain a candidate's USE state when matching;
+/// the four parent-conditional forms are resolved by
+/// `evaluate_use_dep_conditionals`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UseDepOp {
     Enabled,          // "flag"
@@ -239,10 +111,8 @@ pub enum UseDepOp {
     OppositeParent,   // "!flag="
 }
 
-/// A 4-style USE dependency's default (PMS 8.3.4): what to assume when
-/// the ebuild being matched against doesn't have `flag` in
-/// IUSE_REFERENCEABLE at all. Parsed for fidelity/round-tripping; never
-/// consulted by matching, same as the rest of `UseDep`.
+/// A 4-style `(+)`/`(-)` default (PMS 8.3.4): the value assumed when the
+/// candidate's IUSE lacks the flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UseDepDefault {
     Enabled,  // "(+)"
@@ -267,19 +137,15 @@ pub struct Atom {
     pub slot: Option<String>,
     pub sub_slot: Option<String>,
     pub slot_operator: Option<SlotOperator>,
-    /// `None` for no `[...]` at all; `Some(v)` (`v` always non-empty --
-    /// `foo[]` is invalid, same as real portage) for a present one, in
-    /// original left-to-right order. Never consulted by matching -- see
-    /// the module doc comment.
+    /// `None` if there is no `[...]`; `Some` is never empty (`foo[]` is invalid).
+    /// `match_from_list` ignores it; see `use_deps_satisfied`.
     pub use_deps: Option<Vec<UseDep>>,
-    /// `::reponame` (PMS 3.1.5 "Repository names"), `None` if absent --
-    /// see `matches_repo`'s own doc comment for the matching semantics.
+    /// `::reponame` (PMS 3.1.5), `None` if absent; see `matches_repo`.
     pub repo: Option<String>,
 }
 
 impl Atom {
-    /// The version including its revision, e.g. "1.2.3-r1", for feeding to
-    /// `vercmp` -- mirrors Atom.cpv's version part in the Python original.
+    /// The version including its revision (`1.2.3-r1`), as fed to `vercmp`.
     fn full_version(&self) -> Option<String> {
         self.version.as_ref().map(|v| match &self.revision {
             Some(r) => format!("{v}-r{r}"),
@@ -291,32 +157,13 @@ impl Atom {
 fn atom_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // The whole post-":" slot expression is wrapped in its own
-        // "slotpart" group (mirroring real portage's two-stage approach --
-        // _get_atom_re captures the raw text after ":", then
-        // _get_slot_dep_re re-parses it) so parse_atom can tell "no ':' at
-        // all" (group absent) apart from "':' present but empty" (group
-        // matched an empty string), which PMS says is invalid (see the
-        // "if self.slot is None and self.slot_operator is None: raise"
-        // check in Atom.__init__).
-        // "usedeps" mirrors real portage's own permissive `\[.*\]` outer
-        // capture (`_use` in lib/portage/dep/__init__.py): validated in a
-        // second stage by `parse_use_deps`, same two-stage split as the
-        // slot part above.
-        // "glob" (a trailing "*" right after the version/revision, PMS
-        // 8.3.1's "=*" operator) is captured for ANY of the 6 operators
-        // here, not just "=" -- real portage's own grammar only ever
-        // allows it after "=" (a separate, dedicated "star" alternative
-        // in _get_atom_re, distinct from its general "op" alternative),
-        // but `parse_atom` below rejects a captured "glob" paired with
-        // any operator other than "=" explicitly, which is simpler than
-        // duplicating the whole op+cpv sequence into a second regex
-        // alternative just to exclude 5 of 6 operators from one optional
-        // trailing character.
-        // "repo" ("::reponame", PMS 3.1.5) sits between the slot part and
-        // usedeps, matching real _get_atom_re's own ordering exactly --
-        // shared by both the "op" and bare "simple" branches above it,
-        // same as slotpart/usedeps already are.
+        // "slotpart" and "usedeps" are captured permissively and validated in a
+        // second stage, as Portage does (_get_atom_re, then _get_slot_dep_re): this
+        // tells `foo` from `foo:` (invalid) and defers use-dep checks to
+        // `parse_use_deps`.
+        // "glob" is captured after any operator; `parse_atom` rejects it unless the
+        // operator is `=`.
+        // "repo" sits between the slot part and usedeps, as in Portage.
         Regex::new(&format!(
             r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?P<glob>\*)?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?:::(?P<repo>{REPO}))?(?P<usedeps>\[.*\])?$"
         ))
@@ -334,32 +181,18 @@ fn use_dep_token_regex() -> &'static Regex {
     })
 }
 
-/// Parses the raw `[...]` text (brackets included) captured by
-/// `atom_regex`'s permissive `usedeps` group into a validated
-/// `Vec<UseDep>`, mirroring real portage's own two-stage approach
-/// (`Atom.__init__`'s use-dep loop, not a separate regex function this
-/// time -- there's no dedicated `_get_usedep_re`-equivalent split out on
-/// the Rust side, but the algorithm is the same): split on `,`, validate
-/// each token against `use_dep_token_regex`, and validate that only the
-/// 6 real `prefix`+`suffix` combinations appear (`-flag=`/`-flag?` are
-/// syntactically matched by the per-token regex but not real operators --
-/// verified empirically against real portage, which rejects them too).
-/// Also validates that a flag's `(+)`/`(-)` default, if any, is
-/// consistent across every token mentioning that flag within this same
-/// atom (`foo[bar(+),bar(-)]` and `foo[bar(+),-bar]` are both invalid --
-/// same empirically-verified real behavior), so the accept/reject
-/// boundary matches real `Atom` exactly, even though the *values* are
-/// never consulted by matching (see the module doc comment).
+/// Validates the raw `[...]` text (brackets included) into `UseDep`s.
+///
+/// Returns `None` for what Portage's `Atom` rejects: a bad token,
+/// `-flag=`/`-flag?`, or a flag whose `(+)`/`(-)` default differs between
+/// tokens of the same atom.
 fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
     let inner = raw.strip_prefix('[')?.strip_suffix(']')?;
     if inner.is_empty() {
         return None;
     }
     let mut deps = Vec::new();
-    // "has a default at all" per flag, so a later token for the same
-    // flag with a *different* has-default state (regardless of which
-    // specific default) is caught too -- mirrors real Atom.__init__'s
-    // three-way missing_enabled/missing_disabled/no_default bookkeeping.
+    // Default seen so far per flag; a later token with a different default state is invalid.
     let mut seen_defaults: std::collections::HashMap<String, Option<UseDepDefault>> =
         std::collections::HashMap::new();
     for token in inner.split(',') {
@@ -397,18 +230,11 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
     Some(deps)
 }
 
-/// Real `Atom.without_use` for a plain atom STRING: the atom with its
-/// trailing `[use...]` block removed, leaving `cat/pkg[:slot[::repo]]`
-/// to be matched with USE-deps completely ignored. `dep_zapdeps` uses it
-/// for `all_available` so that "does a `||` alternative exist at all"
-/// (`mydbapi.match_pkgs(atom.without_use)`, `dep_check.py:447-449 check,
-/// soft 469) is independent of whether the pickle's USE-flags could
-/// actually be satisfied ("...since we don't want USE settings to
-/// adversely affect || preference evaluation", soft 467-468). The rust
-/// port later re-probes the WITH-USE string for the `all_use_satisfied`
-/// / bug-515584 split. Blocks are always a trailing `[…]` suffix
-/// (PMS 8.3.5), so removing the first `[` through the final `]` is
-/// exact; the no-block input is returned unchanged.
+/// Strips the trailing `[use...]` block, leaving `cat/pkg[:slot[::repo]]`;
+/// input without one is returned unchanged.
+///
+/// Mirrors Portage's `Atom.without_use`. Cuts at the first `[`, since the
+/// USE block is always trailing (PMS 8.3.5).
 pub fn without_use(atom_str: &str) -> &str {
     match atom_str.find('[') {
         Some(start) => &atom_str[..start],
@@ -439,10 +265,7 @@ fn parse_atom_uncached(s: &str) -> Option<Atom> {
 
     let (operator, category, package, version, revision) = if let Some(op) = caps.name("op") {
         let operator = match caps.name("glob") {
-            // "an asterisk used with any other operator is illegal" (PMS
-            // 8.3.1) -- e.g. ">=cat/pkg-1.2*" must be rejected outright,
-            // not silently truncated to ">=cat/pkg-1.2" or accepted as a
-            // glob under the wrong operator.
+            // PMS 8.3.1: `*` is illegal with any operator but `=`.
             Some(_) if op.as_str() != "=" => return None,
             Some(_) => Operator::EqGlob,
             None => Operator::from_str(op.as_str()),
@@ -455,12 +278,8 @@ fn parse_atom_uncached(s: &str) -> Option<Atom> {
             caps.name("rev").map(|m| m.as_str().to_string()),
         )
     } else {
-        // A bare (no-operator) atom whose package name is followed by
-        // something that looks like a version (e.g. "foo-bar-2") is
-        // ambiguous under PMS and must be rejected, not silently absorbed
-        // into a longer package name -- mirrors Atom.__init__'s check on
-        // the "simple" branch's trailing optional "-<version>" group in
-        // lib/portage/dep/__init__.py.
+        // Ambiguous per PMS (`foo-bar-2`).
+        // Portage: lib/portage/dep/__init__.py, Atom.__init__
         if caps.name("ambiguous").is_some() {
             return None;
         }
@@ -473,10 +292,7 @@ fn parse_atom_uncached(s: &str) -> Option<Atom> {
         )
     };
 
-    // "slotpart" present but empty means a bare trailing ":" with nothing
-    // after it -- syntactically matched by the regex (both the slot and
-    // the operator sub-groups are individually optional) but explicitly
-    // invalid per PMS/Atom.__init__ (see atom_regex's doc comment).
+    // A bare trailing ":" matches the regex but is invalid.
     let (slot, sub_slot, slot_operator) = (match caps.name("slotpart") {
         None => Some((None, None, None)),
         Some(m) if m.as_str().is_empty() => None,
@@ -485,9 +301,7 @@ fn parse_atom_uncached(s: &str) -> Option<Atom> {
             let sub_slot = caps.name("subslot").map(|m| m.as_str().to_string());
             let slot_operator = match caps.name("slotop").map(|m| m.as_str()) {
                 None => None,
-                // An explicit slot combined with "*" is invalid -- "*"
-                // means "any slot", which is meaningless alongside a
-                // specific one (see Atom.__init__'s corresponding check).
+                // An explicit slot combined with "*" is invalid.
                 Some("*") if slot.is_some() => return None,
                 Some("*") => Some(SlotOperator::Star),
                 Some("=") => Some(SlotOperator::Equals),
@@ -527,9 +341,7 @@ pub struct Candidate {
     pub revision: Option<String>,
     pub slot: Option<String>,
     pub sub_slot: Option<String>,
-    /// `::reponame` suffix, `None` if the string didn't have one --
-    /// mirrors real `dep_getrepo`'s own convention for plain-string
-    /// candidates. See `matches_repo`'s own doc comment.
+    /// `::reponame` suffix, `None` if absent ("repo unknown"); see `matches_repo`.
     pub repo: Option<String>,
 }
 
@@ -576,24 +388,12 @@ fn parse_candidate_uncached(s: &str) -> Option<Candidate> {
     })
 }
 
-/// Collapses a leading run of `'0'` characters in `version` the way real
-/// `match_from_list`'s own `=*` branch does before ever comparing
-/// anything (its own comment: "XXX: Nasty special casing for leading
-/// zeros / Required as =* is a literal prefix match, so can't use
-/// vercmp"). `=*` matches by literal string prefix, not `vercmp`, so
-/// without this a version's own incidental leading zeros (e.g. "01" vs
-/// "1", numerically identical) would make two numerically-equal versions
-/// compare unequal as prefixes. Only ever applied to the plain version
-/// (never the `-rN` revision suffix, matching real portage's own
-/// `mycpv_cps[2]`/`xs[2]` -- the `catpkgsplit`-style "version, no
-/// revision" component).
+/// Collapses leading zeros of a plain version (never the `-rN` revision) as
+/// Portage does before an `=*` comparison.
 ///
-/// Empirically verified against real `portage.dep.match_from_list`
-/// (`python3 -c` probing several leading-zero cases) before relying on
-/// this port: `"0" -> "0"`, `"00" -> "0"`, `"01" -> "1"`, `"0.5" -> "0.5"`
-/// (unchanged: the single leading zero is a real, meaningful digit, not
-/// redundant), `"00.5" -> "0.5"` (the redundant *second* zero is
-/// dropped).
+/// `=*` is a literal prefix match, so `"01"` must equal `"1"`: `"00"` ->
+/// `"0"`, `"01"` -> `"1"`, `"0.5"` unchanged, `"00.5"` -> `"0.5"`.
+/// Portage: lib/portage/dep/__init__.py, match_from_list (`=*` branch)
 fn normalize_leading_zeros(version: &str) -> String {
     let stripped = version.trim_start_matches('0');
     let starts_with_digit = stripped.starts_with(|c: char| c.is_ascii_digit());
@@ -604,13 +404,7 @@ fn normalize_leading_zeros(version: &str) -> String {
     }
 }
 
-/// The exact string `=*` prefix-compares against for one side (atom or
-/// candidate) of an `EqGlob` match: `version` with its own leading zeros
-/// collapsed (see `normalize_leading_zeros`), plus `-r{revision}` if
-/// present, unchanged -- mirrors real portage's own targeted
-/// `mycpv.replace(cp + "-" + orig_version, cp + "-" + normalized, 1)`,
-/// which only ever rewrites the plain-version substring, never the
-/// revision.
+/// The string `=*` prefix-compares for one side: normalized version plus `-rN` if present.
 fn glob_compare_string(version: &str, revision: &Option<String>) -> String {
     let normalized = normalize_leading_zeros(version);
     match revision {
@@ -619,27 +413,14 @@ fn glob_compare_string(version: &str, revision: &Option<String>) -> String {
     }
 }
 
-/// Mirrors match_from_list's per-candidate filtering, for a single
-/// candidate that has already matched category/package.
+/// Version-operator check for a candidate that already matched category/package.
 fn matches_version(atom: &Atom, candidate: &Candidate) -> bool {
     match atom.operator {
         Operator::None => true,
         Operator::Eq => vercmp(&candidate.full_version(), &atom.full_version().unwrap()) == Some(0),
-        // PMS 8.3.1: "only the given number of version components is
-        // used for comparison, i.e. the asterisk acts as a wildcard for
-        // any further components." Real portage implements this as a
-        // literal string-prefix match (not vercmp-based -- see
-        // normalize_leading_zeros's doc comment) on
-        // category/package-version[-rN], but only at a genuine
-        // component boundary: real portage's own bug 560466 fix means
-        // "1*" must NOT match "10" (both digits, no real boundary there)
-        // even though "10" literally starts with "1" -- captured below
-        // by the digit-adjacency check. category/package equality is
-        // already guaranteed by match_from_list's own caller-side filter
-        // before matches_version ever runs, so comparing just the
-        // version[-rN] suffix (rather than the full
-        // category/package-version[-rN] string real portage's own
-        // implementation slices) is equivalent and simpler.
+        // `=*` is a literal prefix match, not vercmp, but only at a component
+        // boundary: "1*" must not match "10".
+        // Portage: lib/portage/dep/__init__.py, match_from_list
         Operator::EqGlob => {
             let atom_cmp = glob_compare_string(atom.version.as_ref().unwrap(), &atom.revision);
             let cand_cmp = glob_compare_string(&candidate.version, &candidate.revision);
@@ -674,20 +455,11 @@ fn matches_version(atom: &Atom, candidate: &Candidate) -> bool {
     }
 }
 
-/// Mirrors _match_slot: exact slot match required; sub_slot only checked
-/// if the atom specifies one. A candidate with no slot info at all always
-/// passes (matches match_from_list's behavior for plain-string candidates
-/// it can't determine a slot for -- see the module doc comment).
+/// Exact slot match; sub-slot only if the atom has one. A candidate with no
+/// slot always passes.
 ///
-/// `atom.slot_operator` is never consulted here, deliberately: real
-/// `_match_slot` doesn't look at it either -- only real `match_from_list`'s
-/// own `if mydep.slot is not None:` guard (mirrored by the `atom.slot`
-/// check below) decides whether slot-filtering happens at all. A bare
-/// `:=`/`:*` atom has `slot == None` (no explicit slot was given), so it
-/// already falls through this same early-return and matches any slot;
-/// `:slot=` has `slot == Some(..)`, so it's filtered exactly like a plain
-/// `:slot` atom would be. This is why adding slot-operator *parsing*
-/// needed no changes at all to slot-operator *matching*.
+/// `slot_operator` is deliberately ignored, as in Portage's `_match_slot`: a
+/// bare `:=`/`:*` has no slot so matches any, and `:slot=` filters like `:slot`.
 fn matches_slot(atom: &Atom, candidate: &Candidate) -> bool {
     let Some(atom_slot) = &atom.slot else {
         return true;
@@ -704,17 +476,10 @@ fn matches_slot(atom: &Atom, candidate: &Candidate) -> bool {
     }
 }
 
-/// Mirrors real `match_from_list`'s own final post-pass filter (only run
-/// `if mydep.repo:` -- an atom with no `::repo` constraint never filters
-/// on repo at all): a candidate is rejected only if it carries a KNOWN
-/// repo that differs from the atom's. A candidate with no repo info at
-/// all (`candidate.repo == None`, portuale's default for any
-/// plain-string candidate that never had `::repo` appended -- see
-/// `dep_getrepo`'s own real semantics, which return `None` for a
-/// repo-less string) always passes, regardless of what the atom asks
-/// for -- real portage's own justification: a plain string generally
-/// means "repo unknown," not "no repo," so it can't positively fail a
-/// repo check.
+/// Rejects only a candidate carrying a known, different repo; a repo-less
+/// candidate means "unknown" and always passes. An atom without `::repo`
+/// never filters.
+/// Portage: lib/portage/dep/__init__.py, match_from_list (final repo filter)
 fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
     match &atom.repo {
         None => true,
@@ -725,44 +490,18 @@ fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
     }
 }
 
-/// Ports real `match_from_list`'s own USE-dep post-pass (its
-/// `if mydep.unevaluated_atom.use:` block, `lib/portage/dep/__init__.py`
-/// lines 3143-3188) -- NOT called from `match_from_list` itself, since
-/// that function only ever sees plain candidate strings, which carry no
-/// IUSE/USE state at all (real `match_from_list` skips this same block
-/// entirely for a plain-string candidate too -- its own `hasattr(x,
-/// "use")` guard -- so portuale's `match_from_list` staying unaware of
-/// use deps isn't a divergence). Callers with real per-candidate
-/// IUSE/USE state (`portage-repo`, which already computes both via
-/// `read_md5_cache`/`effective_use_flags` for other reasons) call this
-/// directly, after `match_from_list`'s own version/slot/repo filtering.
+/// Whether a candidate's `iuse` (declared flags, `+`/`-` markers stripped)
+/// and `enabled` (effective USE) satisfy `use_deps`.
 ///
-/// `iuse` is the candidate's own declared IUSE (flag names, `+`/`-`
-/// default markers already stripped -- same shape `effective_use_flags`'s
-/// callers already extract from md5-cache elsewhere); `enabled` is its
-/// own effective (computed) USE set.
+/// Not called by `match_from_list` (plain-string candidates carry no USE
+/// state); callers with IUSE/USE in hand apply it afterwards.
 ///
-/// Real behavior, faithfully ported, not simplified: a use-dep flag with
-/// no `(+)`/`(-)` default marker -- of ANY form, including the four
-/// conditional ones below -- must be a real, declared IUSE flag on the
-/// candidate, or the atom doesn't match this candidate at all (real
-/// `_use_dep.required`, checked via `x.iuse.is_valid_flag(...)` before
-/// anything else). Only the two *unconditional* forms, `flag` and
-/// `-flag` (`UseDepOp::Enabled`/`Disabled`), actually constrain the
-/// candidate's own enabled/disabled state; a `(+)`/`(-)` default is
-/// consulted only for a flag that's missing from this candidate's own
-/// IUSE, standing in for "as if the flag were enabled/disabled".
-/// `flag?`/`!flag?`/`flag=`/`!flag=` (`UseDepOp::IfParentEnabled`/
-/// `IfParentDisabled`/`EqualParent`/`OppositeParent`) impose NO
-/// enabled/disabled constraint here at all -- this is real
-/// `match_from_list`'s own genuine behavior (it only ever consults
-/// `mydep.use.enabled`/`.disabled`, which real `_use_dep.__init__` populates
-/// solely from the two unconditional forms; the four conditional ones
-/// land in a separate `.conditional` structure that `match_from_list`
-/// never reads), not a deliberate simplification: evaluating a conditional
-/// use-dep needs the *atom-owning* package's own USE state, a completely
-/// different mechanism (dependency-string conditional evaluation) this
-/// portuale doesn't have and `match_from_list` itself doesn't either.
+/// - A flag without a `(+)`/`(-)` default must be in `iuse`, for every form.
+/// - Only `Enabled`/`Disabled` constrain USE state; the four conditional
+///   forms impose none here, as in Portage. A default applies only to a flag
+///   missing from `iuse`.
+///
+/// Portage: lib/portage/dep/__init__.py, match_from_list (`unevaluated_atom.use` block)
 pub fn use_deps_satisfied(
     use_deps: &[UseDep],
     iuse: &HashSet<String>,
@@ -835,34 +574,18 @@ pub fn use_deps_satisfied(
     true
 }
 
-/// Real `_prepare_conflict_msg_and_check_for_specificity`'s USE branch
-/// (`slot_collision.py:331-389`) for one parent `atom` against one
-/// conflicting `other` instance (already matching on version and slot):
-/// which `("use", flag)` reason keys the pair contributes, split into
-/// unconditional and violated.
+/// The `("use", flag)` reason keys one parent atom's `use_deps` contribute
+/// against a conflicting `other` instance: `(unconditional, violated)`.
 ///
-/// - Unconditional: `atom`'s default-less (`required`) flags absent from
-///   `other`'s IUSE -- real
-///   `other_pkg.iuse.get_missing_iuse(atom.unevaluated_atom.use.required)`.
-///   Non-empty both keys the flags *and* marks the parent preferred for
-///   display (real `unconditional_use_deps`); real skips the violated
-///   computation entirely for such a pair.
-/// - Violated: unconditional-form (`[x]`/`[-x]`) deps contradicted by
-///   `other`'s USE -- real `violated_conditionals`' `.enabled ∪
-///   .disabled` sets: `[x]` violated iff `x` is off `other` while valid
-///   (or carrying a `(-)` default); `[-x]` violated iff `x` is on `other`
-///   (or invalid with a `(+)` default).
+/// - Unconditional: default-less flags absent from `other`'s IUSE; when
+///   non-empty, the violated check is skipped.
+/// - Violated: `[x]` with `x` off in `other` (while valid, or with a `(-)`
+///   default); `[-x]` with `x` on (or invalid with a `(+)` default).
+/// - Conditional forms never yield keys.
 ///
-/// Conditional forms (`?`/`=`/`!`...) never yield keys: real only reads
-/// `.enabled ∪ .disabled` (conditional hits land in a dropped side-dict),
-/// and without `parent_use` real *raises* -- portuale always has the
-/// parent but drops the dict either way, so no raise and no keys (a
-/// divergence only against a real crash).
-///
-/// `is_valid_flag` is plain declared-IUSE membership (real also consults
-/// `_iuse_implicit_match`; same documented simplification as the
-/// `iuse_names` precedent -- implicit-matched flags are rare in
-/// slot-conflict atoms).
+/// "Valid" flag means plain declared-IUSE membership (Portage also consults
+/// implicit IUSE).
+/// Portage: lib/portage/dep/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
 pub fn use_mismatch_flags(
     use_deps: &[UseDep],
     other_use: &HashSet<String>,
@@ -898,25 +621,10 @@ pub fn use_mismatch_flags(
     (HashSet::new(), violated)
 }
 
-/// Real `Atom.violated_conditionals` (`lib/portage/dep/__init__.py`):
-/// whether any of `atom`'s `[use]` deps is violated by `child_use` (the
-/// candidate's own enabled USE set) given `parent_use` (the enabled USE
-/// set of the package that recorded the atom). This is the walk-time
-/// check real's complete-graph end-of-walk loop leans on: a deep
-/// dependency whose use-deps the scheduled (re)build contradicts counts
-/// as unsatisfied even though `match_from_list` (which never reads the
-/// four conditional forms, and only the unconditional two against the
-/// candidate) still matches it.
-///
-/// Composed from the two primitives real's `violated_conditionals` is
-/// equivalent to here --
-/// `evaluate_conditionals` (parent-relative `?`/`!`/`=`/`!` resolved to
-/// unconditional demands or dropped) then the match-time satisfied check
-/// (`use_deps_satisfied`, including its IUSE-validity and `(+)`/`(-)`
-/// default handling) -- rather than a third evaluator, so the truth
-/// table stays in exactly one place (`evaluate_use_dep_conditionals`).
-/// `child_iuse` is the candidate's own declared IUSE (default markers
-/// stripped -- same shape `use_deps_satisfied` takes).
+/// Whether any of `use_deps` is violated by `child_use`/`child_iuse` given the
+/// recording package's `parent_use`: parent-conditionals are evaluated first,
+/// then checked as in `use_deps_satisfied`.
+/// Portage: lib/portage/dep/__init__.py, Atom.violated_conditionals
 pub fn use_deps_violated(
     use_deps: &[UseDep],
     parent_use: &HashSet<String>,
@@ -927,12 +635,7 @@ pub fn use_deps_violated(
     !use_deps_satisfied(&evaluated, child_iuse, child_use)
 }
 
-/// Renders one `UseDep` back to its own atom-string token, the exact
-/// inverse of `parse_use_deps`'s own per-token parse (`flag`/`-flag`/
-/// `flag?`/`!flag?`/`flag=`/`!flag=`, each optionally suffixed with its
-/// own `(+)`/`(-)` default) -- "parsed for fidelity/round-tripping" per
-/// `UseDep`'s own doc comment, now actually round-tripped by
-/// `evaluate_atom_conditionals` below.
+/// Renders one `UseDep` back to its atom-string token (inverse of `parse_use_deps`).
 fn render_use_dep(ud: &UseDep) -> String {
     let default = match ud.default {
         None => "",
@@ -949,13 +652,8 @@ fn render_use_dep(ud: &UseDep) -> String {
     }
 }
 
-/// PMS 8.3.4's own 4 conditional use-dep forms (`flag?`/`!flag?`/
-/// `flag=`/`!flag=`), evaluated against `parent_use` -- the *atom-owning*
-/// package's own current effective USE set, i.e. the same `uselist`
-/// already threaded into `use_reduce_flat` for evaluating a dependency
-/// string's own `flag? ( ... )` groups (real `Atom.evaluate_conditionals`,
-/// `lib/portage/dep/__init__.py:1387`, confirmed by reading it directly
-/// -- ported here verbatim from its own truth table):
+/// Resolves the four parent-conditional forms against `parent_use`, the
+/// atom-owning package's effective USE set:
 ///
 /// ```text
 ///     parent state   conditional   result
@@ -969,15 +667,9 @@ fn render_use_dep(ud: &UseDep) -> String {
 ///     -x             !x=            x
 /// ```
 ///
-/// `x?`/`!x?` are one-directional: they only ever *add* a constraint,
-/// never remove the flag from consideration entirely the way a dropped
-/// token here does -- a `Vec<UseDep>` that becomes empty after this call
-/// is exactly equivalent to "no use-dep at all", the same "empty means
-/// unconstrained" convention `use_deps_satisfied`'s own callers already
-/// established (see `resolve_pretend`'s own `.filter(|d| !d.is_empty())`
-/// gate, portage-repo). The two unconditional forms (`Enabled`/
-/// `Disabled`) and any `(+)`/`(-)` default pass through completely
-/// unchanged -- only the parent-relative ops are ever touched here.
+/// A dropped token imposes no constraint; an empty result means "no use-dep".
+/// `Enabled`/`Disabled` and any `(+)`/`(-)` default pass through unchanged.
+/// Portage: lib/portage/dep/__init__.py, Atom.evaluate_conditionals
 pub fn evaluate_use_dep_conditionals(
     use_deps: &[UseDep],
     parent_use: &HashSet<String>,
@@ -1025,26 +717,13 @@ pub fn evaluate_use_dep_conditionals(
         .collect()
 }
 
-/// Applies `evaluate_use_dep_conditionals` to `atom_str` itself, real
-/// `use_reduce`'s own per-token integration point (`lib/portage/dep/
-/// __init__.py:1045-1046`, confirmed by reading it: `if not matchall and
-/// hasattr(token, "evaluate_conditionals"): token =
-/// token.evaluate_conditionals(uselist)`, called on every dependency
-/// *atom* token as `use_reduce` walks a dependency string -- the exact
-/// same `uselist` parameter it already threads through for `flag?
-/// ( ... )` *group* conditionals). Portuale's own `use_reduce_flat`
-/// (portage-use-reduce) deliberately stays atom-grammar-agnostic (see
-/// its own module doc comment on the atom-parsing/tokenizing split), so
-/// this step lives here instead, applied by the caller (portage-repo's
-/// own `enqueue_flat_deps`) to each flattened token once it already has
-/// the owning package's own effective USE in hand.
+/// Applies `evaluate_use_dep_conditionals` to the atom string itself,
+/// rewriting its `[...]` block.
 ///
-/// Returns `atom_str` completely unchanged (not just semantically
-/// equivalent -- literally the same string) whenever it has no use-deps
-/// at all or none of them are conditional, so a non-USE-dep or
-/// plain-`[flag]`-only atom is never needlessly rewritten. Returns
-/// `None` only if `atom_str` doesn't parse as a valid atom at all --
-/// callers should treat that the same as any other unparseable token.
+/// Returns the input unchanged when it has no conditional use-deps, and `None`
+/// if it doesn't parse. Lives here because `portage-use-reduce` stays
+/// atom-agnostic; callers apply it per flattened token.
+/// Portage: lib/portage/dep/__init__.py, use_reduce (per-token `evaluate_conditionals`)
 pub fn evaluate_atom_conditionals(atom_str: &str, parent_use: &HashSet<String>) -> Option<String> {
     let atom = parse_atom(atom_str)?;
     let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
@@ -1087,11 +766,9 @@ pub fn evaluate_atom_conditionals(atom_str: &str, parent_use: &HashSet<String>) 
     ))
 }
 
-/// Mirrors `match_from_list`: given an atom string and a list of candidate
-/// strings, returns the subset (in input order) that match. `None` means
-/// the atom itself failed to parse under the v1 grammar. Unparseable
-/// candidate strings are silently skipped (a documented simplification --
-/// see the module doc comment).
+/// Returns the candidates (input order) matching `atom_str`; `None` if the
+/// atom doesn't parse. Unparseable candidates are skipped.
+/// Portage: lib/portage/dep/__init__.py, match_from_list
 pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec<&'a str>> {
     let atom = parse_atom(atom_str)?;
     Some(
@@ -1112,24 +789,10 @@ pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec
     )
 }
 
-/// Real `Atom.intersects()` (`lib/portage/dep/__init__.py`): despite the
-/// name, a real, deliberately NARROW check -- real portage's own
-/// docstring says so directly ("atoms with different cpv, operator or
-/// use attributes cause this method to return False even though there
-/// may actually be some intersection... TODO: Detect more forms of
-/// intersection"). Ported field-for-field, skipping real portage's own
-/// `self == other` fast-path shortcut (redundant, not a simplification
-/// -- two textually-identical atoms already satisfy every check below
-/// and fall through to `true` the same way): `cp` (category+package),
-/// `use` (use-deps), `operator`, and `cpv` (category+package+version --
-/// `operator` plus the full version/revision together, compared here as
-/// `full_version()`) must ALL match exactly, not overlap and not
-/// satisfy a range, before slot compatibility (`None` on either side,
-/// or an identical value) decides the result. `repo` is deliberately
-/// NOT checked here, matching real `intersects()` itself -- real
-/// `action_deselect`'s own caller adds its own separate repo check
-/// afterward (`and not (arg_atom.repo and not atom.repo)`, ported at
-/// `run_deselect`'s own call site in `pretend.rs`, not folded in here).
+/// A deliberately narrow check, as in Portage's `Atom.intersects`: cp,
+/// use-deps, operator and full version must all be equal, and slots must be
+/// compatible (either `None`, or equal). `repo` is not checked; the caller
+/// adds its own.
 pub fn atom_intersects(a: &Atom, b: &Atom) -> bool {
     if a.category != b.category
         || a.package != b.package
@@ -1144,18 +807,9 @@ pub fn atom_intersects(a: &Atom, b: &Atom) -> bool {
 
 // --- Bounded wildcard atoms (package.mask/.unmask/.accept_keywords) ---
 //
-// A separate, additional API from everything above: `Atom`/`parse_atom`/
-// `match_from_list` are unchanged, so atom-harness's existing v1 grammar
-// contract (which explicitly rejects wildcard atoms as INVALID) is not
-// affected by any of this. This exists for package.mask/.unmask/
-// .accept_keywords matching (see portage-repo), where real files lean
-// heavily on wildcard atoms like "*/*" and "dev-qt/*" in practice.
-//
-// Deliberately bounded, not the full PMS extended-atom-syntax grab-bag:
-// only "*/*", "category/*", and "*/package" -- a literal "*" standing in
-// for an entire category or package name, not a partial-string glob like
-// "cat/pkg-*". No version operators, no slots on a wildcard atom (real
-// PMS extended atoms don't carry them either).
+// Separate from `Atom`/`parse_atom`, which still reject wildcards. Only
+// `*/*`, `cat/*` and `*/pkg`: a literal `*` for a whole category or package;
+// no partial globs, operators or slots.
 
 fn cat_full_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -1173,12 +827,8 @@ pub struct WildcardAtom {
     pub package: Option<String>,
 }
 
-/// Parses `s` as a wildcard atom. Returns `None` if `s` doesn't have
-/// exactly one `/`, either side fails to validate as a category/package
-/// token (or `*`), or neither side is actually a `*` (a plain atom with
-/// no wildcard at all isn't this grammar's job -- try `parse_atom` +
-/// `match_from_list` first, which covers versioned/slotted atoms this
-/// can't).
+/// Parses `*/*`, `cat/*` or `*/pkg`; `None` for anything else, including a
+/// plain atom with no wildcard (use `parse_atom`).
 pub fn parse_wildcard_atom(s: &str) -> Option<WildcardAtom> {
     let (cat, pkg) = s.split_once('/')?;
     if pkg.contains('/') {
@@ -1215,10 +865,7 @@ pub fn wildcard_atom_matches(atom: &WildcardAtom, category: &str, package: &str)
 mod parse_cache_tests {
     use super::*;
 
-    // The memo cache on `parse_atom` / `parse_candidate` must be
-    // transparent: a cached call returns exactly what the uncached body
-    // would, hit or miss, valid or invalid. Guards against a future
-    // cache-key bug (e.g. keying on a trimmed/normalised string).
+    // The memo cache must be transparent: cached calls equal the uncached body, hit or miss.
     const ATOM_CASES: &[&str] = &[
         ">=dev-libs/foo-1.2.3-r1:2/3=[bar,-baz]",
         "!!sys-apps/portage",
@@ -1260,13 +907,7 @@ mod parse_cache_tests {
 mod without_use_tests {
     use super::*;
 
-    // Real `Atom.without_use`: the trailing `[...]` block is stripped,
-    // everything before it (cat/pkg, slot, repo, version) untouched. The
-    // USE block being always-trailing (PMS 8.3.5), stripping from the
-    // first `[` is exact -- including a no-USE-block atom, which must be
-    // returned unchanged (mydbapi_match_pkgs(atom.without_use) must
-    // behave exactly like the full atom for a `||` alternative with no
-    // `[use]` deps at all).
+    // Cuts at the first `[` (the USE block is trailing, PMS 8.3.5); no block: unchanged.
     #[test]
     fn strips_trailing_use_block_leaving_the_rest_untouched() {
         assert_eq!(without_use("dev-libs/foo[bar]"), "dev-libs/foo");
@@ -1280,11 +921,7 @@ mod without_use_tests {
         );
         assert_eq!(without_use("sys-apps/portage"), "sys-apps/portage");
         assert_eq!(without_use(""), "");
-        // Real's cut is at the FIRST `[` (dep/__init__.py:1792
-        // `s.index("[")`, the same `find('[')` used here) -- the USE
-        // block is guaranteed to be the first and only one (PMS 8.3.5),
-        // so a malformed double-bracket string cuts at the first `[`
-        // exactly like real.
+        // A malformed double-bracket string cuts at the first `[` too, like Portage.
         assert_eq!(without_use("cat/pkg[flag][other]"), "cat/pkg");
     }
 }
@@ -1330,19 +967,14 @@ mod wildcard_tests {
     }
 }
 
-/// One element on `extract_affecting_use`'s parse stack: a bare token
-/// (`"||"`, a `foo?` conditional, or the searched-for atom) or a nested
-/// group. Mirrors real portage's `stack` entries, which are `str` or
-/// `list`.
+/// An element of `extract_affecting_use`'s parse stack: a token or a nested group.
 #[derive(Clone, Debug, PartialEq)]
 enum Aff {
     Tok(String),
     Group(Vec<Aff>),
 }
 
-/// Real `l[0][-1] == "?"` / `stack[level][-1][-1] == "?"`: does this
-/// element's last character (recursing into a group's last element) end
-/// in `?`.
+/// Whether the element ends in `?`, recursing into a group's last element.
 fn aff_ends_q(e: &Aff) -> bool {
     match e {
         Aff::Tok(s) => s.ends_with('?'),
@@ -1350,21 +982,19 @@ fn aff_ends_q(e: &Aff) -> bool {
     }
 }
 
-/// Real `stack[level][-1] == "||"`.
+/// Whether the element is the `||` token.
 fn aff_is_barbar(e: &Aff) -> bool {
     matches!(e, Aff::Tok(s) if s == "||")
 }
 
 fn affecting_useflag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // Real `_get_useflag_re` for the modern EAPI default -- EAPI is not
-    // parametrized here, matching every other primitive in this crate.
+    // Modern-EAPI useflag charset; EAPI is not parametrized.
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
 }
 
-/// Real `extract_affecting_use`'s inner `flag(conditional)`: strip a
-/// leading `!` and the trailing `?`, then validate. `None` where real
-/// raises `InvalidDependString` (invalid flag name).
+/// Strips a leading `!` and the trailing `?`, then validates the flag name;
+/// `None` where Portage raises `InvalidDependString`.
 fn aff_cond_flag(tok: &str) -> Option<String> {
     let body = tok.strip_prefix('!').unwrap_or(tok);
     let mut chars = body.chars();
@@ -1377,8 +1007,7 @@ fn aff_cond_flag(tok: &str) -> Option<String> {
     }
 }
 
-/// Real `extract_affecting_use`'s `special_append()` closure: fold `l`
-/// back into `stack[lvl]`, killing redundant brackets where possible.
+/// Folds `l` back into `stack[lvl]`, dropping redundant brackets (Portage's `special_append`).
 fn aff_special_append(stack: &mut [Vec<Aff>], lvl: usize, is_single: bool, l: &[Aff]) {
     let keep_flat = is_single && !stack[lvl].last().is_some_and(aff_ends_q);
     if keep_flat {
@@ -1394,13 +1023,10 @@ fn aff_special_append(stack: &mut [Vec<Aff>], lvl: usize, is_single: bool, l: &[
     }
 }
 
-/// Rust port of `portage.dep.extract_affecting_use`
-/// (`lib/portage/dep/__init__.py`): the set of USE flags whose `flag?`
-/// conditionals decide whether `atom` (matched as an exact whitespace
-/// token) is in effect inside the dependency string `dep`. `None` on
-/// malformed `dep` syntax -- real raises `InvalidDependString`. EAPI is
-/// not parametrized (the useflag charset is the modern default), matching
-/// the rest of this crate.
+/// Port of `portage.dep.extract_affecting_use`: the USE flags whose `flag?`
+/// conditionals decide whether `atom` (an exact whitespace token) is in
+/// effect inside `dep`. `None` on malformed `dep` (Portage raises
+/// `InvalidDependString`). Not EAPI-parametrized.
 ///
 /// ```
 /// # use std::collections::HashSet;
@@ -1431,7 +1057,7 @@ pub fn extract_affecting_use(dep: &str, atom: &str) -> Option<HashSet<String>> {
             let is_single =
                 l.len() == 1 || (l.len() == 2 && (aff_is_barbar(&l[0]) || aff_ends_q(&l[0])));
 
-            // Predicates over the (still-unmutated) enclosing frames.
+            // Predicates over the still-unmutated enclosing frames.
             let ends_in_any_of_dep = |k: i32| -> bool {
                 k >= 0
                     && stack
@@ -1551,10 +1177,7 @@ mod use_dep_satisfaction_tests {
 
     #[test]
     fn flag_not_in_iuse_at_all_never_matches_without_a_default() {
-        // Real _use_dep.required: any use-dep flag with no (+)/(-)
-        // default must be a real, declared IUSE flag on the candidate,
-        // or the atom simply doesn't match -- regardless of enabled/
-        // disabled state.
+        // A default-less flag must be declared in IUSE, whatever its USE state.
         let ud = use_deps("dev-libs/foo[bar]");
         assert!(!use_deps_satisfied(
             &ud,
@@ -1566,8 +1189,7 @@ mod use_dep_satisfaction_tests {
     #[test]
     fn plus_default_treats_a_missing_flag_as_enabled() {
         let ud = use_deps("dev-libs/foo[bar(+)]");
-        // "bar" isn't declared in IUSE at all -- the (+) default stands
-        // in for "as if enabled", so this still matches.
+        // "bar" is undeclared: the (+) default stands in for "enabled".
         assert!(use_deps_satisfied(&ud, &HashSet::new(), &HashSet::new()));
     }
 
@@ -1579,9 +1201,7 @@ mod use_dep_satisfaction_tests {
 
     #[test]
     fn plus_default_does_not_rescue_a_declared_but_disabled_flag() {
-        // "bar" IS declared in IUSE here, so the (+) default (which only
-        // ever applies to a MISSING flag) doesn't apply -- the candidate's
-        // own actual (disabled) state governs instead.
+        // "bar" is declared, so the (+) default is moot; its real (disabled) state governs.
         let ud = use_deps("dev-libs/foo[bar(+)]");
         let iuse = HashSet::from(["bar".to_string()]);
         assert!(!use_deps_satisfied(&ud, &iuse, &HashSet::new()));
@@ -1589,9 +1209,7 @@ mod use_dep_satisfaction_tests {
 
     #[test]
     fn conditional_forms_only_require_the_flag_be_declared_no_state_constraint() {
-        // flag? / !flag? / flag= / !flag= never constrain enabled/disabled
-        // state in match_from_list itself (see use_deps_satisfied's own
-        // doc comment) -- only the "must be declared IUSE" gate applies.
+        // Conditional forms impose no state constraint; only the declared-IUSE gate applies.
         for atom_str in [
             "dev-libs/foo[bar?]",
             "dev-libs/foo[!bar?]",
@@ -1615,17 +1233,9 @@ mod use_dep_satisfaction_tests {
         }
     }
 
-    /// Real portage's own authoritative test vectors for this exact
-    /// USE-dep-vs-Package-mock matching behavior --
-    /// lib/portage/tests/dep/test_match_from_list.py's own
-    /// testMatch_from_list, the `dev-libs/A[...]` cases (lines 151-195).
-    /// Its own `Package` mock derives a candidate's `iuse` from
-    /// `atom.use.required` (the flags with NO `(+)`/`(-)` default in the
-    /// atom string used to construct that particular candidate) and
-    /// `enabled` from `atom.use.enabled` (bare, non-`-`-prefixed tokens)
-    /// -- reproduced by hand below via `use_deps`/`enabled_of` on the
-    /// same construction atom strings, rather than re-deriving the
-    /// mock's own logic.
+    /// Candidate state for a Portage test vector, built from its construction
+    /// atom as Portage's `Package` mock does: `iuse` = default-less flags,
+    /// `enabled` = bare flags. Vectors: lib/portage/tests/dep/test_match_from_list.py
     fn enabled_of(atom_str: &str) -> HashSet<String> {
         use_deps(atom_str)
             .into_iter()
@@ -1635,7 +1245,6 @@ mod use_dep_satisfaction_tests {
     }
 
     fn iuse_of(atom_str: &str) -> HashSet<String> {
-        // "required": every use-dep flag with no (+)/(-) default marker.
         use_deps(atom_str)
             .into_iter()
             .filter(|ud| ud.default.is_none())
@@ -1698,10 +1307,7 @@ mod use_dep_satisfaction_tests {
 
     #[test]
     fn portage_test_suite_vector_minus_default_on_a_required_enabled_flag_is_a_contradiction() {
-        // "bar(-)" (no "-" prefix, so op=Enabled) defaults an UNDECLARED
-        // "bar" to disabled -- directly contradicting "bar" being
-        // required enabled, so a candidate missing "bar" entirely is
-        // rejected outright, regardless of "foo".
+        // "bar(-)" on a required-enabled flag defaults undeclared "bar" to disabled: a contradiction.
         let ud = use_deps("dev-libs/A[foo,bar(-)]");
         assert!(!use_deps_satisfied(
             &ud,
@@ -1718,10 +1324,7 @@ mod use_dep_satisfaction_tests {
     #[test]
     fn portage_test_suite_vector_minus_bar_default_combines_with_a_plain_required_flag() {
         let ud = use_deps("dev-libs/A[foo,-bar(-)]");
-        // Package("=dev-libs/A-1[-foo,bar]"): bar IS declared here (no
-        // default in ITS OWN construction atom), so bar(-)'s default
-        // never applies -- foo is declared but disabled, violating the
-        // plain "foo" (must-be-enabled) requirement.
+        // bar is declared here, so bar(-) is moot; foo is declared but disabled -> rejected.
         assert!(!use_deps_satisfied(
             &ud,
             &iuse_of("=dev-libs/A-1[-foo,bar]"),
@@ -1776,12 +1379,7 @@ mod use_dep_satisfaction_tests {
 
     #[test]
     fn atom_intersects_rejects_a_different_operator_even_when_the_version_would_satisfy_it() {
-        // Real Atom.intersects()'s own docstring: deliberately narrow,
-        // "atoms with different cpv, operator or use attributes cause
-        // this method to return False even though there may actually be
-        // some intersection". `>=dev-libs/foo-1.0` would genuinely be
-        // satisfied by version 1.0, but the operator itself must match
-        // exactly here, not just range-satisfaction.
+        // Portage's Atom.intersects is deliberately narrow: a differing operator never intersects, even when the ranges overlap.
         let a = parse_atom(">=dev-libs/foo-1.0").unwrap();
         let b = parse_atom("=dev-libs/foo-1.0").unwrap();
         assert!(!atom_intersects(&a, &b));
@@ -1838,9 +1436,7 @@ mod use_mismatch_tests {
 
     #[test]
     fn missing_iuse_is_unconditional_and_skips_violation_checks() {
-        // `[x]` with x not in IUSE at all: unconditional, even though
-        // USE also lacks x (real skips violated_conditionals when
-        // get_missing_iuse is non-empty).
+        // Missing IUSE is unconditional and skips the violation checks.
         assert_eq!(
             mismatch("dev-libs/foo[x]", &[], &[]),
             (vec!["x".to_string()], vec![])
@@ -1880,8 +1476,7 @@ mod use_mismatch_tests {
 
     #[test]
     fn conditional_forms_never_yield_keys() {
-        // Real only reads violated_conditionals' .enabled/.disabled;
-        // conditional hits land in a dropped side-dict.
+        // Conditional hits are dropped, as in Portage.
         for atom in [
             "dev-libs/foo[x?]",
             "dev-libs/foo[!x?]",
@@ -1895,8 +1490,7 @@ mod use_mismatch_tests {
 
     #[test]
     fn defaults_rescue_undeclared_flags_for_matching_but_not_for_keys() {
-        // `[x(-)]` defaults an undeclared x to disabled: with x off,
-        // the (-) default makes the missing flag a violation anyway.
+        // The (-) default makes an undeclared, off `x` a violation.
         assert_eq!(
             mismatch("dev-libs/foo[x(-)]", &[], &[]),
             (vec![], vec!["x".to_string()])
@@ -1937,8 +1531,7 @@ mod use_deps_violated_tests {
 
     #[test]
     fn parent_disabled_child_enabled_breaks_not_parent_disabled() {
-        // Backlog #222's own shape: installed consumer built with -icu
-        // (`[-icu]` raw, `[!icu?]` live) vs the icu-flipped rebuild.
+        // Installed consumer built with -icu (`[-icu]` raw, `[!icu?]` live) vs the icu-flipped rebuild.
         assert!(violated("dev-libs/foo[!x?]", &[], &["x"], &["x"]));
         assert!(!violated("dev-libs/foo[!x?]", &[], &[], &["x"]));
         assert!(!violated("dev-libs/foo[!x?]", &["x"], &["x"], &["x"]));
@@ -1971,8 +1564,7 @@ mod use_dep_conditional_evaluation_tests {
 
     #[test]
     fn if_parent_enabled_becomes_enabled_when_parent_has_the_flag() {
-        // "x?": parent state x -> result x (real truth table, see
-        // evaluate_use_dep_conditionals's own doc comment).
+        // "x?": parent x -> x.
         let ud = parse_atom("dev-libs/foo[bar?]").unwrap().use_deps.unwrap();
         let parent_use = HashSet::from(["bar".to_string()]);
         let evaluated = evaluate_use_dep_conditionals(&ud, &parent_use);
@@ -1988,8 +1580,7 @@ mod use_dep_conditional_evaluation_tests {
 
     #[test]
     fn if_parent_enabled_is_dropped_when_parent_lacks_the_flag() {
-        // "x?": parent state -x -> dropped (no constraint at all), not
-        // "-x" -- the one-directional half of the truth table.
+        // "x?": parent -x -> dropped, not "-x".
         let ud = parse_atom("dev-libs/foo[bar?]").unwrap().use_deps.unwrap();
         let evaluated = evaluate_use_dep_conditionals(&ud, &HashSet::new());
         assert!(evaluated.is_empty());
@@ -2020,8 +1611,7 @@ mod use_dep_conditional_evaluation_tests {
 
     #[test]
     fn equal_parent_mirrors_the_parents_own_state_exactly() {
-        // "x=": x -> x, -x -> -x -- always imposes a constraint, unlike
-        // the "?" forms.
+        // "x=": mirrors the parent; always constrains.
         let ud = parse_atom("dev-libs/foo[bar=]").unwrap().use_deps.unwrap();
         assert_eq!(
             evaluate_use_dep_conditionals(&ud, &HashSet::from(["bar".to_string()])),
@@ -2104,9 +1694,7 @@ mod use_dep_conditional_evaluation_tests {
 
     #[test]
     fn evaluate_atom_conditionals_drops_the_whole_bracket_once_empty() {
-        // A lone "x?" against a parent that lacks the flag evaluates to
-        // zero tokens -- the atom string must come back with no "[...]"
-        // clause at all, not "dev-libs/foo[]".
+        // A lone "x?" with a parent lacking the flag leaves no "[...]" at all, not "[]".
         assert_eq!(
             evaluate_atom_conditionals("dev-libs/foo[bar?]", &HashSet::new()).as_deref(),
             Some("dev-libs/foo")
@@ -2115,11 +1703,7 @@ mod use_dep_conditional_evaluation_tests {
 
     #[test]
     fn evaluate_atom_conditionals_preserves_slot_and_repo() {
-        // Portuale's own atom grammar orders "::repo" before the
-        // use-deps bracket (see atom_regex's own group order) -- unlike
-        // real portage, which puts use-deps before "::repo". Matching
-        // this crate's own already-accepted order, not inventing a new
-        // one.
+        // This crate's grammar puts "::repo" before the use-deps bracket (Portage orders them the other way).
         let parent_use = HashSet::from(["bar".to_string()]);
         assert_eq!(
             evaluate_atom_conditionals("dev-libs/foo:0::testrepo[bar=]", &parent_use).as_deref(),
@@ -2129,8 +1713,7 @@ mod use_dep_conditional_evaluation_tests {
 
     #[test]
     fn evaluate_atom_conditionals_leaves_a_plain_use_dep_atom_unchanged() {
-        // No conditional ops at all -- must be the literal same string,
-        // not just an equivalent re-rendering.
+        // No conditional ops: must be the literal same string.
         let atom_str = "dev-libs/foo[bar,-baz(+)]";
         assert_eq!(
             evaluate_atom_conditionals(atom_str, &HashSet::new()).as_deref(),
@@ -2160,7 +1743,7 @@ mod use_dep_conditional_evaluation_tests {
 mod extract_affecting_use_tests {
     use super::*;
 
-    /// The 23 passing cases from real portage's
+    /// The 23 passing cases from Portage's
     /// `lib/portage/tests/dep/test_extract_affecting_use.py`, verbatim.
     #[test]
     fn matches_portages_test_corpus() {
@@ -2221,7 +1804,7 @@ mod extract_affecting_use_tests {
     }
 
     /// The 15 malformed cases from the same file's `test_cases_xfail`
-    /// (real raises `InvalidDependString`; portuale returns `None`).
+    /// (Portage raises `InvalidDependString`; portuale returns `None`).
     #[test]
     fn malformed_syntax_returns_none() {
         let cases: &[(&str, &str)] = &[
