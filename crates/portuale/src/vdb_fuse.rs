@@ -1,11 +1,7 @@
-// The FUSE adapter of `portuale vdb mount` (feat#157 / backlog #305, plan
-// S7.2): a thin translation from the `fuser` callbacks to the pure
-// `vdb_view::View`, which holds every decision (tree, inodes, attributes,
-// generation pinning, EROFS, the generated `metadata` file) and is unit
-// tested without a mount. With `--rw` (#317) the callbacks go to
-// `vdb_rw::RwView` instead, the read-write layer over the same view. This file only converts types and errno values;
-// it needs `/dev/fuse` and `fusermount3` to run and is exercised by the S7.4
-// commands on a FUSE-capable host, not by `cargo test`.
+// The FUSE adapter of `portuale vdb mount`: a thin translation from the
+// `fuser` callbacks to the pure `vdb_view::View` (read-only) or
+// `vdb_rw::RwView` (`--rw`). This file only converts types and errno values;
+// it needs `/dev/fuse` and `fusermount3` to run.
 //
 // `fuser` is built without its `libfuse` feature: it speaks the kernel
 // protocol itself and mounts through the `fusermount3` helper, so no C
@@ -33,7 +29,7 @@ use crate::vdb_view::{self, Attr, Kind, View, ViewError, WriteOp};
 const TTL: Duration = Duration::from_secs(1);
 
 /// What a mount serves: the read-only view, or the read-write layer
-/// (`--rw`, #317) over it.
+/// (`--rw`) over it.
 enum Mode {
     Ro(View),
     Rw(Box<RwView>),
@@ -45,7 +41,7 @@ struct Fs {
     gid: u32,
 }
 
-/// `--rw`: where staged entries live while real Portage writes them, and
+/// `--rw`: where staged entries live while Portage writes them, and
 /// the ROOT whose stores (world, counter, …) are imported at unmount.
 pub struct RwOpts {
     pub scratch: PathBuf,
@@ -152,9 +148,8 @@ fn ns_of(t: TimeOrNow) -> i128 {
 impl Filesystem for Fs {
     fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> io::Result<()> {
         if let Mode::Rw(_) = self.mode {
-            // Pass O_TRUNC to `open` instead of a separate setattr(size=0)
-            // first: real's in-place `> environment.bz2` (pkg_postinst)
-            // is then one live rewrite, stored at `close`.
+            // Pass O_TRUNC to `open` instead of a separate setattr first:
+            // Portage rewrites `environment.bz2` in place (pkg_postinst).
             let _ = config.add_capabilities(InitFlags::FUSE_ATOMIC_O_TRUNC);
         }
         Ok(())
@@ -229,7 +224,7 @@ impl Filesystem for Fs {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
-        // Real Portage creates regular files with open(O_CREAT), which
+        // Portage creates regular files with open(O_CREAT), which
         // arrives as `create`; a mknod is outside the mapping.
         match self.rw(WriteOp::Mknod) {
             Ok(_) => reply.error(Errno::EPERM),
@@ -310,7 +305,7 @@ impl Filesystem for Fs {
             return reply.error(Errno::EPERM);
         };
         if !flags.is_empty() {
-            // RENAME_EXCHANGE / RENAME_NOREPLACE are not used by Portage.
+            // Portage never sends these flags.
             return reply.error(Errno::EINVAL);
         }
         Self::empty(
@@ -346,9 +341,8 @@ impl Filesystem for Fs {
             Mode::Rw(rw) => rw.open(u64::from(ino), flags.0),
         };
         match r {
-            // Read-only: the content of a generation never changes under a
-            // handle, so the kernel may keep its page cache for it.
-            // Read-write: written files change, so no cache is kept.
+            // Read-only handles serve one immutable generation (page cache
+            // is safe); read-write handles serve changing bytes (direct I/O).
             Ok(fh) => reply.opened(
                 FileHandle(fh),
                 match self.mode {
@@ -413,7 +407,7 @@ impl Filesystem for Fs {
     ) {
         match &self.mode {
             Mode::Ro(_) => reply.ok(),
-            // A written live file is stored here, so `close` sees an error.
+            // A written live file is stored at flush, so `close` can fail.
             Mode::Rw(rw) => Self::empty(rw.flush(u64::from(fh)), reply),
         }
     }
@@ -433,7 +427,7 @@ impl Filesystem for Fs {
                 v.release(u64::from(fh));
                 reply.ok();
             }
-            // A release can publish (a live-entry rewrite, S3).
+            // A release can publish a live-entry rewrite.
             Mode::Rw(rw) => Self::empty(rw.release(u64::from(fh)), reply),
         }
     }
@@ -611,8 +605,8 @@ impl Filesystem for Fs {
         _flags: fuser::CopyFileRangeFlags,
         reply: fuser::ReplyWrite,
     ) {
-        // Real `shutil.copyfile` tries copy_file_range first (S0) and falls
-        // back to plain writes on EOPNOTSUPP.
+        // Portage copies with `shutil.copyfile`, which falls back to plain
+        // writes on EOPNOTSUPP.
         match self.rw(WriteOp::CopyFileRange) {
             Ok(_) => reply.error(Errno::from_i32(libc::EOPNOTSUPP)),
             Err(e) => reply.error(e),
@@ -697,8 +691,8 @@ pub fn serve(args: ServeArgs<'_>, on_mounted: impl FnOnce()) -> io::Result<()> {
             }
         })?;
     session.run()?;
-    // `--rw`: real emerge wrote world, the counter, … on disk under ROOT
-    // while the entries went to the database; take them in now (#317 S4).
+    // `--rw`: Portage's emerge wrote world, the counter, … on disk under
+    // ROOT while the entries went to the database; take them in now.
     if let Some((root, db)) = import {
         match crate::vdb_cmd::import_stores(&root, &*db) {
             Ok(rep) => eprintln!("portuale vdb mount: imported {rep} from {}", root.display()),
@@ -731,7 +725,7 @@ pub fn serve_background(
 ) -> Result<(), String> {
     // `--rw`: the daemon's last words (the store import at unmount) go to
     // a file next to the scratch directory, which the next mount of the
-    // same database clears but this file survives (#320).
+    // same database clears but this file survives.
     let log = rw.map(|o| rw_log_path(&o.scratch));
     let mut fds = [0i32; 2];
     // SAFETY: `fds` is a valid two-element array.
@@ -879,7 +873,7 @@ mod tests {
         );
     }
 
-    /// #320: a detached daemon's stderr goes to the log file, so the line
+    /// A detached daemon's stderr goes to the log file, so the line
     /// printed after `session.run()` returns is not lost. Run in a child
     /// (the redirect replaces the process's own descriptors).
     #[test]

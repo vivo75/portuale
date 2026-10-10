@@ -1,4 +1,4 @@
-//! Test harness for `vdb_rw` (#317): replay one operation script through
+//! Test harness for `vdb_rw`: replay one operation script through
 //! an `RwView` and on a plain `files` VDB directory, then compare the two
 //! databases entry by entry.
 //!
@@ -14,7 +14,7 @@
 //! chmod   PATH MODE          chown   PATH UID GID  (-1 = unchanged)
 //! utime   PATH NS            sameino A B           (assert one inode)
 //! stamp   FILE DIR           append `#dir_mtime=<DIR's mtime ns>\n` to FILE
-//!                            (real `_stamp_metadata_file`)
+//!                            (Portage's `_stamp_metadata_file`)
 //! ```
 
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -248,7 +248,7 @@ fn fs_one(vdb: &Path, op: &Op) -> std::io::Result<()> {
                 .write(true)
                 .create_new(true)
                 .open(p(f))?;
-            // Exactly MODE, whatever the process umask (#308).
+            // Exactly MODE, whatever the process umask.
             std::fs::set_permissions(p(f), std::fs::Permissions::from_mode(*m))
         }
         Op::Write(f, b) => std::fs::write(p(f), b),
@@ -409,7 +409,7 @@ pub fn envs(tag: &str) -> Vec<Env> {
             ("environment.bz2", b"BZh91AY&SY seed env"),
         ] {
             std::fs::write(e.join(n), b).unwrap();
-            // Exactly 0644, whatever the process umask (#308).
+            // Exactly 0644, whatever the process umask.
             std::fs::set_permissions(e.join(n), std::fs::Permissions::from_mode(0o644)).unwrap();
         }
         let spec = format!("{label}:{}", dir.join(format!("vdb.{label}")).display());

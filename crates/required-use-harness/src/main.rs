@@ -1,21 +1,15 @@
-// Neutral CLI test-harness binary for portuale's REQUIRED_USE checking (see
-// LLM/agent-context.md and portage-required-use/src/lib.rs's doc comment).
-// Same argv/output contract as python/required_use_harness.py,
-// which wraps real portage.dep.check_required_use directly.
+// Test-harness CLI for REQUIRED_USE checking: same argv/output contract
+// as the Python harness wrapping Portage's `portage.dep.check_required_use`.
 //
 // Usage:
 //   required-use-harness check <enabled> <iuse> <token...>
 //       enabled: comma-separated effective USE flags, or "-" for none
 //       iuse: comma-separated declared IUSE flags, or "-" for none
 //       token...: the REQUIRED_USE string's whitespace-separated tokens
-//                 (the CLI shell already splits argv on whitespace for
-//                 us, same convention use-reduce-harness's own "reduce"
-//                 op already uses)
 //     -> "true" | "false" | "ERROR"
 //   required-use-harness reduce <enabled> <iuse> <token...>
 //     -> "-" when satisfied, else the human-readable minimal unsatisfied
-//        sub-expression (real check_required_use(...).tounicode() run
-//        through human_readable_required_use), or "ERROR"
+//        sub-expression, or "ERROR"
 //   required-use-harness batch
 //     -> reads "<op> <enabled> <iuse> <token...>" lines from stdin, one
 //        result per line
@@ -63,8 +57,7 @@ fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
             Ok(format_check(enabled, iuse, tokens))
         }
         // "reduce": "-" when satisfied, else the human-readable minimal
-        // unsatisfied sub-expression (real depgraph.py's "The following
-        // REQUIRED_USE flag constraints are unsatisfied:" line).
+        // unsatisfied sub-expression.
         "reduce" => {
             let [enabled, iuse, tokens @ ..] = args else {
                 return Err("reduce expects at least 2 args (enabled, iuse)".to_string());

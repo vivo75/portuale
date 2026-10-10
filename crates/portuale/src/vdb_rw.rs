@@ -1,20 +1,15 @@
-// The read-write layer of `portuale vdb mount --rw` (backlog #317): what
-// real Portage writes into `var/db/pkg` while it merges and unmerges,
-// mapped onto database transactions. Design:
-// `LLM/superpowers/specs/2026-10-05-rw-fuse-vdb-design.md`; plan:
-// `LLM/02.317-rw-fuse.opus.md`; the real operation sequences:
-// `LLM/evidence/317-s0-capture.md`.
+// The read-write layer of `portuale vdb mount --rw`: what Portage writes
+// into `var/db/pkg` while it merges and unmerges, mapped onto database
+// transactions.
 //
 // `RwView` wraps the read-only `vdb_view::View` and answers first from
 // its own objects, then from the view:
 //
-// - volatile names (memory only, never stored): slot lock files
-//   (`<cat>/.<pn>:<slot>.portage_lockfile`), their hardlink checks
-//   (`..*.portage_lockfile.hardlock-*`), and categories created by
-//   `mkdir` that hold no entry yet (S1);
+// - volatile names (memory only, never stored): slot lock files and
+//   categories created by `mkdir` that hold no entry yet;
 // - staged `<cat>/-MERGING-<pf>/` directories on scratch disk, published
-//   with one `insert_entry` transaction at the rename (S2);
-// - rewrites and removals inside live entries (S3).
+//   with one `insert_entry` transaction at the rename;
+// - rewrites and removals inside live entries.
 //
 // Every object gets its inode from the view's one table (`Node::Obj`), so
 // inodes stay unique and a rename keeps its inode. Like `vdb_view`, this
@@ -46,9 +41,9 @@ fn now_ns() -> i128 {
         .map_or(0, |d| d.as_nanos() as i128)
 }
 
-/// The names real Portage's lock code creates next to entries
-/// (`locks.py` `lockfile` with `wantnewlockfile`, `hardlock_name`,
-/// `_lockfile_was_removed`): kept in memory only.
+/// The names Portage's lock code creates next to entries: kept in memory
+/// only.
+// Portage: locks.py, lockfile
 pub(crate) fn is_volatile_name(name: &str) -> bool {
     name.starts_with('.')
         && (name.ends_with(".portage_lockfile")
@@ -80,13 +75,13 @@ enum Parent {
     Cat(String),
     /// A staged `-MERGING-<pf>` directory (its object id).
     Staged(u64),
-    /// A live entry: new names real creates in it (`write_atomic` temps,
+    /// A live entry: new names Portage creates in it (`write_atomic` temps,
     /// `_umask_test` files) until they are renamed onto a field.
     Live(EntryKey),
 }
 
-/// The prefix real Portage gives an entry while it is being merged
-/// (`const.py` `MERGING_IDENTIFIER`).
+/// The prefix Portage gives an entry while it is being merged.
+// Portage: const.py, MERGING_IDENTIFIER
 const MERGING: &str = "-MERGING-";
 
 enum Obj {
@@ -99,7 +94,7 @@ enum Obj {
         nlink: u32,
     },
     /// A staged `<cat>/-MERGING-<pf>` directory, backed by `path` in the
-    /// scratch area. Its mtime follows real filesystem rules: a create,
+    /// scratch area. Its mtime follows filesystem rules: a create,
     /// unlink or rename inside it bumps it, a `utime` sets it.
     StagedDir {
         cat: String,
@@ -123,8 +118,7 @@ enum Fh {
     Staged(std::fs::File),
     /// A stored file of a live entry opened for writing: the new bytes
     /// build up in a scratch copy and are stored with `replace_file` at
-    /// `flush` (the `close` real sees). Real's `PORTAGE_UPDATE_ENV`
-    /// rewrite of `environment.bz2` in `pkg_postinst`.
+    /// `flush` (the `close` Portage sees).
     Live {
         key: EntryKey,
         name: String,
@@ -141,10 +135,10 @@ struct RwState {
     /// names with one id.
     names: BTreeMap<(Parent, String), u64>,
     /// Categories that exist only because of `mkdir` (no entry yet), or
-    /// because an unmerge emptied them and real has not removed them yet,
+    /// because an unmerge emptied them and Portage has not removed them yet,
     /// with their mtime.
     vol_cats: BTreeMap<String, i128>,
-    /// Stored files real has unlinked from a live entry (an `rmtree` in
+    /// Stored files Portage has unlinked from a live entry (an `rmtree` in
     /// progress): hidden from the view until `rmdir` deletes the entry.
     hidden: BTreeMap<EntryKey, std::collections::BTreeSet<String>>,
     handles: HashMap<u64, Fh>,
@@ -206,9 +200,9 @@ fn mtime_of(md: &std::fs::Metadata) -> i128 {
 }
 
 /// The `metadata` stamp state of a staged entry whose directory shows
-/// `dir_mtime_ns`: real `_read_metadata_file` (`vartree.py:157-185`) only
-/// trusts a file whose `#dir_mtime=` line equals the directory's
+/// `dir_mtime_ns`: a stamp is trusted only when it equals the directory's
 /// `st_mtime_ns`.
+// Portage: vartree.py, _read_metadata_file
 pub(crate) fn stamp_state(metadata: Option<&[u8]>, dir_mtime_ns: i128) -> MetadataStamp {
     let Some(bytes) = metadata else {
         return MetadataStamp::Absent;
@@ -245,7 +239,7 @@ pub struct RwView {
 
 impl RwView {
     /// A read-write layer over `db`. `scratch` is emptied (a previous
-    /// daemon's staged entries are discarded, like real Portage removes a
+    /// daemon's staged entries are discarded, like Portage removes a
     /// stale `-MERGING-` directory) and created. `owner` is what `getattr`
     /// reports for everything but volatile files.
     pub fn new(db: Arc<dyn InstalledDb>, scratch: PathBuf, owner: Owner) -> std::io::Result<Self> {
@@ -381,7 +375,7 @@ impl RwView {
         self.scratch.join(format!("live-{n}"))
     }
 
-    /// Whether `key` is being removed (real's `rmtree` has unlinked some
+    /// Whether `key` is being removed (Portage's `rmtree` has unlinked some
     /// of its files).
     fn removing(st: &RwState, key: &EntryKey) -> bool {
         st.hidden.get(key).is_some_and(|h| !h.is_empty())
@@ -879,7 +873,7 @@ impl RwView {
             }
             if let Parent::Live(entry) = &parent_key {
                 // A stored file: hidden now, deleted with the entry at
-                // `rmdir` (real `shutil.rmtree`).
+                // `rmdir` (Portage's `shutil.rmtree`).
                 self.lookup(parent, name)?;
                 lock(&self.st)
                     .hidden
@@ -910,7 +904,7 @@ impl RwView {
     }
 
     /// `rmdir(parent, name)`: an empty category, or an emptied staged
-    /// directory (real removes a stale `-MERGING-<pf>` before it starts).
+    /// directory (Portage removes a stale `-MERGING-<pf>` before it starts).
     pub fn rmdir(&self, parent: u64, name: &str) -> Res<()> {
         match self.view.node_of(parent)? {
             Node::Root => {
@@ -988,8 +982,8 @@ impl RwView {
                     self.rename_stored_file(a, name, newname)
                 }
             }
-            // Real `vardbapi.move_ent` (`vartree.py:626-683`, #319): the
-            // entry directory moves, possibly into another category.
+            // Portage: vartree.py, vardbapi.move_ent (the entry directory
+            // moves, possibly into another category).
             (Parent::Cat(c1), Parent::Cat(c2))
                 if !name.starts_with(MERGING)
                     && !newname.starts_with(MERGING)
@@ -999,7 +993,7 @@ impl RwView {
             {
                 self.move_entry(c1, name, c2, newname)
             }
-            // Live-entry rewrites are S3.
+            // Other renames are unmapped.
             _ => Err(ViewError::Perm),
         }
     }
@@ -1007,7 +1001,7 @@ impl RwView {
     /// `move_ent`'s `_movefile(origpath, newpath)`: one transaction that
     /// deletes the live entry and inserts its image under the new key
     /// (counters stay as they are). The category directory the move
-    /// leaves behind is real's to keep (or remove); like on disk, a
+    /// leaves behind is Portage's to keep (or remove); like on disk, a
     /// destination that exists is `ENOTEMPTY`. Inodes follow the rename.
     fn move_entry(&self, cat: &str, pf: &str, new_cat: &str, new_pf: &str) -> Res<()> {
         let old = EntryKey::new(cat, pf);
@@ -1019,7 +1013,7 @@ impl RwView {
         if self.view.lookup(new_cat_ino, new_pf).is_ok() {
             return Err(ViewError::NotEmpty);
         }
-        // Temps in the entry, or files real already unlinked (a removal
+        // Temps in the entry, or files Portage already unlinked (a removal
         // in progress), have no meaning across a move.
         if Self::removing(&st, &old)
             || st
@@ -1126,7 +1120,7 @@ impl RwView {
         Ok(())
     }
 
-    /// The image real Portage built in staged directory `dir`.
+    /// The image Portage built in staged directory `dir`.
     fn staged_image(&self, st: &RwState, dir: u64, key: EntryKey) -> Res<EntryImage> {
         let Some(Obj::StagedDir { mode, mtime_ns, .. }) = st.objs.get(&dir) else {
             return Err(ViewError::NoEnt);
@@ -1174,8 +1168,8 @@ impl RwView {
             .get(&(Parent::Cat(cat.to_string()), staged.to_string()))
             .ok_or(ViewError::NoEnt)?;
         let key = EntryKey::new(cat, pf);
-        // A rename onto a non-empty directory fails on a real filesystem;
-        // real `dblink.treewalk` removes the live entry first.
+        // A rename onto a non-empty directory fails on a filesystem;
+        // Portage's `dblink.treewalk` removes the live entry first.
         let cat_ino = self.view.ino_of(&Node::Cat(cat.to_string()));
         if self.view.lookup(cat_ino, pf).is_ok() {
             return Err(ViewError::NotEmpty);
@@ -1204,7 +1198,7 @@ impl RwView {
         };
         commit().map_err(|e| ViewError::Io(e.to_string()))?;
         // A directory rename keeps every child's inode: the kernel still
-        // holds dentries for the files real Portage just wrote, and
+        // holds dentries for the files Portage just wrote, and
         // `pkg_postinst` reopens `environment.bz2` through them.
         let mut rebinds = Vec::new();
         for (name, id) in st.children(&Parent::Staged(dir)) {
@@ -1230,7 +1224,7 @@ impl RwView {
 
     /// `rmdir(<cat>/<pf>)` of a live entry: once every stored file was
     /// unlinked (hidden) and no temp is left, delete the entry in one
-    /// transaction. The category stays listed until real removes it.
+    /// transaction. The category stays listed until Portage removes it.
     fn remove_entry(&self, cat_ino: u64, key: EntryKey) -> Res<()> {
         let entry = self.view.lookup(cat_ino, &key.pf)?;
         let fh = self.opendir(entry.ino)?;
@@ -1266,8 +1260,7 @@ impl RwView {
         }
         // A rename carries the temp's bytes, mode and mtime, and moves the
         // directory mtime, so a valid `metadata` stamp turns stale, as on
-        // disk (real's reader then falls back to the field files). The
-        // whole entry is rewritten in one transaction.
+        // disk. The whole entry is rewritten in one transaction.
         let md = std::fs::metadata(path).map_err(io_err)?;
         let data = std::fs::read(path).map_err(io_err)?;
         let path = path.clone();
@@ -1309,8 +1302,9 @@ impl RwView {
     }
 
     /// `link(ino, newparent, newname)`: hardlinks of volatile files only
-    /// (real `_lockfile_was_removed` links the lock file to a hardlock
-    /// name and compares the inodes).
+    /// (Portage links the lock file to a hardlock name and compares the
+    /// inodes).
+    // Portage: locks.py, _lockfile_was_removed
     pub fn link(&self, ino: u64, newparent: u64, newname: &str) -> Res<Attr> {
         let id = self.obj_id(ino).ok_or(ViewError::Perm)?;
         let Some(Parent::Cat(cat)) = self.parent_of(newparent)? else {
@@ -1404,8 +1398,8 @@ impl RwView {
         if s.mode.is_some() || s.size.is_some() {
             return Err(ViewError::Perm);
         }
-        // `utime` on a category or the root (real `_bump_mtime`): accepted,
-        // no lasting effect; the view derives those mtimes.
+        // `utime` on a category or the root: accepted, no lasting effect;
+        // the view derives those mtimes.
         Ok(attr)
     }
 
@@ -1879,10 +1873,8 @@ mod tests {
         }
     }
 
-    /// #319: a package move through the mount. The op sequence is real's
-    /// (`move_ent`, strace capture in `testdata/move-ent.ops`); the files
-    /// run on a real directory is the reference, the view must leave the
-    /// database equal to it, the entry under its new key only.
+    /// A package move through the mount equals the same move on files:
+    /// the database holds the entry under its new key only.
     #[test]
     fn a_package_move_through_the_view_equals_the_same_move_on_files() {
         for env in envs("moveent") {

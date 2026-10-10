@@ -1,81 +1,36 @@
-// The parent pipe (`PORTUALE_VDB_IPC`, feat#157, backlog #305 S6.3).
+// The parent pipe (`PORTUALE_VDB_IPC`): installed-package lookups while
+// `mrg` holds a redb database read-write.
 //
-// redb allows one process per database file. While `mrg --vdb-backend=redb`
-// merges, it holds the file read-write, so the native `portuale portageq`
-// that an ebuild phase runs for `has_version` / `best_version` cannot open
-// it. Real Portage has the same shape for its own helpers (`ebuild-ipc`: a
-// phase asks the parent emerge over a FIFO in `${PORTAGE_BUILDDIR}/.ipc`);
-// here the parent `mrg` answers over a Unix domain socket and exports its
-// path in `PORTUALE_VDB_IPC`. Design: `docs/vdb_to_db.md` §10; plan step
-// S6.3; owner question Q5 (default: the pipe for redb only, files and
-// sqlite keep opening the database directly).
-//
-// # Split of the logic
-//
-// The child (`portageq.rs`) keeps every rule of
-// `LLM/evidence/305-s6-portageq.md` (arguments, strict parse, EAPI QA
-// notice, USE-conditional evaluation, `dep_expand`, output and exit codes)
-// and the config load for the profile's implicit IUSE. The parent only
-// runs the two installed-package lookups those rules need, through the
-// same functions the child uses on a files or sqlite root, against the
-// backend registered for its ROOT:
-//
-// - `match`: `portage_repo::best_installed_match` (the resolver's own
-//   installed-package matcher);
-// - `categories`: `portageq::installed_categories_of` (the `dep_expand`
-//   lookup for a bare package name, only reached outside a phase).
-//
-// # Protocol
+// redb allows one writer process per database file, so the native
+// `portuale portageq` that an ebuild phase runs for `has_version` /
+// `best_version` cannot open it mid-merge. The parent `mrg` answers over a
+// Unix domain socket and exports its path in `PORTUALE_VDB_IPC`.
+// Portage: ebuild-ipc (a phase asks the parent emerge over a FIFO).
 //
 // One connection, one request line, one reply line; fields are separated
 // by TAB, and no field may hold a TAB or a newline.
 //
 // ```text
-// match\t<eroot>\t<atom>\t<unevaluated atom or empty>\t<implicit IUSE, space separated>\n
-//     -> ok\t<version>\n          (the highest matching installed version, PF's version part)
+// match\t<eroot>\t<atom>\t<unevaluated atom or empty>\t<implicit IUSE>\n
+//     -> ok\t<version>\n          (the highest matching installed version)
 //     -> none\n                   (nothing matches)
 // categories\t<eroot>\t<pn>\n
-//     -> ok\t<cat> <cat> ...\n    (categories with <pn> installed; empty after the TAB)
+//     -> ok\t<cat> <cat> ...\n    (categories with <pn> installed)
 // anything else, or a request the server cannot answer
 //     -> err\t<message>\n
 // ```
 //
-// `<eroot>` must name the ROOT the server serves (`portageq::same_root`);
-// the client only uses the pipe for that root anyway. The implicit IUSE is
-// sent only when the atom has USE dependencies (otherwise empty: the
-// matcher never asks for it).
+// `<eroot>` must name the ROOT the server serves; the implicit IUSE is sent
+// only when the atom has USE dependencies.
 //
-// # Lifecycle
+// `mrg` starts the server (redb, not `--pretend`) before `pretend::run` and
+// keeps the returned [`Server`] alive for the whole run. Dropping it stops
+// the accept thread and removes the socket and its directory.
 //
-// `mrg` starts the server (redb, not `--pretend`) right after it opened
-// and registered the database, before `pretend::run`, and keeps the
-// returned [`Server`] alive for the whole run. The socket lives in a
-// private directory (mode 0700) `$TMPDIR/portuale-vdb-ipc-<pid>-<nanos>/s`
-// (`/tmp` when that path is too long for a socket address). Dropping the
-// [`Server`] stops the accept thread and removes the socket and the
-// directory. Outside the unit tests a panic hook removes it too (the
-// release profile aborts on panic, so `Drop` would not run). What a
-// `SIGKILL` leaves behind is removed by the next server start (the
-// directories of dead pids are swept, as `portage_util::TempDir` does).
-//
-// # Never blocking the merge
-//
-// The server thread only reads: every lookup is a read transaction of the
-// registered handle, and redb readers never wait for the writer. A read
-// sees the last committed state, never the merge's open write transaction
-// nor its pending (`merging`) entry, which is exactly real `has_version`'s
-// view during `pkg_preinst`: the old instance until the new one is
-// published. Each connection is served on its own short-lived thread with
-// a read and write timeout and a bounded request size, so a stuck or
-// misbehaving client costs at most one idle thread for the timeout; a
-// malformed request gets an `err` reply and the server keeps serving.
-// The accept thread is not the merge thread.
-//
-// Consistency: one request makes several read calls (candidate list,
-// `repository`, `IUSE`, `USE`), each its own snapshot. A commit landing
-// between them can make one answer mix two committed states; the merge
-// commits only at entry boundaries, and a phase asking while its own
-// package's entry is being published cannot tell the order apart anyway.
+// The server thread only reads, and each connection is served on its own
+// short-lived thread with timeouts, so a stuck client never blocks the
+// merge. A read sees the last committed state, never the merge's open write
+// transaction nor its pending entry.
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -89,7 +44,7 @@ use std::time::Duration;
 /// The variable that carries the socket path to the children.
 pub(crate) const IPC_VAR: &str = "PORTUALE_VDB_IPC";
 
-/// The largest request line the server reads (the implicit IUSE of a real
+/// The largest request line the server reads (the implicit IUSE of a
 /// profile is a few KiB).
 const MAX_REQUEST: u64 = 1 << 20;
 /// The largest reply line the client reads.
@@ -512,12 +467,8 @@ mod tests {
         out
     }
 
-    /// (a) The server answers the S6.2 query set exactly as the direct
-    /// lookup does, on a redb copy of the fixture VDB registered under its
-    /// own root key (the shape `mrg` has: the handle open read-write in
-    /// this process, the queries on another thread). (c) The socket and
-    /// its directory are gone after the drop. (d) Garbage gets an `err`
-    /// reply and the server keeps serving.
+    /// The server answers like the direct lookup on a redb copy, and
+    /// survives garbage requests.
     #[cfg(feature = "vdb-redb")]
     #[test]
     fn server_answers_like_the_direct_match_and_survives_garbage() {
