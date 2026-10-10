@@ -1,14 +1,7 @@
 use super::*;
 
-/// B1 bug 1: the dependency strings of a chosen binary instance are
-/// read from the first `Packages` entry with the same `CPV`, not from
-/// the instance that was actually selected. Here build 2 (newest)
-/// wins `dedup_binary_instances`, but the walk follows build 1's
-/// `RDEPEND` (`dev-libs/olddep`) -- in the field that is
-/// `ghostscript-gpl:0/10.06=`, which forces a downgrade of the
-/// installed 10.08. Expected value: real `_iter_match_pkgs` +
-/// `pkg._metadata` of the selected instance (the `Packages` entry
-/// carrying that `BUILD_ID`).
+/// A chosen binary instance's depstrings come from the selected instance's own
+/// `Packages` entry (Portage's `_iter_match_pkgs` + selected `pkg._metadata`).
 #[test]
 fn multi_instance_walk_reads_the_selected_instances_own_deps() {
     let dir = slotundo_temp_dir("1010-multiinst-deps");
@@ -63,15 +56,8 @@ fn multi_instance_walk_reads_the_selected_instances_own_deps() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #247: a same-version/slot/sub-slot `Reinstall` whose
-/// installed instance's repo differs from the merged candidate's
-/// carries that instance as `oldbest` -- real
-/// `_get_installed_best`'s third disjunct (`not quiet_repo_display
-/// and repo differs`, `output.py:721-731`; owner B5 reopened the
-/// cut). The staged vdb omits the `repository` file (like the
-/// hand-staged abk0/samepkg fixture vdbs), so the installed repo
-/// is real's `__unknown__` sentinel while the candidate merges
-/// from `testrepo`.
+/// A same-version/slot/sub-slot `Reinstall` whose installed repo differs carries
+/// that instance as `oldbest` (Portage's `_get_installed_best`).
 #[test]
 fn run_pass_reinstall_with_only_repo_drift_carries_oldbest() {
     let dir = slotundo_temp_dir("161-run-repobest");
@@ -80,8 +66,8 @@ fn run_pass_reinstall_with_only_repo_drift_carries_oldbest() {
     fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
     fs::write(d.join("SLOT"), "0/1\n").unwrap();
     fs::write(d.join("USE"), "\n").unwrap();
-    // No `repository` file: `installed_pkg_repo` falls back to
-    // `__unknown__`, which never equals the `testrepo` candidate.
+    // No `repository` file, so the installed repo is the `__unknown__` sentinel,
+    // which never equals the `testrepo` candidate.
     let config = test_config();
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let opts = CtxOpts161 {
@@ -114,8 +100,7 @@ fn run_pass_reinstall_with_only_repo_drift_carries_oldbest() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: the `needer`/`othermod` triangle records its
-/// slot conflict on the pass instead of resolving silently.
+/// The `needer`/`othermod` triangle records its slot conflict on the pass.
 #[test]
 fn run_pass_records_the_needer_othermod_slot_conflict() {
     let fixture_root = fixtures_root();
@@ -139,14 +124,13 @@ fn run_pass_records_the_needer_othermod_slot_conflict() {
     let _ = fixture_root;
 }
 
-/// Backlog #161 S6: a runtime blocker on an installed package
-/// that stays put files a satisfied blocker row on it.
+/// A runtime blocker on an installed package that stays put files a satisfied
+/// blocker row on it.
 #[test]
 fn run_pass_files_a_depend_blocker_row() {
     let dir = slotundo_temp_dir("161-run-blk");
     let repos = blocker_161_repo(&dir);
-    // victim-1.0 stays installed while the parent merges around
-    // it under a soft block.
+    // victim-1.0 stays installed while the parent merges around it.
     let d = dir.join("var/db/pkg/dev-libs/victim-1.0");
     fs::create_dir_all(&d).unwrap();
     fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -183,15 +167,10 @@ fn run_pass_files_a_depend_blocker_row() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: under `--nodeps` the all-installed blocker
-/// scan never runs -- an installed owner's blocker stays invisible
-/// even when its target upgrades right beside it.
+/// Under `--nodeps` the all-installed blocker scan never runs.
 #[test]
 fn run_pass_nodeps_skips_the_unwalked_blocker_scan() {
     let dir = slotundo_temp_dir("161-run-nodepsblk");
-    // Unwalked installed owner blocking `scanvictim`, which this
-    // run upgrades 1.0 -> 2.0 (so a scan would find a merge-bound
-    // match and file rows).
     let mk = |name: &str, slot: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -203,11 +182,8 @@ fn run_pass_nodeps_skips_the_unwalked_blocker_scan() {
             fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
         }
     };
-    // Unwalked installed owner blocking `scanvictim`, which this
-    // run upgrades 1.0 -> 2.0 (so a scan would find a merge-bound
-    // match and file rows). Unversioned: an op-less versioned
-    // blocker is ambiguous and rejected on both sides (real
-    // `Atom('!dev-libs/scanvictim-1.0')` raises too).
+    // Unversioned: an op-less versioned blocker is ambiguous and rejected on
+    // both sides (Portage's `Atom` raises too).
     mk("scanowner-1.0", "0", "!dev-libs/scanvictim");
     mk("scanvictim-1.0", "0", "");
     let scratch = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
@@ -222,9 +198,8 @@ fn run_pass_nodeps_skips_the_unwalked_blocker_scan() {
     let mut repos = find_repos(&fixtures_root()).expect("fixture repos");
     repos.push(scratch);
     let atoms = vec!["dev-libs/scanvictim".to_string()];
-    // The owner rides the required-set closure so a found blocker
-    // has a display home (the #73 set-parent arm); without the
-    // `--nodeps` gate the scan would file rows through it.
+    // The owner rides the required-set closure so a found blocker has a
+    // display home; without the `--nodeps` gate the scan would file rows.
     let owner_closure: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "scanowner".to_string())]);
     let opts = CtxOpts161 {
@@ -251,8 +226,8 @@ fn run_pass_nodeps_skips_the_unwalked_blocker_scan() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: top-level atoms matched by `package.provided`
-/// skip resolution and ride out sorted in argument order.
+/// Top-level atoms matched by `package.provided` ride out sorted in argument
+/// order instead of resolving.
 #[test]
 fn run_pass_sorts_provided_atoms_in_argument_order() {
     let dir = slotundo_temp_dir("161-run-prov");
@@ -278,8 +253,7 @@ fn run_pass_sorts_provided_atoms_in_argument_order() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a masked candidate reports through the
-/// masked-dep channel instead of resolving.
+/// A masked candidate reports through the masked-dep channel.
 #[test]
 fn run_pass_reports_a_masked_candidate() {
     let dir = slotundo_temp_dir("161-run-masked");
@@ -307,9 +281,7 @@ fn run_pass_reports_a_masked_candidate() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a REQUIRED_USE violation fails the walk with
-/// no entries at all (its own ebuild documents the trigger: `foo`
-/// forced on via `package.use`, `bar` left off).
+/// A REQUIRED_USE violation fails the walk with no entries at all.
 #[test]
 fn run_pass_fails_a_required_use_violation() {
     let dir = slotundo_temp_dir("161-run-requse");
@@ -337,8 +309,7 @@ fn run_pass_fails_a_required_use_violation() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: `--with-test-deps` walks a top-level atom's
-/// `test?` conditional deps; without it they stay out.
+/// `--with-test-deps` walks a top-level atom's `test?` conditional deps.
 #[test]
 fn run_pass_with_test_deps_walks_test_conditionals() {
     let dir = slotundo_temp_dir("161-run-testdeps");
@@ -368,11 +339,7 @@ fn run_pass_with_test_deps_walks_test_conditionals() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a dependency nothing satisfies -- not even
-/// its bare form -- arms the missing-dep retry trigger.
-/// (A USE-only failure instead stays out of this path -- its bare
-/// form still satisfies the probe -- so the shape uses a fully
-/// missing package.)
+/// A dependency nothing satisfies arms the missing-dep retry trigger.
 #[test]
 fn run_pass_arms_the_missing_dep_trigger() {
     let dir = slotundo_temp_dir("161-run-missdep");
@@ -397,10 +364,7 @@ fn run_pass_arms_the_missing_dep_trigger() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a repeated NVC under active search masks is
-/// flagged suppressed (the #57 surely-masked shape: the second
-/// visit dedups, and the mask gate marks the pass a dead end);
-/// without masks the dep merges and nothing suppresses.
+/// A repeated NVC under active search masks is flagged suppressed.
 #[test]
 fn run_pass_flags_nvc_under_masks_suppressed() {
     let dir = slotundo_temp_dir("161-run-suppr");
@@ -457,9 +421,8 @@ fn run_pass_flags_nvc_under_masks_suppressed() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a dependency whose candidates are all
-/// masked reports once through the masked-dep channel, however
-/// many dep edges name it.
+/// A dependency whose candidates are all masked reports once, however many
+/// dep edges name it.
 #[test]
 fn run_pass_reports_a_masked_dependency_once() {
     let dir = slotundo_temp_dir("161-run-depmask");
@@ -498,9 +461,8 @@ fn run_pass_reports_a_masked_dependency_once() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: in complete mode a dependency outside the
-/// locked merge set resolves to nothing -- the cheap
-/// graph-or-installed check instead of a fresh resolve.
+/// In complete mode a dependency outside the locked merge set resolves to
+/// nothing.
 #[test]
 fn run_pass_complete_mode_locks_unlisted_dependencies_out() {
     let dir = slotundo_temp_dir("161-run-complete");
@@ -527,8 +489,7 @@ fn run_pass_complete_mode_locks_unlisted_dependencies_out() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: an unlimited deep walk recurses into an
-/// installed dependency's own deps; without it they stay out.
+/// An unlimited deep walk recurses into an installed dependency's own deps.
 #[test]
 fn run_pass_deep_walk_recurses_into_installed_deps() {
     let dir = slotundo_temp_dir("161-run-deep");
@@ -568,9 +529,8 @@ fn run_pass_deep_walk_recurses_into_installed_deps() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: under `--usepkg` with a staged binary index,
-/// the atom resolves from the binary pool instead of the tree,
-/// carrying the index's build identity.
+/// Under `--usepkg` with a staged binary index, the atom resolves from the
+/// binary pool instead of the tree.
 #[test]
 fn run_pass_usepkg_selects_the_staged_binary() {
     let dir = slotundo_temp_dir("161-run-binpkg");
@@ -602,8 +562,8 @@ fn run_pass_usepkg_selects_the_staged_binary() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a binary candidate's build-time keys stay out
-/// of the walk without `--with-bdeps`.
+/// A binary candidate's build-time keys stay out of the walk without
+/// `--with-bdeps`.
 #[test]
 fn run_pass_binary_hides_buildtime_deps_without_bdeps() {
     let dir = slotundo_temp_dir("161-run-binbdep");
@@ -667,8 +627,7 @@ fn run_pass_binary_hides_buildtime_deps_without_bdeps() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: two plain-missing deps on one cp file a single
-/// plain-miss report.
+/// Two plain-missing deps on one cp file a single plain-miss report.
 #[test]
 fn run_pass_dedups_plain_miss_reports() {
     let dir = slotundo_temp_dir("161-run-missdup");
@@ -693,10 +652,8 @@ fn run_pass_dedups_plain_miss_reports() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a solved in-walk slot conflict records its
-/// skipped update for the withhold notice. Seed order matters:
-/// `newconsumer` first pulls 2.0, then `oldconsumer` collides it
-/// with 1.0.
+/// A solved in-walk slot conflict records its skipped update. Seed order
+/// matters: `newconsumer` first pulls 2.0, then `oldconsumer` collides it.
 #[test]
 fn run_pass_records_skipped_updates_for_solved_conflicts() {
     let fixture_root = fixtures_root();
@@ -722,8 +679,7 @@ fn run_pass_records_skipped_updates_for_solved_conflicts() {
     let _ = fixture_root;
 }
 
-/// Backlog #161 S6: the missing-dep trigger names the upgraded
-/// parent version (the `Upgrade` arm, not just `New`).
+/// The missing-dep trigger names the upgraded parent version.
 #[test]
 fn run_pass_arms_the_trigger_for_an_upgrading_parent() {
     let dir = slotundo_temp_dir("161-run-misup");
@@ -756,13 +712,8 @@ fn run_pass_arms_the_trigger_for_an_upgrading_parent() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #286: a top-level set member (`@world`/`@selected`
-/// expansion, real `SetArg` "world"/"selected") that selects no
-/// package drops into `missing_args` instead of failing the walk
-/// (real `_missing_args`, `depgraph.py:5577-5605`); the same atom
-/// requested explicitly (no set membership) fails with the bare
-/// miss. The drop leaves no entry, so the healed rest of the graph
-/// can settle around it.
+/// An unresolvable top-level set member drops into `missing_args` instead of
+/// failing the walk; the same atom requested explicitly fails.
 #[test]
 fn run_pass_drops_an_unresolvable_set_member() {
     let dir = slotundo_temp_dir("286-run-missing-arg");
@@ -811,13 +762,10 @@ fn run_pass_drops_an_unresolvable_set_member() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: one report per missing cp, even across
-/// categories sharing a package name.
+/// One report per missing cp, even across categories sharing a package name.
 #[test]
 fn run_pass_reports_each_plain_miss_once() {
     let dir = slotundo_temp_dir("161-run-miss4");
-    // Four missing deps: two sharing dev-libs, two sharing the
-    // package name across categories.
     let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
         base: &dir,
         cp: "dev-libs/depparent",
@@ -855,8 +803,7 @@ fn run_pass_reports_each_plain_miss_once() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a repeated missing dep without active masks is
-/// not suppressed -- suppression needs the mask gate.
+/// A repeated missing dep without active masks is not suppressed.
 #[test]
 fn run_pass_repeated_miss_without_masks_is_not_suppressed() {
     let dir = slotundo_temp_dir("161-run-nosuppr");
@@ -881,8 +828,7 @@ fn run_pass_repeated_miss_without_masks_is_not_suppressed() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: one masked report per masked cp, even
-/// across categories sharing a package name.
+/// One masked report per masked cp, even across categories.
 #[test]
 fn run_pass_reports_each_masked_dep_once() {
     let dir = slotundo_temp_dir("161-run-mask4");
@@ -942,8 +888,7 @@ fn run_pass_reports_each_masked_dep_once() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: one use-unsat report per unsatisfiable cp,
-/// even across categories sharing a package name.
+/// One use-unsat report per unsatisfiable cp, even across categories.
 #[test]
 fn run_pass_reports_each_use_unsat_once() {
     let dir = slotundo_temp_dir("161-run-use4");
@@ -1008,9 +953,8 @@ fn run_pass_reports_each_use_unsat_once() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: two owners blocking the same package file two
-/// rows -- the pending dedup keys on the full triple, so a second
-/// owner is never swallowed.
+/// Two owners blocking the same package file two rows: the dedup keys on the
+/// full triple, so a second owner is never swallowed.
 #[test]
 fn run_pass_files_one_row_per_blocker_owner() {
     let dir = slotundo_temp_dir("161-run-blk2");
@@ -1068,21 +1012,12 @@ fn run_pass_files_one_row_per_blocker_owner() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: with `--with-bdeps` a binary candidate's
-/// build-time keys walk too.
+/// With `--with-bdeps` a binary candidate's build-time keys walk too.
 #[test]
 fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
     let dir = slotundo_temp_dir("161-run-binbdep2");
-    // NOTE (repaired S6p): the first version of this leg built the
-    // tree parent with `DEPEND="dev-libs/buildonlydep"` (the only
-    // key the helper could write) while staging the binary with
-    // `BDEPEND="dev-libs/buildonlydep"`. Under `--with-bdeps`
-    // `--binpkg-changed-deps` compares all five keys, saw the
-    // `DEPEND` mismatch, and rejected the binary -- so the leg
-    // walked the ebuild and proved nothing about the
-    // `Binary && !with_bdeps` gates. The parent now carries the
-    // dep in `BDEPEND` on both sides, so the binary survives
-    // selection and the walk genuinely takes the all-keys arm.
+    // The tree parent carries the dep in `BDEPEND` on both sides, so the
+    // binary survives selection and the walk takes the all-keys arm.
     let repo = dir.join("scratchrepo");
     blocker_161_write_pkg_full(Blocker161WritePkgFullArgs {
         repo: &repo,
@@ -1133,8 +1068,7 @@ fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
         names.contains(&"buildonlydep"),
         "a selected binary walks its build-time keys under --with-bdeps"
     );
-    // The all-keys arm also feeds the merge-order digraph: the
-    // parent's recorded edges name the build-time dep.
+    // The all-keys arm also feeds the merge-order digraph.
     let parent = pass
         .entries
         .iter()
@@ -1144,9 +1078,8 @@ fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
         parent.deps.iter().any(|d| d.package == "buildonlydep"),
         "the binary's build-time dep reaches the merge-order edges"
     );
-    // ... and the queue tags that edge build-time-hard (no
-    // installed provider, no run-time alternative), which is what
-    // the `buildtime_atoms` gate computes.
+    // ... and the queue tags that edge build-time-hard, which is what the
+    // `buildtime_atoms` gate computes.
     assert_eq!(
         pass.edge_kind_map.get(&(
             (false, "dev-libs".to_string(), "buildonlydep".to_string()),
@@ -1158,11 +1091,8 @@ fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6p: under `--buildpkgonly` (without `--deep`)
-/// a source candidate walks only its build-time keys -- the
-/// `dep_keys` second arm (`candidate_source != Binary`). The
-/// scratch parent carries the same dep in `DEPEND` (walked) and
-/// a second one in `RDEPEND` (blanked).
+/// Under `--buildpkgonly` (without `--deep`) a source candidate walks only its
+/// build-time keys.
 #[test]
 fn run_pass_buildpkgonly_walks_buildtime_keys_only() {
     let dir = slotundo_temp_dir("161-run-bpkgonly");
@@ -1217,8 +1147,7 @@ fn run_pass_buildpkgonly_walks_buildtime_keys_only() {
         !parent.deps.iter().any(|d| d.package == "rundep"),
         "the blanked run-time dep stays out of the edges too"
     );
-    // ... and the queue tags the kept dep build-time-hard (no
-    // installed provider, no run-time alternative).
+    // ... and the queue tags the kept dep build-time-hard.
     assert_eq!(
         pass.edge_kind_map.get(&(
             (false, "dev-libs".to_string(), "builddep".to_string()),
@@ -1230,9 +1159,8 @@ fn run_pass_buildpkgonly_walks_buildtime_keys_only() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: sibling report vecs do not shadow other
-/// cps' misses -- visits run reverse-RDEPEND-text, so the plain
-/// filings land last with every sibling vec populated.
+/// Sibling report vecs do not shadow other cps' misses: visits run
+/// reverse-RDEPEND-text, so the plain filings land last populated.
 #[test]
 fn run_pass_plain_miss_ignores_other_cps_reports() {
     let dir = slotundo_temp_dir("161-run-misscombo");
@@ -1290,9 +1218,8 @@ fn run_pass_plain_miss_ignores_other_cps_reports() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: with `--binpkg-respect-use`, a binary
-/// whose USE disagrees with the tree is filtered out and the
-/// ebuild wins instead.
+/// With `--binpkg-respect-use`, a USE-mismatched binary is filtered out and
+/// the ebuild wins instead.
 #[test]
 fn run_pass_respect_use_filters_a_stale_binary() {
     let dir = slotundo_temp_dir("161-run-respect");
@@ -1327,8 +1254,7 @@ fn run_pass_respect_use_filters_a_stale_binary() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: an older staged binary loses to the newer tree
-/// ebuild under `--usepkg`.
+/// An older staged binary loses to the newer tree ebuild under `--usepkg`.
 #[test]
 fn run_pass_newer_ebuild_beats_older_binary() {
     let dir = slotundo_temp_dir("161-run-oldbin");
@@ -1362,9 +1288,7 @@ fn run_pass_newer_ebuild_beats_older_binary() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a bare `:=` pull landing on a resolved slot
-/// reuses it silently -- the satisfaction holds through the
-/// operator and binding arms when nothing rebuilt shifts.
+/// A bare `:=` pull landing on a resolved slot reuses it silently.
 #[test]
 fn run_pass_bare_slotop_pull_reuses_the_resolved_slot() {
     let dir = slotundo_temp_dir("161-run-slotop");
@@ -1421,10 +1345,8 @@ fn run_pass_bare_slotop_pull_reuses_the_resolved_slot() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: an auto-replace seed is not a top-level
-/// argument -- it walks ownerless at depth 1 and never files an
-/// `(Argument)` puller row. (Seeded alone, so no top-level visit
-/// dedups it away first.)
+/// An auto-replace seed is not a top-level argument: it walks ownerless at
+/// depth 1 and never files an `(Argument)` puller row.
 #[test]
 fn run_pass_replace_seed_files_no_argument_puller() {
     let dir = slotundo_temp_dir("161-run-seed");
@@ -1454,9 +1376,7 @@ fn run_pass_replace_seed_files_no_argument_puller() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: the trigger resolves its owner against the
-/// walked entries by exact cp -- a same-category neighbour walking
-/// first never supplies it.
+/// The trigger resolves its owner against the walked entries by exact cp.
 #[test]
 fn run_pass_trigger_matches_the_owner_entry_exactly() {
     let dir = slotundo_temp_dir("161-run-misown");
@@ -1500,8 +1420,8 @@ fn run_pass_trigger_matches_the_owner_entry_exactly() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: under `--usepkgonly`, a newer staged binary
-/// merges even with no ebuild twin at its version.
+/// Under `--usepkgonly`, a newer staged binary merges even with no ebuild twin
+/// at its version.
 #[test]
 fn run_pass_usepkgonly_takes_a_newer_binary() {
     let dir = slotundo_temp_dir("161-run-newbin");
@@ -1531,8 +1451,8 @@ fn run_pass_usepkgonly_takes_a_newer_binary() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: under plain `--usepkg`, a binary with no
-/// ebuild twin at its version loses to the visible tree.
+/// Under plain `--usepkg`, a binary with no ebuild twin at its version loses
+/// to the visible tree.
 #[test]
 fn run_pass_newer_binary_loses_to_the_tree() {
     let dir = slotundo_temp_dir("161-run-ebwin");
@@ -1562,9 +1482,7 @@ fn run_pass_newer_binary_loses_to_the_tree() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a keyword-masked tree ebuild does not count
-/// as an ebuild twin -- the accepted staged binary still merges
-/// under `--usepkgonly`.
+/// A keyword-masked tree ebuild does not count as an ebuild twin.
 #[test]
 fn run_pass_masked_ebuild_is_no_twin() {
     let dir = slotundo_temp_dir("161-run-maskbin");
@@ -1610,8 +1528,7 @@ fn run_pass_masked_ebuild_is_no_twin() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a `package.use_mask` entry masks `test`
-/// exactly like the global mask list.
+/// A `package.use_mask` entry masks `test` exactly like the global mask list.
 #[test]
 fn run_pass_package_use_mask_hides_test_deps() {
     let dir = slotundo_temp_dir("161-run-pumask");

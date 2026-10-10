@@ -9,15 +9,10 @@ fn fixtures_root() -> PathBuf {
         .expect("fixtures/ does not resolve: it is a symlink to ../pmtest/fixtures, so the sibling pmtest repo has to be checked out next to this one")
 }
 
-/// These unit tests exercise portage-repo's own resolution logic in
-/// isolation, independent of real profile/make.conf/package.* parsing
-/// (that's portage-profile's job, tested separately) -- so visibility
-/// is pinned to a fixed "amd64"-only, no-overrides config here,
-/// matching what the fixture's real profile chain also happens to
-/// resolve to (see fixtures/repo/profiles and
-/// test_emerge_pretend_contract.py for the end-to-end version of
-/// this). Constructed directly (not via portage_profile::resolve_config)
-/// so these tests don't depend on real file parsing at all.
+/// These unit tests exercise portage-repo's own resolution logic in isolation
+/// from profile/make.conf/package.* parsing (portage-profile's job, tested
+/// separately): visibility is pinned to a fixed "amd64"-only, no-overrides
+/// config, constructed directly (not via `portage_profile::resolve_config`).
 fn test_config() -> portage_profile::Config {
     portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
@@ -43,12 +38,8 @@ fn fixture_binhost() -> portage_profile::BinRepo {
     }
 }
 
-/// Backlog 2026-10 B1 (`LLM/backlog-tasks-2026-10.md`): binpkg-multi-
-/// instance builds of one `cpv` are told apart only by `BUILD_ID`.
-/// Shared fixture for the three tests below, modelled on the real
-/// `seed-desk` binhost's `app-text/libspectre-0.2.12` -6 (built
-/// against ghostscript `0/10.06=`) and -7 (built against `0/10.08=`),
-/// listed oldest first exactly like the live `Packages` index.
+/// Binpkg-multi-instance builds of one `cpv` are told apart only by `BUILD_ID`.
+/// Shared fixture for the three tests below, oldest first like a live index.
 fn multi_instance_entry_1010(
     build_id: &str,
     build_time: i64,
@@ -69,9 +60,8 @@ fn multi_instance_entry_1010(
     ])
 }
 
-/// A binrepo whose `Packages` index lives only in the in-memory
-/// override table (`set_remote_binary_index_override`), under a
-/// pid+nanos-unique `sync_uri` so parallel tests never collide.
+/// A binrepo whose `Packages` index lives only in the in-memory override
+/// table, under a pid+nanos-unique `sync_uri` so parallel tests never collide.
 fn in_memory_binhost_1010(
     tag: &str,
     entries: Vec<HashMap<String, String>>,
@@ -153,14 +143,9 @@ fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
     root
 }
 
-/// Write a consolidated `metadata` snapshot body into `root`'s entry
-/// for `<cat>/<pf>` and, when `stamp`, append
-/// `#dir_mtime=<dir's st_mtime_ns>` **after** the body write -- real
-/// `_write_metadata_file` + `_stamp_metadata_file` order. A committed
-/// fixture can never carry a valid stamp (`git checkout` sets the
-/// package dir's mtime), so every positive-path test stamps at
-/// runtime. Returns the `metadata` path for tests that append a
-/// custom (stale/garbage) stamp themselves.
+/// Write a consolidated `metadata` snapshot body into `root`'s entry for
+/// `<cat>/<pf>` and, when `stamp`, append the `#dir_mtime=` stamp after the
+/// body write (Portage's write-then-stamp order). Returns the `metadata` path.
 fn write_snapshot(root: &Path, cat: &str, pf: &str, body: &str, stamp: bool) -> PathBuf {
     let dir = root.join("var/db/pkg").join(cat).join(pf);
     let path = dir.join("metadata");
@@ -200,10 +185,7 @@ fn bz2(bytes: &[u8]) -> Vec<u8> {
     enc.finish().unwrap()
 }
 
-/// Like `resolve`, but with `--update` enabled -- for the `upgrade`
-/// test below, and anywhere else `--update`'s own "search for a
-/// better version even when the installed one already satisfies the
-/// atom" behavior needs to be exercised directly.
+/// Like `resolve`, but with `--update` enabled.
 fn resolve_update(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
@@ -225,11 +207,8 @@ fn resolve_update(category: &str, package: &str) -> PretendOutcome {
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
-/// Like `resolve`, but `is_top_level=false` -- exercises the
-/// avoid_update shortcut's own DEPENDENCY-atom code path (this
-/// slice's own fix), distinct from `resolve`'s top-level one.
-/// `selective`'s own value doesn't matter here: `is_top_level=false`
-/// alone already satisfies the `!is_top_level || selective` gate.
+/// Like `resolve`, but `is_top_level=false`: exercises the avoid_update
+/// shortcut's DEPENDENCY-atom code path, distinct from the top-level one.
 fn resolve_as_dependency(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
@@ -247,11 +226,8 @@ fn resolve_as_dependency(category: &str, package: &str) -> PretendOutcome {
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
-/// Like `resolve`, but with `selective=false` -- real portage's own
-/// default for a bare top-level atom with no other flags given (see
-/// `resolve_pretend`'s own `selective`/`is_top_level` doc comment
-/// paragraph). `is_top_level=true` throughout, matching a
-/// directly-requested atom.
+/// Like `resolve`, but with `selective=false` (Portage's own default for a
+/// bare top-level atom).
 fn resolve_not_selective(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
@@ -273,9 +249,7 @@ fn resolve_not_selective(category: &str, package: &str) -> PretendOutcome {
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
-/// Like `resolve_update`, but with `excluded` too -- for exercising
-/// `--exclude`'s own "leave an installed package alone regardless of
-/// --update" precedence directly.
+/// Like `resolve_update`, but with `excluded` too (`--exclude` beats `--update`).
 fn resolve_update_excluded(category: &str, package: &str, excluded: &[String]) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
@@ -298,7 +272,7 @@ fn resolve_update_excluded(category: &str, package: &str, excluded: &[String]) -
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
-/// Unlike `resolve()`, uses the fixture's *real* resolved config
+/// Unlike `resolve()`, uses the fixture's fully resolved config
 /// (package.mask/.unmask/.accept_keywords included), not the
 /// synthetic `test_config()`.
 fn resolve_real(category: &str, package: &str) -> PretendOutcome {
@@ -511,8 +485,8 @@ fn resolve_real_newrepo(category: &str, package: &str) -> PretendOutcome {
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
-/// Backlog #90 (S2) shared builders: a synthetic `SlotConflict`
-/// over `dev-libs/slotconflicttarget:0` from `(version, installed,
+/// Shared builders: a synthetic `SlotConflict` over
+/// `dev-libs/slotconflicttarget:0` from `(version, installed,
 /// [(parent_cpv, atom, parent_installed)])` rows, plus merge `New`
 /// entries in walk order for the `or_tuple` first-pulled rule.
 type S2Row<'x> = (&'x str, bool, Vec<(&'x str, &'x str, bool)>);
@@ -634,11 +608,9 @@ fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
     graph_with(atom_str, |_| {})
 }
 
-/// Backlog #194: resolve one atom as an `--onlydeps` root with the
-/// given `--onlydeps-with-*` values, over the shared fixture tree --
-/// the unit-level counterpart of the `odw0*` contract cells. A full
-/// `ResolveRequest` (like production's own `run_resolve` builds it),
-/// since the legacy marshaller answers with onlydeps off.
+/// Resolve one atom as an `--onlydeps` root with the given `--onlydeps-with-*`
+/// values, over the shared fixture tree (the unit-level counterpart of the
+/// `odw0*` contract cells).
 fn graph_onlydeps(
     atom_str: &str,
     with_rdeps: bool,
@@ -706,10 +678,8 @@ fn graph_onlydeps(
         .collect()
 }
 
-/// #131 S1: resolve a multi-atom fixture graph with `--update`,
-/// returning full entries (the `graph*` helpers above map to
-/// name/outcome pairs only, which cannot drive a display order).
-/// Argument list mirrors `graph()` with the `update` slot on.
+/// Resolve a multi-atom fixture graph with `--update`, returning full entries
+/// (the `graph*` helpers above map to name/outcome pairs only).
 fn graph_update_entries(atoms: &[&str], config: &portage_profile::Config) -> Vec<GraphEntry> {
     let root = fixtures_root();
     let owned: Vec<String> = atoms.iter().map(|a| a.to_string()).collect();
@@ -733,9 +703,7 @@ fn graph_nodeps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
     graph_with(atom_str, |r| r.nodeps = true)
 }
 
-/// Like `graph`, but with `--update` enabled -- proves `update` threads
-/// through the whole BFS, not just a top-level atom (see
-/// `resolve_pretend_graph`'s own doc comment).
+/// Like `graph`, but with `--update` enabled.
 fn graph_update(atom_str: &str) -> Vec<(String, PretendOutcome)> {
     graph_with(atom_str, |r| r.update = true)
 }
@@ -836,12 +804,8 @@ fn graph_rebuild_if(args: GraphRebuildIfArgs<'_>) -> Vec<(String, PretendOutcome
 }
 
 /// Resolve one consumer atom through the `--deep` walk and return
-/// `(cat/pkg, outcome-variant, targets_running_root)` per graph entry
-/// -- the shared probe for the `#132`/`#133` arm tests below (one
-/// place holds the long `resolve_pretend_graph` argument list, copied
-/// from the sibling test above). `root_deps` passes the fixture root
-/// itself as the running root (the unit-level counterpart of the
-/// contract suite's `PORTAGE_RUNNING_ROOT=$ROOT` pin).
+/// `(cat/pkg, outcome-variant, targets_running_root)` per graph entry.
+/// `root_deps` passes the fixture root itself as the running root.
 fn resolve_deep_consumer(atom: &str, root_deps: bool) -> Vec<(String, String, bool)> {
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
@@ -1120,9 +1084,7 @@ fn graph_result_real_backtrack(atom_str: &str, backtrack_max: u32) -> GraphResul
     graph_result_real_atoms(&[atom_str.to_string()], backtrack_max)
 }
 
-/// `graph_result_real_backtrack` for more than one top-level atom --
-/// #57's collisions need two arguments to disagree about one slot,
-/// in both argv orders.
+/// `graph_result_real_backtrack` for more than one top-level atom.
 fn graph_result_real_atoms(atoms: &[String], backtrack_max: u32) -> GraphResult {
     let atom_str = atoms.join(" ");
     let root = fixtures_root();
@@ -1154,10 +1116,8 @@ fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
     graph_result_real(atom_str).entries
 }
 
-/// Like `graph_result_real`, but with `blocker_retry_seed_atoms` set
-/// (#68/#72 B2c): the `@world ∪ @selected ∪ @system` atom list real's
-/// complete-mode retry walks after an uninstall task was selected
-/// (`depgraph.py:10365-10383`).
+/// Like `graph_result_real`, but with `blocker_retry_seed_atoms` set (the
+/// `@world ∪ @selected ∪ @system` list of Portage's complete-mode retry).
 fn graph_entries_with_retry_seeds(atom_str: &str, seeds: &[&str]) -> Vec<GraphEntry> {
     let root = fixtures_root();
     let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
@@ -1224,8 +1184,7 @@ fn graph_result_autounmask_cfg(config: &portage_profile::Config, atom_str: &str)
     graph_result_autounmask_cfg_atoms(config, &[atom_str.to_string()])
 }
 
-/// `graph_result_autounmask_cfg` for several top-level atoms, in argv
-/// order (backlog #244's argument-order cells).
+/// `graph_result_autounmask_cfg` for several top-level atoms, in argv order.
 fn graph_result_autounmask_cfg_atoms(
     config: &portage_profile::Config,
     atoms: &[String],
@@ -1255,11 +1214,8 @@ fn graph_result_autounmask_use_n(atom_str: &str) -> GraphResult {
     graph_result_with(atom_str, |r| r.autounmask_suggest_keywords = true)
 }
 
-/// Backlog #244: the six `aub0` argument orders (upstream
-/// `test_autounmask_use_breakage`; `aub0a` needs `aub0d[-foo]`,
-/// `aub0b` `aub0d[foo]`, `aub0c` `>=aub0d-1`; the fixture profile
-/// enables `foo`). Expected values from real 3.0.82.2
-/// (`LLM/evidence/2026-09-28-244/fixture-oracle/real/`).
+/// The six `aub0` argument orders (upstream `test_autounmask_use_breakage`).
+/// Expected values from Portage 3.0.82.2.
 fn aub0_result(order: &str, backtrack_y: bool) -> GraphResult {
     let root = fixtures_root();
     let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
@@ -1315,12 +1271,9 @@ fn assert_aub0_fails_on_a(result: &GraphResult, order: &str) {
     );
 }
 
-/// Backlog #214 (v2 `#24e`) S0 harness: installed `abicons-1`
-/// recording `app-misc/abiprov:0/1=`, tree `abiprov-1` (`0/1`) +
-/// `abiprov-2` (`0/2`) + consumer `abicons-1` (live `:=`) + forcer
-/// `abiforce-1` (`>=abiprov-2`). `with_consumer` controls whether
-/// the consumer's same-version ebuild (the reinstall real forces)
-/// is visible in the tree.
+/// ABI probe harness: installed `abicons-1` recording `app-misc/abiprov:0/1=`,
+/// tree `abiprov-1`/`abiprov-2` + consumer (live `:=`) + forcer. `with_consumer`
+/// controls whether the consumer's same-version ebuild is visible in the tree.
 fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig>) {
     use md5::Digest as _;
     use std::fmt::Write as _;
@@ -1438,11 +1391,11 @@ fn abi_probe_entries(consumer_outcome: PretendOutcome) -> Vec<GraphEntry> {
     ]
 }
 
-/// Backlog #161 S3: residual-report helpers over the `souprov`
-/// fixtures (1.0 at 0/1, 2.0 at 0/2). A `:=`-rebuild-style dropped
-/// pin whose atom matches the installed instance but not the merged
-/// one yields one record: merge instance first, installed second,
-/// with the consumer folded in at its vdb slot and repository.
+/// Residual-report helpers over the `souprov` fixtures (1.0 at 0/1, 2.0 at
+/// 0/2). A `:=`-rebuild-style dropped pin whose atom matches the installed
+/// instance but not the merged one yields one record: merge instance first,
+/// installed second, with the consumer folded in at its vdb slot and
+/// repository.
 fn residual_161_setup(dir: &Path) -> (Vec<RepoConfig>, portage_profile::Config, GraphEntry) {
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let config = test_config();
@@ -1488,9 +1441,8 @@ fn residual_161_pin() -> RevDepPin {
     }
 }
 
-/// Backlog #161 S4: shared harness for the `collect_feedback`
-/// legs. A minimal `ResolveCtx` plus an empty `PassResult` each
-/// leg fills in.
+/// Shared harness for the `collect_feedback` legs: a minimal `ResolveCtx` plus
+/// an empty `PassResult` each leg fills in.
 static NO_STRINGS_161: Vec<String> = Vec::new();
 
 #[derive(Default)]
@@ -1509,18 +1461,16 @@ struct CtxOpts161 {
     with_test_deps: bool,
     deep: Deep,
     with_bdeps: bool,
-    // Backlog #161 S6p: `--buildpkgonly` blanks the run-time
-    // keys for a non-binary candidate (the `dep_keys` second
-    // arm); default off like every other option flag.
+    // `--buildpkgonly` blanks the run-time keys for a non-binary candidate;
+    // default off like every other option flag.
     buildpkgonly: bool,
     complete: bool,
     locked: HashSet<(String, String)>,
     blocker_closure: HashSet<(String, String)>,
-    /// Backlog #286: the request's top-level atom texts (production
-    /// builds this from the request atoms; empty here unless a test
-    /// needs the fatal top-level miss or the set-member drop).
+    /// The request's top-level atom texts (empty here unless a test needs the
+    /// fatal top-level miss or the set-member drop).
     top_level: Vec<String>,
-    /// Backlog #286: request atoms expanded from `@world`/`@selected`
+    /// Request atoms expanded from `@world`/`@selected`
     /// (see [`ResolveRequest::set_args`]).
     set_args: HashSet<String>,
 }
@@ -1657,9 +1607,7 @@ struct DsInput161Args<'a> {
     config: &'a portage_profile::Config,
 }
 
-/// Backlog #161 S5: `direct_solve` legs over the
-/// `slotconflict*` fixtures. `s2_input` fixes `excluded` to empty;
-/// legs needing an `--exclude` entry build the input literally.
+/// `direct_solve` legs over the `slotconflict*` fixtures.
 fn ds_input_161<'a>(args: DsInput161Args<'a>) -> DirectSolveInput<'a> {
     let DsInput161Args {
         conflicts,
@@ -1736,10 +1684,7 @@ struct Run161Args<'a> {
     with_bdeps: bool,
 }
 
-/// Backlog #161 S6: one full BFS walk per leg over the fixture
-/// tree. `run_pass` takes the request atoms from the context; each
-/// leg below resolves a different installed/tree shape and pins the
-/// pass entries it settles.
+/// One full BFS walk per leg over the fixture tree.
 fn run_161(args: Run161Args<'_>) -> PassResult {
     let Run161Args {
         dir,
@@ -1793,9 +1738,8 @@ struct Blocker161WritePkgArgs<'a> {
     rdepend: &'a str,
 }
 
-/// Backlog #161 S6: scratch-repo package writer shared by the
-/// blocker legs. `blockerparent-1.0` merges `victim-1.0` through
-/// `RDEPEND` while its own `RDEPEND` softly blocks it (a runtime
+/// Scratch-repo package writer shared by the blocker legs: `blockerparent-1.0`
+/// merges `victim-1.0` through `RDEPEND` while softly blocking it (a runtime
 /// key, always walked; `DEPEND` would need `--with-bdeps`).
 fn blocker_161_write_pkg(args: Blocker161WritePkgArgs<'_>) {
     let Blocker161WritePkgArgs {
@@ -1828,10 +1772,7 @@ struct Blocker161WritePkgFullArgs<'a> {
     bdepend: &'a str,
 }
 
-/// Backlog #161 S6p: the `_full` variant also writes `BDEPEND`
-/// (the plain helper can only express `DEPEND`/`RDEPEND`, which
-/// is why the first `with_bdeps` binary leg below walked an
-/// ebuild instead of a binary -- see its doc comment).
+/// The `_full` variant also writes `BDEPEND`.
 fn blocker_161_write_pkg_full(args: Blocker161WritePkgFullArgs<'_>) {
     let Blocker161WritePkgFullArgs {
         repo,
@@ -1947,15 +1888,11 @@ fn blocker_161_scratch_repo(args: Blocker161ScratchRepoArgs<'_>) -> RepoConfig {
     blocker_161_repo_config(repo)
 }
 
-/// Backlog #205, world=B shape shared by the R3/R4 unit tests:
-/// `dev-libs/abk0d` with `--autounmask-backtrack=y` while installed
-/// `abk0b-1` (`RDEPEND=<dev-libs/abk0a-3`) is reachable through the
-/// required sets. The fixture world file stays pristine (an `abk0b`
-/// line there would perturb every other fixture-ROOT test), so the
-/// seed is set directly -- the `FX_WORLD_EXTRA=dev-libs/abk0b`
-/// equivalent the bed cell stages, and the same trick the #209
-/// `backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass`
-/// test uses for its world consumer.
+/// World=B shape shared by the R3/R4 unit tests: `dev-libs/abk0d` with
+/// `--autounmask-backtrack=y` while installed `abk0b-1` is reachable through
+/// the required sets. The fixture world file stays pristine, so the seed is
+/// set directly (the `FX_WORLD_EXTRA=dev-libs/abk0b` equivalent the bed cell
+/// stages).
 fn graph_result_abk0_worldb_on(root: &Path, backtrack_max: u32) -> GraphResult {
     let fixture_root = fixtures_root();
     let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
@@ -2080,10 +2017,9 @@ fn slotundo_temp_dir(tag: &str) -> std::path::PathBuf {
     TempDir::new(&format!("portage-repo-{tag}")).keep()
 }
 
-/// #57 S1: one shared assertion for the triangle's conflict record --
-/// the installed instance is `paired-1.0` and the merge instance
-/// `paired-2.0`, each filed under the hard atom that pulled it,
-/// whichever argv order produced the collision.
+/// One shared assertion for the triangle's conflict record: installed
+/// `paired-1.0` and merge `paired-2.0`, each filed under the hard atom that
+/// pulled it, whichever argv order produced the collision.
 fn assert_triangle_conflict(result: &GraphResult, installed_first: bool) {
     assert_eq!(
         result.slot_conflicts.len(),
@@ -2156,11 +2092,8 @@ struct EufFlatArgs<'a> {
 }
 
 /// Test shim for the pre-"Config depth" positional `effective_use_flags`
-/// signature (single flat `package_use` list, no `conf_use_tokens` /
-/// repo / user split). Tests that predate the split and don't care
-/// about per-layer `package.use` ordering keep calling this; the
-/// `package_use` arg lands in the profile (`defaults`) tier. Tests
-/// that exercise the split call `effective_use_flags` directly.
+/// signature (single flat `package_use` list). Tests that exercise the split
+/// call `effective_use_flags` directly.
 fn euf_flat(args: EufFlatArgs<'_>) -> HashSet<String> {
     let EufFlatArgs {
         iuse,
@@ -2249,21 +2182,13 @@ fn license_tokens(s: &str) -> Vec<String> {
     s.split_whitespace().map(String::from).collect()
 }
 
-/// Backlog #164: direct unit legs for the masking/visibility stack
-/// (`lib.rs` mutation cluster 4). Each leg observes its predicate's
-/// own result -- no end-to-end contract reproduction. Self-contained
-/// so rebases stay mechanical.
+/// Direct unit legs for the masking/visibility stack: each leg observes its
+/// predicate's own result, no end-to-end contract reproduction.
 mod tests_164 {
     use super::*;
 
-    /// Backlog #164 S1: `parse_license_tree` reports exact token
-    /// positions in every error. Real signals these malformed
-    /// shapes with a bare `InvalidDependString`
-    /// (`3rdparty/portage/lib/portage/exception.py:37`); the
-    /// per-token positions are portuale's own diagnostic precision,
-    /// and every `pos + N` site below is a mutation target (`+` ->
-    /// `-`/`*`), so each arm pins its exact number -- including at
-    /// position 0, where `-` underflows and `*` collapses to 0.
+    /// `parse_license_tree` reports exact token positions in every error
+    /// (Portage signals these with a bare `InvalidDependString`).
     #[test]
     fn parse_license_tree_164_reports_exact_error_positions() {
         let toks = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
@@ -2314,9 +2239,7 @@ mod tests_164 {
     }
 
     /// Hand-built binary candidate: `binary_use` is the baked USE set
-    /// (real `pkg.use.enabled` for a built package), `iuse` its
-    /// domain -- no md5-cache read, no profile recompute (see
-    /// `candidate_iuse_and_use`'s own Binary arm).
+    /// (Portage's `pkg.use.enabled`), `iuse` its domain.
     fn binary_164(version: &str, iuse: &str, use_flags: &[&str]) -> Candidate {
         let mut c = candidate(version, &["amd64"]);
         c.source = CandidateSource::Binary;
@@ -2325,13 +2248,8 @@ mod tests_164 {
         c
     }
 
-    /// Backlog #164 S2: a candidate masked by KEYWORDS alone --
-    /// real `_getmaskingstatus`
-    /// (`3rdparty/portage/lib/portage/package/ebuild/getmaskingstatus.py:43`)
-    /// records one `_MaskReason` per failing category (package.mask,
-    /// KEYWORDS, LICENSE, PROPERTIES, RESTRICT), so "keyword-masked
-    /// only" means exactly the KEYWORDS reason fires and no other
-    /// gate trips first.
+    /// A candidate masked by KEYWORDS alone (Portage's `_getmaskingstatus`
+    /// records one reason per failing category).
     #[test]
     fn keyword_masked_only_164_needs_keywords_and_only_keywords() {
         // `~amd64` under an `amd64` profile: keyword-masked, and
@@ -2417,9 +2335,8 @@ mod tests_164 {
 
     #[test]
     fn keyword_masked_only_164_invalid_is_never_keyword_only() {
-        // Backlog #153: an `invalid` IUSE-conditional verdict
-        // disqualifies every "masked by X alone" claim. A binary
-        // candidate carries its own dep keys (`binary_deps`), so no
+        // An `invalid` IUSE-conditional verdict disqualifies every "masked by
+        // X alone" claim; a binary candidate carries its own dep keys, so no
         // repo staging is needed.
         let mut invalid = binary_164("1.0", "", &[]);
         invalid.keywords = vec!["~amd64".to_string()];
@@ -2435,11 +2352,8 @@ mod tests_164 {
         ));
     }
 
-    /// Backlog #164 S2: a candidate masked by `package.mask` alone --
-    /// real `_getmaskingstatus`'s own first reason (`package.mask`
-    /// via `settings._getMaskAtom`, same file): every other
-    /// visibility check (KEYWORDS, LICENSE, PROPERTIES, RESTRICT)
-    /// must pass around it.
+    /// A candidate masked by `package.mask` alone (Portage's first
+    /// `_getmaskingstatus` reason).
     #[test]
     fn mask_masked_only_164_needs_a_mask_and_nothing_else() {
         let config = portage_profile::Config {
@@ -2501,9 +2415,8 @@ mod tests_164 {
 
     #[test]
     fn mask_masked_only_164_unmask_cancels_the_mask() {
-        // Masked AND unmasked: `package.unmask` cancels the mask
-        // (real `_getMaskAtom`'s own unmask half), so the candidate
-        // is not mask-masked at all.
+        // Masked AND unmasked: `package.unmask` cancels the mask (Portage's
+        // unmask half), so the candidate is not mask-masked at all.
         let config = portage_profile::Config {
             accept_keywords: HashSet::from(["amd64".to_string()]),
             package_mask: vec!["dev-libs/maskrescue".to_string()],
@@ -2520,9 +2433,8 @@ mod tests_164 {
 
     #[test]
     fn mask_masked_only_164_invalid_is_never_mask_only() {
-        // Backlog #153, same shape as the keyword leg: an `invalid`
-        // verdict disqualifies the "mask alone" claim even though the
-        // mask gate itself is open.
+        // Same shape as the keyword leg: an `invalid` verdict disqualifies the
+        // "mask alone" claim even though the mask gate itself is open.
         let config = portage_profile::Config {
             accept_keywords: HashSet::from(["amd64".to_string()]),
             package_mask: vec!["dev-libs/maskinvalid".to_string()],
@@ -2541,11 +2453,7 @@ mod tests_164 {
         ));
     }
 
-    /// Backlog #164 S2: a candidate masked by LICENSE alone -- real
-    /// `LicenseManager.getMissingLicenses` (via `_getMaskedLicenses`,
-    /// `3rdparty/portage/lib/portage/package/ebuild/_config/LicenseManager.py:169,211`)
-    /// reports a non-empty missing set while every other
-    /// `_getmaskingstatus` reason stays absent.
+    /// A candidate masked by LICENSE alone (Portage's `LicenseManager`).
     #[test]
     fn license_masked_only_164_needs_a_license_and_only_a_license() {
         let config = portage_profile::Config {
@@ -2637,7 +2545,7 @@ mod tests_164 {
 
     #[test]
     fn license_masked_only_164_use_conditional_follows_the_flag() {
-        // Real `use_reduce`'s own "if '?' in license_str" path: the
+        // Portage `use_reduce`'s own "if '?' in license_str" path: the
         // `foo? ( ... )` group only constrains once `foo` is enabled.
         // `+foo` in IUSE is enabled by default, no profile needed.
         let config = portage_profile::Config {
@@ -2670,8 +2578,8 @@ mod tests_164 {
 
     #[test]
     fn license_masked_only_164_invalid_is_never_license_only() {
-        // Backlog #153: `invalid` disqualifies the claim even with a
-        // genuinely unaccepted LICENSE.
+        // `invalid` disqualifies the claim even with a genuinely unaccepted
+        // LICENSE.
         let config = portage_profile::Config {
             accept_keywords: HashSet::from(["amd64".to_string()]),
             accept_license: vec!["MIT".to_string()],
@@ -2691,11 +2599,8 @@ mod tests_164 {
         ));
     }
 
-    /// Backlog #164 S2: a visible candidate whose atom `[use]` deps
-    /// fail -- real `_iter_match_pkgs` checks a built package's own
-    /// `[use]` deps against `pkg.use.enabled` (the baked set). The
-    /// binary shape below needs no repo staging: `binary_use` is the
-    /// baked set, `iuse` its domain.
+    /// A visible candidate whose atom `[use]` deps fail (Portage checks a built
+    /// package's own `[use]` deps against the baked set).
     #[test]
     fn use_masked_only_164_needs_an_unsatisfied_use_dep() {
         let use_dep = |flag: &str| portage_dep::UseDep {
@@ -2725,9 +2630,8 @@ mod tests_164 {
 
     #[test]
     fn use_masked_only_164_invisible_is_never_use_only() {
-        // A keyword-masked candidate fails `is_visible` first, so no
-        // USE suggestion applies -- real's "only suggest a change
-        // that would actually fix it" spirit.
+        // A keyword-masked candidate fails `is_visible` first, so no USE
+        // suggestion applies (Portage only suggests a change that would fix it).
         let use_dep = portage_dep::UseDep {
             flag: "foo".to_string(),
             op: portage_dep::UseDepOp::Enabled,
@@ -2744,10 +2648,7 @@ mod tests_164 {
         ));
     }
 
-    /// Backlog #164 S3: scratch repo writer with per-version
-    /// KEYWORDS/LICENSE/SLOT, mirroring `blocker_161_write_pkg_full`
-    /// (ebuild + consistent md5-cache entry, which the md5-cache
-    /// validation guard requires).
+    /// Scratch repo writer with per-version KEYWORDS/LICENSE/SLOT.
     fn repo_164(base: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
         // (cp, pv, slot, keywords, license).
         use md5::Digest as _;
@@ -2786,11 +2687,8 @@ mod tests_164 {
         }]
     }
 
-    /// Backlog #164 S3: `visible_tree_matches` returns the visible
-    /// (real `_pkg_visibility_check`,
-    /// `lib/_emerge/depgraph.py:7562`) candidates an atom selects --
-    /// here 1.0 is stable-visible and 2.0 is `~amd64`-masked under an
-    /// `amd64` profile, so only 1.0 shows.
+    /// `visible_tree_matches` returns the visible candidates an atom selects
+    /// (Portage's `_pkg_visibility_check`).
     #[test]
     fn visible_tree_matches_164_lists_only_visible_matches() {
         let dir = slotundo_temp_dir("164-vtm");
@@ -2827,7 +2725,7 @@ mod tests_164 {
         config.accept_license = vec!["*".to_string()];
         // NOTE: the version half needs its `=` operator --
         // portage-dep rejects an operator-less versioned atom as
-        // PMS-ambiguous (mirroring real `Atom.__init__`), which
+        // PMS-ambiguous (mirroring Portage's `Atom`), which
         // would make the constraint vacuously pass.
         let neg_one = ["!=dev-libs/vtmneg-1.0".to_string()];
         let got_none = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &neg_one);
@@ -2843,13 +2741,8 @@ mod tests_164 {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Backlog #212 (v2 `#24c`): a binary-only
-    /// `slot_operator_mask_built` negative (`!=cpv[binary]`) hides
-    /// only the binary instance -- the same-version ebuild stays
-    /// visible to every string-constraint reader (real keys the
-    /// mask by package object; `match_from_list` ignores USE-deps,
-    /// so the marker would otherwise match the ebuild too -- see
-    /// [`is_binary_only_mask`]).
+    /// A binary-only `slot_operator_mask_built` negative hides only the binary
+    /// instance; the same-version ebuild stays visible (see [`is_binary_only_mask`]).
     #[test]
     fn visible_tree_matches_212_ignores_binary_only_masks() {
         let dir = slotundo_temp_dir("212-vtm-bin");
@@ -2892,7 +2785,7 @@ mod tests_164 {
 
     #[test]
     fn visible_tree_matches_164_license_masked_versions_stay_out() {
-        // Real `LicenseManager.getMissingLicenses` verdict inside the
+        // Portage `LicenseManager.getMissingLicenses` verdict inside the
         // visible set: 1.0 declares an unaccepted license, 2.0 an
         // accepted one.
         let dir = slotundo_temp_dir("164-vtm-lic");
@@ -2935,8 +2828,8 @@ mod tests_164 {
         source: CandidateSource,
     }
 
-    /// Backlog #164 S4: minimal `GraphEntry` for the dep-chain legs
-    /// (merge-bound unless stated otherwise).
+    /// Minimal `GraphEntry` for the dep-chain legs (merge-bound unless stated
+    /// otherwise).
     fn entry_164(args: Entry164Args<'_>) -> GraphEntry {
         let Entry164Args {
             category,
@@ -2991,13 +2884,8 @@ mod tests_164 {
         })
     }
 
-    /// Backlog #164 S4: `masked_dep_chain` walks from a
-    /// `NoVisibleCandidate`'s requirers up to the command-line
-    /// argument (real `_show_unsatisfied_dep`'s own dep-chain tail,
-    /// `lib/_emerge/depgraph.py:6471`). Decoys pin every lookup: a
-    /// same-category other-package `New` entry must become neither
-    /// the start nor an ascent step, and a non-`NoVisibleCandidate`
-    /// first entry must not become the start either.
+    /// `masked_dep_chain` walks from a `NoVisibleCandidate`'s requirers up to
+    /// the command-line argument (Portage's `_show_unsatisfied_dep` tail).
     #[test]
     fn masked_dep_chain_164_walks_to_the_argument() {
         let dir = slotundo_temp_dir("164-mdc");
@@ -3072,11 +2960,8 @@ mod tests_164 {
 
     #[test]
     fn masked_dep_chain_164_installed_parent_reports_the_vdb_repo() {
-        // An `AlreadyInstalled` parent renders with the vdb repo and
-        // the `installed` type; with no vdb entry that repo is
-        // `__unknown__` (see `installed_pkg_repo`). The
-        // same-category `AlreadyInstalled` decoy must not shadow the
-        // real parent.
+        // An `AlreadyInstalled` parent renders with the vdb repo and the
+        // `installed` type; the same-category decoy must not shadow the parent.
         let dir = slotundo_temp_dir("164-mdc-inst");
         let entries = vec![
             entry_164(Entry164Args {
@@ -3205,12 +3090,8 @@ mod tests_164 {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Backlog #164 S5: `required_use_dep_chain` reports the failing
-    /// package's direct parent plus its command-line argument (real
-    /// `_show_unsatisfied_dep`'s own dep-chain tail,
-    /// `lib/_emerge/depgraph.py:6471`: "first the failing package's
-    /// direct parent, then that parent's own command-line argument
-    /// when it is one").
+    /// `required_use_dep_chain` reports the failing package's direct parent
+    /// plus its command-line argument (Portage's `_show_unsatisfied_dep` tail).
     #[test]
     fn required_use_dep_chain_164_reports_parent_then_argument() {
         let entries = vec![
@@ -3305,8 +3186,8 @@ mod tests_164 {
 
     #[test]
     fn required_use_dep_chain_164_no_owner_and_installed_parent_yield_nothing() {
-        // No owner: the failing package IS the top-level atom, and
-        // real skips the block.
+        // No owner: the failing package IS the top-level atom, and Portage
+        // skips the block.
         let entries = vec![entry_164(Entry164Args {
             category: "dev-libs",
             package: "rux",
@@ -3338,11 +3219,8 @@ mod tests_164 {
         );
     }
 
-    /// Backlog #164 S6: `autounmask_dep_chain` renders the whole
-    /// parent chain to the argument (real `_get_dep_chain_as_comment`,
-    /// `lib/_emerge/depgraph.py:6457`): one `required by
-    /// <cpv>::<repo>` row per merge-bound parent, then the argument
-    /// line.
+    /// `autounmask_dep_chain` renders the whole parent chain to the argument
+    /// (Portage's `_get_dep_chain_as_comment`).
     #[test]
     fn autounmask_dep_chain_164_top_level_change_names_the_argument() {
         // No owner: a top-level change prints the argument atom as
@@ -3511,11 +3389,8 @@ mod tests_164 {
 
     #[test]
     fn autounmask_dep_chain_164_self_requiring_parent_stops_after_its_row() {
-        // A parent whose `required_by` names itself cannot ascend
-        // (the `*next != cur` guard): the chain is just its own row.
-        // This pins the shape that makes `guard -> true` equivalent
-        // (see the #164 closeout): advancing onto itself re-breaks on
-        // the visited set with the identical chain.
+        // A parent whose `required_by` names itself cannot ascend: the chain
+        // is just its own row.
         let dir = slotundo_temp_dir("164-auc-self");
         let entries = vec![entry_164(Entry164Args {
             category: "dev-libs",
@@ -3548,11 +3423,8 @@ struct EufLayersArgs<'a> {
     package_use_user: &'a [(String, Vec<String>)],
 }
 
-/// "Config depth" slice: `package.use` from each of the three real
-/// sources lands at its own `USE_ORDER` position. `euf` names the
-/// full split signature; the args after `iuse` are
-/// `use_tokens` (profile make.defaults), `conf_use_tokens` (make.conf),
-/// `package_use_repo`, `package_use` (profile), `package_use_user`.
+/// "Config depth" slice: `package.use` from each of the three config sources
+/// lands at its own `USE_ORDER` position.
 fn euf_layers(args: EufLayersArgs<'_>) -> HashSet<String> {
     let EufLayersArgs {
         iuse,

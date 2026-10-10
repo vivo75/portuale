@@ -1,13 +1,8 @@
 use super::*;
 
-/// The fixture tree is not in this repository: `fixtures/` is a
-/// symlink to `../pmtest/fixtures`, the single copy, which the
-/// contract suite reads too (`LLM/agent-context.md`, "Where the
-/// tests live"). Every `#[cfg(test)]` reader in the workspace
-/// resolves it through a compile-time `CARGO_MANIFEST_DIR/../..`
-/// path, so a missing or half-checked-out sibling would otherwise
-/// surface as a pile of unrelated file-not-found failures. This
-/// test is the one that says why.
+/// The fixture tree lives in the sibling pmtest checkout: `fixtures/` is a
+/// symlink to `../pmtest/fixtures` (see `LLM/agent-context.md`, "Where the
+/// tests live"). This test says why when the sibling is missing.
 #[test]
 fn fixtures_tree_is_the_pmtest_checkout() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
@@ -17,9 +12,8 @@ fn fixtures_tree_is_the_pmtest_checkout() {
          check out the sibling pmtest repo next to this one",
         root.display()
     );
-    // Markers, not a full inventory: enough to catch a tree that is
-    // there but is not the fixture tree (a stale mount, an empty
-    // clone, a symlink retargeted by hand).
+    // Markers, not a full inventory: enough to catch a tree that resolves but
+    // is not the fixture tree.
     for marker in [
         "repo/profiles/make.defaults",
         "repo/metadata/md5-cache",
@@ -35,11 +29,8 @@ fn fixtures_tree_is_the_pmtest_checkout() {
     }
 }
 
-/// #109 S2: the shared field set is real's own 23 names, listed
-/// literally so a drift fails loudly, and the format version stays 1
-/// (real's `_METADATA_FILE_FORMAT_VERSION`; changing either the set
-/// or the version breaks interoperability with real's reader/writer
-/// on a live vdb in both directions).
+/// The shared field set is Portage's own 23 names (format version 1),
+/// listed literally so a drift fails loudly.
 #[test]
 fn metadata_file_fields_match_portages_literal_set() {
     assert_eq!(METADATA_FILE_FORMAT_VERSION, 1);
@@ -75,10 +66,8 @@ fn metadata_file_fields_match_portages_literal_set() {
     );
 }
 
-/// #109 S2: `in_metadata_file` is real's `_in_metadata_file()` --
-/// membership in the 23-set, so the line-oriented `CONTENTS` and
-/// `NEEDED.*` fields are rejected (they must never be answered from
-/// the snapshot).
+/// `in_metadata_file` is Portage's `_in_metadata_file()`: the line-oriented
+/// `CONTENTS` and `NEEDED.*` fields are rejected from the snapshot.
 #[test]
 fn in_metadata_file_rejects_contents_and_needed() {
     assert!(!in_metadata_file("CONTENTS"));
@@ -90,12 +79,9 @@ fn in_metadata_file_rejects_contents_and_needed() {
 
 #[test]
 fn emptytree_forces_an_installed_atom_to_a_bare_reinstall() {
-    // dev-libs/samepkg is installed at 1.0 and is the highest visible
-    // version. Without --emptytree a *selective* resolve leaves it
-    // AlreadyInstalled; --emptytree (real create_depgraph_params.py:
-    // 176-179 pops "selective" and forces the merge) turns it into a
-    // bare Reinstall -- every field false, exactly real portage's own
-    // reasonless `[ebuild R]`.
+    // Without --emptytree a selective resolve leaves it AlreadyInstalled;
+    // --emptytree (Portage pops "selective" and forces the merge) makes it a
+    // bare Reinstall.
     assert_eq!(
         resolve("dev-libs", "samepkg"),
         PretendOutcome::AlreadyInstalled {
@@ -134,13 +120,8 @@ fn not_selective_top_level_atom_reinstalls_with_no_reason_when_nothing_else_chan
 
 #[test]
 fn not_selective_top_level_atom_still_offers_a_newer_visible_version() {
-    // dev-libs/upgradepkg is installed at 1.0, 2.0 is visible --
-    // without `update`, real avoid_update's own shortcut never gets
-    // a chance to fire for a not-selective top-level atom (the
-    // installed version is never even a matched candidate to begin
-    // with), so the ordinary "best across everything visible"
-    // search proceeds and finds 2.0, exactly as if `update` were
-    // true.
+    // Without `update`, Portage's avoid_update shortcut never fires for a
+    // not-selective top-level atom, so the best-visible search finds 2.0.
     assert_eq!(
         resolve_not_selective("dev-libs", "upgradepkg"),
         PretendOutcome::Upgrade {
@@ -152,10 +133,7 @@ fn not_selective_top_level_atom_still_offers_a_newer_visible_version() {
 
 #[test]
 fn selective_true_preserves_the_pre_existing_already_installed_outcome() {
-    // Same fixture as the reinstall test above, but selective=true
-    // (via the pre-existing `resolve` helper) -- must still be
-    // AlreadyInstalled, matching every test written before this
-    // slice.
+    // Same fixture, selective=true: must still be AlreadyInstalled.
     assert_eq!(
         resolve("dev-libs", "samepkg"),
         PretendOutcome::AlreadyInstalled {
@@ -186,13 +164,8 @@ fn already_installed() {
 
 #[test]
 fn without_update_an_installed_version_that_still_satisfies_the_atom_is_kept() {
-    // dev-libs/upgradepkg is installed at 1.0; a newer 2.0 is visible
-    // in the tree too. Real depgraph.py's own `avoid_update`
-    // (lines 7814/8448) means plain `emerge dev-libs/upgradepkg`,
-    // with no --update, never even looks for a better version --
-    // see resolve_pretend's own doc comment. This was, before this
-    // slice, portuale's own (inaccurate) default behavior for
-    // `upgrade` below.
+    // Plain `emerge` with no --update never looks for a better version
+    // (Portage's avoid_update).
     assert_eq!(
         resolve("dev-libs", "upgradepkg"),
         PretendOutcome::AlreadyInstalled {
@@ -203,8 +176,7 @@ fn without_update_an_installed_version_that_still_satisfies_the_atom_is_kept() {
 
 #[test]
 fn upgrade() {
-    // Same fixture as above, but with --update: now a real Upgrade,
-    // matching real depgraph.py's own `dont_miss_updates` branch.
+    // Same fixture with --update: a genuine Upgrade (Portage's dont_miss_updates).
     assert_eq!(
         resolve_update("dev-libs", "upgradepkg"),
         PretendOutcome::Upgrade {
@@ -216,15 +188,8 @@ fn upgrade() {
 
 #[test]
 fn downgrade() {
-    // dev-libs/downgradepkg is installed at 2.0, but only 1.0 is
-    // visible in the tree (2.0's own ebuild is gone) -- real
-    // output.py's own in-slot `best()` check (see PretendOutcome::
-    // Downgrade's own doc comment) flags this as a genuine downgrade,
-    // not an "upgrade" to an older version. The installed version
-    // (2.0) has no visible candidate of its own, so avoid_update's
-    // shortcut doesn't apply here even without --update -- see
-    // resolve_pretend's own doc comment on requiring a *visible*
-    // candidate.
+    // Only 1.0 is visible (2.0's ebuild is gone): Portage's in-slot `best()`
+    // flags a genuine downgrade, and avoid_update needs a visible candidate.
     assert_eq!(
         resolve("dev-libs", "downgradepkg"),
         PretendOutcome::Downgrade {
@@ -236,22 +201,9 @@ fn downgrade() {
 
 #[test]
 fn keyword_masked_but_installed_dependency_is_kept_not_downgraded() {
-    // dev-libs/keywordmaskedpkg is installed at 2.0, whose own
-    // KEYWORDS ("~amd64") are no longer accepted under the fixture
-    // profile's own default ACCEPT_KEYWORDS ("amd64") -- only 1.0
-    // (KEYWORDS="amd64") is currently visible. Reached as a
-    // DEPENDENCY atom (is_top_level=false, via `resolve_as_
-    // dependency`), real depgraph.py's own early `avoid_update`
-    // return (`_select_pkg_highest_available_imp`, ~8440: `if
-    // inst_pkg is not None and parent is not None and not self.
-    // _want_update_pkg(...)`) requires NO visibility check at all --
-    // confirmed live against a real system (`sys-libs/liburing`,
-    // installed ~amd64-only, real emerge --pretend never even
-    // considers downgrading it). Before this slice's own fix, this
-    // portuale incorrectly required the installed version to also be
-    // in the visible-filtered candidate set, so this fixture would
-    // have (wrongly) resolved to `Downgrade { from: "2.0", to:
-    // "1.0" }` instead.
+    // Installed ~amd64-only 2.0 with only 1.0 visible, reached as a DEPENDENCY
+    // atom: Portage's early avoid_update return needs no visibility check,
+    // so it stays installed.
     assert_eq!(
         resolve_as_dependency("dev-libs", "keywordmaskedpkg"),
         PretendOutcome::AlreadyInstalled {
@@ -262,12 +214,8 @@ fn keyword_masked_but_installed_dependency_is_kept_not_downgraded() {
 
 #[test]
 fn keyword_masked_but_installed_dependency_still_requires_visibility_as_a_top_level_atom() {
-    // Same fixture, but reached as a TOP-LEVEL atom instead (real
-    // depgraph.py's own SEPARATE, later `if avoid_update: ... self.
-    // _pkg_visibility_check(...)` block, which DOES require
-    // visibility) -- `resolve`'s own `is_top_level=true` exercises
-    // this, unaffected by this slice's own fix, matching real
-    // portage's real distinction between the two code paths.
+    // Same fixture as a TOP-LEVEL atom: Portage's separate, later avoid_update
+    // block DOES require visibility.
     assert_eq!(
         resolve("dev-libs", "keywordmaskedpkg"),
         PretendOutcome::Downgrade {
@@ -279,20 +227,8 @@ fn keyword_masked_but_installed_dependency_still_requires_visibility_as_a_top_le
 
 #[test]
 fn emptytree_downgrades_a_keyword_masked_installed_dependency_to_the_visible_stable() {
-    // #157: dev-libs/needskeywordmasked RDEPENDs on dev-libs/
-    // keywordmaskedpkg, installed at 2.0 (`KEYWORDS="~amd64"`, not
-    // accepted under the fixture profile's own default
-    // `ACCEPT_KEYWORDS="amd64"`) while 1.0 (`KEYWORDS="amd64"`) is the
-    // only visible version -- the installed `~arch`-masked version
-    // beside a visible stable the filing names. Under `--emptytree`
-    // real drops every installed candidate wholesale
-    // (`depgraph.py:7888-7899`: `if empty and pkg.installed ...:
-    // continue`), so its dependency `inst_pkg` return
-    // (`depgraph.py:8453-8458`) never fires and the best visible
-    // stable wins -> downgrade 2.0 -> 1.0. Before #157 the dependency
-    // avoid_update shortcut kept the masked 2.0 and reinstalled it,
-    // exactly the L3 `sys-apps/portage-3.0.82.2` reinstall / real
-    // `3.0.81.3` downgrade shape.
+    // Under `--emptytree` Portage drops every installed candidate wholesale,
+    // so the best visible stable wins -> downgrade 2.0 -> 1.0.
     let entries = graph_empty("dev-libs/needskeywordmasked");
     assert_eq!(
         entries,
@@ -332,9 +268,7 @@ fn nonexistent_package_is_no_visible_candidate() {
 
 #[test]
 fn without_newuse_the_same_package_stays_already_installed() {
-    // Same fixture as above, but without --newuse: the USE mismatch
-    // is real but the flag that would detect it is off, so this must
-    // stay the pre-existing AlreadyInstalled outcome.
+    // Without --newuse the USE mismatch goes undetected: stays AlreadyInstalled.
     assert_eq!(
         resolve_real("dev-libs", "reinstallpkg"),
         PretendOutcome::AlreadyInstalled {
@@ -432,10 +366,8 @@ fn changed_use_reinstall_still_recurses_into_its_own_dependencies() {
 
 #[test]
 fn fixture_overlay_only_package_is_found() {
-    // dev-libs/overlayonlypkg exists only in the fixture's overlay
-    // repo (see fixtures/etc/portage/repos.conf), not the
-    // main repo -- proving the overlay is actually searched, not
-    // just present in repos.conf.
+    // dev-libs/overlayonlypkg exists only in the overlay repo: proves the
+    // overlay is actually searched, not just present in repos.conf.
     assert_eq!(
         resolve_real("dev-libs", "overlayonlypkg"),
         PretendOutcome::New {
@@ -446,9 +378,7 @@ fn fixture_overlay_only_package_is_found() {
 
 #[test]
 fn fixture_best_version_wins_regardless_of_which_repo_has_it() {
-    // dev-libs/overlaynewerpkg-1.0 is in the main repo, -2.0 is in
-    // the overlay -- the higher version wins even though it isn't
-    // in the main (lower-priority) repo.
+    // -2.0 is in the overlay: the higher version wins anyway.
     assert_eq!(
         resolve_real("dev-libs", "overlaynewerpkg"),
         PretendOutcome::New {
@@ -459,11 +389,7 @@ fn fixture_best_version_wins_regardless_of_which_repo_has_it() {
 
 #[test]
 fn fixture_same_version_tie_across_repos_is_broken_toward_higher_priority() {
-    // dev-libs/overlaytiepkg-1.0 exists identically-versioned in both
-    // the main repo (priority -1000, no deps) and the overlay
-    // (priority 10, RDEPENDs on dev-libs/newpkg): resolving it must
-    // pull in newpkg, proving the overlay's own copy -- not the main
-    // repo's -- is the one whose metadata got read.
+    // Resolving it must pull in newpkg, proving the overlay's copy is read.
     let full_names: Vec<String> = graph_entries_real("dev-libs/overlaytiepkg")
         .into_iter()
         .map(|e| format!("{}/{}", e.category, e.package))
@@ -476,19 +402,9 @@ fn fixture_same_version_tie_across_repos_is_broken_toward_higher_priority() {
 
 #[test]
 fn fixture_solvable_slot_conflict_is_reconciled_by_backtracking() {
-    // dev-libs/slotconflictparent pulls in slotconflictnewconsumer
-    // (bare RDEPEND on slotconflicttarget) and slotconflictoldconsumer
-    // (RDEPEND "<dev-libs/slotconflicttarget-2.0"). Backlog #90 (S1):
-    // the walk resolves last-declared-first (real's stack), so the
-    // old consumer's `<2.0` graphs 1.0 before the bare dep is even
-    // visited -- and the bare dep reuses the already-graphed 1.0
-    // (real `_select_package`'s existing-node return), so no slot
-    // conflict ever forms, at any backtrack budget. The backtracking
-    // retry path this test used to exercise (2.0 graphed first, then
-    // reconciled to 1.0) no longer triggers here; the unsolvable twin
-    // below still covers the recorded-conflict shape. Real
-    // `--debug` never prints `Slot conflict handler started.` for
-    // this fixture (S0 matrix oracle).
+    // The walk resolves last-declared-first (Portage's stack), so the old
+    // consumer's `<2.0` graphs 1.0 first and the bare dep reuses it: no
+    // conflict ever forms, at any backtrack budget.
     let result = graph_result_real("dev-libs/slotconflictparent");
     let full_names: Vec<String> = result
         .entries
@@ -520,22 +436,12 @@ fn fixture_solvable_slot_conflict_is_reconciled_by_backtracking() {
 
 #[test]
 fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
-    // Backlog #209: `--backtrack=0` must not skip the
-    // reverse-dependency feed loop. Real `_resolve_conflicts`
-    // (`_emerge/depgraph.py:9444`) calls `_complete_graph()`
-    // (`:8562`) with no `_allow_backtracking` gate, so a satisfiable
-    // installed-consumer pin enforces in-pass even with backtracking
-    // off. Hermetic r25 shape (#25 S0): installed world consumer
-    // `r25consumer` pins `<r25lib-2.0:=` (both bound forms), and
-    // `-uD r25target` must withhold `r25lib-2.0` silently --
-    // `backtrack_restarts` 0 (real `backtrack: 0/20`) and no
-    // skipped-update rows (real merges `r25up-2.0 + r25target-1.0`
-    // with no warning).
+    // `--backtrack=0` must not skip the reverse-dependency feed loop:
+    // Portage calls `_complete_graph()` with no backtracking gate, so a
+    // satisfiable installed-consumer pin enforces in-pass.
     //
-    // The fixture world file does not carry the consumer (it would
-    // perturb every other fixture-ROOT test), so the seed is set
-    // directly -- the `FX_WORLD_EXTRA=dev-libs/r25consumer`
-    // equivalent the bed cell stages.
+    // The fixture world file does not carry the consumer, so the seed is set
+    // directly.
     let root = fixtures_root();
     let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -575,12 +481,12 @@ fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
             .filter(|e| e.package == "r25lib")
             .collect::<Vec<_>>()
     );
-    // Real's silence: no slot-operator withhold rows at bt0 (the
+    // Portage's silence: no slot-operator withhold rows at bt0 (the
     // minimizer/probe path writes no missed-update state).
     assert_eq!(result.skipped_updates, vec![]);
     assert_eq!(result.backtrack_restarts, 0);
     assert_eq!(result.slot_conflicts, vec![]);
-    // The rest of real's merge set is intact.
+    // The rest of Portage's merge set is intact.
     let versions: HashMap<(&str, &str), String> = result
         .entries
         .iter()
@@ -609,12 +515,8 @@ fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
 
 #[test]
 fn two_atom_old_new_withholds_with_a_skip_notice_at_any_budget() {
-    // Walk-level S0 matrix cells (old,new): at `--backtrack=0` and
-    // at the default budget alike, no `SlotConflict` survives (the
-    // direct solve removes 2.0 in-pass, so the retry has nothing to
-    // do), the merge list settles on 1.0, and exactly one skip row
-    // names oldconsumer's pin -- real's rows + `WARNING`, rc 0
-    // (staged oracle both budgets).
+    // At `--backtrack=0` and the default budget alike, no conflict survives
+    // and exactly one skip row names oldconsumer's pin (staged oracle).
     for bt in [0, 10] {
         let result = graph_result_real_atoms(
             &[
@@ -649,15 +551,8 @@ fn two_atom_old_new_withholds_with_a_skip_notice_at_any_budget() {
 
 #[test]
 fn fixture_unsolvable_slot_conflict_is_resolved_by_masking_a_puller_version() {
-    // dev-libs/btparent -> btconsumer (resolves -2.0, RDEPEND
-    // >=bttarget-2.0) + btpin (RDEPEND <bttarget-2.0). No bttarget
-    // version satisfies both, so slice 1's solvability check fails.
-    // C3's ranked choices mask bttarget-2.0 on one node; the retry
-    // finds btconsumer-2.0's dep unsatisfiable (mask-aware
-    // missing-dep probe) and masks its parent, falling back to
-    // btconsumer-1.0 + bttarget-1.0 with every constraint met --
-    // the same downgrade the old puller pre-masking produced, via
-    // real's feedback paths instead.
+    // No bttarget version satisfies both pullers, so the retry masks 2.0 and
+    // falls back to btconsumer-1.0 + bttarget-1.0 via Portage's feedback paths.
     let result = graph_result_real("dev-libs/btparent");
     assert_eq!(result.slot_conflicts, vec![]);
     let ver = |pkg: &str| {
@@ -677,13 +572,8 @@ fn fixture_unsolvable_slot_conflict_is_resolved_by_masking_a_puller_version() {
 
 #[test]
 fn fixture_masking_trial_is_reverted_when_it_makes_a_dependency_unsatisfiable() {
-    // dev-libs/slotconflictunsolvable: both pullers of
-    // slotconflicttarget:0 have a single version, so masking
-    // slotconflicttarget-2.0 only turns the >=2.0 dependency into a
-    // NoVisibleCandidate -- strictly worse. Slice 3 must revert the
-    // trial and report the original slot conflict unchanged
-    // (Backlog #90 S1: instances now file oldpin's 1.0 first --
-    // real's own notice order on the staged oracle).
+    // Masking only turns the >=2.0 dep into an NVC, so the trial reverts and
+    // the original conflict reports unchanged.
     let result = graph_result_real("dev-libs/slotconflictunsolvable");
     assert_one_conflict(AssertOneConflictArgs {
         result: &result,
@@ -704,10 +594,8 @@ fn fixture_masking_trial_is_reverted_when_it_makes_a_dependency_unsatisfiable() 
 
 #[test]
 fn fixture_slot_conflict_carries_per_instance_pulled_in_by_data() {
-    // Slice 4: the SlotConflict names every conflicting version of
-    // slotconflicttarget:0 and, per version, the (parent cpv, atom)
-    // that pulled it -- real slot_collision_handler's per-slot_atom
-    // (pkg, parent_atoms).
+    // The SlotConflict names every conflicting version and, per version, the
+    // (parent cpv, atom) that pulled it (Portage's per-slot_atom).
     let result = graph_result_real("dev-libs/slotconflictunsolvable");
     assert_eq!(result.slot_conflicts.len(), 1);
     let c = &result.slot_conflicts[0];
@@ -740,12 +628,8 @@ fn fixture_slot_conflict_carries_per_instance_pulled_in_by_data() {
             ">=dev-libs/slotconflicttarget-2.0"
         )]
     );
-    // slotconflicttarget and both pins declare no IUSE -> every
-    // instance/parent renders `USE="" ELIBC="glibc"` (real
-    // `pkg_use_display`: the bare USE group plus the implicit
-    // USE_EXPAND group -- backlog #264, grounded in real
-    // `/usr/sbin/emerge` 3.0.82.2 `--pretend --ignore-default-opts
-    // dev-libs/slotconflictunsolvable` on the staged fixture).
+    // No IUSE anywhere: every instance/parent renders `USE="" ELIBC="glibc"`
+    // (Portage's `pkg_use_display` bare group plus the implicit USE_EXPAND).
     assert!(c.instances.iter().all(|i| i.use_display
         == vec![
             ("USE".to_string(), String::new()),
@@ -755,16 +639,8 @@ fn fixture_slot_conflict_carries_per_instance_pulled_in_by_data() {
 
 #[test]
 fn fixture_slot_conflict_carries_pkg_use_display() {
-    // dev-libs/scuseparent -> scusenewpin (>=scusetarget-2.0) +
-    // scuseoldpin (<scusetarget-2.0): unsolvable slot conflict on
-    // scusetarget:0. scusetarget IUSE="+scuon scuoff" -> both
-    // instances render `USE="scuon -scuoff" ELIBC="glibc"` (real
-    // pkg_use_display, enabled-first, plus the implicit USE_EXPAND
-    // group -- backlog #264, grounded in real `/usr/sbin/emerge`
-    // 3.0.82.2 `--pretend --ignore-default-opts dev-libs/scuseparent`
-    // on the staged fixture). scusenewpin IUSE="+scupin" -> that
-    // parent line renders `USE="scupin" ELIBC="glibc"`; scuseoldpin
-    // has no IUSE -> `USE="" ELIBC="glibc"`.
+    // scusetarget IUSE="+scuon scuoff": both instances render
+    // `USE="scuon -scuoff" ELIBC="glibc"` (Portage's `pkg_use_display`).
     let result = graph_result_real("dev-libs/scuseparent");
     assert_eq!(result.slot_conflicts.len(), 1);
     let c = &result.slot_conflicts[0];
@@ -777,11 +653,8 @@ fn fixture_slot_conflict_carries_pkg_use_display() {
             ]
         );
     }
-    // Backlog #90 (S1): instance order follows the walk -- the
-    // oldpin's `<2.0` resolves first (reversed declaration order,
-    // real's stack discipline), so 1.0 sorts first, exactly real's
-    // own notice order (staged oracle: 1.0 pulled by oldpin, then
-    // 2.0 by newpin).
+    // Instance order follows the walk: the oldpin's `<2.0` resolves first, so
+    // 1.0 sorts first (Portage's notice order).
     assert_eq!(
         c.instances[0].parents[0].use_display,
         vec![
@@ -800,14 +673,8 @@ fn fixture_slot_conflict_carries_pkg_use_display() {
 
 #[test]
 fn fixture_unsolvable_slot_conflict_survives_backtracking_and_is_reported() {
-    // dev-libs/slotconflictunsolvable pulls in slotconflictnewpin
-    // (RDEPEND ">=dev-libs/slotconflicttarget-2.0") and
-    // slotconflictoldpin (RDEPEND "<dev-libs/slotconflicttarget-
-    // 2.0"). No single version of slotconflicttarget satisfies both,
-    // so the backtracking solvability pre-check fails, no retry is
-    // attempted, and the SlotConflict is reported exactly as before
-    // (Backlog #90 S1: oldpin's instance files first -- real's
-    // notice order -- since the walk resolves it first).
+    // No single version satisfies both pullers, so no retry is attempted and
+    // the SlotConflict reports unchanged.
     let result = graph_result_real("dev-libs/slotconflictunsolvable");
     assert_one_conflict(AssertOneConflictArgs {
         result: &result,
@@ -821,13 +688,8 @@ fn fixture_unsolvable_slot_conflict_survives_backtracking_and_is_reported() {
 
 #[test]
 fn fixture_different_slots_of_the_same_package_coexist_without_conflict() {
-    // dev-libs/multislotparent RDEPENDs on both
-    // dev-libs/multislotpkg:0 and dev-libs/multislotpkg:1 -- real,
-    // different slots of the same package are normal coexistence
-    // (like dev-lang/python:3.11 and :3.12), not a conflict: both
-    // must appear as independent entries, and neither is silently
-    // dropped by the visited-set the way v1 always did before slot
-    // tracking existed.
+    // Different slots of the same package coexist (like dev-lang/python:3.11
+    // and :3.12): both appear as independent entries.
     let result = graph_result_real("dev-libs/multislotparent");
     let full_names: Vec<String> = result
         .entries
@@ -855,15 +717,8 @@ fn fixture_different_slots_of_the_same_package_coexist_without_conflict() {
 
 #[test]
 fn fixture_new_slot_install_is_new_not_an_upgrade() {
-    // dev-libs/newslotpkg-1.0 (SLOT 0) is installed; -2.0 (SLOT 1) is
-    // not. Requesting `:1` matches only -2.0, whose own slot has
-    // nothing installed -- real portage's `_get_installed_best`
-    // (`not myinslotlist` while `vardb.match(cp)` is non-empty) makes
-    // this a `New` with `new_slot=True` (`[ebuild NS]`), NOT an
-    // `Upgrade` from 1.0. Before installed matching was slot-aware
-    // portuale mis-reported it as `Upgrade { from: "1.0", to:
-    // "2.0" }` (both this crate and the Python oracle agreed, and
-    // both were wrong).
+    // Requesting `:1` matches only -2.0, whose own slot has nothing installed:
+    // a `New` with `new_slot=True`, NOT an `Upgrade` from 1.0.
     let entries = graph_entries_real("dev-libs/newslotpkg:1");
     assert_eq!(entries.len(), 1);
     assert_eq!(
@@ -878,10 +733,7 @@ fn fixture_new_slot_install_is_new_not_an_upgrade() {
 
 #[test]
 fn fixture_in_slot_request_is_not_flagged_new_slot() {
-    // Requesting the slot that IS installed (`:0`, holding
-    // newslotpkg-1.0) stays an in-slot outcome -- selective (this
-    // helper's mode) keeps the installed version untouched, and
-    // `new_slot` is never set for anything but a `New`.
+    // Requesting the installed slot stays an in-slot outcome, never `new_slot`.
     let entries = graph_entries_real("dev-libs/newslotpkg:0");
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].new_slot);
@@ -895,35 +747,27 @@ fn fixture_in_slot_request_is_not_flagged_new_slot() {
 
 #[test]
 fn fixture_interactive_bracket_column_tracks_evaluated_properties() {
-    // dev-libs/interactivemergepkg has an unconditional
-    // PROPERTIES=interactive and is merge-bound -> real
-    // output.py:833's `attr_display.interactive`.
+    // Unconditional PROPERTIES=interactive on a merge-bound pkg -> the
+    // interactive bracket (Portage's output.py attr_display).
     let entries = graph_entries_real("dev-libs/interactivemergepkg");
     assert_eq!(entries.len(), 1);
     assert!(entries[0].interactive);
     assert!(matches!(entries[0].outcome, PretendOutcome::New { .. }));
 
-    // dev-libs/interactivecondpkg's `interactive` token sits behind a
-    // `gtk? ( ... )` conditional with `gtk` disabled -> the real
-    // USE-conditional evaluation (`_PackageMetadataWrapper`, `"?" in
-    // v`) gates it out.
+    // `interactive` behind a `gtk?` conditional with `gtk` disabled is gated
+    // out by USE-conditional evaluation.
     let entries = graph_entries_real("dev-libs/interactivecondpkg");
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].interactive);
-    // (The merge-bound `Reinstall` case -- an already-installed
-    // interactive package under non-selective resolution rendering
-    // `[ebuild Ir]` -- is covered end to end by the contract suite;
-    // `graph_entries_real` is selective, so a bare installed atom
-    // resolves to `AlreadyInstalled` here, which carries no bracket.)
+    // (The merge-bound `Reinstall` case is covered end to end by the contract
+    // suite; this helper is selective, so a bare installed atom resolves to
+    // `AlreadyInstalled` here, which carries no bracket.)
 }
 
 #[test]
 fn fixture_fetch_restrict_column_tracks_distdir_state() {
-    // Both fixtures are `RESTRICT="fetch"`. The test helpers pass
-    // `fixtures_root().join("distfiles")` as `distdir`, which holds
-    // `frs-1.0.tar.gz` at the size its Manifest records but not
-    // `frm-1.0.tar.gz` -- real `output.py:633-641`'s `fetch_restrict`
-    // / `not getfetchsizes(only_restricted=True)`.
+    // Both fixtures are `RESTRICT="fetch"`. The distdir holds `frs-1.0.tar.gz`
+    // at its Manifest size but not `frm-1.0.tar.gz` (Portage's fetch_restrict).
     let entries = graph_entries_real("dev-libs/fetchrestrictsatisfiedpkg");
     assert_eq!(entries.len(), 1);
     assert!(entries[0].fetch_restrict);
@@ -942,18 +786,9 @@ fn fixture_fetch_restrict_column_tracks_distdir_state() {
 
 #[test]
 fn fixture_virtual_resolves_through_ordinary_category_and_any_of_machinery() {
-    // virtual/texteditor is shaped exactly like a real virtual (e.g.
-    // virtual/pager in the real Gentoo tree, confirmed by
-    // inspection): an ordinary ebuild whose RDEPEND is a
-    // "|| ( dev-libs/newpkg dev-libs/samepkg )" any-of group of real
-    // providers -- no PROVIDE mechanism, no dedicated virtuals
-    // resolution code anywhere in portuale. Real `dep_zapdeps`
-    // preference (see `use_reduce_flat_disjunctive`'s `AltPreference`,
-    // portage-use-reduce): dev-libs/samepkg is already installed
-    // (choice bin 0, `preferred_installed`) so it wins over the
-    // first-listed dev-libs/newpkg (bin 1, needs a merge) -- exactly
-    // how real portage resolves `virtual/wine` -> the installed
-    // `wine-staging` instead of the first-listed `wine-vanilla`.
+    // No PROVIDE mechanism, no dedicated virtuals code: the installed
+    // alternative wins over the first-listed one (Portage's dep_zapdeps
+    // preference, like `virtual/wine` -> installed `wine-staging`).
     let entries = graph_entries_real("virtual/texteditor");
     let full_names: Vec<String> = entries
         .iter()
@@ -1046,12 +881,12 @@ fn keyword_mask_marker_classifies_the_bracket_column() {
         Some('~')
     );
     // ~arm64, visible only via "~*" -- a different arch's testing
-    // keyword -> '*' (real get_keyword_mask "missing").
+    // keyword -> '*' (Portage's get_keyword_mask "missing").
     assert_eq!(
         graph_entries_real("dev-libs/tildestarkeywordpkg")[0].keyword_mask,
         Some('*')
     );
-    // package.mask'd then package.unmask'd -> '#' (real isHardMasked
+    // package.mask'd then package.unmask'd -> '#' (Portage's isHardMasked
     // ignores package.unmask), and it wins over any keyword state.
     assert_eq!(
         graph_entries_real("dev-libs/maskedandunmaskedpkg")[0].keyword_mask,
@@ -1061,10 +896,8 @@ fn keyword_mask_marker_classifies_the_bracket_column() {
 
 #[test]
 fn fixture_package_mask_minus_atom_removal_is_unaffected() {
-    // dev-libs/samepkg is masked then immediately un-masked via
-    // "-dev-libs/samepkg" within package.mask itself -- it must
-    // resolve completely normally (already installed), not as if it
-    // were ever masked.
+    // Masked then un-masked via "-dev-libs/samepkg" within package.mask itself:
+    // resolves normally, not as if ever masked.
     assert_eq!(
         resolve_real("dev-libs", "samepkg"),
         PretendOutcome::AlreadyInstalled {
@@ -1095,10 +928,8 @@ fn fixture_package_accept_keywords_double_star_accepts_no_keywords_package() {
 
 #[test]
 fn fixture_unrelated_masked_by_keywords_package_is_still_hidden() {
-    // Regression guard: the "*/wildcardkeywordpkg" package.accept_keywords
-    // entry is scoped to that package name only (not "dev-libs/*"),
-    // specifically so it can't accidentally make dev-libs/maskedpkg
-    // visible too.
+    // Regression guard: the "*"-scoped accept_keywords entry must not leak
+    // onto dev-libs/maskedpkg.
     assert_eq!(
         resolve_real("dev-libs", "maskedpkg"),
         PretendOutcome::NoVisibleCandidate
@@ -1107,11 +938,7 @@ fn fixture_unrelated_masked_by_keywords_package_is_still_hidden() {
 
 #[test]
 fn fixture_eula_style_license_is_masked_by_the_portage_default_accept_license() {
-    // Neither the fixture profile chain nor make.conf sets
-    // ACCEPT_LICENSE at all -- real portage's own "* -@EULA"
-    // default applies, and profiles/license_groups defines
-    // EULA="SomeEula", so dev-libs/eulapkg's own LICENSE="SomeEula"
-    // is masked.
+    // No ACCEPT_LICENSE set anywhere: Portage's own "* -@EULA" default applies.
     assert_eq!(
         resolve_real("dev-libs", "eulapkg"),
         PretendOutcome::NoVisibleCandidate
@@ -1130,9 +957,7 @@ fn fixture_any_of_license_group_is_visible_via_the_accepted_alternative() {
 
 #[test]
 fn fixture_package_license_unmasks_an_otherwise_eula_masked_package() {
-    // fixtures/etc/portage/package.license accepts SomeEula for this
-    // one package specifically, despite the same global "* -@EULA"
-    // default that masks dev-libs/eulapkg above.
+    // package.license accepts SomeEula for this package specifically.
     assert_eq!(
         resolve_real("dev-libs", "packagelicensepkg"),
         PretendOutcome::New {
@@ -1153,10 +978,8 @@ fn fixture_use_conditional_license_is_visible_when_the_flag_is_off() {
 
 #[test]
 fn fixture_use_conditional_license_is_masked_once_package_use_forces_the_flag_on() {
-    // fixtures/etc/portage/package.use forces "nonfreeflag" on for
-    // this specific package, activating its own LICENSE's
-    // "nonfreeflag? ( SomeEula )" conditional -- masked by the same
-    // real "* -@EULA" default as dev-libs/eulapkg.
+    // package.use forces the flag on, activating the conditional -- masked by
+    // the same Portage "* -@EULA" default as dev-libs/eulapkg.
     assert_eq!(
         resolve_real("dev-libs", "uselicensepkgforced"),
         PretendOutcome::NoVisibleCandidate
@@ -1175,10 +998,8 @@ fn fixture_properties_default_star_accepts_a_declared_property() {
 
 #[test]
 fn fixture_package_properties_narrows_acceptance_for_one_package() {
-    // fixtures/etc/portage/package.properties revokes "interactive"
-    // for dev-libs/interactivepkg specifically, despite the real
-    // default ACCEPT_PROPERTIES=* that leaves dev-libs/propertiespkg
-    // (above) visible.
+    // package.properties revokes "interactive" for this package specifically,
+    // despite the permissive global default.
     assert_eq!(
         resolve_real("dev-libs", "interactivepkg"),
         PretendOutcome::NoVisibleCandidate
@@ -1187,9 +1008,7 @@ fn fixture_package_properties_narrows_acceptance_for_one_package() {
 
 #[test]
 fn fixture_package_accept_restrict_narrows_acceptance_for_one_package() {
-    // fixtures/etc/portage/package.accept_restrict revokes "bindist"
-    // for dev-libs/restrictedpkg specifically, same "-token narrows
-    // despite a permissive global default" mechanism as
+    // Same "-token narrows despite a permissive global default" mechanism as
     // package.properties above.
     assert_eq!(
         resolve_real("dev-libs", "restrictedpkg"),
@@ -1197,12 +1016,9 @@ fn fixture_package_accept_restrict_narrows_acceptance_for_one_package() {
     );
 }
 
-/// Regression test: a sibling package sharing a name prefix
-/// ("foo-bar" installed) must not be misread as an installed version
-/// of "foo" when scanning the vdb category directory. Without the
-/// digit-start guard in strip_version_prefix, this would wrongly
-/// report an Upgrade from a bogus "bar-2.0" pseudo-version instead of
-/// a clean New.
+/// A sibling package sharing a name prefix ("foo-bar" installed) must not be
+/// misread as an installed version of "foo" (needs the digit-start guard in
+/// `strip_version_prefix`).
 #[test]
 fn sibling_package_prefix_does_not_contaminate_vdb_scan() {
     assert_eq!(
@@ -1219,12 +1035,9 @@ fn sibling_package_prefix_does_not_contaminate_vdb_scan() {
     );
 }
 
-/// Backlog #194: `--onlydeps-with-rdeps` / `--onlydeps-with-ideps`
-/// blank an onlydeps root's dep classes exactly like real
-/// `depgraph.py:4186-4193` (sets asserted against the
-/// `/tmp/opencode/n194/oracle_odw.log` playground oracle; the root
-/// itself is always resolved -- only the display layer suppresses
-/// it -- so it stays in the entries here).
+/// `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` blank an onlydeps root's
+/// dep classes like Portage (the root itself is always resolved; only the
+/// display layer suppresses it).
 #[test]
 fn onlydeps_with_rdeps_and_ideps_blank_the_root_dep_classes() {
     let names = |entries: Vec<(String, PretendOutcome)>| {
@@ -1264,9 +1077,8 @@ fn onlydeps_with_rdeps_and_ideps_blank_the_root_dep_classes() {
     );
 }
 
-/// Backlog #194: an EAPI-7 root's `IDEPEND` never reaches the walk
-/// (real `bin/ebuild.sh` unsets it in the depend phase), so even the
-/// default rdeps-on shape merges no `E`.
+/// An EAPI-7 root's `IDEPEND` never reaches the walk (Portage's `bin/ebuild.sh`
+/// unsets it in the depend phase).
 #[test]
 fn onlydeps_eapi7_root_ignores_idepend() {
     let mut names: Vec<String> = graph_onlydeps("dev-libs/odw0g", true, false)
@@ -1285,20 +1097,9 @@ fn onlydeps_eapi7_root_ignores_idepend() {
     );
 }
 
-/// #74 S1: an installed `||` alternative's `[use]` deps are matched
-/// against its recorded vdb USE, not the tree candidate's
-/// profile-derived USE (real `dep_check.dep_zapdeps`'s
-/// `_dep_check_composite_db` covers the vardb, and `dbapi._match_use`
-/// has a separate built-package branch that reads `metadata["USE"]`).
-/// `fixtures/repo/dev-libs/altconsumer-1.0` BDEPENDs
-/// `|| ( dev-libs/altprov:1.1[flip] dev-libs/altprov:1.0 )`;
-/// `fixtures/var/db/pkg/dev-libs/altprov-1.1` is installed with
-/// `USE=flip` while the fixture profile/environment never enables
-/// `flip`. Before the fix the installed alternative ranked
-/// `UnsatUseInstalled` and the uninstalled slot's cp-level
-/// `Installed` won, so portuale merged `dev-libs/altprov-1.0`; real's
-/// own container capture (findings "#74 S0") keeps the installed
-/// `:1.1` (bin 0 plus the `all_installed_slots` promotion).
+/// An installed `||` alternative's `[use]` deps are matched against its
+/// recorded vdb USE, not the tree candidate's profile-derived USE (Portage's
+/// composite-db vardb cover plus the built-package branch reading `USE`).
 #[test]
 fn disjunction_preference_matches_an_installed_alternatives_vdb_use() {
     let entries = graph("dev-libs/altconsumer");
@@ -1329,12 +1130,8 @@ fn disjunction_preference_matches_an_installed_alternatives_vdb_use() {
 
 #[test]
 fn exclude_threads_through_dependency_recursion_not_just_top_level() {
-    // dev-libs/upgradepkg is reached only as a dependency of
-    // dev-libs/withdeps here, never a top-level atom -- --exclude
-    // must still leave it alone despite --update, proving the flag
-    // threads uniformly through the whole BFS (see
-    // resolve_pretend_graph's own doc comment), not just a
-    // top-level atom.
+    // --exclude must still leave it alone despite --update, proving the flag
+    // threads uniformly through the whole BFS, not just top-level atoms.
     let root = fixtures_root();
     let entries: Vec<(String, PretendOutcome)> = ResolveRequest {
         update: true,
@@ -1386,10 +1183,8 @@ fn reinstall_atoms_accepts_a_wildcard_atom() {
 
 #[test]
 fn rebuild_if_unbuilt_reinstalls_a_consumer_of_a_merged_build_dep() {
-    // dev-libs/rebuildconsumer (installed) has a vdb DEPEND on
-    // dev-libs/rebuildtrigger; `emerge -u rebuildtrigger` upgrades it
-    // 1.0 -> 2.0. --rebuild-if-unbuilt then schedules rebuildconsumer
-    // for a rebuild (it isn't otherwise in the graph at all).
+    // Installed with a vdb DEPEND on the trigger; upgrading the trigger then
+    // schedules the consumer for a rebuild.
     let g = graph_rebuild_if(GraphRebuildIfArgs {
         atom_str: "dev-libs/rebuildtrigger",
         unbuilt: true,
@@ -1475,13 +1270,8 @@ fn rebuild_exclude_and_ignore_suppress_the_rebuild() {
 
 #[test]
 fn dynamic_deps_picks_ebuild_vs_vdb_deps_for_an_already_installed_deep_walk() {
-    // changeddepspkg (installed) has vdb RDEPEND=dev-libs/samepkg but
-    // its current ebuild RDEPEND=dev-libs/newpkg. Kept from being a
-    // Reinstall via --reinstall-atoms's opposite... just drive it as
-    // AlreadyInstalled by NOT requesting a reinstall: resolve_pretend
-    // in test_config keeps a directly-named installed atom as
-    // AlreadyInstalled (selective=true here), so --deep recurses via
-    // enqueue_dependencies.
+    // Installed with a vdb RDEPEND but a current-ebuild RDEPEND naming someone
+    // else: dynamic walks the ebuild, =n walks the vdb snapshot.
     let root = fixtures_root();
     let call = |dynamic_deps: bool| -> Vec<String> {
         ResolveRequest {
@@ -1510,16 +1300,9 @@ fn dynamic_deps_picks_ebuild_vs_vdb_deps_for_an_already_installed_deep_walk() {
 
 #[test]
 fn default_dynamic_deps_walks_the_live_ebuild_alone() {
-    // dev-libs/builtbindpkg is installed with vdb
-    // RDEPEND="dev-libs/builtbindtarget:0/1=" while its current ebuild
-    // RDEPEND is "dev-libs/newpkg" (the binding was dropped from the
-    // tree). Its vdb carries no `EAPI` file, so real reads the
-    // installed EAPI as `"0"` and the overlay never applies here
-    // (backlog #25 S1b): the default walks the live ebuild alone;
-    // `=n` walks the vdb snapshot alone;
-    // `--ignore-built-slot-operator-deps` changes nothing on this
-    // shape. (The EAPI-bearing r25 shape walks both; the ungated
-    // append broke both #24 pins, Phase 5 S1 S0.)
+    // No vdb `EAPI` file, so the installed EAPI reads as `"0"` and the overlay
+    // never applies here: the default walks the live ebuild alone, `=n`
+    // walks the vdb snapshot alone.
     let root = fixtures_root();
     let call = |dynamic_deps: bool, ignore_built: bool| -> Vec<String> {
         ResolveRequest {
@@ -1572,14 +1355,8 @@ fn default_dynamic_deps_walks_the_live_ebuild_alone() {
 
 #[test]
 fn deep_walk_evaluates_flag_deps_against_the_installed_vdb_use_not_effective() {
-    // dev-libs/deepvdbusepkg is installed with vdb USE="" (no
-    // `wantdep`); its IUSE is `wantdep` and fixtures/repo/profiles/
-    // base/package.use enables it in the *effective* set. Its current
-    // ebuild RDEPENDs `wantdep? ( dev-libs/deepvdbusetarget )`.
-    // Reached only via the --deep recursion under
-    // dev-libs/deepvdbuseconsumer (New), that conditional must be
-    // evaluated against the recorded vdb USE (real `_pkg_use_enabled`
-    // for a built package) -> deepvdbusetarget NOT pulled.
+    // The conditional is evaluated against the recorded vdb USE (Portage's
+    // `_pkg_use_enabled` for a built package), so the target is NOT pulled.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -1619,19 +1396,13 @@ fn deep_walk_evaluates_flag_deps_against_the_installed_vdb_use_not_effective() {
 
 #[test]
 fn deep_walk_evaluates_conditional_use_deps_of_installed_parents() {
-    // #139 (#132's missing Rust-side test): the `deepusedep*` arms
-    // pin `enqueue_dependencies`' evaluation rule at the graph level.
-    // Each installed parent carries `~child-1.0[flip=]`; the token is
-    // evaluated against the parent's recorded vdb USE (real
-    // `_pkg_use_enabled` for a built package) before candidate
-    // selection, so the conditional form never arrives unevaluated
-    // (where it imposes no state constraint at all).
+    // Each installed parent carries `~child-1.0[flip=]`; the token is evaluated
+    // against the parent's recorded vdb USE (Portage's `_pkg_use_enabled`)
+    // before candidate selection.
     //
-    // Arm A (parent built -flip, child installed +flip and
-    // profile-pinned +flip): `[-flip]` is unsatisfiable -- the child
-    // is present as an entry but never as a satisfied install, so the
-    // abort path (pinned at the CLI by the #132 contract test) has
-    // something to report.
+    // Arm A (parent built -flip, child installed +flip and profile-pinned
+    // +flip): `[-flip]` is unsatisfiable, so the child surfaces unsatisfied
+    // for the abort path to report.
     let arm_a = resolve_deep_consumer("dev-libs/deepusedepconsumer", false);
     assert!(
         arm_a
@@ -1655,10 +1426,8 @@ fn deep_walk_evaluates_conditional_use_deps_of_installed_parents() {
          under the profile pin: {arm_a:?}"
     );
     //
-    // Arm B (same parent shape, child not profile-pinned): `[-flip]`
-    // reaches candidate *selection* -- the child rebuilds with flip
-    // off rather than aborting. A fix that only hardened the failure
-    // display would pass arm A and fail here.
+    // Arm B (same parent shape, child not profile-pinned): `[-flip]` reaches
+    // candidate selection -- the child rebuilds with flip off.
     let arm_b = resolve_deep_consumer("dev-libs/deepusedepbconsumer", false);
     assert!(
         arm_b
@@ -1668,12 +1437,8 @@ fn deep_walk_evaluates_conditional_use_deps_of_installed_parents() {
          flip off: {arm_b:?}"
     );
     //
-    // Arm C (control -- parent built +flip): the same atom evaluates
-    // to `[flip]`, which the installed +flip child satisfies, so
-    // nothing merges. (The graph still records the walked installed
-    // nodes as `AlreadyInstalled` entries -- unlike the CLI merge
-    // list -- so the assertion is "no merging entry", not
-    // single-entry.) Guards against an over-broad fix.
+    // Arm C (control -- parent built +flip): the atom evaluates to `[flip]`,
+    // which the installed child satisfies, so nothing merges.
     let arm_c = resolve_deep_consumer("dev-libs/deepusedepokconsumer", false);
     assert!(
         arm_c
@@ -1691,15 +1456,9 @@ fn deep_walk_evaluates_conditional_use_deps_of_installed_parents() {
 
 #[test]
 fn root_deps_walk_evaluates_conditional_use_deps_before_the_satisfied_check() {
-    // #133 at the graph level (the contract pin is
-    // `test_root_deps_evaluates_conditional_use_deps_before_the_satisfied_check`):
-    // `dev-libs/deeprootdepparent` is installed with vdb USE=""
-    // (built -flip) and BDEPENDs `~dev-libs/deeprootdepchild-1.0[flip=]`;
-    // the running root has the child installed +flip. With `--root-deps`
-    // the producers must evaluate the atom to `[-flip]` *and* enforce it
-    // against the running-root instance -- otherwise the raw form is
-    // vacuously satisfied and the child vanishes (bed
-    // `l0-fx-20260922T082944Z`: real rebuilds it with flip off).
+    // With `--root-deps` the producers must evaluate the atom to `[-flip]`
+    // *and* enforce it against the running-root instance (Portage rebuilds
+    // it with flip off).
     let with_root_deps = resolve_deep_consumer("dev-libs/deeprootdepconsumer", true);
     assert!(
         with_root_deps
@@ -1711,9 +1470,8 @@ fn root_deps_walk_evaluates_conditional_use_deps_before_the_satisfied_check() {
          child, so it resolves as a running-root rebuild: {with_root_deps:?}"
     );
     //
-    // Control without `--root-deps`: the producers are a strict no-op
-    // (`root_deps_running_root` None) and the ordinary S5-evaluated
-    // walk rebuilds the child against the target root instead.
+    // Control without `--root-deps`: the producers are a strict no-op and the
+    // ordinary walk rebuilds the child against the target root instead.
     let without = resolve_deep_consumer("dev-libs/deeprootdepconsumer", false);
     assert!(
         without
@@ -1725,13 +1483,8 @@ fn root_deps_walk_evaluates_conditional_use_deps_before_the_satisfied_check() {
     );
 }
 
-/// #141 (Phase 5b S1): a `--root-deps` running-root build entry's
-/// `use_flags_display` must carry the rebuild's flipped flag, so the
-/// renderer prints real's `USE="-flip*"` column (bed
-/// `l0-fx-20260922T192350Z`) instead of skipping the display. The
-/// contract pin is
-/// `test_root_deps_evaluates_conditional_use_deps_before_the_satisfied_check`;
-/// this is the `cargo test` gate over the same constructor.
+/// A `--root-deps` running-root build entry's `use_flags_display` carries the
+/// rebuild's flipped flag for the renderer's `-flip*` column.
 #[test]
 fn root_deps_build_entry_displays_the_rebuild_use_column() {
     let root = fixtures_root();
@@ -1759,8 +1512,8 @@ fn root_deps_build_entry_displays_the_rebuild_use_column() {
         child.targets_running_root,
         "the rebuild is the running-root build entry: {child:?}"
     );
-    // Installed +flip (vdb USE="flip"), rebuilt with flip off -- the
-    // `use_flags_display` pair the renderer's `-flip*` comes from.
+    // Installed +flip (vdb USE="flip"), rebuilt with flip off: the pair the
+    // renderer's `-flip*` comes from.
     assert_eq!(
         child.use_flags_display,
         vec![("flip".to_string(), false)],
@@ -1771,12 +1524,8 @@ fn root_deps_build_entry_displays_the_rebuild_use_column() {
 
 #[test]
 fn emptytree_reinstalls_the_whole_deep_dependency_tree() {
-    // Without --deep/--emptytree, `graph("dev-libs/deeppkg")` on an
-    // installed deeppkg shows only itself (AlreadyInstalled, or a
-    // top-level bare Reinstall) and never walks deeppkg2/newpkg.
-    // --emptytree forces `deep` on AND turns each installed dep into
-    // a Reinstall, so the whole chain shows: deeppkg + deeppkg2 as
-    // Reinstall (both installed), newpkg as New (not installed).
+    // --emptytree forces `deep` on AND turns each installed dep into a
+    // Reinstall, so the whole chain shows.
     let entries = graph_empty("dev-libs/deeppkg");
     let bare = PretendOutcome::Reinstall {
         version: "1.0".to_string(),
@@ -1804,17 +1553,10 @@ fn emptytree_reinstalls_the_whole_deep_dependency_tree() {
 
 #[test]
 fn with_bdeps_default_true_walks_depend_and_bdepend_of_an_already_installed_package() {
-    // withbdepspkg is already installed, RDEPENDs on newpkg, DEPENDs
-    // on builddeponlypkg, BDEPENDs on hostdeponlypkg -- with_bdeps
-    // defaulting to true (real --with-bdeps=auto/y, portuale's own
-    // --usepkg-less default) walks all three under --deep, same as
-    // before --with-bdeps existed.
-    // Merge order follows real's own discovery order (RDEPEND,
-    // IDEPEND, PDEPEND, DEPEND, BDEPEND -- `_add_pkg_dep_string`'s
-    // `deps` tuple, `depgraph.py:4253-4289`), via
-    // `portage_discovery_order`: RDEPEND's newpkg is discovered before
-    // DEPEND's builddeponlypkg, which is discovered before BDEPEND's
-    // hostdeponlypkg.
+    // with_bdeps defaults to true (Portage's --with-bdeps=auto/y): all three
+    // dep classes walk under --deep.
+    // Merge order follows Portage's discovery order (RDEPEND, IDEPEND,
+    // PDEPEND, DEPEND, BDEPEND).
     assert_eq!(
         graph_deep_with_bdeps("dev-libs/withbdepspkg", true),
         vec![
@@ -1848,11 +1590,8 @@ fn with_bdeps_default_true_walks_depend_and_bdepend_of_an_already_installed_pack
 
 #[test]
 fn with_bdeps_false_skips_depend_and_bdepend_but_not_rdepend() {
-    // Real depgraph.py's own "if pkg.built and not removal_action":
-    // --with-bdeps=n only ever drops DEPEND/BDEPEND for an
-    // already-built (here: AlreadyInstalled) package -- RDEPEND is
-    // never affected, so newpkg (RDEPEND) still shows up while
-    // builddeponlypkg (DEPEND) and hostdeponlypkg (BDEPEND) don't.
+    // --with-bdeps=n only ever drops DEPEND/BDEPEND for an already-built
+    // package; RDEPEND still shows up.
     assert_eq!(
         graph_deep_with_bdeps("dev-libs/withbdepspkg", false),
         vec![
@@ -1872,15 +1611,9 @@ fn with_bdeps_false_skips_depend_and_bdepend_but_not_rdepend() {
     );
 }
 
-/// Real "recursively pull in and build a new package against the
-/// running root" (see `resolve_root_deps_build_entries`'s own doc
-/// comment): `rootdepsbuildpkg`'s own `BDEPEND` (`dev-libs/
-/// rootdepsbuildtool`) has a real, tree-visible ebuild, but no vdb
-/// entry anywhere -- so under `--root-deps`, it's neither dropped as
-/// already-satisfied (unlike `rootdepsprovider` above) nor reported
-/// as `NoVisibleCandidate` (unlike the same atom would be *without*
-/// `--root-deps`, since it's genuinely visible in the tree): it gets
-/// its own real `New` entry, `targets_running_root: true`.
+/// An unsatisfied BDEPEND with a visible ebuild gets its own running-root
+/// `New` entry under `--root-deps` (Portage's "recursively pull in and build
+/// a new package against the running root").
 #[test]
 fn root_deps_adds_a_real_build_entry_for_an_unsatisfied_bdepend_with_a_visible_ebuild() {
     let root = fixtures_root();
@@ -1932,13 +1665,9 @@ fn root_deps_adds_a_real_build_entry_for_an_unsatisfied_bdepend_with_a_visible_e
     );
 }
 
-/// Recursive successor to the test above (see
-/// `resolve_root_deps_build_entries`'s own doc comment): `rdrapp`
-/// BDEPENDs `rdrtool`, which itself BDEPENDs `rdrtooldep` and
-/// RDEPENDs `rdrlib` -- so all four resolve, the three build entries
-/// carry `targets_running_root: true`, each names its *immediate*
-/// requester in `required_by`, and `rdrlib` proves an entry's own
-/// RDEPEND is walked against the running root too.
+/// Recursive successor to the test above: all four resolve, the three build
+/// entries carry `targets_running_root: true`, each names its immediate
+/// requester, and `rdrlib` proves RDEPEND walks against the running root too.
 #[test]
 fn root_deps_recursion_walks_a_build_entrys_own_build_and_runtime_deps() {
     let root = fixtures_root();
@@ -1996,11 +1725,8 @@ fn root_deps_recursion_walks_a_build_entrys_own_build_and_runtime_deps() {
     );
 }
 
-/// `IDEPEND` of a running-root build entry is walked against the
-/// running root too (real portage: `IDEPEND` *always* targets
-/// `_running_root.root`, `depgraph.py:4247-4252`). `rdriapp`
-/// BDEPENDs `rdritool`, whose own `IDEPEND` (`rdrilib`) must be
-/// pulled in as its own `targets_running_root` entry.
+/// `IDEPEND` of a running-root build entry is walked against the running root
+/// too (Portage: `IDEPEND` always targets the running root).
 #[test]
 fn root_deps_recursion_walks_a_build_entrys_own_idepend() {
     let root = fixtures_root();
@@ -2036,12 +1762,8 @@ fn root_deps_recursion_walks_a_build_entrys_own_idepend() {
     );
 }
 
-/// A *top-level* package's own `IDEPEND` resolves against the running
-/// root too, not just recursed running-root build entries (real
-/// `depgraph.py:4247-4252`: `IDEPEND` always targets
-/// `_running_root.root` for every package). `topidepapp` IDEPENDs
-/// `topideplib`; under `--root-deps` `topideplib` becomes a
-/// `targets_running_root` entry rather than an ordinary ROOT entry.
+/// A *top-level* package's own `IDEPEND` resolves against the running root too
+/// (Portage: `IDEPEND` always targets the running root for every package).
 #[test]
 fn root_deps_top_level_idepend_resolves_against_the_running_root() {
     let root = fixtures_root();
@@ -2085,22 +1807,14 @@ fn root_deps_top_level_idepend_resolves_against_the_running_root() {
     );
 }
 
-/// Track X Slice C (#242): the g216 shape under default staging --
-/// `g216top` RDEPENDs `g216mid` RDEPENDs `g216comp` BDEPENDs
-/// `|| ( >=dev-lang/g216comp-1.0 dev-lang/g216boot )`. Real's pass 1
-/// keeps the in-graph self branch live and dead-ends on the
-/// running-root self cycle (`_serialize_tasks`, `depgraph.py:10262`),
-/// then re-resolves with the `circular_dependency` map to `g216boot`
-/// (`backtrack: 1/20`, rc 0). The merge list spans both roots: the
-/// running-root build dep merges before its target-root consumer, and
-/// `g216comp` lands TWICE (one row per root, real `output.py`
-/// `get_display_list`).
-/// (`LLM/evidence/2026-09-29-242-inventory/probes/default-g216top.txt`).
+/// The g216 shape under default staging: the running-root build dep merges
+/// before its target-root consumer, and `g216comp` lands TWICE (one row per
+/// root, like Portage's display list).
 #[test]
 fn cross_root_bdepend_self_branch_merges_in_both_roots() {
     let root = fixtures_root();
-    // Hermetic running root: nothing installed there, so every build
-    // dep selects from the tree.
+    // Hermetic running root: nothing installed there, so every build dep
+    // selects from the tree.
     let running = TempDir::new("portuale-242-xc-empty-running-root").keep();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -2125,12 +1839,11 @@ fn cross_root_bdepend_self_branch_merges_in_both_roots() {
     }
     .resolve()
     .unwrap_or_else(|e| panic!("resolving app-misc/g216top failed: {e}"));
-    // Real spends its single backtrack retry on the serialize abort.
+    // Portage spends its single backtrack retry on the serialize abort.
     assert!(result.backtrack_restarts >= 1);
     assert!(matches!(result.outcome, ResolveOutcome::Complete));
-    // Merge order runs across roots: the running-root build dep
-    // merges before its target-root consumer, and `g216comp` lands
-    // twice -- real's `default-g216top.txt` rows.
+    // Merge order runs across roots: the running-root build dep merges before
+    // its target-root consumer, and `g216comp` lands twice.
     let rows: Vec<(String, String, bool)> = result
         .entries
         .iter()
@@ -2154,10 +1867,8 @@ fn cross_root_bdepend_self_branch_merges_in_both_roots() {
     );
 }
 
-/// The cycle guard: `rdrcyca` BDEPENDs `rdrcycb` BDEPENDs `rdrcyca`.
-/// The shared `root_deps_build_seen` set (inserted *before* a
-/// package's own deps are walked) must cut the recursion so each
-/// cycle node appears exactly once, not overflow the stack.
+/// The cycle guard: each cycle node appears exactly once, not overflow the
+/// stack (the shared seen set is inserted before a package's own deps walk).
 #[test]
 fn root_deps_recursion_terminates_on_a_mutual_bdepend_cycle() {
     let root = fixtures_root();
@@ -2188,11 +1899,8 @@ fn root_deps_recursion_terminates_on_a_mutual_bdepend_cycle() {
     );
 }
 
-/// Per the confirmed judgment call for this slice: an unbuildable,
-/// not-installed dep of a running-root build entry (`rdrmisstool`
-/// BDEPENDs `rdrnothere`, which has no ebuild anywhere) is now
-/// surfaced as its own `NoVisibleCandidate` entry -- previously
-/// `--root-deps` silently swallowed it.
+/// An unbuildable, not-installed dep of a running-root build entry surfaces as
+/// its own `NoVisibleCandidate` entry instead of being silently swallowed.
 #[test]
 fn root_deps_recursion_surfaces_an_unbuildable_build_dep() {
     let root = fixtures_root();
@@ -2223,9 +1931,8 @@ fn root_deps_recursion_surfaces_an_unbuildable_build_dep() {
 
 #[test]
 fn deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely() {
-    // --nodeps trumps --deep -- real create_depgraph_params.py pops
-    // "recurse" out of myparams outright, which the dependency walk
-    // itself checks for before `deep` is ever consulted.
+    // --nodeps trumps --deep (Portage pops "recurse" outright, checked before
+    // `deep` is ever consulted).
     let root = fixtures_root();
     let entries: Vec<(String, PretendOutcome)> = ResolveRequest {
         nodeps: true,
@@ -2257,12 +1964,8 @@ fn deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely() {
 
 #[test]
 fn recursion_basic_chain() {
-    // dev-libs/upgradepkg is installed at 1.0 with a newer 2.0
-    // visible in the tree too -- without --update, it stays
-    // AlreadyInstalled, same as resolve_pretend's own
-    // without_update_an_installed_version_that_still_satisfies_the_atom_is_kept
-    // test above, just reached here as a dependency instead of a
-    // top-level atom.
+    // Without --update it stays AlreadyInstalled, reached here as a dependency
+    // instead of a top-level atom.
     let entries = graph("dev-libs/withdeps");
     assert_eq!(
         entries,
@@ -2291,17 +1994,8 @@ fn recursion_basic_chain() {
 
 #[test]
 fn recursion_keeps_a_keyword_masked_but_installed_dependency_instead_of_downgrading() {
-    // dev-libs/needskeywordmasked (New) RDEPENDs on dev-libs/
-    // keywordmaskedpkg, installed at 2.0 (KEYWORDS="~amd64", not
-    // accepted under the fixture profile's own default
-    // ACCEPT_KEYWORDS="amd64") -- reached only as a dependency,
-    // never a top-level atom, so this exercises the exact real
-    // resolve_pretend_graph BFS path a real `sys-fs/fuse`'s own
-    // `sys-libs/liburing` dependency takes, confirmed live against
-    // a real system (see this slice's own resolve_pretend-level
-    // keyword_masked_but_installed_dependency_is_kept_not_downgraded
-    // test for the full citation). Before this slice's own fix,
-    // this would have (wrongly) shown a Downgrade entry to 1.0.
+    // Reached only as a dependency (the live `sys-fs/fuse` -> `sys-libs/liburing`
+    // shape): stays installed instead of downgrading.
     let entries = graph("dev-libs/needskeywordmasked");
     assert_eq!(
         entries,
@@ -2324,20 +2018,9 @@ fn recursion_keeps_a_keyword_masked_but_installed_dependency_instead_of_downgrad
 
 #[test]
 fn recursion_keeps_a_keyword_masked_but_installed_dependency_with_a_satisfied_use_dep() {
-    // dev-libs/needskeywordmaskeduse (New) RDEPENDs on
-    // dev-libs/keywordmaskedusepkg[flag] -- a real USE-dep on top of
-    // the same keyword-masked-but-installed situation as the test
-    // above. Installed at 2.0 with real vdb USE="flag" (see the
-    // fixture's own IUSE/USE files) -- checked against that real
-    // vdb-recorded USE, not the current tree's, via
-    // `use_deps_satisfied` -- so this is kept exactly as installed,
-    // matching real `sys-fs/fuse`'s own real
-    // `sys-libs/liburing:=[abi_x86_64(-)?,...]` dependency (the
-    // actual real-world case this slice's own fix was built for,
-    // confirmed live: without checking USE-deps against vdb data,
-    // an earlier version of this fix would have (wrongly) fallen
-    // back to the old, visibility-gated lookup for ANY USE-decorated
-    // atom, missing this exact case entirely).
+    // A genuine USE-dep on the same keyword-masked-but-installed shape, checked
+    // against the vdb-recorded USE via `use_deps_satisfied` (the live
+    // `sys-fs/fuse` -> `sys-libs/liburing:=[...]` shape).
     let entries = graph("dev-libs/needskeywordmaskeduse");
     assert_eq!(
         entries,
@@ -2360,17 +2043,9 @@ fn recursion_keeps_a_keyword_masked_but_installed_dependency_with_a_satisfied_us
 
 #[test]
 fn recursion_keeps_an_installed_dependency_whose_use_dep_flag_is_only_in_its_built_use() {
-    // dev-libs/needsbuiltusediverge (New) RDEPENDs on
-    // dev-libs/builtusedivergedep[divergedflag]. The installed 1.0
-    // has vdb USE="divergedflag" but vdb IUSE="" -- and the *current*
-    // ebuild has dropped `divergedflag` from its IUSE entirely, so
-    // the tree candidate can't satisfy the `[divergedflag]` USE-dep
-    // at all (top-level `dev-libs/builtusedivergedep[divergedflag]`
-    // resolves to NoVisibleCandidate). Real
-    // `dbapi._iuse_implicit_built` (bug #640318): a built package's
-    // own USE is authoritative for what counts as a valid IUSE flag,
-    // so the installed version satisfies the atom and the dependency
-    // is kept exactly as installed -- no spurious NoVisibleCandidate.
+    // The installed 1.0 has vdb USE="divergedflag" but empty vdb IUSE, and the
+    // current ebuild dropped the flag entirely -- yet the installed version
+    // satisfies the atom (Portage's `_iuse_implicit_built`).
     let entries = graph("dev-libs/needsbuiltusediverge");
     assert_eq!(
         entries,
@@ -2393,12 +2068,8 @@ fn recursion_keeps_an_installed_dependency_whose_use_dep_flag_is_only_in_its_bui
 
 #[test]
 fn recursion_basic_chain_with_update_upgrades_the_dependency() {
-    // Same fixture as recursion_basic_chain above, but with --update:
-    // dev-libs/upgradepkg -- reached only as a *dependency* of
-    // withdeps, never a top-level atom -- still upgrades, proving
-    // `update` threads uniformly through the whole BFS (see
-    // resolve_pretend_graph's own doc comment), not just top-level
-    // atoms.
+    // Same fixture with --update, reached only as a dependency: still upgrades,
+    // proving `update` threads through the whole BFS.
     let entries = graph_update("dev-libs/withdeps");
     assert_eq!(
         entries,
@@ -2428,10 +2099,8 @@ fn recursion_basic_chain_with_update_upgrades_the_dependency() {
 
 #[test]
 fn nodeps_resolves_the_top_level_atom_but_never_recurses() {
-    // Same dev-libs/withdeps fixture as recursion_basic_chain above --
-    // with --nodeps, only the top-level atom itself is ever resolved;
-    // its own DEPEND/RDEPEND (which would otherwise pull in newpkg
-    // and upgradepkg) is never even read.
+    // With --nodeps only the top-level atom itself is ever resolved; its own
+    // DEPEND/RDEPEND is never even read.
     let entries = graph_nodeps("dev-libs/withdeps");
     assert_eq!(
         entries,
@@ -2446,12 +2115,8 @@ fn nodeps_resolves_the_top_level_atom_but_never_recurses() {
 
 #[test]
 fn nodeps_still_computes_use_flags_display_for_the_top_level_atom() {
-    // Real portage's own -v USE display is about a package's own
-    // metadata, unrelated to whether its dependencies get walked --
-    // --nodeps must not blank it out. dev-libs/useflagpkg's own
-    // foo?-gated RDEPEND on dev-libs/newpkg proves the *dependency*
-    // walk really is skipped (no second entry), while its own
-    // IUSE="foo missingflag" still shows up correctly.
+    // Portage's own -v USE display is about a package's own metadata, so
+    // --nodeps must not blank it out.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -2516,8 +2181,8 @@ fn use_expand_hidden_group_is_absent_from_the_pv_display() {
             .use_flags_display
             .contains(&("cpu_flags_x86_sse2".to_string(), true))
     );
-    // ...but CPU_FLAGS_X86 is USE_EXPAND_HIDDEN, so it never reaches
-    // the `-pv` display.
+    // ...but CPU_FLAGS_X86 is USE_EXPAND_HIDDEN, so it never reaches the
+    // `-pv` display.
     assert!(entry.use_expand_display.is_empty());
 }
 
@@ -2566,13 +2231,8 @@ fn recursion_dedupes_diamond_dependency() {
 
 #[test]
 fn entries_are_returned_in_dependency_first_merge_order() {
-    // `topological_merge_order`: real portage's `mylist` is a genuine
-    // topological merge schedule; portuale's BFS builds entries
-    // parent-first, so `resolve_pretend_graph` re-sorts them into
-    // dependency-first order before returning. `dev-libs/withdeps`
-    // RDEPENDs `dev-libs/newpkg` + `dev-libs/upgradepkg`; both deps
-    // must precede `withdeps`, and among the two unconstrained deps
-    // their BFS-discovery (RDEPEND string) order is preserved.
+    // `topological_merge_order`: the BFS builds entries parent-first, so the
+    // graph re-sorts them into dependency-first order before returning.
     let names: Vec<String> = graph("dev-libs/withdeps")
         .into_iter()
         .map(|(n, _)| n)
@@ -2586,8 +2246,8 @@ fn entries_are_returned_in_dependency_first_merge_order() {
     assert!(newpkg < withdeps, "{names:?}");
     assert!(upgradepkg < withdeps, "{names:?}");
 
-    // Diamond: the shared leaf precedes both of its consumers, which
-    // both precede the root -- a strict topological order.
+    // Diamond: the shared leaf precedes both consumers, which both precede
+    // the root.
     let d: Vec<String> = graph("dev-libs/diamond")
         .into_iter()
         .map(|(n, _)| n)
@@ -2609,8 +2269,7 @@ fn required_by_is_empty_for_a_directly_requested_top_level_atom() {
 
 #[test]
 fn required_by_names_the_single_owner_of_a_plain_dependency() {
-    // dev-libs/withdeps RDEPENDs on newpkg and upgradepkg -- both
-    // should list withdeps as their only owner.
+    // Both deps list withdeps as their only owner.
     let entries = full_graph("dev-libs/withdeps");
     for entry in &entries {
         if entry.category == "dev-libs"
@@ -2629,9 +2288,8 @@ fn required_by_names_the_single_owner_of_a_plain_dependency() {
 
 #[test]
 fn required_by_lists_every_owner_of_a_diamond_dependency() {
-    // dev-libs/common is reached via both shared-a and shared-b --
-    // both owners must be recorded (sorted), not just whichever one
-    // the BFS happened to resolve it through first.
+    // Both owners must be recorded (sorted), not just whichever the BFS
+    // resolved first.
     let entries = full_graph("dev-libs/diamond");
     let common = entries
         .iter()
@@ -2648,13 +2306,8 @@ fn required_by_lists_every_owner_of_a_diamond_dependency() {
 
 #[test]
 fn required_by_is_set_on_every_slot_of_a_multi_slot_dependency() {
-    // dev-libs/multislotparent RDEPENDs on both dev-libs/multislotpkg:0
-    // and :1 -- two separate entries sharing one (category, package).
-    // Both were pulled in by multislotparent, so both must carry it in
-    // `required_by`. The merge post-pass previously used a destructive
-    // `required_by_map.remove(...)`, handing the owner to whichever
-    // slot's entry came first and leaving the other with `[]` (which
-    // `--tree` then dropped to its flush-left safety net).
+    // Two separate entries sharing one (category, package); both must carry
+    // the owner (the old destructive map handed it to only the first).
     let entries = full_graph("dev-libs/multislotparent");
     let slots: Vec<&GraphEntry> = entries
         .iter()
@@ -2673,15 +2326,8 @@ fn required_by_is_set_on_every_slot_of_a_multi_slot_dependency() {
 
 #[test]
 fn a_slot_qualified_dep_does_not_edge_to_a_sibling_slot() {
-    // `build_digraph` resolves each dep atom to the entries it
-    // actually matches before adding an edge. `slotorderroot` RDEPENDs
-    // `dev-libs/slotorderdual:2`; `:1` is pulled only through
-    // `slotorderb`. Before per-atom edge matching, the slot-blind
-    // `cat/pkg` lookup gave `slotorderroot` a phantom edge to `:1`
-    // too (and the `required_by` fallback did the same in reverse),
-    // so both `slotorderdual` slots reached parent-count 2 and
-    // `_merge_order_bias` promoted them ahead of the plain leaf
-    // `slotordera` (parent-count 1, declared first).
+    // `build_digraph` resolves each dep atom to the entries it actually
+    // matches before adding an edge (a slot-blind lookup gave phantom edges).
     let names: Vec<String> = graph("dev-libs/slotorderroot")
         .into_iter()
         .map(|(n, _)| n)
@@ -2719,13 +2365,8 @@ fn recursion_terminates_on_a_dependency_cycle() {
 
 #[test]
 fn virtual_cycle_aborts_like_portage_on_the_upstream_fixtures() {
-    // Backlog #193, upstream `test_virtual_cycle.py` (bug 965570) as
-    // emitted by pmtest `89d17e0`: both cells fail in real
-    // (`ResolverPlayground` success=False,
-    // virtual_cycle={gzip-1} / {A-1,B-1,C-1}; g193 container probe
-    // `emerge -p --color=n app-misc/{bar,foo}` on the staged tree:
-    // rc 1 with the `!!! virtual cycle detected:` block). Portuale
-    // merged both as ordinary rings (rc 0).
+    // Upstream bug 965570: both cells fail in Portage, while portuale merged
+    // both as ordinary rings.
     for (top, expected) in [
         ("app-misc/bar", vec!["virtual/gzip-1::testrepo".to_string()]),
         (
@@ -2754,15 +2395,9 @@ fn virtual_cycle_aborts_like_portage_on_the_upstream_fixtures() {
 
 #[test]
 fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cycle_analysis() {
-    // Backlog #153: the fucyclea/fucycleb USE-gated cycle is still in
-    // the tree, but the top-level target dev-libs/fucyclec constrains
-    // the solution flag conditionally (`dev-libs/fucyclea[x?]`) with
-    // `x` in no IUSE of its own -- real masks the whole candidate
-    // `invalid` at construction (`Package._validate_deps`), so the
-    // resolve fails with the all-masked report before any cycle is
-    // ever walked: there is no circular-dep suggestion to keep. (This
-    // test previously pinned the followup suggestion; that output
-    // described a merge real never makes.)
+    // The USE-gated cycle is still in the tree, but the target constrains the
+    // flag conditionally with `x` in no IUSE: Portage masks the candidate
+    // `invalid` at construction, so the resolve fails before any cycle walk.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -2798,11 +2433,8 @@ fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cyc
 
 #[test]
 fn large_cycle_count_and_display_fire_on_a_four_ring() {
-    // dev-libs/cyc4a through dev-libs/cyc4d form a four-ring of
-    // build-time deps (the cyc4a edge gated behind USE=x, on by
-    // default): real `get_cycles` records one ring per node, so four
-    // records trip `large_cycle_count`, and the stuck remainder
-    // re-displays all four members in leaf-drain order.
+    // A four-ring of build-time deps: Portage records one ring per node, so
+    // four records trip `large_cycle_count`.
     let result = graph_result_real("dev-libs/cyc4a");
     assert_eq!(result.circular_deps.len(), 1);
     assert!(
@@ -2824,9 +2456,8 @@ fn large_cycle_count_and_display_fire_on_a_four_ring() {
 
 #[test]
 fn small_cycles_report_without_large_count_or_display() {
-    // Control: the two-ring reports its error block but neither the
-    // trailer (two records) nor ... -- well, the re-display still
-    // shows (two members); only `large_cycle_count` stays false.
+    // Control: the two-ring still re-displays its two members, but
+    // `large_cycle_count` stays false.
     let result = graph_result_real("dev-libs/hardcyclea");
     assert_eq!(result.circular_deps.len(), 1);
     assert!(
@@ -2838,10 +2469,8 @@ fn small_cycles_report_without_large_count_or_display() {
 
 #[test]
 fn masked_dep_report_carries_the_chain_to_the_argument() {
-    // End to end through the driver: the maskneedpkg resolve records
-    // one masked_deps report (atom + masked list) whose chain walks
-    // the merge parent up to the top-level argument, like real's
-    // `(dependency required by …)` lines.
+    // The masked_deps report chain walks the merge parent up to the top-level
+    // argument (Portage's dependency-required-by lines).
     let result = graph_result_real("dev-libs/maskneedpkg");
     assert_eq!(result.masked_deps.len(), 1);
     let rep = &result.masked_deps[0];
@@ -2869,11 +2498,8 @@ fn masked_dep_report_carries_the_chain_to_the_argument() {
 
 #[test]
 fn mia0a_cells_report_missing_iuse_for_the_conditional_dep() {
-    // End to end through the driver for #265(a): both `mia0a` cells
-    // record one `Missing IUSE: foo` disclosure on `mia0b` whose chain
-    // walks the merge parent up to the top-level argument, like
-    // real's `(dependency required by …)` lines in
-    // `LLM/evidence/2026-09-30-265/real/mia0a-{1,2}.txt`.
+    // Both `mia0a` cells record one `Missing IUSE` disclosure with a chain to
+    // the argument (Portage's lines).
     for (arg, atom) in [
         ("=dev-libs/mia0a-1", "dev-libs/mia0b[foo?]"),
         ("=dev-libs/mia0a-2", "dev-libs/mia0b[foo?,bar]"),
@@ -2908,10 +2534,8 @@ fn mia0a_cells_report_missing_iuse_for_the_conditional_dep() {
 
 #[test]
 fn use_unsat_dep_report_carries_the_chain_to_the_argument() {
-    // End to end through the driver: the unsatuseiuse resolve records
-    // one Missing IUSE disclosure whose chain walks the merge parent
-    // up to the top-level argument, like real's `(dependency required
-    // by …)` lines.
+    // The Missing IUSE disclosure chain walks the merge parent up to the
+    // top-level argument (Portage's lines).
     let result = graph_result_real("dev-libs/unsatuseiuse");
     assert_eq!(result.use_unsat_deps.len(), 1);
     let rep = &result.use_unsat_deps[0];
@@ -2948,19 +2572,8 @@ fn use_unsat_dep_report_carries_the_chain_to_the_argument() {
 
 #[test]
 fn unreachable_installed_pin_does_not_block_an_upgrade() {
-    // #54: dev-libs/keeper-1.0 (installed, outside every target
-    // closure, and outside @world/@selected/@system in the checked-in
-    // fixture) records `=dev-libs/paired-1.0` -- but `graph_result_real`
-    // resolves through a single non-complete-mode pass (no
-    // `complete_seed_atoms`, matching real never entering complete
-    // mode here at all: hermetic real 3.0.82.2 never walks to keeper),
-    // so the explicit `=dev-libs/paired-2.0` request merges cleanly
-    // with no residual conflict (verified live,
-    // `TEST/findings/l0-fixture-oracle.md` "#54 S0" hermetic row).
-    // Before the #54 fix this asserted the opposite: a residual
-    // conflict pairing the merge against installed 1.0 with keeper as
-    // parent -- portuale's unconditional (unreachable-consumers
-    // included) vdb reverse scan applying a pin real never sees.
+    // keeper-1.0 is installed but outside every closure, so its pin never
+    // applies and the explicit `=paired-2.0` request merges cleanly.
     let result = graph_result_real("=dev-libs/paired-2.0");
     let paired = result
         .entries
@@ -2984,12 +2597,9 @@ fn unreachable_installed_pin_does_not_block_an_upgrade() {
 
 #[test]
 fn build_time_cycle_between_two_installed_packages_is_not_a_hard_cycle() {
-    // instcyclea BDEPENDs instcycleb BDEPENDs instcyclea, both
-    // already installed. Real `DepPriority.satisfied` demotes a
-    // build-time edge whose dep an installed package provides, so
-    // `_serialize_tasks` can break the cycle. Under --emptytree both
-    // are `[ebuild R]`; `circular_deps` must stay empty (contrast
-    // `hardcyclea`/`hardcycleb`, neither installed -> reported).
+    // Both already installed: Portage demotes the build-time edge an installed
+    // package provides, so the cycle breaks (contrast the genuine hard cycle,
+    // neither installed, which still reports).
     let result = graph_result_empty("dev-libs/instcyclea");
     assert!(
         result.circular_deps.is_empty(),
@@ -3014,14 +2624,8 @@ fn build_time_cycle_between_two_installed_packages_is_not_a_hard_cycle() {
 
 #[test]
 fn or_dep_prefers_a_branch_already_merge_bound_in_the_graph() {
-    // ingraphsvc RDEPENDs `|| ( dev-libs/ingraphkeyring
-    // dev-libs/ingraphwallet[keyring] )`. Neither branch is installed.
-    // ingraphany pulls ingraphwallet[keyring] directly *and*
-    // ingraphsvc -- so when ingraphsvc's `||` is resolved,
-    // ingraphwallet is already a graph node. Real `dep_zapdeps`
-    // `all_in_graph` (choice bin 0) picks it over the first-listed
-    // ingraphkeyring, so ingraphkeyring + its own dep never enter the
-    // graph.
+    // ingraphwallet is already a graph node when ingraphsvc's `||` resolves:
+    // Portage's `all_in_graph` bin picks it over the first-listed branch.
     let names: Vec<String> = graph("dev-libs/ingraphany")
         .into_iter()
         .map(|(n, _)| n)
@@ -3042,16 +2646,8 @@ fn or_dep_prefers_a_branch_already_merge_bound_in_the_graph() {
 
 #[test]
 fn recursion_prefers_the_installed_any_of_alternative_over_an_earlier_uninstalled_one() {
-    // dev-libs/anyof's own RDEPEND is
-    // "|| ( dev-libs/newpkg dev-libs/samepkg )". dev-libs/newpkg
-    // (listed first) would need a merge; dev-libs/samepkg (second) is
-    // already installed. Real `dep_zapdeps` files samepkg in choice
-    // bin 0 (`preferred_installed`, aliased to `preferred_in_graph`)
-    // and newpkg in bin 1 (`preferred_non_installed`), and takes the
-    // first entry of the best non-empty bin -- so `samepkg` wins even
-    // though it's listed second, and `newpkg` is never merged. See
-    // `use_reduce_flat_disjunctive`'s `AltPreference` (portage-use-
-    // reduce) and `atom_cp_installed`.
+    // The installed alternative wins even though it's listed second (Portage's
+    // `preferred_installed` bin).
     let entries = graph("dev-libs/anyof");
     let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, vec!["dev-libs/samepkg", "dev-libs/anyof"]);
@@ -3059,9 +2655,8 @@ fn recursion_prefers_the_installed_any_of_alternative_over_an_earlier_uninstalle
 
 #[test]
 fn recursion_survives_an_unresolvable_dependency() {
-    // The top-level package still resolves, and the unresolvable
-    // dependency still shows up in the graph (as NoVisibleCandidate,
-    // not silently dropped) -- it just isn't recursed into further.
+    // The unresolvable dependency still shows up (as NoVisibleCandidate, not
+    // silently dropped); it just isn't recursed into further.
     let entries = graph("dev-libs/missingdep");
     assert_eq!(
         entries,
@@ -3087,15 +2682,8 @@ fn recursion_dedupes_across_depend_and_rdepend() {
     assert_eq!(names, vec!["dev-libs/newpkg", "dev-libs/dualdep"]);
 }
 
-/// End-to-end wiring check: uses the *real* profile-resolved config
-/// (via portage-profile, a dev-dependency only) instead of the fixed
-/// test_accept_keywords()/empty-USE sets every other test in this file
-/// uses, proving real USE flags -- not just a hardcoded empty set --
-/// actually reach use_reduce and change dependency resolution.
-/// fixtures/repo/profiles resolves "foo" enabled and
-/// "missingflag" disabled (see portage-profile's own fixture test),
-/// so useflagpkg's `foo? ( dev-libs/newpkg )` must be pulled in and
-/// its `missingflag? ( dev-libs/hiddendep )` must not be.
+/// End-to-end wiring check: the fully resolved config proves genuine USE flags
+/// reach use_reduce and change dependency resolution.
 #[test]
 fn real_resolved_use_flags_drive_dependency_recursion() {
     let root = fixtures_root();
@@ -3128,9 +2716,8 @@ fn real_resolved_use_flags_drive_dependency_recursion() {
 
 #[test]
 fn use_expand_flag_drives_dependency_recursion() {
-    // profiles/base/make.defaults declares USE_EXPAND="VIDEO_CARDS"
-    // and VIDEO_CARDS="nvidia" -- expands into "video_cards_nvidia",
-    // which dev-libs/useexpandpkg's own RDEPEND is gated on.
+    // VIDEO_CARDS="nvidia" expands into "video_cards_nvidia", which the RDEPEND
+    // is gated on.
     let full_names: Vec<String> = graph_real("dev-libs/useexpandpkg")
         .into_iter()
         .map(|(name, _)| name)
@@ -3140,10 +2727,8 @@ fn use_expand_flag_drives_dependency_recursion() {
 
 #[test]
 fn package_use_expand_shorthand_drives_dependency_recursion() {
-    // fixtures/etc/portage/package.use has "dev-libs/
-    // packageuseexpandpkg PYTHON_TARGETS: python3_12" -- expands into
-    // "python_targets_python3_12", which
-    // dev-libs/packageuseexpandpkg's own RDEPEND is gated on.
+    // package.use shorthand expands into the qualified flag the RDEPEND is
+    // gated on.
     let full_names: Vec<String> = graph_real("dev-libs/packageuseexpandpkg")
         .into_iter()
         .map(|(name, _)| name)
@@ -3156,13 +2741,8 @@ fn package_use_expand_shorthand_drives_dependency_recursion() {
 
 #[test]
 fn use_expand_star_wildcard_enables_every_matching_iuse_flag() {
-    // fixtures/etc/portage/package.use has "dev-libs/wildexpandpkg
-    // linguas_*" -- real config.py setcpv's own _* wildcard: enable
-    // every linguas_<x> in this package's OWN IUSE
-    // ("linguas_en linguas_de") that isn't masked. profiles/base/
-    // package.use.mask keeps linguas_en off, so only linguas_de is
-    // enabled -> RDEPEND's "linguas_de? ( wildexpanddep )" fires and
-    // "linguas_en? ( wildexpandmasked )" does not.
+    // The `_*` wildcard enables every matching flag in the package's OWN IUSE
+    // (Portage's setcpv); the masked one stays off, so only its gate fires.
     let full_names: Vec<String> = graph_real("dev-libs/wildexpandpkg")
         .into_iter()
         .map(|(name, _)| name)
@@ -3175,23 +2755,15 @@ fn use_expand_star_wildcard_enables_every_matching_iuse_flag() {
 
 #[test]
 fn use_expand_implicit_flag_is_valid_iuse_even_when_unlisted() {
-    // profiles/base/make.defaults: USE_EXPAND_IMPLICIT="ELIBC",
-    // USE_EXPAND_VALUES_ELIBC="glibc musl", ELIBC="glibc". So
-    // elibc_glibc is valid implicit IUSE for every package AND
-    // enabled -- dev-libs/implicitiusepkg RDEPENDs
-    // implicitiuseprov[elibc_glibc], and implicitiuseprov never
-    // lists elibc_glibc in its own IUSE. Before this slice that
-    // dep's `.required` check failed against the (declared-only)
-    // IUSE and implicitiuseprov was invisible.
+    // elibc_glibc is valid implicit IUSE for every package AND enabled, so the
+    // dep resolves (before this slice the declared-only `.required` check
+    // left it invisible).
     let entries = graph_real("dev-libs/implicitiusepkg");
     let prov = entries
         .iter()
         .find(|(name, _)| name == "dev-libs/implicitiuseprov")
         .expect("the dep is in the graph");
-    // Resolved as a real New entry, NOT NoVisibleCandidate -- which
-    // is exactly what it would be without this slice (elibc_glibc
-    // absent from implicitiuseprov's declared IUSE -> `.required`
-    // fails -> no matching candidate).
+    // Resolved as a genuine New entry, NOT NoVisibleCandidate.
     assert_eq!(
         prov.1,
         PretendOutcome::New {
@@ -3202,12 +2774,9 @@ fn use_expand_implicit_flag_is_valid_iuse_even_when_unlisted() {
 
 #[test]
 fn use_expand_implicit_flag_valid_but_not_enabled_still_fails_the_use_dep() {
-    // elibc_musl is valid implicit IUSE (in USE_EXPAND_VALUES_ELIBC)
-    // but not enabled (ELIBC="glibc"), so
-    // implicitiuseprov[elibc_musl] is genuinely unsatisfiable --
-    // implicitiusepkgmusl's own dep resolves to NoVisibleCandidate,
-    // exactly like any other unsatisfiable USE-dep (proves the slice
-    // widened the *valid* domain, not the *enabled* one).
+    // elibc_musl is valid implicit IUSE but not enabled, so the dep is
+    // genuinely unsatisfiable (the slice widened the *valid* domain, not the
+    // *enabled* one).
     let entries = graph_real("dev-libs/implicitiusepkgmusl");
     let prov = entries
         .iter()
@@ -3218,9 +2787,7 @@ fn use_expand_implicit_flag_valid_but_not_enabled_still_fails_the_use_dep() {
 
 #[test]
 fn fixture_stable_use_force_and_package_use_stable_mask_apply_when_stable() {
-    // dev-libs/stableusepkg's own KEYWORDS="amd64" (no "~") is
-    // genuinely stable -- use.stable.force (profiles/base) pulls in
-    // its own RDEPEND.
+    // Genuinely stable KEYWORDS: use.stable.force pulls in its own RDEPEND.
     let full_names: Vec<String> = graph_real("dev-libs/stableusepkg")
         .into_iter()
         .map(|(name, _)| name)
@@ -3230,9 +2797,7 @@ fn fixture_stable_use_force_and_package_use_stable_mask_apply_when_stable() {
 
 #[test]
 fn fixture_stable_use_force_skips_an_unstable_candidate() {
-    // dev-libs/unstableusepkg's own KEYWORDS="~amd64" is genuinely
-    // NOT stable -- the same use.stable.force never applies, so its
-    // own stableforceflag?-gated RDEPEND is never pulled in.
+    // Genuinely NOT stable: the same use.stable.force never applies.
     let full_names: Vec<String> = graph_real("dev-libs/unstableusepkg")
         .into_iter()
         .map(|(name, _)| name)
@@ -3270,9 +2835,8 @@ fn without_with_test_deps_the_test_gated_dependency_is_absent() {
 
 #[test]
 fn with_test_deps_does_not_apply_beyond_a_top_level_atom() {
-    // dev-libs/withtestdepconsumer RDEPENDs on dev-libs/withtestdeppkg,
-    // reached at depth 1, not depth 0 -- testonlydep must stay absent
-    // even though --with-test-deps is given.
+    // Reached at depth 1, not depth 0: testonlydep stays absent even with
+    // --with-test-deps.
     let full_names: Vec<String> = graph_real_with_test_deps("dev-libs/withtestdepconsumer")
         .into_iter()
         .map(|(name, _)| name)
@@ -3289,8 +2853,7 @@ fn with_test_deps_does_not_apply_beyond_a_top_level_atom() {
 
 #[test]
 fn with_test_deps_is_a_no_op_for_a_package_with_no_test_iuse_flag_at_all() {
-    // dev-libs/newpkg has no "test" IUSE flag declared at all -- real
-    // portage's own "pkg.iuse.is_valid_flag(\"test\")" guard means
+    // No "test" IUSE flag declared at all: Portage's validity guard means
     // --with-test-deps changes nothing for it.
     assert_eq!(
         graph_real_with_test_deps("dev-libs/newpkg"),
@@ -3300,10 +2863,8 @@ fn with_test_deps_is_a_no_op_for_a_package_with_no_test_iuse_flag_at_all() {
 
 #[test]
 fn newuse_reinstall_still_recurses_into_its_own_dependencies() {
-    // dev-libs/reinstallpkg RDEPENDs on dev-libs/newpkg -- proving a
-    // Reinstall entry is walked for dependencies exactly like New/
-    // Upgrade, not treated like the AlreadyInstalled dead-end it used
-    // to be before --newuse existed.
+    // A Reinstall entry is walked for dependencies exactly like New/Upgrade,
+    // not treated like the AlreadyInstalled dead-end.
     assert_eq!(
         graph_real_newuse("dev-libs/reinstallpkg"),
         vec![
@@ -3331,10 +2892,7 @@ fn newuse_reinstall_still_recurses_into_its_own_dependencies() {
 
 #[test]
 fn fixture_package_use_enables_a_flag_not_on_globally() {
-    // Neither the profile nor make.conf enables "pkguseflag", but
-    // fixtures/etc/portage/package.use has a "*/packageuseenablepkg
-    // pkguseflag" wildcard entry, so newpkg's foo?-unrelated,
-    // pkguseflag?-gated dependency must be pulled in.
+    // A package.use wildcard entry enables the gating flag for this package.
     let full_names: Vec<String> = graph_real("dev-libs/packageuseenablepkg")
         .into_iter()
         .map(|(name, _)| name)
@@ -3347,11 +2905,8 @@ fn fixture_package_use_enables_a_flag_not_on_globally() {
 
 #[test]
 fn nodeps_skips_recursion_even_when_package_use_would_otherwise_pull_something_in() {
-    // Same fixture as fixture_package_use_enables_a_flag_not_on_globally
-    // above, but with --nodeps: the real profile-resolved config still
-    // decides packageuseenablepkg's own visibility/USE normally, it's
-    // only the *recursion* into its now-enabled pkguseflag?-gated
-    // RDEPEND that --nodeps skips -- dev-libs/newpkg must NOT appear.
+    // Same fixture with --nodeps: only the *recursion* into the now-enabled
+    // gate is skipped; visibility/USE still resolve normally.
     let full_names: Vec<String> = graph_real_nodeps("dev-libs/packageuseenablepkg")
         .into_iter()
         .map(|(name, _)| name)
@@ -3361,13 +2916,8 @@ fn nodeps_skips_recursion_even_when_package_use_would_otherwise_pull_something_i
 
 #[test]
 fn fixture_package_use_disables_a_flag_that_is_on_globally() {
-    // The fixture profile chain enables "foo" globally (see
-    // resolves_fixture_profile_chain_and_make_conf in portage-profile,
-    // and dev-libs/useflagpkg's own test above, which -- unlike this
-    // package -- DOES pull in its foo?-gated dependency), but
-    // fixtures/etc/portage/package.use has a "dev-libs/packageusedisablepkg
-    // -foo" entry scoped to just this package, so its own foo?-gated
-    // dependency must NOT be pulled in.
+    // The fixture profile chain enables "foo" globally, but a package.use
+    // "-foo" entry scoped to just this package keeps its gate closed.
     let full_names: Vec<String> = graph_real("dev-libs/packageusedisablepkg")
         .into_iter()
         .map(|(name, _)| name)
@@ -3377,9 +2927,7 @@ fn fixture_package_use_disables_a_flag_that_is_on_globally() {
 
 #[test]
 fn use_dep_enforcement_matches_a_declared_and_enabled_flag() {
-    // dev-libs/useflagpkg's own IUSE="foo missingflag", "foo"
-    // enabled globally by the fixture profile chain -- see
-    // resolve_pretend's own doc comment on use_deps_satisfied.
+    // IUSE="foo missingflag" with "foo" enabled globally.
     assert_eq!(
         resolve_real("dev-libs", "useflagpkg[foo]"),
         PretendOutcome::New {
@@ -3434,13 +2982,8 @@ fn use_dep_enforcement_plus_default_rescues_an_undeclared_flag() {
 
 #[test]
 fn use_dep_enforcement_rejects_a_dependency_atom_but_does_not_fail_the_graph() {
-    // dev-libs/usedeprejectedpkg's own RDEPEND is
-    // "dev-libs/useflagpkg[-foo]", genuinely unsatisfiable -- the
-    // parent still resolves, and the dependency gets its own
-    // NoVisibleCandidate entry (reported, not silently dropped or
-    // failing the whole graph -- same "report, don't fail"
-    // precedent an unresolvable dependency atom already gets; see
-    // resolve_pretend_graph's own doc comment).
+    // Genuinely unsatisfiable: the parent still resolves, and the dependency
+    // gets its own NoVisibleCandidate entry (reported, not failing the graph).
     let entries = graph_real("dev-libs/usedeprejectedpkg");
     assert_eq!(
         entries,
@@ -3461,9 +3004,8 @@ fn use_dep_enforcement_rejects_a_dependency_atom_but_does_not_fail_the_graph() {
 
 #[test]
 fn required_use_satisfied_resolves_normally() {
-    // dev-libs/requireduseokpkg's own REQUIRED_USE is "foo? ( bar )"
-    // -- foo enabled globally, bar forced on by this package's own
-    // package.use entry, so genuinely satisfied.
+    // REQUIRED_USE="foo? ( bar )", genuinely satisfied via the package.use
+    // entry forcing bar on.
     assert_eq!(
         graph_real("dev-libs/requireduseokpkg"),
         vec![(
@@ -3477,15 +3019,10 @@ fn required_use_satisfied_resolves_normally() {
 
 #[test]
 fn required_use_violated_top_level_fails_the_whole_call() {
-    // dev-libs/requiredusebadpkg's own REQUIRED_USE is "foo? ( bar )"
-    // -- foo enabled globally, bar never forced on, genuinely
-    // violated. Real depgraph.py's own REQUIRED_USE check happens
-    // right after package selection and aborts the whole run on
-    // failure -- a materially different severity than a merely
-    // unresolvable dependency (report, don't fail).
-    // Real `_show_unsatisfied_dep`'s REQUIRED_USE block -- the whole
-    // one-clause expression is the minimal unsatisfied one (no
-    // "complete expression" line); top-level atom -> no dep chain.
+    // Genuinely violated: Portage aborts the whole run right after package
+    // selection (a different severity than a merely unresolvable dependency).
+    // The whole one-clause expression is the minimal unsatisfied one, with no
+    // dep chain for a top-level atom.
     let err = graph_real_err("dev-libs/requiredusebadpkg");
     assert_eq!(
         err,
@@ -3499,13 +3036,9 @@ fn required_use_violated_top_level_fails_the_whole_call() {
 
 #[test]
 fn required_use_violated_dependency_still_fails_the_whole_call() {
-    // dev-libs/requiredusebadparentpkg RDEPENDs on
-    // dev-libs/requiredusebadpkg -- proving the same fatal severity
-    // applies regardless of whether the violating package was
-    // reached as a top-level atom or a dependency.
-    // Reached as a dependency -> the block gains the `(dependency
-    // required by "..." [ebuild])` chain, plus a trailing
-    // `[argument]` line since the parent is itself the CLI argument.
+    // Same fatal severity whether reached as a top-level atom or a dependency.
+    // As a dependency the block gains the chain plus a trailing `[argument]`
+    // line since the parent is itself the CLI argument.
     let err = graph_real_err("dev-libs/requiredusebadparentpkg");
     assert_eq!(
         err,
@@ -3521,22 +3054,11 @@ fn required_use_violated_dependency_still_fails_the_whole_call() {
 
 #[test]
 fn required_use_violations_are_collected_across_the_whole_walk_not_just_the_first() {
-    // Real depgraph.py's own _add_pkg sets
-    // _dynamic_config._required_use_unsatisfied = True and returns 0
-    // on a violation -- it does NOT abort the whole graph walk, so a
-    // SECOND, independent top-level atom's own violation (here,
-    // dev-libs/requiredusebadpkg2's own "baz? ( qux )", unrelated to
-    // dev-libs/requiredusebadpkg's own "foo? ( bar )") still gets
-    // reached, resolved, and reported too -- not silently skipped
-    // because the first atom already failed. Confirmed live against
-    // both portuale's own Rust and Python implementations
-    // (byte-identical joined output) before this test was written.
-    // Backlog #90 (S1): report order follows the walk, which
-    // resolves last-declared-first (real's stack discipline) -- so
-    // badpkg2's block now leads. (Real itself stops at the first
-    // violation, argv order -- staged oracle shows only badpkg --
-    // but collecting both stays portuale's own established,
-    // separately-pinned behavior; only the order moves here.)
+    // Portage does NOT abort the whole walk on a violation, so a SECOND,
+    // independent top-level atom's own violation still gets reported too.
+    // Report order follows the walk (last-declared-first), so badpkg2's block
+    // leads. (Portage itself stops at the first violation; collecting both
+    // stays portuale's own separately-pinned behavior.)
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -3577,11 +3099,7 @@ fn required_use_violations_are_collected_across_the_whole_walk_not_just_the_firs
 
 #[test]
 fn fixture_dependency_no_visible_candidate_gets_no_keyword_suggestion_by_default() {
-    // dev-libs/autounmaskdepconsumer RDEPENDs on dev-libs/
-    // autounmaskkeywordpkg (the same keyword-masked-only fixture the
-    // top-level test above uses), a *dependency's* own
-    // NoVisibleCandidate -- previously always silent, now able to
-    // carry a keyword_suggestion, but only once
+    // A dependency's own NoVisibleCandidate carries a suggestion only once
     // autounmask_suggest_keywords is on.
     let entries = graph_entries_real("dev-libs/autounmaskdepconsumer");
     let dep = entries
@@ -3624,9 +3142,8 @@ fn fixture_dependency_no_visible_candidate_gets_a_keyword_suggestion_once_enable
         .iter()
         .find(|e| e.package == "autounmaskkeywordpkg")
         .expect("dependency entry present");
-    // With `--autounmask` explicit the keyword-masked dependency now
-    // RESOLVES (was `NoVisibleCandidate` + a `keyword_suggestion`
-    // before autounmask keyword *resolution* shipped).
+    // With `--autounmask` explicit the keyword-masked dependency now RESOLVES
+    // (was `NoVisibleCandidate` + a suggestion before keyword resolution).
     assert!(matches!(dep.outcome, PretendOutcome::New { .. }));
     assert_eq!(dep.keyword_mask, Some('~'));
     assert_eq!(result.autounmask_keyword_changes.len(), 1);
@@ -3641,18 +3158,9 @@ fn fixture_dependency_no_visible_candidate_gets_a_keyword_suggestion_once_enable
 
 #[test]
 fn top_level_use_miss_reports_the_use_block_without_chain() {
-    // Backlog #265(b) (with #273): an *argument* atom's own USE miss
-    // aborts with real `_show_unsatisfied_dep`'s "no ebuilds built
-    // with USE flags" block -- the `(Change USE: …)` row and no
-    // `(dependency required by …)` lines (real skips the chain for
-    // an `AtomArg` parent, `depgraph.py:7080-7090`). Live real
-    // 3.0.82.2 staged-fixture probe
-    // (`LLM/evidence/2026-09-30-265/real/useflagpkg-autounmask-use-n.txt`):
-    // `emerge --pretend --autounmask-use=n
-    // 'dev-libs/useflagpkg[-foo]'` prints the block where portuale
-    // printed the plain `no ebuilds to satisfy` miss. Real's staging
-    // `for <root>.` suffix stays absent (the long-standing
-    // `fixture-miss-message-unsuffixed` class).
+    // An *argument* atom's own USE miss aborts with the "no ebuilds built with
+    // USE flags" block: the `(Change USE: …)` row and no dep-chain lines
+    // (Portage skips the chain for an argument parent).
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -3685,10 +3193,7 @@ fn top_level_use_miss_reports_the_use_block_without_chain() {
 
 #[test]
 fn fixture_dependency_no_visible_candidate_gets_no_use_suggestion_by_default() {
-    // dev-libs/usedeprejectedpkg RDEPENDs on
-    // "dev-libs/useflagpkg[-foo]" (the same fixture the top-level
-    // test above uses), a *dependency's* own NoVisibleCandidate --
-    // able to carry a use_suggestion, but only once
+    // A dependency's own NoVisibleCandidate carries a use_suggestion only once
     // autounmask_suggest_use is on.
     let entries = graph_entries_real("dev-libs/usedeprejectedpkg");
     let dep = entries
@@ -3701,17 +3206,9 @@ fn fixture_dependency_no_visible_candidate_gets_no_use_suggestion_by_default() {
 
 #[test]
 fn required_use_referencing_an_implicit_arch_list_flag_is_valid() {
-    // dev-libs/archiuseimplicitpkg's own IUSE is empty and its own
-    // REQUIRED_USE is "!x86" -- "x86" is never declared by this
-    // package's own IUSE at all, but IS a real, valid flag via
-    // PORTAGE_ARCHLIST (fixtures/repo/profiles/base/arch.list),
-    // exactly like real media-libs/mesa's own REQUIRED_USE
-    // referencing "x86" without declaring it in IUSE -- confirmed
-    // live against the real, installed system. Before this fix,
-    // portuale's own iuse_set never consulted PORTAGE_ARCHLIST at
-    // all, so this would fail with "USE flag 'x86' is not in IUSE"
-    // instead of resolving (x86 isn't the active profile's own arch,
-    // so it stays disabled, and "!x86" is satisfied).
+    // "!x86" with "x86" never declared in IUSE is still valid via
+    // PORTAGE_ARCHLIST (like Portage's media-libs/mesa); x86 stays disabled
+    // here, so "!x86" is satisfied.
     assert_eq!(
         graph_real("dev-libs/archiuseimplicitpkg"),
         vec![(
@@ -3741,15 +3238,15 @@ fn aub0_backtrack_y_fails_on_a_with_the_order_dependent_slot_prefix() {
 
 #[test]
 fn aub0_backtrack_n_fails_or_stops_early_by_walk_order() {
-    // A walked before B: B contradicts A's needed `-foo`, real's
-    // breakage clean pass fails on A, no conflict reached.
+    // A walked before B: B contradicts A's needed `-foo`, so the clean pass
+    // fails on A with no conflict reached.
     for order in ["c b a", "b c a", "b a c"] {
         let result = aub0_result(order, false);
         assert_aub0_fails_on_a(&result, order);
         assert!(result.slot_conflicts.is_empty(), "{order}");
     }
-    // B walked before A: A's `-foo` is the first needed change; the
-    // loop stops on it (`need_config_change`), the pass is the report.
+    // B walked before A: A's `-foo` is the first needed change; the loop stops
+    // on it and the pass is the report.
     for (order, instances) in [
         ("c a b", ["0", "1"]),
         ("a c b", ["0", "1"]),
@@ -3810,10 +3307,8 @@ fn aub0_backtrack_n_fails_or_stops_early_by_walk_order() {
 
 #[test]
 fn autounmask_use_n_leaves_a_masked_child_flag_dep_unresolved() {
-    // The same fixture with `--autounmask-use=n`: the shared
-    // `autounmask_suggest_use` gate is off, so neither the child nor
-    // the parent flip is attempted -- the dependency stays
-    // `NoVisibleCandidate` and no change is recorded.
+    // With `--autounmask-use=n` neither the child nor the parent flip is
+    // attempted: the dependency stays NoVisibleCandidate with no change.
     let result = graph_result_autounmask_use_n("dev-libs/parentflipeqpkg");
     let child = result
         .entries
@@ -3824,8 +3319,7 @@ fn autounmask_use_n_leaves_a_masked_child_flag_dep_unresolved() {
     assert!(result.autounmask_use_changes.is_empty());
 }
 
-/// Backlog #161 S2: `adopt_current` replaces the live node's params
-/// in place (the C2 dead-end accumulator hand-off) without adding a
+/// `adopt_current` replaces the live node's params in place without adding a
 /// node.
 #[test]
 fn backtracker_adopt_current_replaces_the_live_node() {
@@ -3838,10 +3332,7 @@ fn backtracker_adopt_current_replaces_the_live_node() {
     assert_eq!(bt.get_best_run().depth, 7);
 }
 
-/// Backlog #161 S2: `get_best_run` returns the deepest terminal
-/// node, earliest on ties -- the most config progress with no masks.
-/// (The children differ in accumulator state, not just position:
-/// `add_node` dedups position-only progress via `params_equal`.)
+/// `get_best_run` returns the deepest terminal node, earliest on ties.
 #[test]
 fn backtracker_get_best_run_prefers_the_deepest_terminal() {
     let cp_a = ("dev-libs".to_string(), "aa".to_string());
@@ -3869,8 +3360,7 @@ fn backtracker_get_best_run_prefers_the_deepest_terminal() {
     bt.feedback(BacktrackFeedback::Config {
         params: Box::new(b),
     });
-    // Both children are terminal at depth 3; the tie keeps the
-    // first, not the last.
+    // Both children are terminal at depth 3; the tie keeps the first.
     let best = bt.get_best_run();
     assert_eq!(best.depth, 3);
     assert!(
@@ -3880,9 +3370,8 @@ fn backtracker_get_best_run_prefers_the_deepest_terminal() {
     );
 }
 
-/// Backlog #161 S2: the slot-conflict arm masks the target in a new
-/// node (costing one budget unit), replacing -- not duplicating -- a
-/// mask for the same negative.
+/// The slot-conflict arm masks the target in a new node, replacing -- not
+/// duplicating -- a mask for the same negative.
 #[test]
 fn backtracker_feedback_slot_conflict_replaces_the_same_mask() {
     let cp = ("dev-libs".to_string(), "maskpkg".to_string());
@@ -3930,9 +3419,7 @@ fn backtracker_feedback_slot_conflict_replaces_the_same_mask() {
     assert_eq!(node.depth, 1);
 }
 
-/// Backlog #161 S2: the missing-dep arm latches the parent and masks
-/// it once -- an already-masked parent is not pushed again -- and a
-/// mask step costs one budget unit.
+/// The missing-dep arm latches the parent and masks it once.
 #[test]
 fn backtracker_feedback_missing_dep_latches_without_duplicating() {
     let owner = ("dev-libs".to_string(), "ownpkg".to_string());
@@ -3964,16 +3451,8 @@ fn backtracker_feedback_missing_dep_latches_without_duplicating() {
     assert_eq!(node.depth, 1);
 }
 
-/// Backlog #205 R4: the USE-change chain starts at the recorded
-/// forcing parent. Real `_get_dep_chain(pkg,
-/// unsatisfied_dependency=True)` (`lib/_emerge/depgraph.py:6257`)
-/// picks the parent whose atom the package still does not satisfy;
-/// here that is `abk0d-1` (whose `C[x]` the flip satisfies, not
-/// `abk0a-2`'s plain `C`). The flip site records that owner in
-/// `AutounmaskChange::trigger`, and the fill starts the chain
-/// there -- asserting the recorded trigger itself, not just the
-/// final text, is what distinguishes this from the legacy
-/// first-requirer start.
+/// The USE-change chain starts at the recorded forcing parent (Portage picks
+/// the parent whose atom the package still does not satisfy).
 #[test]
 fn use_change_chain_starts_at_the_recorded_forcing_parent() {
     let result = graph_result_abk0_worldb(2);
@@ -4002,19 +3481,9 @@ fn use_change_chain_starts_at_the_recorded_forcing_parent() {
 
 #[test]
 fn installed_instance_then_merge_records_an_unsolvable_slot_conflict() {
-    // #57 direction 2: argv `[othermod, needer]`. Backlog #90 (S1):
-    // the walk resolves last-declared-first (real's stack), so
-    // `needer`'s `>=paired-2.0` graphs 2.0 first and `othermod`'s
-    // `<paired-2.0` then collides with the installed 1.0 -- the
-    // merge instance files first, exactly real's notice order for
-    // this argv order (staged oracle: 2.0 by needer, then 1.0).
-    // Real's `_package_tracker` holds both nodes and reports the
-    // collision; portuale used to merge all three silently. The two
-    // atoms are jointly unsatisfiable, so the backtracker's mask
-    // trials all fail and `get_best_run` reports the original
-    // shape -- exactly real's `backtrack: 4/20` run, whose block is
-    // byte-identical to its own `--backtrack=0` one
-    // (`TEST/findings/l0-fixture-oracle.md` "#57 S0" cells b/c).
+    // Direction 2, argv `[othermod, needer]`: last-declared-first graphs 2.0
+    // first, then collides with the installed 1.0 -- the merge instance files
+    // first (Portage's notice order for this argv order).
     let result = graph_result_real_atoms(
         &[
             "dev-libs/othermod".to_string(),
@@ -4023,7 +3492,7 @@ fn installed_instance_then_merge_records_an_unsolvable_slot_conflict() {
         10,
     );
     assert_triangle_conflict(&result, false);
-    // The upgrade still merges, like real's merge list.
+    // The upgrade still merges, like Portage's merge list.
     let paired = result
         .entries
         .iter()
@@ -4040,13 +3509,8 @@ fn installed_instance_then_merge_records_an_unsolvable_slot_conflict() {
 
 #[test]
 fn merge_then_installed_instance_records_the_same_slot_conflict() {
-    // #57 direction 1, the mirror argv order: argv `[needer,
-    // othermod]`. Backlog #90 (S1): last-declared-first, so
-    // `othermod`'s `<paired-2.0` meets the installed 1.0 (the
-    // walker's `AlreadyInstalled` early branch) before `needer`'s
-    // `>=paired-2.0` graphs 2.0 -- the installed instance files
-    // first, exactly real's notice order for this argv order
-    // (staged oracle: 1.0, then 2.0 by needer).
+    // Direction 1, the mirror argv order: the installed instance files first
+    // (Portage's notice order for this argv order).
     let result = graph_result_real_atoms(
         &[
             "dev-libs/needer".to_string(),
@@ -4059,14 +3523,8 @@ fn merge_then_installed_instance_records_the_same_slot_conflict() {
 
 #[test]
 fn solvable_installed_instance_collision_records_nothing() {
-    // #57 K2: `plainuser`'s bare `dev-libs/paired` is satisfied by
-    // the installed 1.0 *and* by the 2.0 `needer` forces, so one
-    // graphed instance satisfies every hard parent atom -- real
-    // `_solve_non_slot_operator_slot_conflicts` reconciles it
-    // silently. Portuale reaches the same place through
-    // `collect_feedback`'s existing `slot_want` solvability check
-    // (the merge-vs-merge reconciliation reused, not a second
-    // solver), so no record survives to the settled pass.
+    // One graphed instance satisfies every hard parent atom, so the conflict
+    // reconciles silently through the existing `slot_want` check.
     for argv in [
         [
             "dev-libs/plainuser".to_string(),
@@ -4097,12 +3555,8 @@ fn solvable_installed_instance_collision_records_nothing() {
 
 #[test]
 fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
-    // A test-local vdb (the shared fixtures keep only the slotbind
-    // repo ebuilds/md5-cache): slotbindtarget-1.0 at SLOT="2" plus a
-    // stale `:2/2=` consumer. Emerging the target picks
-    // slotbindtarget-2.0 (SLOT="2/9") from the shared repo, so the
-    // consumer is normally rebuilt -- unless
-    // `ignore_built_slot_operator_deps` is set.
+    // A test-local vdb: the consumer is normally rebuilt on the target upgrade
+    // unless `ignore_built_slot_operator_deps` is set.
     let cfg_root = fixtures_root();
     let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &cfg_root,
@@ -4133,9 +3587,8 @@ fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
 
     let resolve = |ignore: bool| {
         ResolveRequest {
-            // selective = false: a directly-named installed atom
-            // with a higher version still upgrades (matching real
-            // `emerge <atom>` without `--noreplace`).
+            // selective = false: a directly-named installed atom with a higher
+            // version still upgrades (matching Portage without --noreplace).
             selective: false,
             ignore_built_slot_operator_deps: ignore,
             ..ResolveRequest::new(
@@ -4157,12 +3610,9 @@ fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
         .find(|e| e.package == "slotbindconsumer")
         .expect("consumer is rebuilt by default");
     assert!(!normal.abi_rebuilds.is_empty());
-    // #24 S3: the rebuilt consumer is a *walked node*, not a
-    // post-pass synthetic entry -- it carries the tree ebuild's own
-    // dependency edges (`slotbindtarget:2/2=` re-read from
-    // `metadata/md5-cache`), which is what puts the provider ahead
-    // of it in merge order. The pre-S3 synthesiser left `deps`
-    // empty, so this assertion is the slice.
+    // The rebuilt consumer is a *walked node*, not a post-pass synthetic entry:
+    // it carries the tree ebuild's own dependency edges, which is what puts
+    // the provider ahead of it in merge order.
     assert!(
         matches!(
             consumer.outcome,
@@ -4193,8 +3643,8 @@ fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
         pos("slotbindtarget") < pos("slotbindconsumer"),
         "the provider merges before the consumer it forces a rebuild of"
     );
-    // Exactly one entry per cp: the flip happens where the outcome is
-    // first decided, so no `AlreadyInstalled` row is left behind.
+    // Exactly one entry per cp: the flip happens where the outcome is first
+    // decided, so no `AlreadyInstalled` row is left behind.
     assert_eq!(
         normal
             .entries
@@ -4219,10 +3669,8 @@ fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
 
 #[test]
 fn dependency_avoid_update_candidate_is_slot_aware() {
-    // avoidslotpkg-1.0 is installed at SLOT="2" (the repo ebuild says
-    // SLOT="1"); avoidslotconsumer RDEPENDs `dev-libs/avoidslotpkg:1`.
-    // The `:1` dependency must NOT short-circuit to "already
-    // installed" off the slot-2 install -- slot 1 is genuinely new.
+    // Installed at SLOT="2" while the repo ebuild says SLOT="1": the `:1`
+    // dependency must NOT short-circuit to "already installed".
     let cfg_root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &cfg_root,
@@ -4283,10 +3731,7 @@ fn graph_entry_carries_sub_slot_repo_and_oldbest_for_slot_repo_decoration() {
     assert_eq!(sub.slot.as_deref(), Some("0"));
     assert_eq!(sub.sub_slot.as_deref(), Some("2"));
 
-    // A new-slot New: oldbest lists every installed version (all
-    // slots); the vdb entry for newslotpkg-1.0 has no `repository`
-    // file -> `__unknown__`... but portuale's fixtures add one, so
-    // it's testrepo. Its slot ("0") differs from the resolved slot.
+    // A new-slot New: oldbest lists every installed version (all slots).
     let ns = &graph_entries_real("dev-libs/newslotpkg:1")[0];
     assert!(ns.new_slot);
     assert_eq!(
@@ -4301,10 +3746,7 @@ fn graph_entry_carries_sub_slot_repo_and_oldbest_for_slot_repo_decoration() {
 
 #[test]
 fn package_provided_drops_a_matching_dependency_from_the_walk() {
-    // dev-libs/needsprovided RDEPENDs dev-libs/providedpkg (listed in
-    // profiles/default/package.provided) + dev-libs/newpkg. The
-    // provided dep is silently dropped -- only needsprovided +
-    // newpkg show, and pprovided_atoms stays empty (it's a
+    // The provided dep is silently dropped; pprovided_atoms stays empty (it's a
     // dependency, not a top-level target).
     let result = graph_result_real("dev-libs/needsprovided");
     let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
@@ -4314,10 +3756,8 @@ fn package_provided_drops_a_matching_dependency_from_the_walk() {
 
 #[test]
 fn package_provided_records_a_matching_top_level_target_for_the_warning() {
-    // A direct `emerge providedpkg` resolves nothing (no entry) and
-    // records the atom in pprovided_atoms -- real depgraph.py's own
-    // _pprovided_args, which pretend.rs turns into the `WARNING: …
-    // package.provided:` block.
+    // A direct `emerge providedpkg` resolves nothing (no entry) and records the
+    // atom in pprovided_atoms (Portage's own `_pprovided_args`).
     let result = graph_result_real("dev-libs/providedpkg");
     assert!(result.entries.is_empty());
     assert_eq!(
@@ -4328,45 +3768,36 @@ fn package_provided_records_a_matching_top_level_target_for_the_warning() {
 
 #[test]
 fn buildpkgonly_flags_a_new_package_depending_on_another_new_package() {
-    // dev-libs/dualdep (New) has both DEPEND and RDEPEND on
-    // dev-libs/newpkg (also New) -- real --buildpkgonly can't
-    // resolve this, since newpkg itself would also need building.
+    // Both DEPEND and RDEPEND on another New package: --buildpkgonly can't
+    // resolve this, since the dep itself would also need building.
     let result = graph_result_buildpkgonly("dev-libs/dualdep");
     assert!(result.buildpkgonly_deps_unsatisfied);
 }
 
 #[test]
 fn buildpkgonly_does_not_fire_when_the_dependency_is_already_installed() {
-    // dev-libs/buildpkgonlysatisfied (New) RDEPENDs on dev-libs/
-    // samepkg, which is already installed -- nothing else needs
-    // building.
+    // RDEPENDs on an already-installed package: nothing else needs building.
     let result = graph_result_buildpkgonly("dev-libs/buildpkgonlysatisfied");
     assert!(!result.buildpkgonly_deps_unsatisfied);
 }
 
 #[test]
 fn buildpkgonly_is_always_false_when_not_requested() {
-    // graph_result_real's own helper always passes buildpkgonly=false
-    // -- even for the same dualdep fixture that trips the check
-    // above, the field must stay false when the flag isn't given at
-    // all.
+    // `graph_result_real` always passes buildpkgonly=false -- even for the same
+    // dualdep fixture that trips the check above, the field must stay false
+    // when the flag isn't given at all.
     let result = graph_result_real("dev-libs/dualdep");
     assert!(!result.buildpkgonly_deps_unsatisfied);
 }
 
 #[test]
 fn fixture_strong_blocker_matches_an_installed_package() {
-    // dev-libs/blockerpkg's RDEPEND is "!!dev-libs/samepkg", and
-    // dev-libs/samepkg-1.0 is already installed per the fixture vdb.
-    // #68 S3 (container oracle, 2026-09-16): a plain `emerge -p
-    // dev-libs/blockerpkg` prints `b` + `[uninstall samepkg-1.0]`,
-    // rc 0 -- the other installed fixtures that RDEPEND on samepkg
-    // are *not* walked into the graph, so they do not block the
-    // unmerge. (Pre-S3 this expected `unsolvable: true` from the vdb
-    // reverse scan.)
+    // A plain `emerge -p` prints `b` + `[uninstall samepkg-1.0]` (rc 0); the
+    // other installed fixtures that RDEPEND on samepkg are not walked, so
+    // they do not block the unmerge.
     let entries = graph_entries_real("dev-libs/blockerpkg");
-    // #72 B3: the satisfied block also produces the removal entry
-    // real models as an uninstall task (display of it is B4).
+    // The satisfied block also produces the removal entry Portage models as an
+    // uninstall task.
     assert_eq!(entries.len(), 2);
     assert_eq!(
         entries[0].blockers,
@@ -4377,7 +3808,7 @@ fn fixture_strong_blocker_matches_an_installed_package() {
             matched_package: "samepkg".to_string(),
             matched_version: "1.0".to_string(),
             unsolvable: false,
-            // #72 B3: resolved by removing the installed match.
+            // Resolved by removing the installed match.
             satisfied_by: Some(BlockerSatisfiedBy::Uninstall {
                 cpv: "dev-libs/samepkg-1.0".to_string(),
                 anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
@@ -4389,20 +3820,14 @@ fn fixture_strong_blocker_matches_an_installed_package() {
 
 #[test]
 fn blocker_retry_seeds_make_an_uninstall_resolved_block_unsolvable() {
-    // #68/#72 B2c, B0 cell u4: real re-runs `_serialize_tasks` in
-    // complete mode when the first pass selected an uninstall task
-    // (`depgraph.py:10365-10383`), and that walk covers
-    // `@selected ∪ @profile ∪ @system` -- so an installed blocked
-    // instance reachable from a world member is a digraph node with
-    // parents and the block is `B` (rc 1), even though the resolve
-    // itself is not complete.
+    // Complete mode re-runs the serialize in the retry walk covering
+    // `@selected ∪ @profile ∪ @system`, so an installed blocked instance
+    // reachable from a world member is a digraph node with parents and the
+    // block is `B` (rc 1).
     //
-    // `dev-libs/blockerpkg` (`!!dev-libs/samepkg`) with installed
-    // `samepkg-1.0`: with no seeds the block is uninstall-resolved
-    // (`b`, the `test_strong_blocker_matches_an_installed_package`
-    // pin); with installed `dev-libs/changeddepspkg` (vdb
-    // `RDEPEND=dev-libs/samepkg`) as the world seed, the retry
-    // closure reaches `samepkg` -> unresolved.
+    // With no seeds the block is uninstall-resolved (`b`, the pin above);
+    // with installed `changeddepspkg` as the world seed, the retry closure
+    // reaches `samepkg` -> unresolved.
     let entries = graph_entries_with_retry_seeds("dev-libs/blockerpkg", &[]);
     assert!(!entries[0].blockers[0].unsolvable);
     let entries =
@@ -4415,11 +3840,8 @@ fn blocker_retry_seeds_make_an_uninstall_resolved_block_unsolvable() {
 
 #[test]
 fn fixture_weak_blocker_matches_another_new_package_in_the_same_graph() {
-    // dev-libs/graphblockerparent pulls in both dev-libs/blockerpartnerpkg
-    // and dev-libs/weakblockerpkg (whose RDEPEND is
-    // "!dev-libs/blockerpartnerpkg") as New in the same run, so the
-    // weak blocker must be reported against blockerpartnerpkg's
-    // graph-resolved version, not just against the (empty) vdb.
+    // The weak blocker is reported against the graph-resolved version, not
+    // just against the (empty) vdb.
     let entries = graph_entries_real("dev-libs/graphblockerparent");
     let full_names: Vec<String> = entries
         .iter()
@@ -4446,9 +3868,8 @@ fn fixture_weak_blocker_matches_another_new_package_in_the_same_graph() {
             matched_category: "dev-libs".to_string(),
             matched_package: "blockerpartnerpkg".to_string(),
             matched_version: "1.0".to_string(),
-            // #68 S2 (container oracle, 2026-09-16): real prints
-            // `[blocks B]` for this merge-vs-merge shape -- a
-            // merge-bound match with a merging parent is unresolved.
+            // A merge-bound match with a merging parent is unresolved (Portage
+            // prints `[blocks B]` for this merge-vs-merge shape).
             unsolvable: true,
             satisfied_by: None,
             tree_scheduled_uninstall: false,
@@ -4464,26 +3885,9 @@ fn fixture_unrelated_packages_report_no_blockers() {
     assert!(entries.iter().all(|e| e.blockers.is_empty()));
 }
 
-/// Backlog #285: an exact-version top-level request keeps its named
-/// installed instance under `--update`. Same installed/tree shape as
-/// the #268 pin (`mmprov-1` `0/1` + `mmprov-2` `1/1` + `mmcons-1`
-/// bound `mmprov:0/1=`, tree `mmprov-1/-2/-3` with `mmprov-3` at
-/// `1/2`), but the tree here is the shared fixture repo (resolved
-/// through `config_root`) while the vdb is ad-hoc under `root` --
-/// the `_b1_root` split. Full `--update --deep` walks, real 3.0.82.2
-/// bytes from the R3 S0 capture (host staged-fixture probe
-/// 2026-10-02, `--ignore-default-opts --pretend --color=n
-/// --backtrack=3 --update --deep <atoms>`, rc 0 throughout):
-/// - `=app-misc/mmprov-2 app-misc/mmcons` -> `[ebuild rR]
-///   app-misc/mmcons-1` alone (`backtrack: 1/3`): the argument pins
-///   installed `mmprov-2` in the graph and the rebuilt consumer's
-///   `app-misc/mmprov:=` reuses it (real
-///   `_wrapped_select_pkg_highest_available_imp`'s
-///   `find_existing_node` pass) instead of upgrading to `mmprov-3`.
-/// - `~app-misc/mmprov-2 app-misc/mmcons` -> the same single row.
-/// - Control `app-misc/mmprov:1/2 app-misc/mmcons` -> `[ebuild U]
-///   app-misc/mmprov-3 [2]` + `[ebuild rR] app-misc/mmcons-1`: the
-///   slot atom's own pick is the upgrade, so the dep binds that.
+/// An exact-version top-level request keeps its named installed instance
+/// under `--update` (the argument pins it; the rebuilt consumer reuses it
+/// instead of upgrading).
 #[test]
 fn exact_version_update_keeps_arg_pinned_provider() {
     let base = TempDir::new("portage-repo-285-exact-update").keep();
@@ -4563,9 +3967,8 @@ fn exact_version_update_keeps_arg_pinned_provider() {
             .resolve(&req)
             .unwrap_or_else(|e| panic!("resolve({atoms:?}) failed: {e}"))
     };
-    // Merge-bound `(cat/pkg, version)` pairs, for the row-level
-    // assertion below (an `AlreadyInstalled` provider merges
-    // nothing and renders no row).
+    // Merge-bound `(cat/pkg, version)` pairs (`AlreadyInstalled` merges nothing
+    // and renders no row).
     let merges = |result: &GraphResult| {
         result
             .entries
@@ -4613,8 +4016,8 @@ fn exact_version_update_keeps_arg_pinned_provider() {
             consumer.outcome
         );
     }
-    // Control: the slot atom upgrades the provider itself, so the
-    // rebuilt consumer binds the upgrade.
+    // Control: the slot atom upgrades the provider itself, so the rebuilt
+    // consumer binds the upgrade.
     let result = resolve(&["app-misc/mmprov:1/2", "app-misc/mmcons"]);
     assert_eq!(
         merges(&result),

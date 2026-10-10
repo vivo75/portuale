@@ -2,10 +2,7 @@ use super::*;
 
 #[test]
 fn parse_license_tree_flattens_a_plain_group_at_top_level() {
-    // Verified directly against real portage.dep.use_reduce(...,
-    // opconvert=True): "GPL-2 MIT" -> ['GPL-2', 'MIT'] (a bare
-    // top-level list already has AND semantics, so a plain "(...)"
-    // there adds nothing structurally worth keeping).
+    // Expected value from Portage's use_reduce (opconvert=True).
     let tree = parse_license_tree(&license_tokens("GPL-2 ( MIT )"), &HashSet::new()).unwrap();
     assert_eq!(
         tree,
@@ -18,9 +15,7 @@ fn parse_license_tree_flattens_a_plain_group_at_top_level() {
 
 #[test]
 fn parse_license_tree_keeps_any_of_members_flat() {
-    // Verified: "GPL-2 || ( MIT BSD )" -> ['GPL-2', ['||', 'MIT', 'BSD']]
-    // -- the || group's own members sit directly in its own list,
-    // not double-nested.
+    // Expected value from Portage's use_reduce.
     let tree =
         parse_license_tree(&license_tokens("GPL-2 || ( MIT BSD )"), &HashSet::new()).unwrap();
     assert_eq!(
@@ -37,11 +32,7 @@ fn parse_license_tree_keeps_any_of_members_flat() {
 
 #[test]
 fn parse_license_tree_nests_a_plain_group_directly_inside_any_of() {
-    // Verified: "|| ( ( GPL-2 MIT ) BSD )" ->
-    // [['||', ['GPL-2', 'MIT'], 'BSD']] -- a plain sub-group sitting
-    // directly inside a || group's own member list stays a genuine
-    // nested "this whole bundle is one alternative" unit, unlike
-    // the top-level case above.
+    // Expected value from Portage's use_reduce.
     let tree =
         parse_license_tree(&license_tokens("|| ( ( GPL-2 MIT ) BSD )"), &HashSet::new()).unwrap();
     assert_eq!(
@@ -58,11 +49,7 @@ fn parse_license_tree_nests_a_plain_group_directly_inside_any_of() {
 
 #[test]
 fn parse_license_tree_resolves_a_use_conditional() {
-    // Verified: "|| ( foo? ( GPL-2 MIT ) BSD )" with foo enabled ->
-    // [['||', ['GPL-2', 'MIT'], 'BSD']]; with foo disabled ->
-    // ['BSD'] (the conditional contributes nothing at all, and the
-    // now-single-alternative || itself collapses away too -- real
-    // use_reduce's own behavior, verified directly).
+    // Expected value from Portage's use_reduce.
     let enabled = HashSet::from(["foo".to_string()]);
     let tree =
         parse_license_tree(&license_tokens("|| ( foo? ( GPL-2 MIT ) BSD )"), &enabled).unwrap();
@@ -80,12 +67,8 @@ fn parse_license_tree_resolves_a_use_conditional() {
     let disabled = HashSet::new();
     let tree_disabled =
         parse_license_tree(&license_tokens("|| ( foo? ( GPL-2 MIT ) BSD )"), &disabled).unwrap();
-    // Portuale's own parser keeps the || wrapper (unlike real
-    // use_reduce's own further single-alternative collapse -- see
-    // the module doc comment on why that specific collapse isn't
-    // replicated); masking-wise this is equivalent either way,
-    // since an AnyOf of one alternative and that alternative alone
-    // make an identical accept/reject decision.
+    // Portage's use_reduce also collapses a single-alternative `||`; kept here
+    // since the accept/reject decision is identical either way.
     assert_eq!(
         tree_disabled,
         vec![LicenseNode::AnyOf(vec![LicenseNode::License(
@@ -128,9 +111,7 @@ fn has_masked_license_any_of_needs_only_one_alternative_accepted() {
 
 #[test]
 fn has_masked_license_any_of_alternative_bundle_needs_the_whole_bundle_accepted() {
-    // "|| ( ( GPL-2 MIT ) BSD )": accepting only MIT (not GPL-2)
-    // must NOT satisfy the (GPL-2 AND MIT) bundle -- only accepting
-    // BSD, or both GPL-2 and MIT together, satisfies this.
+    // Only BSD alone, or GPL-2 and MIT together, satisfies the bundle.
     let only_mit = HashSet::from(["MIT".to_string()]);
     assert!(has_masked_license("|| ( ( GPL-2 MIT ) BSD )", &HashSet::new(), &only_mit).unwrap());
     let both = HashSet::from(["GPL-2".to_string(), "MIT".to_string()]);

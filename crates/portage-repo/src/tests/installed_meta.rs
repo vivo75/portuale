@@ -1,9 +1,7 @@
 use super::*;
 
-/// Backlog #86 S1: `live_metadata_for_installed` reads the
-/// vdb-recorded repo's copy of the exact installed cpv, never the
-/// priority winner's -- real `FakeVartree._aux_get_wrapper`
-/// (`FakeVartree.py:136`, `myrepo=pkg.repo`).
+/// `live_metadata_for_installed` reads the vdb-recorded repo's copy, never the
+/// priority winner's (Portage's `FakeVartree`).
 #[test]
 fn live_metadata_for_installed_prefers_the_recorded_repo() {
     use md5::Digest as _;
@@ -58,8 +56,7 @@ fn live_metadata_for_installed_prefers_the_recorded_repo() {
     assert_eq!(meta.get("RDEPEND").map(String::as_str), None);
     let _ = std::fs::remove_dir_all(&root);
 
-    // No `repository` file: the pre-#86 priority search is the
-    // fallback, so minimal fixture vdbs keep their live view.
+    // No `repository` file: the priority search is the fallback.
     let root = tmp_vdb("dev-libs", "twounit-1.0", &[("USE", b"\n")]);
     let meta = live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "1.0")
         .expect("fallback search finds the version");
@@ -91,19 +88,9 @@ fn live_metadata_for_installed_prefers_the_recorded_repo() {
 
 #[test]
 fn installed_dep_string_effective_is_the_live_ebuild_value() {
-    // Backlog #25 S1b: the built-`:=` append is EAPI-gated exactly
-    // like real (`FakeVartree._apply_dynamic_deps`). These two
-    // fixtures' vdbs carry no `EAPI` file, so real reads the
-    // installed EAPI as `"0"` (`vartree.py:1054-1055`) -- no
-    // `slot_operator` support -- and the live value stands even
-    // though the vdb carries a built binding. (Without the gate this
-    // append broke both #24 pins, Phase 5 S1 S0.)
-    // --dynamic-deps=n and Raw collapse to the vdb record;
-    // the no-live-metadata arm is real's `_DynamicDepsNotApplicable`
-    // fallback (raw + global moves, identity in fixtures).
-    // Every live map below carries `EAPI`, like real's `portdb`
-    // `aux_get` always does -- a missing live `EAPI` is unsupported
-    // and takes the raw fallback (unreachable in real).
+    // The built-`:=` append is EAPI-gated like Portage (`FakeVartree`); a vdb
+    // without `EAPI` reads as `"0"`, without `:=` support.
+    // --dynamic-deps=n and Raw collapse to the vdb record.
     let root = fixtures_root();
     let live_slotop: HashMap<String, String> = [
         ("RDEPEND".to_string(), "dev-libs/slotoptarget:=".to_string()),
@@ -111,8 +98,8 @@ fn installed_dep_string_effective_is_the_live_ebuild_value() {
     ]
     .into_iter()
     .collect();
-    // slotopdepspkg's vdb RDEPEND is `dev-libs/slotoptarget:2=` --
-    // the live value stands.
+    // slotopdepspkg's vdb RDEPEND is the built `...:2=` form: the live value
+    // stands.
     let mut memo = HashMap::new();
     let eff = installed_dep_string(InstalledDepStringArgs {
         root: &root,
@@ -128,10 +115,8 @@ fn installed_dep_string_effective_is_the_live_ebuild_value() {
     });
     assert_eq!(eff, "dev-libs/slotoptarget:=");
 
-    // revdepslotconsumer's vdb RDEPEND is
-    // `dev-libs/revdepslottarget:0/1=` -- built, but its vdb has no
-    // `EAPI` file: Effective is the live value (empty here), never
-    // the vdb binding.
+    // revdepslotconsumer's vdb has no `EAPI` file: Effective is the live value
+    // (empty here), never the vdb binding.
     let live_empty: HashMap<String, String> = [("EAPI".to_string(), "8".to_string())]
         .into_iter()
         .collect();
@@ -156,8 +141,7 @@ fn installed_dep_string_effective_is_the_live_ebuild_value() {
         "RDEPEND".to_string()
     )));
 
-    // The live value stands alone even when the vdb carries a built
-    // binding for the same cp.
+    // The live value stands alone over a same-cp vdb binding.
     let live_target: HashMap<String, String> = [
         (
             "RDEPEND".to_string(),
@@ -198,8 +182,7 @@ fn installed_dep_string_effective_is_the_live_ebuild_value() {
     });
     assert_eq!(raw, "dev-libs/revdepslottarget:0/1=");
 
-    // Missing live metadata: raw record stands (global moves are
-    // identity without `profiles/updates` commands).
+    // Missing live metadata: the raw record stands.
     let mut memo = HashMap::new();
     let fallback = installed_dep_string(InstalledDepStringArgs {
         root: &root,
@@ -218,15 +201,10 @@ fn installed_dep_string_effective_is_the_live_ebuild_value() {
 
 #[test]
 fn installed_dep_string_effective_appends_built_atoms_when_eapi_gated() {
-    // Backlog #25 S1b: real `FakeVartree._apply_dynamic_deps`
-    // (`lib/_emerge/FakeVartree.py:146-191`) on the hermetic r25
-    // shape (findings/l0.md "## #25 S0 (2026-09-27)"): both vdb rows
-    // carry `EAPI` files (`8`), so the recorded bound atoms append
-    // to the live depstring -- `Depstring: dev-libs/r25lib:=
-    // >=dev-libs/r25lib-1.0:0/1=` (`realC-debug.log:35-47`).
+    // Both vdb rows carry `EAPI` files (`8`), so the recorded bound atoms
+    // append to the live depstring (Portage's `FakeVartree`).
     let root = fixtures_root();
-    // r25mid: live `dev-libs/r25lib:=`, vdb
-    // `>=dev-libs/r25lib-1.0:0/1=` (real's recorded bound form).
+    // r25mid: the recorded bound form appends to the live `:=`.
     let live_mid: HashMap<String, String> = [
         ("RDEPEND".to_string(), "dev-libs/r25lib:=".to_string()),
         ("EAPI".to_string(), "8".to_string()),
@@ -248,8 +226,7 @@ fn installed_dep_string_effective_appends_built_atoms_when_eapi_gated() {
     });
     assert_eq!(eff, "dev-libs/r25lib:= >=dev-libs/r25lib-1.0:0/1=");
 
-    // r25consumer: live `<dev-libs/r25lib-2.0:=`, vdb
-    // `<dev-libs/r25lib-2.0:0/1=`.
+    // r25consumer likewise appends its bound form.
     let live_consumer: HashMap<String, String> = [
         ("RDEPEND".to_string(), "<dev-libs/r25lib-2.0:=".to_string()),
         ("EAPI".to_string(), "8".to_string()),
@@ -271,8 +248,8 @@ fn installed_dep_string_effective_appends_built_atoms_when_eapi_gated() {
     });
     assert_eq!(eff, "<dev-libs/r25lib-2.0:= <dev-libs/r25lib-2.0:0/1=");
 
-    // `--ignore-built-slot-operator-deps`: append suppressed, live
-    // stands (real `FakeVartree.py:166-168`).
+    // `--ignore-built-slot-operator-deps` suppresses the append (Portage's
+    // `FakeVartree`).
     let mut memo = HashMap::new();
     let eff = installed_dep_string(InstalledDepStringArgs {
         root: &root,
@@ -288,8 +265,7 @@ fn installed_dep_string_effective_appends_built_atoms_when_eapi_gated() {
     });
     assert_eq!(eff, "dev-libs/r25lib:=");
 
-    // Live EAPI without `:=` support voids the whole overlay, not
-    // just the append (real `FakeVartree.py:176-178`): the raw
+    // A live EAPI without `:=` support voids the whole overlay: the raw
     // record stands.
     let live_old_eapi: HashMap<String, String> = [
         ("RDEPEND".to_string(), "dev-libs/r25lib:=".to_string()),
@@ -312,8 +288,7 @@ fn installed_dep_string_effective_appends_built_atoms_when_eapi_gated() {
     });
     assert_eq!(eff, ">=dev-libs/r25lib-1.0:0/1=");
 
-    // Unsupported live EAPI: `_DynamicDepsNotApplicable`, raw stands
-    // (real `FakeVartree.py:158-162`).
+    // Unsupported live EAPI: raw stands (Portage's `_DynamicDepsNotApplicable`).
     let live_bad_eapi: HashMap<String, String> = [
         ("RDEPEND".to_string(), "dev-libs/r25lib:=".to_string()),
         ("EAPI".to_string(), "99".to_string()),

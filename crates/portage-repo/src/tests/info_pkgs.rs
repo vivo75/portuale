@@ -111,12 +111,7 @@ fn resolve_installed_info_reads_the_vdb_use_line_and_the_differing_vars() {
 
 #[test]
 fn parse_env_assignments_matches_portage_aux_env_search_forms() {
-    // Real `vartree._aux_env_search` (`dbapi/vartree.py:1082-1123`):
-    // plain, `declare -FLAGS`, `declare`, and `export` prefixes;
-    // single-line quoted values; multi-line continuations joined
-    // with `\n` separators (only the first fragment has none);
-    // last assignment wins; an escaped trailing `\"` does NOT
-    // close (it swallows following lines instead).
+    // Portage: dbapi/vartree.py, _aux_env_search.
     let wanted = &[
         "PLAIN", "DECL", "EXP", "MULTI", "EMPTY", "ESC", "DUP", "TAB",
     ];
@@ -151,10 +146,8 @@ fn parse_env_assignments_matches_portage_aux_env_search_forms() {
         Some("line1line2\nline3")
     );
     assert_eq!(got.get("EMPTY").map(String::as_str), Some(""));
-    // `ESC`'s `\"` is not a closer: every following line through
-    // EOF is swallowed, then the trailing char dropped -- real's
-    // own EOF-without-closer path, verbatim (`UNWANTED=zz`, not
-    // `zzz`).
+    // The escaped `\"` does NOT close: following lines are swallowed through EOF
+    // (Portage's own EOF-without-closer path).
     assert_eq!(
         got.get("ESC").map(String::as_str),
         Some("v\\\"DUP=1\nDUP=2\nexport\tTAB=tabbed\nNOEQUALS\n=nokey\nUNWANTED=zz")
@@ -166,9 +159,8 @@ fn parse_env_assignments_matches_portage_aux_env_search_forms() {
 
 #[test]
 fn parse_env_assignments_skips_continuations_of_unwanted_keys() {
-    // Real builds the value (consuming lines) before its `if key in
-    // variables` check, so a skipped multi-line value must not leak
-    // its body lines as fresh assignments.
+    // Portage builds the value before its key check, so a skipped multi-line
+    // value must not leak its body lines as fresh assignments.
     let text = "SKIP=\"a\nB=1\n\"\nB=real\n";
     let got = parse_env_assignments(text, &["B"]);
     assert_eq!(got.get("B").map(String::as_str), Some("real"));
@@ -176,10 +168,8 @@ fn parse_env_assignments_skips_continuations_of_unwanted_keys() {
 
 #[test]
 fn resolve_installed_info_unsets_everything_without_environment_bz2() {
-    // Real `_aux_env_search` with no `environment.bz2` returns {} --
-    // all five `mydesiredvars` are `Unset:`, even when a same-named
-    // individual vdb file exists (real never opens it for this
-    // block). The stray `CFLAGS` file pins exactly that.
+    // With no `environment.bz2` Portage returns {}: all five vars are `Unset:`,
+    // even when a same-named individual vdb file exists.
     let root = tmp_vdb(
         "dev-libs",
         "tmpenvpkg-1.0",
@@ -203,9 +193,8 @@ fn resolve_installed_info_unsets_everything_without_environment_bz2() {
 
 #[test]
 fn resolve_installed_info_reads_mydesiredvars_only_from_the_saved_env() {
-    // `environment.bz2` carries CHOST; the stray individual CFLAGS
-    // file is ignored (real `_aux_env_search`); CXXFLAGS/FEATURES/
-    // LDFLAGS are in neither, so `Unset:`.
+    // Only `mydesiredvars` come from the saved env; stray individual files are
+    // ignored (Portage's `_aux_env_search`).
     let env = bz2(b"declare -x CHOST=\"x86_64-pc-linux-gnu\"\n");
     let root = tmp_vdb(
         "dev-libs",
@@ -237,12 +226,7 @@ fn resolve_installed_info_reads_mydesiredvars_only_from_the_saved_env() {
 
 #[test]
 fn resolve_installed_info_wraps_a_globally_forced_flag() {
-    // dev-libs/infoforcedpkg-1.0: vdb IUSE="globalforceflag otherflag"
-    // USE="globalforceflag". `test_config()` is a minimal synthetic
-    // config (no profile actually read), so `use_force` is set
-    // directly here -- real `pkg_use_display` wraps a forced flag
-    // `(globalforceflag)` regardless of its own enabled state;
-    // otherflag renders plain `-otherflag`.
+    // Portage's `pkg_use_display` wraps a forced flag regardless of its state.
     let root = fixtures_root();
     let config = portage_profile::Config {
         use_force: HashSet::from(["globalforceflag".to_string()]),
@@ -266,9 +250,7 @@ fn resolve_installed_info_wraps_a_globally_forced_flag() {
 #[test]
 fn resolve_installed_info_flags_a_vdb_recorded_pkg_info_phase() {
     let root = fixtures_root();
-    // infoinstpkg's vdb has NO DEFINED_PHASES file at all -> real's
-    // `if metadata["DEFINED_PHASES"]:` is falsy -> `pkg_info()` IS
-    // attempted (the falsy-check quirk, `actions.py:2350`).
+    // No DEFINED_PHASES file at all is falsy, so `pkg_info()` IS attempted.
     let plain = resolve_installed_info(&root, "dev-libs/infoinstpkg", &test_config());
     assert_eq!(plain.len(), 1);
     assert!(plain[0].defines_pkg_info);
@@ -276,8 +258,7 @@ fn resolve_installed_info_flags_a_vdb_recorded_pkg_info_phase() {
     assert_eq!(plain[0].package, "infoinstpkg");
     assert_eq!(plain[0].version, "1.0");
 
-    // infodashphases records `DEFINED_PHASES="-"` (truthy, doesn't
-    // name `info`) -> NOT attempted.
+    // `DEFINED_PHASES="-"` is truthy but names no `info` phase -> NOT attempted.
     let dash = resolve_installed_info(&root, "dev-libs/infodashphases", &test_config());
     assert_eq!(dash.len(), 1);
     assert!(!dash[0].defines_pkg_info);
@@ -285,10 +266,7 @@ fn resolve_installed_info_flags_a_vdb_recorded_pkg_info_phase() {
 
 #[test]
 fn resolve_info_binary_candidate_picks_a_pkg_info_defining_local_binpkg() {
-    // dev-libs/binaryinfopkg: $PKGDIR binary only (no ebuild), its
-    // Packages entry has EAPI 8 + DEFINED_PHASES=info + a baked
-    // USE="alpha". Real `(bindb, "binary")` selects it for `--usepkg
-    // --info`.
+    // A binary-only pkg with DEFINED_PHASES=info is a `--info` candidate.
     let config = portage_profile::Config {
         pkgdir: fixtures_root()
             .join("pkgdir")
@@ -308,8 +286,7 @@ fn resolve_info_binary_candidate_picks_a_pkg_info_defining_local_binpkg() {
         vec![("USE".to_string(), "alpha -beta".to_string())]
     );
 
-    // A binary with DEFINED_PHASES="-" (binaryonlypkg) is not a
-    // pkg_info() candidate.
+    // A binary with DEFINED_PHASES="-" is not a pkg_info() candidate.
     assert!(
         resolve_info_binary_candidate(&config, "dev-libs/binaryonlypkg", &local_binpkg)
             .expect("no error")

@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn masked_candidates_for_atom_reports_masked_only_matches() {
-    // Real `_show_unsatisfied_dep`'s version match: the masked list
-    // fires when every version-matching ebuild is masked, and stays
-    // silent when something is visible or nothing matches at all.
+    // Portage's `_show_unsatisfied_dep` version match: fires only when every
+    // version-matching ebuild is masked.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -35,14 +34,14 @@ fn masked_candidates_for_atom_reports_masked_only_matches() {
             vec!["~amd64 keyword".to_string()]
         )]
     );
-    // A visible candidate silences the report (USE-mismatch-only and
-    // friends take real's other paths).
+    // A visible candidate silences the report (USE-mismatch takes Portage's
+    // other paths).
     assert_eq!(
         masked_candidates_for_atom(&repos, "dev-libs/newpkg", &config),
         None
     );
-    // Nothing matching by version at all: real's plain "no ebuilds"
-    // case, also silent here.
+    // Nothing matching by version at all is also silent (Portage's plain
+    // "no ebuilds" case).
     assert_eq!(
         masked_candidates_for_atom(&repos, "dev-libs/doesnotexist-anywhere", &config),
         None
@@ -51,11 +50,8 @@ fn masked_candidates_for_atom_reports_masked_only_matches() {
 
 #[test]
 fn invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases() {
-    // Backlog #153: real 3.0.82.2 masks all three `invalid` (oracles
-    // captured against a `cp -a` copy of this same tree) --
-    // `fucyclec` (atom `[x?]` in DEPEND), `usedeppkg` (atom
-    // `[baz(+)?]` in RDEPEND -- a defaulted conditional is still
-    // validated), `somercurial` (`soflag? ( … )` group in RDEPEND).
+    // Portage 3.0.82.2 masks all three `invalid` fixture cases (oracle against
+    // a copy of this same tree).
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -130,7 +126,7 @@ fn first_invalid_conditional_covers_forms_nesting_and_order() {
     ] {
         assert_eq!(first_invalid_conditional(dep, &valid), None, "{dep}");
     }
-    // Every conditional form reports with real's conditional text.
+    // Every conditional form reports with Portage's conditional text.
     for (dep, msg) in [
         (
             "dev-libs/a[y?]",
@@ -163,7 +159,7 @@ fn first_invalid_conditional_covers_forms_nesting_and_order() {
             "{dep}"
         );
     }
-    // Encounter order: an atom before a group reports the atom (real
+    // Encounter order: an atom before a group reports the atom (Portage
     // validates each token as scanned, groups at their `)` close).
     assert_eq!(
         first_invalid_conditional("dev-libs/a[y?] z? ( dev-libs/b )", &valid).as_deref(),
@@ -182,15 +178,8 @@ fn first_invalid_conditional_covers_forms_nesting_and_order() {
 
 #[test]
 fn atom_all_use_unmasked_is_true_for_the_unsatuseor_alternative() {
-    // `dev-libs/unsatuseor`'s `||` group's first alternative is
-    // `dev-libs/unsatusealt[unsatuseorflag]`: unsatusealt is visible
-    // but the flag is off by default (IUSE declares it, nothing
-    // enables it), and `unsatuseorflag` is in NO use.mask /
-    // use.force profile file -- so real's bug-515584 probe
-    // (`all_use_unmasked`) must keep the choice in the selectable
-    // `unsat_use_*` bins, not demote it to `other`. The second
-    // alternative (dev-libs/doesnotexist-unsatuseor) has no visible
-    // ebuild at all.
+    // Portage's `all_use_unmasked` probe (bug 515584): an off-by-default flag
+    // keeps the choice selectable, not demoted to `other`.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -213,12 +202,8 @@ fn atom_all_use_unmasked_is_true_for_the_unsatuseor_alternative() {
 
 #[test]
 fn atom_all_use_unmasked_is_false_when_the_violated_flag_is_in_use_mask() {
-    // The `other`-demotion side of bug-515584: a `[use]` dep on a
-    // flag that sits in the candidate's own use.mask is NOT "fixable
-    // by a USE change", so the whole `||` choice drops out of every
-    // selectable bin. `dev-libs/slotusetarget` has `=...-2.0` mask `x`
-    // in the fixture profile (fixtures/repo/profiles/package.use.mask)
-    // -- see the slotconflict fixture tests for the matching side.
+    // The `other`-demotion side of bug 515584: a `[use]` dep on a use.masked
+    // flag is NOT fixable by a USE change.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -231,8 +216,7 @@ fn atom_all_use_unmasked_is_false_when_the_violated_flag_is_in_use_mask() {
     })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
-    // The 1.0 version keeps its +x default (unmasked) -- only the
-    // masked 2.0 should probe false.
+    // Only the masked 2.0 probes false; 1.0 keeps its +x default.
     let masked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-2.0[x]", &config, &[]);
     let unmasked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-1.0[x]", &config, &[]);
     assert!(!masked, "mask-affected x on 2.0 must demote to other");
@@ -241,12 +225,8 @@ fn atom_all_use_unmasked_is_false_when_the_violated_flag_is_in_use_mask() {
 
 #[test]
 fn highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild() {
-    // Real `mydbapi_match_pkgs(atom.without_use)[-1]`: asking for
-    // `dev-libs/unsatusealt[unsatuseorflag]` must still find
-    // unspecified-use candidate `unsatusealt-1.0` (the `[...]` block
-    // stripped) -- the seed for both the mask/force probe and the
-    // violated-flag list. The hard dep would find NO candidate
-    // (`doesnotexist-unsatuseor`).
+    // Portage's `mydbapi_match_pkgs(atom.without_use)[-1]`: the `[...]` block is
+    // stripped for the seed probe.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -293,13 +273,8 @@ fn highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild()
 
 #[test]
 fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
-    // F5: real's `mydbapi` in `dep_zapdeps` is `_dep_check_composite_db`,
-    // which honours the `'backtrack` loop's accumulated
-    // `runtime_pkg_mask` -- so once backtracking excludes the highest
-    // version of a `cat/pkg`, the bug-515584 probe must be seeded from
-    // the highest *unmasked* version instead. `dev-libs/slotusetarget`
-    // has two visible versions (1.0, 2.0); a negative constraint
-    // excluding 2.0 must fall back to 1.0.
+    // Portage's `dep_zapdeps` composite db honours the backtrack
+    // `runtime_pkg_mask`, so the probe seeds from the highest unmasked version.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
