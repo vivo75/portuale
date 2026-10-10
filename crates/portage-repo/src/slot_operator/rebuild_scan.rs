@@ -3,12 +3,8 @@
 use crate::*;
 
 /// [`slot_operator_rebuild_scan`]'s result: the consumer `(cat, pkg)`
-/// replace set (real `_slot_operator_replace_installed`), the
-/// `(provider_cpv, consumer_cpv)` display pairs (real `_forced_rebuilds`,
-/// what `_show_abi_rebuild_info` renders), and the stale-binary
-/// `(category, package, version)` triples for `collect_feedback`'s
-/// `slot_operator_mask_built` records (real `_slot_change_backtrack`,
-/// backlog #212 v2 `#24c`).
+/// replace set, the `(provider_cpv, consumer_cpv)` display pairs, and the
+/// stale-binary `(category, package, version)` triples.
 pub(crate) type SlotOpRebuildScan = (
     BTreeSet<(String, String)>,
     Vec<(String, String)>,
@@ -31,6 +27,11 @@ pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
 }
 
+/// Post-walk scan for consumers needing a slot-operator rebuild: the same-slot
+/// arm (bound sub-slot moved under a replacing provider) and the new-slot arm
+/// (bound slot abandoned for a fresh one). Returns the replace set, the display
+/// pairs, and the stale-binary triples.
+// Portage: _emerge/depgraph.py, _slot_operator_trigger_reinstalls
 pub(crate) fn slot_operator_rebuild_scan(
     args: SlotOperatorRebuildScanArgs<'_>,
 ) -> SlotOpRebuildScan {
@@ -52,18 +53,11 @@ pub(crate) fn slot_operator_rebuild_scan(
     // replaces an installed version in that slot.
     let mut new_slot: HashMap<(String, String), (String, String, String)> = HashMap::new();
     // cp -> (new version, new slot, new sub-slot) for every entry merged
-    // into a fresh slot (no installed instance in that slot -- real's
-    // `_get_installed_best` empty-`myinslotlist` case, rendered `[ebuild N]`).
-    // A provider that moves slot only ever arrives this way; the update
-    // probe's new-child-slot arm (`:3121-3126`) prefers these, falling
-    // back to `Upgrade`/`Downgrade`/`Reinstall` entries in a slot the
-    // consumer is not bound to (same real candidate loop).
+    // into a fresh slot (no installed instance there).
     let mut new_slot_fresh: HashMap<(String, String), (String, String, String)> = HashMap::new();
     let mut in_graph: HashSet<(String, String)> = HashSet::new();
     for e in entries {
-        // #72 B3: a removal installs nothing, so it is not "in graph" for
-        // the slot-operator rebuild scan (real only rebuilds consumers of
-        // a package this run actually leaves at a new slot).
+        // A removal installs nothing, so it is not "in graph".
         if !matches!(
             e.outcome,
             PretendOutcome::AlreadyInstalled { .. }
@@ -81,15 +75,9 @@ pub(crate) fn slot_operator_rebuild_scan(
             (version, e.slot.clone(), e.sub_slot.clone())
         {
             let cp = (e.category.clone(), e.package.clone());
-            // Backlog #303: under `--update`, a non-requested provider the
-            // pass *downgraded* was held back by an installed consumer's
-            // built `:=` pin (the pass picked the older sub-slot the
-            // consumer is bound to). Real's first pass does the same, then
-            // `_slot_operator_update_probe` (`depgraph.py:3131`) finds the
-            // installed instance as the missed update and backtracks to
-            // replace the consumer. Model the missed update by taking the
-            // slot/sub-slot of the version the downgrade replaces, so the
-            // same-slot arm below flags the consumer and the pin lifts.
+            // Under `--update`, a downgraded non-requested provider was held
+            // back by a consumer's built `:=` pin; model the missed update
+            // from the replaced version's slot so the arm below fires.
             let missed = match &e.outcome {
                 PretendOutcome::Downgrade { from, .. }
                     if update && !top_level_cps.contains(&cp) =>
@@ -112,9 +100,7 @@ pub(crate) fn slot_operator_rebuild_scan(
         }
     }
     let installed = all_installed_packages(root);
-    // cp -> every installed (version, main slot): the update probe's
-    // superseded child (`dep.child`) is the installed instance in the
-    // consumer's bound slot, looked up per built atom below.
+    // cp -> every installed (version, main slot).
     let mut installed_by_cp: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
     for p in &installed {
         installed_by_cp
@@ -124,34 +110,16 @@ pub(crate) fn slot_operator_rebuild_scan(
     }
     let mut scheduled: BTreeSet<(String, String)> = already.clone();
     let mut abi_rebuilds: Vec<(String, String)> = Vec::new();
-    // #65 S2: every cp this pass actually walked (any outcome, installed
-    // nodes included). Real only registers a slot-operator dep for a
-    // *built* parent's `DEPEND`/`BDEPEND` when the walk reaches it
-    // non-optionally (`_add_pkg_deps`' `optional=pkg.built`,
-    // `depgraph.py:4277/4287` combined with `dep.want_update`,
-    // `:3802-3806`), so a consumer that complete mode merely *reaches*
-    // (`slot_op_reachable`) never rebuilds through a build-time key. The
-    // world shape still qualifies: there the consumers are walked nodes
-    // (complete-mode seeds), not reachability-only. `RDEPEND`/`PDEPEND`/
-    // `IDEPEND` keep the wider `reachable` gate.
+    // Every cp this pass actually walked (any outcome). Only consumers
+    // the walk reached can fire through build-time keys; `RDEPEND` /
+    // `PDEPEND` / `IDEPEND` keep the wider `reachable` gate.
     let walked: HashSet<(String, String)> = entries
         .iter()
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
-    // #24 S5: the post-walk vdb scan stays behind the `reachable` gate
-    // (complete mode) for the same-slot arm. The #211 new-slot arm
-    // additionally accepts walked consumers: real registers slot-operator
-    // deps for every walked parent (`_add_pkg_deps`), and the update
-    // probe's own gate is `want_update`, not reachability -- an empty
-    // world (the conflict-mass shape) leaves `reachable` empty while the
-    // installed consumers sit in the graph as walked nodes.
-    // The `_slot_change_probe` half below is *not* complete-mode gated in
-    // real (its first trigger arm runs for any merge-bound parent,
-    // 3103-3107), so it is called unconditionally.
-    // #211 R2: the update-probe refusal parents (real
-    // `_slot_operator_check_reverse_dependencies`, `depgraph.py:2472`).
-    // Collected once per scan; the per-edge verdict reads the replace
-    // set as it grows (see `probe_refused`).
+    // The post-walk vdb scan stays behind the `reachable` gate for the
+    // same-slot arm; the new-slot arm additionally accepts walked
+    // consumers, and the `_slot_change_probe` half below is never gated.
     let mut probe_parents = collect_probe_parents(CollectProbeParentsArgs {
         root,
         entries,
@@ -162,29 +130,19 @@ pub(crate) fn slot_operator_rebuild_scan(
         with_bdeps,
         excluded,
     });
-    // #288: real records the arguments as parents too (`_add_parent_atom`),
-    // so an argument pin vetoes a provider candidate it does not match.
+    // Arguments also veto a provider candidate they do not match.
     add_argument_probe_parents(&mut probe_parents, top_level_atoms);
-    // #268 cut (a): the requested cps real's `--update` greedy expansion
-    // actually pins. Collected once per scan; the `#252` gate below reads
-    // it per edge.
+    // The requested cps the `--update` greedy expansion actually pins.
     let greedy_cps: HashSet<(String, String)> = if update {
         greedy_pinned_cps(top_level_atoms, repos, &installed_by_cp)
     } else {
         HashSet::new()
     };
-    // #268 cut (b): per-(provider, bound-slot) memo for the revision
-    // check below (tree metadata + effective-USE walks, so not
-    // recomputed per consumer edge).
+    // Per-(provider, bound-slot) memo for the revision check below.
     let mut revision_memo: HashMap<((String, String), String), bool> = HashMap::new();
-    // #269: real's update probe ranges over every *available* package
-    // (`_iter_similar_available`, `depgraph.py:3015`), not just the
-    // scheduled entries, so the new-slot arm below can fire with both
-    // maps empty (the `mmcons` shape: no pass schedules the provider,
-    // yet the probe finds it among the available packages). The arm
-    // itself still needs `want_update` (the per-candidate gate below),
-    // which is exactly `update || provider requested` -- pre-check it
-    // here so plain resolves skip the vdb loop as before.
+    // The new-slot arm reads available candidates too, so it can fire with
+    // both maps empty; pre-check `want_update` here so plain resolves skip
+    // the vdb loop as before.
     let want_probe = update || !top_level_cps.is_empty();
     if !new_slot.is_empty() || !new_slot_fresh.is_empty() || want_probe {
         for pkg in &installed {
@@ -194,31 +152,22 @@ pub(crate) fn slot_operator_rebuild_scan(
             }
             // Same-slot arm scope (frozen): complete-mode reachability only.
             let same_slot_scope = !new_slot.is_empty() && reachable.contains(&cp);
-            // New-slot arm scope (#211): reachability or walked this pass.
-            // Merge-bound consumers stay skipped by the `in_graph` rule
-            // above -- their live `:=` re-binds through their own walk and
-            // their vdb is rewritten at merge, so no reinstall is needed
-            // (real's not-installed-parent disjunct would probe them; the
-            // refusal half of that probe is v2 `#24b` remainder either way).
-            // #269: the arm reads available candidates too (see below), so
-            // unlike the same-slot arm it needs no scheduled entry -- the
-            // outer `want_probe` gate already covers that.
+            // New-slot arm scope: reachability or walked this pass.
+            // Merge-bound consumers stay skipped by the `in_graph` rule:
+            // their live `:=` re-binds through their own walk.
             let new_slot_scope = reachable.contains(&cp) || walked.contains(&cp);
             if !same_slot_scope && !new_slot_scope {
                 continue;
             }
             let consumer_cpv = pkg.cpv();
-            // #65 S1/S2: real empties a built package's DEPEND/BDEPEND
-            // when bdeps is not y/auto, and only the consumers the walk
-            // reached non-optionally can fire through them.
+            // A built package's DEPEND/BDEPEND only count when bdeps is on.
             let dep_keys: &[&str] = match with_bdeps && walked.contains(&cp) {
                 true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
                 false => &["RDEPEND", "PDEPEND", "IDEPEND"],
             };
             // (display `provider_cpv`, provider cp, fresh candidate
-            // `"cat/pkg-ver:slot/sub"` for the refusal check, and whether
-            // the edge came from the same-slot arm -- #269: only that arm
-            // contributes display pairs).
+            // `"cat/pkg-ver:slot/sub"`, and whether the edge came from the
+            // same-slot arm).
             let mut edges: Vec<(String, (String, String), String, bool)> = dep_keys
                 .iter()
                 .flat_map(|key| {
@@ -245,71 +194,16 @@ pub(crate) fn slot_operator_rebuild_scan(
                             return Some((display, provider_cp, cand, true));
                         }
                     }
-                    // #211 (v2 `#24b`): real `_slot_operator_update_probe`
-                    // with `new_child_slot=True` (`depgraph.py:3121-3126`,
-                    // bug 486580): an installed consumer whose built
-                    // `:S/SS=` dep is bound to a slot the provider no
-                    // longer occupies rebuilds against the fresh slot.
-                    // Candidates are the fresh (`New`) entries first, then
-                    // `Upgrade`/`Downgrade`/`Reinstall` entries in a slot
-                    // the consumer is not bound to -- but only while no
-                    // greedy request-argument pin covers the bound slot
-                    // (the `#252` gate below): real's candidate loop
-                    // (`_iter_similar_available`, `:2660-2695`) ranges
-                    // over every available package, yet the reverse-deps
-                    // gate refuses each off-slot candidate against the
-                    // `P:S` arg, so a bound-slot mismatch on a requested
-                    // provider's upgrade probes nothing (entries at the
-                    // bound slot stay with the same-slot arm above).
-                    // First acceptable candidate wins, gates and R2 refusal
-                    // per candidate.
+                    // New-slot arm: an installed consumer whose built `:S/SS=`
+                    // dep is bound to a slot the provider no longer occupies
+                    // rebuilds against the fresh slot. First acceptable
+                    // candidate wins, gates and refusal per candidate.
                     if new_slot_scope {
-                        // #252: real's greedy request-argument pin. Under
-                        // `--update` real expands a directly-requested cp
-                        // into per-slot arg atoms (`_select_files`,
-                        // `depgraph.py:5380`, via `_greedy_slots`, `:5896`):
-                        // every installed slot below the highest visible
-                        // slot gains a `cat/pkg:S` arg recorded on the
-                        // installed instance in S (`_add_parent_atom`,
-                        // `:4136`). The update probe's reverse-deps gate
-                        // (`_slot_operator_check_reverse_dependencies`,
-                        // `:2472-2538`) checks the fresh candidate against
-                        // those too, and a non-`Package` parent goes
-                        // straight to the atom match (`:2487-2541`) -- so
-                        // every candidate in another slot is refused, the
-                        // probe returns None, and the replace set stays
-                        // empty. Probed on real 3.0.82.2 (host
-                        // staged-fixture probe 2026-09-29, plus a
-                        // vendored-`ResolverPlayground` spy run): on the
-                        // `mmprov` shape (`mmprov` requested, consumer
-                        // bound `0/1=`, upgrade `1/1 -> 1/2`) both
-                        // `new_child_slot` forms return None -- the
-                        // `mmprov:0` arg kills the slot-1 candidates --
-                        // and only `mmprov-3` merges. Without the pin
-                        // (provider not requested, bound to the highest
-                        // slot, or no `--update`) the arm fires as before.
-                        //
-                        // The pin is recorded per installed instance, but
-                        // this edge already carries its bound slot
-                        // (`a_slot`), and every candidate this arm keeps
-                        // sits in another slot -- so a pin on `a_slot`
-                        // refuses the whole edge. Same-slot candidates
-                        // match `P:S` trivially, so the same-slot arm
-                        // above needs no gate.
-                        //
-                        // #268: both cuts are now modelled. (a) The pin
-                        // only exists when the request atom spans slots
-                        // (`greedy_cps` -- real `_greedy_slots`' own
-                        // single-slot emptiness): an explicit slot or
-                        // exact-version request pins nothing, so the arm
-                        // fires. (b) The pin must survive the greedy
-                        // revision with blocker lookahead
-                        // (`greedy_pin_survives_revision`): a discarded
-                        // pin refuses nothing, so the arm fires and the
-                        // old slot is uninstalled instead of updated.
-                        // Still cut: the pairwise lower-version discard
-                        // among two or more greedy packages (needs three
-                        // installed slots).
+                        // A greedy request-argument pin on the bound slot
+                        // refuses the whole edge; same-slot candidates match
+                        // `P:S` trivially. The pin needs a multi-slot request
+                        // atom and must survive the greedy revision with
+                        // blocker lookahead.
                         if update
                             && greedy_cps.contains(&provider_cp)
                             && let Some((high_slot, high_ver)) =
@@ -345,13 +239,9 @@ pub(crate) fn slot_operator_rebuild_scan(
                         if let Some(other) = new_slot.get(&provider_cp) {
                             cands.push((&other.0, &other.1, &other.2));
                         }
-                        // #288: an installed provider instance in another
-                        // slot that an argument names is a graph package
-                        // (real selects it for the argument), hence a probe
-                        // candidate the argument itself accepts: with
-                        // `=mmprov-2` the rebuild proceeds against it, while
-                        // `=mmprov-1` (the bound slot's own instance) leaves
-                        // no other-slot candidate the argument accepts.
+                        // An installed provider instance in another slot that an
+                        // argument names is a probe candidate the argument
+                        // itself accepts.
                         let arg_installed: Vec<(String, String, String)> =
                             installed_refs(root, &provider_cp.0, &provider_cp.1)
                                 .into_iter()
@@ -371,18 +261,10 @@ pub(crate) fn slot_operator_rebuild_scan(
                         for (v, sl, sub) in &arg_installed {
                             cands.push((v, sl, sub));
                         }
-                        // #269: real's probe ranges over every *available*
-                        // package (`_iter_similar_available`,
-                        // `depgraph.py:3015-3057`), not just the scheduled
-                        // entries above: a provider upgrade nobody pulled
-                        // in (the `mmcons` shape) still rebuilds the
-                        // consumer. Ebuilds only: a binary candidate has
-                        // no ebuild-visibility verdict at this layer (cut,
-                        // same direction as the old miss). Visible ones
-                        // only (real's `_pkg_visibility_check`), highest
-                        // first like the walk's own selection; versions
-                        // already installed are not updates (real's
-                        // `pkg.installed` skip).
+                        // The probe also ranges over every available package,
+                        // not just scheduled entries. Ebuilds only, visible
+                        // ones only, highest first; already-installed
+                        // versions are not updates.
                         let tree = list_candidates(repos, &provider_cp.0, &provider_cp.1).ok();
                         if let Some(tree) = tree.as_deref() {
                             let installed_versions: HashSet<&String> = installed_by_cp
@@ -415,32 +297,26 @@ pub(crate) fn slot_operator_rebuild_scan(
                             if *c_slot == a_slot {
                                 continue;
                             }
-                            // The superseded child: an installed provider
-                            // instance must sit in the bound slot (else
-                            // there is no `dep.child` to update away from).
+                            // An installed provider instance must sit in the
+                            // bound slot, else there is nothing to update
+                            // away from.
                             let Some(old_ver) = installed_by_cp.get(&provider_cp)?.iter().find_map(
                                 |(version, slot)| (*slot == a_slot).then(|| version.clone()),
                             ) else {
                                 continue;
                             };
-                            // Higher version only (real `pkg < dep.child`
-                            // skips downgrades; equal versions -- a slot
-                            // move without a revbump -- probe).
+                            // Higher version only; equal versions (a slot move
+                            // without a revbump) probe.
                             if vercmp_ordering(c_ver, &old_ver) == Ordering::Less {
                                 continue;
                             }
-                            // `want_update` stand-in (real `:3805-3809`):
-                            // `--update`, or the provider itself is
-                            // directly requested (real's arg-chain
-                            // disjunct). The registration-time
-                            // complete-mode/depth nuance is not modelled.
+                            // `--update`, or the provider itself is directly
+                            // requested.
                             if !update && !top_level_cps.contains(&provider_cp) {
                                 continue;
                             }
-                            // A `replacement_parent` must exist: with no
-                            // visible tree candidate the forced reinstall
-                            // would dead-end (real finds no replacement
-                            // and does nothing).
+                            // With no visible tree candidate the forced reinstall
+                            // would dead-end.
                             if list_candidates(repos, &pkg.category, &pkg.package)
                                 .ok()
                                 .is_none_or(|cands| cands.is_empty())
@@ -452,8 +328,8 @@ pub(crate) fn slot_operator_rebuild_scan(
                                 "{}/{}-{c_ver}:{c_slot}/{c_sub}",
                                 atom.category, atom.package
                             );
-                            // #304: a replacement parent whose own atom
-                            // accepts the new slot must exist.
+                            // A replacement parent whose own atom accepts the
+                            // new slot must exist.
                             if !replacement_parent_accepts(ReplacementParentAcceptsArgs {
                                 repos,
                                 config,
@@ -476,18 +352,10 @@ pub(crate) fn slot_operator_rebuild_scan(
                 .collect();
             edges.sort();
             edges.dedup();
-            // #211 R2: real `_slot_operator_check_reverse_dependencies`
-            // (`depgraph.py:2472-2573`, gates `:2622`/`:2738`) refuses
-            // the whole replacement when the fresh candidate violates
-            // another parent's atom -- on both arms alike.
-            // #269: real's `_slot_operator_update_backtrack`
-            // (`depgraph.py:2442`) files the child (provider) reinstall
-            // only when `new_child_slot is None` -- the new-slot arm
-            // records the consumer alone, so only the same-slot arm
-            // contributes `(provider, consumer)` display pairs (real's
-            // `_forced_rebuilds`, what renders the provider `r` and the
-            // `causing rebuilds` block). The consumer itself is scheduled
-            // on both arms alike.
+            // A fresh candidate that violates another parent's atom refuses
+            // the whole replacement. Only the same-slot arm contributes
+            // `(provider, consumer)` display pairs; the consumer itself is
+            // scheduled on both arms alike.
             let mut survived = false;
             for (display, provider_cp, cand, same_slot) in edges {
                 if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
@@ -505,13 +373,8 @@ pub(crate) fn slot_operator_rebuild_scan(
         }
     }
 
-    // #24 S5: real `_slot_change_probe` (depgraph.py:2317-2359), the
-    // slot-move-without-revbump arm (bug 456208). Runs even when the vdb
-    // scan above is gated off (real's first trigger arm is not
-    // complete-mode gated) -- see the helper's own doc comment. The #212
-    // binary arm rides the same call and reports stale binaries into
-    // `masked` for `collect_feedback`'s `slot_operator_mask_built`
-    // records.
+    // The slot-move-without-revbump arm below runs even when the vdb scan
+    // above is gated off; see the helper's doc comment.
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root,

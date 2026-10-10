@@ -16,36 +16,12 @@ pub(crate) struct SlotOperatorEliminateRebuildsArgs<'a> {
     pub(crate) empty: bool,
 }
 
-/// Backlog #24 S4: real `_eliminate_rebuilds` (`depgraph.py:3859-4000`),
-/// the undo path. For every cp in the S3 replace set whose walked entry
-/// is a `Reinstall { slot_operator_rebuild: true }` at the installed
-/// version, apply rules 1-8 of the plan's §1.2 *in real's order* and
-/// return the cps whose rebuild is unnecessary (rule 6/8 are what keep a
-/// genuine ABI rebuild): the caller drops them from the set and latches
-/// them in `slot_operator_undone`.
-///
-/// Rules, with real's line refs:
-/// 1. installed instance at the same cpv (a real upgrade is never undone);
-/// 2. `--newuse`/`--changed-use` wins (`pkg in _reinstall_nodes`);
-/// 3. `--changed-slot` (3898-3899): keep the rebuild when the tree
-///    ebuild at the same cpv moved `(slot, sub_slot)` vs the installed
-///    instance. Landed in S5; for an ebuild consumer rule 6 already
-///    keeps every such rebuild (the entry's own slot *is* the tree
-///    ebuild's), so the line is behaviour-neutral until the binary
-///    halves land (v2 `#24c`) -- kept in real's position so that half
-///    drops in without moving rules;
-/// 4. every parent atom matches the installed instance;
-/// 5. non-`selective` only: no user-asked parent;
-/// 6. installed and new `(slot, sub_slot)` equal;
-/// 7. built `provides`/`requires` equal -- not reachable in v1: the
-///    binary halves are v2 `#24c`, so a binary entry keeps its rebuild;
-/// 8. the dep comparison: [`flat_dep_atoms`] (use-reduced against the
-///    *new* node's enabled USE) of [`bind_slot_operator_deps`]'s bound
-///    tree string vs the vdb string, both through [`strip_libc_atoms`].
-///
-/// Skipped entirely under `--emptytree` (real `"empty" in myparams`) and
-/// under any live slot conflict (`entries` cannot see the pass; the
-/// caller checks, real bug 922038).
+/// Portage's `_eliminate_rebuilds`: the undo path. For every cp in the replace
+/// set whose walked entry is a `slot_operator_rebuild` reinstall at the
+/// installed version, apply rules 1-8 in Portage's order and return the cps
+/// whose rebuild is unnecessary (rules 6/8 keep a genuine ABI rebuild).
+/// Skipped under `--emptytree` and under any live slot conflict.
+// Portage: _emerge/depgraph.py, _eliminate_rebuilds
 pub(crate) fn slot_operator_eliminate_rebuilds(
     args: SlotOperatorEliminateRebuildsArgs<'_>,
 ) -> BTreeSet<(String, String)> {
@@ -75,11 +51,9 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
         else {
             continue;
         };
-        // Real `match(root, atom, installed=False)` only ever sees a
-        // *non-installed* graph pkg; the S3 flip is the only thing that
-        // constructs `slot_operator_rebuild: true`, and an ordinary
-        // Upgrade/Reinstall-for-USE entry keeps its rebuild like real's
-        // `installed_instance.cpv != pkg.cpv` / `_reinstall_nodes` arms.
+        // Only a `slot_operator_rebuild` reinstall at the installed version
+        // can be undone; an ordinary upgrade or USE reinstall keeps its
+        // rebuild.
         let PretendOutcome::Reinstall {
             version,
             changed_flags,
@@ -89,17 +63,12 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
         else {
             continue;
         };
-        // Rule 7 (see the function doc): binary halves are v2. Hoisted
-        // above rule 1 (real checks `pkg.built` between rule 6 and 8):
-        // the pre-filter can only *keep* a rebuild, and rules 1-6/8 are
-        // all keep-on-mismatch, so the only decision it can change is
-        // the all-rules-pass demotion that IS rule 7's domain -- no
-        // ordering counter-example exists.
+        // Rule 7 first (it can only keep a rebuild): binary halves are not
+        // ported yet, so a binary entry keeps its rebuild.
         if entry.source != CandidateSource::Ebuild {
             continue;
         }
-        // Real `installed_instance = match_pkgs(pkg.slot_atom)[0]`: the
-        // installed instance in the *entry's* own main slot.
+        // The installed instance in the entry's own main slot.
         let entry_slot = entry.slot.as_deref().unwrap_or("0");
         let Some(installed) = installed_all
             .iter()
@@ -115,15 +84,8 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
         if !changed_flags.is_empty() {
             continue;
         }
-        // Rule 3 (real 3898-3899, S5): `--changed-slot` keeps a rebuild
-        // whose tree ebuild at the same cpv moved (slot, sub_slot) vs
-        // the installed instance (real `_changed_slot(installed_instance)`).
-        // Real also checks `_changed_slot(pkg)`, always false for a
-        // merge-bound ebuild entry -- its slot *is* the tree ebuild's --
-        // and rule 6 below is the ebuild equivalent, so this is
-        // behaviour-neutral until the binary halves land (v2 `#24c`).
-        // Kept in real's position so that half drops in without moving
-        // the rules.
+        // Rule 3: `--changed-slot` keeps a rebuild whose tree ebuild at the
+        // same cpv moved (slot, sub_slot) vs the installed instance.
         if changed_slot && slot_changed(root, repos, &cp.0, &cp.1, version) {
             continue;
         }
@@ -175,9 +137,8 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
                 flat_dep_atoms(&bound, &new_use).map(|atoms| strip_libc_atoms(atoms, &libc_cps));
             let key_equal = match (installed_atoms, new_atoms) {
                 (Some(a), Some(b)) => a == b,
-                // Real `except InvalidDependString: continue` keeps the
-                // rebuild on an unparsable *installed* string; treating
-                // either side's parse failure as "not equal" keeps it too.
+                // Either side's parse failure counts as "not equal", keeping
+                // the rebuild.
                 _ => false,
             };
             if !key_equal {
@@ -207,30 +168,11 @@ pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
 }
 
-/// #24 S3 legacy path, for the `--solver=pubgrub` / `--solver=resolvo`
-/// bridges only (`solver_bridge.rs`). Those engines have no
-/// `Backtracker`, so they cannot re-drive a pass with the consumer
-/// seeded as a walked node the way the default resolver now does; they
-/// keep the pre-S3 post-pass synthesiser: run
-/// [`slot_operator_rebuild_scan`], build one
-/// `Reinstall { slot_operator_rebuild: true }` entry per scheduled
-/// consumer, and iterate until the set stops growing (the cascade the
-/// scan itself no longer walks -- a rebuild lands at its *tree* ebuild's
-/// sub-slot, which when it differs from the vdb's is itself a slot shift
-/// the next round chases).
-///
-/// Same cuts as the v1 synthesiser it is: empty `deps` / `required_by`,
-/// so a synthesised rebuild falls back to array position in
-/// `topological_merge_order`, and its own `RDEPEND` is never re-walked.
-/// The default `--solver=portage` path has none of that -- see
-/// `BacktrackParams::slot_operator_replace_installed`.
-///
-/// #212 cut: the scan's stale-binary triples are dropped here. The
-/// bridge resolves in one shot with no `Backtracker`, so there is no
-/// re-pass a `slot_operator_mask_built` record could steer (real
-/// enforces the mask through the backtrack-config restart,
-/// `depgraph.py:5703-5712`); recording one would be dead state. The
-/// bridge keeps its pre-#212 answers on stale-binary shapes.
+/// Legacy path for the `--solver=pubgrub` / `--solver=resolvo` bridges only:
+/// those engines re-drive no pass, so they keep the post-pass synthesiser --
+/// one `slot_operator_rebuild` reinstall entry per scheduled consumer,
+/// iterated until the set stops growing. The default solver path seeds the
+/// consumer as a walked node instead.
 pub(crate) fn slot_operator_rebuild_entries(
     args: SlotOperatorRebuildEntriesArgs<'_>,
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
@@ -260,11 +202,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             reachable,
             already: &scheduled,
             undone: &BTreeSet::new(),
-            with_bdeps, // #211 I1: the `--solver=` bridge threads the same
-            // `update`/`top_level` context the default path passes, so
-            // both solvers agree on the new-slot arm (the request
-            // carries both -- the "no context at this layer" cut that
-            // kept this fixpoint same-slot-only is gone).
+            with_bdeps,
             update,
             top_level_cps,
             top_level_atoms,
@@ -280,8 +218,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             .iter()
             .filter(|pkg| scheduled.contains(&(pkg.category.clone(), pkg.package.clone())))
             .map(|pkg| {
-                // The rebuild lands at the tree ebuild's SLOT, not the
-                // vdb's (real re-reads `SLOT` at merge time).
+                // The rebuild lands at the tree ebuild's SLOT, not the vdb's.
                 let (v_slot, v_sub) =
                     read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
                 let (slot, sub_slot, tree_repo) =
@@ -295,23 +232,12 @@ pub(crate) fn slot_operator_rebuild_entries(
                         })
                         .map(|(slot, sub_slot, repo)| (slot, sub_slot, Some(repo)))
                         .unwrap_or_else(|| (v_slot.clone(), v_sub.clone(), None));
-                // The installed repo, `__unknown__` when the vdb records
-                // none (real `portage.versions._unknown_repo`) -- the same
-                // value `resolve_pretend`'s own oldbest assembly compares
-                // (backlog #247).
+                // The installed repo, `__unknown__` when the vdb records none.
                 let installed_repo =
                     installed_pkg_repo(root, &pkg.category, &pkg.package, &pkg.version);
-                // Real `output.py::_get_installed_best` (721-731): the
-                // rebuilt cpv is already installed (`replace = True`), so
-                // the `[oldver]` bracket shows when the rebuild lands at
-                // a different slot/sub-slot than the installed instance
-                // (the sub-slot bump driving the cascade) *or* when the
-                // repo differs and repo display is not quieted (the third
-                // disjunct -- #247 ported it to `resolve_pretend`, #274
-                // ports it to this synthesiser assembly;
-                // `--quiet-repo-display` stays an unimplemented option
-                // exiting 2, so every successful run has it off and the
-                // disjunct reduces to the repo comparison).
+                // The rebuilt cpv is already installed, so the `[oldver]`
+                // bracket shows when the rebuild lands at a different
+                // slot/sub-slot or repo than the installed instance.
                 let repo_drift = tree_repo
                     .as_deref()
                     .is_some_and(|tree| tree != installed_repo.as_str());
@@ -328,10 +254,8 @@ pub(crate) fn slot_operator_rebuild_entries(
                 } else {
                     Vec::new()
                 };
-                // The entry is the tree package being merged (real
-                // `pkg.repo`), not the installed instance -- the two agree
-                // unless the repo drifted, in which case the row keeps
-                // `::tree` and the bracket names the installed repo.
+                // The entry is the tree package being merged, not the installed
+                // instance.
                 let entry_repo = tree_repo
                     .filter(|tree| !tree.is_empty())
                     .or_else(|| (installed_repo != "__unknown__").then(|| installed_repo.clone()));
@@ -379,23 +303,11 @@ pub(crate) fn slot_operator_rebuild_entries(
     (out, abi_rebuilds)
 }
 
-/// The `(category, package)` of every installed package reachable, over
-/// the **installed** dependency graph, from the required sets
-/// (`@world` ∪ `@selected` ∪ `@system`) -- real `_complete_graph`'s deep
-/// re-walk of those sets in complete mode (`_select_pkg_from_graph`
-/// never merges anything, it just pulls the reachable installed closure
-/// into the digraph so downstream triggers can see it).
-///
-/// `world_selected_atoms` is the `world` file's own atoms unioned with
-/// every `world_sets` nested set (real `@selected`; portuale's `@world`
-/// expands to exactly this -- see `pretend.rs::expand_selected`);
-/// `system_atoms` is the profile's own `packages` file.
-///
-/// The edges are every installed package's vdb `RDEPEND`/`PDEPEND`/
-/// `DEPEND`/`BDEPEND`, USE-reduced against its own recorded `USE` and
-/// matched by `cat/pkg` (real's `_parent_atoms` is cp-level for this
-/// purpose). Used to gate `slot_operator_rebuild_entries` -- real only
-/// slot-op-rebuilds a consumer that is in the graph.
+/// Every installed package reachable over the installed dependency graph from
+/// the required sets (`@world` ∪ `@selected` ∪ `@system`). Gates
+/// `slot_operator_rebuild_entries`: Portage only slot-op-rebuilds a consumer
+/// that is in the graph.
+// Portage: _emerge/depgraph.py, _complete_graph
 pub fn required_set_reachable_cps(
     root: &Path,
     world_selected_atoms: &[String],
@@ -410,9 +322,7 @@ pub fn required_set_reachable_cps(
         let a = portage_dep::parse_atom(atom_str)?;
         let p = by_cp.get(&(a.category.as_str(), a.package.as_str()))?;
         // A slot/version-constrained seed still only needs cp-level
-        // reachability here (real `_parent_atoms` records the cp edge
-        // regardless); an installed package is a single instance per cp
-        // in portuale's model, so no `match_from_list` narrowing.
+        // reachability here.
         Some((p.category.clone(), p.package.clone()))
     };
 
@@ -450,10 +360,8 @@ pub fn required_set_reachable_cps(
     reachable
 }
 
-/// `<version>` with a trailing `-r<digits>` revision suffix removed
-/// (real `catpkgsplit(cpv)[:-1]` -- "revision numbers are ignored" for
-/// `--rebuild-if-new-ver`). Returns the input unchanged when there is no
-/// such suffix.
+/// `<version>` with a trailing `-r<digits>` revision suffix removed.
+/// Returns the input unchanged when there is no such suffix.
 pub(crate) fn strip_revision(version: &str) -> &str {
     match version.rsplit_once("-r") {
         Some((base, rev)) if !rev.is_empty() && rev.bytes().all(|b| b.is_ascii_digit()) => base,
@@ -472,26 +380,11 @@ pub(crate) struct RebuildIfEntriesArgs<'a> {
     pub(crate) rebuild_ignore: &'a [String],
 }
 
-/// Real `_emerge/depgraph.py`'s `_rebuild_config` (`--rebuild-if-unbuilt`
-/// / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an already-
-/// installed package whose own build-time dependency (`DEPEND`/`BDEPEND`
-/// in its vdb, resolved against its *built* `USE`) is satisfied by a
-/// package this run is merging is scheduled for a rebuild.
-/// `_needs_rebuild(dep_pkg)` -- for portuale every merge is from source
-/// (`dep_pkg.built` is always false), so: `unbuilt` triggers always (a
-/// source build invalidates any binary parent); `new_rev` triggers
-/// unless the merged `cat/pkg-version` (revision included) is already one
-/// of the installed versions of that cp; `new_ver` is the same but with
-/// the `-r<n>` revision stripped from both sides.
-/// The caller resolves the real precedence (`unbuilt` > `new_rev` >
-/// `new_ver`; `=n` disables) so at most one of the three is set here.
-/// `--rebuild-exclude ATOMS` matches the *parent* (skip rebuilding it);
-/// `--rebuild-ignore ATOMS` matches the *dep* (it never triggers a
-/// rebuild) -- both the same two-tier `matches_config_entry` matcher
-/// `excluded` uses. Structurally a sibling of
-/// `slot_operator_rebuild_entries` above (same `all_installed_packages`
-/// scan, same `Reinstall` rebuild-entry shape) -- `--rebuild-if-new-slot`
-/// stays that function's job.
+/// Portage's `_rebuild_config` (`--rebuild-if-unbuilt` / `--rebuild-if-new-rev`
+/// / `--rebuild-if-new-ver`): an already-installed package whose own build-time
+/// dependency is satisfied by a package this run merges is scheduled for a
+/// rebuild. `--rebuild-exclude` matches the parent, `--rebuild-ignore` the dep.
+// Portage: _emerge/depgraph.py, _rebuild_config
 pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEntry> {
     let RebuildIfEntriesArgs {
         root,
@@ -505,8 +398,7 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
     if !(unbuilt || new_rev || new_ver) {
         return Vec::new();
     }
-    // `cat/pkg` -> merged version, for every entry being installed this
-    // run (New / Upgrade / Downgrade / Reinstall).
+    // `cat/pkg` -> merged version, for every entry being installed this run.
     let mut merged: HashMap<(String, String), String> = HashMap::new();
     let mut in_graph: HashSet<(String, String)> = HashSet::new();
     for e in entries {
@@ -516,7 +408,7 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
                 Some(version)
             }
             PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
-            // #72 B3: a removal merges nothing.
+            // A removal merges nothing.
             PretendOutcome::AlreadyInstalled { .. }
             | PretendOutcome::NoVisibleCandidate
             | PretendOutcome::Uninstall { .. } => None,

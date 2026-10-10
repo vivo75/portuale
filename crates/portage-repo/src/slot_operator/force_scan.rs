@@ -25,33 +25,13 @@ pub(crate) struct SlotOperatorUpdateForceScanArgs<'a> {
     pub(crate) excluded: &'a [String],
 }
 
-/// #236 A: the forcing half of real's slot-operator update probe
-/// (`_slot_operator_trigger_reinstalls` -> `_slot_operator_update_probe`
-/// -> `_slot_operator_update_backtrack`, `_emerge/depgraph.py:3089-3132`,
-/// `:2576-2800`, `:2400-2452`) for the case [`slot_operator_rebuild_scan`]
-/// cannot see: the walk bound a built consumer's `:S/SS=` dep to the
-/// *installed* child and put no update of that child in the graph at all
-/// (the `_minimize_children` collapse makes this the normal shape -- the
-/// live `cat/pkg:=` and the appended built atom both bind the installed
-/// instance). Real's probe then looks for a visible candidate of the
-/// child in the same slot with a different sub-slot and a higher version
-/// (downgrades need `_downgrade_probe`, not modelled), which the
-/// consumer's replacement ebuild's own atoms on that cp accept
-/// (`_iter_similar_available(dep.child, atom)` intersected over the
-/// atoms, highest wins), and which every other parent of the child
-/// accepts (`_slot_operator_check_reverse_dependencies`, the #211 R2
-/// [`probe_refused`] helper). A hit writes both halves of real's
-/// backtrack: the consumer into the replace set, the child's candidate
-/// into `slot_operator_forced_upgrade`, and the restart selects them.
-///
-/// Gates, as the scan's #211 arms: the consumer is a walked installed
-/// node (real registers `_slot_operator_deps` for walked parents only)
-/// that is not merge-bound, neither end is `--exclude`d (`:2589-2603`),
-/// `want_update` is stood in for by `--update` or the child being
-/// directly requested, the child's graph node is the installed instance
-/// the atom is bound to, and a visible replacement ebuild exists. The
-/// `_select_atoms_probe` check (`||` choices) and `_too_deep` are not
-/// modelled; the consumer's atoms are flattened like the scan's.
+/// The forcing half of Portage's slot-operator update probe: the walk bound
+/// a built consumer's `:S/SS=` dep to the installed child and put no update
+/// of that child in the graph, but a visible same-slot higher-version
+/// candidate exists that the consumer's replacement ebuild and every other
+/// parent accept. A hit schedules the consumer rebuild plus the forced child
+/// upgrade.
+// Portage: _emerge/depgraph.py, _slot_operator_trigger_reinstalls, _slot_operator_update_probe, _slot_operator_update_backtrack
 pub(crate) fn slot_operator_update_force_scan(
     args: SlotOperatorUpdateForceScanArgs<'_>,
 ) -> SlotOpForceScan {
@@ -257,42 +237,19 @@ pub(crate) struct SlotOperatorSlotChangeProbeArgs<'a> {
     pub(crate) undone: &'a BTreeSet<(String, String)>,
     pub(crate) scheduled: &'a mut BTreeSet<(String, String)>,
     pub(crate) excluded: &'a [String],
-    /// #212 (v2 `#24c`): every merge-bound binary the arm below finds
-    /// stale -- `(category, package, version)` triples for
-    /// `collect_feedback`'s `slot_operator_mask_built` records (real
-    /// `_slot_change_backtrack`, `depgraph.py:2381-2398`).
+    /// Every merge-bound binary the arm below finds stale, for
+    /// `collect_feedback`'s `slot_operator_mask_built` records.
     pub(crate) masked: &'a mut BTreeSet<(String, String, String)>,
     pub(crate) config: &'a portage_profile::Config,
 }
 
-/// Backlog #24 S5: real `_slot_change_probe` (`depgraph.py:2317-2359`),
-/// the first arm of `_slot_operator_trigger_reinstalls` (`3103-3107`).
-/// For an *unbuilt* slot-operator dep -- `:=` or `:S=`, real's
-/// `not (atom.soname or atom.slot_operator_built)`, i.e. anything but
-/// the built `:S/SS=` form -- whose parent is an ebuild being merged
-/// and whose child the graph resolved to an installed instance, the
-/// tree ebuild at the child's own cpv may carry a different
-/// `(slot, sub_slot)` than the vdb record: a slot move without a
-/// revbump (bug 456208; `test_slot_change_without_revbump.py`,
-/// `test_regular_slot_change_without_revbump.py`). Real finds the dep
-/// through `_slot_operator_deps` (registered when the parent's dep was
-/// walked); portuale re-reads the parent entry's own tree metadata and
-/// use-reduces it against the node's enabled USE ([`flat_dep_atoms`])
-/// so only deps this run would walk are seen -- `||` arms are flattened
-/// (the same over-approximation the vdb side of the scan makes; the S4
-/// undo and the probe's own rule-6 keep are the correction for a false
-/// hit). [`slot_changed`] is the probe's tree-ebuild-at-cpv lookup. A
-/// hit joins `scheduled`, exactly real's `_slot_change_backtrack`
-/// (`2361-2399`) writing `slot_operator_replace_installed` +
-/// `_need_restart`.
-///
-/// Real's `runtime_pkg_mask` / excluded-package checks on the tree ebuild
-/// (2341/2343) have no portuale counterpart on the installed arm:
-/// [`slot_changed`] is the same tolerant metadata re-lookup the standalone
-/// `--changed-slot` trigger uses. The binary arm below carries real's
-/// visibility gate (`_pkg_visibility_check` 2347, #243).
-/// The binary arm (`dep.child` a binary package scheduled for merge) is
-/// v2 `#24c`.
+/// Portage's `_slot_change_probe`: a slot move without a revbump. For an
+/// unbuilt slot-operator dep (`:=` or `:S=`) whose parent is a merging ebuild
+/// and whose child resolved to an installed instance, the tree ebuild at the
+/// child's own cpv may carry a different `(slot, sub_slot)` than the vdb
+/// record. A hit joins `scheduled`; the binary arm reports stale binaries
+/// into `masked` instead.
+// Portage: _emerge/depgraph.py, _slot_change_probe, _slot_change_backtrack
 pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeArgs<'_>) {
     let SlotOperatorSlotChangeProbeArgs {
         root,
@@ -306,8 +263,7 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
     } = args;
     const DEP_KEYS: [&str; 5] = ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
     for e in entries {
-        // Real's `not dep.parent.built`: only an ebuild scheduled for
-        // merge is a probing parent.
+        // Only a merging ebuild is a probing parent.
         if e.source != CandidateSource::Ebuild {
             continue;
         }
@@ -346,13 +302,10 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                 if undone.contains(&child_cp) || scheduled.contains(&child_cp) {
                     continue;
                 }
-                // Real's `dep.child.built`: the graph must have resolved
-                // this dep to that installed instance. A merge-bound
-                // entry means the walk chose a different candidate
-                // (typically a real upgrade) -- the probe does not fire.
-                // (A merge-bound *binary* is the #212 arm below, which
-                // runs independently -- real files the two backtracks
-                // from independent deps.)
+                // The graph must have resolved this dep to that installed
+                // instance; a merge-bound entry means the walk chose a
+                // different candidate. (A merge-bound binary is the arm
+                // below, which runs independently.)
                 if let Some(installed_version) =
                     best_installed_for_atom(root, &token, &atom.category, &atom.package)
                 {
@@ -378,36 +331,14 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                         scheduled.insert(child_cp.clone());
                     }
                 }
-                // #212 binary arm (real `_slot_change_backtrack`,
-                // `depgraph.py:2381-2398`, v2 `#24c`): the graph resolved
-                // this dep to a merge-bound *binary* (`dep.child.built`
-                // and not installed), and the tree ebuild at the binary's
-                // own cpv (`=cpv`, real `_slot_change_probe`'s
-                // `self._pkg(dep.child.cpv, "ebuild", ...)` then
-                // `_iter_match_pkgs(..., "ebuild", ...)` fallback) carries
-                // a different `(slot, sub_slot)` -- the same slot move
-                // without a revbump, but the stale side is a binary, not
-                // the vdb. Real masks it (`slot_operator_mask_built`) so
-                // the backtrack-config restart resolves the dep to the
-                // tree ebuild instead. Portuale's one-instance-per-cp
-                // model makes entry existence equivalent to dep
-                // resolution: whatever atom pulled this cp sees the
-                // binary entry's version.
-                //
-                // Gates, mirroring real (`_slot_change_probe`
-                // `2317-2359`): the tree ebuild at the binary's cpv must
-                // exist (a `replacement_parent` -- else masking dead-ends
-                // the re-pass, the same gate the #211 arms carry), must
-                // not be `--exclude`d (real `:2343`, the same
-                // `matches_config_entry` idiom as the C4 grouping and
-                // `collect_probe_parents`), and must be visible
-                // (`_pkg_visibility_check`, `:2347`, #243: an explicit
-                // gate here -- a binary entry does not imply a visible
-                // same-version ebuild, and masking a binary whose ebuild
-                // is hidden dead-ends the re-pass).
-                // Real's `runtime_pkg_mask` check on the tree ebuild
-                // (`:2341`) has no counterpart (standing cut, same as
-                // the installed arm above).
+                // Binary arm: the graph resolved this dep to a merge-bound
+                // binary whose own cpv moved in the tree. Mask it so the
+                // restart resolves the dep to the tree ebuild instead.
+                // The tree ebuild must exist (else masking dead-ends the
+                // re-pass), must not be `--exclude`d, and must be visible:
+                // masking a binary whose ebuild is hidden dead-ends the
+                // re-pass. No `runtime_pkg_mask` check on the tree ebuild
+                // (standing cut, same as the installed arm).
                 for child_entry in entries
                     .iter()
                     .filter(|x| x.category == child_cp.0 && x.package == child_cp.1)
@@ -422,10 +353,8 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                         | PretendOutcome::Downgrade { to, .. } => to,
                         _ => continue,
                     };
-                    // A merge-bound entry always carries its resolved
-                    // slot; without it there is nothing to compare
-                    // against the tree (real compares package objects
-                    // that always have one).
+                    // Without a resolved slot there is nothing to compare
+                    // against the tree.
                     let (Some(bin_slot), Some(bin_sub)) =
                         (child_entry.slot.as_deref(), child_entry.sub_slot.as_deref())
                     else {
@@ -433,8 +362,7 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                     };
                     // The replacement gate and the slot compare read one
                     // tree lookup: the highest-priority repo's candidate
-                    // at the binary's own version (the same tolerant
-                    // metadata `slot_changed` trusts).
+                    // at the binary's own version.
                     let Ok(tree_cands) = list_candidates(repos, &atom.category, &atom.package)
                     else {
                         continue;
@@ -460,11 +388,9 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                     }) {
                         continue;
                     }
-                    // Backlog #243: real masks the binary only when the
-                    // same-version ebuild passes `_pkg_visibility_check`
-                    // (`depgraph.py:2347`); an ebuild a keyword or package
-                    // mask hides leaves the binary alone (the live bed
-                    // run keeps `[binary]` on `--usepkg` there).
+                    // Mask the binary only when the same-version ebuild is
+                    // visible; an ebuild a keyword or package mask hides
+                    // leaves the binary alone.
                     if !is_visible(tree, &atom.category, &atom.package, config) {
                         continue;
                     }
