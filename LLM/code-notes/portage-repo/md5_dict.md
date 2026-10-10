@@ -8,18 +8,23 @@ The `md5-dict` aux-cache validator shared by `--regen` and the depend-phase fall
 - `const.EAPI = 9` (`portage/__init__.py:391`); sets `_testing_eapis` and `_deprecated_eapis` as listed in the code.
 
 ## fn eapi_has_slot_operator
+- Portage `_get_eapi_attrs(eapi).slot_operator` (`portage/eapi.py`): whether `:=` slot-operator dependencies exist in this EAPI.
+- The deprecated underscore EAPIs (`3_pre1`, …) make Portage's `Eapi()` raise `ValueError` (no `-` to partition on); no vdb or tree can carry one in practice, so they read by numeric prefix here.
 - Rule is `Eapi(eapi) >= Eapi("5")` (`eapi.py` else-branch), where `Eapi` compares only the integer before any `-` suffix (`"9-pre1"` reads as 9). Portage evaluates the attribute strictly after the support gate in `FakeVartree._apply_dynamic_deps` (`lib/_emerge/FakeVartree.py:158-169`); the only reachable inputs here are `"0"`–`"9"`.
 
 ## fn eapi_empty_groups_always_true
+- Portage `eapi_empty_groups_always_true` (`portage/eapi.py:139-140`): whether a `||` group an inactive conditional emptied is dropped.
 - `empty_groups_always_true = eapi <= Eapi("6")` (`eapi.py:295`), same dash-suffix-insensitive integer comparison. Portage's defaults struct for `None`/unsupported EAPIs (`eapi.py:247-253`) is also what Portage's `dep_check` feeds `use_reduce` for installed packages (`dep_check.py:865-877`).
 
 ## fn eapi_has_iuse_effective
 - Backlog #230. PMS defines `IUSE_EFFECTIVE` beginning with EAPI 5, instead of the pre-EAPI-5 `_get_implicit_iuse` rule; governs the `PORTAGE_USE` masking (`config.py` setcpv). Both attributes share the `Eapi(eapi) >= Eapi("5")` gate.
 
 ## fn eapi_has_idepend
+- Portage `eapi_has_idepend` (`portage/eapi.py:135`): whether `IDEPEND` exists in this EAPI (`_get_eapi_attrs(eapi).idepend`, `eapi.py:304`: `idepend = eapi >= Eapi("8")`).
 - `idepend = eapi >= Eapi("8")` (`eapi.py:304`). Backlog #194: the `--onlydeps-with-rdeps=y` oracle cell on an EAPI-7 root merges `[B, C, D]` with no `E` for exactly this reason. `portdb.aux_get` serves `""` and `depgraph.py` never walks it.
 
 ## fn cache_entry_is_valid
+- Portage `portdbapi._pull_valid_cache` (`porttree.py:603-658`) against a single on-disk `md5-cache` entry: `true` when `metadata/md5-cache/<category>/<pf>` validates, so the `depend` phase can be skipped.
 - Validation mirrors `cache/template.py::validate_entry`: the entry parses as `KEY=value` lines (a corrupt line invalidates, Portage's `flat_hash._parse_data` raising `CacheCorruption`); `_md5_` equals the md5 of the current ebuild file bytes; `EAPI` defaults to `"0"` when missing/empty (Portage's `porttree.py:644-648`) and unsupported-EAPI entries are disregarded so `depend` re-runs; every `_eclasses_` pair/triple still matches the eclass file that wins across the `masters`-then-self chain (Portage's `eclass_cache.py::validate_and_rewrite_cache`; the last tree in the chain holding the file wins, the same rule `portuale::regen::eclasses_field` documents). A missing/empty `_eclasses_` validates (nothing inherited, Portage's empty-dict success); a missing eclass file, a differing md5, or a malformed field length invalidates.
 - Falling through to `EbuildMetadataPhase` when no auxdb hits is Portage's behavior.
 
@@ -31,3 +36,9 @@ The `md5-dict` aux-cache validator shared by `--regen` and the depend-phase fall
 
 ## tests: triple_eclass_format
 - S0 cell (a): the writable depcachedir is `mtime_md5_database` (`store_eclass_paths = True`); validation reads the `(dir, checksum)` tuple's `itemgetter(1)`, i.e. checksum only.
+
+## tests: corrupt_line_and_unsupported_eapi_invalidate
+- An unsupported EAPI is disregarded so the `depend` phase re-runs (Portage `porttree.py:648-653`, `_pull_valid_cache`).
+
+## tests: eapi_empty_groups_matches_portage
+- Portage `_get_eapi_attrs(eapi).empty_groups_always_true` (`portage/eapi.py:295`): `eapi <= Eapi("6")`, dash-suffix-insensitive like the slot operator.

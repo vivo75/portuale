@@ -388,7 +388,7 @@ mod tests {
             Some(&format!("EAPI=8\nNOEQUALS\n_md5_={md5}\n")),
             false,
         ));
-        // Unsupported EAPI is disregarded (`porttree.py:648-653`).
+        // Unsupported EAPI is disregarded (Portage: porttree.py, _pull_valid_cache).
         assert!(!valid_repo(
             ebuild,
             None,
