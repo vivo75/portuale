@@ -2,12 +2,9 @@
 
 use crate::ebuild_merge::*;
 
-/// Real portage's own mechanism for naming a repo (`layout.conf`'s
-/// `repo-name` key aside, the canonical source is a repo's own
-/// `profiles/repo_name` file, first line): walks up from `pkg_dir`
-/// (`<category>/<package>`) through every ancestor, returning the first
-/// `profiles/repo_name` found. `None` when no ancestor has one at all
-/// (e.g. a standalone ebuild file outside any repo checkout).
+/// Finds the repo name by walking up from `pkg_dir` (`<category>/<package>`)
+/// for the first `profiles/repo_name` file (the canonical source besides
+/// `layout.conf`'s `repo-name` key). `None` when no ancestor has one.
 pub(crate) fn repository_name_for(pkg_dir: &Path) -> Option<String> {
     for ancestor in pkg_dir.ancestors() {
         let candidate = ancestor.join("profiles").join("repo_name");
@@ -28,16 +25,15 @@ pub(crate) fn md5_hex_bytes(data: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Hex MD5 of a file's bytes. Shared with the remote-merge server
-/// (`remote_bundle::build_bundle` writes `build-info/BINPKGMD5`, backlog
-/// #170): the same digest the local `merge_binpkg` records, so a later
+/// Hex MD5 of a file's bytes. Shared with the remote-merge server so a later
 /// index rebuild sees a still-current instance either way.
 pub(crate) fn md5_hex(path: &Path) -> Result<String, String> {
     let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(md5_hex_bytes(&data))
 }
 
-/// Real `dblink._format_contents_line`: `<type> <path>[ <md5>| -> <target>][ <mtime>]\n`.
+/// One `CONTENTS` line: `<type> <path>[ <md5>| -> <target>][ <mtime>]\n`.
+// Portage: dblink._format_contents_line
 pub(crate) fn format_contents_line(
     node_type: &str,
     abs_path: &str,
@@ -57,9 +53,8 @@ pub(crate) fn format_contents_line(
     format!("{}\n", fields.join(" "))
 }
 
-/// `pub(crate)`: `ebuild_unmerge`'s own mtime-staleness check
-/// (`remove_contents`) reuses this exact conversion to compare a live
-/// file's current mtime against a `CONTENTS`-recorded one.
+/// Converts a file's mtime to seconds since the epoch. `ebuild_unmerge`'s
+/// mtime-staleness check reuses this to compare against `CONTENTS`-recorded times.
 pub(crate) fn mtime_secs(metadata: &std::fs::Metadata) -> Result<i64, String> {
     use std::time::UNIX_EPOCH;
     let mtime = metadata
@@ -71,7 +66,6 @@ pub(crate) fn mtime_secs(metadata: &std::fs::Metadata) -> Result<i64, String> {
         .as_secs() as i64)
 }
 
-/// Arguments of [`merge_tree`].
 pub(crate) struct MergeTreeArgs<'a> {
     pub(crate) d: &'a Path,
     pub(crate) root: &'a Path,
@@ -85,13 +79,11 @@ pub(crate) struct MergeTreeArgs<'a> {
     pub(crate) xattrs: &'a XattrPolicy,
 }
 
-/// Walks `d` (real `${D}`) and merges every entry into `root` (real
-/// `${ROOT}`), returning the accumulated real `CONTENTS` text (see this
-/// module's own doc comment for the exact line format and the v1 scope
-/// cuts -- no chown, sorted-by-name traversal order). `cfgfiledict` is
-/// read once by the caller before this runs and written back once after
-/// -- real `vardbapi._conf_mem_file` semantics (a single, whole-merge
-/// read/update/write, not a per-file one).
+/// Walks `d` (`${D}`) and merges every entry into `root` (`${ROOT}`),
+/// returning the accumulated `CONTENTS` text. `cfgfiledict` is read once by
+/// the caller before this runs and written back once after, a single
+/// whole-merge read/update/write, not a per-file one.
+// Portage: vartree.py, mergeme; vardbapi._conf_mem_file
 pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
     let MergeTreeArgs {
         d,
@@ -127,13 +119,10 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                 let target =
                     std::fs::read_link(&src).map_err(|e| format!("{}: {e}", src.display()))?;
                 let target_str = target.to_string_lossy().to_string();
-                // Real dblink._protect(): a CONFIG_PROTECT'd `sym` entry
-                // whose real, live destination differs is diverted to a
-                // fresh ._cfgNNNN_ sibling (real bug #485598: the target
-                // string's own MD5 is what's hashed, not file content) --
-                // `protect_decision` computes the comparison from the
-                // dest's own real on-disk type, whatever it actually is
-                // (see that function's own doc comment).
+                // A CONFIG_PROTECT'd `sym` entry whose live destination differs
+                // is diverted to a fresh ._cfgNNNN_ sibling (the target
+                // string's own MD5 is what's hashed, not file content).
+                // Portage: dblink._protect
                 let mut write_dest = dest.to_path_buf();
                 let mut moveme = true;
                 let protected_path = is_protected(root, config_protect, config_protect_mask, &dest);
@@ -151,18 +140,10 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                         noconfmem,
                     })?;
                 }
-                // Real `mergeme()`'s own symlink-over-directory branch
-                // (`vartree.py`: `if mydmode is not None and S_ISDIR and
-                // not protected`): a symlink can never replace a real
-                // directory -- the symlink lands at the first
-                // `dest.backup.NNNN` instead and the directory is kept.
-                // This is the merge-time half of the `find_collisions`
-                // exclusion above: directory-target symlinks are never
-                // collision-checked (real `os.walk` puts them in `dirs`),
-                // so they always reach here, and real still exits 0.
-                // (File-target symlinks never reach here: they always
-                // aborted in `_collision_protect` first.) `CONTENTS`
-                // below still records the logical `abs_path`, like real.
+                // A symlink can never replace a directory: it lands at the
+                // first `dest.backup.NNNN` instead and the directory is kept.
+                // Directory-target symlinks always reach here and still exit 0.
+                // Portage: vartree.py, mergeme
                 if moveme
                     && !protected_path
                     && write_dest == dest
@@ -182,29 +163,20 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                     &std::fs::symlink_metadata(&src)
                         .map_err(|e| format!("{}: {e}", src.display()))?,
                 )?;
-                // Real `moveme == false` ("confmem rejected this update",
-                // see `protect_decision`'s own doc comment): skip the
-                // write entirely, leaving the live destination completely
-                // untouched -- `mtime` above still uses the *source's* own
-                // mtime for CONTENTS below either way, matching real
-                // `mergeme()`'s own `mymtime = mystat.st_mtime_ns` (set
-                // before the `if moveme:` gate, never touched when it's
-                // skipped, `vartree.py:5403`/`5547`).
+                // `moveme == false` (confmem rejected this update): skip the
+                // write entirely. `mtime` still uses the source's mtime for
+                // CONTENTS either way.
+                // Portage: vartree.py, mergeme
                 if moveme {
                     if let Some(parent) = write_dest.parent() {
                         std::fs::create_dir_all(parent)
                             .map_err(|e| format!("{}: {e}", parent.display()))?;
                     }
-                    // Real `movefile()` installs a symlink by an atomic
-                    // rename too -- see `replace_symlink_atomic`'s own
-                    // doc comment (backlog #96).
+                    // Installed by atomic rename, like a regular file.
                     replace_symlink_atomic(&target, &src, &write_dest, mtime)?;
                 }
-                // Real CONTENTS always records the package's own logical
-                // path/target (`abs_path`/`target_str`), never the
-                // ._cfgNNNN_ variant a protected write may have actually
-                // landed at -- same "logical path, not the protect-file
-                // path" rule the `obj` branch below documents.
+                // CONTENTS records the logical path/target, never the ._cfgNNNN_
+                // variant a protected write may have landed at.
                 contents.push_str(&format_contents_line(
                     "sym",
                     &abs_path,
@@ -213,14 +185,10 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                     Some(mtime),
                 ));
             } else if file_type.is_dir() {
-                // Real `mergeme()`: a *newly created* directory gets
-                // `os.chmod`/`os.chown`ed to the source's own recorded
-                // mode/owner (`vartree.py:5865-5867`); a destination that
-                // already exists as a directory is left completely alone
-                // (the `--- {mydest}/` "kept as-is" branch, `:5808-5810`)
-                // -- an existing shared directory (e.g. `/usr/lib`) must
-                // never have its ownership clobbered by every package
-                // that happens to also install into it.
+                // A newly created directory takes the source's mode/owner; an
+                // existing one is left alone (a shared `/usr/lib` must never
+                // have ownership clobbered by every package installing into it).
+                // Portage: vartree.py, mergeme
                 let dir_existed = dest.is_dir();
                 std::fs::create_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
                 if !dir_existed {
@@ -238,15 +206,11 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                 stack.push(relative_path);
             } else if file_type.is_file() {
                 let src_md5 = md5_hex(&src)?;
-                // Real dblink._protect(): a protected path whose real
-                // on-disk content differs from what's about to be merged
-                // gets diverted to a fresh ._cfgNNNN_ sibling instead of
-                // overwritten -- unless cfgfiledict already remembers
-                // this exact src_md5 as a previously-offered update for
-                // this path (real "--noconfmem off" default: apply it
-                // directly, don't re-protect; `NOCONFMEM` forces
-                // re-protection regardless of memory, real `cfgfiledict[
-                // "IGNORE"]`).
+                // A protected path whose on-disk content differs is diverted to
+                // a fresh ._cfgNNNN_ sibling, unless cfgfiledict already
+                // remembers this src_md5 for this path (`NOCONFMEM` forces
+                // re-protection regardless).
+                // Portage: dblink._protect
                 let mut write_dest = dest.to_path_buf();
                 let mut moveme = true;
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
@@ -266,31 +230,19 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                 let mtime = mtime_secs(
                     &std::fs::metadata(&src).map_err(|e| format!("{}: {e}", src.display()))?,
                 )?;
-                // Real `moveme == false` ("confmem rejected this update",
-                // see `protect_decision`'s own doc comment): skip the copy
-                // entirely, leaving the live destination completely
-                // untouched -- `mtime` above still uses the *source's* own
-                // mtime for CONTENTS below either way, matching real
-                // `mergeme()`'s own `mymtime = mystat.st_mtime_ns` (set
-                // before the `if moveme:` gate, never touched when it's
-                // skipped, `vartree.py:5403`/`5749`).
+                // `moveme == false` (confmem rejected this update): skip the copy
+                // entirely. `mtime` still uses the source's mtime for CONTENTS.
+                // Portage: vartree.py, mergeme
                 if moveme {
                     if let Some(parent) = write_dest.parent() {
                         std::fs::create_dir_all(parent)
                             .map_err(|e| format!("{}: {e}", parent.display()))?;
                     }
-                    // Real `mergeme()`'s `if self._needs_move(mysrc,
-                    // mydest, mymode, mydmode)` gate (bug #722270): a
-                    // destination that already is a regular file with
-                    // the same mode and byte-identical content is left
-                    // completely in place -- inode, ownership and xattrs
-                    // survive the rebuild, and only the mtime is
-                    // refreshed (`os.utime(mydest, ns=(mymtime,
-                    // mymtime))`). A diverted `._cfgNNNN_` write never
-                    // takes this path: real clears `mydmode` whenever
-                    // `_protect` diverts (`vartree.py:5645-5647`), so it
-                    // always moves there, and `write_dest != dest` says
-                    // the same thing here.
+                    // A destination already a regular file with the same mode and
+                    // byte-identical content is left in place (inode, ownership
+                    // and xattrs survive; only mtime is refreshed). A diverted
+                    // ._cfgNNNN_ write never takes this path.
+                    // Portage: vartree.py, dblink._needs_move
                     if write_dest == dest && !needs_move(&src, &write_dest, xattrs) {
                         filetime::set_file_mtime(
                             &write_dest,
@@ -298,22 +250,14 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                         )
                         .map_err(|e| format!("{}: {e}", write_dest.display()))?;
                     } else {
-                        // Real `movefile()`'s atomic replacement -- the
-                        // destination's existing inode is never opened for
-                        // write (backlog #96): see
-                        // `replace_file_atomic`'s own doc comment for why
-                        // that is a safety requirement, not an
-                        // optimization.
+                        // Atomic replacement: the destination's existing inode is
+                        // never opened for write (a safety requirement, not an
+                        // optimization).
                         replace_file_atomic(&src, &write_dest, mtime, xattrs)?;
                     }
                 }
-                // Real CONTENTS always records the package's own logical
-                // path (`abs_path`) and the *source*'s own MD5 -- never
-                // the ._cfgNNNN_ variant a protected write may have
-                // actually landed at (real dblink.mergeme(): `abs_path=
-                // myrealdest, md5_digest=mymd5`, both computed before
-                // `_protect()` ever runs). The vdb still considers this
-                // package the owner of the *logical* path either way.
+                // CONTENTS records the logical path and the source's MD5, never
+                // the ._cfgNNNN_ variant; the vdb owns the logical path either way.
                 contents.push_str(&format_contents_line(
                     "obj",
                     &abs_path,
@@ -325,34 +269,12 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                 || file_type.is_char_device()
                 || file_type.is_block_device()
             {
-                // Real `mergeme()`'s own `else:` branch ("we are merging a
-                // fifo or device node", `vartree.py:5787-5811`): never
-                // `_protect()`'d (this branch doesn't call it at all,
-                // unlike `obj`/`sym` above), and only actually created
-                // when the live destination doesn't already exist yet
-                // (real `if mydmode is None:`) -- an existing node at that
-                // path is left completely alone, matching real portage's
-                // own conservative "don't touch a device/fifo that's
-                // already there" behavior. The `CONTENTS` line is written
-                // unconditionally either way (real `_format_contents_line`
-                // call sits *outside* that `if`), with no digest/mtime/
-                // target field at all (real `abs_path=myrealdest` only).
-                //
-                // Real `movefile()` has no dedicated fifo/device-node
-                // logic of its own -- an ordinary `os.rename()` just works
-                // for a special file too, since `rename(2)` doesn't care
-                // what type of file it's moving (real `movefile()`'s own
-                // comment: "we don't yet handle special, so we need to
-                // fall back to /bin/mv" only fires on a genuine cross-
-                // device `EXDEV` failure). Portuale's own merge step
-                // never moves `${D}` content though (every other branch
-                // above copies/recreates instead, so `${D}` itself stays
-                // intact) -- recreating a fresh node at `write_dest` via
-                // real `mkfifo(3)`/`mknod(3)` (matching the source's own
-                // real type, permission bits, and -- for a device node --
-                // major/minor) is the equivalent "copy" here, the same
-                // "recreate, don't move" shape the `sym` branch above
-                // already established for symlinks.
+                // Fifo/device nodes: never protected; only created when the live
+                // destination doesn't exist yet (an existing node is left
+                // alone). The CONTENTS line is written unconditionally, with
+                // no digest/mtime/target. Recreated via mkfifo/mknod (not
+                // moved) so `${D}` stays intact.
+                // Portage: vartree.py, mergeme
                 if std::fs::symlink_metadata(&dest).is_err() {
                     if let Some(parent) = dest.parent() {
                         std::fs::create_dir_all(parent)
@@ -370,24 +292,15 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
     Ok(contents)
 }
 
-/// Creates a fresh FIFO or device node at `dest`, matching `src`'s own
-/// real type, permission bits, and (for a device) real major/minor
-/// (`st_rdev`) -- the "recreate, don't move" equivalent of real
-/// `movefile()`'s ordinary same-device `rename(2)` for a special file
-/// (see `merge_tree`'s own `fif`/`dev` branch doc comment for why this
-/// portuale recreates rather than moves). `mkfifo(3)`/`mknod(3)` both apply
-/// the process umask to the mode given, unlike `std::fs::copy`'s own
-/// automatic exact permission-bit preservation for a regular file -- an
-/// explicit `chmod` afterward closes that gap, so a real, non-default
-/// source mode (e.g. `0600`) survives regardless of this process's own
-/// umask.
+/// Creates a fresh FIFO or device node at `dest`, matching `src`'s type,
+/// permission bits, and (for a device) major/minor. Recreated rather than
+/// moved so `${D}` stays intact. An explicit `chmod` afterward closes the
+/// umask gap (`mkfifo`/`mknod` apply it, unlike `std::fs::copy`).
 ///
-/// Real `mknod(2)` genuinely requires root/`CAP_MKNOD` for a real
-/// (nonzero major:minor) character or block device -- an unprivileged
-/// caller merging a real device node from `${D}` (itself only possible
-/// because a privileged build process, e.g. real `udev`, put it there)
-/// hits this same real permission wall, surfaced here as an ordinary
-/// `Result::Err` rather than a panic.
+/// # Errors
+///
+/// Returns `Err` (not a panic) when `mknod` hits the root/`CAP_MKNOD`
+/// permission wall for a nonzero major:minor device.
 pub(crate) fn create_special_node(
     src: &Path,
     dest: &Path,
@@ -439,25 +352,11 @@ pub(crate) fn create_special_node(
     Ok(())
 }
 
-/// Real `movefile()`'s ownership preservation: `lchown(dest, sstat.
-/// st_uid, sstat.st_gid)` for a symlink (real `movefile.py:255`, via
-/// `portage.data.lchown` -- a thin `os.lchown` wrapper, `data.py:18`),
-/// `os.chown(dest, sstat.st_uid, sstat.st_gid)` for anything else (real
-/// `_apply_stat`, `movefile.py:28-30`) -- both set `dest`'s owner/group
-/// to match the *source*'s own recorded uid/gid from `${D}` (whatever
-/// the build phases, or an ebuild's own `fowners`, actually left
-/// there).
-///
-/// Real portage runs merges as root in normal operation, so this always
-/// succeeds there; it's not gated on "am I root" here either, matching
-/// real's own unconditional call with no privilege check at this call
-/// site. Run unprivileged with the source already owned by the calling
-/// process (the common single-user case `${D}`'s files are almost
-/// always in), `chown(path, self_uid, self_gid)` is permitted regardless
-/// and still succeeds. Only a genuinely privileged ownership change
-/// attempted without root hits the same real `EPERM` real portage would
-/// -- propagated here as an ordinary merge failure, exactly like every
-/// other I/O error in this function, never silently swallowed.
+/// Sets `dest`'s owner/group to the source's recorded uid/gid from `${D}`
+/// (`lchown` for a symlink, `chown` otherwise). Unconditional, like Portage:
+/// unprivileged callers only fail on a genuinely privileged change, and that
+/// surfaces as an ordinary merge failure, never silently swallowed.
+// Portage: movefile.py, movefile._apply_stat
 pub(crate) fn lchown_or_chown(
     dest: &Path,
     uid: u32,
@@ -486,21 +385,12 @@ pub(crate) fn lchown_or_chown(
     Ok(())
 }
 
-/// Real `dblink._needs_move` (`vartree.py:6363`): `true` unless the
-/// destination already exists as a regular file with the same full mode
-/// and byte-identical content. When it returns `false`, real's
-/// `mergeme` does not call `movefile` at all (`:5916`'s
-/// `if self._needs_move(...)` gate, bug #722270) -- the destination's
+/// `true` unless the destination already exists as a regular file with the
+/// same full mode and byte-identical content. When `false`, the destination's
 /// inode, ownership and xattrs survive the rebuild and only its mtime is
-/// refreshed, which is exactly why the L3 ncurses case keeps `1:1`:
-/// the stage3 image's `curses.h`/terminfo are byte-identical to the
-/// rebuilt ones, so real leaves them alone while a fresh copy would
-/// come out `0:0`.
-///
-/// Under `FEATURES=xattr` real also compares xattrs (`_cmpxattr`,
-/// `PORTAGE_XATTR_EXCLUDE`-aware, `vartree.py:6376-6379`):
-/// [`xattrs_equal`] (#329). Real's `filecmp.cmp(shallow=False)` is a byte compare after
-/// the mode check; [`files_equal`] does the same in fixed chunks.
+/// refreshed. Under `FEATURES=xattr` xattrs are compared too
+/// (`PORTAGE_XATTR_EXCLUDE`-aware); content is compared in fixed chunks.
+// Portage: vartree.py, dblink._needs_move
 pub(crate) fn needs_move(src: &Path, dest: &Path, xattrs: &XattrPolicy) -> bool {
     use std::os::unix::fs::PermissionsExt;
     let Ok(src_meta) = std::fs::symlink_metadata(src) else {
@@ -518,10 +408,8 @@ pub(crate) fn needs_move(src: &Path, dest: &Path, xattrs: &XattrPolicy) -> bool 
     !files_equal(src, dest).unwrap_or(false)
 }
 
-/// Byte-for-byte comparison for [`needs_move`] (real
-/// `filecmp.cmp(shallow=False)`, which also short-circuits on a size
-/// mismatch first). Chunked so a large distfile-scale object never
-/// materializes in memory twice.
+/// Byte-for-byte comparison for [`needs_move`], short-circuiting on a size
+/// mismatch first. Chunked so a large object never materializes in memory twice.
 pub(crate) fn files_equal(a: &Path, b: &Path) -> std::io::Result<bool> {
     let mut fa = std::fs::File::open(a)?;
     let mut fb = std::fs::File::open(b)?;
@@ -542,9 +430,8 @@ pub(crate) fn files_equal(a: &Path, b: &Path) -> std::io::Result<bool> {
     }
 }
 
-/// `read` until `buf` is full or EOF (a plain `Read::read` may return a
-/// short count for regular files too, which would otherwise misalign the
-/// chunk comparison).
+/// `read` until `buf` is full or EOF (a plain `Read::read` may return a short
+/// count, which would otherwise misalign the chunk comparison).
 pub(crate) fn read_filling(reader: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
     use std::io::Read as _;
     let mut filled = 0;

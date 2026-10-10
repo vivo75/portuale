@@ -1,96 +1,16 @@
-// Real binary-package building (task #54's own natural sibling to
-// `merge`): `ebuild <file> package` mirrors real `doebuild()`'s own
-// `"package"` action -- runs the real `install` chain
-// (`actionmap_deps["package"] == ["install"]`), then really invokes
-// `bin/misc-functions.sh`'s own `__dyn_package` (real, unmodified bash --
-// `ebuild_phases::run_misc_functions`'s own doc comment explains why this
-// is a *separate* script invocation, not a `bin/ebuild.sh` phase), which
-// itself shells out to the native `xpak recompose` helper (#326 S5,
-// `helpers/xpak.rs`, reached through `bin/portuale-python`) to tar
-// `${D}` and append real XPAK metadata, producing a genuine
-// `${PKGDIR}/${CATEGORY}/${PF}.tbz2`. `portage_repo`'s own binary-package
-// reader (task #53/#63) never parses a `.tbz2`/XPAK file's own content at
-// all -- only `<PKGDIR>/Packages`, a plain-text index -- so this module
-// also writes/updates a real entry there, in the exact format that
-// reader already parses, closing the loop: a package built this way is
-// immediately visible to `emerge --pretend --usepkg`.
-//
-// KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
-// "narrow v1, document the cut" pattern):
-//   - `BINPKG_FORMAT` (real default `"gpkg"` -- real `cnf/make.globals:43`
-//     -- with `"xpak"`, the predecessor format, still selectable) is
-//     honored at package time: for `"gpkg"`, real, unmodified `bin/misc-functions.sh
-//     __dyn_package` shells out to the native `gpkg compress` helper
-//     (#326 S4, `helpers/gpkg.rs` -- a field-for-field port of real
-//     `portage.gpkg.gpkg().compress()`, reached through
-//     `bin/portuale-python`) exactly the way the `"xpak"` branch already
-//     reaches the native `xpak recompose`, producing a genuine
-//     `${PKGDIR}/${CATEGORY}/${PF}.gpkg.tar` portuale's own
-//     `binpkg::read_gpkg_metadata` reader round-trips. Anything other
-//     than those two values is `Err("Unknown BINPKG_FORMAT ...")`, real
-//     `__dyn_package`'s own `die`. `FEATURES=binpkg-signing` IS real now
-//     for gpkg (`PackageOptions::binpkg_signing`'s own doc comment):
-//     the real, unmodified helper signs the members (detached `.sig`
-//     sidecars) and clear-signs the `Manifest`, configured via the real
-//     `BINPKG_GPG_SIGNING_*` env passthrough, with real
-//     `_emerge/actions.py`'s own `!!! {var} is not set` pre-check.
-//     `FEATURES=binpkg-multi-instance`
-//     IS real now for both formats, opt-in (`PackageOptions::
-//     binpkg_multi_instance`'s own doc comment) -- the `<cat>/<pn>/<pf>-
-//     <build_id>.<suffix>` subdir layout real `_allocate_filename_multi`
-//     writes, `.xpak` suffix for xpak.
-//   - Real `PORTAGE_COMPRESSION_COMMAND` resolution (real
-//     `_compressors`/`BINPKG_COMPRESS_FLAGS_*`, `doebuild.py:697-750`) is
-//     real now -- see `resolve_compression_command`'s own doc comment
-//     for the exact real mechanics and v1 narrowing (no full shell
-//     `varexpand`, real host CPU count for `{JOBS}`). `PKGDIR`/
-//     `BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`/
-//     `PORTAGE_BZIP2_COMMAND` follow real's layering at both
-//     `PackageOptions` construction sites (backlog #180): calling env
-//     over `make.conf`/profile/`make.globals` (real `config`
-//     precedence, via `portage_profile::env_over_config_scalar`),
-//     falling back to real `make.globals`'s own defaults
-//     (`PKGDIR="/var/cache/binpkgs"`, `BINPKG_COMPRESS="zstd"`,
-//     `PORTAGE_BZIP2_COMMAND="bzip2"`, empty flags) -- except the
-//     gpkg compression pair, which real's `environ_filter` keeps out
-//     of the helper's rebuilt settings, so only a config-file value
-//     reaches it (the Q6 rule: calling-env `BINPKG_COMPRESS`/`FLAGS`
-//     win for `xpak`, never for `gpkg`).
-//   - `USE` in the Packages index entry is real now
-//     (`package_after_install`'s own `use_flags` parameter): an
-//     `emerge <atom> -b` build's resolved flags (the same `USE`
-//     `MergeOptions::build_env`/`entry_build_env` already resolved for
-//     the `install` phase this binpkg is built from) are written
-//     verbatim, matching real `Package.use.enabled`. Still empty for a
-//     standalone `ebuild <file> package`/`merge` -- no resolved graph
-//     reaches that deep, so `""` stays the honest value there.
-//   - `SLOT`/`KEYWORDS`/`IUSE`/`LICENSE`/`PROPERTIES`/`RESTRICT`/the
-//     `*DEPEND` family in the `Packages` *index* entry are read from the
-//     ebuild's own repo's real `metadata/md5-cache` entry (via
-//     `portage_repo::read_md5_cache`, the exact same source `emerge
-//     --pretend`'s own dependency resolution already trusts) when the
-//     ebuild's own containing repo can be found by walking up for a
-//     `profiles/repo_name` file -- absent entirely (empty strings
-//     throughout) for a standalone ebuild file outside any repo
-//     checkout. The `.tbz2`'s own appended XPAK metadata gets the same
-//     keys independently, from real `build-info` (`bin/phase-functions.
-//     sh` + `ebuild_phases::write_post_install_metadata`) -- for a
-//     USE-conditional dep string the two can differ (the index entry is
-//     flat md5-cache, the XPAK is `use_reduce`'d against the empty
-//     phase-side USE set); `--pretend` reads the index entry, so this is
-//     cosmetic. Reading the index entry from `build-info` too, for a
-//     single source of truth, is a documented follow-up.
-//   - No `packdebug`/`splitdebug` handling, no RPM (`__dyn_rpm`) format.
-//   - `PKGDIR`-index locking IS real now (`write_packages_index_entry`'s
-//     own doc comment) -- the same real `flock(2)`-based
-//     `PortageLockfile` `fetch.rs`'s own distlocks already use, wrapping
-//     the whole read-modify-write sequence, matching real `bintree.
-//     inject`/`update_pkgindex`/`remove`.
-//   - Real `EbuildBinpkg`'s own separate `bindbapi.inject()` step (an
-//     in-memory binary-package database update, distinct from the
-//     on-disk `Packages` file write) has no equivalent here -- this
-//     portuale has no long-lived `bindbapi` process at all, only ever
-//     re-reading `Packages` fresh each invocation.
+//! Binary-package building: `ebuild <file> package` runs the `install` chain,
+//! then `bin/misc-functions.sh __dyn_package` to produce a genuine
+//! `${PKGDIR}/${CATEGORY}/${PF}.tbz2` (xpak) or `.gpkg.tar` (gpkg), plus a
+//! `<PKGDIR>/Packages` index entry so the package is immediately visible
+//! to `emerge --pretend --usepkg`.
+//!
+//! Scope cuts a caller must know: `BINPKG_FORMAT` accepts only `gpkg` (the
+//! default) and `xpak`; `USE` in the index entry is empty for standalone
+//! builds (no resolved graph reaches this deep); `SLOT`/`KEYWORDS`/deps in
+//! the index entry come from the repo's `metadata/md5-cache` when the ebuild
+//! is inside a repo checkout, else empty; no `packdebug`/`splitdebug` or RPM
+//! handling. Details in notes.
+// Portage: doebuild.py, __dyn_package; bintree.py, EbuildBinpkg
 
 use crate::binpkg;
 use crate::ebuild_merge;
@@ -99,110 +19,60 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Whether `command` is the one real package-building command this
-/// module implements -- `ebuild.rs` checks this alongside
-/// `ebuild_phases::is_phase_command`/`ebuild_merge::
-/// is_merge_command`/`ebuild_unmerge::is_unmerge_command`
-/// before routing to real execution.
+/// Whether `command` is the package-building command this module implements
+/// (`ebuild.rs` checks this alongside the phase/merge/unmerge routers).
 pub fn is_package_command(command: &str) -> bool {
     command == "package"
 }
 
 /// Options for `run_package`, bundled into a struct rather than more
-/// positional parameters (the same "positional-parameter pain" lesson
-/// `ebuild_merge::MergeOptions` already applied). `pkgdir` is
-/// chain-resolved at the construction sites (backlog #180: calling env
-/// over `make.conf`/profile/`make.globals`); `Default` matches real
-/// `make.globals`'s own `PKGDIR="/var/cache/binpkgs"` exactly.
+/// positional parameters. `pkgdir` is chain-resolved at the construction
+/// sites (calling env over `make.conf`/profile/`make.globals`); `Default`
+/// matches `make.globals`' `PKGDIR="/var/cache/binpkgs"`.
 #[derive(Clone)]
 pub struct PackageOptions {
     pub debug: bool,
     pub pkgdir: PathBuf,
     pub distdir: PathBuf,
     pub shell: ebuild_phases::ShellBackend,
-    /// Real `BINPKG_COMPRESS` (real `make.globals`'s own default:
-    /// `"zstd"`) -- see `resolve_compression_command`'s own doc comment.
+    /// `BINPKG_COMPRESS` (default `"zstd"`); see `resolve_compression_command`.
     pub binpkg_compress: String,
-    /// Real `BINPKG_COMPRESS_FLAGS_<NAME>` (the per-compressor override,
-    /// `<NAME>` = `binpkg_compress` uppercased) if set, else real
-    /// `BINPKG_COMPRESS_FLAGS` -- already resolved to the single value
-    /// to use, at the `ebuild.rs` CLI boundary, so this module itself
-    /// doesn't need to know about the per-compressor override naming
-    /// convention at all. Real `make.globals` sets neither, so
-    /// `Default` is empty.
+    /// `BINPKG_COMPRESS_FLAGS_<NAME>` (per-compressor override) if set, else
+    /// `BINPKG_COMPRESS_FLAGS` -- already resolved to the single value to use
+    /// at the CLI boundary. Default is empty.
     pub binpkg_compress_flags: String,
-    /// Real `PORTAGE_BZIP2_COMMAND` (real `make.globals`'s own default:
-    /// `"bzip2"`) -- only actually substituted when `binpkg_compress ==
-    /// "bzip2"`.
+    /// `PORTAGE_BZIP2_COMMAND` (default `"bzip2"`); only substituted when
+    /// `binpkg_compress == "bzip2"`.
     pub portage_bzip2_command: String,
-    /// Real `BINPKG_FORMAT` (real `cnf/make.globals:43`'s own default:
-    /// `"gpkg"` -- `"xpak"` is only the first entry of real
-    /// `SUPPORTED_GENTOO_BINPKG_FORMATS` (`const.py:296`), not the
-    /// shipped default). `"xpak"` is the only other accepted value; `run_package` rejects anything else
-    /// with `Err("Unknown BINPKG_FORMAT ...")`, real `bin/misc-functions.
-    /// sh __dyn_package`'s own `die`.
+    /// `BINPKG_FORMAT` (default `"gpkg"`; `"xpak"` is the only other accepted
+    /// value -- anything else is `Err("Unknown BINPKG_FORMAT ...")`).
     pub binpkg_format: String,
-    /// Real `PORTAGE_CONFIGROOT` -- see `ebuild_merge::MergeOptions::
-    /// config_root`'s own doc comment for the exact real default/`Default`
-    /// split this mirrors (only consulted by `ebuild_phases::
-    /// eclass_locations_value`'s own masters-chain resolution).
+    /// `PORTAGE_CONFIGROOT` (mirrors `ebuild_merge::MergeOptions::config_root`).
     pub config_root: PathBuf,
-    /// Real `FEATURES=buildpkg-live` (`_emerge/Package.py:621-637`'s own
-    /// `binpkg_wanted`): whether a `PROPERTIES=live` build also gets
-    /// packaged when `buildpkg` is otherwise on. Real default is `true`
-    /// (`buildpkg-live` is one of real `make.globals`'s own default
-    /// `FEATURES` tokens) -- explicit `FEATURES=-buildpkg-live` is the
-    /// only way to skip packaging a live build. Consulted by
-    /// `emerge_build::entry_buildpkg_wanted`, not by this module itself
-    /// (a live-vs-not decision needs the resolved graph entry, which
-    /// this module never sees -- it just builds whatever it's told to).
+    /// `FEATURES=buildpkg-live`: whether a `PROPERTIES=live` build also gets
+    /// packaged when `buildpkg` is on. Default `true`; consulted by
+    /// `emerge_build::entry_buildpkg_wanted`, not by this module itself.
     pub buildpkg_live: bool,
-    /// Real `FEATURES=binpkg-multi-instance` (`bintree.py:526-531`) --
-    /// real default is `true` (one of real `make.globals`'s own default
-    /// `FEATURES` tokens too), but this defaults to `false` here (a
-    /// deliberate conservatism, not a capability gap). Both formats are
-    /// supported: real `bin/misc-functions.sh __dyn_package` builds the
-    /// exact same archive bytes regardless of `BUILD_ID` -- an xpak
-    /// `[image tarball][XPAK trailer]` (a `.xpak` file is byte-format-
-    /// identical to a `.tbz2`; the extension is just the multi-instance
-    /// marker), a self-contained gpkg container -- so multi-instance is
-    /// purely `real bintree._allocate_filename_multi`'s own path
-    /// convention: `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>`, with
-    /// `<suffix>` `xpak` for xpak and `gpkg.tar` for gpkg
-    /// (`allocate_binpkg_build_id`), plus the `BUILD_ID` env export
-    /// `invoke_dyn_package` already does. `binpkg::populate_local_pkgdir`
-    /// walks that subdir layout back on the no-`Packages`-index scan.
+    /// `FEATURES=binpkg-multi-instance`, opt-in (default `false` here, a
+    /// deliberate conservatism). Both formats build identical archive bytes;
+    /// only the path convention differs: `<pkgdir>/<cat>/<pn>/<pf>-
+    /// <build_id>.<suffix>`, suffix `xpak` for xpak, `gpkg.tar` for gpkg.
     pub binpkg_multi_instance: bool,
-    /// Real `FEATURES=binpkg-signing` (`gpkg.gpkg.create_signature`,
-    /// `gpkg.py:790`): the `__dyn_package` helper subprocess signs the
-    /// gpkg's `metadata.tar`/`image.tar` members (detached `.sig`
-    /// sidecars) and clear-signs the `Manifest` itself, via real
-    /// `checksum_helper(SIGNING)` spawning `binpkg_gpg_signing_base_
-    /// command` below. Sourced from `FEATURES` at the CLI boundary like
-    /// `buildpkg_live`/`binpkg_multi_instance`. xpak has no signature
-    /// mechanism (real `binpkg-request-signature` *ignores* xpak) -- the
-    /// flag is inert unless `binpkg_format == "gpkg"`.
+    /// `FEATURES=binpkg-signing`: the `__dyn_package` helper signs the gpkg
+    /// members (detached `.sig` sidecars) and clear-signs the `Manifest`.
+    /// Inert unless `binpkg_format == "gpkg"` (xpak has no signature mechanism).
     pub binpkg_signing: bool,
-    /// Real `BINPKG_GPG_SIGNING_BASE_COMMAND` (real `make.globals`'s own
-    /// default: `"/usr/bin/flock /run/lock/portage-binpkg-gpg.lock
-    /// /usr/bin/gpg --sign --armor [PORTAGE_CONFIG]"`). Only exported to
-    /// the `__dyn_package` helper when non-empty -- an empty value means
-    /// "not set", letting the helper fall back to its own
-    /// `make.globals` default exactly as a real unset `make.conf` would
-    /// (rather than overriding the default with `""`, which real's own
-    /// env layer would otherwise do).
+    /// `BINPKG_GPG_SIGNING_BASE_COMMAND`. Only exported to the helper when
+    /// non-empty; empty means "not set", falling back to the helper's own
+    /// default exactly as an unset `make.conf` would.
     pub binpkg_gpg_signing_base_command: String,
-    /// Real `BINPKG_GPG_SIGNING_DIGEST` (real `make.globals`'s own
-    /// default: `"SHA512"`).
+    /// `BINPKG_GPG_SIGNING_DIGEST` (default `"SHA512"`).
     pub binpkg_gpg_signing_digest: String,
-    /// Real `BINPKG_GPG_SIGNING_GPG_HOME` (no `make.globals` default --
-    /// real `_emerge/actions.py:632-646` refuses to build with
-    /// `binpkg-signing` when this or the key below is unset:
-    /// `!!! {var} is not set`, exit 1 -- mirrored by `run_package`'s
-    /// own pre-check).
+    /// `BINPKG_GPG_SIGNING_GPG_HOME` (unset by default; `run_package` refuses
+    /// to build with `binpkg-signing` when this or the key below is unset:
+    /// `!!! {var} is not set`).
     pub binpkg_gpg_signing_gpg_home: String,
-    /// Real `BINPKG_GPG_SIGNING_KEY` (likewise unset by default, same
-    /// pre-check).
+    /// `BINPKG_GPG_SIGNING_KEY` (likewise unset by default, same pre-check).
     pub binpkg_gpg_signing_key: String,
 }
 
@@ -230,31 +100,12 @@ impl Default for PackageOptions {
 }
 
 impl PackageOptions {
-    /// Real per-package `FEATURES` (backlog #130, narrowed by #147
-    /// S1 ruling (i)): re-derive the binpkg-affecting tokens from a
-    /// **resolved**, already-folded `FEATURES` list -- the same
-    /// "presence is the answer" reading
-    /// `package_options_from_env`'s own `Some(resolved_features)` arm
-    /// already uses (a negated token has already been folded away by
-    /// `regenerate()`/`fold_package_env_incremental`, so a plain
-    /// presence check is correct here, unlike the raw-process-env
-    /// default-on-unless-negated fallback `PackageOptions::default`'s own
-    /// `buildpkg_live` doc comment describes). Mirrors
-    /// `ebuild_merge::MergeOptions::set_resolved_features`'s shape: the
-    /// `emerge` production paths call this right after resolving a
-    /// per-entry `FEATURES` fold, so a `package_after_install` call site
-    /// that shares one `PackageOptions` across every entry in a run can
-    /// clone it and re-derive the tokens for just this entry instead.
-    ///
-    /// `binpkg_multi_instance` is deliberately NOT re-derived here:
-    /// real's binpkg layout is run-wide-only (the bintree binds its
-    /// allocator once from the run-wide settings, `bintree.py:529-531`
-    /// -- S0 A1x/A2 prove both directions), so the layout bit keeps
-    /// its construction value and `package_after_install` takes the
-    /// per-entry token separately for the `BUILD_ID` export gate
-    /// (real `EbuildBinpkg.py:47-48`). `binpkg_compress`/
-    /// `binpkg_format`/the GPG signing identity fields are config
-    /// scalars, not `FEATURES` tokens, and are untouched here.
+    /// Re-derives the binpkg-affecting `FEATURES` tokens from a resolved,
+    /// already-folded `FEATURES` list by plain presence (a negated token has
+    /// already been folded away, so presence alone is correct). The layout
+    /// bit `binpkg_multi_instance` is deliberately not re-derived: the binpkg
+    /// layout is run-wide-only, so it keeps its construction value.
+    /// Config scalars are untouched.
     pub fn set_resolved_features(&mut self, features: &str) {
         let has = |token: &str| features.split_whitespace().any(|t| t == token);
         self.buildpkg_live = has("buildpkg-live");
@@ -262,14 +113,10 @@ impl PackageOptions {
     }
 }
 
-/// Real `_compressors` (`lib/portage/util/compression_probe.py:10-53`),
-/// narrowed to the `"compress"` half only -- this module only ever
-/// *builds* a binpkg, never installs from one, so the real
-/// `"decompress"`/`"decompress_alt"` fields (relevant only when
-/// *installing* from a binpkg) have no equivalent here. `{JOBS}` is a
-/// plain, non-`${...}`, pre-`varexpand` substitution (real
-/// `doebuild.py:721-724`/`:740-743`); `${...}` placeholders are resolved
-/// afterward by `resolve_compression_command`.
+/// The `"compress"` half of Portage's `_compressors` table (this module only
+/// ever builds a binpkg, never installs from one). `{JOBS}` is substituted
+/// before `${...}` placeholders by `resolve_compression_command`.
+// Portage: lib/portage/util/compression_probe.py
 pub(crate) fn compress_template(name: &str) -> Option<&'static str> {
     Some(match name {
         "bzip2" => "${PORTAGE_BZIP2_COMMAND} ${BINPKG_COMPRESS_FLAGS}",
@@ -283,8 +130,8 @@ pub(crate) fn compress_template(name: &str) -> Option<&'static str> {
     })
 }
 
-/// Real `find_binary()` (`lib/portage/process.py`): the first `PATH`
-/// entry containing an executable file named `name`.
+/// The first `PATH` entry containing an executable file named `name`.
+// Portage: lib/portage/process.py, find_binary
 pub(crate) fn find_binary(name: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else {
         return false;
@@ -296,30 +143,15 @@ pub(crate) fn find_binary(name: &str) -> bool {
     })
 }
 
-/// Real `PORTAGE_COMPRESSION_COMMAND` resolution (`doebuild.py:697-750`):
-/// looks up `binpkg_compress` in the real `_compressors` table,
-/// substitutes `{JOBS}` (real host CPU count, matching real
-/// `makeopts_to_job_count`'s own `get_cpu_count()` fallback path --
-/// portuale's own `MAKEOPTS` is always unset, the same path real code
-/// takes whenever `MAKEOPTS` doesn't itself contain a `-j`/`--jobs=`
-/// value) and `${PORTAGE_BZIP2_COMMAND}`/`${BINPKG_COMPRESS_FLAGS}` (a
-/// plain, narrow `${VAR}` substitution -- not a full shell `varexpand`,
-/// since none of the six real templates or realistic flag values need
-/// anything beyond that), `shlex.split()`s the result (narrowed to
-/// whitespace-splitting -- same reasoning, no real quoting need), and
-/// confirms the resolved binary is real-`PATH`-findable (real
-/// `find_binary()`).
+/// Resolves `PORTAGE_COMPRESSION_COMMAND`: looks up `binpkg_compress` in the
+/// compressor table, substitutes `{JOBS}` (host CPU count) and
+/// `${PORTAGE_BZIP2_COMMAND}`/`${BINPKG_COMPRESS_FLAGS}` (plain `${VAR}`
+/// substitution, not full shell expansion), whitespace-splits, and confirms
+/// the binary is on `PATH`.
 ///
-/// Returns `None` -- the caller omits `PORTAGE_COMPRESSION_COMMAND` from
-/// the exported environment entirely -- for an unknown `binpkg_compress`
-/// name or a compressor whose binary isn't installed, matching real
-/// behavior exactly: `mysettings["PORTAGE_COMPRESSION_COMMAND"]` is left
-/// unset in both real cases too (only warned about, real `writemsg` --
-/// not reproduced, this module's own real-execution path has no
-/// message-printing output anywhere else either), so real, unmodified
-/// `bin/misc-functions.sh` hits its own real `[[ -z
-/// "${PORTAGE_COMPRESSION_COMMAND}" ]] && die "PORTAGE_COMPRESSION_
-/// COMMAND is unset"` guard naturally.
+/// Returns `None` -- omitting the variable from the exported environment --
+/// for an unknown compressor or a missing binary, matching Portage exactly.
+/// Portage: doebuild.py
 fn resolve_compression_command(
     binpkg_compress: &str,
     binpkg_compress_flags: &str,
@@ -333,11 +165,9 @@ fn resolve_compression_command(
     )
 }
 
-/// Real `makeopts_to_job_count` (`util/cpuinfo.py:55-70`): the digits
-/// after the *last* `j` (or `--jobs=<whitespace>`) that is followed by
-/// optional whitespace and a number -- the greedy `.*(j|--jobs=\s)\s*
-/// ([0-9]+)` match -- else the CPU count (`get_cpu_count()` =
-/// `sched_getaffinity`). Returned as the matched text, as real does.
+/// The digits after the *last* `j` (or `--jobs=<whitespace>`) followed by
+/// optional whitespace and a number, else the CPU count. Returned as text.
+// Portage: util/cpuinfo.py, makeopts_to_job_count
 pub(crate) fn makeopts_to_job_count(makeopts: &str) -> String {
     let cpu_count = || {
         std::thread::available_parallelism()
@@ -373,14 +203,12 @@ pub(crate) fn makeopts_to_job_count(makeopts: &str) -> String {
     cpu_count()
 }
 
-/// Real `doebuild_environment()`'s `PORTAGE_COMPRESSION_COMMAND`
-/// (`doebuild.py:697-750`), set for every build phase regardless of
-/// `BINPKG_FORMAT`, from the resolved config (`lookup`: calling env over
-/// `make.conf`/profile/`make.globals`): `BINPKG_COMPRESS` (default
-/// `bzip2`; empty = `cat`), `BINPKG_COMPRESS_FLAGS_<NAME>` replacing
-/// `BINPKG_COMPRESS_FLAGS` when set, `{JOBS}` from `MAKEOPTS` (the
-/// already-defaulted phase value). `None` for an unknown compressor or a
-/// missing binary, like real (left unset, only warned about).
+/// `PORTAGE_COMPRESSION_COMMAND` from the resolved config (`lookup`: calling
+/// env over `make.conf`/profile/`make.globals`): `BINPKG_COMPRESS` (default
+/// `bzip2`; empty = `cat`), the `BINPKG_COMPRESS_FLAGS_<NAME>` override over
+/// `BINPKG_COMPRESS_FLAGS`, `{JOBS}` from `MAKEOPTS`. `None` for an unknown
+/// compressor or a missing binary, like Portage (left unset).
+// Portage: doebuild.py, doebuild_environment
 pub fn phase_compression_command(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
     let name = lookup("BINPKG_COMPRESS").unwrap_or_else(|| "bzip2".to_string());
     if name.is_empty() {
@@ -394,43 +222,20 @@ pub fn phase_compression_command(lookup: impl Fn(&str) -> Option<String>) -> Opt
     resolve_compression_command_jobs(&name, &flags, &bzip2, &makeopts_to_job_count(&makeopts))
 }
 
-/// Real `BINPKG_FORMAT` from the resolved config (`lookup`: calling env
-/// over `make.conf`/profile/`make.globals` -- the same precedence real's
-/// `config` object gives any variable, and the same `lookup` shape
-/// `phase_compression_command` takes): the chain value when set
-/// anywhere, else real `cnf/make.globals:43`'s own default `"gpkg"`.
-/// Backlog #173: the two `PackageOptions` construction sites (`ebuild.
-/// rs`'s standalone `package`, `pretend.rs`'s `package_options_from_env`)
-/// used to read only the process env over a hardcoded `"xpak"`, so a
-/// `make.conf`/profile value was ignored and the default named the
-/// wrong format.
+/// `BINPKG_FORMAT` from the resolved config (`lookup`: calling env over
+/// `make.conf`/profile/`make.globals`): the chain value when set anywhere,
+/// else the default `"gpkg"`. An empty value stays an `Unknown BINPKG_FORMAT`
+/// error downstream, never a fallback.
 pub fn resolve_binpkg_format(lookup: impl Fn(&str) -> Option<String>) -> String {
-    // An empty value stays an `Unknown BINPKG_FORMAT` error downstream,
-    // never a fallback: real's `make.conf` assignment overrides
-    // `make.globals` with `""` and real `bin/misc-functions.sh`
-    // `__dyn_package` then dies the same way (`die "Unknown
-    // BINPKG_FORMAT ..."`).
+    // An empty value stays an `Unknown BINPKG_FORMAT` error downstream:
+    // a `make.conf` assignment overrides `make.globals` with `""` and
+    // `__dyn_package` then dies the same way.
     lookup("BINPKG_FORMAT").unwrap_or_else(|| PackageOptions::default().binpkg_format.clone())
 }
 
-/// Real `PKGDIR` from the resolved config (`lookup`: calling env over
-/// `make.conf`/profile/`make.globals` -- the same precedence real's
-/// `config` object gives any variable, and the same `lookup` shape
-/// `resolve_binpkg_format` takes): the chain value when set anywhere,
-/// else real `cnf/make.globals:31`'s own default
-/// (`PackageOptions::default().pkgdir`). Backlog #180: the two
-/// `PackageOptions` construction sites (`ebuild.rs`'s standalone
-/// `package`, `pretend.rs`'s `package_options_from_env`) used to read
-/// only the process env over that default, so a `make.conf`/profile
-/// value was ignored. An empty value falls back (real has no
-/// `PKGDIR`-empty die; an empty `bintree.pkgdir` only ever yields
-/// broken relative paths).
-///
-/// Real grounding: `PKGDIR` is in real's `environ_whitelist`
-/// (`_config/special_env_vars.py:125`) and not in `environ_filter`, so the
-/// calling-env value reaches every consumer -- real `bintree.pkgdir`
-/// (the full config, env layer highest) for the tmpfile path, and the
-/// phase env for `${PKGDIR}` itself -- for both formats alike.
+/// `PKGDIR` from the resolved config: the chain value when set anywhere, else
+/// the default `/var/cache/binpkgs`. An empty value falls back (Portage has
+/// no `PKGDIR`-empty die; an empty pkgdir only ever yields broken paths).
 pub fn resolve_pkgdir(lookup: impl Fn(&str) -> Option<String>) -> std::path::PathBuf {
     lookup("PKGDIR")
         .filter(|v| !v.is_empty())
@@ -438,43 +243,18 @@ pub fn resolve_pkgdir(lookup: impl Fn(&str) -> Option<String>) -> std::path::Pat
         .unwrap_or_else(|| PackageOptions::default().pkgdir.clone())
 }
 
-/// Real `BINPKG_COMPRESS` from the resolved config (`lookup`: calling
-/// env over `make.conf`/profile/`make.globals`): the chain value when
-/// set anywhere, else real `cnf/make.globals:39`'s own default
-/// (`PackageOptions::default().binpkg_compress`). Backlog #180, same
-/// two construction sites as `resolve_pkgdir`.
-///
-/// The caller picks the lookup per format (backlog #180's Q6 rule,
-/// pmtest `bf0692f`): for `xpak` the full chain -- real `doebuild.py:
-/// 697` reads the package's own `mysettings` (env layer highest) for
-/// the tar pipe -- but for `gpkg` the files-only chain (no calling
-/// env): real's `environ_filter`
-/// (`_config/special_env_vars.py:280`) keeps a calling-environment
-/// `BINPKG_COMPRESS` out of the phase env, and `bin/gpkg-helper.py`
-/// rebuilds `portage.settings` from that filtered env plus the config
-/// files, so an env value never reaches the gpkg compressor (the Q6
-/// probe: env-only `gzip` still compresses `zst`, `make.conf` `gzip`
-/// compresses `.gz`). An empty value is honored verbatim (real's
-/// empty-`BINPKG_COMPRESS`-disables-compression arm,
-/// `doebuild.py:706-710` / `bin/quickpkg:161-167`); only an *unset*
-/// chain falls back.
+/// `BINPKG_COMPRESS` from the resolved config: the chain value when set
+/// anywhere, else the default `"zstd"`. The caller picks the lookup per
+/// format: the full chain for `xpak`, the files-only chain (no calling env)
+/// for `gpkg`. An empty value is honored verbatim (disables compression);
+/// only an *unset* chain falls back.
 pub fn resolve_binpkg_compress(lookup: impl Fn(&str) -> Option<String>) -> String {
     lookup("BINPKG_COMPRESS").unwrap_or_else(|| PackageOptions::default().binpkg_compress.clone())
 }
 
-/// Real `BINPKG_COMPRESS_FLAGS_<NAME>` (per-compressor override,
-/// `<NAME>` = `binpkg_compress` uppercased) if set, else real
-/// `BINPKG_COMPRESS_FLAGS` (`doebuild.py:710-717`, `gpkg.py:1876-1882`
-/// -- the same override-then-generic order both readers use), resolved
-/// over the caller's `lookup` (full chain for `xpak`, files-only for
-/// `gpkg`, exactly as `resolve_binpkg_compress`'s own doc comment
-/// explains -- generic `BINPKG_COMPRESS_FLAGS` is `environ_filter`ed
-/// alongside `BINPKG_COMPRESS`, and `BINPKG_COMPRESS_FLAGS_<NAME>` never
-/// reaches the phase environment because it is not in
-/// `environ_whitelist` (`config.environ()`'s `filter_calling_env`,
-/// `config.py:3275-3305`)). Real `make.globals` sets neither, so the
-/// default is empty (`PackageOptions::default().
-/// binpkg_compress_flags`).
+/// `BINPKG_COMPRESS_FLAGS_<NAME>` (per-compressor override) if set, else
+/// `BINPKG_COMPRESS_FLAGS`, over the caller's `lookup` (full chain for
+/// `xpak`, files-only for `gpkg`, as above). Default is empty.
 pub fn resolve_binpkg_compress_flags(
     lookup: impl Fn(&str) -> Option<String>,
     binpkg_compress: &str,
@@ -487,17 +267,10 @@ pub fn resolve_binpkg_compress_flags(
     .unwrap_or_default()
 }
 
-/// Real `PORTAGE_BZIP2_COMMAND` from the resolved config (`lookup`:
-/// calling env over `make.conf`/profile/`make.globals`): the chain
-/// value when set anywhere, else real `cnf/make.globals:105`'s own
-/// default (`PackageOptions::default().portage_bzip2_command`).
-/// Backlog #180, same two construction sites. Unlike the compression
-/// pair, the calling env wins for **both** formats: the key is in
-/// real's `environ_whitelist` (`_config/special_env_vars.py:143`) and not in
-/// `environ_filter`, so it propagates into the phase env and reaches
-/// even the gpkg helper's rebuilt settings. Only substituted when
-/// `binpkg_compress == "bzip2"` (the `${PORTAGE_BZIP2_COMMAND}`
-/// template arm).
+/// `PORTAGE_BZIP2_COMMAND` from the resolved config: the chain value when set
+/// anywhere, else the default `"bzip2"`. Unlike the compression pair, the
+/// calling env wins for both formats. Only substituted when
+/// `binpkg_compress == "bzip2"`.
 pub fn resolve_portage_bzip2_command(lookup: impl Fn(&str) -> Option<String>) -> String {
     lookup("PORTAGE_BZIP2_COMMAND")
         .unwrap_or_else(|| PackageOptions::default().portage_bzip2_command.clone())
@@ -522,48 +295,18 @@ fn resolve_compression_command_jobs(
     Some(tokens.join(" "))
 }
 
-/// Real per-package `BINPKG_COMPRESS` (backlog #147 S2): re-derive
-/// `PORTAGE_COMPRESSION_COMMAND` from an entry's already-layered
-/// build env, replacing the run-wide pair in place.
+/// Re-derives `PORTAGE_COMPRESSION_COMMAND` from an entry's already-layered
+/// build env, replacing the run-wide pair in place. Portage computes the
+/// command from the package's own settings, so a per-package
+/// `BINPKG_COMPRESS=gzip` reaches the xpak tar pipe even when the run-wide
+/// value differs -- but the gpkg helper reads the global settings, so a
+/// per-entry value must never reach it.
 ///
-/// Real `doebuild_environment()` computes the command from the
-/// package's own `mysettings` (`doebuild.py:697-750`), which carry
-/// the entry's matched `package.env` scalars -- so a per-package
-/// `BINPKG_COMPRESS=gzip` reaches the xpak tar pipe
-/// (`bin/misc-functions.sh:593-596`) even when the run-wide value
-/// is `zstd` (S0 B-xpak: gzip magic). The command is what real
-/// `__dyn_package` reads -- via the saved `${T}/environment`
-/// `bin/ebuild.sh:565-580` sources for the `package` phase -- not
-/// `PackageOptions::binpkg_compress`, which stays run-wide on
-/// purpose: the gpkg helper reads the global settings
-/// (`bin/gpkg-helper.py:49`, `gpkg.py:785`), so a per-entry value
-/// must never reach it (S0 B-gpkg: zst members).
-///
-/// The lookup is last-wins over the layered pairs (the matched
-/// scalars are already appended after the run-wide base by
-/// `matched_package_env_vars`, and the calling env is already
-/// folded into the run-wide pairs upstream -- no separate process
-/// lookup, which would also be unsound under `cargo test`'s shared
-/// process env), then the calling env, then the resolved config's
-/// own file chain (`config.other_vars`: `make.conf`/profile/
-/// `make.globals` -- backlog #180). That tail is what keeps a
-/// `make.conf` `BINPKG_COMPRESS` (with no calling-env value and no
-/// `package.env` match) on the pipe: the run-wide base the callers
-/// pass in carries no `BINPKG_COMPRESS` pair for it (the key is
-/// `environ_filter`ed out of `phase_environ`), so without the file
-/// tail the recompute would fall back to real's own `.get` default
-/// (`bzip2`) and clobber the run-wide `make.conf` command the pipe
-/// would otherwise read back. The order mirrors real's
-/// `env:pkg:conf` `USE_ORDER` exactly: a calling-env value already
-/// masked any same-key `package.env` match upstream (#101), so the
-/// layered pairs still outrank the raw env here, and both outrank
-/// the files. An unmatched entry re-derives the run-wide
-/// command byte-identically (regression guard by construction). A
-/// recompute of `None` (unknown per-entry codec) removes the pair,
-/// matching real leaving `mysettings["PORTAGE_COMPRESSION_COMMAND"]`
-/// unset (real `__dyn_package` then dies on its own guard).
-/// `config` is `None` on the config-less paths (no chain to fall
-/// back to -- the lookup stays pairs-then-env, today's shape).
+/// The lookup is last-wins over the layered pairs, then the calling env, then
+/// the resolved config's own file chain. An unmatched entry re-derives the
+/// run-wide command byte-identically. A recompute of `None` (unknown
+/// per-entry codec) removes the pair, matching Portage leaving the key unset.
+/// `config` is `None` on the config-less paths.
 pub(crate) fn refresh_entry_compression_command(
     build_env: &mut Vec<(String, String)>,
     config: Option<&portage_profile::Config>,
@@ -600,22 +343,11 @@ fn now_unix_time() -> Result<u64, String> {
         .map_err(|e| format!("system clock before epoch: {e}"))
 }
 
-/// Real `<pkgdir>/Packages`'s own header block (see `portage_repo::
-/// read_packages_index`'s own doc comment: always the first, blank-
-/// line-terminated block, unconditionally skipped by portuale's own
-/// reader) -- but real Portage does NOT skip it: `bintree._load_pkgindex`
-/// runs the header through `_pkgindex_version_supported`
-/// (`bintree.py:2429-2437`), which returns False unless the header
-/// carries a `VERSION` <= `bintree._pkgindex_version`. Without it real
-/// Portage discards the whole index and, under `pkgdir-index-trusted`
-/// (the test image's own FEATURES), never walks the directory to rebuild
-/// it -- so every portuale-built archive is invisible and `emerge -k`
-/// silently falls back to a from-source build (L2 S0 finding
-/// `l2-pkgindex-version-missing`). Real's writer always stamps the
-/// header with `VERSION: <n>` (`bintree.py:2388`/`:2397`); a
-/// `TIMESTAMP`-only header is not a valid index to real Portage.
-/// `PACKAGES`/the config-fingerprint fields stay omitted: real only
-/// updates/consumes them when it rewrites the index itself.
+/// The `<pkgdir>/Packages` header block. Portage discards a header-less index
+/// wholesale (`_pkgindex_version_supported`), so the `VERSION` stamp is what
+/// makes portuale-built archives visible to it; `PACKAGES`/fingerprint fields
+/// stay omitted (Portage only consumes them when it rewrites the index itself).
+// Portage: bintree.py, _load_pkgindex
 fn packages_index_header(now: u64) -> String {
     format!("TIMESTAMP: {now}\nVERSION: 0\n")
 }
@@ -630,20 +362,11 @@ fn format_packages_entry(fields: &[(&str, &str)]) -> String {
     block
 }
 
-/// Real `PackageIndex.write` drops a stanza value that equals real's
-/// `_pkgindex_default_pkg_data` default for that key
-/// (`getbinpkg.py:169-172`, defaults at `bintree.py:609-629`), and
-/// `readBody` restores it on the next read (`getbinpkg.py:143-145`,
-/// `d.setdefault(k, v)`). Of the whole default map only `SLOT: "0"`
-/// and `EAPI: "0"` can reach a stanza non-empty (every other defaulted
-/// key defaults to `""`, which `format_packages_entry` — like real's
-/// `if metadata[k]` guard at `getbinpkg.py:176` — skips anyway), so
-/// those two are the whole rule: a default-`SLOT` package's on-disk
-/// stanza carries no `SLOT` line at all, and a non-default one carries
-/// it verbatim, sub-slot included (only the exact `"0"` is default).
-/// S0 probe (backlog #188, real Portage in
-/// `localhost/test-portuale:latest`): `l32/dep-a` (`SLOT="0"`) has no
-/// `SLOT` line, `l32/slotpkg` (`SLOT="1"`) has `SLOT: 1`.
+/// Portage's `PackageIndex.write` drops a stanza value equal to its default
+/// for that key; only `SLOT: "0"` and `EAPI: "0"` can reach a stanza non-empty
+/// (every other default is `""`, already skipped), so those two are the whole
+/// rule. Only the exact `"0"` is default.
+// Portage: getbinpkg.py, PackageIndex.write; bintree.py, _pkgindex_default_pkg_data
 fn omit_stanza_default<'a>(key: &'a str, value: &'a str) -> &'a str {
     match (key, value) {
         ("SLOT", "0") | ("EAPI", "0") => "",
@@ -651,21 +374,11 @@ fn omit_stanza_default<'a>(key: &'a str, value: &'a str) -> &'a str {
     }
 }
 
-/// Real `PackageIndex.write`'s own key order
-/// (`getbinpkg.py:153-177`): `keys.sort()` over the *internal* names,
-/// then the `_write_translation_map` applied on the way out
-/// (`_writepkgindex`, `getbinpkg.py:123-126`). Of the translated keys
-/// (`_pkgindex_translated_keys`, `bintree.py:638-642`) either writer
-/// emits only `_mtime_` -> `MTIME` and `repository` -> `REPO` (the third
-/// pair, `DESCRIPTION` -> `DESC`, never reaches a stanza); both internals
-/// sort after every all-uppercase key (`_` is 0x5F, `r` is 0x72), so
-/// the translated pair lands last with `MTIME` before `REPO` -- in
-/// either naming. Sorting by this internal-name mapping is therefore
-/// byte-identical to real's order for every key either stanza writer
-/// emits. Both writers route through here: the `--buildpkg` field
-/// assembly is already hand-sorted (this is a no-op guard against
-/// future drift) and the quickpkg assembly relies on it (backlog
-/// #203: its fixed order was real-divergent).
+/// Portage's `PackageIndex.write` key order: the internal names sorted, with
+/// the translated pair landing last as `MTIME` before `REPO`. Sorting by this
+/// internal-name mapping is byte-identical to Portage's order for every key
+/// either stanza writer emits. Both writers route through here.
+// Portage: getbinpkg.py, PackageIndex.write
 fn sort_stanza_fields_for_write(fields: &mut Vec<(&'static str, &str)>) {
     fn internal(key: &str) -> &str {
         match key {
@@ -677,20 +390,11 @@ fn sort_stanza_fields_for_write(fields: &mut Vec<(&'static str, &str)>) {
     fields.sort_by(|a, b| internal(a.0).cmp(internal(b.0)));
 }
 
-/// One freshly built binary package's `<pkgdir>/Packages` stanza
-/// fields: the archive metadata's own values (real `_pkgindex_entry`,
-/// `bintree.py:2289-2313`), ordered as real's `keys.sort()` writes
-/// them (`getbinpkg.py:173-177`) -- the *internal* names `_mtime_` and
-/// `repository` sort after every uppercase key, so the translated
-/// `MTIME`/`REPO` land last. Default-valued (`SLOT: "0"`, `EAPI:
-/// "0"`) and empty values are omitted by [`omit_stanza_default`] and
-/// [`format_packages_entry`], like real's write path.
-/// `REPO_REVISIONS` has no `_pkgindex_default_pkg_data` entry
-/// (`bintree.py:609-629`), so only real's falsy guard
-/// (`getbinpkg.py:176`) applies: a non-empty archive value --
-/// `"{}"` for sync-less repos (see [`built_binpkg_stanza_fields`]'s
-/// field doc below) up to real sync-revision JSON -- is written
-/// verbatim, a missing/empty one is omitted.
+/// One freshly built binary package's `<pkgdir>/Packages` stanza fields, in
+/// Portage's `keys.sort()` order (the translated `MTIME`/`REPO` land last).
+/// Default-valued and empty values are omitted, like Portage's write path.
+/// `REPO_REVISIONS` has no default entry, so only the falsy guard applies.
+// Portage: bintree.py, _pkgindex_entry
 struct BuiltBinpkgStanza<'a> {
     bdepend: &'a str,
     build_id: &'a str,
@@ -723,11 +427,8 @@ struct BuiltBinpkgStanza<'a> {
 fn built_binpkg_stanza_fields<'a>(
     stanza: &'a BuiltBinpkgStanza<'a>,
 ) -> Vec<(&'static str, &'a str)> {
-    // Hand-sorted into real's `keys.sort()` order (see
-    // [`sort_stanza_fields_for_write`]); the sort call below is a
+    // Hand-sorted into Portage's `keys.sort()` order; the sort call below is a
     // no-op guard so a future field lands ordered too.
-    // `REPO_REVISIONS` sorts between `RDEPEND` and `REQUIRES`
-    // (`RDEPEND` < `REPO_...` < `REQUIRES`: `D` < `E`, `P` < `Q`).
     let mut fields = vec![
         ("BDEPEND", stanza.bdepend),
         ("BUILD_ID", stanza.build_id),
@@ -760,25 +461,15 @@ fn built_binpkg_stanza_fields<'a>(
     fields
 }
 
-/// Writes (creating the file, and its own header block, if necessary)
-/// or replaces `cpv`'s own entry in `<pkgdir>/Packages` -- real
-/// portage's own index format (`portage_repo::read_packages_index`'s
-/// own doc comment: `KEY: value` lines, blank-line-separated blocks,
-/// first block a header). A pre-existing entry for the *same* `cpv`
-/// (a rebuild) is replaced in place, not duplicated -- every other
-/// entry (including other versions of the same package) is preserved
-/// verbatim.
+/// Writes (creating the file and its header if necessary) or replaces `cpv`'s
+/// entry in `<pkgdir>/Packages`. A pre-existing entry for the same `cpv` (a
+/// rebuild) is replaced in place, not duplicated; every other entry is
+/// preserved verbatim.
 ///
-/// Real `bintree.inject`/`update_pkgindex`/`remove` (`bintree.py:948`/
-/// `:1999`/`:2059`) all wrap this exact "reread the index, in case
-/// another process changed it, then update it" sequence in a real,
-/// blocking `lockfile(self._pkgindex_file, wantnewlockfile=1)` --
-/// `PortageLockfile::acquire`, the same real primitive `fetch.rs`'s own
-/// distfile locking already uses. A genuinely concurrent `emerge -b`/
-/// `--buildpkg` racing another write to the same `Packages` file could
-/// otherwise interleave (portuale's own single-invocation-at-a-time CLI
-/// usage rarely exercises this, but it's cheap and correct to hold the
-/// same real lock real portage does regardless).
+/// The whole read-modify-write runs under the same `flock`-based
+/// `PortageLockfile` Portage wraps this sequence in, so a concurrent write to
+/// the same `Packages` file cannot interleave.
+// Portage: bintree.py, bintree.inject/update_pkgindex/remove
 fn write_packages_index_entry(
     pkgdir: &Path,
     cpv: &str,
@@ -787,9 +478,8 @@ fn write_packages_index_entry(
     let path = pkgdir.join("Packages");
     let now = now_unix_time()?;
 
-    // Real order: `os.makedirs(self.pkgdir, exist_ok=True)` *then*
-    // acquire the lock (`bintree.py:2057-2059`) -- the lock file itself
-    // is a sibling of `Packages`, so its own parent dir must exist first.
+    // Makedirs first, then the lock: the lock file is a sibling of `Packages`,
+    // so its parent dir must exist first (Portage's order).
     std::fs::create_dir_all(pkgdir).map_err(|e| format!("{}: {e}", pkgdir.display()))?;
     let _lock = crate::portage_lock::PortageLockfile::acquire(&path)?;
 
@@ -805,13 +495,9 @@ fn write_packages_index_entry(
     if blocks.is_empty() {
         blocks.push(packages_index_header(now).trim().to_string());
     }
-    // Header is always blocks[0] -- keep it, then drop any existing
-    // entry this fresh one replaces, matching real `_inject_file`'s own
-    // dedup (`bintree.py:2237-2247`): primarily by `PATH` (a *different*
-    // `PATH` -- e.g. a different `BUILD_ID` under multi-instance -- is a
-    // genuinely different on-disk file and survives untouched, letting
-    // multiple builds of the same `CPV` coexist), falling back to `CPV`
-    // alone only when this entry carries no `PATH` at all.
+    // Header is always blocks[0]; dedup like Portage's `_inject_file`: by
+    // `PATH` when this entry carries one (a different `PATH` is a genuinely
+    // different file and survives), else by `CPV` alone.
     let header = blocks.remove(0);
     let path_value = fields
         .iter()
@@ -833,22 +519,14 @@ fn write_packages_index_entry(
     text.push('\n');
 
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
-    // `_lock` drops here, releasing the flock -- same real effect real
-    // `unlockfile()` has.
+    // `_lock` drops here, releasing the flock.
 }
 
-/// Real `doebuild()`'s own first step for `"package"` is always the real
-/// `install` phase chain having already completed (`actionmap_deps
-/// ["package"] == ["install"]`) -- run here directly, the same
-/// "run it myself, don't require the caller to" shape `ebuild_merge::
-/// run_merge` already established for its own `["install"]`
-/// prerequisite.
-/// Real `_emerge/actions.py:623-646`'s own "not set" gate, shared by
-/// `run_package` (before the `install` chain -- real refuses before
-/// building anything) and `package_after_install` (which the
-/// `FEATURES=buildpkg` side-effect path reaches directly): with
-/// `FEATURES=binpkg-signing` on a gpkg build, the signing keyring and
-/// key must be configured, else `!!! {var} is not set`.
+/// With `FEATURES=binpkg-signing` on a gpkg build, the signing keyring and key
+/// must be configured, else `!!! {var} is not set`. Checked by `run_package`
+/// before the `install` chain and again by `package_after_install` for the
+/// `FEATURES=buildpkg` side-effect path.
+// Portage: _emerge/actions.py
 fn require_signing_config(options: &PackageOptions) -> Result<(), String> {
     if options.binpkg_signing && options.binpkg_format == "gpkg" {
         for (var, value) in [
@@ -869,7 +547,6 @@ fn require_signing_config(options: &PackageOptions) -> Result<(), String> {
     Ok(())
 }
 
-/// Arguments of [`run_package`].
 pub struct RunPackageArgs<'a> {
     pub ebuild_path: &'a Path,
     pub root: &'a Path,
@@ -879,14 +556,12 @@ pub struct RunPackageArgs<'a> {
     pub use_flags: &'a str,
 }
 
-///
-/// `build_env`: the resolved phase environment the caller wants the
-/// `install` chain to run with. `--buildpkgonly` passes the full
-/// `phase_environ`-derived env plus the entry's own `USE` (#37 S2);
-/// a standalone `ebuild <file> package` passes `&[]` (no graph, no
-/// resolved config -- `phase_env_vars`' own curated base stands).
-/// `use_flags`: real `Package.use.enabled`, written to the `Packages`
-/// index `USE` field; `""` for standalone.
+/// Runs the `install` chain, then the packaging tail.
+/// `build_env`: the resolved phase environment for the `install` chain
+/// (`--buildpkgonly` passes the full env plus the entry's `USE`;
+/// standalone passes `&[]`). `use_flags` is `Package.use.enabled`, written
+/// to the index `USE` field; `""` for standalone.
+// Portage: doebuild.py, actionmap_deps["package"] == ["install"]
 pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
     let RunPackageArgs {
         ebuild_path,
@@ -911,18 +586,8 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
     if status != 0 {
         return Ok(status);
     }
-    // Standalone `ebuild <file> package`: no resolved graph reaches
-    // this deep, so there is no resolved USE to report -- the same "no
-    // graph, no USE" gap `package_after_install`'s own doc comment
-    // covers (`use_flags` is then `""`).
-    //
-    // The per-entry multi-instance token comes from this run's own
-    // `build_env` (the `--buildpkgonly` per-entry fold when one
-    // matched, the run-wide value otherwise); a standalone run
-    // passes `&[]`, so it falls back to the run-wide construction
-    // value, preserving today's standalone behavior exactly (real's
-    // `doebuild` package branch has no per-package `BUILD_ID`
-    // logic either).
+    // The per-entry multi-instance token comes from this run's own `build_env`,
+    // falling back to the run-wide construction value for standalone runs.
     let per_entry_binpkg_multi_instance = build_env
         .iter()
         .rev()
@@ -939,7 +604,6 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
     })
 }
 
-/// Arguments of [`package_after_install`].
 pub(crate) struct PackageAfterInstallArgs<'a> {
     pub(crate) ebuild_path: &'a Path,
     pub(crate) root: &'a Path,
@@ -949,27 +613,17 @@ pub(crate) struct PackageAfterInstallArgs<'a> {
     pub(crate) per_entry_binpkg_multi_instance: bool,
 }
 
-/// The packaging tail of `run_package`, split out so it can also run as a
-/// side effect of a source merge (`FEATURES=buildpkg` / `--buildpkg`,
-/// real `_emerge/EbuildBinpkg`: after `src_install`, before the vdb
-/// merge -- `ebuild_merge::run_merge`'s own `buildpkg` param). Assumes a
-/// populated `${D}` from a prior real `install` chain. `use_flags` is
-/// real `Package.use.enabled`, the resolved flag set the `install`
-/// phase this binpkg is built from just ran with -- space-joined,
-/// already-enabled-only, the exact shape a real `Packages` index `USE`
-/// field carries. `""` for a standalone `ebuild <file> package`/`merge`
-/// (no resolved graph reaches that deep -- the documented gap this
-/// module's own doc comment already covers).
-/// `per_entry_binpkg_multi_instance` is the entry's own resolved
-/// `binpkg-multi-instance` token (backlog #147 S1 ruling (i)): the
-/// layout stays run-wide (`options.binpkg_multi_instance`, real's
-/// once-bound bintree allocator), while the `BUILD_ID` export and
-/// the index entry follow this per-entry gate (real
-/// `EbuildBinpkg.py:47-48`). Standalone callers pass `false` --
-/// real's `doebuild` package branch has no per-package `BUILD_ID`
-/// logic. Run-wide single + per-entry token writes no `BUILD_ID`
-/// anywhere here, where real writes index `None` and vdb `-1` (S1
-/// D1): a documented `str(None)`-wart divergence, not mirrored.
+/// The packaging tail of `run_package`, also run as a side effect of a source
+/// merge (`FEATURES=buildpkg` / `--buildpkg`, after `src_install`, before the
+/// vdb merge). Assumes a populated `${D}` from a prior `install` chain.
+/// `use_flags` is `Package.use.enabled` (space-joined enabled-only, the shape
+/// an index `USE` field carries); `""` for standalone builds (no resolved
+/// graph reaches that deep). `per_entry_binpkg_multi_instance` is the entry's
+/// own resolved token: the layout stays run-wide while the `BUILD_ID` export
+/// and index entry follow this gate. Run-wide single + per-entry token writes
+/// no `BUILD_ID` anywhere here, where Portage writes index `None` and vdb
+/// `-1`: a documented divergence, not mirrored.
+// Portage: _emerge/EbuildBinpkg
 pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result<i32, String> {
     let PackageAfterInstallArgs {
         ebuild_path,
@@ -979,10 +633,8 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
         use_flags,
         per_entry_binpkg_multi_instance,
     } = args;
-    // Same real gate as `run_package`'s (which already ran for the
-    // `ebuild package` / `--buildpkgonly` paths) -- repeated here so
-    // the `FEATURES=buildpkg` side-effect path through
-    // `ebuild_merge::run_merge` hits it too.
+    // Repeated here so the `FEATURES=buildpkg` side-effect path through
+    // `ebuild_merge::run_merge` hits the gate too.
     require_signing_config(options)?;
     let binpkg_extension = binpkg_extension(&options.binpkg_format)?;
 
@@ -995,16 +647,9 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
     std::fs::write(build_info_dir.join("BUILD_TIME"), build_time.to_string())
         .map_err(|e| format!("{}: {e}", build_info_dir.join("BUILD_TIME").display()))?;
 
-    // Real `FEATURES=binpkg-multi-instance` (`bintree.py:529-531`'s own
-    // `_allocate_filename = self._allocate_filename_multi` swap-in) --
-    // both formats (`PackageOptions::binpkg_multi_instance`'s own doc
-    // comment has the full grounding). Real `_allocate_filename_multi`
-    // (`bintree.py:2607-2669`) writes to `<pkgdir>/<cat>/<pn>/<pf>-
-    // <build_id>.<suffix>` -- a `<cat>/<pn>` subdir, a `-<build_id>`
-    // suffix, and `<suffix>` `xpak` (not `tbz2`) for the xpak format.
-    // The archive bytes are the single-instance form either way, so this
-    // is a pure path/naming convention plus the `BUILD_ID` env export in
-    // `invoke_dyn_package`.
+    // Multi-instance layout (see `PackageOptions::binpkg_multi_instance`):
+    // `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>`; the archive bytes are
+    // the single-instance form either way.
     let multi_instance_suffix = multi_instance_binpkg_suffix(&options.binpkg_format)?;
     let build_id = options.binpkg_multi_instance.then(|| {
         allocate_binpkg_build_id(
@@ -1030,21 +675,10 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
 
-    // Real `EbuildBinpkg._start`/`_package_phase_exit`
-    // (`_emerge/EbuildBinpkg.py:37-67`): `__dyn_package` never writes the
-    // real, discoverable `Packages`-index path directly -- it writes a
-    // same-directory `PORTAGE_BINPKG_TMPFILE` (a `NamedTemporaryFile`
-    // with a PID suffix) instead, and only `bintree.inject()` renames it
-    // into place, and only after the packaging phase has already exited
-    // `EX_OK`. A mid-write failure (tar/compressor/xpak-helper crash,
-    // disk full) therefore never leaves a truncated or corrupt archive
-    // sitting at the final path for a later scan to pick up -- the temp
-    // file is unlinked instead (`_package_phase_exit`'s own
-    // `os.unlink(self._binpkg_tmpfile)` on non-`EX_OK`). Mirrored here
-    // with `std::fs::rename` (atomic, same directory => same
-    // filesystem) rather than a real `NamedTemporaryFile`, since this is
-    // a single-process CLI with no concurrent packaging of the same CPV
-    // to race against.
+    // Temp-file-then-rename: `__dyn_package` writes a same-directory temp file,
+    // renamed into place only after the phase exits success, so a mid-write
+    // failure never leaves a corrupt archive at the final path.
+    // Portage: _emerge/EbuildBinpkg
     let tmp_path = binpkg_path.with_extension(format!(
         "{}.tmp{}",
         binpkg_path
@@ -1058,15 +692,9 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
         portage_tmpdir,
         root,
         options,
-        binpkg_path: &tmp_path, // Real `EbuildBinpkg._start`'s per-package gate
-        // (`EbuildBinpkg.py:47-48`, backlog #147 S1 ruling (i)): the
-        // `BUILD_ID` export follows the entry's own token, while the
-        // allocation above stays run-wide. A negated entry in a
-        // run-wide-multi run therefore takes the multi path with no
-        // `BUILD_ID` (S0 A2 shape); a tokened entry in a
-        // run-wide-single run takes the single path with none either
-        // (real writes `None`/`-1` there -- documented divergence,
-        // see the function docs).
+        binpkg_path: &tmp_path,
+        // The `BUILD_ID` export follows the entry's own token, while the
+        // allocation above stays run-wide.
         build_id: build_id.filter(|_| per_entry_binpkg_multi_instance),
     })?;
     if package_status != 0 {
@@ -1083,13 +711,8 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
         })
         .unwrap_or_default();
     let get = |key: &str| metadata.get(key).map(String::as_str).unwrap_or("");
-    // Real `_pkgindex_entry` reads `cpv._metadata`, i.e. the *archive's
-    // own* metadata -- which for everything the install-phase passes
-    // rewrote (`RDEPEND` with its libc injection, `PROVIDES`/
-    // `REQUIRES` from the ELF scan, `IUSE`/`IUSE_EFFECTIVE`, `SIZE`) is
-    // `build-info`, not the raw `md5-cache`. Read `build-info` first and
-    // fall back to `md5-cache` for the keys the phase runtime does not
-    // record itself.
+    // `build-info` first (it carries what the install phase rewrote: `RDEPEND`,
+    // `PROVIDES`/`REQUIRES`, `IUSE`, `SIZE`), `md5-cache` as fallback.
     let build_info = env.build_info();
     let build_info_value = |key: &str| -> Option<String> {
         std::fs::read_to_string(build_info.join(key))
@@ -1100,18 +723,11 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
     let get_bi =
         |key: &str| -> String { build_info_value(key).unwrap_or_else(|| get(key).to_string()) };
     let build_time_str = build_time.to_string();
-    // Real `_pkgindex_entry` (`bintree.py:2311`) always writes `PATH`,
-    // regardless of format -- not gpkg-only. Needed for correctness (a
-    // remote fetch falls back to a bare `<pf>.<ext>` guess without it,
-    // real `gettbz2`'s own `if not rel_url: rel_url = pkgname + ".tbz2"`)
-    // and now also for `binpkg::populate_local_pkgdir`'s own mtime-
-    // staleness fast path, which looks up a cached entry by this same
-    // `PATH`'s basename. Derived from `binpkg_path` relative to
-    // `$PKGDIR` rather than reconstructed, so the two can never drift
-    // apart -- `<cat>/<pf>.<ext>` for a single instance, `<cat>/<pn>/
-    // <pf>-<build_id>.<suffix>` under multi-instance (real
-    // `_allocate_filename_multi`'s own `os.path.join(pkgdir, cpv.cp,
-    // pf)`).
+    // `PATH` is always written, in any format: a remote fetch falls back to a
+    // bare `<pf>.<ext>` guess without it, and the local-pkgdir scan's
+    // mtime-staleness fast path looks entries up by it. Derived from
+    // `binpkg_path` relative to `$PKGDIR` so the two can never drift apart.
+    // Portage: bintree.py, _pkgindex_entry
     let path_field = binpkg_path
         .strip_prefix(&options.pkgdir)
         .ok()
@@ -1127,8 +743,7 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
                     .unwrap_or_default()
             )
         });
-    // The index `BUILD_ID` is the archive's own metadata (real
-    // `_pkgindex_entry` reads `cpv._metadata`), so it follows the
+    // The index `BUILD_ID` is the archive's own metadata, so it follows the
     // same per-entry gate as the export above, not the allocation.
     let build_id_str = build_id
         .filter(|_| per_entry_binpkg_multi_instance)
@@ -1143,21 +758,9 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
         .unwrap_or_default();
     let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
 
-    // Real `_pkgindex_entry` + `PackageIndex.write` (`bintree.py:2289-
-    // 2312`, `getbinpkg.py:155-175`): the stanza fields are the archive
-    // metadata's own values in real's `keys.sort()` order (see
-    // [`built_binpkg_stanza_fields`]). `PROVIDES`/`REQUIRES`/
-    // `DEFINED_PHASES`/`SIZE`/`IUSE`/`IUSE_EFFECTIVE` and the rewritten
-    // `*DEPEND` values all now live in `build-info` (#39), so read them
-    // from there, falling back to `md5-cache` for the rest.
-    //
-    // Real `_pkgindex_hashes = ["MD5", "SHA1"]` (`bintree.py:548`) is a
-    // fixed list: `perform_multiple_checksums(pkg_path,
-    // hashes=self._pkgindex_hashes)` (`bintree.py:2302`) takes no
-    // configuration, and the S0 probe (backlog #188) confirmed a
-    // `PORTAGE_CHECKSUM_FILTER='-SHA1'` rebuild still writes both
-    // digests. [`binpkg_checksums`] therefore always computes both,
-    // unconditionally.
+    // The stanza fields are the archive metadata's values in Portage's
+    // `keys.sort()` order; both digests are always computed (Portage's fixed
+    // `_pkgindex_hashes`, unaffected by `PORTAGE_CHECKSUM_FILTER`).
     let defined_phases = get_bi("DEFINED_PHASES");
     let eapi = get_bi("EAPI");
     let slot = get_bi("SLOT");
@@ -1205,13 +808,10 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
     };
     write_packages_index_entry(&options.pkgdir, &cpv, &built_binpkg_stanza_fields(&stanza))?;
 
-    // Real `EbuildBuild._record_binpkg_info` (`EbuildBuild.py:502-523`,
-    // the emerge `--buildpkg`/`--buildpkgonly` paths) and `doebuild`'s
-    // own `package` branch (`doebuild.py:1522-1544`) both record the
-    // freshly injected archive in `build-info`: `BINPKGMD5` (the index
-    // `MD5`) always, `BUILD_ID` when the archive carries one. The vdb
-    // merge copies `build-info` wholesale, so a from-source merge then
-    // records the binpkg it produced, as the binpkg-merge path does.
+    // Record the fresh archive in `build-info`: `BINPKGMD5` always, `BUILD_ID`
+    // when the archive carries one. The vdb merge copies `build-info`
+    // wholesale, so a from-source merge records the binpkg it produced too.
+    // Portage: _emerge/EbuildBuild._record_binpkg_info; doebuild.py, package
     if !md5_str.is_empty() {
         std::fs::write(build_info.join("BINPKGMD5"), format!("{md5_str}\n"))
             .map_err(|e| format!("{}: {e}", build_info.join("BINPKGMD5").display()))?;
@@ -1224,10 +824,8 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
     Ok(0)
 }
 
-/// Real `bin/misc-functions.sh __dyn_package`'s own `die "Unknown
-/// BINPKG_FORMAT ${BINPKG_FORMAT}"` -- rejected here rather than letting
-/// the real bash hit it, so the caller gets a clean `Err` instead of a
-/// phase-script failure exit code.
+/// Rejected here rather than letting the bash hit `die "Unknown BINPKG_FORMAT"`,
+/// so the caller gets a clean `Err` instead of a phase-script failure.
 fn binpkg_extension(binpkg_format: &str) -> Result<&'static str, String> {
     match binpkg_format {
         "xpak" => Ok("tbz2"),
@@ -1236,10 +834,10 @@ fn binpkg_extension(binpkg_format: &str) -> Result<&'static str, String> {
     }
 }
 
-/// The `_allocate_filename_multi` filename suffix (`bintree.py:2620-2626`):
-/// `xpak` for the xpak format (NOT `tbz2` -- a multi-instance xpak file
-/// is `<pf>-<build_id>.xpak`, byte-format-identical to a `.tbz2` but
-/// named for the multi-instance layout), `gpkg.tar` for gpkg.
+/// The multi-instance filename suffix: `xpak` for xpak (not `tbz2` -- a
+/// multi-instance xpak file is `<pf>-<build_id>.xpak`, byte-identical to a
+/// `.tbz2` but named for the layout), `gpkg.tar` for gpkg.
+// Portage: bintree.py, _allocate_filename_multi
 fn multi_instance_binpkg_suffix(binpkg_format: &str) -> Result<&'static str, String> {
     match binpkg_format {
         "xpak" => Ok("xpak"),
@@ -1248,15 +846,11 @@ fn multi_instance_binpkg_suffix(binpkg_format: &str) -> Result<&'static str, Str
     }
 }
 
-/// Real `_allocate_filename_multi`'s own build_id search
-/// (`bintree.py:2607-2669`): starts one past the highest `BUILD_ID`
-/// already used by this `cp/pf` (scanning `<pkgdir>/<cat>/<pn>/<pf>-*.
-/// <suffix>`, real's own `_max_build_id` equivalent -- portuale has no
-/// long-lived `bindbapi` to consult instead, so this re-derives it from
-/// the filesystem each call), then increments past any that's since
-/// become occupied (real's own "avoid races" `while True` retry loop,
-/// narrowed to a single-process CLI that never races itself: existence
-/// alone is enough, no `open(..., "x")` placeholder-file dance needed).
+/// Allocates the next `BUILD_ID` for this `cp/pf`: one past the highest id in
+/// `<pkgdir>/<cat>/<pn>/<pf>-*.<suffix>`, re-derived from the filesystem each
+/// call (no long-lived index to consult), then incremented past any occupied
+/// name. Single-process: existence alone is enough, no placeholder-file dance.
+// Portage: bintree.py, _allocate_filename_multi
 fn allocate_binpkg_build_id(
     pkgdir: &Path,
     category: &str,
@@ -1291,19 +885,12 @@ fn allocate_binpkg_build_id(
     build_id
 }
 
-/// Real `_pkgindex_entry` (`bintree.py:2302`'s own
-/// `perform_multiple_checksums(pkg_path, hashes=self._pkgindex_hashes)`,
-/// `_pkgindex_hashes = ["MD5", "SHA1"]` at `bintree.py:548`) writes both
-/// an `MD5` and a `SHA1` digest of the whole binpkg file into its own
-/// `Packages` entry. Both are computed here in a single read (real hashes
-/// the file once per checksum too, streaming; portuale's whole-file read
-/// matches the pre-existing `MD5`-only shape). Without this, a binpkg
-/// portuale itself built would carry no digests at all, silently skipping
-/// `download_and_verify`'s own integrity checks for anyone fetching it
-/// from a portuale-served pkgdir as a remote binhost.
+/// The whole binpkg file's `MD5` and `SHA1` for the `Packages` entry, in a
+/// single read. Without digests a self-built binpkg would silently skip
+/// integrity checks for anyone fetching it as a remote binhost.
+// Portage: bintree.py, _pkgindex_entry
 fn binpkg_checksums(path: &Path) -> Option<(String, String)> {
-    // One import covers both hashers: `md5::Digest` and `sha1::Digest`
-    // are the same `digest::Digest` trait re-exported.
+    // `md5::Digest` and `sha1::Digest` are the same trait re-exported.
     use md5::Digest as _;
     let bytes = std::fs::read(path).ok()?;
     let md5: String = md5::Md5::digest(&bytes)
@@ -1317,11 +904,9 @@ fn binpkg_checksums(path: &Path) -> Option<(String, String)> {
     Some((md5, sha1))
 }
 
-/// `MAKEOPTS` for the package step's native gpkg compressor (`{JOBS}`,
-/// #326 S4): the ebuild's own resolved chain, else the global one
-/// (#328). The global fallback serves `quickpkg_from_vdb`, whose scratch
-/// copy of the vdb ebuild has no repo above it, so the ebuild-path chain
-/// resolves nothing there.
+/// `MAKEOPTS` for the package step's native gpkg compressor: the ebuild's own
+/// resolved chain, else the global chain (which serves `quickpkg_from_vdb`,
+/// whose scratch vdb-ebuild copy has no repo above it).
 fn package_makeopts(ebuild_path: &Path, config_root: &Path, root: &Path) -> Option<String> {
     ebuild_phases::resolve_standalone_chain_scalar(ebuild_path, config_root, root, "MAKEOPTS")
         .or_else(|| {
@@ -1330,7 +915,6 @@ fn package_makeopts(ebuild_path: &Path, config_root: &Path, root: &Path) -> Opti
         })
 }
 
-/// Arguments of [`invoke_dyn_package`].
 struct InvokeDynPackageArgs<'a> {
     ebuild_path: &'a Path,
     portage_tmpdir: &'a Path,
@@ -1340,27 +924,15 @@ struct InvokeDynPackageArgs<'a> {
     build_id: Option<u64>,
 }
 
-/// Runs the real, unmodified `bin/misc-functions.sh __dyn_package`
-/// against `ebuild_path` (tars `${D}` + appends `${PORTAGE_BUILDDIR}/
-/// build-info` as the xpak segment / hands both to `gpkg-helper.py`),
-/// with the compressor / `PKGDIR` / `PORTAGE_BINPKG_TMPFILE` environment
-/// real portage sets. Shared by `run_package` (fresh `src_install`
-/// image) and `quickpkg_from_vdb` (installed-files image).
+/// Runs `bin/misc-functions.sh __dyn_package` against `ebuild_path` with the
+/// compressor / `PKGDIR` / `PORTAGE_BINPKG_TMPFILE` environment Portage sets.
+/// Shared by `run_package` (fresh `src_install` image) and `quickpkg_from_vdb`
+/// (installed-files image).
 ///
-/// `build_id`: real `EbuildBinpkg._start`'s own condition, exactly --
-/// `if "binpkg-multi-instance" in self.settings.features:
-/// self.settings["BUILD_ID"] = str(build_id)` (`EbuildBinpkg.py:47-48`),
-/// which for portuale is precisely when the caller already allocated one
-/// (`package_after_install`'s own multi-instance gate, either format).
-/// Exporting it makes real,
-/// unmodified `__dyn_package` do two things for free that portuale
-/// previously never triggered: write a real `build-info/BUILD_ID` file
-/// into the archive itself (`bin/misc-functions.sh:557-558` --
-/// previously only the `$PKGDIR/Packages` *index* entry carried this
-/// value, so `binpkg::populate_local_pkgdir`'s own filename-inference
-/// fallback was silently doing the archive's job), and, if
-/// `FEATURES=packdebug` is also set, real `__generate_packdebug`
-/// (needs `BUILD_ID` for the debug tarball's own filename).
+/// `build_id`: exported exactly when the caller allocated one, so
+/// `__dyn_package` writes `build-info/BUILD_ID` into the archive itself (and
+/// `__generate_packdebug` gets the name it needs under `FEATURES=packdebug`).
+// Portage: _emerge/EbuildBinpkg._start
 fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
     let InvokeDynPackageArgs {
         ebuild_path,
@@ -1379,12 +951,9 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
         ),
         ("BINPKG_FORMAT".to_string(), binpkg_format.to_string()),
     ];
-    // Real `bin/misc-functions.sh`'s own `xpak-helper.py`/`gpkg-helper.py`
-    // invocation prefers `PORTAGE_PYTHONPATH` over `PORTAGE_PYM_PATH`
-    // (`PYTHONPATH=${PORTAGE_PYTHONPATH:-${PORTAGE_PYM_PATH}}`) -- set
-    // directly so the real, unmodified helper subprocess imports `portage`
-    // from *this* checkout, not whatever else might be system-installed.
-    // Without a checkout nothing is pushed (`pythonpath_value`).
+    // The helper prefers `PORTAGE_PYTHONPATH` over `PORTAGE_PYM_PATH`: set it
+    // directly so the helper imports `portage` from this checkout. Nothing is
+    // pushed without a checkout.
     let checkout = ebuild_phases::portage_checkout();
     if let Some(pythonpath) = ebuild_phases::pythonpath_value(&checkout) {
         extra_env.push(("PORTAGE_PYTHONPATH".to_string(), pythonpath));
@@ -1393,20 +962,10 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
         extra_env.push(("BUILD_ID".to_string(), id.to_string()));
     }
     if binpkg_format == "gpkg" {
-        // Real `gpkg-helper.py` builds its own `portage.settings` inside
-        // the subprocess and reads the compressor from it
-        // (`BINPKG_COMPRESS`, `BINPKG_COMPRESS_FLAGS[_<NAME>]`, and
-        // `${PORTAGE_BZIP2_COMMAND}` via `varexpand` -- real
-        // `gpkg._get_binary_cmd`), NOT from `PORTAGE_COMPRESSION_COMMAND`
-        // (that is xpak's `bin/misc-functions.sh` tar-pipe only). Export
-        // the same values the construction sites already resolved
-        // through the chain (backlog #180) so the gpkg build is
-        // deterministic rather than inheriting the host's own
-        // `make.conf` -- and, by construction, identical to what the
-        // helper's own files-only rebuild would read: the
-        // `BINPKG_COMPRESS`/`FLAGS` values here are files-only for
-        // `gpkg` runs (the Q6 rule), while `PORTAGE_BZIP2_COMMAND`
-        // keeps the calling env (whitelisted, never filtered).
+        // The gpkg helper rebuilds its own settings in the subprocess and reads
+        // the compressor from `BINPKG_COMPRESS`/`FLAGS` (not from
+        // `PORTAGE_COMPRESSION_COMMAND`, which is xpak's tar-pipe only), so
+        // the already-resolved values are exported for a deterministic build.
         extra_env.push((
             "BINPKG_COMPRESS".to_string(),
             options.binpkg_compress.clone(),
@@ -1426,43 +985,19 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
             "PORTAGE_BZIP2_COMMAND".to_string(),
             options.portage_bzip2_command.clone(),
         ));
-        // The native `gpkg-helper.py` (#326 S4) takes `{JOBS}` for
-        // `zstd -T{JOBS}` / `xz -T{JOBS}` from `MAKEOPTS` (real
-        // `gpkg._get_binary_cmd`: `makeopts_to_job_count(settings.get(
-        // "MAKEOPTS", "1"))`, from the helper's own `portage.settings`,
-        // i.e. `make.conf` included). A calling-env `MAKEOPTS` is
-        // whitelisted and already reaches the helper through the phase
-        // env; the `make.conf`/profile side does not, so it is exported
-        // here, from the same global (not `package.env`-matched) chain
-        // as the other scalars above. Left unset when nothing resolves:
-        // the helper then counts CPUs, as real does.
-        //
-        // #328: the ebuild-path chain needs a repo above the ebuild, and
-        // `quickpkg_from_vdb` (unmerge-backup, the replaced-instance
-        // backup) packages a scratch copy of the vdb ebuild that has
-        // none. `MAKEOPTS` is a global scalar, so it then comes from the
-        // global chain (`resolve_unmerge_config`, as `BINPKG_FORMAT` does
-        // on that path, #173): real reads `settings["MAKEOPTS"]` there
-        // too, and logs `zstd -T5` for a `make.conf` `MAKEOPTS=-j5`
-        // (pmtest `differential-test-bed/scripts/328-quickpkg-makeopts.sh`).
+        // The helper takes `{JOBS}` from `MAKEOPTS` in its own settings; the
+        // calling-env side already reaches it through the phase env, so only
+        // the `make.conf`/profile side is exported here (left unset when
+        // nothing resolves: the helper then counts CPUs, like Portage).
         if portage_profile::config_env_var("MAKEOPTS").is_none()
             && let Some(makeopts) = package_makeopts(ebuild_path, &options.config_root, root)
         {
             extra_env.push(("MAKEOPTS".to_string(), makeopts));
         }
-        // Real `FEATURES=binpkg-signing` (`gpkg.gpkg.create_signature`,
-        // `gpkg.py:790`): the real, unmodified helper signs the
-        // `metadata.tar`/`image.tar` members (detached `.sig` sidecars)
-        // and clear-signs the `Manifest` itself, via real
-        // `checksum_helper(SIGNING)` spawning
-        // `BINPKG_GPG_SIGNING_BASE_COMMAND` with real's own
-        // `[PORTAGE_CONFIG]` substitution. `FEATURES` itself already
-        // flows through (`phase_env_vars` passes it straight through);
-        // only non-empty values are exported here, so an unset var falls
-        // back to the helper's own `make.globals` default exactly as a
-        // real unset `make.conf` would. A signing request with no
-        // keyring/key never reaches this far -- `package_after_install`'s
-        // own pre-check (real `_emerge/actions.py:623-646`) rejects it.
+        // Only non-empty signing values are exported, so an unset var falls back
+        // to the helper's own default exactly as an unset `make.conf` would.
+        // A signing request with no keyring/key never reaches here (rejected
+        // by the pre-check).
         for (key, value) in [
             (
                 "BINPKG_GPG_SIGNING_BASE_COMMAND",
@@ -1509,7 +1044,6 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
     })
 }
 
-/// Arguments of [`quickpkg_from_vdb`].
 pub(crate) struct QuickpkgFromVdbArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) category: &'a str,
@@ -1522,34 +1056,25 @@ pub(crate) struct QuickpkgFromVdbArgs<'a> {
     pub(crate) config_protect_mask: &'a str,
 }
 
-/// Real `dblink.quickpkg` + `_quickpkg_dblink` (`vartree.py:2307` /
-/// `:6296`) -- `FEATURES=unmerge-backup`'s pre-unmerge binpkg of the
-/// **installed** package, built from its files under `${ROOT}` per
-/// `CONTENTS` rather than from a fresh `src_install`. Stages the
-/// installed tree into `${PORTAGE_BUILDDIR}/image` and a verbatim copy
-/// of the vdb dir into `${PORTAGE_BUILDDIR}/build-info`, then runs the
-/// same real, unmodified `bin/misc-functions.sh __dyn_package` the
-/// `ebuild <file> package` / `--buildpkgonly` paths already use -- which
-/// tars `${D}` and appends `build-info/` as the xpak segment, byte-shape
-/// identical to real quickpkg's own `tar_contents(...)` +
-/// `xpak.tbz2(...).recompose_mem(xpak.xpak(dbdir))`. A `$PKGDIR/Packages`
-/// entry is written from the vdb's own recorded dependency metadata (not
-/// md5-cache -- the package may no longer be in any repo).
+/// `FEATURES=unmerge-backup`'s pre-unmerge binpkg of the **installed** package,
+/// built from its files under `${ROOT}` per `CONTENTS` rather than from a
+/// fresh `src_install`. Stages the installed tree into the image dir and a
+/// verbatim copy of the vdb dir into `build-info`, then runs the same
+/// `__dyn_package` the `ebuild package` path uses. The `Packages` entry is
+/// written from the vdb's own recorded metadata (not md5-cache -- the package
+/// may no longer be in any repo).
 ///
-/// Real `include_config=False`: a CONFIG_PROTECT'd (not -MASK'd) file is
-/// left out of the image. fifo/device `CONTENTS` nodes are skipped -- a
-/// documented cut, the same `CAP_MKNOD` limitation the merge side's own
-/// `create_special_node` has. Returns `Ok(None)` -- silently building no
-/// backup -- only when the target archive path already exists. Real has
-/// no such guard (`bin/quickpkg` overwrites), so that is portuale's own
-/// conservative cut against clobbering a user-placed binpkg; real's
-/// `_quickpkg_dblink` `BUILD_TIME` idempotency check is deliberately not
-/// mirrored (see the body comment, backlog #202).
+/// A CONFIG_PROTECT'd (not -MASK'd) file is left out of the image
+/// (`include_config=False`); fifo/device nodes are skipped. Returns `Ok(None)`
+/// -- silently building no backup -- only when the target archive path already
+/// exists (Portage overwrites; this is a conservative cut against clobbering a
+/// user-placed binpkg). Portage's `BUILD_TIME` idempotency check is
+/// deliberately not mirrored (see body).
 ///
-/// Under `FEATURES=binpkg-multi-instance` the archive is written to real
-/// `_allocate_filename_multi`'s `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.
-/// <suffix>` (real `bin/quickpkg` -> `bintree.inject` -> `getname(...,
-/// allocate_new=True)`); otherwise the bare `<cat>/<pf>.<ext>`.
+/// Under `FEATURES=binpkg-multi-instance` the archive goes to
+/// `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>`; otherwise the bare
+/// `<cat>/<pf>.<ext>`.
+// Portage: vartree.py, dblink.quickpkg
 pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<PathBuf>, String> {
     let QuickpkgFromVdbArgs {
         root,
@@ -1563,11 +1088,9 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
         config_protect_mask,
     } = args;
     let ext = binpkg_extension(&options.binpkg_format)?;
-    // The entry's files are read through the root's installed-database
-    // backend (feat#157 S1.6; `files`: one `open` each, as before). The
-    // vdb ebuild and the whole entry are handed to a copier by path: the
-    // entry directory on `files`, a scratch copy of the whole entry under
-    // `scratch_ebuild_dir` on a database backend (S4.1).
+    // The entry is read through the root's installed-database backend: the entry
+    // directory on `files`, a scratch materialized copy under
+    // `scratch_ebuild_dir` on a database backend.
     let db = portage_vdb::for_root(root);
     let key = portage_vdb::EntryKey::new(category, pf);
     let vdb_dir = match db.entry_path(&key) {
@@ -1587,20 +1110,10 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
         .trim()
         .to_string();
 
-    // Deliberately no real `_quickpkg_dblink` `BUILD_TIME` idempotency
-    // check (backlog #202): real's own check iterates
-    // `bintree.dbapi.match("=cpv")` (`vartree.py:6297-6313`), but in
-    // every removal flow that reaches it that bintree was never
-    // populated -- `binarytree.__init__` only records `populated = 0`,
-    // and `run_action` populates it solely for `action in ("search",
-    // None)` with `--usepkg` (`actions.py:3725-3765`; the remaining
-    // populate sites serve the depgraph merge flow with remote
-    // binpkgs). An empty dbapi matches nothing, so real always shells
-    // out to `bin/quickpkg` and rebuilds -- while consulting the raw
-    // `<pkgdir>/Packages` file here skipped the backup whenever a stale
-    // stanza (e.g. an unlinked first backup) shared the re-merged
-    // package's second-granularity `BUILD_TIME`, silently producing no
-    // second backup with rc 0.
+    // No `BUILD_TIME` idempotency check: in every removal flow that reaches here
+    // Portage's own bintree was never populated, so its check always rebuilds;
+    // consulting the raw index here instead once skipped a backup whenever a
+    // stale stanza shared the re-merged package's `BUILD_TIME`.
     let cpv = format!("{category}/{pf}");
 
     let multi_instance_suffix = multi_instance_binpkg_suffix(&options.binpkg_format)?;
@@ -1625,9 +1138,8 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
         return Ok(None);
     }
 
-    // `read_to_string` of old: the io error for a read that failed,
-    // `ENOENT` for a missing entry or file, the std UTF-8 text for a
-    // `CONTENTS` that is not UTF-8.
+    // Error shapes mirror `read_to_string`: io error, ENOENT for missing, UTF-8
+    // error text for non-UTF-8 CONTENTS.
     let contents_path = vdb_dir.join("CONTENTS");
     let contents_err = |e: &dyn std::fmt::Display| format!("{}: {e}", contents_path.display());
     let contents = match db.read_file(&key, "CONTENTS") {
@@ -1649,9 +1161,8 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
         ));
     }
 
-    // Copy the vdb ebuild into a <cat>/<pn>/<pf>.ebuild layout so
-    // `compute_environment`'s path parse works (the vdb layout is
-    // <cat>/<pf>/<pf>.ebuild).
+    // The vdb layout is <cat>/<pf>/<pf>.ebuild; copy into a <cat>/<pn> layout
+    // so `compute_environment`'s path parse works.
     let src_dir = scratch_ebuild_dir.join(category).join(package);
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
     let scratch_ebuild = src_dir.join(format!("{pf}.ebuild"));
@@ -1701,20 +1212,13 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
         }
     }
 
-    // build-info/ = a verbatim copy of the vdb dir (real `xpak(dbdir)`).
+    // build-info/ is a verbatim copy of the vdb dir.
     let build_info = env.build_info();
     let _ = std::fs::remove_dir_all(&build_info);
     copy_dir_recursive(&vdb_dir, &build_info)?;
 
-    // Same temp-file-then-rename dance as `package_after_install` (see
-    // its own doc comment for the full real grounding) -- real `bin/
-    // quickpkg` does this too (its own `binpkg_tmpfile = bintree.pkgdir
-    // + cpv + ".tbz2." + str(portage.getpid())`, later `bintree.inject`
-    // renamed), so a failed compressor never leaves a corrupt archive at
-    // `binpkg_path` (the `if binpkg_path.exists() { return Ok(None) }`
-    // check above means this only ever runs when nothing was there
-    // before -- but leaving a corrupt file behind would still poison the
-    // next `--getbinpkg`/`--usepkg` scan of this pkgdir).
+    // Same temp-file-then-rename as `package_after_install`, so a failed
+    // compressor never leaves a corrupt archive at `binpkg_path`.
     let tmp_path = binpkg_path.with_extension(format!(
         "{}.tmp{}",
         binpkg_path
@@ -1747,12 +1251,9 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
     };
     let build_time = vdb_build_time.as_str();
     let build_id_str = build_id.map(|id| id.to_string()).unwrap_or_default();
-    // Real `_pkgindex_entry` always writes `PATH` -- see
-    // `package_after_install`'s own identical fix for the full real
-    // grounding (also needed for `populate_local_pkgdir`'s mtime-
-    // staleness fast path to find this entry at all). Derived from
-    // `binpkg_path` relative to `$PKGDIR` so the multi-instance
-    // `<cat>/<pn>/<pf>-<id>.<suffix>` subdir path is carried through.
+    // `PATH` is always written (also needed by the local-pkgdir scan's
+    // mtime-staleness fast path); derived from `binpkg_path` relative to
+    // `$PKGDIR` so the multi-instance subdir path carries through.
     let path_field = binpkg_path
         .strip_prefix(&options.pkgdir)
         .ok()
@@ -1767,39 +1268,10 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
         .map(|st| binpkg::file_mtime(&st).to_string())
         .unwrap_or_default();
     let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
-    // `$PKGDIR/Packages` entry from the vdb's own build-info files --
-    // the same archive-metadata source real `_pkgindex_entry`
-    // (`bintree.py:2289-2313`) reads: real quickpkg packs the whole vdb
-    // dir (`xpak.xpak(dblnk.dbdir)`, `bin/quickpkg:147`) and the stanza
-    // is whatever of it survives `PackageIndex.write`
-    // (`getbinpkg.py:153-177`). That is: `EAPI` verbatim unless `"0"`
-    // (the vdb `EAPI` file always exists; [`omit_stanza_default`]),
-    // `REPO_REVISIONS` verbatim when the vdb entry carries it (the
-    // installed package was merged from a build that recorded it --
-    // real writes `build-info/REPO_REVISIONS` whenever
-    // `PORTAGE_REPO_REVISIONS` is non-empty, `phase-functions.sh:769`,
-    // so even sync-less repos record `"{}"`), `repository` verbatim as
-    // `REPO` (`repository` is in real's stanza aux-key set,
-    // `bindbapi._aux_cache_keys`, `bintree.py:96-124`, so the archive
-    // metadata carries it and `PackageIndex.write` emits it translated
-    // last, after `MTIME`), keys in real's `keys.sort()` order, and no
-    // `PF`/`CATEGORY` lines at all -- neither is in real's stanza
-    // aux-key set, so the n203 probe's real quickpkg stanza carries
-    // neither although the vdb has both files (backlog #188's "extras
-    // match real" claim was wrong). `REPO` is never inherited from the
-    // index header in the shapes portuale writes: real drops a stanza
-    // value equal to a non-empty header value
-    // (`_pkgindex_inherited_keys`, `bintree.py:630`,
-    // `getbinpkg.py:164-168`), but the header default for
-    // `repository` is `""` (`bintree.py:633-636`), real's
-    // `_update_pkgindex_header` never sets it (it only sets
-    // `_pkgindex_header_keys`, which excludes it), and portuale's own
-    // header carries only `TIMESTAMP`+`VERSION`
-    // ([`packages_index_header`]) -- so the guard's `if v` is always
-    // falsy and `REPO` is always written, exactly like real's
-    // fresh-index shape (the n203 probe ends `..., MTIME, REPO: l32`).
-    // Empty values are skipped by [`format_packages_entry`], like
-    // real's `if metadata[k]` guard.
+    // The stanza is whatever of the vdb dir survives `PackageIndex.write`:
+    // `EAPI` verbatim unless `"0"`, `REPO_REVISIONS` verbatim when carried,
+    // `repository` verbatim as last key `REPO`, keys in sorted order, no
+    // `PF`/`CATEGORY` lines. Empty values are skipped, like Portage's guard.
     let slot = omit_stanza_default("SLOT", bi("SLOT").as_str()).to_string();
     let eapi = omit_stanza_default("EAPI", bi("EAPI").as_str()).to_string();
     let keywords = bi("KEYWORDS");
@@ -1882,14 +1354,8 @@ mod tests {
         TempDir::new("portuale-ebuild-package-test").keep()
     }
 
-    /// #328: `quickpkg_from_vdb` packages a scratch copy of the vdb ebuild
-    /// with no repo above it, so the ebuild-path chain resolves no
-    /// `MAKEOPTS`, and the native gpkg compressor counted CPUs
-    /// (`zstd -T<ncpu>`). Real reads `settings["MAKEOPTS"]` there
-    /// (`gpkg._get_binary_cmd`) and runs `zstd -T5` for a `make.conf`
-    /// `MAKEOPTS=-j5` (pmtest `differential-test-bed/scripts/
-    /// 328-quickpkg-makeopts.sh`, Portage 3.0.82.2 in the bed image).
-    /// The global chain fallback gives the same value.
+    /// Expected value from Portage (container bed): `make.conf MAKEOPTS=-j5`
+    /// must reach the gpkg compressor even outside a repo.
     #[test]
     fn package_makeopts_falls_back_to_the_global_chain_outside_a_repo() {
         let probe = tempdir();
@@ -1924,11 +1390,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&probe);
     }
 
-    /// Backlog #130: `set_resolved_features` re-derives the
-    /// binpkg-affecting tokens from a resolved (already-folded)
-    /// `FEATURES` list by plain presence -- unlike the raw-process-env
-    /// `Default`/`package_options_from_env`'s `None` arm, a negated token
-    /// has already been folded away, so presence alone is correct here.
+    /// Re-derivation from a resolved list is by plain presence, and the layout
+    /// bit stays run-wide.
     #[test]
     fn set_resolved_features_rederives_the_binpkg_affecting_tokens() {
         let mut options = PackageOptions {
@@ -1941,10 +1404,7 @@ mod tests {
             .set_resolved_features("binpkg-multi-instance buildpkg-live binpkg-signing splitdebug");
         assert!(options.buildpkg_live);
         assert!(options.binpkg_signing);
-        // The layout bit is run-wide-only (backlog #147 S1 ruling
-        // (i)): a per-entry token no longer flips it -- the
-        // `BUILD_ID` export gate lives in `package_after_install`'s
-        // own `per_entry_binpkg_multi_instance` parameter instead.
+        // The layout bit is run-wide-only: a per-entry token doesn't flip it.
         assert!(!options.binpkg_multi_instance);
 
         // A folded list that no longer carries a token turns it back off
@@ -1993,10 +1453,8 @@ mod tests {
 
     #[test]
     fn resolve_compression_command_substitutes_bzip2_var_and_flags() {
-        // "bzip2" is used as both the compressor name and the
-        // ${PORTAGE_BZIP2_COMMAND} value here so find_binary succeeds
-        // without depending on any *other* binary actually being
-        // installed on the test-running host.
+        // "bzip2" doubles as the ${PORTAGE_BZIP2_COMMAND} value so find_binary
+        // succeeds without depending on another installed binary.
         let cmd = resolve_compression_command("bzip2", "-9", "bzip2")
             .expect("bzip2 should be found on a real test PATH");
         assert_eq!(cmd, "bzip2 -9");
@@ -2011,9 +1469,8 @@ mod tests {
 
     #[test]
     fn resolve_compression_command_substitutes_jobs_for_xz_and_zstd() {
-        // {JOBS} is real host CPU count -- not pinned to a fixed value,
-        // just proven to have actually been substituted (no literal
-        // "{JOBS}" left, and a real positive integer follows "-T").
+        // {JOBS} is the host CPU count -- not pinned, just proven substituted
+        // (no literal "{JOBS}" left, and a positive integer follows "-T").
         for name in ["xz", "zstd"] {
             let cmd = resolve_compression_command(name, "", "bzip2")
                 .unwrap_or_else(|| panic!("{name} should be found on a real test PATH"));
@@ -2039,8 +1496,7 @@ mod tests {
             .map(|n| n.get())
             .unwrap_or(1)
             .to_string();
-        // `--jobs=6` has no whitespace after `=`, and `j` is followed by
-        // `obs`: real falls back to the CPU count.
+        // `--jobs=6` has no whitespace after `=`: Portage falls back to CPU count.
         assert_eq!(makeopts_to_job_count("--jobs=6"), cpus);
         assert_eq!(makeopts_to_job_count(""), cpus);
     }
@@ -2055,8 +1511,7 @@ mod tests {
                     .map(|(_, v)| v.to_string())
             }
         };
-        // Flag-less templates collapse to the bare binary (the L2 oracle's
-        // `zstd -T{JOBS}` + `MAKEOPTS=-j1` is `zstd -T1` the same way).
+        // Flag-less templates collapse to the bare binary.
         assert_eq!(
             phase_compression_command(cfg(&[("BINPKG_COMPRESS", "gzip"), ("MAKEOPTS", "-j1")])),
             Some("gzip".to_string())
@@ -2089,13 +1544,7 @@ mod tests {
 
     #[test]
     fn resolve_binpkg_format_defaults_to_gpkg_and_obeys_the_chain() {
-        // Backlog #173, grounded in real `cnf/make.globals:43`
-        // (`BINPKG_FORMAT="gpkg"`): no value anywhere in the chain
-        // yields the real default, and a chain value wins verbatim.
-        // The chain precedence itself (calling env over
-        // `make.conf`/profile/`make.globals`) lives in the `lookup`
-        // each call site builds (`portage_profile::env_over_config_scalar`
-        // over the resolved config); here the lookup is driven directly.
+        // Expected values from Portage's `make.globals` defaults.
         let cfg = |pairs: &'static [(&'static str, &'static str)]| {
             move |k: &str| {
                 pairs
@@ -2118,17 +1567,8 @@ mod tests {
 
     #[test]
     fn resolve_pkgdir_compress_flags_and_bzip2_obey_the_chain() {
-        // Backlog #180, grounded in real `cnf/make.globals:31`
-        // (`PKGDIR="/var/cache/binpkgs"`), `:39`
-        // (`BINPKG_COMPRESS="zstd"`), `:105`
-        // (`PORTAGE_BZIP2_COMMAND="bzip2"`), with no `FLAGS` default
-        // anywhere: no value anywhere in the chain yields the real
-        // default, and a chain value wins verbatim. The chain
-        // precedence itself (calling env over `make.conf`/profile/
-        // `make.globals`) lives in the `lookup` each call site builds
-        // (`portage_profile::env_over_config_scalar` over the resolved
-        // config, files-only `other_vars` for the gpkg compression
-        // pair per the Q6 rule); here the lookup is driven directly.
+        // Expected values from Portage's `make.globals` defaults; the lookup
+        // is driven directly here, chain precedence lives at the call sites.
         let cfg = |pairs: &'static [(&'static str, &'static str)]| {
             move |k: &str| {
                 pairs
@@ -2149,8 +1589,7 @@ mod tests {
             resolve_pkgdir(cfg(&[("PKGDIR", "/tmp/bins")])),
             std::path::PathBuf::from("/tmp/bins")
         );
-        // Empty is unset (real has no `PKGDIR`-empty die), never a
-        // relative-path footgun.
+        // Empty is unset (Portage has no `PKGDIR`-empty die).
         assert_eq!(
             resolve_pkgdir(cfg(&[("PKGDIR", "")])),
             std::path::PathBuf::from("/var/cache/binpkgs")
@@ -2166,15 +1605,12 @@ mod tests {
             resolve_binpkg_compress(cfg(&[("BINPKG_COMPRESS", "bzip2")])),
             "bzip2"
         );
-        // Empty disables compression downstream (real
-        // `doebuild.py:706-710`), so it round-trips verbatim, never a
-        // fallback.
+        // Empty disables compression downstream, so it round-trips verbatim.
         assert_eq!(resolve_binpkg_compress(cfg(&[("BINPKG_COMPRESS", "")])), "");
 
         assert_eq!(PackageOptions::default().binpkg_compress_flags, "");
         assert_eq!(resolve_binpkg_compress_flags(cfg(&[]), "gzip"), "");
-        // The per-compressor override wins over the generic value
-        // (real `doebuild.py:710-717` / `gpkg.py:1876-1882` order).
+        // The per-compressor override wins over the generic value.
         assert_eq!(
             resolve_binpkg_compress_flags(
                 cfg(&[
@@ -2211,9 +1647,8 @@ mod tests {
                 .find(|(k, _)| k == "PORTAGE_COMPRESSION_COMMAND")
                 .map(|(_, v)| v.clone())
         };
-        // Matched per-entry BINPKG_COMPRESS=gzip over a run-wide
-        // bzip2 pair: the pair is replaced (real's per-package
-        // mysettings value wins for the xpak pipe).
+        // Matched per-entry BINPKG_COMPRESS=gzip over a run-wide bzip2 pair:
+        // the pair is replaced.
         let mut matched = vec![
             (
                 "PORTAGE_COMPRESSION_COMMAND".to_string(),
@@ -2224,18 +1659,15 @@ mod tests {
         ];
         refresh_entry_compression_command(&mut matched, None);
         assert_eq!(command_of(&matched), Some("gzip".to_string()));
-        // Unmatched entry: no BINPKG_COMPRESS pair anywhere, so the
-        // run-wide fallback recomputes byte-identically (bzip2
-        // default, matching real's own `.get` default and the
-        // `run_wide_phase_env` value already in the env).
+        // Unmatched entry: recomputes byte-identically to the run-wide value.
         let mut unmatched = vec![(
             "PORTAGE_COMPRESSION_COMMAND".to_string(),
             "bzip2".to_string(),
         )];
         refresh_entry_compression_command(&mut unmatched, None);
         assert_eq!(command_of(&unmatched), Some("bzip2".to_string()));
-        // Unknown per-entry codec: the pair is removed, matching real
-        // leaving the key unset (its `__dyn_package` guard then fires).
+        // Unknown per-entry codec: the pair is removed, matching Portage leaving
+        // the key unset.
         let mut unknown = vec![
             (
                 "PORTAGE_COMPRESSION_COMMAND".to_string(),
@@ -2245,14 +1677,10 @@ mod tests {
         ];
         refresh_entry_compression_command(&mut unknown, None);
         assert_eq!(command_of(&unknown), None);
-        // Backlog #180: a `make.conf` BINPKG_COMPRESS (no calling-env
-        // value, no `package.env` match -- so no compression scalar at
-        // all in the layered pairs) still reaches the pipe through the
-        // config tail instead of falling back to the `bzip2` default.
-        // Only meaningful when the ambient process env is itself
-        // silent on the compression keys (otherwise the ambient value
-        // rightly wins and the assertion would be testing the
-        // developer's shell).
+        // A `make.conf` BINPKG_COMPRESS with no calling-env value and no
+        // `package.env` match still reaches the pipe through the config tail.
+        // Skipped when the ambient process env sets the compression keys
+        // (the ambient value would rightly win).
         if std::env::var_os("BINPKG_COMPRESS").is_none()
             && std::env::var_os("BINPKG_COMPRESS_FLAGS").is_none()
             && std::env::var_os("PORTAGE_BZIP2_COMMAND").is_none()
@@ -2281,10 +1709,8 @@ mod tests {
 
     #[test]
     fn resolve_compression_command_is_none_when_the_bzip2_var_names_a_missing_binary() {
-        // A real compressor name, but ${PORTAGE_BZIP2_COMMAND} resolves
-        // to a binary that isn't actually installed -- real behavior:
-        // PORTAGE_COMPRESSION_COMMAND is left unset (the caller omits it
-        // from the exported environment), not a fabricated fallback.
+        // A genuine compressor name, but the bzip2 var names a missing binary:
+        // the command is left unset, not fabricated.
         assert_eq!(
             resolve_compression_command(
                 "bzip2",
@@ -2295,9 +1721,7 @@ mod tests {
         );
     }
 
-    // `repo_root_for` itself now lives in, and is tested in,
-    // `ebuild_phases.rs` (shared with `fetch_sources`'s own repo lookup
-    // -- see that module's own doc comment on why it moved).
+    // `repo_root_for` lives in, and is tested in, `ebuild_phases.rs`.
 
     #[test]
     fn write_packages_index_entry_creates_a_header_then_the_entry() {
@@ -2312,9 +1736,7 @@ mod tests {
         let blocks: Vec<&str> = text.trim().split("\n\n").collect();
         assert_eq!(blocks.len(), 2, "header block + one entry: {text:?}");
         assert!(blocks[0].contains("TIMESTAMP:"));
-        // Real Portage's `_pkgindex_version_supported` gate -- without
-        // VERSION it discards the index wholesale (L2 S0 finding
-        // `l2-pkgindex-version-missing`).
+        // Without VERSION Portage discards the index wholesale.
         assert!(
             blocks[0].contains("VERSION: 0"),
             "header must carry VERSION for real Portage: {text:?}"
@@ -2377,11 +1799,7 @@ mod tests {
 
     #[test]
     fn omit_stanza_default_omits_only_exact_slot_and_eapi_zero() {
-        // Real `_pkgindex_default_pkg_data` (`bintree.py:609-629`): only
-        // the exact `"0"` is default. A sub-slotted `SLOT` (`0/1`) or a
-        // non-zero `EAPI` is written verbatim; any other key is never a
-        // default and passes through untouched (empty values are
-        // skipped separately by `format_packages_entry`).
+        // Only the exact `"0"` is default; anything else passes through.
         assert_eq!(omit_stanza_default("SLOT", "0"), "");
         assert_eq!(omit_stanza_default("SLOT", ""), "");
         assert_eq!(omit_stanza_default("SLOT", "1"), "1");
@@ -2393,19 +1811,8 @@ mod tests {
     }
 
     fn probe_shaped_stanza(slot: &str) -> BuiltBinpkgStanza<'_> {
-        // The S0 probe's `l32/dep-a` stanza shape (real Portage in
-        // `localhost/test-portuale:latest`, default config), with only
-        // the `SLOT` varying: real omits it for `"0"` and writes
-        // `SLOT: 1` for `"1"`. Digests are real's fixed
-        // `_pkgindex_hashes` pair (`bintree.py:548`), written even with
-        // `PORTAGE_CHECKSUM_FILTER='-SHA1'` in the environment.
-        // `REPO_REVISIONS: {}` is real's sync-less value: the probe's
-        // overlay repo has no sync type, so `_setup_repo_revisions`
-        // records an empty dict, which `phase-functions.sh:769` still
-        // writes (the `"{}"` string is non-empty) into
-        // `build-info/REPO_REVISIONS`, and the stanza carries it
-        // verbatim (no `_pkgindex_default_pkg_data` entry, only the
-        // falsy guard).
+        // Expected values from Portage (container bed): the probe's stanza
+        // shape, with only `SLOT` varying.
         BuiltBinpkgStanza {
             bdepend: "",
             build_id: "1",
@@ -2471,12 +1878,7 @@ mod tests {
 
     #[test]
     fn stanza_field_sort_matches_portage_keys_sort_with_mtime_repo_last() {
-        // Real `PackageIndex.write` sorts the *internal* names
-        // (`getbinpkg.py:173-174`) and translates on write
-        // (`:175-177`): `_mtime_`/`repository` sort after every
-        // uppercase key, so `MTIME`/`REPO` land last in that relative
-        // order. A shuffled full key set must come out in exactly the
-        // probe's order.
+        // A shuffled key set must come out in exactly the probe's order.
         let mut fields: Vec<(&'static str, &str)> = vec![
             ("REPO", "l32"),
             ("SLOT", "1"),
@@ -2508,19 +1910,9 @@ mod tests {
 
     #[test]
     fn quickpkg_from_vdb_writes_portage_ordered_stanza_with_eapi_and_repo_revisions() {
-        // Backlog #203, grounded in the n203 container probe (real
-        // `quickpkg =l32/dep-a-1.0` in `localhost/test-portuale:latest`,
-        // `/tmp/opencode/n203/probe.log`): the stanza carries the vdb
-        // `EAPI` verbatim (`EAPI: 8`; omitted iff `"0"` like
-        // `--buildpkg`), `REPO_REVISIONS` verbatim from the vdb entry
-        // (`{}` here -- the package was merged from a sync-less build),
-        // `repository` verbatim as `REPO` (backlog #226: `repository`
-        // is in real's stanza aux-key set, and the header never carries
-        // it in the shapes portuale writes, so the inherited-key drop
-        // never fires -- the probe stanza ends `..., MTIME, REPO: l32`),
-        // keys in `PackageIndex.write` sorted order with `REPO` last,
-        // and no `PF`/`CATEGORY`/`SLOT` lines (neither of the first two
-        // is in real's stanza aux-key set; `SLOT` is `"0"` here).
+        // Expected values from Portage (container probe): vdb `EAPI`/`REPO_REVISIONS`
+        // carried verbatim, `repository` as last key `REPO`, sorted key order,
+        // no `PF`/`CATEGORY`/`SLOT` lines.
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -2646,16 +2038,11 @@ mod tests {
             pkgdir: tmp.join("pkgdir"),
             distdir: tmp.join("distdir"),
             shell: ebuild_phases::ShellBackend::default(),
-            // Real xpak/tbz2 building is codec-agnostic (portuale's
-            // own `portage_repo` binpkg reader never parses a `.tbz2`'s
-            // own content, only `Packages`) -- pinned to "bzip2"
-            // explicitly here (rather than the real `Default`, "zstd")
-            // so this test doesn't depend on the test-running host
-            // actually having `zstd` installed; `bzip2` is a
-            // near-universal base package.
+            // Pinned to "bzip2" (not the default "zstd") so this test doesn't
+            // depend on the host having `zstd` installed.
             binpkg_compress: "bzip2".to_string(),
-            // Pinned explicitly (backlog #173): the point of this test
-            // is the xpak path, not the (now gpkg) default.
+            // Pinned explicitly: the point of this test is the xpak path,
+            // not the (now gpkg) default.
             binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         };
@@ -2676,11 +2063,8 @@ mod tests {
         .expect("run_package succeeds");
         assert_eq!(status, 0);
 
-        // A real file, real bzip2+tar+XPAK content -- not portuale's
-        // own invention: real portage's own `xpak.py` writes a real
-        // `XPAKPACK` magic marker (`lib/portage/xpak.py`'s own
-        // `xpak()`) right before the metadata blob it appends, via the
-        // real, unmodified `xpak-helper.py recompose` subprocess.
+        // A genuine bzip2+tar+XPAK file: Portage's `xpak.py` writes an
+        // `XPAKPACK` magic marker right before the appended metadata blob.
         let binpkg_path = options.pkgdir.join("dev-libs/packagepkg-1.0.tbz2");
         let binpkg_bytes = std::fs::read(&binpkg_path)
             .unwrap_or_else(|e| panic!("{}: {e}", binpkg_path.display()));
@@ -2691,10 +2075,8 @@ mod tests {
             binpkg_path.display()
         );
 
-        // Real, unmodified portage_repo::list_binary_candidates (task
-        // #53/#63's own reader) sees it immediately -- the whole point
-        // of writing a real Packages entry in the exact format that
-        // reader already parses.
+        // The binpkg reader sees it immediately -- the point of writing a
+        // Packages entry in the exact format that reader parses.
         let index = portage_repo::BinaryIndex::from_pkgdir(&options.pkgdir);
         let candidates = portage_repo::list_binary_candidates(&index, "dev-libs", "packagepkg");
         assert_eq!(candidates.len(), 1);
@@ -2703,8 +2085,7 @@ mod tests {
         assert_eq!(candidate.slot, "0");
         assert_eq!(candidate.keywords, vec!["amd64".to_string()]);
 
-        // The real RDEPEND this fixture's own md5-cache entry declares
-        // came through into the Packages index too.
+        // The fixture's md5-cache RDEPEND came through into the index too.
         let metadata = portage_repo::read_binary_metadata(&index, "dev-libs", "packagepkg", "1.0")
             .expect("binary metadata entry exists");
         assert_eq!(
@@ -2712,13 +2093,9 @@ mod tests {
             Some("dev-libs/samepkg")
         );
 
-        // Real `_pkgindex_entry` always writes an `MD5` and a `SHA1` of
-        // the whole binpkg file (`binpkg_checksums`'s own doc comment)
-        // -- without them, `emerge_getbinpkg::download_and_verify` would
-        // silently skip integrity-checking anyone fetching this same file
-        // from a portuale-served pkgdir as a remote binhost.
-        // (`md5::Digest` below is the shared `digest::Digest` trait both
-        // hashers implement -- one import covers both.)
+        // Both fixed digests are written; without them integrity checks would
+        // be silently skipped for anyone fetching this file as a remote binhost.
+        // (`md5::Digest` is the shared trait both hashers implement.)
         use md5::Digest as _;
         let expected_md5: String = md5::Md5::digest(&binpkg_bytes)
             .iter()
@@ -2740,12 +2117,7 @@ mod tests {
 
     #[test]
     fn package_after_install_writes_the_resolved_use_flags_into_the_packages_index() {
-        // Real `Package.use.enabled` (`emerge_build.rs`'s own
-        // `build_one_source_entry`/`ebuild_merge.rs`'s own `run_merge`
-        // both now extract this from their own already-resolved build
-        // env and pass it straight through) -- exercised here directly
-        // against `package_after_install` itself, the shared tail both
-        // callers route through.
+        // Resolved `USE` flags pass straight through to the index `USE` field.
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -2796,14 +2168,8 @@ mod tests {
 
     #[test]
     fn package_after_install_stanza_omits_default_slot_and_writes_both_digests() {
-        // Backlog #188, grounded in the S0 real-Portage probe (default
-        // config, `SLOT="0"` fixture `dev-libs/packagepkg` — the same
-        // shape as the probe's `l32/dep-a`): real's on-disk stanza
-        // carries no `SLOT` line (`_pkgindex_default_pkg_data`,
-        // `bintree.py:609-629`, dropped by `PackageIndex.write`,
-        // `getbinpkg.py:169-172`), both fixed digests (`MD5` + `SHA1`,
-        // `_pkgindex_hashes`, `bintree.py:548`), and the translated
-        // `MTIME` key (never the internal `_mtime_`).
+        // Expected values from Portage (container probe): no `SLOT` line for the
+        // default slot, both fixed digests, translated `MTIME` key.
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -2869,11 +2235,9 @@ mod tests {
         );
     }
 
-    /// `FEATURES=unmerge-backup` / `quickpkg` with `BINPKG_FORMAT=gpkg`:
-    /// the installed files and the vdb entry become a real gpkg through
-    /// the `gpkg-helper.py compress` the dispatcher routes natively
-    /// (#326 S4). Re-run as a child process with no checkout by
-    /// `helpers::gpkg::tests::quickpkg_from_vdb_gpkg_works_without_the_checkout`.
+    /// `FEATURES=unmerge-backup` / `quickpkg` with `BINPKG_FORMAT=gpkg`: the
+    /// installed files and the vdb entry become a gpkg through the natively
+    /// routed `gpkg-helper.py compress`.
     #[test]
     fn quickpkg_from_vdb_with_gpkg_format_builds_a_readable_gpkg() {
         let tmp = tempdir();
@@ -2885,7 +2249,7 @@ mod tests {
             pkgdir: tmp.join("pkgdir"),
             distdir: tmp.join("distdir"),
             shell: ebuild_phases::ShellBackend::default(),
-            // not the `Default` zstd: the test must not need zstd installed
+            // Not the default zstd: the test must not need zstd installed.
             binpkg_compress: "bzip2".to_string(),
             binpkg_format: "gpkg".to_string(),
             ..PackageOptions::default()
@@ -2949,9 +2313,8 @@ mod tests {
             distdir: tmp.join("distdir"),
             shell: ebuild_phases::ShellBackend::default(),
             binpkg_format: "gpkg".to_string(),
-            // Pinned to "bzip2" (not the real `Default`, "zstd") so this
-            // test doesn't depend on `zstd` being installed -- real
-            // `gpkg-helper.py` reads this from the environment we export.
+            // Pinned to "bzip2" (not the default "zstd") so this test doesn't
+            // depend on `zstd` being installed.
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         };
@@ -2972,11 +2335,8 @@ mod tests {
         .expect("run_package succeeds");
         assert_eq!(status, 0);
 
-        // A real `.gpkg.tar` -- real, unmodified `bin/gpkg-helper.py
-        // compress` (real `portage.gpkg.gpkg().compress()`) built it: an
-        // outer tar whose members are the `gpkg-1` version marker, the
-        // compressed `metadata.tar.<comp>`, the compressed
-        // `image.tar.<comp>`, and a `Manifest`.
+        // A genuine `.gpkg.tar`: an outer tar of the `gpkg-1` marker, the
+        // compressed `metadata.tar`/`image.tar`, and a `Manifest`.
         let binpkg_path = options.pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar");
         assert!(
             binpkg_path.is_file(),
@@ -2984,18 +2344,13 @@ mod tests {
             binpkg_path.display()
         );
 
-        // The round trip: portuale's OWN gpkg reader (the `$PKGDIR`
-        // directory-scan buildout's `binpkg::read_gpkg_metadata`) reads
-        // back exactly what the real writer put in.
+        // The round trip: portuale's own gpkg reader reads back what the helper wrote.
         let scalar = crate::binpkg::read_gpkg_metadata(&binpkg_path)
             .expect("portuale's gpkg reader parses the real writer's output");
         assert_eq!(scalar.get("SLOT").map(String::as_str), Some("0"));
         assert_eq!(scalar.get("CATEGORY").map(String::as_str), Some("dev-libs"));
         assert_eq!(scalar.get("PF").map(String::as_str), Some("packagepkg-1.0"));
-        // `write_post_install_metadata` (real
-        // `_post_src_install_write_metadata`) put the dep strings into
-        // `build-info`, and real `gpkg._generate_metadata_from_dir`
-        // carried them into `metadata.tar`.
+        // The dep strings went from `build-info` into `metadata.tar`.
         assert_eq!(
             scalar.get("RDEPEND").map(|s| s.trim()),
             Some("dev-libs/samepkg")
@@ -3013,11 +2368,9 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].version, "1.0");
 
-        // And the directory scan (real `bintree._populate_local`) reads
-        // the file directly -- the just-written index entry's own
-        // `_mtime_`/`SIZE` still agree with the real file (nothing else
-        // touched it since), so this hits the mtime-staleness fast path
-        // rather than re-parsing the gpkg archive.
+        // The directory scan reads the file directly: the just-written entry's
+        // `_mtime_`/`SIZE` still agree with the file, so this hits the
+        // mtime-staleness fast path rather than re-parsing the archive.
         let scanned =
             crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 1);
@@ -3048,9 +2401,8 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        // Build it twice -- real `FEATURES=binpkg-multi-instance` keeps
-        // both builds around under distinct `BUILD_ID`s, rather than the
-        // single-instance default of overwriting the same bare filename.
+        // Build it twice -- multi-instance keeps both builds under distinct
+        // `BUILD_ID`s instead of overwriting the same bare filename.
         let status = run_package(RunPackageArgs {
             ebuild_path: &ebuild,
             root: &root,
@@ -3072,8 +2424,7 @@ mod tests {
         .expect("run_package succeeds");
         assert_eq!(status, 0);
 
-        // Real `bintree._allocate_filename_multi`: `<pkgdir>/<cat>/<pn>/
-        // <pf>-<build_id>.gpkg.tar`, not a bare `<cat>/<pf>` name.
+        // `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.gpkg.tar`, not a bare name.
         let first = options
             .pkgdir
             .join("dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar");
@@ -3097,33 +2448,22 @@ mod tests {
                 .exists()
         );
 
-        // Real `EbuildBinpkg._start`'s own `BUILD_ID` export
-        // (`invoke_dyn_package`'s own doc comment): each archive's
-        // *embedded* `build-info/BUILD_ID` -- written by real,
-        // unmodified `__dyn_package` bash, not synthesized Rust-side --
-        // must match its own filename suffix.
+        // Each archive's embedded `build-info/BUILD_ID` must match its own
+        // filename suffix.
         let first_meta = crate::binpkg::read_gpkg_metadata(&first).expect("reads metadata");
         assert_eq!(first_meta.get("BUILD_ID").map(String::as_str), Some("1"));
         let second_meta = crate::binpkg::read_gpkg_metadata(&second).expect("reads metadata");
         assert_eq!(second_meta.get("BUILD_ID").map(String::as_str), Some("2"));
 
-        // Both builds' own Packages entries survive -- real `_inject_file`'s
-        // own PATH-keyed dedup (not CPV-keyed), which
-        // `write_packages_index_entry`'s own doc comment mirrors.
+        // Both builds' entries survive: PATH-keyed dedup, not CPV-keyed.
         let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
         assert!(packages.contains("PATH: dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar"));
         assert!(packages.contains("PATH: dev-libs/packagepkg/packagepkg-1.0-2.gpkg.tar"));
         assert!(packages.contains("BUILD_ID: 1"));
         assert!(packages.contains("BUILD_ID: 2"));
 
-        // The directory scan walks the `<cat>/<pn>/` subdir, keeps each
-        // build's own BUILD_ID, and CPV stays the bare `cat/pf`.
-        // (Backlog #174: vouched files are trusted on the index's word,
-        // like real's default `FEATURES=pkgdir-index-trusted`, so the
-        // entries are the written stanzas verbatim -- real's own
-        // `_pkgindex_aux_keys` carries no `PF`, and neither does the
-        // stanza portuale wrote, so `PF` is no longer asserted here.
-        // Downstream splits it from `CPV`, exactly like real.)
+        // The scan walks the subdir, keeps each build's BUILD_ID, and CPV stays
+        // the bare `cat/pf` (downstream splits `PF` from `CPV`, like Portage).
         let scanned =
             crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 2);
@@ -3140,14 +2480,8 @@ mod tests {
         }
     }
 
-    /// Real `EbuildBuild._record_binpkg_info` (`EbuildBuild.py:502-523`)
-    /// and `doebuild`'s `package` branch (`doebuild.py:1522-1544`):
-    /// after a successful package step `build-info` holds `BINPKGMD5`
-    /// (the injected archive's index `MD5`, newline-terminated) and,
-    /// when the archive carries one, `BUILD_ID` -- overwriting
-    /// `__dyn_package`'s own newline-less `BUILD_ID`
-    /// (`misc-functions.sh:560-561`). The vdb merge copies `build-info`
-    /// wholesale, so a `--buildpkg` source merge records them too.
+    /// Expected values from Portage: after a package step `build-info` holds
+    /// `BINPKGMD5` and, when the archive carries one, `BUILD_ID`.
     #[test]
     fn package_records_binpkgmd5_and_build_id_in_build_info_like_portage() {
         let tmp = tempdir();
@@ -3210,13 +2544,9 @@ mod tests {
 
     #[test]
     fn real_multi_instance_xpak_uses_the_dot_xpak_extension_and_scans_back() {
-        // Real `bintree._allocate_filename_multi`: an xpak multi-instance
-        // binpkg is `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.xpak` -- the
-        // `.xpak` extension (not `.tbz2`), but byte-format-identical to a
-        // `.tbz2` (real `bin/misc-functions.sh` builds `[image][XPAK]`
-        // regardless of `BUILD_ID`). The no-`Packages`-index scan
-        // (`populate_local_pkgdir`) must walk the subdir, read the file
-        // with the same xpak reader, and carry `BUILD_ID` back.
+        // An xpak multi-instance binpkg is `<pkgdir>/<cat>/<pn>/<pf>-<id>.xpak`:
+        // the `.xpak` extension, byte-identical to a `.tbz2`. The index-less
+        // scan must walk the subdir and carry `BUILD_ID` back.
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -3259,9 +2589,8 @@ mod tests {
                 .exists()
         );
 
-        // The `.xpak` file reads with the same reader as a `.tbz2`, and
-        // its own embedded `build-info/BUILD_ID` (written by real,
-        // unmodified `__dyn_package`) matches the filename suffix.
+        // The `.xpak` file reads with the same reader as a `.tbz2`, and its
+        // embedded `build-info/BUILD_ID` matches the filename suffix.
         let meta = crate::binpkg::read_xpak_metadata(&xpak).expect("reads xpak metadata");
         assert_eq!(meta.get("PF").map(String::as_str), Some("packagepkg-1.0"));
         assert_eq!(meta.get("BUILD_ID").map(String::as_str), Some("1"));
@@ -3284,13 +2613,9 @@ mod tests {
 
     #[test]
     fn a_failed_packaging_phase_never_touches_the_final_binpkg_path() {
-        // Real `EbuildBinpkg`'s own temp-file-then-rename dance
-        // (`_emerge/EbuildBinpkg.py:37-67`, this function's own doc
-        // comment above the `tmp_path` it now builds) -- `__dyn_package`
-        // only ever writes a same-directory temp file, so a mid-write
-        // failure can never leave a truncated/corrupt archive at the
-        // real, discoverable `Packages`-index path for a later
-        // `--usepkg` scan to trust.
+        // `__dyn_package` only ever writes a same-directory temp file, so a
+        // mid-write failure can never leave a corrupt archive at the
+        // discoverable index path.
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -3299,17 +2624,12 @@ mod tests {
             pkgdir: tmp.join("pkgdir"),
             distdir: tmp.join("distdir"),
             shell: ebuild_phases::ShellBackend::default(),
-            // A compressor name find_binary can never resolve leaves
-            // PORTAGE_COMPRESSION_COMMAND unset, so real, unmodified
-            // `__dyn_package` hits its own `[[ -z
-            // "${PORTAGE_COMPRESSION_COMMAND}" ]] && die` before ever
-            // opening the tar pipe -- a clean, deterministic failure
-            // that never touches PORTAGE_BINPKG_TMPFILE at all.
+            // An unresolvable compressor leaves PORTAGE_COMPRESSION_COMMAND
+            // unset, so `__dyn_package` dies before ever opening the tar pipe:
+            // a clean, deterministic failure that never touches the tmpfile.
             binpkg_compress: "made-up-codec".to_string(),
-            // Pinned explicitly (backlog #173): the deterministic
-            // `__dyn_package` die this test needs is the xpak tar
-            // pipe's own `[[ -z "${PORTAGE_COMPRESSION_COMMAND}" ]]`
-            // guard, not the gpkg path.
+            // Pinned explicitly: the deterministic die this test needs is the
+            // xpak tar pipe's guard, not the gpkg path.
             binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         };
@@ -3319,9 +2639,8 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        // Sentinel content already at the final path, standing in for a
-        // real prior successful build -- a failed *re*-package (e.g. a
-        // `--buildpkg` rebuild after edits) must never clobber it.
+        // Sentinel content at the final path, standing in for a prior
+        // successful build -- a failed re-package must never clobber it.
         let binpkg_path = options.pkgdir.join("dev-libs/packagepkg-1.0.tbz2");
         std::fs::create_dir_all(binpkg_path.parent().unwrap()).unwrap();
         std::fs::write(&binpkg_path, b"OLD-CONTENT").unwrap();
