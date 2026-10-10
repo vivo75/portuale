@@ -436,7 +436,8 @@ pub(crate) fn install_client_binary(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| format!("mrg: install target {target} has no parent directory"))?;
     // `mktemp <dir>/.portuale.XXXXXX`.
-    let tmp: String = match ctx.transport {        RemoteTransport::Local => {
+    let tmp: String = match ctx.transport {
+        RemoteTransport::Local => {
             let mut attempt = 0;
             loop {
                 let nanos = std::time::SystemTime::now()

@@ -541,11 +541,12 @@ pub fn run(args: &[String]) -> ExitCode {
         // Selective-without-`--oneshot` world candidates: plain favorites and
         // user `@set`s (built-ins never count). `--onlydeps` counts like
         // `--oneshot` here. See `selective_noop_deferred`.
-        let deferred = selective_noop_deferred(
-            SelectiveNoopDeferredArgs { selective: plan.selective, oneshot_or_onlydeps:
-            opts.oneshot || opts.onlydeps, has_world_candidates: opts.atom_args.iter().any(|a| !a.starts_with('@'))
-                || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()) },
-        );
+        let deferred = selective_noop_deferred(SelectiveNoopDeferredArgs {
+            selective: plan.selective,
+            oneshot_or_onlydeps: opts.oneshot || opts.onlydeps,
+            has_world_candidates: opts.atom_args.iter().any(|a| !a.starts_with('@'))
+                || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()),
+        });
         if let Some(code) = show_nothing_to_merge(ShowNothingToMergeArgs {
             opts: &opts,
             show_merge_list,
