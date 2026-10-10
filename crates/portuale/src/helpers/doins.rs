@@ -1,75 +1,16 @@
-// Native `doins.py` (#326 S6, D1/D3/D4/D7): a port of
-// `3rdparty/portage/bin/doins.py` (all 619 lines: `main`, `_parse_args`,
-// `_install_dir`, `_doins`, `_InstallRunner`, the two in-process runners,
-// the two subprocess runners, `_parse_install_options` and
-// `_set_attributes`/`_set_timestamps`), routed from the `python`
-// dispatcher when the script argument's basename is `doins.py`.
+// Native `doins.py`: installs files and dirs into the image.
 //
-// Behaviour is real's, in real's order:
-// - Outer argv (`_create_arg_parser`): the long options as real spells
-//   them, both `--x=v` and `--x v`, unique long-option prefixes, and
-//   `--` before the sources. `-h`/`--help` (and the single-dash `-h*`
-//   cluster, as argparse parses it) prints the help to stdout and exits
-//   0, winning over any other error. Any other argparse error exits 2
-//   with real's usage text (probed live, pinned in tests). `--distdir`
-//   becomes its value + `/` (an empty one is `/`, so every absolute
-//   link target counts as inside it).
-// - Install options (`_parse_install_options`): `-g/--group`,
-//   `-o/--owner`, `-m/--mode` (default 0o755) and `-p`, parsed from
-//   `shlex.split(options)` with `parse_known_args` semantics. `-m` uses
-//   `int(x, 8)` (whitespace, sign, `0o` prefix and `_` separators
-//   accepted; failure gives `mode=None`). Owner/group resolve a name
-//   first (from `/etc/passwd` and `/etc/group` by parsing the files:
-//   no NSS in a static binary), then `int()`; an `int()` failure is an
-//   argparse type error (exit 2). Remaining args, or `mode is None`:
-//   the two `!!! <helper>:` warnings, then `--strict_option` exits 1,
-//   otherwise fall back to `install(1)` from PATH.
-// - File install: `stat` (following links; failure is uncaught, rc 1),
-//   `_is_install_allowed` with its same-file warning, unlink (ENOENT is
-//   fine; anything else is uncaught), copy the contents into a newly
-//   created file (`0o666 & ~umask`), then lchown, chmod, the xattr copy,
-//   then `-p` utime (ns). Any failure in that block is logged and
-//   returns False; the file stays behind.
-// - xattr (`--enable_copy_xattr`): list (ENOTSUP means none), skip
-//   `--xattr_exclude` whitespace-split globs (fnmatch semantics), set
-//   the rest; a set failure becomes real's `OperationNotSupported`
-//   message. The following variants (`listxattr`/`getxattr`/`setxattr`)
-//   are used, as real's `portage.util._xattr` (which calls
-//   `os.listxattr`/`getxattr`/`setxattr` with `follow_symlinks=True`)
-//   does.
-// - Dirs: `makedirs`, so created parents get `0o777 & ~umask` and only
-//   the leaf gets `_set_attributes`. EEXIST on an existing dir is fine.
-//   `install_dir` re-raises only with `--helpers_can_die`, otherwise it
-//   logs `install_dir failed.`.
-// - `_doins`: the symlink branch preserves the link (unlink the dest,
-//   rmtree if it is a dir) when `--preserve_symlinks` is set and its
-//   target does not start with distdir; otherwise the file is
-//   installed. `_install_dir` walks without following symlinks: a
-//   symlinked dir is queued for `_doins`, a real dir gets an
-//   `install_dir`. A dir without `-r` is skipped (None); for `dodoc` it
-//   is a warning plus failure.
-// - `main`: create `--dest` if it is not a dir, loop over the sources,
-//   return `0 if not any_failure and any_success else 1`.
-// - D7 write guard: before every create, unlink, mkdir, symlink, chown,
-//   chmod, xattr-set or utime, the canonical parent (for mutations that
-//   follow links: the canonical path itself) must lie under the
-//   canonical `$D` (when `D` is set in the env), else under the
-//   canonical `--dest`. A violation prints an error naming the path and
-//   exits 1.
-// - Python tracebacks are not reproduced. Where real logs an exception
-//   (`logger.exception(...)`), the first line (the message) and the
-//   final `ExceptionType: message` line are printed. Uncaught
-//   exceptions print only the final line.
-//
-// Deviations from real, all documented where they occur:
-// - Usage/help text is rendered at a fixed width of 80 columns: real's
-//   argparse re-wraps when `COLUMNS` is set or stdout is a wide tty.
-// - Non-UTF-8 option values are decoded lossy for parsing (paths stay
-//   raw bytes throughout).
-// - `int()`-style owner/group values beyond `i64` are type errors
-//   rather than unbounded Python ints.
-// - `copyfile` uses a plain read/write copy (no reflink/sparse
-//   acceleration): contents are identical, which is what D3 compares.
+// A port of `main`, `_parse_args`, `_install_dir`, `_doins` and the
+// install runners: outer argv (long options, `--x=v` and `--x v`,
+// unique prefixes, `--` before sources), install options from
+// `shlex.split` (`-g/-o/-m/-p`, unknown ones falling back to
+// `install(1)` unless `--strict_option`), then per-source install with
+// Portage's return rule (`0 if not any_failure and any_success else 1`).
+// Every mutation is D7-guarded under the canonical `$D` (else `--dest`);
+// uncaught failures print only the final `ExceptionType: message` line.
+// Deviations: help text is fixed at 80 columns; option values decode
+// lossy (paths stay raw bytes); copies are plain read/write.
+// Portage: bin/doins.py, main
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -103,9 +44,7 @@ fn argv_basename(arg: &OsString) -> &[u8] {
 }
 
 // ---------------------------------------------------------------------
-// Python repr helpers (warning/exception lines quote bytes the way
-// Python's `repr()` does, so the pinned lines match real's byte for
-// byte on ASCII paths).
+// Python `repr()` helpers (pinned lines match Portage's byte for byte)
 // ---------------------------------------------------------------------
 
 /// Python `repr()` of a byte string: `b'...'` (double quotes when the
@@ -193,9 +132,8 @@ fn py_bytes_list_repr(items: &[Vec<u8>]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------
-// Help/usage text (probed live from real `doins.py`, Portage 3.0.82.2,
-// pipe width 80; see the module docs for the fixed-width deviation).
-// `doins.py` occurs exactly once in each and is the program name.
+// Help/usage text (probed from Portage `doins.py` at 80 columns; the
+// program name occurs exactly once in each).
 // ---------------------------------------------------------------------
 
 const OUTER_USAGE: &str = "usage: doins.py [-h] [--recursive] [--preserve_symlinks] [--helpers_can_die]\n                [--distdir DISTDIR] [--insoptions INSOPTIONS]\n                [--diroptions DIROPTIONS] [--strict_option]\n                [--enable_copy_xattr] [--xattr_exclude XATTR_EXCLUDE]\n                [--helper HELPER] [--dest DEST]\n                [sources ...]\n";
@@ -236,13 +174,10 @@ fn warn(helper: &str, msg: &[u8]) {
 }
 
 // ---------------------------------------------------------------------
-// `shlex.split` (posix mode, `whitespace_split`, no comments; ASCII
-// syntax, arbitrary bytes pass through). Probed against real
-// `shlex.split`: inside `"..."` a backslash escapes only `"` and `\`
-// (`"06\44"` keeps the backslash); outside quotes it escapes any byte,
-// a newline included (`a\<newline>b` is `a<newline>b`, no line
-// continuation); `''`/`""` give an empty word. An unterminated quote
-// or a trailing backslash is real's uncaught `ValueError`.
+// `shlex.split` (posix, `whitespace_split`, no comments; ASCII syntax).
+// Inside `"..."` a backslash escapes only `"` and `\`; outside quotes it
+// escapes any byte; `''`/`""` give an empty word. An unterminated quote
+// or trailing backslash is Portage's uncaught `ValueError`.
 // ---------------------------------------------------------------------
 
 fn shlex_split(s: &[u8]) -> Result<Vec<Vec<u8>>, &'static str> {
@@ -304,9 +239,8 @@ fn shlex_split(s: &[u8]) -> Result<Vec<Vec<u8>>, &'static str> {
 }
 
 // ---------------------------------------------------------------------
-// Python `int(x, base)`: surrounding ASCII whitespace, an optional
-// sign, a matching `0o`/`0O` prefix for base 8, and single `_`
-// separators between digits. Anything else fails.
+// Python `int(x, base)`: ASCII whitespace, optional sign, `0o` prefix
+// for base 8, single `_` separators. Anything else fails.
 // ---------------------------------------------------------------------
 
 fn py_int(s: &str, base: u32) -> Option<i64> {
@@ -350,8 +284,8 @@ fn py_int(s: &str, base: u32) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------
-// Owner/group names: `/etc/passwd` and `/etc/group` parsed by hand (no
-// NSS in a static binary). A name first, then `int()`.
+// Owner/group names from `/etc/passwd` and `/etc/group` (no NSS in a
+// static binary): a name first, then `int()`.
 // ---------------------------------------------------------------------
 
 /// Look up `name` in `data` (the bytes of a passwd/group file):
@@ -410,9 +344,8 @@ fn parse_mode(s: &str) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------
-// fnmatch (posix: `*` matches everything including `/`; case is
-// significant) and `_xattr_excluder` (whitespace-split globs, any
-// match excludes; empty pattern never excludes).
+// fnmatch (posix: `*` matches everything including `/`) and
+// `_xattr_excluder` (whitespace-split globs; empty never excludes).
 // ---------------------------------------------------------------------
 
 fn fnmatch_inner(pat: &[u8], name: &[u8]) -> bool {
@@ -501,7 +434,7 @@ fn fnmatch_glob(pat: &[u8], name: &[u8]) -> bool {
 }
 
 /// `_xattr_excluder(pattern)`: `None`/empty never excludes.
-/// Shared with `helpers/xattr.rs` (#326 S7).
+/// Shared with `helpers/xattr.rs`.
 pub(crate) fn xattr_excluded(pattern: &str, attr: &[u8]) -> bool {
     for pat in pattern.split_whitespace() {
         if fnmatch_glob(pat.as_bytes(), attr) {
@@ -539,7 +472,7 @@ fn helper_display(helper: &Option<Vec<u8>>) -> String {
 }
 
 /// Python `Namespace(...)` repr of the outer options, for the
-/// `Failed to create symlink` first line (field order = real's
+/// `Failed to create symlink` first line (field order = Portage's
 /// `add_argument` order; bytes values use `b'...'`).
 fn outer_namespace_repr(o: &OuterOpts) -> Vec<u8> {
     let b = |v: &[u8]| py_bytes_repr(v);
@@ -613,7 +546,7 @@ fn match_long(name: &[u8], cands: &[&str]) -> Result<usize, Vec<usize>> {
 }
 
 fn parse_outer(prog: &str, argv: &[OsString]) -> OuterParse {
-    // Long options as real spells them, in `add_argument` order (the
+    // Long options as Portage spells them, in `add_argument` order (the
     // order ambiguous-option errors list).
     const LONGS: &[&str] = &[
         "recursive",
@@ -755,10 +688,8 @@ fn parse_outer(prog: &str, argv: &[OsString]) -> OuterParse {
                 i += 1;
                 continue;
             }
-            // Single dash: only `-h` exists. `-h` fires the help action;
-            // `-h*` (no `=`) does too, as argparse parses the `-h`
-            // prefix first (probed: `-hx`, `-help`). With `=` it is an
-            // explicit-argument error (probed: `-h=x`).
+            // Single dash: only `-h` exists, but `-h*` fires too (argparse
+            // parses the `-h` prefix first); with `=` it is an error.
             if tok == b"-h" || (tok.starts_with(b"-h") && !tok.contains(&b'=')) {
                 stdout_write(&outer_help(prog));
                 return OuterParse::Help;
@@ -805,7 +736,7 @@ struct InstallParsed {
 
 impl InstallParsed {
     /// `Namespace(group=.., owner=.., mode=.., preserve_timestamps=..)`
-    /// for the `Failed to copy file` first line (real's field order).
+    /// for the `Failed to copy file` first line (Portage's field order).
     fn namespace_repr(&self) -> Vec<u8> {
         let mut out = format!(
             "Namespace(group={}, owner={}, mode=",
@@ -838,7 +769,7 @@ enum InstallRoute {
 enum InstallOutcome {
     Route(InstallRoute),
     Printed(i32),
-    /// Real's uncaught exception (`shlex.split`'s `ValueError`): its
+    /// Portage's uncaught exception (`shlex.split`'s `ValueError`): its
     /// final traceback line, rc 1.
     Uncaught(Vec<u8>),
 }
@@ -1123,11 +1054,9 @@ fn parse_install_options(
 }
 
 // ---------------------------------------------------------------------
-// D7 write guard: every filesystem mutation must land under the
-// canonical `$D` (when `D` is set and non-empty in the env), else under
-// the canonical `--dest`. A static binary escapes libsandbox's
-// `LD_PRELOAD`, so without this a symlink inside the dest tree could
-// redirect writes outside it.
+// D7 write guard: every mutation must land under the canonical `$D`
+// (else `--dest`). A static binary escapes libsandbox's `LD_PRELOAD`,
+// so symlinks could otherwise redirect writes outside the dest tree.
 // ---------------------------------------------------------------------
 
 struct Guard {
@@ -1243,8 +1172,8 @@ impl Guard {
 }
 
 // ---------------------------------------------------------------------
-// Failures. `Uncaught` prints real's final `ExceptionType: message`
-// line (rc 1). `Guard` prints the D7 refusal (rc 1).
+// Failures. `Uncaught` prints the final `ExceptionType: message` line
+// (rc 1). `Guard` prints the D7 refusal (rc 1).
 // ---------------------------------------------------------------------
 
 enum Fatal {
@@ -1252,7 +1181,7 @@ enum Fatal {
     Guard(Vec<u8>),
 }
 
-/// Map an errno to real's Python exception type name.
+/// Map an errno to Portage's Python exception type name.
 fn exc_name(errno: i32) -> &'static str {
     match errno {
         x if x == libc::ENOENT => "FileNotFoundError",
@@ -1312,8 +1241,8 @@ fn last_errno() -> i32 {
 }
 
 // ---------------------------------------------------------------------
-// xattr (`movefile._copyxattr` over `portage.util._xattr`, which calls
-// the following variants).
+// xattr (`movefile._copyxattr` over `portage.util._xattr`, which follows
+// symlinks).
 // ---------------------------------------------------------------------
 
 fn c_path(p: &[u8]) -> Result<std::ffi::CString, ()> {
@@ -1321,7 +1250,7 @@ fn c_path(p: &[u8]) -> Result<std::ffi::CString, ()> {
 }
 
 /// `xattr.list(src)`: ENOTSUP/EOPNOTSUPP means "none" (`attrs = ()`).
-/// Shared with `helpers/xattr.rs` (#326 S7: one copier, not two).
+/// Shared with `helpers/xattr.rs` (one copier, not two).
 pub(crate) fn xattr_list(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     let c = c_path(path).map_err(|_| libc::EINVAL)?;
     let n = unsafe { libc::listxattr(c.as_ptr(), std::ptr::null_mut(), 0) };
@@ -1364,7 +1293,7 @@ pub(crate) fn xattr_get(path: &[u8], name: &[u8]) -> Result<Vec<u8>, i32> {
     Ok(buf)
 }
 
-/// Shared with `helpers/xattr.rs` (#326 S7).
+/// Shared with `helpers/xattr.rs`.
 pub(crate) fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i32> {
     let c = c_path(path).map_err(|_| libc::EINVAL)?;
     let n = std::ffi::CString::new(name).map_err(|_| libc::EINVAL)?;
@@ -1383,8 +1312,8 @@ pub(crate) fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i3
 /// `_copyxattr(src, dest, exclude)`. `Err` is either an errno line
 /// (list/get failures other than ENOTSUP) or the full
 /// `OperationNotSupported: ...` line (set failures).
-/// Shared with `helpers/xattr.rs` (#326 S7: `install.py` copies through
-/// this, never its own).
+/// Shared with `helpers/xattr.rs` (`install.py` copies through this,
+/// never its own).
 pub(crate) fn copy_xattr(src: &[u8], dest: &[u8], exclude: &[u8]) -> Result<(), Vec<u8>> {
     let attrs = xattr_list(src).map_err(|e| errno_line(e, src))?;
     if attrs.is_empty() {
@@ -1527,7 +1456,7 @@ fn c_symlink(target: &[u8], link: &[u8]) -> Result<(), i32> {
 
 fn c_lchown(p: &[u8], owner: i64, group: i64) -> Result<(), Vec<u8>> {
     // `-1` keeps the id; anything outside `u32` cannot be passed to
-    // the syscall (real's `OverflowError`, caught and logged there).
+    // the syscall (Portage's `OverflowError`, caught and logged there).
     const OVERFLOW: &[u8] = b"OverflowError: Python int too large to convert to C long";
     let uid = if owner == -1 {
         u32::MAX
@@ -1634,8 +1563,7 @@ impl Ctx {
     fn makedirs(&self, dest: &[u8]) -> Result<(), MakedirsFail> {
         let path = Path::new(OsStr::from_bytes(dest));
         // Missing ancestors, created top-down (their own EEXIST is
-        // swallowed, like the `except FileExistsError: pass` in real's
-        // recursion — but only when the ancestor is reachable).
+        // swallowed when the ancestor is reachable).
         let mut missing: Vec<Vec<u8>> = Vec::new();
         let mut anc = path;
         while std::fs::symlink_metadata(anc).is_err() {
@@ -1682,8 +1610,7 @@ impl Ctx {
     }
 
     /// `_DirSubprocessInstallRunner.run`: `install -d <opts> <dest>`.
-    /// A failure is an error for `install_dir` to judge (real's
-    /// `check_call` raises into it).
+    /// A failure is an error for `install_dir` to judge.
     fn dir_subprocess(&self, split: &[Vec<u8>], dest: &[u8]) -> Result<(), Fatal> {
         self.guard.check_parent(dest).map_err(Fatal::Guard)?;
         let mut cmd = std::process::Command::new("install");
@@ -1776,10 +1703,9 @@ impl Ctx {
         Ok(false)
     }
 
-    /// Copy the contents into a newly created file (`0o666 & ~umask`,
-    /// like Python's `open(dst, "wb")`), then attributes, xattrs,
-    /// timestamps. Failures log the `Failed to copy file` first line
-    /// plus the final line and return False.
+    /// Copy the contents into a newly created file (`0o666 & ~umask`),
+    /// then attributes, xattrs, timestamps. Failures log both lines
+    /// and return False.
     fn copy_and_set(&self, args: CopyAndSetArgs<'_>) -> Result<bool, Fatal> {
         let CopyAndSetArgs {
             parsed,
@@ -1858,7 +1784,7 @@ impl Ctx {
             return Ok(false);
         }
         // Unlink first, to emulate `install`. ENOENT is fine; anything
-        // else is uncaught (the `raise` outside real's `try`).
+        // else is uncaught (the `raise` outside Portage's `try`).
         self.guard.check_parent(&dest).map_err(Fatal::Guard)?;
         match c_unlink(&dest) {
             Ok(()) => {}
@@ -1875,9 +1801,7 @@ impl Ctx {
     }
 
     /// `_InsSubprocessInstallRunner.run`: `install <opts> <source>
-    /// <dest_dir>` from PATH, stdio inherited, True iff rc 0. A
-    /// missing `install` is uncaught (real's `subprocess.call` has no
-    /// `try` here).
+    /// <dest_dir>` from PATH, stdio inherited, True iff rc 0.
     fn ins_subprocess(
         &self,
         split: &[Vec<u8>],
@@ -1908,8 +1832,7 @@ impl Ctx {
     }
 
     /// The symlink branch of `_doins`: unlink the dest (rmtree if it
-    /// is a dir; other unlink errors are swallowed, as real's bare
-    /// `except OSError` does) and re-create the link.
+    /// is a dir) and re-create the link.
     fn place_symlink(&self, linkto: &[u8], dest: &[u8]) -> Result<(), Fatal> {
         self.guard.check_parent(dest).map_err(Fatal::Guard)?;
         match c_unlink(dest) {
@@ -1998,10 +1921,9 @@ impl Ctx {
         Ok(Some(success))
     }
 
-    /// One level of real's `os.walk` (no `followlinks`): symlinked
-    /// dirs are queued for `_doins`, real dirs get an `install_dir`
-    /// immediately, everything else is queued. A listing error is
-    /// silently skipped, as `os.walk` does.
+    /// One level of Portage's `os.walk` (no `followlinks`): symlinked
+    /// dirs are queued for `_doins`, real dirs get an `install_dir`.
+    /// A listing error is silently skipped.
     fn walk(&self, dir: &[u8], rel_here: &[u8], out: &mut Vec<Vec<u8>>) -> Result<(), Fatal> {
         let entries = match std::fs::read_dir(OsStr::from_bytes(dir)) {
             Ok(r) => r,
@@ -2030,10 +1952,8 @@ impl Ctx {
                 filenames.push(name);
             }
         }
-        // Real's loop body runs per yielded level, top-down: this
-        // level's dirs (link: queued; real dir: `install_dir`), then its
-        // files, and only then does `os.walk` descend, skipping
-        // symlinked dirs.
+        // Top-down per level: this level's dirs (link: queued; real dir:
+        // `install_dir`), then its files, then descend past symlinked dirs.
         let mut descend: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         for name in &dirnames {
             let full = join_path(dir, name);
@@ -2069,16 +1989,15 @@ fn main_inner(prog: &str, argv: &[OsString]) -> Result<i32, Fatal> {
         OuterParse::Ok(o) => o,
     };
     let Some(dest) = opts.dest.clone() else {
-        // `os.fsencode(None)`: real's `TypeError` traceback, rc 1.
+        // `os.fsencode(None)`: Portage's `TypeError` traceback, rc 1.
         return Err(Fatal::Uncaught(type_error_line(
             "expected str, bytes or os.PathLike object, not NoneType",
         )));
     };
     let helper = helper_display(&opts.helper);
     // `_InstallRunner(opts)`: insoptions first, then diroptions. A
-    // strict refusal exits before `--dest` is created (real dies in
-    // the constructor, and the oracle's `unknown-strict` case pins the
-    // never-created dest).
+    // strict refusal exits before `--dest` is created (Portage dies in
+    // the constructor).
     let ins = match parse_install_options(prog, &opts.insoptions, opts.strict_option, &helper) {
         InstallOutcome::Route(r) => r,
         InstallOutcome::Printed(c) => return Ok(c),
@@ -2120,7 +2039,7 @@ fn main_inner(prog: &str, argv: &[OsString]) -> Result<i32, Fatal> {
     Ok(combine_rc(any_success, any_failure))
 }
 
-/// Entry point: `script` is the `doins.py` element (real's
+/// Entry point: `script` is the `doins.py` element (Portage's
 /// `sys.argv[0]`), `args` everything after it.
 pub(crate) fn run(script: &OsString, args: &[OsString]) -> i32 {
     let prog = String::from_utf8_lossy(argv_basename(script)).into_owned();
@@ -2178,9 +2097,8 @@ mod tests {
             .expect("portuale __helper spawns")
     }
 
-    /// An argparse error exits 2 with real's usage text (probed live:
-    /// `python3 3rdparty/portage/bin/doins.py --bogus` with
-    /// `PYTHONPATH=3rdparty/portage/lib`, Portage 3.0.82.2).
+    /// An argparse error exits 2 with Portage's usage text (probed
+    /// against Portage 3.0.82.2).
     #[test]
     fn argparse_error_exits_2_with_portages_usage_text() {
         let out = helper(&["--bogus"]);
@@ -2197,7 +2115,8 @@ mod tests {
         );
     }
 
-    /// `--help` prints real's help text byte for byte (same probe).
+    /// `--help` prints Portage's help text byte for byte (probed
+    /// against Portage 3.0.82.2).
     #[test]
     fn outer_help_matches_portage_byte_for_byte() {
         let out = helper(&["--help"]);
@@ -2241,8 +2160,8 @@ mod tests {
         );
     }
 
-    /// `--insoptions=-h` prints the install-option parser's help (same
-    /// probe setup; real exits 0 from `_parse_install_options`).
+    /// `--insoptions=-h` prints the install-option parser's help
+    /// (Portage exits 0 from `_parse_install_options`).
     #[test]
     fn install_option_help_matches_portage_byte_for_byte() {
         let out = helper(&[
@@ -2267,7 +2186,7 @@ mod tests {
     }
 
     /// A bad owner/group name is an argparse type error: exit 2 with
-    /// real's text (same probe setup).
+    /// Portage's text.
     #[test]
     fn install_option_type_error_exits_2_with_portages_text() {
         let out = helper(&[
@@ -2300,7 +2219,7 @@ mod tests {
         );
     }
 
-    // ---- install-option forms (probed live, see the task brief) -----
+    // ---- install-option forms ----------------------------------------
 
     fn parsed_of(options: &str) -> InstallParsed {
         match parse_install_options("doins.py", options.as_bytes(), false, "doins") {
@@ -2316,8 +2235,8 @@ mod tests {
         }
     }
 
-    /// Every argparse form real accepts (probed with a harness
-    /// importing real's parser logic).
+    /// Every argparse form Portage accepts (probed with a harness
+    /// importing Portage's parser logic).
     #[test]
     fn install_option_forms_match_portage() {
         let full = |owner, group, mode, p| InstallParsed {
@@ -2441,14 +2360,14 @@ mod tests {
         assert_eq!(parse_id_file(group, "root"), Some(0));
         assert_eq!(parse_id_file(group, "users"), Some(100));
         assert_eq!(parse_id_file(group, "portage"), Some(250));
-        // A numeric name resolves as a name first (real checks the
+        // A numeric name resolves as a name first (Portage checks the
         // name before `int()`).
         let numeric = b"1001:x:1001:1001::/:/bin/sh\n";
         assert_eq!(parse_id_file(numeric, "1001"), Some(1001));
     }
 
     /// The xattr excluder: whitespace-split globs, fnmatch semantics
-    /// (probed against `fnmatch.fnmatch` via real's cases).
+    /// (probed against `fnmatch.fnmatch` via Portage's cases).
     #[test]
     fn xattr_excluder_matches_portage() {
         assert!(!xattr_excluded("", b"user.keep"));
@@ -2473,7 +2392,7 @@ mod tests {
         assert!(xattr_excluded("user.[a-z]eep", b"user.keep"));
         assert!(xattr_excluded("user.[!a-c]eep", b"user.keep"));
         assert!(!xattr_excluded("user.[!a-c]eep", b"user.beep"));
-        // Probed against real `fnmatch.fnmatchcase` (Python 3.14): a
+        // Probed against Python's `fnmatch.fnmatchcase` (3.14): a
         // backslash is literal, only `!` negates (`^` is a member), a
         // `]` first in a class is literal, `-` last is literal, an
         // inverted range matches nothing, an unterminated `[` is
@@ -2490,7 +2409,7 @@ mod tests {
         assert!(xattr_excluded("[\\]", b"\\"));
     }
 
-    /// `shlex.split` as real runs it on `--insoptions` (each expected
+    /// `shlex.split` as Portage runs it on `--insoptions` (each expected
     /// value probed with Python 3.14's `shlex.split`).
     #[test]
     fn shlex_split_matches_python() {
@@ -2514,10 +2433,8 @@ mod tests {
         assert_eq!(shlex_split(b"-m \"ab\\"), Err("No escaped character"));
     }
 
-    /// An unterminated quote in `--insoptions` is real's uncaught
-    /// `ValueError` from `shlex.split`, raised in `_InstallRunner`
-    /// before `--dest` exists (probed live: rc 1, last traceback line
-    /// `ValueError: No closing quotation`, no dest dir).
+    /// An unterminated quote in `--insoptions` is Portage's uncaught
+    /// `ValueError`, raised before `--dest` exists (rc 1, no dest dir).
     #[test]
     fn unterminated_insoptions_quote_is_portages_value_error() {
         let tmp = TempDir::new("doins-shlex");
@@ -2539,7 +2456,7 @@ mod tests {
         assert!(!dest.exists());
     }
 
-    /// The `Failed to copy file` Namespace keeps real's field order
+    /// The `Failed to copy file` Namespace keeps Portage's field order
     /// and puts each id in its own field.
     #[test]
     fn install_namespace_repr_names_each_id() {
@@ -2632,9 +2549,8 @@ mod tests {
         );
     }
 
-    /// End to end through a child process: `doins -r` over a dest tree
-    /// containing a symlink to the outside is refused (rc 1, the path
-    /// is named) and the outside tree is untouched.
+    /// End to end: `doins -r` over a dest tree containing a symlink to
+    /// the outside is refused (rc 1) and the outside tree is untouched.
     #[test]
     fn guard_refuses_a_recursive_write_through_a_dest_symlink() {
         let shm = PathBuf::from("/dev/shm");
@@ -2648,10 +2564,8 @@ mod tests {
         let outside = tmp.path().join("outside");
         std::fs::create_dir_all(src.join("tree/sub")).unwrap();
         std::fs::write(src.join("tree/sub/file.txt"), b"data\n").unwrap();
-        // The symlink sits where the run would write through it:
-        // `doins -r tree` installs `tree/sub/file.txt` via
-        // `<dest>/tree/sub`, which already exists here as a link to
-        // the outside.
+        // The symlink sits where the run would write through it (an
+        // existing `<dest>/tree/sub` link to the outside).
         let dest = ed.join("usr/lib/probe");
         std::fs::create_dir_all(dest.join("tree")).unwrap();
         std::os::unix::fs::symlink(&outside, dest.join("tree/sub")).unwrap();
@@ -2686,9 +2600,8 @@ mod tests {
 
     // ---- oracle (one test per case dir) -------------------------------
 
-    /// pmtest's `fixtures/helpers/doins/` (the oracle generated by
-    /// running the real wrapper; Rust reads it through the `fixtures`
-    /// symlink, so no checkout or Python is needed).
+    /// pmtest's `fixtures/helpers/doins/` (the oracle from running the
+    /// Portage wrapper; no checkout or Python needed).
     fn fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/doins")
     }
@@ -2731,8 +2644,7 @@ mod tests {
     }
 
     /// `materialise.py` ported to Rust (so the test needs no python3):
-    /// entries are created in manifest order (parents first), then a
-    /// deepest-first pass applies modes and pins every mtime to MTIME.
+    /// entries in manifest order, then modes and the pinned mtime.
     fn materialise(manifest: &Path, dest: &Path, src: &Path, dist: &Path) {
         const MTIME: i64 = 1_700_000_000;
         std::fs::create_dir_all(dest).unwrap();
@@ -2974,11 +2886,9 @@ mod tests {
         envs: Vec<(String, String)>,
     }
 
-    /// Stage a case on `/dev/shm` with `materialise.py`'s semantics
-    /// (python3 must not be needed). Placeholders are substituted:
-    /// `<SCRATCH>` (the stage), `<CHECKOUT>` never occurs in doins
-    /// args (checked: no case's `args` names it), `newins.RAND` (the
-    /// wrapper's mktemp suffix, normalised by the generator).
+    /// Stage a case on `/dev/shm` with `materialise.py`'s semantics.
+    /// Placeholders substituted: `<SCRATCH>`, `newins.RAND` (the
+    /// wrapper's mktemp suffix).
     fn stage_case(case: &str) -> Option<Staged> {
         let shm = Path::new("/dev/shm");
         if !shm.is_dir() {
@@ -3031,10 +2941,8 @@ mod tests {
             })
             .collect();
         if newins {
-            // The `newins` wrapper copies the source to a mktemp dir
-            // under `$T` before invoking doins: mirror that `cp` (the
-            // installed mode comes from insoptions, not from this
-            // copy).
+            // Mirror the `newins` wrapper's `cp` to a mktemp dir under
+            // `$T` (the installed mode comes from insoptions).
             let dir = t.join("newins.test");
             std::fs::create_dir_all(&dir).unwrap();
             let data = std::fs::read(src.join("tree/file.txt")).unwrap();
@@ -3126,10 +3034,9 @@ mod tests {
             .collect()
     }
 
-    /// The D3 tree dump in `out.manifest`'s exact format, with `mtime`
-    /// on every regular file (the comparison strips it unless the
-    /// oracle line carries one) and `hlink` groups computed (doins.py
-    /// never preserves hardlinks, so any group is a regression).
+    /// The D3 tree dump in `out.manifest`'s exact format (`mtime` only
+    /// compared when the oracle carries it; any `hlink` group is a
+    /// regression, since hardlinks are never preserved).
     fn dump_tree(ed: &Path, stage: &Path) -> Vec<String> {
         struct Entry {
             qpath: String,
@@ -3152,9 +3059,8 @@ mod tests {
                 let md = std::fs::symlink_metadata(&p).unwrap();
                 let xattrs = {
                     let mut xs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-                    // Symlinks are listed without following (like the
-                    // oracle's dump): a preserved link must not show
-                    // its target's attributes.
+                    // Symlinks listed without following: a preserved link
+                    // must not show its target's attributes.
                     let is_link = md.file_type().is_symlink();
                     let list = if is_link {
                         llistxattr(p.as_os_str().as_bytes())
@@ -3190,10 +3096,8 @@ mod tests {
                 };
                 if md.file_type().is_symlink() {
                     let target = std::fs::read_link(&p).unwrap().into_os_string().into_vec();
-                    // Scrub after escaping: the stage path is all
-                    // unreserved bytes, so it survives `qesc`
-                    // unchanged, while `<SCRATCH>` itself must stay
-                    // literal (as the oracle shows it).
+                    // Scrub after escaping, so `<SCRATCH>` stays literal
+                    // while the stage path is replaced.
                     let scrubbed = qesc(&target).replace(stage.to_str().unwrap(), "<SCRATCH>");
                     entries.push(Entry {
                         qpath: qpath.clone(),
@@ -3287,8 +3191,7 @@ mod tests {
     }
 
     /// Read an oracle file, preferring the `*.root.*` variant as root
-    /// (every case runs as both user and root; the root files exist
-    /// only when the root run differs).
+    /// (root files exist only when the root run differs).
     fn oracle_text(case_dir: &Path, base: &str, ext: &str, as_root: bool) -> String {
         let root_name = format!("{base}.root.{ext}");
         if as_root && case_dir.join(&root_name).is_file() {
@@ -3301,9 +3204,8 @@ mod tests {
         String::new()
     }
 
-    /// Compare one case against the oracle: rc, the significant
-    /// stderr lines, and the dest tree dump. Returns false when
-    /// skipped (no `/dev/shm`).
+    /// Compare one case against the oracle: rc, significant stderr
+    /// lines, and the dest tree dump. False when skipped.
     fn check_oracle(case: &str) -> bool {
         let Some(st) = stage_case(case) else {
             return false;
@@ -3339,13 +3241,9 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(rc, want_rc, "{case}: rc, stderr:\n{stderr}");
-        // stderr: every significant line of the oracle must appear in
-        // order. The die banner (` * ...`) is the bash wrapper's, not
-        // doins.py's (the wrapper's `__helpers_die`, which our native
-        // helper never prints), so both sides skip it: the comparison
-        // drops got lines starting with ` * ` and only looks at
-        // oracle lines that are doins.py's own (col-0, non-banner,
-        // non-traceback-header).
+        // stderr: every significant oracle line appears in order. The
+        // die banner (` * ...`) is the bash wrapper's, so both sides
+        // skip it; only doins.py's own lines are compared.
         let stage_str = st.tmp.path().to_str().unwrap();
         let want_err =
             oracle_text(&case_dir, "stderr", "txt", as_root).replace("<SCRATCH>", stage_str);
@@ -3366,13 +3264,9 @@ mod tests {
                 None => panic!("{case}: stderr lacks {w:?}\n got:\n{stderr}"),
             }
         }
-        // The tree dump. Owner ids are environment-dependent (the
-        // oracle records the generator's), so the expected uid/gid
+        // Owner ids are environment-dependent, so the expected uid/gid
         // columns are rewritten to this process's ids; everything else
-        // (modes, contents, links, mtimes, xattrs) is exact. `mtime`
-        // is recorded on every file but only compared when the oracle
-        // line carries one (only `insopts-preserve` does: `-p` is the
-        // sole path that stamps dest files).
+        // is exact. `mtime` is only compared when the oracle carries it.
         let euid = unsafe { libc::geteuid() };
         let egid = unsafe { libc::getegid() };
         let manifest_name = if as_root && case_dir.join("out.root.manifest").is_file() {
@@ -3450,13 +3344,8 @@ mod tests {
     oracle_case!(oracle_dangling_abs_kept, "dangling-abs-kept");
     oracle_case!(oracle_dangling_abs_nodistdir, "dangling-abs-nodistdir");
 
-    /// A failing `os.symlink(linkto, dest)` prints both filenames. Real,
-    /// probed 2026-10-09 (`doins.py --recursive --preserve_symlinks
-    /// --distdir=/x --helper doins --dest /proc/x src/p`, `src/p/abs-link
-    /// -> /nonexistent/abs`): `os.makedirs` under `/proc` fails silently
-    /// to the caller, then the last stderr line is
-    /// `FileNotFoundError: [Errno 2] No such file or directory:
-    /// b'/nonexistent/abs' -> b'/proc/x/p/abs-link'`, rc 1.
+    /// A failing `os.symlink(linkto, dest)` prints both filenames; the
+    /// last stderr line is the two-filename `FileNotFoundError`, rc 1.
     #[test]
     fn symlink_failure_names_target_and_dest_like_portage() {
         let tmp = TempDir::new("doins-symlink-fail");
@@ -3517,8 +3406,7 @@ mod tests {
     }
 
     /// Re-run the in-process install in a child with no checkout and
-    /// no real Python, so the native `doins.py` is the only thing that
-    /// can install the file (the `gpkg.rs` no-checkout shape).
+    /// no Python, so only the native `doins.py` can install the file.
     #[test]
     fn doins_installs_packagepkg_files_without_the_checkout() {
         let out = Command::new(std::env::current_exe().unwrap())

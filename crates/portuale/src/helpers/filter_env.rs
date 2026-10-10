@@ -1,82 +1,12 @@
-// Native `filter-bash-environment` (#326 S3, D1/D3/D4/D7): a byte-level
-// port of `bin/filter-bash-environment.py`'s `filter_bash_environment()`
-// (all 164 lines of it), routed from the `python` dispatcher (D1): a
-// first argument whose basename is `filter-bash-environment.py` comes
-// here with the remaining args. The vendored script itself is untouched
-// (the call site stays upstream's; in D2 `real` mode
-// `PORTAGE_PYTHON=/usr/bin/python` still runs it).
+// Native `filter-bash-environment`: keeps only the wanted variables.
 //
-// Behaviour is real's, in real's order, over raw bytes: stdin is split
-// exactly like Python binary-file iteration (lines end at `\n`
-// inclusive; the last line may lack it), stdin streams to stdout
-// (`BufReader`/`BufWriter`), and there is no UTF-8 decoding anywhere.
-// Per line, first match wins:
-// - a multi-line-quote continuation line (written with `\x01` stripped
-//   when its variable is kept; it clears the quote when
-//   `have_end_quote` says so);
-// - then, only when not in a here-doc or function, a variable
-//   assignment (a kept line gets the `declare -r` rewrite and the
-//   `\x01` strip) or a `declare` without assignment (a kept line gets
-//   the rewrite but NO `\x01` strip);
-// - then a here-doc delimiter line, a here-doc start line, a function
-//   body line, a function start line, else pass-through.
-// The end-quote search skips the start quote exactly like real:
-// `line[end(name)+2..]` (past `=` and the opening quote).
-//
-// Regex translation (Python `re` on bytes -> `regex::bytes::Regex`):
-// - `(?-u)` everywhere, so `\w \s \d \W` are ASCII-only, like Python
-//   bytes patterns (on bytes Python never matches non-ASCII word
-//   bytes). `.` never matches `\n` in either engine; `(?s)` is NOT set.
-// - Python `$` (no MULTILINE) matches at end or just before a final
-//   `\n`. Every line here carries its `\n`, so each trailing `$` is
-//   written `\n?\z`, consistently, including the runtime here-doc
-//   delimiter `^DELIM$` -> `\AD ELIM\n?\z` (DELIM is `\w+`, so, as in
-//   real, nothing is escaped).
-// - Python `.match` anchors at the start only: every anchored pattern
-//   gets `\A` (`close_quote_re.search` stays unanchored).
-//
-// | Python (bytes, `.match` unless noted) | Rust (`regex::bytes`)             |
-// | `.*\s<<[-]?(\w+)$`                    | `(?-u)\A.*\s<<[-]?(\w+)\n?\z`      |
-// | `^[-\w]+\s*\(\)\s*$`                  | `(?-u)\A[-\w]+\s*\(\)\s*\n?\z`     |
-// | `^\}$`                                | `(?-u)\A\}\n?\z`                   |
-// | `(^|^declare\s+-\S+\s+|^declare\s+    | `(?-u)\A(?:declare\s+-\S+\s+       |
-// |   |^export\s+)([^=\s]+)=("|\')?.*$`   |   |declare\s+|export\s+)?          |
-// |                                       |   ([^=\s]+)=(["'])?.*\n?\z`       |
-// |   (groups 1=prefix 2=name 3=quote)    |   (groups 1=name 2=quote)          |
-// | `(\\"|"|\')\s*$` (`.search`)          | `(?-u)(\\"|["'])\s*\n?\z` (search) |
-// | `^declare\s+-(\S*)r(\S*)\s+`          | `(?-u)\Adeclare\s+-(\S*)r(\S*)\s+` |
-// | `^declare(\s+-\S+)?\s+([^=\s]+)\s*$`  | `(?-u)\Adeclare(?:\s+-\S+)?\s+     |
-// |   (groups 1=flags 2=name)             |   ([^=\s]+)\s*\n?\z` (group 1=name)|
-// | runtime `^DELIM$`                     | `(?-u)\ADELIM\n?\z`                |
-// | var `^(t1|..\|\d.*|.*\W.*)$`          | `(?-u)\A(?:t1|..\|\d.*|.*\W.*)\n?\z`|
-// |   (`.match(name)`)                    |   (`is_match(name)`)                |
-//
-// The PATTERN argument uses Python regex syntax (real joins
-// `argv[1].split()` -- an ASCII-whitespace split, empties dropped --
-// plus `\d.*` and `.*\W.*` with `|`). Accepted: everything
-// `regex::bytes` compiles with identical meaning to Python `re` on
-// bytes -- literal names, `.`, `*`/`+`/`?`/`{m,n}`, `.*`, `\d \D \s
-// \S \w \W`, `[...]`, `|` (real joins the tokens with it),
-// `(...)`/`(?:...)`/`(?P<name>...)`, `^ $ \A \z \b \B`, `\\` escapes,
-// `(?i)`-style scoped flags with Python-identical meaning. Loud
-// failure (stderr message + exit 1, empty stdout, the
-// `error-bad-pattern` rc): anything the Rust engine rejects
-// (lookarounds, backrefs, `\Z`, `\C`, octal escapes -- all
-// Python-`re`-only), plus anything Rust would accept with a different
-// meaning than Python-on-bytes: `\p`/`\P` (no Python `re` equivalent)
-// and `(?u`/`(?U` flag runs outside a character class (bytes patterns
-// cannot set UNICODE in Python; Rust would flip `\w` et al. to
-// Unicode); a `[` inside a class (`[a[b]]`, POSIX `[[:alpha:]]`: Rust
-// nests, Python reads it literally) and `&&`/`--`/`~~` inside a class
-// (Rust set operators, Python literals or a bad range); `(?<name>`
-// (a Rust named group, a Python error). PATTERN bytes outside ASCII become `\xHH` escapes (a
-// literal-byte match in both engines); a `\`-escape of a non-ASCII
-// byte is a bad escape in Python, so it fails loudly too.
-//
-// argv (real's `__main__`): `-h`/`--help` anywhere in the args after
-// the script -> `usage: <script-basename> PATTERN` on stdout, exit 0;
-// anything but exactly one PATTERN arg -> the usage plus
-// `Exactly one PATTERN argument required.` on stderr, exit 2.
+// A byte-level port of `filter_bash_environment()`: stdin streams to
+// stdout over raw bytes with no UTF-8 decoding; per line, first match
+// wins (multi-line-quote continuation, then assignments and bare declares
+// outside here-docs and functions, then here-doc and function lines).
+// Python `re` on bytes becomes `regex::bytes::Regex` with `(?-u)`,
+// `\A` for `.match` anchoring and `\n?\z` for a trailing `$`.
+// Portage: bin/filter-bash-environment.py, filter_bash_environment
 
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -84,12 +14,8 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::sync::OnceLock;
 
-/// Entry from the `python` dispatcher: `script` is the argv element
-/// whose basename is `filter-bash-environment.py` (real's
-/// `sys.argv[0]`, the usage basename), `args` is everything after it
-/// (real's `sys.argv[1:]`). Returns the process exit code; stdout stays
-/// empty on every non-zero exit (the failure paths return before the
-/// filter runs, as in real, where `re.compile` throws first).
+/// Entry from the `python` dispatcher: `script` is the usage basename,
+/// `args` everything after it. Stdout stays empty on non-zero exits.
 pub(crate) fn run(script: &OsString, args: &[OsString]) -> i32 {
     let usage = format!(
         "usage: {} PATTERN",
@@ -139,12 +65,8 @@ fn basename_of(arg: &OsString) -> &[u8] {
     }
 }
 
-/// Real's `__main__` pattern build: `argv[1].split()` (an
-/// ASCII-whitespace split, empties dropped) plus the appended `\d.*`
-/// (drop digit-leading names: not valid bash) and `.*\W.*` (drop names
-/// with non-bash characters), compiled as `^(...)$`. Returns the
-/// loud-failure message when the tokens have no Python-bytes
-/// equivalent (see the module docs).
+/// Portage's `__main__` pattern build: `argv[1].split()` plus `\d.*`
+/// and `.*\W.*`, compiled as `^(...)$`. Err on divergent syntax.
 fn compile_var_pattern(raw: &[u8]) -> Result<regex::bytes::Regex, String> {
     let mut alts: Vec<&[u8]> = raw
         .split(|b: &u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c))
@@ -163,10 +85,8 @@ fn compile_var_pattern(raw: &[u8]) -> Result<regex::bytes::Regex, String> {
     regex::bytes::Regex::new(&src).map_err(|e| format!("invalid PATTERN ({e})"))
 }
 
-/// True when the joined token bytes would compile in Rust with a
-/// different meaning than Python `re` on bytes (the module docs list
-/// the cases): `\p`/`\P` anywhere an escape is active, and a `u`/`U`
-/// flag inside an inline `(?...)` group outside a character class.
+/// True when the joined tokens would compile in Rust with a different
+/// meaning than Python `re` on bytes (`\p`, `u` flags, nesting, `(?<`).
 fn pattern_is_divergent(joined: &[u8]) -> bool {
     let mut escaped = false;
     let mut in_class = false;
@@ -233,12 +153,8 @@ fn pattern_is_divergent(joined: &[u8]) -> bool {
     false
 }
 
-/// Translate raw PATTERN bytes into the Rust pattern string: ASCII
-/// bytes pass through (every regex metacharacter is ASCII, with the
-/// same meaning in both engines); each non-ASCII byte becomes a
-/// `\xHH` escape (a literal-byte match in both). `None` when the bytes
-/// cannot mean the same in both engines: a `\`-escape of a non-ASCII
-/// byte is a bad escape in Python `re`.
+/// Translate raw PATTERN bytes: ASCII passes through, non-ASCII becomes
+/// `\xHH`. `None` when a `\`-escape of a non-ASCII byte diverges.
 fn rust_pattern_source(joined: &[u8]) -> Option<String> {
     let mut out = String::with_capacity(joined.len());
     let mut escaped = false;
@@ -263,9 +179,8 @@ fn rust_pattern_source(joined: &[u8]) -> Option<String> {
     Some(out)
 }
 
-/// The static line patterns (the translation table lives in the module
-/// docs). Group numbering differs from real's where a prefix group
-/// became non-capturing; the uses below name the new numbers.
+/// The static line patterns. Group numbering differs from Portage's
+/// where a prefix group became non-capturing.
 struct LineRes {
     here_doc: regex::bytes::Regex,
     func_start: regex::bytes::Regex,
@@ -293,10 +208,8 @@ fn res() -> &'static LineRes {
     })
 }
 
-/// Real's `have_end_quote`: the line ends (modulo trailing whitespace)
-/// with the opening quote byte. `\\"` (backslash-quote) at the end is
-/// NOT the end quote -- group 1 is then two bytes, never equal to the
-/// one-byte quote.
+/// The line ends with the opening quote byte (`\\"` at the end is NOT
+/// the end quote: group 1 is then two bytes).
 fn have_end_quote(quote: u8, line: &[u8]) -> bool {
     res()
         .close_quote
@@ -304,9 +217,8 @@ fn have_end_quote(quote: u8, line: &[u8]) -> bool {
         .is_some_and(|caps| caps.get(1).is_some_and(|m| m.as_bytes() == [quote]))
 }
 
-/// Real's `filter_declare_readonly_opt`: drop the `r` from a
-/// `declare -<opts>r<opts>` flag run (`declare -ar` -> `declare -a`,
-/// bare `declare -r` -> `declare `).
+/// Portage's `filter_declare_readonly_opt`: drop the `r` from a
+/// `declare -<opts>r<opts>` flag run.
 fn filter_declare_readonly_opt(line: &[u8]) -> Cow<'_, [u8]> {
     let Some(caps) = res().readonly.captures(line) else {
         return Cow::Borrowed(line);
@@ -328,7 +240,7 @@ fn filter_declare_readonly_opt(line: &[u8]) -> Cow<'_, [u8]> {
     Cow::Owned(out)
 }
 
-/// Real's `line.replace(b"\1", b"")` (bug 222091: bash multiplies
+/// Portage's `line.replace(b"\1", b"")` (bug 222091: bash multiplies
 /// `\x01` bytes on every env save).
 fn strip_ctrl_a(line: &[u8]) -> Cow<'_, [u8]> {
     if !line.contains(&1) {
@@ -337,9 +249,8 @@ fn strip_ctrl_a(line: &[u8]) -> Cow<'_, [u8]> {
     Cow::Owned(line.iter().copied().filter(|b| *b != 1).collect())
 }
 
-/// Real builds the delimiter matcher as `re.compile(b"^" + group +
-/// b"$")` (nothing escaped); the group is `\w+`, so it is regex-safe
-/// by construction.
+/// The delimiter matcher is `^group$`, unescaped; the group is `\w+`,
+/// so regex-safe by construction.
 fn here_doc_delimiter(delim: &[u8]) -> regex::bytes::Regex {
     let mut src = String::from("(?-u)\\A");
     src.push_str(std::str::from_utf8(delim).expect("here-doc delimiter is \\w+ (ASCII)"));
@@ -347,9 +258,8 @@ fn here_doc_delimiter(delim: &[u8]) -> regex::bytes::Regex {
     regex::bytes::Regex::new(&src).expect("here-doc delimiter is \\w+ (regex-safe)")
 }
 
-/// Real's `filter_bash_environment`, in real's order (see the module
-/// docs). Lines are raw byte slices ending at `\n` inclusive, except a
-/// final line without one.
+/// Portage's `filter_bash_environment`, in Portage's order, over raw
+/// byte lines (`\n`-terminated, except possibly the last).
 fn run_filter(
     pattern: &regex::bytes::Regex,
     input: &mut impl BufRead,
@@ -403,7 +313,7 @@ fn run_filter(
                 let filter_this = pattern.is_match(caps.get(1).unwrap().as_bytes());
                 if !filter_this {
                     let line = filter_declare_readonly_opt(line);
-                    // No `\x01` strip on this path, like real.
+                    // No `\x01` strip on this path, like Portage.
                     output.write_all(&line)?;
                 }
                 continue;
@@ -447,10 +357,8 @@ mod tests {
     use std::path::Path;
     use std::process::Stdio;
 
-    /// The built `portuale` binary next to this test binary (child
-    /// processes, never in-process: the helper reads stdin and the
-    /// failure paths replace the process image in the transition rows,
-    /// so only a real process boundary matches the shim's call shape).
+    /// The `portuale` binary next to this test binary (child processes:
+    /// the helper reads stdin, so only a real process boundary matches).
     fn portuale_exe() -> std::path::PathBuf {
         let mut exe = std::env::current_exe().expect("current test exe");
         exe.pop();
@@ -461,11 +369,8 @@ mod tests {
         exe
     }
 
-    /// Run the native filter exactly like the shim would:
-    /// `portuale __helper python filter-bash-environment.py <args>`,
-    /// stdin bytes verbatim. (The `args` fixture file bytes ARE
-    /// argv[1]: no trailing newline is added, none is present, so this
-    /// matches `"$(cat args)"` byte for byte.)
+    /// Run the native filter as the shim would, stdin bytes verbatim
+    /// (the `args` file bytes ARE argv[1], with no added newline).
     fn run_native(pattern: &[u8], stdin_bytes: &[u8]) -> std::process::Output {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
@@ -529,11 +434,8 @@ mod tests {
         }
     }
 
-    /// #326 S3/D4: every `fixtures/helpers/filter-env/<case>` oracle --
-    /// run the native filter as a child process (the shim's call shape)
-    /// and assert stdout is BYTE-IDENTICAL, rc matches, and (for rc 0)
-    /// stderr is empty. `error-bad-pattern` pins only rc and empty
-    /// stdout (the Python traceback text is not reproduced).
+    /// Every `fixtures/helpers/filter-env/<case>` oracle: stdout must be
+    /// BYTE-IDENTICAL, rc must match, and stderr must be empty on success.
     #[test]
     fn native_filter_matches_every_fixture_case_byte_identical() {
         let cases = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/filter-env");
@@ -581,9 +483,8 @@ mod tests {
         println!("filter-env fixtures: {}/{} pass", names.len(), names.len());
     }
 
-    /// `$` (no MULTILINE) matches at end OR just before a final `\n`:
-    /// the function-end and here-doc-delimiter patterns accept both
-    /// spellings and reject a non-delimiter line either way.
+    /// `$` matches at end OR just before a final `\n`: both spellings
+    /// are accepted, non-delimiter lines rejected either way.
     #[test]
     fn dollar_matches_before_a_final_newline() {
         let r = res();
@@ -599,9 +500,7 @@ mod tests {
     }
 
     /// `\w` is ASCII-only on both sides: a here-doc redirect into a
-    /// UTF-8 word is NOT a here-doc start (the `(\w+)$` cannot reach
-    /// the line end past the non-ASCII bytes), while a plain ASCII
-    /// delimiter is.
+    /// UTF-8 word is NOT a here-doc start.
     #[test]
     fn word_class_is_ascii_only() {
         let r = res();
@@ -613,21 +512,20 @@ mod tests {
         assert!(r.here_doc.is_match(b"cat <<-EOF\n"));
     }
 
-    /// Real appends `.*\W.*` to the alternation, and `\W` is ASCII-only
-    /// on bytes: a name with a non-ASCII byte matches (every non-ASCII
-    /// byte is a non-word byte), an ASCII clean name does not.
+    /// Portage appends `.*\W.*` (ASCII-only `\W` on bytes), so a name
+    /// with a non-ASCII byte is dropped with the non-bash names.
     #[test]
     fn non_ascii_name_bytes_match_dot_star_backslash_capital_w() {
         let pattern = compile_var_pattern(b"MY_KEEP").unwrap();
         // Listed names match (they are dropped); clean ASCII names do not.
         assert!(pattern.is_match(b"MY_KEEP"));
         assert!(!pattern.is_match(b"OTHER_VAR"));
-        // Real's appended `\d.*` drops digit-leading names.
+        // Portage's appended `\d.*` drops digit-leading names.
         assert!(pattern.is_match(b"9LIVES"));
-        // Real's appended `.*\W.*` drops names with non-bash
+        // Portage's appended `.*\W.*` drops names with non-bash
         // characters, and `\W` is ASCII-only on bytes: a name with a
         // non-ASCII byte matches (every non-ASCII byte is a non-word
-        // byte), so real drops it (see the `edge-utf8-name` fixture).
+        // byte), so Portage drops it (see the `edge-utf8-name` fixture).
         assert!(pattern.is_match("caf\u{e9}".as_bytes()));
         assert!(pattern.is_match(b"caf\xff"));
         // A literal multi-token pattern still matches exactly.
@@ -637,9 +535,8 @@ mod tests {
         assert!(!pattern.is_match(b"BASH_FUNCX"));
     }
 
-    /// A last line without trailing newline round-trips byte-identical
-    /// (kept: no newline added; dropped: no output), like Python
-    /// binary-file iteration.
+    /// A last line without trailing newline round-trips byte-identical,
+    /// like Python binary-file iteration.
     #[test]
     fn a_last_line_without_newline_round_trips() {
         let pattern = compile_var_pattern(b"D").unwrap();
@@ -712,9 +609,8 @@ mod tests {
         }
     }
 
-    /// An uncompilable PATTERN fails loudly: exit 1, empty stdout (the
-    /// Python traceback text is not reproduced -- only the rc pins the
-    /// `error-bad-pattern` fixture).
+    /// An uncompilable PATTERN fails loudly: exit 1, empty stdout (only
+    /// the rc pins the `error-bad-pattern` fixture).
     #[test]
     fn bad_pattern_exits_one_with_empty_stdout() {
         let out = run_native(b"(", b"declare -x MY_KEEP=\"k\"\n");
@@ -728,10 +624,7 @@ mod tests {
     }
 
     /// Patterns Rust compiles with a meaning Python `re` does not share
-    /// are refused (Python 3, probed live 2026-10-08: `[[:alpha:]]`
-    /// matches `a]`, `[a&&b]` matches `&`, `[a~~b]` is the class
-    /// {a,~,b}, `(?<n>a)` is "unknown extension"); the Python-identical
-    /// shapes that look similar are still accepted.
+    /// are refused; the Python-identical lookalikes are still accepted.
     #[test]
     fn patterns_with_rust_only_meaning_are_refused() {
         for p in [

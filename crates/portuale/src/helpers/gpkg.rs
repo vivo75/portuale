@@ -1,53 +1,12 @@
-// Native `gpkg-helper.py compress` (#326 S4, D1/D3/D4/D7): a port of
-// `bin/gpkg-helper.py` (`main` + `command_compose`) over
-// `lib/portage/gpkg.py` (`gpkg.compress`, `_add_metadata`,
-// `_add_manifest`, `_add_signature`, `_record_checksum`,
-// `_generate_metadata_from_dir`, `_check_pre_image_files`,
-// `_get_tar_format_from_stats`, `_get_binary_cmd`, `_create_tarinfo`,
-// `tar_stream_writer`, `checksum_helper`), routed from the `python`
-// dispatcher when the script argument's basename is `gpkg-helper.py`.
-// It writes what the reader in `binpkg.rs` (`read_outer_members`,
-// `verify_gpkg_manifest`) reads.
+// Native `gpkg-helper.py compress`: builds a gpkg binpkg from two dirs.
 //
-// Behaviour is real's, in real's order:
-// - argv: no command -> argparse error (rc 2); a command other than
-//   `compress` -> rc 2 `invalid command: '<cmd>'`; `compress` with argc !=
-//   4, arg 3 or 4 not a directory -> rc 1 with real's messages (the usage
-//   line there says `compose`, as real's does). The category of the first
-//   argument is dropped (`basename.split("/", 1)[-1]`).
-// - Order of work: the metadata dict (`os.walk` order of the metadata
-//   dir, first-insertion position and last value per file name, names
-//   that are not UTF-8 skipped), then the image pre-scan (a non-UTF-8
-//   name there is an error, rc 1, and no artifact is created), then the
-//   container file, `gpkg-1`, the compressor command (resolved from the
-//   settings *after* the container exists, like real), the metadata
-//   member (+ `.sig`), the image member (+ `.sig`), the `Manifest`, and
-//   the two zero blocks plus padding to a 10240-byte record.
-// - Tar headers are rendered by hand as `tarfile.TarInfo.tobuf` does
-//   (the `tar` crate cannot reproduce them: USTAR directory names keep a
-//   trailing `/`, the name/prefix split is `_posix_split_name`'s, GNU
-//   `L`/`K` extension blocks are real's, uname/gname are looked up from
-//   the uid/gid and are empty without an entry, numbers overflow into
-//   base-256 only in GNU format). The container format (`gpkg-1`, the
-//   `.sig` members, `Manifest`) is USTAR, GNU when the basename has 154
-//   characters or more or the image is 8000000000 bytes or more; the
-//   `metadata.tar` member header is always USTAR and the `image.tar`
-//   member header carries the image format (oracle: `long-basename` has
-//   USTAR stream members in a GNU container, `longname` the reverse).
-//   The image tar is GNU when a file name or link target
-//   is 100 bytes or more, a directory path is 155 bytes or more, or one
-//   file is 8000000000 bytes or more (`_get_tar_format_from_stats`).
-// - The image tar is `TarFile.add(root, "image")`: lstat, a sorted
-//   walk, a regular file seen again with `st_nlink > 1` becomes a type 1
-//   hardlink to the first arcname, sockets are skipped, `st_mode` keeps
-//   its setuid/setgid/sticky bits.
-// - Compressors and the signing command are spawned from the settings
-//   in the process environment (`BINPKG_COMPRESS`,
-//   `BINPKG_COMPRESS_FLAGS[_<NAME>]`, `PORTAGE_BZIP2_COMMAND`,
-//   `MAKEOPTS`, `FEATURES`, `BINPKG_GPG_*`) over `make.globals`'
-//   defaults, with `varexpand` + `shlex.split` and `{JOBS}` from
-//   `makeopts_to_job_count`, like `_get_binary_cmd` and
-//   `checksum_helper`.
+// A port of `command_compose` over `gpkg.compress`: metadata dict first,
+// then the image pre-scan, then the container (`gpkg-1`, compressor
+// resolved after the container exists, metadata and image members with
+// `.sig`s, `Manifest`, close). Tar headers are hand-rendered USTAR,
+// GNU past the 100/155/8000000000 thresholds. It writes what the
+// `binpkg.rs` reader reads.
+// Portage: bin/gpkg-helper.py, command_compose
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -71,9 +30,8 @@ const LENGTH_NAME: usize = 100;
 const LENGTH_LINK: usize = 100;
 const LENGTH_PREFIX: usize = 155;
 
-/// Why `compress` stopped. `Compressor` is the one exception the real
-/// helper catches (`CompressorOperationFailed` -> `eerror` + rc 1);
-/// everything else is an uncaught Python exception (rc 1, traceback).
+/// Why `compress` stopped. `Compressor` is Portage's one caught failure
+/// (`CompressorOperationFailed`); the rest are uncaught (rc 1).
 #[derive(Debug)]
 enum Failure {
     Compressor,
@@ -114,12 +72,12 @@ fn basename_bytes(arg: &OsString) -> &[u8] {
     }
 }
 
-/// Entry point: `script` is the `gpkg-helper.py` element (real's
+/// Entry point: `script` is the `gpkg-helper.py` element (Portage's
 /// `sys.argv[0]`), `args` everything after it.
 pub(crate) fn run(script: &OsString, args: &[OsString]) -> i32 {
     let prog = basename_bytes(script);
-    // real passes `usage="usage: ..."` and argparse prefixes `usage: `
-    // again: the doubled prefix is real's.
+    // Portage passes `usage="usage: ..."` and argparse prefixes `usage: `
+    // again: the doubled prefix is Portage's.
     let usage = [b"usage: usage: ", prog, b" COMMAND [args]\n"].concat();
     if args.iter().any(|a| raw(a) == b"-h" || raw(a) == b"--help") {
         let help =
@@ -141,7 +99,7 @@ pub(crate) fn run(script: &OsString, args: &[OsString]) -> i32 {
 }
 
 fn command_compose(args: &[OsString]) -> i32 {
-    // The usage line names `compose` (real's own text).
+    // The usage line names `compose` (Portage's own text).
     let usage: &[u8] = b"usage: compose <package_cpv> <binpkg_path> <metadata_dir> <image_dir>\n";
     if args.len() != 4 {
         err_bytes(&[
@@ -194,11 +152,9 @@ fn command_compose(args: &[OsString]) -> i32 {
 // Settings
 // ---------------------------------------------------------------------
 
-/// The slice of `portage.settings` real reads: the process environment
-/// over the `make.globals` defaults of the keys below. (The Python helper
-/// also folds `make.conf`/profile into `settings`; here the caller,
-/// `invoke_dyn_package`, exports the resolved values into the
-/// environment, backlog #180.)
+/// The slice of `portage.settings` Portage reads: the process environment
+/// over the `make.globals` defaults below. (The Python helper also folds
+/// `make.conf`/profile in; here the caller exports them into the env.)
 struct Settings {
     vars: HashMap<String, String>,
 }
@@ -212,7 +168,7 @@ impl Settings {
                 v.to_string_lossy().into_owned(),
             );
         }
-        // cnf/make.globals:39,47,50,105
+        // make.globals defaults for the keys below
         for (k, v) in [
             ("BINPKG_COMPRESS", "zstd"),
             (
@@ -757,12 +713,10 @@ struct StreamMemberArgs<'a> {
     sign: bool,
 }
 
-/// `tar_stream_writer` as used by `_add_metadata` (header format USTAR)
-/// and `compress` (header format `image_tar_format`: the *container*
-/// format only governs `gpkg-1`, the `.sig` members and `Manifest`,
-/// which go through `container.addfile`): write the member header, stream `produce`'s tar through the compressor into
-/// the container (hashing and signing as it goes), then pad and rewrite
-/// the header with the final size.
+/// Stream one member's tar through the compressor into the container
+/// (hashing and signing as it goes), then pad and rewrite the header
+/// with the final size. The container format governs only `gpkg-1`,
+/// the `.sig` members and `Manifest`.
 fn stream_member(
     args: StreamMemberArgs<'_>,
     produce: impl FnOnce(&mut dyn Write) -> Result<(), Failure>,
@@ -841,7 +795,7 @@ fn stream_member(
             let (sink, read_result) = reader.join().expect("reader thread");
             let status = proc.wait().map_err(|e| io_msg(&cmd[0], e))?;
             // A dead compressor shows as a broken pipe in `produce`:
-            // real's `CompressorOperationFailed("PIPE broken")`.
+            // Portage's `CompressorOperationFailed("PIPE broken")`.
             if !status.success() {
                 return Err(Failure::Compressor);
             }
@@ -1191,7 +1145,7 @@ fn scan_image(dir: &Path, rel: &[u8], stats: &mut ImageStats) -> Result<(), Fail
             [rel, b"/", name].concat()
         }
     };
-    // "image/" is the arcname prefix real counts (`image_prefix_length`).
+    // "image/" is the arcname prefix Portage counts (`image_prefix_length`).
     let counted = |rel_path: &[u8]| "image/".len() + rel_path.len();
     for (name, path) in &dirs {
         if let Some(msg) = utf8_error(name) {
@@ -1265,8 +1219,7 @@ fn tar_formats(stats: &ImageStats) -> (Fmt, Fmt) {
     (container, image)
 }
 
-/// `_generate_metadata_from_dir`: a Python dict in insertion order.
-/// A Python dict of file name -> contents, in insertion order.
+/// `_generate_metadata_from_dir`: file name -> contents, in insertion order.
 type MetadataDict = Vec<(Vec<u8>, Vec<u8>)>;
 
 fn generate_metadata_from_dir(dir: &Path) -> Result<MetadataDict, Failure> {
@@ -1504,7 +1457,7 @@ mod tests {
     }
 
     /// pmtest's `fixtures/helpers/gpkg/` (oracles generated by running the
-    /// real `bin/gpkg-helper.py compress`, see its README).
+    /// Portage `bin/gpkg-helper.py compress`, see its README).
     fn fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/gpkg")
     }
@@ -1521,9 +1474,8 @@ mod tests {
     }
 
     /// Scratch space for the oracle runs: tmpfs, never `/var/tmp` (zfs
-    /// here: it refuses non-UTF-8 names and hands `readdir` back in hash
-    /// order, which would change the metadata member order the helper
-    /// sees; tmpfs order is stable for a fixed creation order).
+    /// refuses non-UTF-8 names and reorders `readdir`; tmpfs order is
+    /// stable for a fixed creation order).
     fn shm_scratch(tag: &str) -> Option<TempDir> {
         let shm = Path::new("/dev/shm");
         if !shm.is_dir() {
@@ -1559,11 +1511,8 @@ mod tests {
     }
 
     /// `materialise.py` ported to Rust (so the test needs no python3):
-    /// entries are created in manifest order, then a deepest-first pass
-    /// applies ownership (root only: `lchown`, else every entry stays
-    /// owned by the invoker), mode (not for symlinks; after the chown,
-    /// which clears setuid) and the pinned mtime. Hardlinks share their
-    /// target's inode and are skipped in the final pass.
+    /// entries in manifest order, then a deepest-first pass for
+    /// ownership, mode and the pinned mtime (hardlinks skipped).
     fn materialise(manifest: &Path, dest: &Path) {
         const MTIME: i64 = 1_700_000_000;
         std::fs::create_dir_all(dest).unwrap();
@@ -2025,12 +1974,9 @@ mod tests {
         }
     }
 
-    /// The user-run oracle records the generator's own owner (uid 1000,
-    /// gid 100, `vivo`, `users`) on every image entry it owned. Those
-    /// entries are owned by whoever runs the test here, so the expected
-    /// values of the `image.member` lines are rewritten to the host
-    /// owner. The container and metadata lines (uid 0, empty names, set
-    /// by the writer, not by the filesystem) are never touched.
+    /// The user-run oracle records the generator's owner on every image
+    /// entry it owned; here those become the host owner. Container and
+    /// metadata lines (set by the writer) are never touched.
     fn rewrite_owners(expected: &str, from: &Owner, to: &Owner) -> String {
         let old = format!(
             " uid={} gid={} uname={} gname={} size=",
@@ -2069,11 +2015,8 @@ mod tests {
         stderr: String,
     }
 
-    /// Stage a case like the generator did and run
-    /// `portuale __helper python gpkg-helper.py <args>` as a CHILD
-    /// PROCESS with the case's `env` file and the `@..@` tokens
-    /// substituted. `None` = skipped (tool or tmpfs missing).
-    /// `key` overrides `BINPKG_GPG_SIGNING_KEY`.
+    /// Stage a case like the generator did and run the native helper as
+    /// a CHILD PROCESS with the case's `env` file. `None` = skipped.
     fn run_case(case: &str, comp: &str, key: Option<&str>) -> Option<CaseRun> {
         let case_dir = fixtures().join(case);
         let comp_dir = case_dir.join(comp);
@@ -2205,7 +2148,7 @@ mod tests {
             .unwrap();
         assert_eq!(run.rc, want_rc, "{case}/{comp}: rc, stderr: {}", run.stderr);
         if want_rc != 0 {
-            // real's refusal: rc 1 and no artifact
+            // Portage's refusal: rc 1 and no artifact
             assert!(!run.out.exists(), "{case}/{comp}: an artifact was left");
             let want_err = std::fs::read_to_string(comp_dir.join("stderr.txt")).unwrap();
             let needle = want_err
@@ -2370,7 +2313,7 @@ mod tests {
             .expect("portuale __helper spawns")
     }
 
-    /// argv errors are real's (`gpkg-helper.py`): argparse rc 2, the
+    /// argv errors are Portage's (`gpkg-helper.py`): argparse rc 2, the
     /// `compose` usage rc 1.
     #[test]
     fn argv_errors_are_portages() {
@@ -2408,11 +2351,9 @@ mod tests {
         );
     }
 
-    /// An unknown `BINPKG_COMPRESS` is refused by `_get_compression_cmd`,
-    /// after the container and its `gpkg-1` header exist: real (probed
-    /// live, Portage 3.0.82.2, `BINPKG_COMPRESS=foo`) exits 1 with
-    /// `InvalidCompressionMethod: foo` and leaves a 512-byte file holding
-    /// only `pkg-1/gpkg-1`.
+    /// An unknown `BINPKG_COMPRESS` is refused after the container and
+    /// its `gpkg-1` header exist: exit 1, `InvalidCompressionMethod`,
+    /// and a 512-byte file holding only `pkg-1/gpkg-1`.
     #[test]
     fn unknown_compression_fails_after_gpkg_1_like_portage() {
         let tmp = TempDir::new("gpkg-badcomp");
@@ -2503,12 +2444,9 @@ mod tests {
         }
     }
 
-    /// The native output is accepted by the container reader, its
-    /// metadata is read back, the Manifest verifies, and extracting the
-    /// image gives back the materialised tree (types, contents, link
-    /// targets, hardlink groups; modes depend on the umask and are not
-    /// compared). Also: the build-info extracted verbatim equals the
-    /// metadata dir that went in.
+    /// The native output round-trips through the container reader: the
+    /// Manifest verifies and the extracted image gives back the tree
+    /// (modes depend on the umask and are not compared).
     fn round_trip(case: &str) {
         let Some(run) = run_case(case, "zstd", None) else {
             return;
@@ -2566,12 +2504,8 @@ mod tests {
         round_trip("special");
     }
 
-    /// Signed: the oracle ran with the untrusted key 0x8812... (the field
-    /// dump does not depend on the key); acceptance by
-    /// `verify_gpkg_manifest` needs the keyring's TRUSTED key
-    /// 0x5D90EA06352177F6, so this run signs with that one. Every member
-    /// has its `.sig`, the clear-signed Manifest and each detached
-    /// signature verify (request-signature = nothing may be unsigned).
+    /// Signed: this run signs with the keyring's TRUSTED key, so every
+    /// member has its `.sig` and each signature verifies.
     #[test]
     fn signed_output_is_accepted_by_verify_gpkg_manifest() {
         let Some(run) = run_case("signed", "zstd", Some("0x5D90EA06352177F6")) else {
@@ -2609,7 +2543,7 @@ mod tests {
 
         // The oracle's own key (0x8812...) is the keyring's UNTRUSTED one:
         // its signatures are valid but `verify_gpkg_manifest` refuses
-        // them (`TRUST_UNDEFINED`), as real's `_check_gpg_status` does.
+        // them (`TRUST_UNDEFINED`), as Portage's `_check_gpg_status` does.
         let Some(untrusted) = run_case("signed", "zstd", None) else {
             return;
         };
@@ -2662,9 +2596,8 @@ mod tests {
 
     // ---- no checkout: the package scenarios as child test processes ----
 
-    /// Re-run one `ebuild_package` test in a child process with no
-    /// Portage checkout and no real Python reachable, so the native
-    /// `gpkg-helper.py` is the only thing that can build the gpkg.
+    /// Re-run an `ebuild_package` test with no checkout and no Python,
+    /// so only the native `gpkg-helper.py` can build the gpkg.
     fn rerun_without_checkout(test: &str) {
         let out = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--nocapture", "--test-threads=1"])
@@ -2702,11 +2635,9 @@ mod tests {
         );
     }
 
-    /// `MAKEOPTS` set only in `make.conf` (not in the calling env) reaches
-    /// the native helper: `invoke_dyn_package` exports the file side, and
-    /// `{JOBS}` of `zstd -T{JOBS}` becomes 5 (real: `makeopts_to_job_count`
-    /// of the helper's own `portage.settings`). A logging `zstd` stands in
-    /// for the compressor. Child process, no checkout, no real Python.
+    /// `MAKEOPTS` from `make.conf` (not the calling env) reaches the
+    /// native helper: `{JOBS}` of `zstd -T{JOBS}` becomes 5, proven by
+    /// a logging `zstd` stand-in.
     #[test]
     fn make_conf_makeopts_reaches_the_native_compressor() {
         if !have("zstd") {

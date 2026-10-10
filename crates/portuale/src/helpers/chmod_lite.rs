@@ -1,31 +1,9 @@
-// Native `chmod-lite` (#326 S2.4, D2/D3): a port of real
-// `bin/chmod-lite.py`'s `main()` over `apply_recursive_permissions(
-// filename, filemode=0o644, filemask=0o022, dirmode=0o755, dirmask=0o022)`
-// (`3rdparty/portage/lib/portage/util/__init__.py:1251`), which itself
-// wraps `apply_secpass_permissions` (`:1323`) over `apply_permissions`
-// (`:1145`, the mode/mask arithmetic below).
-//
-// Real `bin/ebuild-pyhelper` records the caller's cwd in
-// `__PORTAGE_HELPER_CWD` and `chmod-lite.py` chdirs back to it after the
-// imports; the `bin/chmod-lite` shim keeps the caller's cwd, so this
-// helper takes its arguments relative to the current directory, as raw
-// bytes throughout (argv paths may not be UTF-8).
-//
-// Fidelity notes (all from the real sources above):
-// - minimal chmod calls: a path is chmod'ed only when the arithmetic
-//   says a bit must change;
-// - symlinks are never followed and never chmod'ed (`follow_links=False`,
-//   and `apply_permissions` clears `new_mode` for symlinks);
-// - a directory is chmod'ed before it is walked (bug 554084): the walk
-//   below chmods each directory before recursing into it;
-// - the top-level `FileNotFound` is swallowed for backward compatibility
-//   (a missing top returns True), while one deeper in the walk is
-//   ignored as an `InvalidLocation`;
-// - `EPERM` prints `Operation Not Permitted: ...` and `ENOENT` prints
-//   `File Not Found: '...'` (the default `onerror`); anything else real
-//   would let propagate (a traceback, exit 1).
-// - `main()` returns `os.EX_OK` unconditionally: exit 0 even when some
-//   permissions were left unapplied.
+//! Native `chmod-lite`: recursive permission normalization.
+//!
+//! Port of `bin/chmod-lite.py`'s `main()` over `apply_recursive_permissions`
+//! (filemode 0o644/filemask 0o022, dirmode 0o755/dirmask 0o022), relative
+//! to the current directory, over raw bytes (paths may not be UTF-8).
+// Portage: bin/chmod-lite.py, main
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
@@ -38,8 +16,8 @@ const DIRMODE: u32 = 0o755;
 const DIRMASK: u32 = 0o022;
 
 /// Native entry: `apply_recursive_permissions` for each argument.
-/// Exit 0 like real (`os.EX_OK`), or 1 when an unexpected (non-EPERM,
-/// non-ENOENT) OS error occurs, which real reports as a traceback.
+/// Exit 0 like Portage (`os.EX_OK`), or 1 when an unexpected (non-EPERM,
+/// non-ENOENT) OS error occurs, which Portage reports as a traceback.
 pub(crate) fn run(argv: &[OsString]) -> i32 {
     // D2: `PORTUALE_PYTHON_HELPERS=real` brings back today's behaviour:
     // exec the checkout's upstream script with the same argv.
@@ -76,10 +54,9 @@ fn exec_real_chmod_lite(argv: &[OsString]) -> i32 {
     127
 }
 
-/// Port of `apply_recursive_permissions(top, uid=-1, gid=-1, ...)`: with
-/// no owner/group request the secpass/chown half is a no-op and only the
-/// mode arithmetic remains. Returns true when an unexpected error
-/// occurred (real: an uncaught exception).
+/// Port of `apply_recursive_permissions` (no owner/group: mode only).
+/// A missing top is silently OK; true means an unexpected error occurred.
+// Portage: lib/portage/util/__init__.py, apply_recursive_permissions
 fn apply_recursive(top: &Path) -> bool {
     let stat = match std::fs::symlink_metadata(top) {
         Ok(m) => m,
@@ -105,12 +82,10 @@ fn apply_recursive(top: &Path) -> bool {
     stat.is_dir() && walk(top)
 }
 
-/// Depth-first walk of `dir` (already chmod'ed by the caller, bug
-/// 554084): files get `filemode`/`filemask`, subdirectories
-/// `dirmode`/`dirmask` before recursing. A directory that cannot be
-/// listed is silently skipped (real `os.walk` ignores its errors), and
-/// entries that disappear mid-walk are ignored (`InvalidLocation`).
+/// Depth-first walk; each directory is chmod'ed before recursing (bug 554084).
+/// Unlistable directories and vanished entries are silently skipped.
 /// Returns true when an unexpected error occurred.
+// Portage: bin/chmod-lite.py, main
 fn walk(dir: &Path) -> bool {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -127,7 +102,7 @@ fn walk(dir: &Path) -> bool {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => {
-                // Real maps the stat errno: EPERM prints, anything else
+                // Portage maps the stat errno: EPERM prints, anything else
                 // (EACCES, EROFS, ...) propagates as a traceback.
                 if e.raw_os_error() == Some(libc::EPERM) {
                     eprintln!(
@@ -162,12 +137,9 @@ fn walk(dir: &Path) -> bool {
     failed
 }
 
-/// Port of `apply_permissions`' mode half (uid/gid are always -1 here):
-/// with `mask >= 0`, add the `mode` bits and clear the `mask` bits, but
-/// only chmod when something would actually change. `st_mode` carries
-/// the full `0o7777` bits so owner-exec and the special bits survive
-/// (the mode only adds, the mask only clears). Returns true on an
-/// unexpected chmod error.
+/// `apply_permissions` without the owner/group half: add `mode` bits, clear
+/// `mask` bits, chmod only on change; full `0o7777` keeps the special bits.
+// Portage: lib/portage/util/__init__.py, apply_permissions
 fn apply_one(path: &Path, st_mode: u32, mode: u32, mask: u32) -> bool {
     let st_mode = st_mode & 0o7777;
     let mode = mode & 0o7777;
@@ -204,7 +176,7 @@ fn apply_one(path: &Path, st_mode: u32, mode: u32, mask: u32) -> bool {
 }
 
 /// Port of `_do_stat`'s error mapping for the top-level stat: EPERM
-/// prints through `onerror`, anything else real would let propagate.
+/// prints through `onerror`, anything else Portage would let propagate.
 fn report_stat_error(top: &Path, e: &std::io::Error) -> bool {
     let display = String::from_utf8_lossy(top.as_os_str().as_bytes()).into_owned();
     match e.raw_os_error() {
@@ -298,11 +270,9 @@ mod fixture_tests {
         e.raw_os_error() == Some(libc::EILSEQ) || e.kind() == std::io::ErrorKind::InvalidInput
     }
 
-    /// Build a tree from `in.manifest` (byte paths throughout; modes set
-    /// deepest-first so `0000` dirs can still be populated). Returns
-    /// false with a printed reason when the filesystem rejects a name
-    /// (EILSEQ: this host's zfs datasets reject non-UTF-8 names; the
-    /// case must be skipped, never silently passed).
+    /// Build a tree from `in.manifest` (byte paths; modes deepest-first).
+    /// Returns false, with a printed reason, where the filesystem
+    /// rejects a name (then the case is skipped, never passed).
     fn build_tree(root: &Path, entries: &BTreeMap<Vec<u8>, Entry>) -> bool {
         for (rel, entry) in entries {
             let path = join(root, rel);
@@ -390,12 +360,8 @@ mod fixture_tests {
         map
     }
 
-    /// #326 S2: every `fixtures/helpers/chmod-lite/<case>` oracle --
-    /// rebuild the tree from `in.manifest`, run the native helper as a
-    /// child process (cwd = tree root, the same top-level-argv shape as
-    /// real's `find ... -exec`), and compare the resulting lstat manifest
-    /// with `out.manifest` (or `out.root.manifest` as root), plus rc and
-    /// stderr. Includes the non-UTF-8 case (byte paths throughout).
+    /// Every `fixtures/helpers/chmod-lite/<case>` oracle: rebuild the tree,
+    /// run the native helper as a child process, compare manifest, rc, stderr.
     #[test]
     fn chmod_lite_matches_the_portage_helper_on_every_fixture_case() {
         let cases = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/chmod-lite");
@@ -430,9 +396,8 @@ mod fixture_tests {
                 .unwrap();
             let expected_stderr =
                 std::fs::read_to_string(dir.join(format!("stderr{rc_suffix}"))).unwrap();
-            // HOST QUIRK (fixtures/helpers/README.md): zfs rejects
-            // non-UTF-8 names with EILSEQ; stage under temp_dir (tmpfs
-            // here) and skip with a printed reason when even that fails.
+            // Some filesystems reject non-UTF-8 names: skip with a
+            // printed reason when even a tmpfs stage fails.
             let tmp = TempDir::new_in(&std::env::temp_dir(), "helper-chmod-lite");
             let root = tmp.join("tree");
             std::fs::create_dir_all(&root).unwrap();
@@ -440,8 +405,8 @@ mod fixture_tests {
                 println!("case {name}: skipped (filesystem rejects non-UTF-8 names)");
                 continue;
             }
-            // Real's call shape (`phase-helpers.sh:511`): top-level
-            // entries, symlinks excluded (`! -type l`).
+            // Top-level entries, symlinks excluded, like the phase's
+            // `find ... -exec` call shape.
             let mut tops: Vec<OsString> = std::fs::read_dir(&root)
                 .unwrap()
                 .map(|e| e.unwrap())
@@ -467,10 +432,8 @@ mod fixture_tests {
         }
     }
 
-    /// The isolation proof's counterpart (see the S2 report): with the
-    /// native helper this case normalises; the proof breaks the helper
-    /// and watches this assertion fail. Kept as its own test so the
-    /// failure names the behaviour, not the fixture loop.
+    /// A 0600 file normalises to 0644; kept separate so the failure
+    /// names the behaviour, not the fixture loop.
     #[test]
     fn chmod_lite_normalises_a_0600_file_to_0644() {
         let tmp = TempDir::new("helper-chmod-lite-single");

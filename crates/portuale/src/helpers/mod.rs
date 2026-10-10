@@ -1,22 +1,15 @@
-// Native phase helpers (#326 S2, decisions D1/D2/D3/D6/D7/D8).
+// The `portuale __helper` dispatcher.
 //
-// `portuale __helper <name> ...` is dispatched first in `main()`, from
-// `args_os()` (never `args()`: helpers receive raw filenames that may not
-// be UTF-8), before anything else. It never calls `bin_dir()` (no
-// extraction, no atexit), loads no config, and writes only its own
-// outputs (D7).
-//
-// Names: `python` (the D1 dispatcher: the native
-// `filter-bash-environment` (S3) plus the transition table holding
-// every not-yet-ported script of 0.3), `chmod-lite` (D2/D3),
-// `ebuild-ipc` (always 127, D6), `ping` (a fixed token, D8). Anything
-// unknown exits 127 with `portuale: no native helper for: <argv>`, so
-// an upstream re-sync that adds a Python call fails loudly (D1).
+// Runs first in `main()`, from `args_os()` (paths may not be UTF-8),
+// loading no config and writing only its own outputs (D7). Helpers:
+// `python` (the script dispatcher), `chmod-lite`, `ebuild-ipc` (always
+// 127: no IPC daemon) and `ping` (a fixed token). Anything unknown exits
+// 127, so a new upstream call fails loudly (D1).
 
 mod chmod_lite;
 mod doins;
-// #329: the merge copies xattrs through the same `_copyxattr` /
-// `_cmpxattr` port the helpers use.
+// The merge copies xattrs through the same `_copyxattr`/`_cmpxattr`
+// port the helpers use.
 #[cfg(test)]
 pub(crate) use doins::xattr_set;
 pub(crate) use doins::{copy_xattr, xattr_excluded, xattr_get, xattr_list};
@@ -72,8 +65,7 @@ fn no_native_helper(argv: &[std::ffi::OsString]) {
 #[cfg(test)]
 mod dispatcher_tests {
     /// The `portuale` binary built next to this test binary (child
-    /// processes, never in-process: the native helpers run across a
-    /// real process boundary).
+    /// processes: the helpers run across a real process boundary).
     fn portuale_exe() -> std::path::PathBuf {
         let mut exe = std::env::current_exe().expect("current test exe");
         exe.pop();
@@ -93,8 +85,7 @@ mod dispatcher_tests {
             .expect("portuale __helper spawns")
     }
 
-    /// S2 dispatcher table: an unknown helper name exits 127 with the
-    /// `no native helper` message naming the full argv.
+    /// An unknown helper name exits 127 with the message naming the full argv.
     #[test]
     fn an_unknown_helper_name_exits_127_with_the_message() {
         let out = helper(&["frobnicate", "a", "b"]);
@@ -106,7 +97,7 @@ mod dispatcher_tests {
         );
     }
 
-    /// S2/D6: `ebuild-ipc` always exits 127 (never 1: exit 1 would make
+    /// `ebuild-ipc` always exits 127 (never 1: that would make
     /// `has_version` silently answer "not installed").
     #[test]
     fn ebuild_ipc_always_exits_127() {
@@ -119,7 +110,7 @@ mod dispatcher_tests {
         );
     }
 
-    /// S2/D8: `ping` prints the fixed token and exits 0.
+    /// `ping` prints the fixed token and exits 0.
     #[test]
     fn ping_prints_the_fixed_token() {
         let out = helper(&["ping"]);
@@ -130,8 +121,8 @@ mod dispatcher_tests {
         );
     }
 
-    /// S2 dispatcher table: `python` with anything but the probe program
-    /// or a transition script exits 127 with the `python <argv>` message.
+    /// `python` with anything but the probe program or a known script
+    /// exits 127 with the `python <argv>` message.
     #[test]
     fn python_with_an_unknown_program_exits_127() {
         let out = helper(&["python", "-c", "print(1)"]);
@@ -143,11 +134,8 @@ mod dispatcher_tests {
         );
     }
 
-    /// S7 dispatcher table: the transition table is empty (every 0.3
-    /// script is natively ported), so a never-in-scope script like
-    /// `dohtml.py` exits 127 with the `python <argv>` message — the same
-    /// as any other unknown name. (`dohtml` dies first for EAPI >= 7,
-    /// the ebuild floor, so it has no native port and never will.)
+    /// A never-in-scope script like `dohtml.py` exits 127 like any other
+    /// unknown name (`dohtml` dies first for EAPI >= 7, so it has no port).
     #[test]
     fn python_with_a_non_native_script_exits_127() {
         for argv in [&["dohtml.py", "x"][..], &["frobnicate.py", "--dump"][..]] {
@@ -166,9 +154,8 @@ mod dispatcher_tests {
         }
     }
 
-    /// S7 dispatcher table: the last native rows route without any
-    /// interpreter or checkout (`xattr-helper.py --help` answers
-    /// natively even with both disabled).
+    /// Helper scripts route without any interpreter or checkout
+    /// (`xattr-helper.py --help` answers natively even with both disabled).
     #[test]
     fn python_xattr_helper_routes_natively_without_interpreter_or_checkout() {
         let out = std::process::Command::new(portuale_exe())
@@ -182,8 +169,8 @@ mod dispatcher_tests {
         assert!(stdout.starts_with("usage: xattr-helper.py"), "{stdout}");
     }
 
-    /// S2 dispatcher table: `-c` with the exact QA probe program answers
-    /// natively (the full locale table is `locale::table_tests`).
+    /// `-c` with the exact QA probe program answers natively
+    /// (the full locale table is `locale::table_tests`).
     #[test]
     fn python_c_with_the_exact_probe_program_answers_natively() {
         let out = std::process::Command::new(portuale_exe())
