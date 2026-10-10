@@ -1,13 +1,8 @@
 use super::*;
 
-/// #37 S2 end-to-end: a real source merge with a resolved config
-/// threads the full effective `USE`, the resolved (folded)
-/// `FEATURES` -- which must win over `phase_env_vars`' raw process-env
-/// base -- and the entry's `SLOT` into the phase, under **both**
-/// backends. `build-info/USE` is what real `__dyn_install` writes from
-/// the phase `${USE}`; the `.keep_*` marker is written by the external
-/// `ebuild-helpers/keepdir` subprocess, which is why an unexported
-/// `SLOT` used to produce a bare `-` (S0's `l2-env-*` findings).
+/// A source merge with a resolved config threads the full effective `USE`, the
+/// resolved (folded) `FEATURES`, and the entry's `SLOT` into the phase, under
+/// **both** backends. Expected value from Portage source.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
@@ -38,9 +33,9 @@ fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
         };
         options.build_env = portage_profile::phase_environ(&config_env, None);
         options.resolved_config = Some(std::sync::Arc::new(config));
-        // The `${T}`/`build-info` files asserted below are the
-        // subject; keep the builddir the way real `FEATURES=noclean`
-        // does (the default post-merge clean is pinned separately).
+        // The `${T}`/`build-info` files asserted below are the subject; keep
+        // the builddir via `FEATURES=noclean` (the default post-merge clean
+        // is pinned separately).
         options.features = "noclean".to_string();
 
         let entries = vec![source_entry(
@@ -102,13 +97,9 @@ fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
     }
 }
 
-/// Backlog #332 end to end: `envdreload-a` installs
-/// `/etc/env.d/99envdreload` (`ENVDRELOAD_VAR=1`); the merge's
-/// `env-update` rewrites `<root>/etc/profile.env`; `envdreload-b`,
-/// built afterwards in the same run, must see the variable in its
-/// `src_install` (real reloads config before every package task,
-/// `Scheduler._allocate_config`), as the bed's `helper-doins` /
-/// `PT_HELPER_DOINS` pair showed.
+/// `envdreload-a` installs `/etc/env.d/99envdreload`; `envdreload-b`, built
+/// afterwards in the same run, must see the variable in its `src_install`.
+/// Expected value from Portage source.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn source_merge_second_package_sees_env_d_installed_by_the_first() {
@@ -163,19 +154,10 @@ fn source_merge_second_package_sees_env_d_installed_by_the_first() {
     let _ = fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// #333: a two-entry source merge with `CONFIG_PROTECT` resolved
-/// from the config (`/etc /usr/share/cfgprotme`), none in the
-/// process env. `cfgprotlate-a` installs `/etc/env.d/99cfgprotlate`
-/// (`CONFIG_PROTECT="/usr/share/cfgprotlate"`) and its merge runs
-/// env-update; `cfgprotlate-b` then installs one file under each path
-/// over a locally modified copy. Real (Portage 3.0.82.2 in the bed
-/// image, `env -i emerge`, same shape: pmtest
-/// `differential-test-bed/scripts/333-config-protect.sh`) keeps both
-/// local files and writes `._cfg0000_x` /
-/// `._cfg0000_y`: the config's fold protects `x`
-/// (`dblink._get_protect_obj`, `vartree.py:2063-2072`), and the
-/// per-task `config.reload()` (`Scheduler.py:1899-1913`) protects
-/// `y`.
+/// A two-entry merge with `CONFIG_PROTECT` from the config: `cfgprotlate-a`
+/// installs an `env.d` entry adding a `CONFIG_PROTECT` path and `cfgprotlate-b`
+/// installs over locally modified copies. Both local files must survive with
+/// `._cfg0000_*` siblings. Expected value from Portage in the bed image.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn source_merge_protects_the_config_fold_and_env_d_added_paths() {
@@ -236,16 +218,10 @@ fn source_merge_protects_the_config_fold_and_env_d_added_paths() {
     let _ = fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// #160: real `config.environ()`'s `filter_calling_env`
-/// (`lib/portage/package/ebuild/config.py:3275-3305`, bug #189417) is
-/// what keeps a variable the ebuild `unset` in an earlier phase unset:
-/// every phase after `${T}/environment` exists spawns with only the
-/// `special_env_vars.environ_whitelist` keys from the config/calling
-/// env, and the saved environment supplies the rest. `unsetcflagspkg`'s
-/// `src_compile` is `dev-build/ninja-1.13.2-r1`'s own `unset CFLAGS`
-/// shape, so real's `__dyn_install` writes no `build-info/CFLAGS` and
-/// the vdb gets no `CFLAGS` row (the l3-20260925T074707Z Class 4 row).
-/// `CXXFLAGS` (never unset) is the control: its row must stay.
+/// A variable the ebuild `unset` in an earlier phase stays unset in later
+/// phases: `unsetcflagspkg`'s `src_compile` unsets `CFLAGS`, so no vdb `CFLAGS`
+/// row is written while `CXXFLAGS` (never unset) keeps its row as the control.
+/// Expected value from Portage source.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn source_merge_omits_a_vdb_aux_file_the_ebuild_unset_in_an_earlier_phase() {
@@ -259,21 +235,18 @@ fn source_merge_omits_a_vdb_aux_file_the_ebuild_unset_in_an_earlier_phase() {
         shell: ebuild_phases::ShellBackend::Bash,
         ..ebuild_merge::MergeOptions::default()
     };
-    // Real `bin/phase-functions.sh:1257` chgrps `${T}/environment` to
-    // `${PORTAGE_GRPNAME:-portage}`; unprivileged, the default
-    // `portage` group makes that fail and bash prints a `chgrp: …
-    // Operation not permitted` line per phase straight to the harness
-    // stderr. Point it at this process's own gid -- the group the file
-    // already has -- so the chgrp is a permitted no-op. Ownership is
-    // unchanged, so the aux-file assertion below is not weakened.
+    // Point `PORTAGE_GRPNAME` at this process's own gid, so the per-phase
+    // `chgrp` of `${T}/environment` is a permitted no-op instead of a
+    // per-phase "Operation not permitted" line on harness stderr.
     let gid = unsafe { libc::getegid() };
     options.build_env = vec![
         ("CFLAGS".to_string(), "-O2 -pipe".to_string()),
         ("CXXFLAGS".to_string(), "-O2 -pipe".to_string()),
         ("PORTAGE_GRPNAME".to_string(), gid.to_string()),
     ];
-    // Keep the builddir: the observed `${T}` file is copied into the
-    // merged image, and the vdb read below happens on the final tree.
+    // Keep the builddir (`FEATURES=noclean`): the observed `${T}` file is
+    // copied into the merged image, and the vdb read below happens on the
+    // final tree.
     options.features = "noclean".to_string();
 
     let entries = vec![source_entry(
@@ -320,14 +293,9 @@ fn source_merge_omits_a_vdb_aux_file_the_ebuild_unset_in_an_earlier_phase() {
     let _ = fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// #158: a byte-identical installed file survives a re-merge when the
-/// ebuild's own `pkg_preinst` helper is gated on `REPLACING_VERSIONS`
-/// (real `dblink.treewalk`, `vartree.py:4768-4771`). Without the var
-/// the fixture's preinst `rm`s the file; with it the preinst returns
-/// early and `merge_tree`'s `needs_move` (real `_needs_move`,
-/// `vartree.py:6363`) leaves the existing inode -- the property that
-/// keeps real's OWNER (`/usr/share/man/man1/awk.1`'s `1:1`, #158)
-/// instead of recreating the file from the image.
+/// A byte-identical installed file survives a re-merge when the ebuild's
+/// `pkg_preinst` helper is gated on `REPLACING_VERSIONS`: the preinst returns
+/// early and the destination keeps its inode. Expected value from Portage source.
 #[test]
 fn reinstall_leaves_a_byte_identical_file_a_preinst_helper_would_remove() {
     use std::os::unix::fs::MetadataExt;
@@ -360,7 +328,7 @@ fn reinstall_leaves_a_byte_identical_file_a_preinst_helper_would_remove() {
     };
 
     // First merge: no same-slot instance yet, so the fixture's preinst
-    // `rm` is a no-op and the image's `identical.txt` lands.
+    // `rm` is a no-op and the image's file lands.
     merge(PretendOutcome::New {
         version: "4".into(),
     });
@@ -369,8 +337,7 @@ fn reinstall_leaves_a_byte_identical_file_a_preinst_helper_would_remove() {
         .expect("the fixture installed its file")
         .ino();
 
-    // Re-merge the same version: `installed_instance_pf` sees the
-    // just-written vdb entry, `REPLACING_VERSIONS=4` is set for the
+    // Re-merge the same version: `REPLACING_VERSIONS=4` is set for the
     // preinst, the fixture returns early, and the byte-identical
     // destination is left in place (same inode, same owner).
     merge(PretendOutcome::Reinstall {
@@ -399,8 +366,7 @@ fn run_source_merge_builds_and_merges_a_new_package_end_to_end() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
 
-    // `samepkg` is packagepkg's RDEPEND -- already installed, so it's
-    // an AlreadyInstalled entry that must be skipped silently.
+    // `samepkg` is already installed, so it is skipped silently.
     let entries = vec![
         source_entry(
             "samepkg",
@@ -453,15 +419,10 @@ fn run_source_merge_builds_and_merges_a_new_package_end_to_end() {
     let _ = fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Backlog #42 regression: `merge_one_source_entry` (the serial
-/// `emerge` source path) pre-cleans before every build, exactly like
-/// real `_emerge/EbuildBuild._start_pre_clean`. With a stale
-/// `.installed` marker and a tampered `${D}` left by an earlier build
-/// in the same `${PORTAGE_BUILDDIR}` (kept here via `noclean`), the
-/// next run must discard them and rebuild -- previously `install`
-/// printed "already installed; skipping" and merged the stale image,
-/// which is how a `-B` after a source merge shipped stripped
-/// binaries (#38 S4).
+/// `merge_one_source_entry` pre-cleans before every build: with a stale
+/// `.installed` marker and a tampered `${D}` left by an earlier build (kept via
+/// `noclean`), the next run must discard them and rebuild. Expected value from
+/// Portage source.
 #[test]
 fn source_merge_pre_cleans_a_stale_installed_image() {
     let config_root = fixtures_root();
@@ -497,15 +458,15 @@ fn source_merge_pre_cleans_a_stale_installed_image() {
         "noclean must keep the first build's state"
     );
 
-    // Tamper: replace the real image file with a stale one, keeping
-    // the `.installed` marker -- the exact state the missing
-    // pre-clean treated as "already built".
+    // Tamper: replace the image file with a stale one, keeping the
+    // `.installed` marker -- the state the missing pre-clean treated as
+    // "already built".
     let image = builddir.join("image/usr/share/packagepkg");
     std::fs::remove_file(image.join("hello.txt")).unwrap();
     std::fs::write(image.join("stale.txt"), "stale\n").unwrap();
 
-    // Second merge, no noclean: the pre-clean drops the stale
-    // `.installed`/image, so `install` really re-runs.
+    // Second merge, no noclean: the pre-clean drops the stale state, so
+    // `install` really re-runs.
     let options = ebuild_merge::MergeOptions {
         features: "sandbox".to_string(),
         ..ebuild_merge::MergeOptions::default()
@@ -538,10 +499,8 @@ fn run_build_scheduler_builds_two_leaves_in_parallel_then_the_parent() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
 
-    // schedparent RDEPENDs schedleaf-a + schedleaf-b (both leaves,
-    // buildable, not installed). required_by wires the DAG so the
-    // scheduler builds the leaves first (concurrently under jobs=2)
-    // and schedparent only after both have merged.
+    // schedparent depends on both leaves; the scheduler builds the leaves
+    // first (concurrently under jobs=2) and the parent only after both merge.
     let leaf_a = source_entry(
         "schedleaf-a",
         PretendOutcome::New {
@@ -631,8 +590,8 @@ fn run_build_scheduler_with_a_high_load_average_never_throttles() {
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
-    // A load average of 1e9 can never be exceeded -> the throttle is
-    // a no-op and every package still builds and merges.
+    // A load average of 1e9 can never be exceeded, so the throttle is a
+    // no-op and every package still builds and merges.
     run_source_merge(RunSourceMergeArgs {
         entries: &entries,
         repos: &repos,
@@ -665,8 +624,8 @@ fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
 
-    // schedbad's src_install dies; schedbaddep RDEPENDs it (so it must
-    // be skipped); schedok is independent and must still merge.
+    // schedbad's install fails; schedbaddep depends on it (must be skipped);
+    // schedok is independent (must still merge).
     let mut bad = source_entry(
         "schedbad",
         PretendOutcome::New {
@@ -726,16 +685,10 @@ fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
 
 #[test]
 fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
-    // Real `Scheduler._keep_scheduling`/`_terminate_tasks`
-    // (`PollScheduler.py:106-126`): once any package fails without
-    // `--keep-going`, real portage sends kill signals to whatever's
-    // still running rather than letting it finish -- its own result
-    // would be discarded regardless. `schedbad` (fails almost
-    // instantly, in `install`, the last phase) and `schedslow`
-    // (sleeps 120s in `compile`, well before `install`) are
-    // independent leaves under `jobs=2`, so both start together;
-    // `schedbad` fails long before `schedslow`'s own sleep would
-    // ever finish on its own.
+    // Once any package fails without `--keep-going`, still-running builds are
+    // killed rather than waited out. `schedbad` fails almost instantly while
+    // `schedslow` sleeps 120s; both start together as independent leaves
+    // under `jobs=2`, so the run must finish well under 120s.
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
@@ -777,8 +730,8 @@ fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
     })
     .expect_err("schedbad's own failure must fail the whole run");
     assert!(err.contains("schedbad-1.0"), "{err}");
-    // Real generously bounded (loaded machines, #308): well under schedslow's own 120s sleep,
-    // proving the scheduler didn't just wait it out.
+    // Generously bounded for loaded machines: well under schedslow's 120s
+    // sleep, proving the scheduler didn't just wait it out.
     assert!(
         started.elapsed() < std::time::Duration::from_secs(60),
         "run_source_merge took {:?}, schedslow's sleep should have been killed",
@@ -798,8 +751,8 @@ fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
 
 #[test]
 fn run_source_merge_rejects_a_binary_entry() {
-    // The error is raised before any real execution, so a bogus
-    // ROOT/tmpdir that would fail loudly if touched is safe here.
+    // The error is raised before any execution, so nonexistent paths are
+    // safe here.
     let bogus = PathBuf::from("/nonexistent/does/not/exist");
     let options = ebuild_merge::MergeOptions::default();
 
@@ -911,10 +864,9 @@ fn run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents() {
 
 #[test]
 fn run_source_merge_upgrade_replaces_the_installed_version() {
-    // Merge binpkgrmpkg-1.0 (New), then 2.0 (Upgrade) -- 2.0's files
-    // land, 1.0's own file is unmerged, 1.0's vdb entry is gone, and
-    // 1.0's pkg_prerm/pkg_postrm run from its own saved vdb env (the
-    // fixture's five hooks each append `<phase>-<PVR>` to a ROOT log).
+    // Merges 1.0 (`New`), then 2.0 (`Upgrade`): 2.0's files land, 1.0's file
+    // is unmerged, 1.0's vdb entry is gone, and 1.0's `pkg_prerm`/`pkg_postrm`
+    // run from its saved vdb env (each fixture hook appends `<phase>-<PVR>`).
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();

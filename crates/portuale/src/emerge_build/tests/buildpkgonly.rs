@@ -2,11 +2,8 @@ use super::*;
 
 #[test]
 fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
-    // Neither outcome ever has a resolvable version (see
-    // entry_version), so this must return Ok(()) without attempting
-    // any real execution at all -- proven by using a nonexistent
-    // ROOT/PORTAGE_TMPDIR/PackageOptions that would fail loudly if
-    // touched.
+    // Neither outcome has a resolvable version, so this must return `Ok`
+    // without attempting any execution (proven by the nonexistent paths).
     let entries = vec![
         GraphEntry {
             discovery: 0,
@@ -83,11 +80,8 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
             pkgdir: bogus.clone(),
             distdir: bogus.clone(),
             shell: PackageOptions::default().shell,
-            // Pinned to "bzip2" (near-universal base package) rather
-            // than real Default's "zstd", so these tests don't
-            // depend on the test-running host actually having zstd
-            // installed -- real xpak/tbz2 building is codec-
-            // agnostic either way.
+            // Pinned to "bzip2" rather than the default "zstd", so the test
+            // does not depend on the host having zstd installed.
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
@@ -149,15 +143,11 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
             shell: PackageOptions::default().shell,
-            // Pinned to "bzip2" (near-universal base package) rather
-            // than real Default's "zstd", so these tests don't
-            // depend on the test-running host actually having zstd
-            // installed -- real xpak/tbz2 building is codec-
-            // agnostic either way.
+            // Pinned to "bzip2" rather than the default "zstd", so the test
+            // does not depend on the host having zstd installed.
             binpkg_compress: "bzip2".to_string(),
-            // Pinned explicitly (backlog #173): this test asserts
-            // XPAK magic via the xpak reader, not the (now gpkg)
-            // default.
+            // Pinned explicitly: this test asserts XPAK magic, not the
+            // (now gpkg) default.
             binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         },
@@ -174,9 +164,8 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
         "missing real XPAK magic bytes"
     );
 
-    // #39: `packagepkg` installs a real file, so the
-    // `_post_src_install_uid_fix` size walk must record a positive
-    // `SIZE` in the archive's metadata.
+    // `packagepkg` installs a file, so the size walk must record a
+    // positive `SIZE` in the archive's metadata.
     let meta = crate::binpkg::read_xpak_metadata(&tbz2).expect("xpak metadata parses");
     assert!(
         meta.get("SIZE")
@@ -190,10 +179,8 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
     assert!(packages.contains("CPV: dev-libs/packagepkg-1.0"));
 }
 
-/// Backlog #99/#129 (Phase 2 S0 cell E): a matched `PORTAGE_TMPDIR`
-/// that does not exist on disk is real's exact `_check_temp_dir`
-/// failure, and `run_buildpkgonly` now re-derives the tmpdir per
-/// entry instead of only ever using the run-wide one.
+/// A matched `PORTAGE_TMPDIR` that does not exist fails the entry with
+/// Portage's exact `_check_temp_dir` message. Expected value from Portage source.
 #[test]
 fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_match() {
     let config_root = fixtures_root();
@@ -253,20 +240,9 @@ fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_m
     );
 }
 
-/// Backlog #130: `--buildpkgonly` re-derives `PackageOptions`'
-/// binpkg-affecting fields (`binpkg_multi_instance` here) from the
-/// per-entry `package.env` `FEATURES` fold, not the single shared,
-/// Real per-package `FEATURES` (backlog #147 S1 ruling (i)):
-/// the binpkg layout is run-wide-only (real's bintree binds its
-/// allocator once, `bintree.py:529-531` -- S0 A1x/A2 prove both
-/// directions), while the `BUILD_ID` export follows the entry's
-/// own token (real `EbuildBinpkg.py:47-48`). With run-wide
-/// multi-instance ON, a per-entry `-binpkg-multi-instance`
-/// negation still takes the multi path (layout ignores it) but
-/// exports no `BUILD_ID` (the gate honors it) -- S0 A2 shape.
-/// Needs no Portage checkout: the install/package phases run through
-/// the native helpers (#326 S2-S7), verified live with
-/// `PORTUALE_PORTAGE_CHECKOUT=/nonexistent`.
+/// `--buildpkgonly` re-derives `PackageOptions`' binpkg-affecting fields from the
+/// per-entry `package.env` `FEATURES` fold: the layout stays run-wide while the
+/// `BUILD_ID` export follows the entry's own token. Expected value from Portage source.
 #[test]
 fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() {
     let config_root = fixtures_root();
@@ -316,9 +292,8 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() 
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),
             binpkg_multi_instance: true,
-            // Pinned explicitly (backlog #173): this test pins the
-            // `.xpak` multi-instance paths, not the (now gpkg)
-            // default.
+            // Pinned explicitly: this test pins the `.xpak` multi-instance
+            // paths, not the (now gpkg) default.
             binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         },
@@ -362,17 +337,9 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() 
     );
 }
 
-/// Real per-package `BINPKG_COMPRESS` (backlog #147 S2): a
-/// `package.env` scalar match must reach the xpak tar pipe for
-/// that entry only (real `doebuild_environment()` reads the
-/// package's own `mysettings`, `doebuild.py:697` -- S0 B-xpak
-/// proves gzip magic with a zstd run-wide). The observable is
-/// the archive magic: the matched entry compresses with its own
-/// codec, its unmatched neighbour in the same run keeps the
-/// run-wide one. Needs no Portage checkout: the install/package
-/// phases run through the native helpers (#326 S2-S7), verified live
-/// with `PORTUALE_PORTAGE_CHECKOUT=/nonexistent`, like the
-/// multi-instance test above.
+/// A `package.env` scalar match reaches the xpak tar pipe for that entry only:
+/// the matched entry compresses with its own codec, its unmatched neighbour
+/// keeps the run-wide one. Expected value from Portage source.
 #[test]
 fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
     let config_root = fixtures_root();
@@ -395,11 +362,9 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
             },
         ),
     ];
-    // In-memory package.env table (no committed fixture change --
-    // the scalars are env-driven, not ebuild-driven): gzip for the
-    // matched package only. Run-wide stays on the bzip2 fallback
-    // (no `BINPKG_COMPRESS` in this config or process env), so the
-    // neighbour pins the unchanged run-wide behavior too.
+    // In-memory package.env table (no committed fixture change): gzip for
+    // the matched package only; run-wide stays on bzip2, so the neighbour
+    // pins the unchanged run-wide behavior too.
     let config = portage_profile::Config {
         package_env_vars: vec![(
             "dev-libs/penvbuildpkg".to_string(),
@@ -452,11 +417,9 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
     );
 }
 
-/// #37 S2: `--buildpkgonly` threads the same resolved env as the
-/// `-b` merge path -- the archive's `metadata/USE`/`metadata/FEATURES`
-/// (real `__dyn_install` writes both into `build-info` from the phase
-/// env) and the `Packages` index `USE` field carry the effective
-/// flags, not the raw harness env / empty standalone env.
+/// `--buildpkgonly` threads the same resolved env as the `-b` merge path: the
+/// archive's `metadata/USE`/`metadata/FEATURES` and the `Packages` index `USE`
+/// carry the effective flags. Expected value from Portage source.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
@@ -509,18 +472,15 @@ fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
     );
     assert_eq!(meta.get("FEATURES").map(String::as_str), Some("sandbox"));
     assert_eq!(meta.get("SLOT").map(String::as_str), Some("0"));
-    // #39: real `_post_src_install_write_metadata` always writes
-    // `IUSE` (empty for a no-IUSE ebuild), the profile-computed
-    // `IUSE_EFFECTIVE`, and `_post_src_install_uid_fix`'s own
-    // `${D}`-walk `SIZE`.
+    // Portage always writes `IUSE` (empty for a no-IUSE ebuild), the
+    // profile-computed `IUSE_EFFECTIVE`, and the installed-size `SIZE` walk.
     assert_eq!(meta.get("IUSE").map(String::as_str), Some(""));
     assert_eq!(
         meta.get("IUSE_EFFECTIVE").map(String::as_str),
         Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
     );
-    // `phaseenvpkg` installs only a `keepdir` (the `.keep_*` marker
-    // lands at merge time), so its image holds no regular file and
-    // real's own walk writes `0` -- the member must be *present*.
+    // `phaseenvpkg` installs only a `keepdir`, so its image holds no regular
+    // file and the walk writes `0` -- the member must still be *present*.
     assert!(
         meta.get("SIZE")
             .and_then(|s| s.parse::<u64>().ok())
@@ -541,10 +501,8 @@ fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
     let _ = fs::remove_dir_all(&pkgdir);
 }
 
-/// Backlog #42: real `_buildpkgonly_success_hook_exit` runs the
-/// `clean` phase after a successful `--buildpkgonly` package, so the
-/// builddir is gone afterwards (the phase itself, not a `noclean`
-/// gate, honors `keepwork`).
+/// A successful `--buildpkgonly` package runs the `clean` phase afterwards,
+/// so the builddir is gone. Expected value from Portage source.
 #[test]
 fn buildpkgonly_post_cleans_the_builddir() {
     let config_root = fixtures_root();
@@ -576,9 +534,8 @@ fn buildpkgonly_post_cleans_the_builddir() {
     })
     .expect("--buildpkgonly succeeds");
 
-    // Backlog #173: the default format is gpkg now (real
-    // `cnf/make.globals:43`), so the incidental artefact assertion
-    // follows the default rather than pinning the old xpak shape.
+    // The default format is gpkg now, so the artefact assertion follows
+    // the default rather than pinning the old xpak shape.
     assert!(pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar").is_file());
     let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
     assert!(
@@ -647,21 +604,17 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
             shell: PackageOptions::default().shell,
-            // Pinned to "bzip2" (near-universal base package) rather
-            // than real Default's "zstd", so these tests don't
-            // depend on the test-running host actually having zstd
-            // installed -- real xpak/tbz2 building is codec-
-            // agnostic either way.
+            // Pinned to "bzip2" rather than the default "zstd", so the test
+            // does not depend on the host having zstd installed.
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
         keep_going: false,
         mode: StatusMode::for_tests(),
     });
-    // `fetchpkg`'s own fixture has a real, nonempty SRC_URI but no
-    // Manifest entry at all -- refused before any network access is
-    // even attempted (see `crate::fetch::fetch_src_uri`'s own doc
-    // comment: unverifiable content is worse than a loud failure).
+    // `fetchpkg`'s fixture has a nonempty SRC_URI but no Manifest entry --
+    // refused before any network access is even attempted (unverifiable
+    // content is worse than a loud failure).
     let err = result.expect_err("an unverifiable SRC_URI must be refused");
     assert!(err.contains("no Manifest entry"), "{err}");
     assert!(
@@ -670,9 +623,8 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
     );
 }
 
-/// Without real `--keep-going`, a failing entry stops the whole run
-/// immediately -- a later, independently-buildable entry in the same
-/// list never even gets attempted.
+/// Without `--keep-going`, a failing entry stops the whole run: a later,
+/// independently-buildable entry is never attempted.
 #[test]
 fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
     let config_root = fixtures_root();
@@ -681,9 +633,7 @@ fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
 
-    // fetchpkg (no Manifest entry, always fails) listed *before*
-    // packagepkg (builds cleanly) -- proves packagepkg is never even
-    // attempted once fetchpkg fails.
+    // fetchpkg (always fails) listed *before* packagepkg (builds cleanly).
     let entries = vec![
         buildpkgonly_entry("dev-libs", "fetchpkg", "1.0"),
         buildpkgonly_entry("dev-libs", "packagepkg", "1.0"),
@@ -714,9 +664,8 @@ fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
     );
 }
 
-/// With real `--keep-going`, a failing entry does *not* stop the
-/// run -- packagepkg still gets built despite fetchpkg's own
-/// failure, and the final error names both entries.
+/// With `--keep-going`, a failing entry does *not* stop the run: the rest
+/// still builds, and the final error names the failure.
 #[test]
 fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
     let config_root = fixtures_root();
@@ -751,8 +700,7 @@ fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
     assert!(err.contains("dev-libs/fetchpkg-1.0"), "{err}");
     assert!(err.contains("no Manifest entry"), "{err}");
 
-    // Backlog #173: the default format is gpkg now (real
-    // `cnf/make.globals:43`).
+    // The default format is gpkg now.
     assert!(
         pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar").is_file(),
         "packagepkg must still be built with --keep-going, despite fetchpkg's own failure"

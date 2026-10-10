@@ -57,7 +57,7 @@ fn ensure_portage_logdir_symlink_points_t_build_log_at_the_real_logdir() {
     // Real "<CATEGORY><sep><PF><sep><logid_time>.log".
     assert!(name.starts_with("dev-libs:foo-1.0:"), "{name}");
     assert!(name.ends_with(".log"), "{name}");
-    // Writing through the symlink lands in the real logdir file.
+    // Writing through the symlink lands in the logdir file.
     std::fs::write(&log_path, b"hello").unwrap();
     assert_eq!(fs::read_to_string(&target).unwrap(), "hello");
 
@@ -110,9 +110,8 @@ fn ensure_portage_logdir_symlink_honors_split_log_and_the_separator() {
 
 #[test]
 fn ensure_portage_logdir_symlink_gains_the_gz_suffix_when_compressed() {
-    // Real `prepare_build_dirs.py:397-399` (`compress_log_ext`):
-    // with `FEATURES=compress-build-logs` the real log file is
-    // `<...>.log.gz` in both the flat and `split-log` layouts.
+    // With `compress-build-logs` the log file is `<...>.log.gz` in both
+    // the flat and `split-log` layouts.
     for split_log in [false, true] {
         let tmp = tempdir();
         let builddir = tmp.join("builddir");
@@ -136,14 +135,14 @@ fn ensure_portage_logdir_symlink_gains_the_gz_suffix_when_compressed() {
         let name = target.file_name().unwrap().to_str().unwrap();
         assert!(name.ends_with(".log.gz"), "{name}");
         if split_log {
-            // Real `<logdir>/build/<CATEGORY>/<PF><sep><logid_time>.log.gz`.
+            // `<logdir>/build/<CATEGORY>/<PF><sep><logid_time>.log.gz`.
             assert!(name.starts_with("foo-1.0:"), "{name}");
             assert_eq!(
                 target.parent().unwrap(),
                 logdir.join("build").join("dev-libs")
             );
         } else {
-            // Real `<logdir>/<CATEGORY><sep><PF><sep><logid_time>.log.gz`.
+            // `<logdir>/<CATEGORY><sep><PF><sep><logid_time>.log.gz`.
             assert!(name.starts_with("dev-libs:foo-1.0:"), "{name}");
             assert_eq!(target.parent().unwrap(), logdir);
         }
@@ -152,9 +151,7 @@ fn ensure_portage_logdir_symlink_gains_the_gz_suffix_when_compressed() {
 
 #[test]
 fn tail_of_gunzips_a_compressed_build_log() {
-    // Real `Scheduler.py` / `doebuild.py` wrap a `.gz`-suffixed log
-    // in `gzip.GzipFile(mode="rb")` before reading: the failure tail
-    // must decode, not print binary.
+    // A `.gz`-suffixed log must decode, not print binary.
     let tmp = tempdir();
     let log_path = tmp.join("build.log.gz");
     {
@@ -173,17 +170,10 @@ fn tail_of_gunzips_a_compressed_build_log() {
 
 #[test]
 fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
-    // Real `Scheduler._background_mode`: under `capture_log` (always
-    // true for `--jobs` >1, opt-in via `--quiet-build`/`-q`
-    // otherwise), a package's own `install` phase output already
-    // went to its own `build.log` -- but `pkg_preinst`/`pkg_postinst`
-    // (run separately, not part of `install`'s own `actionmap_deps`
-    // chain -- `merge_after_install`'s own doc comment) previously
-    // had no log file threaded to them at all, so their own output
-    // always leaked straight to the terminal regardless of
-    // `capture_log`. `hookoutputpkg`'s `pkg_preinst`/`pkg_postinst`
-    // each echo an observable marker for this test to look for in
-    // the captured log instead.
+    // `pkg_preinst`/`pkg_postinst` run separately from `install`, so they
+    // need the log file threaded to them too; otherwise their output leaks
+    // to the terminal despite `capture_log`. The fixture's hooks echo a
+    // marker each for this test to find in the captured log.
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
@@ -198,9 +188,9 @@ fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
     let options = ebuild_merge::MergeOptions {
         distdir: tempdir(),
         config_root: config_root.clone(),
-        // The `${T}/build.log` this test reads is removed by the real
-        // post-merge clean; keep it the way real `FEATURES=noclean`
-        // does (the clean itself is pinned separately, #42).
+        // The `${T}/build.log` this test reads is removed by the post-merge
+        // clean; keep it via `FEATURES=noclean` (the clean itself is pinned
+        // separately).
         features: "noclean".to_string(),
         ..ebuild_merge::MergeOptions::default()
     };

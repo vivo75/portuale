@@ -1,12 +1,7 @@
 use super::*;
 
-/// Backlog #129: `--buildpkgonly`'s per-entry env now matches
-/// `package.env` the same way the merge scheduler's `entry_build_env`
-/// does -- Phase 2 S0 cell A/F's own oracle (a matched `CFLAGS`/`CC`
-/// wins over the run-wide value), applied to the third build path.
-/// Direct unit test of `buildpkgonly_entry_build_env` (no real build),
-/// the same pattern `entry_build_env_resolves_full_use_expand_and_
-/// entry_identity` already uses for the merge-scheduler sibling.
+/// `--buildpkgonly`'s per-entry env matches `package.env` the way the merge
+/// scheduler's `entry_build_env` does. Expected value from the Phase 2 oracle.
 #[test]
 fn buildpkgonly_entry_build_env_matches_package_env_and_folds_flags() {
     let config_root = fixtures_root();
@@ -55,8 +50,7 @@ fn buildpkgonly_entry_build_env_matches_package_env_and_folds_flags() {
     );
     assert_eq!(get("CC").as_deref(), Some("buildpkgonly-cc"));
 
-    // An unmatched entry (different cpv) keeps the run-wide value --
-    // #129 must not leak a matched entry's vars onto its neighbours.
+    // An unmatched entry (different cpv) keeps the run-wide value.
     let other = source_entry(
         "newpkg",
         PretendOutcome::New {
@@ -84,9 +78,8 @@ fn buildpkgonly_entry_build_env_matches_package_env_and_folds_flags() {
     );
 }
 
-/// Backlog #98/#129: a `package.env` `FEATURES` entry is an
-/// incremental -- it folds onto the run-wide list
-/// (`[run-wide, pkg, calling-env]`), it does not replace it.
+/// A `package.env` `FEATURES` entry folds onto the run-wide list instead of
+/// replacing it. Expected value from Portage source.
 #[test]
 fn buildpkgonly_entry_build_env_folds_matched_features() {
     let config_root = fixtures_root();
@@ -139,11 +132,9 @@ fn buildpkgonly_entry_build_env_folds_matched_features() {
     }
 }
 
-/// #37 S2: with a resolved config in scope, `entry_build_env` threads
-/// the full effective `USE` (implicit profile flags included), the
-/// per-package `USE_EXPAND` values, and the entry's `SLOT`/repo
-/// identity -- the S0 oracle's exact row set
-/// (`TEST/findings/l2.md` "S0 recon (#37)").
+/// With a resolved config, `entry_build_env` threads the full effective `USE`
+/// (implicit profile flags included), the per-package `USE_EXPAND` values,
+/// and the entry's `SLOT`/repo identity. Expected value from the fixture oracle.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
@@ -182,17 +173,16 @@ fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
         },
     );
     let env = entry_build_env(&options, &entry, &repos);
-    // Later pairs win in both backends (`Command::envs` / successive
-    // `export`s), so read the *last* pair: the run-wide base carries
-    // empty `USE_EXPAND` placeholders that the per-entry rows override.
+    // Later pairs win in both backends, so read the *last* pair: the
+    // run-wide base carries placeholders that the per-entry rows override.
     fn get<'a>(env: &'a [(String, String)], k: &str) -> Option<&'a str> {
         env.iter()
             .rev()
             .find(|(n, _)| n == k)
             .map(|(_, v)| v.as_str())
     }
-    // `archusepkg` declares `IUSE="amd64 riscv"`; the implicit flags
-    // come from the resolver's full effective set, not from IUSE.
+    // The implicit flags come from the resolver's full effective set, not
+    // from IUSE.
     assert_eq!(
         get(&env, "USE"),
         Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
@@ -207,7 +197,7 @@ fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
     assert_eq!(get(&env, "PORTAGE_REPO_NAME"), Some("testrepo"));
     // The run-wide half rides along, folded `FEATURES` included.
     assert_eq!(get(&env, "FEATURES"), Some("sandbox"));
-    // Real `environ_filter`/`AA`-pop rows stay out (S0 findings).
+    // Filtered-out rows stay out.
     for absent in ["O", "AA", "SRC_URI", "PORTAGE_USE"] {
         assert_eq!(get(&env, absent), None, "{absent}");
     }
@@ -224,10 +214,9 @@ fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
     );
 }
 
-/// Backlog #98: the per-entry folded `FEATURES` list. A matched env
-/// file value folds onto the run-wide list in `[run-wide, pkg,
-/// calling-env]` order (S0 cells B/C); no match returns `None`, so
-/// the run-wide value — and every gate reading it — stays untouched.
+/// The per-entry folded `FEATURES` list: a matched env-file value folds in
+/// `[run-wide, pkg, calling-env]` order; no match returns `None`, so the
+/// run-wide value stays untouched. Expected value from Portage source.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn entry_resolved_features_folds_the_matched_env_file_value() {
@@ -253,7 +242,7 @@ fn entry_resolved_features_folds_the_matched_env_file_value() {
         entry_resolved_features(&options_for("sandbox", ""), &entry, ""),
         None
     );
-    // Env file only: the token joins the folded, sorted list (S0 C).
+    // Env file only: the token joins the folded, sorted list.
     assert_eq!(
         entry_resolved_features(
             &options_for("sandbox userfetch", "probe-feature"),
@@ -262,7 +251,7 @@ fn entry_resolved_features_folds_the_matched_env_file_value() {
         ),
         Some("probe-feature sandbox userfetch".to_string())
     );
-    // A `-tok` in the calling env prunes the pkg token (S0 B).
+    // A `-tok` in the calling env prunes the pkg token.
     assert_eq!(
         entry_resolved_features(
             &options_for("sandbox userfetch", "probe-feature"),
@@ -289,15 +278,9 @@ fn entry_resolved_features_folds_the_matched_env_file_value() {
     assert_eq!(entry_resolved_features(&options, &entry, ""), None);
 }
 
-/// Backlog #332: real `Scheduler._allocate_config`
-/// (`Scheduler.py:1899-1913`) calls `config.reload()` for every
-/// package task, which re-reads `env.d` (`config.py:2691-2699`).
-/// `entry_build_env` is portuale's `_allocate_config` point: once
-/// `<eroot>/etc/profile.env` changes after the config was resolved,
-/// the env it returns carries the new variable; with `profile.env`
-/// untouched it equals the pre-#332 env exactly (fast path).
-/// Expected value from real source (`config.py:2691-2699`), the bed
-/// finding being `PT_HELPER_DOINS` missing from later packages.
+/// Once `<eroot>/etc/profile.env` changes after the config was resolved, the
+/// env carries the new variable; untouched, it equals the pre-existing env
+/// exactly. Expected value from Portage source.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn entry_build_env_rereads_profile_env_changed_after_resolve() {

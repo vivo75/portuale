@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn resume_cpv_maps_source_and_binary_and_skips_non_merges() {
-    // The up-front resume save (real `Scheduler._save_resume_list`'s
-    // `operation == "merge"` filter) records every entry that will
-    // actually merge -- source and binary alike -- and nothing else.
+    // The up-front resume save records every entry that will actually
+    // merge -- source and binary alike -- and nothing else.
     let src = resume_entry(ResumeEntryArgs {
         category: "dev-libs",
         package: "src-pkg",
@@ -65,13 +64,9 @@ fn resume_cpv_maps_source_and_binary_and_skips_non_merges() {
 
 #[test]
 fn resume_binary_repo_comes_from_the_binary_pool_not_the_ebuild_repos() {
-    // #186: real `depgraph.py::_loadResumeCommand` re-resolves a
-    // `["binary", root, cpv, "merge"]` resume item from the bintree,
-    // so the resumed `(N of M) cpv::repo` line names the binary's own
-    // repository. Local `$PKGDIR` index first, then the configured
-    // remote binhosts; a record without `REPO` is `"__unknown__"`
-    // (what a fresh binary merge shows for it); nothing anywhere is
-    // `None` (the caller then keeps the ebuild fallback).
+    // The resumed `cpv::repo` line names the binary's own repository: local
+    // `$PKGDIR` index first, then remote binhosts; a record without `REPO`
+    // is `"__unknown__"`, and nothing anywhere is `None`.
     use std::collections::HashMap;
     let record = |cpv: &str, repo: Option<&str>| {
         let mut m = HashMap::new();
@@ -164,11 +159,8 @@ fn resume_binary_repo_comes_from_the_binary_pool_not_the_ebuild_repos() {
 
 #[test]
 fn resume_entry_uses_the_binary_repo_for_binary_entries_only() {
-    // #186: `binary_repo` wins for a `Binary` entry (even when an
-    // ebuild repo would resolve -- here there are no repos at all,
-    // so the fallback would be `None` either way and the win is
-    // exact), is ignored for an `Ebuild` entry, and `None` keeps the
-    // ebuild fallback.
+    // `binary_repo` wins for a `Binary` entry, is ignored for an `Ebuild`
+    // entry, and `None` keeps the ebuild fallback.
     let bin = resume_entry(ResumeEntryArgs {
         category: "dev-libs",
         package: "bin-pkg",
@@ -200,10 +192,9 @@ fn resume_entry_uses_the_binary_repo_for_binary_entries_only() {
 
 #[test]
 fn run_merge_loop_shrinks_the_saved_resume_list_per_successful_merge() {
-    // #168 through the production serial loop: with the full mergelist
-    // saved up front, each successful merge removes exactly that entry
-    // (real `Scheduler.py:1595-1602`), so a SIGKILL mid-run leaves the
-    // tail and the last merge deletes the key.
+    // With the full mergelist saved up front, each successful merge removes
+    // exactly that entry, so a SIGKILL mid-run leaves the tail and the last
+    // merge deletes the key.
     let root = tempdir();
     let entries = vec![
         resume_entry(ResumeEntryArgs {

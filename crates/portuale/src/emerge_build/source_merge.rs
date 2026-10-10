@@ -14,42 +14,24 @@ pub struct RunSourceMergeArgs<'a> {
     pub buildpkg_exclude: &'a [String],
     pub jobs: usize,
     pub load_average: Option<f64>,
-    /// Real `Scheduler._background_mode`: redirect each package's build
-    /// output to `${T}/build.log` instead of the terminal. Always true for
-    /// `jobs` >1 (a `-j` run must not interleave); otherwise driven by
-    /// `--quiet-build=y` / `-q`. When set, the single-job path runs the
-    /// same captured-build-then-serialized-merge split the scheduler uses.
+    /// Whether to redirect each package's build output to `${T}/build.log`.
+    /// Always true for `jobs` > 1; otherwise driven by `--quiet-build=y` / `-q`.
     pub capture_log: bool,
-    /// Backlog #197: the scheduler-display mode (background + Jobs
-    /// visibility), computed once by the caller from the CLI flags and
-    /// the mergelist length. A serial captured run (`capture_log`) is
-    /// always background (see `scheduler_status_mode`); the mode only
-    /// carries the display half, never the capture decision itself.
+    /// Scheduler-display mode, computed once by the caller from the CLI flags
+    /// and the mergelist length. Carries the display half only, never the
+    /// capture decision itself.
     pub mode: StatusMode,
 }
 
-/// Real `emerge <atom>` with no `--pretend` and no `--buildpkgonly`/
-/// `--getbinpkgonly`: portuale's first source build-and-merge path for
-/// `emerge` itself. Iterates the resolved entries (already in real
-/// dependency-first merge order, so every dependency merges before its
-/// dependents), and for each `New` **source** entry runs the full real
-/// `install` phase chain plus the vdb merge -- `ebuild_merge::run_merge`
-/// (`pretend`→`setup`→…→`install` via embedded `brush` + real
-/// `SRC_URI` fetch, then `merge_tree` + `pkg_preinst`/`pkg_postinst` +
-/// `env_update()`). `AlreadyInstalled` entries are skipped.
+/// Portage's `emerge <atom>` with no `--pretend` and no `--buildpkgonly` /
+/// `--getbinpkgonly`: for each `New` **source** entry runs the full `install`
+/// phase chain plus the vdb merge. Entries are already in dependency-first
+/// merge order. `AlreadyInstalled` entries are skipped; `Upgrade` /
+/// `Downgrade` / `Reinstall` merge the new version and unmerge the replaced
+/// same-slot version.
 ///
-/// An `Upgrade`/`Downgrade`/`Reinstall` is handled too: `run_merge`
-/// merges the new version, then `ebuild_merge::unmerge_replaced_same_slot`
-/// (inside `merge_after_install`) unmerges the replaced same-slot
-/// version -- real `dblink.treewalk()`'s own merge-then-unmerge order,
-/// with that version's own `pkg_prerm`/`pkg_postrm` run from its saved
-/// vdb environment.
-///
-/// A `Binary` entry (only reachable with `--usepkg` without
-/// `--getbinpkg`) is a hard error here -- pass `--getbinpkg` for the
-/// mixed path (`emerge_getbinpkg::run_merge_plan`). Failure handling
-/// (stop at the first, or `--keep-going` -> drop the failed package's
-/// dependents and continue) is `run_merge_loop`'s.
+/// A `Binary` entry is a hard error here (the mixed dispatcher routes those
+/// to `merge_binpkg`). Failure handling is `run_merge_loop`'s.
 pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
     let RunSourceMergeArgs {
         entries,
@@ -65,18 +47,14 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
         capture_log,
         mode,
     } = args;
-    // Backlog #197: real `Scheduler` owns one `JobStatusDisplay` per
-    // merge run (`maxval` is the build-bound count here -- see
-    // `StatusDisplay`'s own doc comment for the installed-noop
-    // narrowing).
+    // One `JobStatusDisplay` per merge run; `maxval` is the build-bound
+    // count here.
     let total_builds = entries.iter().filter(|e| scheduler_needs_build(e)).count();
     let display = StatusDisplay::new(mode, total_builds, progress_color());
     if jobs > 1 {
-        // The `-jN` dispatch policy, one of the director's two
-        // `SchedulerPolicy` implementations: a bare `-j` (mapped to
-        // `usize::MAX` by the CLI layer) runs uncapped (real
-        // `max_jobs is True`), a numbered `--jobs=N` runs capped --
-        // both keep the `--load-average` gate for additional builds.
+        // A bare `-j` (mapped to `usize::MAX` by the CLI layer) runs
+        // uncapped; a numbered `--jobs=N` runs capped. Both keep the
+        // `--load-average` gate.
         if jobs == usize::MAX {
             let policy = mrg_director::UnlimitedPolicy::new(load_average);
             return run_build_scheduler(RunBuildSchedulerArgs {
@@ -106,13 +84,10 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
             display: &display,
         });
     }
-    // The serial loop merges through the director's source engine (the
-    // same `SourceEngine::merge_entry` the mixed dispatcher runs per
-    // source unit) rather than calling `merge_one_source_entry`
-    // directly, so the merge-engine slot carries the production
-    // source-merge traffic. The captured-build split stays inline: it is
-    // scheduler machinery (build-half concurrency), not per-unit
-    // execution.
+    // The serial loop merges through the director's source engine rather
+    // than calling `merge_one_source_entry` directly, so the merge-engine
+    // slot carries the production source-merge traffic. The captured-build
+    // split stays inline: scheduler machinery, not per-unit execution.
     let engine = crate::merge_engines::SourceEngine {
         repos,
         root,
@@ -122,8 +97,8 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
         buildpkg_exclude,
         display: &display,
     };
-    // Real `Scheduler._pkg_count` for this run (backlog #177): every
-    // entry below prints its own positional snapshot of these counters.
+    // Every entry below prints its own positional snapshot of these
+    // counters.
     let progress = merge_progress_map(entries);
     run_merge_loop(entries, keep_going, root, |idx, entry| {
         let entry_progress = progress[idx];
@@ -131,14 +106,9 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
         });
         if capture_log && scheduler_needs_build(entry) {
-            // Backlog #197: the captured serial split is background by
-            // construction (see `scheduler_status_mode`), so these are
-            // real's serial-background `>>> Jobs:` events: start,
-            // build-end, merge-land around the same halves the `-jN`
-            // scheduler runs -- and, on failure, real `_build_exit` /
-            // `_merge_exit`'s failure arms (`Scheduler.py:1641-1658` /
-            // `:1543-1561`), each fired exactly once like the `-jN`
-            // scheduler above.
+            // The captured serial split is background by construction, so
+            // these are the serial-background `>>> Jobs:` events around
+            // the same halves the `-jN` scheduler runs.
             display.job_started();
             let path = match build_one_source_entry(BuildOneSourceEntryArgs {
                 entry,
@@ -183,15 +153,11 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
 }
 
 /// The shared per-entry loop for `run_source_merge` /
-/// `emerge_getbinpkg::run_merge_plan`. Without `keep_going` it stops at
-/// the first failure (`merge_one`'s own `Err`), portuale's long-
-/// standing default. With real `--keep-going` (real `Scheduler`'s own
-/// `_calc_resume_list`) it records the failure, drops every entry that
-/// (transitively) depends on the failed one via the `GraphEntry`'s
-/// reverse-dependency edges (`required_by`), and merges the rest --
-/// then returns a combined `Err` naming what failed and what was
-/// skipped (real `emerge` also exits non-zero when anything failed
-/// under `--keep-going`).
+/// `emerge_getbinpkg::run_merge_plan`. Without `keep_going` stops at the
+/// first failure. With `--keep-going` records the failure, drops every
+/// entry that (transitively) depends on the failed one via `required_by`,
+/// and merges the rest, then returns a combined `Err`.
+// Portage: Scheduler.py, _calc_resume_list
 pub(crate) fn run_merge_loop<F>(
     entries: &[GraphEntry],
     keep_going: bool,
@@ -229,8 +195,8 @@ where
                 return Err(e);
             }
             failures.push(e);
-            // Real `_calc_resume_list`: every (transitive) dependent of
-            // the failed package can no longer be merged.
+            // Every (transitive) dependent of the failed package can no
+            // longer be merged.
             let mut queue = vec![cp];
             while let Some(x) = queue.pop() {
                 if let Some(deps) = dependents.get(&x) {
@@ -242,11 +208,9 @@ where
                 }
             }
         } else if let Some(cpv) = resume_cpv(entry) {
-            // Real `Scheduler.py:1595-1602`: each successful merge removes
-            // its own package from the up-front-saved resume list (and
-            // commits), so a SIGKILL leaves exactly the tail for
-            // `--resume`. A no-op "merge" (already installed) was never
-            // saved, so its own removal is a silent no-op.
+            // Each successful merge removes its own package from the
+            // up-front-saved resume list, so a SIGKILL leaves exactly the
+            // tail for `--resume`.
             crate::mtimedb::remove_merged_entry(root, &cpv);
         }
     }
@@ -289,11 +253,9 @@ pub(crate) struct MergeOneSourceEntryArgs<'a> {
     pub(crate) display: &'a StatusDisplay,
 }
 
-/// One entry of `run_source_merge`'s own loop -- also the `Source`-entry
-/// arm of `emerge_getbinpkg::run_merge_plan` (`emerge --getbinpkg`'s
-/// mixed source+binary merge). `AlreadyInstalled` is a silent no-op; a
-/// `Binary` entry is a hard error here (the mixed dispatcher routes
-/// those to `merge_binpkg` before ever calling this).
+/// One entry of `run_source_merge`'s loop, also the `Source`-entry arm of
+/// the mixed source+binary merge. `AlreadyInstalled` is a silent no-op; a
+/// `Binary` entry is a hard error here.
 pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Result<(), String> {
     let MergeOneSourceEntryArgs {
         entry,
@@ -307,9 +269,8 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
     } = args;
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
-        // #72 B3: a blocker-removal task is not a merge. Executing it is
-        // a documented non-goal (`LLM/02.072-uninstall_merge_rows.md`
-        // §7); the entry is skipped exactly like an installed no-op.
+        // A blocker-removal task is not a merge; skipped like an
+        // installed no-op.
         PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::Uninstall { .. } => {
             return Ok(());
         }
@@ -336,26 +297,21 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
     };
     let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
 
-    // Real `MergeListItem._start`'s per-package line (backlog #177).
+    // The per-package line.
     let color = progress_color();
     display.status(&emerging_line(entry, &version, progress, root, &color));
     if buildpkg.is_some() {
         println!(">>> Building package for {cp}-{version}...");
     }
-    // The resolved `USE` for this entry, so `bin/ebuild.sh`'s own `use()`
-    // (and every USE-conditional in the ebuild's phases) sees the real
-    // flags -- `phase_env_vars` otherwise leaves `USE=""`. Narrowing: the
-    // IUSE-declared enabled flags only (`GraphEntry::use_flags_display`),
-    // not the implicit/arch part of the effective set.
     let mut per_entry = options.clone();
+    // This entry's resolved `USE`, so `use()` in the phases sees the flags.
     per_entry.build_env = entry_build_env(options, entry, repos);
     if let Some((protect, mask)) = reloaded_config_protect(options) {
         per_entry.config_protect = protect;
         per_entry.config_protect_mask = mask;
     }
-    // Real per-package `FEATURES` (#98): this entry's gates (Rust-side
-    // `feature_enabled` and the vdb-environment regeneration) read the
-    // per-entry folded list. `None` (no match) keeps the run-wide value.
+    // This entry's gates read the per-entry folded list; `None` (no match)
+    // keeps the run-wide value.
     if let Some(features) = entry_resolved_features(
         options,
         entry,
@@ -363,18 +319,15 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
     ) {
         per_entry.set_resolved_features(&features);
     }
-    // Real per-package `PORTAGE_TMPDIR` (#99): this entry's build
-    // directories live under the matched value, so the pre-clean and
-    // the merge below share the resolved root.
+    // This entry's build directories live under the matched value, so the
+    // pre-clean and the merge below share the resolved root.
     let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
     let portage_tmpdir = entry_tmpdir.as_path();
-    // Real `_emerge/EbuildBuild._start_pre_clean` (`EbuildBuild.py:207-
-    // 229`) and `Scheduler.py:969-981`/`:1119-1139`: the `clean` phase
-    // runs before every build, unconditionally (`noclean` only skips the
-    // *post*-merge clean). Without it a stale `.installed` marker or an
-    // already-`instprep`ped image from an earlier build in the same
-    // `${PORTAGE_BUILDDIR}` silently skips `install` (backlog #42, found
-    // in #38 S4).
+    // The `clean` phase runs before every build, unconditionally (`noclean`
+    // only skips the *post*-merge clean). Without it a stale `.installed`
+    // marker or an already-prepared image from an earlier build in the same
+    // `${PORTAGE_BUILDDIR}` would silently skip `install`.
+    // Portage: EbuildBuild.py, _start_pre_clean
     let clean_status = ebuild_phases::run_clean(ebuild_phases::RunCleanArgs {
         ebuild_path: &path,
         root,
@@ -388,15 +341,9 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
     if clean_status != 0 {
         return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
     }
-    // Real `PackageMerge._start`'s per-package line (backlog #177),
-    // printed from `run_merge`'s pre-merge hook: real wraps the finished
-    // `EbuildBuild` in a `PackageMerge` (`Scheduler._build_exit`,
-    // `Scheduler.py:1615-1621`), so `Installing` lands after the build
-    // phase output (and the `--buildpkg` packaging) and before the
-    // `EbuildMerge` vdb merge -- the same point the `-jN` scheduler's
-    // build/merge split prints it (before the serialized `run_qmerge`).
-    // A failed build never reaches the hook, so no `Installing` prints
-    // for it, exactly like real queuing no merge for a failed build.
+    // `Installing` prints from `run_merge`'s pre-merge hook, after the build
+    // phase output and before the vdb merge; a failed build never reaches
+    // the hook, so no `Installing` prints for it.
     let installing = installing_line(entry, &version, progress, root, &color);
     let print_installing = || display.status(&installing);
     let status = ebuild_merge::run_merge_with_hook(ebuild_merge::RunMergeWithHookArgs {
@@ -410,9 +357,7 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
     }
-    // Real `PackageMerge._install_exit`'s per-package line (backlog
-    // #177): this is the `Completed (N of M) cpv::repo` real prints
-    // where portuale used to print its own `merged.` line.
+    // The `Completed (N of M) cpv::repo` line.
     display.status(&completed_line(entry, &version, progress, root, &color));
     Ok(())
 }
