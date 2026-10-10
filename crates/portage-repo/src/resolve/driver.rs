@@ -34,7 +34,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
             Err(_) if from_feed => continue,
             Err(_) if !first_pass => {
                 bt.adopt_current(params.clone());
-                // A failed iteration counts too; the cap is checked first (#297).
+                // A failed iteration counts too; the cap is checked first.
                 if passes >= u64::from(ctx.backtrack_max) {
                     break;
                 }
@@ -130,7 +130,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 let result = assemble_result(&ctx, &params, pass, config, restarts);
                 // A retry pass that dropped a set member and still reports a
                 // slot conflict is a failed iteration; a drop on a
-                // conflict-free pass settles (#276, #286).
+                // conflict-free pass settles.
                 if !result.missing_args.is_empty()
                     && !result.slot_conflicts.is_empty()
                     && !was_first
@@ -145,7 +145,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 // The node is consumed but keeps the pass's merged accumulators
                 // for the best-run re-pass below.
                 bt.adopt_current(*params);
-                // Same cap as the failed-iteration arm above (#297).
+                // Same cap as the failed-iteration arm above.
                 if restarts >= u64::from(ctx.backtrack_max) {
                     break;
                 }
