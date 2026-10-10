@@ -194,3 +194,5 @@ path	helpers/portage-cli-pmtest-probe.plan.md	LLM/plans/2026-10-09-portage-cli-p
 path	helpers/strategie-di-leggibilità-struttura-e-refactoring-applicazione-rust-cli.md	LLM/plans/2026-10-10-readability-strategy.it.md	helpers
 path	helpers/devmanual/	3rdparty/devmanual/	helpers
 path	helpers/vdb_to_db.md	docs/vdb_to_db.md	helpers
+path	crates/portage-repo/src/lib.rs (items)	crates/portage-repo/src/<module>.rs, resolve/, slot_operator/ (see LLM/plans/2026-10-10-split-portage-repo.tsv)	6
+path	crates/portage-repo/src/lib.rs (mod tests*)	crates/portage-repo/src/tests/ (tests_16x now tests::tests_16x)	6
