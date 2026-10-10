@@ -92,12 +92,11 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         let cfg: std::borrow::Cow<portage_profile::Config> =
             if !complete_seed_atoms.is_empty() || !locked.is_empty() {
                 let mut c = config.clone();
-                // #72 B2c: the blocker classification follows real's
-                // complete-mode retry even on a non-complete pass
-                // (`blocker_retry_seed_atoms`), while `complete_seed_atoms`
-                // stays gated on `with_seeds` -- filling *that* field here
-                // would switch the slot-operator-rebuild scan on for every
-                // plain resolve (the trap the plan calls out).
+                // Blocker classification follows the complete-mode retry even
+                // on a non-complete pass, while `complete_seed_atoms` stays
+                // gated on `with_seeds`: filling that field here would switch
+                // the slot-operator-rebuild scan on for every plain resolve.
+                // Portage: depgraph.py, _complete_graph
                 c.blocker_retry_seed_atoms = complete_seed_atoms.to_vec();
                 if with_seeds {
                     c.complete_seed_atoms = complete_seed_atoms.to_vec();
@@ -168,10 +167,9 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         Ok(result) => Ok(result),
         Err(e) => {
             let msg = e.to_string();
-            // Real never prefixes a `!!!`-headed report (masked packages,
-            // the REQUIRED_USE "has unmet requirements" block) with
-            // `emerge: ` -- it is `writemsg`-emitted verbatim by
-            // `_show_unsatisfied_dep`.
+            // Portage never prefixes a `!!!`-headed report with `emerge: `;
+            // it is emitted verbatim.
+            // Portage: _emerge/depgraph.py, _show_unsatisfied_dep
             if msg.trim_start().starts_with("!!!") {
                 eprint!("{msg}");
             } else {
@@ -185,10 +183,10 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         }
     };
 
-    // Phase 1 is **always non-complete** -- the authoritative merge
-    // list. Real `_complete_graph` runs *after* the normal graph is
-    // built and only extends it (graph-or-installed selection, never a
-    // new merge).
+    // Phase 1 is always non-complete: the authoritative merge list.
+    // Portage's `_complete_graph` runs after the normal graph is built
+    // and only extends it, never adding a new merge.
+    // Portage: depgraph.py, _complete_graph
     let result = match handle(run_resolve(false, &[], false).map_err(crate::error::Error::from)) {
         Ok(result) => result,
         Err(code) => {
@@ -196,8 +194,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             return Err(code);
         }
     };
-    // The `cp`s phase 1 would actually merge -- real's "already in the
-    // graph" for `_select_pkg_from_graph`. The complete pass may not
+    // The `cp`s phase 1 would actually merge. The complete pass may not
     // merge anything outside this set.
     let locked_merges: Vec<String> = result
         .entries
@@ -213,21 +210,13 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         })
         .map(|e| format!("{}/{}", e.category, e.package))
         .collect();
-    // Phase 2 (`_complete_graph`): run when `--complete-graph` is
-    // explicit, or auto-enabled -- real `depgraph.py:8581-8648`, re-walk
-    // in complete mode when the first graph changes an already-installed
-    // package and `--complete-graph-if-new-use`/`-if-new-ver`/
-    // `--rebuild-if-new-slot` is on. Real has no `--deep` condition (it
-    // forces deep itself when not already deep); when `--deep` already
-    // forced the deep walk, the locked-gate re-resolve is skipped --
-    // the deep walk already visited the reachable closure -- and the
-    // phase-1 walk is instead re-run below with only the
-    // `complete_seed_atoms` fed in (they feed `slot_op_reachable` and
-    // nothing else -- see `ResolveCtx::new`). Skipped entirely under
-    // `--nodeps`. The completeness re-walk
-    // never changes the visible merge list (the locked set gates it) --
-    // it only widens `--json` / `--changed-deps-report` / slot-op
-    // accounting.
+    // Phase 2 (`_complete_graph`): run when `--complete-graph` is explicit
+    // or auto-enabled (first graph changes an installed package while a
+    // `--complete-graph-if-new-*` / `--rebuild-if-new-slot` switch is on).
+    // Skipped entirely under `--nodeps`. It never changes the visible
+    // merge list (the locked set gates it); it only widens `--json` /
+    // `--changed-deps-report` / slot-op accounting.
+    // Portage: depgraph.py, _complete_graph
     let auto_enable = !nodeps
         && portage_repo::complete_graph_auto_enable(portage_repo::CompleteGraphAutoEnableArgs {
             entries: &result.entries,
@@ -248,11 +237,11 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             }
         }
     } else if auto_enable {
-        // `--deep` in force (the only way to reach here with
-        // `auto_enable` true): real would still run `_complete_graph`,
-        // so re-run the phase-1 walk with the seeds fed in. Deterministic
-        // input means an identical walk; the only delta is the
-        // slot-operator-rebuild scan now seeing `slot_op_reachable`.
+        // `--deep` in force (the only way to reach here with `auto_enable`
+        // true): re-run the phase-1 walk with the seeds fed in. A
+        // deterministic input means an identical walk; the only delta is
+        // the slot-operator-rebuild scan now seeing `slot_op_reachable`.
+        // Portage: depgraph.py, _complete_graph
         match handle(run_resolve(false, &[], true).map_err(crate::error::Error::from)) {
             Ok(result) => result,
             Err(code) => {
@@ -263,12 +252,10 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     } else {
         result
     };
-    // Backlog #242 Slice D: repaint running-rooted rows from the running
-    // root's own profile (S0 §2) — merge entries and abort-partial rows
-    // alike (the circular re-display renders the partial list). Runs only
-    // on a genuine cross-root run with a loaded running profile;
-    // single-root runs (and hermetic trees without one) keep the
-    // resolve-time target paint.
+    // Repaint running-rooted rows from the running root's own profile,
+    // merge entries and abort-partial rows alike. Runs only on a genuine
+    // cross-root run with a loaded running profile; single-root runs keep
+    // the resolve-time target paint.
     let mut result = result;
     if let (Some(running), Some(running_cfg)) =
         (root_deps_running_root.as_deref(), running_config.as_ref())

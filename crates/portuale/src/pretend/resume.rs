@@ -3,12 +3,9 @@
 use crate::pretend::*;
 
 /// The `(kind, category, package, version)` of every entry in `entries`
-/// (source *or* binary -- real portage's own resume mergelist records
-/// both) that was supposed to merge but has no `CONTENTS` under `root`
-/// yet -- the resume list for `mtimedb::write_resume_list` on the failure
-/// path. The per-entry mapping itself is `emerge_build::resume_cpv` (the
-/// same mapping the up-front save uses), narrowed here to entries whose
-/// merge never landed.
+/// (source or binary) that was supposed to merge but has no `CONTENTS`
+/// under `root` yet: the resume list for `mtimedb::write_resume_list` on
+/// the failure path.
 pub(crate) fn entries_not_merged(
     root: &Path,
     entries: &[portage_repo::GraphEntry],
@@ -44,31 +41,22 @@ pub(crate) struct RunResumeArgs<'a> {
     pub(crate) load_average: Option<f64>,
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
-    /// Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): suppresses
-    /// the post-merge info-regen einfo lines like every other action's.
+    /// Suppresses the post-merge info-regen einfo lines like every other
+    /// action's.
     pub(crate) quiet: bool,
-    /// Backlog #231 (a/c): real `run_action` prints the pre-resolution
-    /// news notice (and offers the `--read-news` prompt) before
-    /// `action_build` -- which is where the resume handling lives -- so
-    /// resumed builds print both notices too.
+    /// Whether to offer the `--read-news` prompt when the pre-resolution
+    /// notice printed.
     pub(crate) ask: bool,
     pub(crate) read_news: bool,
 }
 
-/// `emerge --resume [--skipfirst] [--pretend]`: replay
-/// `mtimedb["resume"]["mergelist"]` (real `_emerge/actions.py`'s resume
-/// handling). With `--pretend`, print the saved list and stop (merging
-/// nothing, touching neither the resume list nor `world`). Otherwise
-/// each saved `cat/pkg-ver` is built + merged through
-/// `emerge_getbinpkg::run_merge_plan` in the recorded order and per its
-/// own recorded `ResumeEntryKind` (source or binary -- real portage's
-/// own resume mergelist records both); `--skipfirst` drops the first
-/// (the one that failed). On success the resume list is cleared and the
-/// saved `favorites` are recorded in the world file -- unless the
-/// recorded `myopts` carried `--oneshot` / `--onlydeps`, in which case
-/// the same suppression the original run would have applied is
-/// honoured. On another failure the still-unmerged tail is re-saved
-/// with the same `myopts`.
+/// `emerge --resume [--skipfirst] [--pretend]`: replay the saved resume
+/// mergelist. With `--pretend`, print the saved list and stop; otherwise
+/// build + merge each entry in order (`--skipfirst` drops the first). On
+/// success clear the resume list and record the saved `favorites` in the
+/// world file (honouring the recorded `--oneshot` / `--onlydeps`); on
+/// failure re-save the still-unmerged tail with the same `myopts`.
+/// Portage: _emerge/actions.py
 pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     let RunResumeArgs {
         root,
@@ -94,22 +82,17 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    // Backlog #231 (a): real `_emerge/actions.py::run_action`
-    // (`actions.py:4266-4270`) prints the GLEP 42 pre-resolution notice
-    // before `action_build` -- and the resume handling (`resume =
-    // True`, `resume_depgraph`, `actions.py:220-...`) lives *inside*
-    // `action_build` -- so a resumed build prints it too (even when the
-    // resume list turns out missing or empty below: real's notice
-    // precedes all of that). Gated on non-`--pretend` like real; the
-    // `--ask` + `--read-news` prompt (c) rides the same pre point.
+    // The GLEP 42 pre-resolution notice prints here too (resume handling
+    // lives inside `action_build`), even when the resume list turns out
+    // missing or empty below. Gated on non-`--pretend`.
+    // Portage: _emerge/actions.py, run_action
     let resume_pre_printed = if !pretend {
         display_news_notice_if_any(&repos, root, config, &color)
     } else {
         false
     };
-    // An interrupted news prompt (backlog #234) exits `128 + SIGINT`
-    // before `action_build`, like real `UserQuery.query`'s own
-    // `sys.exit` (`_emerge/UserQuery.py:74-76`).
+    // An interrupted news prompt exits before `action_build`.
+    // Portage: _emerge/UserQuery.py, query
     if offer_news_reading(OfferNewsReadingArgs {
         ask,
         read_news,
@@ -119,10 +102,8 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         return ExitCode::from(130);
     }
     let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
-        // Real reaches `post_emerge` even on this path (unconditional
-        // in `run_action`, `actions.py:4289-4297`): with nothing merged
-        // that prints the notice only under `--pretend`
-        // (`post_emerge.py:112-117`) -- a no-op otherwise.
+        // Portage reaches `post_emerge` even on this path: with nothing
+        // merged only a `--pretend` run prints there.
         pretend_end_news_notice(pretend, &repos, root, config, &color);
         eprintln!("emerge: could not find a valid resume list");
         return ExitCode::from(1);
@@ -138,13 +119,10 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         println!("emerge: the resume list is empty; nothing to do.");
         return ExitCode::SUCCESS;
     }
-    // The local binary pool for resumed `Binary` entries (real's bintree
-    // re-resolution, backlog #186): the resolver's own pool constructor,
-    // so a resumed binary names the same `::repo` a fresh merge would.
-    // Built once even when the list turns out all-source (cheap: the
-    // constructor reads `<pkgdir>/Packages`, and only scans `$PKGDIR`
-    // files when a `--usepkg`-family run already scanned them into
-    // `config.scanned_binpkgs`).
+    // The local binary pool for resumed `Binary` entries, so a resumed
+    // binary names the same `::repo` a fresh merge would. Built once even
+    // when the list turns out all-source.
+    // Portage: depgraph.py, _loadResumeCommand
     let resume_bin_index = portage_repo::build_local_binpkg_index(config);
     let entries: Vec<portage_repo::GraphEntry> = mergelist
         .iter()
@@ -154,8 +132,8 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
                 crate::mtimedb::ResumeEntryKind::Binary => portage_repo::CandidateSource::Binary,
             };
             // A resumed binary entry re-resolves its `::repo` from the
-            // binary pool, never from the ebuild repos (real
-            // `depgraph.py::_loadResumeCommand`, backlog #186).
+            // binary pool, never from the ebuild repos.
+            // Portage: depgraph.py, _loadResumeCommand
             let binary_repo = if source == portage_repo::CandidateSource::Binary {
                 emerge_build::resume_binary_repo(emerge_build::ResumeBinaryRepoArgs {
                     local: &resume_bin_index,
@@ -177,13 +155,10 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
                 binary_repo: binary_repo.as_deref(),
             });
             // The `mtimedb` resume list records only `cat/pkg-ver`, so the
-            // resolver's own `use_flags_display` population is skipped.
-            // Recompute it for a source build -- `emerge_build::
-            // build_use_env` turns it into the phase `USE=`, and an empty
-            // one makes a `python-r1`/`distutils-r1` (or any
-            // USE-conditional) ebuild `die` in `src_compile`. A binary
-            // entry carries its own baked USE (`merge_binpkg`), so it
-            // needs nothing here.
+            // resolver's `use_flags_display` population is skipped here.
+            // Recompute it for a source build: an empty one makes a
+            // USE-conditional ebuild `die` in `src_compile`. A binary entry
+            // carries its own baked USE, so it needs nothing here.
             if source == portage_repo::CandidateSource::Ebuild {
                 entry.use_flags_display =
                     portage_repo::candidate_use_flags_display(&repos, config, c, p, v);
@@ -192,14 +167,10 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         })
         .collect();
 
-    // `emerge --resume --pretend` (real `_emerge/actions.py`: re-resolve
-    // the resume list, `mydepgraph.display(...)`, `return os.EX_OK`):
-    // show the saved list and stop, merging nothing and touching neither
-    // the resume list nor `world`. Portuale's resume list only records
-    // `cat/pkg-ver` (no re-resolution), so every line prints as
-    // `[ebuild N ...]` -- a documented divergence from real portage's
-    // re-derived `N`/`U`/`R` markers, same limitation the resume merge
-    // itself already carries.
+    // `emerge --resume --pretend`: show the saved list and stop, merging
+    // nothing and touching neither the resume list nor `world`. Every line
+    // prints as `[ebuild N ...]`, since the saved list records no markers.
+    // Portage: _emerge/actions.py
     if pretend {
         let mut blocker_lines: Vec<String> = Vec::new();
         for (i, _entry) in entries.iter().enumerate() {
@@ -234,20 +205,16 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
                 circular: &HashMap::new(),
             });
         }
-        // Backlog #231 (a): real reaches `post_emerge` after the
-        // `--resume --pretend` display too (`actions.py:4289-4297`),
-        // printing the notice when the vdb did not change
-        // (`post_emerge.py:112-117`).
+        // Portage reaches `post_emerge` after the `--resume --pretend`
+        // display too.
         pretend_end_news_notice(pretend, &repos, root, config, &color);
         return ExitCode::SUCCESS;
     }
 
-    // Real `Scheduler.merge() -> _save_resume_list()` (#168): a resumed
-    // run re-saves before merging too -- this drops a `--skipfirst`-
-    // skipped head from the on-disk list and, together with the per-merge
-    // shrink inside the merge loops, leaves exactly the tail behind if
-    // this run is itself SIGKILLed. `--resume --pretend` returns above, so
-    // a preview never touches the list.
+    // A resumed run re-saves before merging too: this drops a
+    // `--skipfirst`-skipped head and leaves exactly the tail behind if
+    // this run is itself killed. A preview never touches the list.
+    // Portage: Scheduler.merge, _save_resume_list
     let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
     let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
 
@@ -262,31 +229,22 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         merge_options.install_mask_prunes_usr_share,
     ) = config_install_mask(config);
     merge_options.set_resolved_features(&config_features_string(config));
-    // #333: `CONFIG_PROTECT[_MASK]` from the resolved config, as the
-    // non-resume `emerge` path does.
+    // `CONFIG_PROTECT[_MASK]` from the resolved config, as the non-resume
+    // `emerge` path does.
     merge_options.apply_config_protect(config);
     // The run-wide phase env and `package.env` vars the non-resume
     // `emerge` path resolves (see `run_wide_phase_env` there):
-    // a resumed source build is a real build and needs the same phase
+    // a resumed source build is a genuine build and needs the same phase
     // env -- without these a resumed `src_compile` sees `CFLAGS=""`.
     // (The per-entry resolved `USE` already flows via
     // `candidate_use_flags_display` above.)
     merge_options.build_env = crate::emerge_build::run_wide_phase_env(config);
     merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
     merge_options.package_env_vars = config.package_env_vars.clone();
-    // An all-source resume list keeps going through `run_source_merge`
-    // (full `--jobs`/`--load-average` scheduler support); a mergelist
-    // with at least one resumed binary entry (real portage's own resume
-    // mergelist can mix both -- `ResumeEntryKind`) goes through
-    // `run_merge_plan` instead, the same per-entry binary-vs-source
-    // dispatch `--getbinpkg` itself already uses. `run_merge_plan` has
-    // no scheduler of its own yet (a pre-existing, separate gap, not
-    // introduced here) -- unlike a pure-source resume, a binary-
-    // involving one never had `--jobs` parallelism to begin with, so
-    // this isn't a regression for it.
-    // Backlog #197: `--resume` carries no `--quiet`/`--verbose` in
-    // `mtimedb["resume"]` (a documented `myopts` cut), so the display
-    // mode is serial-streaming unless `-j` >1.
+    // An all-source list goes through `run_source_merge`; a list with a
+    // resumed binary entry goes through `run_merge_plan` instead (the
+    // resume mergelist can mix both). The saved `myopts` carries no
+    // `--quiet`/`--verbose`, so the display is serial unless `-j` > 1.
     let resume_mode = emerge_build::scheduler_status_mode(jobs, false, None, entries.len(), false);
     let merge_result = if entries
         .iter()
@@ -302,8 +260,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
             buildpkg: None,
             buildpkg_exclude: &[],
             jobs,
-            load_average, // `--resume` carries no `--quiet-build` in `mtimedb["resume"]`
-            // (a documented `myopts` cut) -- stream, unless `-j` >1.
+            load_average,
             capture_log: false,
             mode: resume_mode,
         })
@@ -331,40 +288,29 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     if let Err(e) = merge_result {
         let still = entries_not_merged(root, &entries);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-        // The empty-`still` guard is the failure path's own
-        // (`write_resume_list` itself is unconditional now, #179): a
-        // failure with nothing unmerged leaves the per-merge shrink's
+        // A failure with nothing unmerged leaves the per-merge shrink's
         // own tail alone.
         if !still.is_empty() {
             let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
         }
-        // Backlog #174: a merge-time binpkg digest failure already
-        // printed real's full tail -- no `emerge:` line either (real
-        // exits a merge failure via `FAILURE`, not the action error
-        // path). Backlog #187 extends the same silence to the
-        // missing-file sentinel (real `BinpkgVerifier`'s ENOENT arm).
-        // The silent resume re-save above stays: real keeps the
-        // list resumable too.
+        // A merge-time binpkg digest/missing-file failure already printed
+        // its own tail: no `emerge:` line. The silent resume re-save above
+        // stays; Portage keeps the list resumable too.
         if !crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
             && !crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
         {
             eprintln!("emerge: {e}");
         }
-        // Backlog #231 (a): real `post_emerge.py:155` prints the notice
-        // regardless of retval -- gated on the vdb having changed
-        // (`:112-117`), which here is `still.len() < entries.len()` (at
-        // least one resumed entry landed; the same structural
-        // approximation as the non-resume failure arms'
-        // `merge_failure_news_notice`).
+        // The notice prints when the vdb changed (at least one resumed
+        // entry landed); see `merge_failure_news_notice`.
         merge_failure_news_notice(still.len() < entries.len(), &repos, root, config, &color);
         return ExitCode::from(1);
     }
 
     crate::mtimedb::clear_resume_list(root);
     let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-    // Real `--resume` honours the recorded `--oneshot`/`--onlydeps`: the
-    // saved `favorites` are only world-recorded when the original run
-    // would have recorded them.
+    // The saved `favorites` are only world-recorded when the original run
+    // would have recorded them (recorded `--oneshot`/`--onlydeps`).
     if let Err(e) = update_world_file(UpdateWorldFileArgs {
         root,
         target_atoms: &fav_refs,
@@ -378,20 +324,18 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // Real `post_emerge()`: the info-dir regen fires after a
-    // `--resume` too (the vdb changed -- the failure branch above
-    // already returned, and an empty mergelist returned even earlier),
+    // The info-dir regen fires after a `--resume` too (the vdb changed),
     // before the preserved-libs advisory.
+    // Portage: post_emerge.py, post_emerge
     let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
     if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
     crate::preserved_libs::show_preserved_libs_notice(root, &color, false, false);
-    // Backlog #231 (a): real `post_emerge()` (`post_emerge.py:155`)
-    // prints the GLEP 42 notice a second time once the resumed merge
-    // changed the vdb -- same FEATURES-plus-nonzero-count gates as the
-    // non-resume success path above.
+    // The GLEP 42 notice prints a second time once the resumed merge
+    // changed the vdb.
+    // Portage: post_emerge.py, post_emerge
     display_news_notice_if_any(&repos, root, config, &color);
 
     ExitCode::SUCCESS

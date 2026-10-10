@@ -2,47 +2,13 @@
 
 use crate::pretend::*;
 
-/// Real `emerge --check-news` (`_emerge/actions.py:3844` ->
-/// `portage.news.getUnreadItems` / `NewsManager`): print the `IMPORTANT:
-/// N news items need reading` block if any repo's `.unread` count is
-/// nonzero, else ` * No news items were found.` (unless `--quiet`).
-///
-/// A news item lives at `<repo>/metadata/news/<id>/<id>.<lang>.txt`
-/// (`<lang>` = `en` here -- `L10N`/`PORTAGE_L10N` not modelled). It is
-/// **valid** iff its `News-Item-Format:` header matches `[12].*` (real
-/// `NewsItem.isValid`). It is **relevant** iff it has no `Display-If-*`
-/// restriction, or each kind it carries (`Display-If-Installed` against
-/// the vdb, `Display-If-Profile` against the profile path,
-/// `Display-If-Keyword` against `ARCH`) has a matching value -- see
-/// `news_item_relevant`.
-///
-/// Real `NewsManager.updateItems`'s write-back (`news.py:112-190`) is
-/// shipped: an item not already in `.skip` is (re-)evaluated; once
-/// valid+relevant, it's added to *both* `.unread` and `.skip`
-/// (permanently -- from then on it's `.skip`-excluded from
-/// re-evaluation, even if it later stops matching a live
-/// `Display-If-*` restriction). The printed count is real's own `N =
-/// len(.unread)` (`getUnreadItems`, `news.py:234`) -- **not** a live
-/// recompute -- so an item, once counted, stays counted on every future
-/// run until something removes it from `.unread`. The only thing real
-/// ever does that is `eselect news read`, a separate tool portuale
-/// doesn't implement as its own action; `<eroot>/var/lib/gentoo/news/
-/// news-<repo>.read` models that tool's effect (an id there is removed
-/// from the `unread` set, lazily, on the next `--check-news` run,
-/// rather than requiring a real `eselect news read` invocation to have
-/// rewritten the file directly). Either file is rewritten (sorted, one
-/// id per line) only when its set actually changed --
-/// `write_news_state_if_changed`. `Display-If-Installed` atoms are
-/// matched in full (version operators, slot/sub-slot) -- see
-/// `news_item_relevant`'s own doc comment for its remaining narrow cuts.
-/// The live `NewsSelector`: real `--check-news` relevance over one
-/// repo's `metadata/news`, evaluated with the same `news_item_valid` /
-/// `news_item_relevant` used everywhere else. `run_check_news` reads each
-/// repo's unread ids through one of these rather than inlining the scan,
-/// so the director's news slot carries the production traffic; the state
-/// files (`.read`/`.skip`/`.unread` under
-/// `<root>/var/lib/gentoo/news`) are read here and written back by the
-/// caller, mirroring real `NewsManager.updateItems` + `getUnreadItems`.
+/// Print the `IMPORTANT: N news items need reading` block if any repo has
+/// unread items, else ` * No news items were found.` (unless `--quiet`).
+/// A news item is valid iff its `News-Item-Format:` header matches `[12].*`,
+/// and relevant iff every `Display-If-*` kind it carries has a matching
+/// value. The printed count is `len(.unread)`, not a live recompute: once
+/// counted, an item stays counted until removed from `.unread`.
+/// Portage: _emerge/actions.py; portage/news.py, NewsManager
 pub struct FilesystemNews<'a> {
     /// The repo checkout (`metadata/news` lives under it).
     pub repo_location: &'a Path,
@@ -52,33 +18,28 @@ pub struct FilesystemNews<'a> {
     /// the state files live under.
     pub root: &'a Path,
     /// The profile/`ARCH` the `Display-If-Profile` / `Display-If-Keyword`
-    /// restrictions match against (backlog #258).
+    /// restrictions match against.
     pub context: &'a NewsContext,
 }
 
-/// What real `NewsItem.isRelevant` passes its non-vdb restrictions
-/// (`news.py:406-423`) plus the ownership real
-/// `NewsManager.__init__` gives the state files (`news.py:79-84`).
-/// Built once per run by [`news_context`].
+/// The non-vdb restrictions plus the state-file ownership, built once per
+/// run by [`news_context`].
+/// Portage: portage/news.py, NewsManager
 #[derive(Debug, Clone, Default)]
 pub struct NewsContext {
-    /// Real `NewsManager._profile_path`: `realpath(settings.profile_path)`
-    /// with the main repo's `<location>/profiles/` prefix removed (the
-    /// full real path when the profile lives elsewhere); `None` with no
-    /// profile at all.
+    /// The profile path with the main repo's `<location>/profiles/` prefix
+    /// removed (the full path when the profile lives elsewhere); `None`
+    /// with no profile at all.
     pub profile: Option<String>,
-    /// Real `settings.profile_path` is set (a `make.profile` directory
-    /// exists): `count_unread_news`'s gate (`news.py:470-479`). It can
-    /// be set while `profile` is `None` (no main repo).
+    /// Whether a `make.profile` directory exists. It can be set while
+    /// `profile` is `None` (no main repo).
     pub has_profile: bool,
-    /// Real `config.get("ARCH", "")`, the `Display-If-Keyword` operand.
+    /// The `Display-If-Keyword` operand.
     pub arch: String,
-    /// Real `int(config["PORTAGE_INST_UID"])` (default 0).
+    /// `PORTAGE_INST_UID` (default 0).
     pub inst_uid: u32,
-    /// Real `portage.data.portage_gid`: the host's `PORTAGE_GRPNAME`
-    /// group (default `portage`), 0 when that group does not exist
-    /// (`data.py:173-178`). Read from `/etc/group` only, where real's
-    /// `grp.getgrnam` also sees NSS sources (LDAP, sssd).
+    /// The host's `PORTAGE_GRPNAME` group (default `portage`), 0 when that
+    /// group does not exist. Read from `/etc/group` only.
     pub portage_gid: u32,
 }
 
@@ -100,16 +61,16 @@ pub struct NewsEvaluation {
 impl FilesystemNews<'_> {
     /// Evaluate one repo's news items: every item not already in `.read`
     /// or `.skip` is (re-)evaluated, and a valid, relevant one is added
-    /// to *both* the `unread` and `skip` accumulators. `None` when the
-    /// repo has no `metadata/news` directory at all (nothing pending,
-    /// nothing to write back).
+    /// to both the `unread` and `skip` accumulators. `None` when the repo
+    /// has no `metadata/news` directory at all.
+    /// Portage: portage/news.py, NewsManager.updateItems
     pub fn evaluate(&self) -> Option<NewsEvaluation> {
         let news_dir = self.repo_location.join("metadata/news");
         let Ok(entries) = portage_util::read_dir_entries(&news_dir) else {
             return None;
         };
-        // `.read` (eselect news read) + `.skip` (updateItems' permanent
-        // per-item skip list) -- an id in either is not counted.
+        // `.read` + `.skip`: an id in either is not counted.
+        // Portage: portage/news.py, NewsManager.updateItems
         let news_state_dir = self.root.join("var/lib/gentoo/news");
         let read_state_file = |suffix: &str| -> HashSet<String> {
             grab_news_state_file(
@@ -133,12 +94,9 @@ impl FilesystemNews<'_> {
             .filter_map(|e| e.file_name().to_str().map(String::from))
             .collect();
 
-        // Real `NewsManager.updateItems` (`news.py:112-190`): every item
-        // not already in `.skip` is (re-)evaluated; a valid, relevant one
-        // is added to *both* the `unread` and `skip` accumulators
-        // (permanently -- once relevant, always in `.skip`, so it is
-        // never re-evaluated again even if it later stops matching a
-        // live `Display-If-*` restriction).
+        // Every item not already in `.skip` is (re-)evaluated; a valid,
+        // relevant one joins both accumulators, permanently.
+        // Portage: portage/news.py, NewsManager.updateItems
         let mut unread = unread_orig.clone();
         let mut skip = skip_orig.clone();
         for id in ids {
@@ -157,15 +115,9 @@ impl FilesystemNews<'_> {
                 skip.insert(id);
             }
         }
-        // Real `getUnreadItems`'s count is simply `len(.unread)` -- once
-        // an item is added, it stays counted on every future run,
-        // regardless of whether it would still evaluate as "relevant"
-        // (it's `.skip`-permanent, never re-checked). The only thing
-        // real ever *removes* from `.unread` is `eselect news read`,
-        // which portuale doesn't implement as its own action; `.read`
-        // models that tool's effect instead, applied lazily here each
-        // run (real would have rewritten `.unread` at the time the user
-        // ran it) rather than requiring a separate action to exist.
+        // The count is `len(.unread)`: once added, an item stays counted.
+        // `.read` models `eselect news read`, applied lazily each run.
+        // Portage: portage/news.py, getUnreadItems
         for id in &read_only {
             unread.remove(id);
         }
@@ -193,21 +145,19 @@ impl mrg_director::NewsSelector for FilesystemNews<'_> {
     }
 }
 
-/// One repo's unread-news evaluation plus the `updateItems` state
-/// write-back, shared by `--check-news` and the GLEP 42 count notice
-/// (backlog #196): every repo maps to its `len(.unread)` count (real
-/// `NewsManager.getUnreadItems`, `news.py:234`) -- 0 when the repo has
-/// no `metadata/news` directory at all. The `.unread`/`.skip` files are
-/// rewritten (sorted, one id per line) only when their sets actually
-/// changed, exactly like `run_check_news` always did.
+/// One repo's unread-news evaluation plus the state write-back, shared by
+/// `--check-news` and the GLEP 42 count notice: every repo maps to its
+/// `len(.unread)` count (0 with no `metadata/news` directory). The
+/// `.unread`/`.skip` files are rewritten only when their sets changed.
+/// Portage: portage/news.py, NewsManager
 pub(crate) fn unread_news_counts(
     repos: &[portage_repo::RepoConfig],
     root: &Path,
     context: &NewsContext,
 ) -> Vec<(String, usize)> {
-    // Real `count_unread_news` (`news.py:470-479`): with no profile
-    // path at all it prints two errors and counts nothing, because
+    // With no profile path at all, print two errors and count nothing:
     // profile restrictions cannot be evaluated.
+    // Portage: portage/news.py, count_unread_news
     if !context.has_profile {
         eprintln!("!!! News items will not be displayed due to an invalid profile setting.");
         eprintln!("!!! Use eselect profile to update your profile.");
@@ -215,22 +165,18 @@ pub(crate) fn unread_news_counts(
     }
     let mut per_repo: Vec<(String, usize)> = Vec::new();
     for repo in repos {
-        // The unread computation runs through the director's news slot:
-        // one filesystem selector per repo, evaluated here. Write-back
-        // of the state files stays the CLI layer's job (the selector is
-        // a pure relevance read, like every other director slot).
+        // The unread computation runs through the director's news slot;
+        // write-back of the state files stays the CLI layer's job.
         let selector = FilesystemNews {
             repo_location: &repo.location,
             repo_name: &repo.name,
             root,
             context,
         };
-        // Real `updateItems` prepares the state directory first, even
-        // for a repo with no `metadata/news` (its `listdir` raises
-        // after, and `getUnreadItems` turns that into 0). When the
-        // preparation fails it returns before touching the news dir,
-        // and `getUnreadItems` counts the `.unread` file as it stands
-        // (`news.py:206-239`).
+        // The state directory is prepared first, even for a repo with no
+        // `metadata/news`; when the preparation fails, count the `.unread`
+        // file as it stands.
+        // Portage: portage/news.py, updateItems; getUnreadItems
         let news_state_dir = root.join("var/lib/gentoo/news");
         if !ensure_news_state_dir(&news_state_dir, context) {
             let unread =
@@ -263,15 +209,11 @@ pub(crate) fn unread_news_counts(
     per_repo
 }
 
-/// Real `portage.news.display_news_notifications` (`news.py:509-528`):
-/// a leading blank line, then one ` * IMPORTANT: N news items need
-/// reading for repository '<repo>'.` line per repo with a nonzero
-/// count, then ` * Use eselect news read to view new items.` plus a
-/// trailing blank line. The all-zero gate lives INSIDE, like real
-/// (`news.py:526`, `if news_reader_display`): an all-zero map prints
-/// nothing at all, so a future third caller cannot emit a dangling
-/// "Use eselect…" block (review Minor #4). Shared by `--check-news`
-/// and the backlog #196 count notice so the two can never drift apart.
+/// One ` * IMPORTANT: N news items need reading for repository '<repo>'.`
+/// line per repo with a nonzero count, then the `eselect news read` hint.
+/// An all-zero map prints nothing at all. Shared by `--check-news` and the
+/// count notice so the two can never drift apart.
+/// Portage: portage/news.py, display_news_notifications
 pub(crate) fn print_news_notifications(per_repo: &[(String, usize)], color: &Colorizer) -> bool {
     let mut first = true;
     for (repo, count) in per_repo {
@@ -296,28 +238,18 @@ pub(crate) fn print_news_notifications(per_repo: &[(String, usize)], color: &Col
     !first
 }
 
-/// Real `display_news_notification`'s own gate (`post_emerge.py:38`):
-/// `news` is in the resolved `FEATURES`. Pure predicate so the gate
-/// stays unit-pinned independently of the counting.
+/// Whether `news` is in the resolved `FEATURES`: the notice's own gate.
+/// Pure predicate so the gate stays unit-pinned.
+/// Portage: post_emerge.py, display_news_notification
 pub(crate) fn news_notice_enabled(config: &portage_profile::Config) -> bool {
     config_features_list(config).iter().any(|t| t == "news")
 }
 
-/// Backlog #196: real `_emerge/post_emerge.py::display_news_notification`
-/// (`post_emerge.py:37-46`): print the GLEP 42 count notice when `news`
-/// is in the resolved `FEATURES` and at least one repo has a nonzero
-/// unread count (real `count_unread_news`, `news.py:447-506`, reusing the
-/// existing `FilesystemNews` evaluation -- no second news parser). No
-/// `--quiet` gate: real's own function consults neither `--quiet` nor
-/// `--ask` (the m185 probe's `--quiet` shape shows the notice surfacing
-/// mid-merge through stdio buffering, which is not ported).
-/// Returns real `display_news_notification`'s own boolean (whether the
-/// notice printed): the `--ask` + `--read-news` prompt below only fires
-/// when the notice actually printed (real `actions.py:4268-4281`
-/// short-circuits on its falsy return).
-/// The all-zero gate lives in `print_news_notifications` (like real
-/// `news.py:526`), so this calls it unconditionally past the FEATURES
-/// gate.
+/// Print the GLEP 42 count notice when `news` is in the resolved `FEATURES`
+/// and at least one repo has a nonzero unread count. No `--quiet` gate.
+/// Returns whether the notice printed: the `--ask` + `--read-news` prompt
+/// only fires when it did.
+/// Portage: post_emerge.py, display_news_notification
 pub(crate) fn display_news_notice_if_any(
     repos: &[portage_repo::RepoConfig],
     root: &Path,
@@ -340,26 +272,12 @@ pub(crate) struct OfferNewsReadingArgs<'a> {
     pub(crate) color: &'a Colorizer,
 }
 
-/// Backlog #231 (c): real `_emerge/actions.py::run_action`
-/// (`actions.py:4266-4281`) -- when the pre-resolution notice printed
-/// *and* `--ask` *and* `--read-news` are given, real asks "Would you
-/// like to read the news items while calculating dependencies?" (real
-/// `UserQuery.query` with the `--ask-enter-invalid` flag) and spawns
-/// `eselect news read` on "Yes" (stdio inherited, return code ignored).
-/// A "No" answer skips the spawn and continues into the
-/// resolve -- only the merge-list prompt quits the run. EOF or a read
-/// error (backlog #234) prints real `UserQuery.query`'s own
-/// `Interrupted.` (inside `ask_yes_no`, `_emerge/UserQuery.py:74-76`)
-/// and reports `true` so the caller exits `128 + SIGINT` before
-/// `action_build`, exactly like real `actions.py:4270-4281` (whose
-/// `sys.exit` never reaches `action_build` either).
-/// When `eselect`
-/// is missing the spawn raises `OSError`, and real prints `Please
-/// install eselect to use this feature.` to stderr. `--ask` without a
-/// TTY never reaches here (the up-front `stdin_is_tty` gate exits
-/// first), matching real `actions.py:3917-3926`; under `--pretend`
-/// `ask` is already false, matching real's `--pretend` gate around the
-/// whole block.
+/// When the pre-resolution notice printed and `--ask` + `--read-news` are
+/// given, ask "Would you like to read the news items while calculating
+/// dependencies?" and spawn `eselect news read` on "Yes" (return code
+/// ignored). A "No" answer skips the spawn and continues into the resolve.
+/// Missing `eselect` prints `Please install eselect to use this feature.`
+/// Portage: _emerge/actions.py, run_action
 pub(crate) fn offer_news_reading(args: OfferNewsReadingArgs<'_>) -> bool {
     let OfferNewsReadingArgs {
         ask,
@@ -389,18 +307,9 @@ pub(crate) fn offer_news_reading(args: OfferNewsReadingArgs<'_>) -> bool {
     }
 }
 
-/// Backlog #196 fix round 1: real `_emerge/post_emerge.py:112-117` --
-/// when the vdb did not change and the run was `--pretend`,
-/// `post_emerge` still runs `display_news_notification` before
-/// returning. Real reaches this arm for EVERY `action_build` retval:
-/// `run_action` calls `post_emerge` unconditionally (the final
-/// `retval = action_build(...); post_emerge(...)` in the build branch,
-/// `actions.py:4289-4297`), so a failed `--pretend` resolve prints the
-/// notice too -- every `--pretend` exit of the build path below ends
-/// with this call. (Usage-error returns above the resolve never reach
-/// `post_emerge` in real either, so they stay silent here as well.)
-/// `--json` is a portuale-only format with no real counterpart and
-/// stays machine-readable: no notice on that path.
+/// On a `--pretend` run, still print the count notice at the end, even when
+/// resolution failed. `--json` stays machine-readable: no notice there.
+/// Portage: post_emerge.py, post_emerge
 pub(crate) fn pretend_end_news_notice(
     pretend: bool,
     repos: &[portage_repo::RepoConfig],
@@ -413,14 +322,10 @@ pub(crate) fn pretend_end_news_notice(
     }
 }
 
-/// Backlog #196 fix round 1: real `post_emerge.py:155` prints the
-/// notice regardless of retval (`retval` only feeds `exit_msg`,
-/// `:104-108`) -- but only when the vdb actually changed (`:112-117`
-/// early-returns otherwise). `changed` is that gate: the caller passes
-/// `unmerged.len() < entries.len()` (at least one entry landed, read
-/// off the vdb the way `entries_not_merged` already does for the
-/// resume list). A total failure with nothing merged -- e.g. a digest
-/// failure on the first package -- stays silent, exactly like real.
+/// On a merge failure, print the notice only when the vdb actually changed
+/// (`changed`: at least one entry landed). A total failure with nothing
+/// merged stays silent.
+/// Portage: post_emerge.py, post_emerge
 pub(crate) fn merge_failure_news_notice(
     changed: bool,
     repos: &[portage_repo::RepoConfig],
@@ -465,9 +370,10 @@ pub(crate) fn run_check_news(args: RunCheckNewsArgs<'_>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Real `grabfile` (`util/__init__.py`) over one news state file: each
-/// line split on whitespace, cut at the first `#`-led token, re-joined;
-/// empty results dropped. A missing file reads as empty.
+/// Read one news state file: each line split on whitespace, cut at the
+/// first `#`-led token, re-joined; empty results dropped. A missing file
+/// reads as empty.
+/// Portage: portage/util/__init__.py, grabfile
 pub(crate) fn grab_news_state_file(path: &Path) -> Vec<String> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -492,15 +398,10 @@ pub(crate) struct WriteNewsStateIfChangedArgs<'a> {
     pub(crate) context: &'a NewsContext,
 }
 
-/// Real `NewsManager.updateItems`'s own `write_atomic` calls
-/// (`news.py:183-200`): `news-<repo>.<suffix>` gets rewritten -- one id
-/// per line, sorted -- only when `updated` differs from `orig`, i.e. the
-/// set genuinely changed this run, and then gets real's
-/// `apply_secpass_permissions(uid=PORTAGE_INST_UID, gid=portage_gid,
-/// mode=0o064, mask=0)`: group `portage`, group read/write and world
-/// read on top of the umask mode (a root run lands `0664 root:portage`,
-/// backlog #258). The state directory itself was already prepared by
-/// [`ensure_news_state_dir`].
+/// Rewrite `news-<repo>.<suffix>` (one id per line, sorted) only when the
+/// set genuinely changed this run, then apply the secpass permissions.
+/// The state directory itself was already prepared by [`ensure_news_state_dir`].
+/// Portage: portage/news.py, NewsManager.updateItems
 pub(crate) fn write_news_state_if_changed(args: WriteNewsStateIfChangedArgs<'_>) {
     let WriteNewsStateIfChangedArgs {
         news_state_dir,
@@ -527,13 +428,10 @@ pub(crate) fn write_news_state_if_changed(args: WriteNewsStateIfChangedArgs<'_>)
     }
 }
 
-/// Real `updateItems`'s preamble (`news.py:121-133`): `ensure_dirs(
-/// unread_path, uid=PORTAGE_INST_UID, gid=portage_gid, mode=0o074,
-/// mask=0)` -- a permission failure returns before anything is read or
-/// written -- then `os.access(unread_path, os.W_OK)`, same early return.
-/// `false` means "no write-back this run": the caller then counts the
-/// `.unread` file as found, exactly like real `getUnreadItems` reading
-/// `len(grabfile(unread))` after the early return.
+/// Prepare the state directory first; a permission failure returns before
+/// anything is read or written. `false` means "no write-back this run":
+/// the caller then counts the `.unread` file as found.
+/// Portage: portage/news.py, NewsManager.updateItems
 pub(crate) fn ensure_news_state_dir(dir: &Path, context: &NewsContext) -> bool {
     if std::fs::create_dir_all(dir).is_err() || !apply_news_permissions(dir, context, 0o074) {
         return false;
@@ -545,18 +443,10 @@ pub(crate) fn ensure_news_state_dir(dir: &Path, context: &NewsContext) -> bool {
     unsafe { libc::access(c_dir.as_ptr(), libc::W_OK) == 0 }
 }
 
-/// Real `apply_permissions` with `mask=0` (`util/__init__.py:1145`):
-/// chown to `PORTAGE_INST_UID:portage_gid` when either differs, then
-/// OR the `mode` bits into the existing mode when any is missing.
-/// Ownership is only changed by a root caller: a non-root caller is
-/// real's unprivileged mode (`PORTAGE_INST_UID` and the portage group
-/// become the caller's own, so the files it creates already match) or,
-/// for the state files, real's `apply_secpass_permissions` skipping
-/// what `secpass < 2` cannot do. One narrow difference remains for the
-/// directory: real's `ensure_dirs` has no secpass gate, so a non-root
-/// caller facing a writable directory it does not own fails the chown
-/// and skips the update, where this proceeds. `false` on a failed
-/// chown/chmod (real `OperationNotPermitted`).
+/// Chown to `PORTAGE_INST_UID:portage_gid` when either differs (root caller
+/// only), then OR the `mode` bits into the existing mode when any is
+/// missing. `false` on a failed chown/chmod.
+/// Portage: portage/util/__init__.py, apply_permissions
 pub(crate) fn apply_news_permissions(path: &Path, context: &NewsContext, mode: u32) -> bool {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let Ok(meta) = std::fs::metadata(path) else {
@@ -580,9 +470,9 @@ pub(crate) fn apply_news_permissions(path: &Path, context: &NewsContext, mode: u
     true
 }
 
-/// Build the [`NewsContext`] real `NewsManager` works from: the profile
-/// path (`news.py:88-98`), `ARCH`, `PORTAGE_INST_UID` and the portage
-/// group id.
+/// Build the [`NewsContext`]: the profile path, `ARCH`, `PORTAGE_INST_UID`
+/// and the portage group id.
+/// Portage: portage/news.py, NewsManager
 pub(crate) fn news_context(
     repos: &[portage_repo::RepoConfig],
     config_root: &Path,
@@ -606,13 +496,10 @@ pub(crate) fn news_context(
     }
 }
 
-/// Real `NewsManager.__init__`'s `_profile_path` (`news.py:88-98`):
-/// `realpath` of `settings.profile_path` -- `<config_root>/etc/portage/
-/// make.profile`, else the deprecated `<config_root>/etc/make.profile`
-/// (`LocationsManager.py:119-143`), else none -- with the main repo's
-/// `<location>/profiles/` prefix removed. Real builds that prefix from
-/// the configured location without resolving it, so a profile outside
-/// it stays a full real path (and matches no `Display-If-Profile`).
+/// The profile path with the main repo's `<location>/profiles/` prefix
+/// removed; a profile outside it stays a full path (matching no
+/// `Display-If-Profile`).
+/// Portage: portage/news.py, NewsManager
 pub(crate) fn news_profile_path(
     repos: &[portage_repo::RepoConfig],
     config_root: &Path,
@@ -625,9 +512,9 @@ pub(crate) fn news_profile_path(
     Some(real.strip_prefix(&base).map(str::to_string).unwrap_or(real))
 }
 
-/// Real `settings.profile_path` (`LocationsManager.py:119-143`):
-/// `<config_root>/etc/portage/make.profile`, else the deprecated
-/// `<config_root>/etc/make.profile`, whichever is a directory.
+/// The profile directory: `<config_root>/etc/portage/make.profile`, else
+/// the deprecated `<config_root>/etc/make.profile`, whichever is a directory.
+/// Portage: portage/locations.py, LocationsManager
 pub(crate) fn config_profile_dir(config_root: &Path) -> Option<std::path::PathBuf> {
     [
         config_root.join("etc/portage/make.profile"),
@@ -637,8 +524,8 @@ pub(crate) fn config_profile_dir(config_root: &Path) -> Option<std::path::PathBu
     .find(|p| p.is_dir())
 }
 
-/// Real `grp.getgrnam(name).gr_gid` for `portage.data.portage_gid`: the
-/// running host's group database (`/etc/group`), never `${ROOT}`'s.
+/// The running host's group database (`/etc/group`), never `${ROOT}`'s.
+/// Portage: portage/data.py, portage_gid
 pub(crate) fn host_group_gid(name: &str) -> Option<u32> {
     std::fs::read_to_string("/etc/group")
         .ok()?
@@ -651,14 +538,10 @@ pub(crate) fn host_group_gid(name: &str) -> Option<u32> {
         })
 }
 
-/// Real `NewsItem.isValid`: a `News-Item-Format:` header whose value
-/// `fnmatch`es `[12].*` (i.e. starts `1.` or `2.`), and each
-/// `Display-If-Installed` atom passes the format-bound `isvalidatom`
-/// gate. Returns the format version as `Some(true)` for a 1.x item and
-/// `Some(false)` for 2.x -- real `NewsItem.parse`'s own
-/// `fnmatch.fnmatch(news_format, "[12].*")` break-on-first-match is
-/// mirrored (the first `1.*`/`2.*` header line wins). `None` carries
-/// "no valid format header" (real `_formatRE` miss -> invalid).
+/// The format version as `Some(true)` for a 1.x item and `Some(false)` for
+/// 2.x; `None` means "no valid format header". The first `1.*`/`2.*` header
+/// line wins.
+/// Portage: portage/news.py, NewsItem.parse
 pub(crate) fn news_item_format(text: &str) -> Option<bool> {
     for line in text.lines() {
         if let Some(v) = line.strip_prefix("News-Item-Format:").map(str::trim) {
@@ -677,27 +560,11 @@ pub(crate) fn news_item_valid(text: &str) -> bool {
     let Some(is_1x) = news_item_format(text) else {
         return false;
     };
-    // Real `NewsItem.isValid` also fails the whole item when any
-    // `Display-If-Installed:` restriction's own atom is malformed
-    // (`DisplayInstalledRestriction.isValid` -> `isvalidatom(atom,
-    // eapi=…)` -> `InvalidAtom` -> `self._valid = False`).
-    //
-    // The `eapi="0"` (1.x) vs `eapi="5"` (2.x) split is *not* a
-    // `portage_dep` EAPI parametrization -- it is a narrow field gate,
-    // "does it parse at all" untouched: real EAPI 0 lacks slot deps
-    // (`slot_deps` is EAPI >= 1) and USE deps (`use_deps` is EAPI >= 2),
-    // so a 1.x Display-If-Installed atom is legal only when it carries
-    // no `:slot`/`:slot/sub` (also no `:=`/`:*` slot operator) and no
-    // `[use]`. A 2.x atom keeps the permissive parse-at-all check (its
-    // own grammar is exactly the EAPI-5+ superset `parse_atom` already
-    // implements). No crate EAPI parameterization is added -- Part 3's
-    // non-goal is about ebuild-conditional EAPI logic, not this
-    // one-off legacy news-format rule.
-    //
-    // Real `DisplayProfileRestriction.isValid` (`news.py:398-404`) fails
-    // a 1.x item whose `Display-If-Profile:` value holds a `*` anywhere
-    // but a trailing `/*` (`_valid_profile_RE`, `^[^*]+(/\*)?$`); a 2.x
-    // value is always valid.
+    // A malformed `Display-If-Installed` atom fails the whole item, and a
+    // 1.x item only allows atoms without slot info or use-deps (EAPI 0
+    // lacks both); a 2.x atom keeps the permissive parse-at-all check. A
+    // 1.x `Display-If-Profile` value allows `*` only as a trailing `/*`.
+    // Portage: portage/news.py, NewsItem.isValid
     let profile_valid = |value: &str| {
         !is_1x || !value.contains('*') || {
             let head = value.strip_suffix("/*").unwrap_or(value);
@@ -722,31 +589,16 @@ pub(crate) fn news_item_valid(text: &str) -> bool {
             })
 }
 
-/// Real `NewsItem.isRelevant` (`news.py:269-306`): no restriction ->
-/// relevant; otherwise each `Display-If-*` kind is OR'd within and
-/// AND'd across. The three kinds (backlog #258 added the last two):
+/// No restriction -> relevant; otherwise each `Display-If-*` kind is OR'd
+/// within and AND'd across:
+/// - `Display-If-Installed`: a full atom match against every installed
+///   version of the atom's `cat/pkg`, with `[use]`-deps post-filtered
+///   against the matched version's own vdb `IUSE`/`USE`.
+/// - `Display-If-Profile`: a 2.x `…/*` value matches every profile under
+///   that prefix, anything else must equal the profile path exactly.
+/// - `Display-If-Keyword`: verbatim equality with `ARCH`.
 ///
-/// - `Display-If-Installed` -- real `DisplayInstalledRestriction.
-///   checkRestriction` is `vardb.match(self.atom)`: a full atom match,
-///   version operators (`>=cat/pkg-1`), slot/sub-slot (`cat/pkg:2/3`)
-///   and all, against every installed version of the atom's `cat/pkg`.
-///   A `[use]`-dep is post-filtered against the matched version's own
-///   vdb `IUSE`/`USE` (`use_deps_satisfied`), since portuale's
-///   `match_from_list` ignores use-deps. A malformed atom makes the
-///   whole item *invalid* (see `news_item_valid`), not merely
-///   unsatisfied.
-/// - `Display-If-Profile` -- real `DisplayProfileRestriction.
-///   checkRestriction` (`news.py:406-409`): a 2.x item's `…/*` value
-///   matches every profile under that prefix (`startswith` of the value
-///   minus its `*`), anything else must equal the profile path exactly.
-///   No profile at all matches nothing.
-/// - `Display-If-Keyword` -- real `DisplayKeywordRestriction.
-///   checkRestriction` (`news.py:422-423`): `config.get("ARCH", "")`
-///   equals the value, verbatim (so `~amd64` never matches).
-///
-/// Real only matches a restriction line that ends in a newline
-/// (`_installedRE` and friends end in `\n`); a header on a file's final,
-/// unterminated line is the one shape not mirrored here.
+/// Portage: portage/news.py, NewsItem.isRelevant
 pub(crate) fn news_item_relevant(text: &str, root: &Path, context: &NewsContext) -> bool {
     let is_2x = news_item_format(text) == Some(false);
     let values = |key: &str| -> Vec<&str> {
@@ -775,8 +627,9 @@ pub(crate) fn news_item_relevant(text: &str, root: &Path, context: &NewsContext)
                     {
                         return false;
                     }
-                    // Real `vardb.match` also enforces the atom's use-deps
-                    // against this version's own recorded USE.
+                    // The atom's use-deps are enforced against this version's
+                    // own recorded USE.
+                    // Portage: portage/news.py, DisplayInstalledRestriction
                     match use_deps {
                         None => true,
                         Some(uds) => {

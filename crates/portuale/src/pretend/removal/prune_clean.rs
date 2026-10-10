@@ -8,8 +8,7 @@ pub(crate) struct RunPrunePretendArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
-    /// The `repos.conf` repos -- threaded into the post-removal GLEP 42
-    /// count notice (backlog #196 fix round 1).
+    /// The `repos.conf` repos, for the post-removal GLEP 42 count notice.
     pub(crate) repos: &'a [portage_repo::RepoConfig],
     pub(crate) verbose: bool,
     pub(crate) lib_check: bool,
@@ -18,23 +17,17 @@ pub(crate) struct RunPrunePretendArgs<'a> {
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
-    /// Threaded into the post-removal info-regen block (real `--quiet`
-    /// suppression + resolved-config `noinfo`); computed by the caller.
+    /// Suppression of the post-removal info-regen block; computed by the caller.
     pub(crate) quiet: bool,
     pub(crate) noinfo: bool,
 }
 
-/// Real `emerge --prune` / `-P` (real `action_depclean` with
-/// `action="prune"`). Unlike `--depclean`, real `action_depclean`
-/// returns right after `unmerge()` (`actions.py:888`), so there is
-/// **no** `* ` advisory block (only `action == "depclean"` prints it,
-/// `:840`) and **no** `Packages installed:` / `Required packages:` /
-/// `Number ...` stats block. The empty-cleanlist message gains a `>>>
-/// To ignore dependencies, use --nodeps` line (`create_cleanlist`,
-/// `:1348`). Without `--pretend` the shared `run_unmerge_pretend` really
-/// removes the cleanlist (`execute_unmerge`). See
-/// `portage_repo::prune_cleanlist`'s own doc comment for the removal-set
-/// semantics.
+/// `emerge --prune`: unlike `--depclean` there is no `* ` advisory block
+/// and no stats block, and the empty-cleanlist message gains a `To ignore
+/// dependencies, use --nodeps` line. Without `--pretend` the shared
+/// `run_unmerge_pretend` really removes the cleanlist. See
+/// `portage_repo::prune_cleanlist` for the removal-set semantics.
+/// Portage: _emerge/actions.py, action_depclean
 pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
     let RunPrunePretendArgs {
         targets,
@@ -58,21 +51,21 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
     };
 
     let result = portage_repo::prune_cleanlist(root, &args, &[], &config.package_provided);
-    // Real `_calc_depclean`'s `unresolved_deps()` safety halt -- serves
-    // `action in ("depclean", "prune")`, so it applies here too (with the
-    // prune-only `use --nodeps` trailer).
+    // The `unresolved_deps()` safety halt applies here too (with the
+    // prune-only trailer).
+    // Portage: _emerge/actions.py, _calc_depclean
     if let Some(code) = depclean_unresolved_halt(&result.unresolved, true, color) {
         return code;
     }
-    // Real `_calc_depclean` serves `action in ("depclean", "prune")`, so
     // `--depclean-lib-check` applies to `--prune` too.
+    // Portage: _emerge/actions.py, _calc_depclean
     let result = apply_depclean_lib_check(root, result, lib_check, color, |providers| {
         portage_repo::prune_cleanlist(root, &args, providers, &config.package_provided)
     });
 
-    // Real `create_cleanlist`'s prune branch prints `show_parents(pkg)`
-    // inline while it builds the removal list -- before the removal-order
-    // line / empty message.
+    // The inline reverse-dep display prints while the removal list is
+    // built, before the removal-order line / empty message.
+    // Portage: _emerge/actions.py, create_cleanlist
     if verbose {
         for (pkg, lines) in &result.kept_parents {
             println!("  {} pulled in by:", pkg.cpv());
@@ -100,9 +93,8 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    // Real `action_depclean` (`action == "prune"`): `unmerge(...,
-    // "unmerge", cleanlist, ordered=ordered)`. Without `--pretend`,
-    // `run_unmerge_pretend` removes them.
+    // Without `--pretend`, the shared unmerge path removes them.
+    // Portage: _emerge/actions.py, action_depclean
     run_unmerge_pretend(RunUnmergePretendArgs {
         targets: &cpv_refs,
         action: "unmerge",
@@ -131,35 +123,20 @@ pub(crate) struct RunPruneNodepsPretendArgs<'a> {
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
-    /// Threaded into the post-removal info-regen block (real `--quiet`
-    /// suppression + resolved-config `noinfo`); computed by the caller.
+    /// Suppression of the post-removal info-regen block; computed by the caller.
     pub(crate) quiet: bool,
     pub(crate) noinfo: bool,
-    /// The `repos.conf` repos + resolved config -- threaded into the
-    /// post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    /// The `repos.conf` repos + resolved config, for the post-removal
+    /// GLEP 42 count notice.
     pub(crate) repos: &'a [portage_repo::RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
 }
 
-/// Real `emerge --pretend --prune --nodeps` (`actions.py:2684-2697`):
-/// `--nodeps` routes prune to `unmerge()`'s own `_unmerge_display` prune
-/// branch (`unmerge.py:245-272`) *instead of* `_calc_depclean` -- so
-/// there is NO dependency/reachability check at all, no `>>>
-/// Calculating removal order...`, and no `show_parents` (`--verbose` is
-/// inert here). For every cp with more than one version installed the
-/// best (highest) version is `protected` and every other version is
-/// `selected` for removal (see `portage_repo::prune_nodeps_selection`).
-/// `_unmerge_display` renders it unordered: the header, per-cp
-/// `selected:`/`protected:`/`omitted:` blocks (`omitted` is always
-/// `none` here -- every version is either selected or protected), the
-/// `sys-apps/portage` self-skip, the "still listed in package sets"
-/// warning, and the footer. Empty result: `>>> No outdated packages
-/// were found on your system.` with no args (real `global_unmerge`),
-/// else `>>> No packages selected for removal by prune` -- both exit 1
-/// (real `_unmerge_display` returns `(1, {})`, unlike plain `--prune`'s
-/// exit 0). Without `--pretend`, `execute_unmerge` removes the selected
-/// versions after the display -- real `actions.py:2684` routes `prune
-/// --nodeps` through the very same `unmerge()` `-C` uses.
+/// `emerge --prune --nodeps`: no dependency check at all. For every cp with
+/// more than one version installed the highest is `protected` and the rest
+/// are `selected`. Empty result exits 1. Without `--pretend` the selected
+/// versions are removed after the display.
+/// Portage: _emerge/actions.py; unmerge.py, _unmerge_display
 pub(crate) fn run_prune_nodeps_pretend(args: RunPruneNodepsPretendArgs<'_>) -> ExitCode {
     let RunPruneNodepsPretendArgs {
         targets,
@@ -202,24 +179,20 @@ pub(crate) struct RunCleanPretendArgs<'a> {
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
-    /// Threaded into the post-removal info-regen block (real `--quiet`
-    /// suppression + resolved-config `noinfo`); computed by the caller.
+    /// Suppression of the post-removal info-regen block; computed by the caller.
     pub(crate) quiet: bool,
     pub(crate) noinfo: bool,
-    /// The `repos.conf` repos + resolved config -- threaded into the
-    /// post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    /// The `repos.conf` repos + resolved config, for the post-removal
+    /// GLEP 42 count notice.
     pub(crate) repos: &'a [portage_repo::RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
 }
 
-/// Real `emerge --clean` (`action_uninstall` -> `unmerge` with
-/// `unmerge_action == "clean"`): identical to `--prune --nodeps` except
-/// the best/rest split is **per slot** (see
-/// `portage_repo::clean_selection`), there is no `sys-apps/portage`
-/// self-skip (real `unmerge.py:368`), and the empty-selection message
-/// names `clean`. Individual ebuild-path args are rejected (real
-/// `unmerge.py:131`); `resolve_cleanup_args` already only produces
-/// `cat/pkg` atoms here.
+/// `emerge --clean`: identical to `--prune --nodeps` except the best/rest
+/// split is per slot (see `portage_repo::clean_selection`), there is no
+/// `sys-apps/portage` self-skip, and the empty-selection message names
+/// `clean`. Individual ebuild-path args are rejected.
+/// Portage: _emerge/actions.py, action_uninstall; unmerge.py
 pub(crate) fn run_clean_pretend(args: RunCleanPretendArgs<'_>) -> ExitCode {
     let RunCleanPretendArgs {
         targets,
@@ -262,12 +235,11 @@ pub(crate) struct RunPruneNodepsOrCleanArgs<'a> {
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
     pub(crate) is_clean: bool,
-    /// Threaded into the post-removal info-regen block (real `--quiet`
-    /// suppression + resolved-config `noinfo`); computed by the caller.
+    /// Suppression of the post-removal info-regen block; computed by the caller.
     pub(crate) quiet: bool,
     pub(crate) noinfo: bool,
-    /// The `repos.conf` repos + resolved config -- threaded into the
-    /// post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    /// The `repos.conf` repos + resolved config, for the post-removal
+    /// GLEP 42 count notice.
     pub(crate) repos: &'a [portage_repo::RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
 }
@@ -300,8 +272,8 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         portage_repo::prune_nodeps_selection(root, &args)
     };
 
-    // Real `_unmerge_display` (`unmerge.py:195`): the header is
-    // `--pretend`/`--ask`-only.
+    // The header is `--pretend`/`--ask`-only.
+    // Portage: unmerge.py, _unmerge_display
     if pretend {
         println!(
             "{}",
@@ -312,12 +284,10 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         );
     }
 
-    // Real `sys-apps/portage` self-skip (`unmerge.py:368-391`): move any
-    // selected `sys-apps/portage` version into `protected` with the
-    // eerror. Realistically dead code -- `sys-apps/portage` is never
-    // installed at more than one version -- kept for fidelity. Real
-    // `unmerge.py:368`: `if unmerge_action != "clean"` -- `--clean` does
-    // NOT self-skip.
+    // `sys-apps/portage` self-skip: selected versions move to `protected`
+    // with the eerror. Dead code in practice (never installed twice), kept
+    // for fidelity. `--clean` does not self-skip.
+    // Portage: unmerge.py, _unmerge_display
     if !is_clean {
         for cp in &mut selection {
             if (cp.category.as_str(), cp.package.as_str()) == ("sys-apps", "portage") {
@@ -341,8 +311,9 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         return ExitCode::from(1);
     }
 
-    // "still listed in package sets" warning (real `_unmerge_display`,
-    // `unmerge.py:393-447`) -- same machinery `run_unmerge_pretend` uses.
+    // "Still listed in package sets" warning; same machinery as the
+    // unmerge path.
+    // Portage: unmerge.py, _unmerge_display
     let installed_sets: Vec<(String, Vec<String>)> = match collect_installed_sets(config_root, root)
     {
         Ok(sets) => sets,

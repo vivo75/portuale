@@ -2,14 +2,9 @@
 
 use crate::pretend::*;
 
-/// Real `emerge --list-sets` (`_emerge/actions.py:3839` --
-/// `writemsg_stdout("".join(f"{s}\n" for s in sorted(...sets)))`): every
-/// defined package-set name, sorted, one per line. The built-in names
-/// are `cnf/sets/portage.conf`'s own `[section]` headers (real
-/// `SetConfig._parse` over the bundled default config), skipping the
-/// `multiset = true` `[usersets]` generator (its members are the user
-/// set *files*, added below), plus every file under
-/// `<config_root>/etc/portage/sets/` (real `usersets.multiBuilder`).
+/// Every defined package-set name, sorted, one per line: the built-in
+/// names plus every file under `<config_root>/etc/portage/sets/`.
+/// Portage: _emerge/actions.py
 pub(crate) fn run_list_sets(config_root: &Path) -> ExitCode {
     let mut names = defined_set_names(config_root);
     names.sort();
@@ -76,35 +71,14 @@ pub(crate) struct RunSearchArgs<'a> {
     pub(crate) color: &'a Colorizer,
 }
 
-/// Real `emerge --search`/`-s` (`_emerge/actions.py::action_search` ->
-/// `_emerge/search.py`): a case-insensitive substring search of every
-/// `category/package` in the configured repos (the package-name half
-/// only, unless the key contains `/`), plus defined set names. `-S` /
-/// `--searchdesc` also matches each package's `DESCRIPTION`.
-///
-/// Output shape is real `search.output()`: `Searching...\n\n`, the
-/// `[ Results for search key : KEY ]` header (with real's own `\b\b  \n`
-/// spinner-erase prefix), one `*  cat/pkg` line per hit (with the
-/// verbose `Latest version` / installed-status / `Homepage` /
-/// `Description` / `License` block under `-v`), and the
-/// `[ Applications found : N ]` footer.
-///
-/// `--fuzzy-search` (default on): a hit also lands when `difflib::ratio`
-/// (a faithful `difflib.SequenceMatcher.ratio()` port) between the key
-/// and a package/set name reaches `search_similarity`% (default 80) --
-/// real `search.py`'s `fuzzy_search_part`. For a `cat/pkg` key the two
-/// halves are scored independently and both must pass (real portage's
-/// `part_matchers` split). `--regex-search-auto` (default on): a key
-/// containing a regex metacharacter (`^ $ * [ ] { } | ?` or `.+`) that
-/// compiles is matched as a case-insensitive regex instead of a literal
-/// substring (fuzzy is then off, matching real `search.py`); a leading
-/// `%` forces regex mode.
-///
-/// **v1 cuts:** the search index (`--search-index`); `--usepkg`
-/// binary-package results; the `bestmatch-visible` mask/keyword filter
-/// (the highest version is used, flagged `[ Masked ]` only when its
-/// `KEYWORDS` carry no stable/testing token for the profile arch);
-/// `Size of files`.
+/// Case-insensitive substring search of every `category/package` in the
+/// configured repos (package-name half only, unless the key holds `/`),
+/// plus defined set names. `-S` also matches `DESCRIPTION`. `--fuzzy-search`
+/// (default on) lands near-misses at `--search-similarity`% (default 80);
+/// `--regex-search-auto` (default on) matches regex-looking keys as regex.
+/// V1 cuts: no search index, no binpkg results, an approximate
+/// mask/keyword filter, no `Size of files`.
+/// Portage: _emerge/actions.py, action_search; _emerge/search.py
 pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
     let RunSearchArgs {
         terms,
@@ -131,9 +105,9 @@ pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
         let match_category = key.contains('/');
         let cutoff = search_similarity / 100.0;
 
-        // Real `search.py:265-280`: `%`-forced, or auto-detected (a regex
-        // metacharacter present *and* the key compiles). Fuzzy is
-        // disabled for a regex search.
+        // `%`-forced, or auto-detected (a regex metacharacter present and
+        // the key compiles). Fuzzy is disabled for a regex search.
+        // Portage: _emerge/search.py
         let looks_regex =
             key.contains(['^', '$', '*', '[', ']', '{', '}', '|', '?']) || key.contains(".+");
         let re: Option<regex::Regex> = if forced_regex || (regex_auto && looks_regex) {
@@ -146,8 +120,7 @@ pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
         };
         let use_fuzzy = fuzzy && re.is_none();
 
-        // `re.search` (regex) or a plain case-insensitive substring
-        // (real: `re.compile(re.escape(key), re.IGNORECASE)`).
+        // `re.search` (regex) or a plain case-insensitive substring.
         let needle = key.to_lowercase();
         let literal_or_re = |hay: &str| -> bool {
             match &re {
@@ -155,8 +128,9 @@ pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
                 None => hay.to_lowercase().contains(&needle),
             }
         };
-        // Real `fuzzy_search` / `fuzzy_search_part`: split key + candidate
-        // into `(cat, pkg)` when matching categories, score each half.
+        // Fuzzy match: for a `cat/pkg` key the halves score independently
+        // and both must pass.
+        // Portage: _emerge/search.py, fuzzy_search_part
         let fuzzy_hit = |match_string: &str| -> bool {
             if !use_fuzzy {
                 return false;
@@ -203,9 +177,9 @@ pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
                 hits.push((cp.clone(), masked));
             }
         }
-        // Real `search.py:349-357`: set names matched with the same
-        // `searchre` (never fuzzy), against the last `/` component unless
-        // matching categories.
+        // Set names match with the same regex (never fuzzy), against the
+        // last `/` component unless matching categories.
+        // Portage: _emerge/search.py
         let mut set_hits: Vec<String> = set_names
             .iter()
             .filter(|s| {
@@ -284,10 +258,9 @@ pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The highest-version candidate (real `bestmatch` before the visibility
-/// filter), a version tie broken toward the higher-priority repo (real
-/// `portdbapi.xmatch`'s own repo ordering) -- `run_search`'s "Latest
-/// version" pick.
+/// The highest-version candidate, a version tie broken toward the
+/// higher-priority repo: `run_search`'s "Latest version" pick.
+/// Portage: portdbapi.xmatch
 pub(crate) fn search_best_candidate(
     cands: &[portage_repo::Candidate],
 ) -> Option<portage_repo::Candidate> {
@@ -302,32 +275,18 @@ pub(crate) fn search_best_candidate(
         .cloned()
 }
 
-/// A rough `bestmatch-visible` stand-in: the candidate carries a
-/// non-`-`-prefixed `KEYWORDS` token for `amd64` (stable or `~`) -- the
-/// portuale's fixtures are all `amd64`. Real portage runs the full
-/// mask/keyword visibility check.
+/// Approximate `bestmatch-visible` check: the candidate carries a
+/// non-`-`-prefixed `KEYWORDS` token for the profile arch. Portage runs
+/// the full mask/keyword visibility check instead.
 pub(crate) fn search_candidate_visible(c: &portage_repo::Candidate) -> bool {
     c.keywords
         .iter()
         .any(|k| matches!(k.as_str(), "amd64" | "~amd64" | "*" | "~*" | "**"))
 }
 
-/// Real `ambiguous_package_name`'s own non-`--quiet` branch
-/// (`depgraph.py:12063-12083`): builds a `search` object seeded via
-/// `addCP(cp)` for each ambiguous `cp` (not a free-text query -- so, per
-/// real `_results_specified`, `output()` skips straight to rendering
-/// the given list, no `_iter_search()`/`"Searching...\n\n"` line at
-/// all), then calls `s.output()`. Real's own `verbose` here is always
-/// `True` (`search(..., "--quiet" not in myopts, ...)`, and this branch
-/// is only reached when `"--quiet" not in myopts` already) -- so the
-/// full metadata block always renders, unlike `run_search`'s own
-/// `--quiet`-gated `verbose` toggle. Reuses `run_search`'s own
-/// `search_best_candidate`/`search_candidate_visible`/render shape;
-/// same v1 cut that function's own doc comment already documents
-/// (`Size of files`, the `bestmatch-visible` mask/keyword filter
-/// approximation) -- not re-derived here, this is the identical
-/// renderer real's own single `search.output()` is, just fed a
-/// `addCP`-built list instead of a query match.
+/// The ambiguous-short-name report: the same renderer fed a fixed package
+/// list instead of a query match, always with the full metadata block.
+/// Portage: _emerge/depgraph.py, ambiguous_package_name
 pub(crate) fn render_ambiguous_search_output(
     key: &str,
     cps: &[String],

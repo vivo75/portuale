@@ -63,10 +63,9 @@ pub(crate) fn dispatch_standalone_actions(
         nodeps,
         ..
     } = opts;
-    // `--resume` / `-r`: a standalone action -- replay the saved
-    // `mtimedb["resume"]` mergelist (real `_emerge/actions.py`). No atoms.
-    // `--resume --pretend` prints the saved list and stops (see
-    // `run_resume`).
+    // `--resume` replays the saved `mtimedb["resume"]` mergelist. No atoms.
+    // `--resume --pretend` prints the saved list and stops (see `run_resume`).
+    // Portage: _emerge/actions.py
     if resume {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
@@ -89,9 +88,9 @@ pub(crate) fn dispatch_standalone_actions(
         }));
     }
 
-    // `--config <atom>`: a standalone action -- run `pkg_config` for one
-    // installed package (real `action_config`). Needs nothing from the
-    // resolved `config`; ignores `--pretend`.
+    // `--config <atom>`: run `pkg_config` for one installed package.
+    // Needs nothing from the resolved `config`; ignores `--pretend`.
+    // Portage: _emerge/actions.py, action_config
     if config_action {
         return Some(run_config_action(RunConfigActionArgs {
             atom_args,
@@ -103,12 +102,10 @@ pub(crate) fn dispatch_standalone_actions(
         }));
     }
 
-    // `--search`/`-s` (`--searchdesc`/`-S` also matches DESCRIPTION): a
-    // standalone read-only query action (real `action_search`). Real
-    // `action_search` passes `search`'s `verbose` as `"--quiet" not in
-    // myopts` -- so the full `Latest version` / `Homepage` /
-    // `Description` block shows by default and `-q` makes it terse; `-v`
-    // is irrelevant to search.
+    // `--search`/`-s` (`--searchdesc`/`-S` also matches DESCRIPTION).
+    // The full `Latest version` / `Homepage` / `Description` block shows
+    // by default and `-q` makes it terse; `-v` is irrelevant to search.
+    // Portage: _emerge/actions.py, action_search
     if search_action {
         return Some(run_search(RunSearchArgs {
             terms: atom_args,
@@ -123,9 +120,8 @@ pub(crate) fn dispatch_standalone_actions(
         }));
     }
 
-    // `--check-news`: a standalone read-only query action (real
-    // `actions.py`'s `count_unread_news` block). Real gates its output on
-    // `"--quiet" not in myopts`.
+    // `--check-news`: output gated on `--quiet` not being given.
+    // Portage: _emerge/actions.py, count_unread_news
     if check_news {
         return Some(run_check_news(RunCheckNewsArgs {
             repos,
@@ -137,16 +133,16 @@ pub(crate) fn dispatch_standalone_actions(
         }));
     }
 
-    // `--info`: a standalone read-only query action (real
-    // `action_info`), narrowed to its deterministic config block plus
-    // the per-atom "Package Settings" block.
+    // `--info`: narrowed to its deterministic config block plus the
+    // per-atom "Package Settings" block.
+    // Portage: _emerge/actions.py, action_info
     if info_action {
         let info_usepkg = usepkg || usepkgonly || getbinpkg || getbinpkgonly;
-        // Real `action_info` consults `bindb` (the local `$PKGDIR` pool)
-        // for its `(bindb, "binary")` search half whenever `--usepkg` is
-        // on -- so scan `$PKGDIR` here too, exactly as the ordinary
-        // `--usepkg` resolve path does further down (that scan runs after
-        // this standalone-action dispatch, so `--info` needs its own).
+        // Portage consults the local `$PKGDIR` pool for its `(bindb,
+        // "binary")` search half whenever `--usepkg` is on, so scan
+        // `$PKGDIR` here too, exactly as the ordinary `--usepkg` resolve
+        // path does further down (that scan runs after this dispatch,
+        // so `--info` needs its own).
         if info_usepkg {
             match crate::binpkg::populate_local_pkgdir(
                 Path::new(&config.pkgdir),
@@ -174,8 +170,7 @@ pub(crate) fn dispatch_standalone_actions(
         }));
     }
 
-    // `--clean`: a standalone removal action -- keep only the newest
-    // version per slot.
+    // `--clean`: keep only the newest version per slot.
     if clean_action {
         return Some(run_clean_pretend(RunCleanPretendArgs {
             targets: atom_args,
@@ -212,9 +207,9 @@ pub(crate) fn dispatch_standalone_actions(
         }));
     }
 
-    // `--unmerge`/`-C`: a standalone action -- resolved config in hand
-    // (its `@system` target support and system-profile check both need
-    // it), dispatch before the ordinary resolve-graph path below.
+    // `--unmerge`/`-C`: the `@system` target support and system-profile
+    // check both need the resolved config, so dispatch before the
+    // ordinary resolve-graph path below.
     if unmerge {
         // `pretend` last: without it, `run_unmerge_pretend` really
         // removes the selected packages after the display.

@@ -13,17 +13,11 @@ pub(crate) fn show_missing_args_and_aborts(
     repos: &[RepoConfig],
     config: &Config,
 ) {
-    // Backlog #286: real `display_problems()`'s world-file tail
-    // (`depgraph.py:11150-11190`) for the dropped set members
-    // (`GraphResult::missing_args`) -- what real prints right after the
-    // skipped-update block above. The world-file notice fires only for a
-    // missing member of the world file itself (real's `atom in world_set`
-    // gate: a `@system`/`@profile` member riding `@world` prints only
-    // the list); the masked-or-don't-exist list names every missing arg
-    // in requested order. Unlike the missed-update blocks above these
-    // two carry no `--quiet` gate (real prints them outside
-    // `_show_missed_update`); `--json` returns above, and `--columns`
-    // has no gate (not merge-list rows).
+    // The world-file tail for dropped set members: the notice fires only for
+    // a missing member of the world file itself; the masked-or-don't-exist
+    // list names every missing arg in requested order. Neither carries a
+    // `--quiet` gate; `--json` returns above, and `--columns` has no gate.
+    // Portage: depgraph.py, display_problems
     if !result.missing_args.is_empty() {
         let world_atoms: HashSet<String> = read_world_atoms(root)
             .unwrap_or_default()
@@ -42,15 +36,10 @@ pub(crate) fn show_missing_args_and_aborts(
         println!("{}", result.missing_args.join(" "));
     }
 
-    // Backlog #19 Slice 5: with the gate on, an aborted cycle prints its
-    // circular block HERE -- before the autounmask section -- matching
-    // real `display_problems()` order (`_show_circular_deps` at
-    // `depgraph.py:11113`, `_display_autounmask` at `:11140`). Flow then
-    // continues into the autounmask rendering below (USE block, notice,
-    // exit 1), which is exactly the fourth-shape oracle (spec §4d). A
-    // masked/unsat abort prints no circular block at all (real abandons
-    // the walk before serialization ever runs); gate off keeps the
-    // legacy position below.
+    // With the abort gate on, an aborted cycle prints its circular block here,
+    // before the autounmask section, matching Portage's `display_problems`
+    // order. A masked/unsat abort prints no circular block at all.
+    // Portage: depgraph.py, display_problems
     if portage_repo::abort_path_enabled()
         && let portage_repo::ResolveOutcome::Aborted {
             reason: portage_repo::AbortReason::UnserializableCycle { members: _ },
@@ -70,17 +59,11 @@ pub(crate) fn show_missing_args_and_aborts(
         });
     }
 
-    // Backlog #193: real `select_files`' `_virtual_cycle_error` handler
-    // (`lib/_emerge/depgraph.py:5002-5013` in 3rdparty/portage 3.0.82.2)
-    // prints `\n\n!!! virtual cycle detected:\n\n`, one
-    // `  {cpv}::{repo}` line per probe-stack member (sorted), then `\n`
-    // -- to stderr (`writemsg`, noiselevel -1), mid-resolution (between
-    // real's `Calculating dependencies ...` notice halves; portuale
-    // prints that notice whole in the preamble above, like the
-    // masked/unsat arm). No merge list, no counters, no trailing error
-    // block: real's run ends after the timing line (g193 probe), and the
-    // shared abort gate below exits 1. Uncoloured like real's own
-    // `writemsg` (no colour markup on that path).
+    // A virtual cycle prints `\n\n!!! virtual cycle detected:\n\n`, one
+    // `  {cpv}::{repo}` line per probe-stack member (sorted), then `\n`,
+    // to stderr, mid-resolution. No merge list, no counters, no trailing
+    // error block; the shared abort gate below exits 1. Uncoloured.
+    // Portage: lib/_emerge/depgraph.py, select_files
     if portage_repo::abort_path_enabled()
         && let portage_repo::ResolveOutcome::Aborted {
             reason: portage_repo::AbortReason::VirtualCycle { members },
@@ -97,16 +80,10 @@ pub(crate) fn show_missing_args_and_aborts(
 
 /// Updates skipped for missing dependencies.
 pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &GraphResult) {
-    // Backlog #129 (S1): real `_show_missed_update_unsatisfied_dep`'s
-    // abbreviated tail (`depgraph.py:1638-1649`) -- the slots whose
-    // higher masked version lost to an unsatisfied dependency under
-    // backtracking (`GraphResult::skipped_missing_deps`, in first-mask
-    // order like the `WARNING` rows above). Real prefixes the section
-    // with one blank line (its slot section already ends with one);
-    // the `for <root>` suffix is omitted like every other portuale
-    // notice row. Same `--quiet`-unless-`--debug` gate as the
-    // `WARNING` block above (real drops both types together,
-    // `depgraph.py:1576-1581`); likewise no `--columns` gate.
+    // The abbreviated tail: slots whose higher masked version lost to an
+    // unsatisfied dependency under backtracking. Same `--quiet`-unless-`--debug`
+    // gate as the `WARNING` block; no `--columns` gate.
+    // Portage: depgraph.py, _show_missed_update_unsatisfied_dep
     if !(quiet && !debug) && !result.skipped_missing_deps.is_empty() {
         println!();
         println!("!!! The following update(s) have been skipped due to unsatisfied dependencies");
@@ -117,17 +94,10 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
         }
     }
 
-    // Backlog #198: real `_show_missed_update_unsatisfied_dep`'s full
-    // per-update form (`depgraph.py:1592-1636`) -- one block per masked
-    // higher version whose missing atom bites nothing backtrack-masked
-    // (`GraphResult::skipped_missing_dep_full`, in the same first-mask
-    // order). The `cat/pkg:slot` header, the `selected:` / `skipped:
-    // ... (see unsatisfied dependency below)` rows and the missing
-    // atom's own disclosure follow real line for line; the `for <root>`
-    // suffix is omitted like every other portuale notice row. Same
-    // `--quiet`-unless-`--debug` gate as the two blocks above (real
-    // drops all missed-update types together, `depgraph.py:1576-1581`);
-    // likewise no `--columns` gate, and `--json` returns above.
+    // The full per-update form: one block per masked higher version whose
+    // missing atom bites nothing backtrack-masked. Same gate as above;
+    // `--json` returns above, no `--columns` gate.
+    // Portage: depgraph.py, _show_missed_update_unsatisfied_dep
     if !(quiet && !debug) && !result.skipped_missing_dep_full.is_empty() {
         for f in &result.skipped_missing_dep_full {
             println!();
@@ -187,51 +157,14 @@ pub(crate) fn show_skipped_updates(
         ..
     } = plan;
     let &EmergeOpts { quiet, debug, .. } = opts;
-    // Backlog #90 (S2) + #92, #129 review round 2: real
-    // `_conflict_missed_update["slot conflict"]`
-    // (`depgraph.py:2063-2106`) -- `WARNING: One or more
-    // updates/rebuilds have been skipped due to a dependency
-    // conflict:` plus one `conflicts with` block per missed upgrade,
-    // printed after the merge list, rc 0. Real keeps one entry per
-    // `(root, slot_atom)` with the whole `(parent, atom)` set inside
-    // (`_get_missed_updates`, `:1553-1562`); portuale's rows are one
-    // per rejecting parent, so rows naming the same missed pkg group
-    // into one block (`portage_repo::group_skipped_updates`). Two
-    // producers, one shape: the direct solve's removed instances and
-    // the reverse-pin withholds (`GraphResult::skipped_updates`; the
-    // renderer cannot tell them apart and real does not distinguish
-    // them either). Backlog #230 renders each package with real's full
-    // `pkg_use_display` (`skipped_update_use_display_for` /
-    // `skipped_update_installed_use_display_for`, reusing the
-    // slot-collision notice's `render_pkg_use_display` string form):
-    // the whole effective USE masked to the valid-IUSE domain, one
-    // `VAR="…"` group per non-hidden `USE_EXPAND` var, `( )`-wrapped
-    // force/mask flags. Backlog #242 Slice D: destinations follow real's
-    // per-node rule (`skipped_node_suffix` — quoted `to '<root>'` iff
-    // the node's OWN root is not `/`), and each side paints from its own
-    // root's profile (the running `Config` when the row rides the
-    // running root, recomputed here from the shared repos; single-root
-    // runs keep the resolve-time target paint). An installed consumer
-    // renders `(cpv, installed in '<root>')` with its own root, like the
-    // notice's installed instances. Real's own rendering pairs a bare
-    // missed line with `to`-suffixed parents exactly when the missed
-    // package sits in the running-root (`/`) tree while the parents sit
-    // in the target (the bed blk0 shape with the running pin dropped);
-    // under `fixture_env`'s single root every node is target-rooted, so
-    // the missed line and the parents all carry the fixture `to` suffix
-    // with fixture-profile paint — deterministic, and the contract pin
-    // records it as such. The `^` marker line
-    // mirrors real `format_unmatched_atom`'s operator + version spans
-    // plus a mismatched `:slot[/sub-slot]` span (USE-token spans stay a
-    // documented cut -- no grounded case carries USE-deps here). A
-    // top-level `(Argument)` parent (empty `consumer_cpv`: a CLI atom
-    // that accepts only the surviving instance) renders as real's bare
-    // indented arg line with no atom and no marker
-    // (`depgraph.py:1681-1686`). Suppressed under `--quiet` unless
-    // `--debug` -- real `_show_missed_update` drops both notice types
-    // then (`depgraph.py:1576-1581`). `--json` never reaches this block
-    // (it returns above); `--columns` has no gate (real shows the
-    // notices regardless of columns: they are not merge-list rows).
+    // The slot-conflict missed-update block, printed after the merge list
+    // with rc 0. Rows naming the same missed package group into one block.
+    // Each package renders with its effective USE display; destinations
+    // follow the per-node rule (quoted `to '<root>'` iff the node's own
+    // root is not `/`). A top-level `(Argument)` parent renders as the bare
+    // indented arg line with no atom and no marker. Suppressed under
+    // `--quiet` unless `--debug`; `--json` and `--columns` never reach here.
+    // Portage: depgraph.py, _conflict_missed_update
     if !(quiet && !debug) && !result.skipped_updates.is_empty() {
         println!(
             "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
@@ -243,10 +176,8 @@ pub(crate) fn show_skipped_updates(
             println!();
             println!("{}/{}:{}", header.category, header.package, header.slot);
             println!();
-            // Backlog #242 Slice D: per-node destination (quoted, iff the
-            // missed node's own root is not `/`) and own-root USE paint
-            // (recomputed from the shared repos under the running profile
-            // when the miss rides the running root).
+            // Per-node destination and own-root USE paint, like the missed
+            // line above.
             let missed_suffix = skipped_node_suffix(
                 header.missed_targets_running_root,
                 root,
@@ -278,31 +209,15 @@ pub(crate) fn show_skipped_updates(
             );
             for s in group.iter() {
                 if s.consumer_cpv.is_empty() {
-                    // Real's `PackageArg`/`AtomArg` arm
-                    // (`depgraph.py:1681-1686`): the bare command-line
-                    // argument, no atom and no `^` marker. `s.atom`
-                    // already IS that argument here: the only producer
-                    // that emits empty-`consumer_cpv` rows is the
-                    // direct-solve path, and its empty-cpv parents come
-                    // solely from top-level argument pullers, whose
-                    // recorded atom is the argument text as typed
-                    // (unit-pinned by portage-repo's
-                    // `direct_solve_reports_an_argument_parent_with_the_cli_text`;
-                    // the reverse-pin producer always builds a
-                    // non-empty consumer, the backtrack-mask rows skip
-                    // empty pullers). No contract or bed cell grounds
-                    // this arm end to end (blk0 parents are all
-                    // Packages), so beyond that producer pin it stays
-                    // unpinned.
+                    // The bare command-line argument: no atom and no `^` marker.
+                    // The recorded atom already is that argument text.
+                    // Portage: depgraph.py
                     println!("    {}", s.atom);
                     continue;
                 }
                 if s.consumer_installed {
-                    // Backlog #242 Slice D: the installed root is the
-                    // consumer's own (`in '<root>'` with the running path
-                    // when the consumer rides it — always the target walk
-                    // from every producer today, so the flag is false and
-                    // this matches the old rendering exactly).
+                    // The installed root is the consumer's own.
+                    // Portage: depgraph.py
                     let installed_root: &Path = if s.consumer_targets_running_root {
                         root_deps_running_root.as_deref().unwrap_or(root)
                     } else {
@@ -316,9 +231,7 @@ pub(crate) fn show_skipped_updates(
                         render_pkg_use_display(&s.consumer_use),
                     );
                 } else {
-                    // Backlog #242 Slice D: per-node destination + own-root
-                    // USE paint, like the missed line above. The consumer
-                    // cpv re-derives `(cat, pkg, ver)` for the recompute;
+                    // Per-node destination + own-root USE paint, like above;
                     // an unparsable cpv keeps the resolve-time paint.
                     let consumer_suffix = skipped_node_suffix(
                         s.consumer_targets_running_root,
@@ -345,10 +258,9 @@ pub(crate) fn show_skipped_updates(
                         render_pkg_use_display(&consumer_use),
                     );
                 }
-                // #270: real marks the operator + version only when the
-                // missed package does not satisfy the version part
-                // (`highlight_version`, `output.py:925-929`: the atom
-                // without repo, slot and USE against the package).
+                // The `^` marker spans the operator + version only when the
+                // missed package does not satisfy the version part.
+                // Portage: output.py, highlight_version
                 let version_ok = {
                     let cpv = format!(
                         "{}/{}-{}",
@@ -482,39 +394,17 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
         backtrack_max,
         ..
     } = opts;
-    // Real `depgraph._show_slot_collision_notice` -> `slot_conflict_handler.
-    // get_conflict()` (`lib/_emerge/resolver/slot_collision.py`): the
-    // `!!! Multiple package instances within a single package slot ...`
-    // block, then the advisory paragraph. Ported: the preamble, the
-    // per-instance `(<cpv>, ebuild scheduled for merge) USE="" pulled in
-    // by` line, real `_prepare_conflict_msg_and_check_for_specificity`'s
-    // `collision_reasons` grouping + one-representative-per-reason
-    // selection (every parent under `--verbose-conflicts`), the
-    // `highlight_violations` `^` marker line (operator, version, slot,
-    // and USE-token spans, wrapped in `BAD` red under `--color y` with
-    // markers kept aligned on the displayed string -- real marks
-    // pre-color indices and drifts, a genuine upstream bug portuale
-    // deliberately does not reproduce), the `(and N more with the
-    // same problem[s])` tail, the `NOTE: Use the '--verbose-conflicts'
-    // option ...` footer, the `need_rebuild` "cannot be rebuilt" trailer,
-    // and the advisory (with the `--backtrack=30` hint gated the real
-    // way: shown unless `--backtrack` is >=30 or 0). Documented cuts
-    // (fixtures don't exercise them): the `soname` reason key (no soname
-    // atom can reach this renderer) and an `=*` operator's `("version",
-    // None)` key. The one deliberate divergence in this block: real
-    // drifts its `^` markers once ANSI codes lengthen the line under
-    // `--color y` (genuine upstream bug); portuale wraps the same spans
-    // but keeps the markers aligned. The block is display-only: the
-    // exit-code consequence lives below in the "display, then fail the
-    // action" band next to `unsolvable_blockers` (real `actions.py:
-    // 460-462` -- a slot conflict fails the run with rc 1, `--pretend`
-    // included; see that gate's own comment for the two escapes).
+    // The slot-conflict notice: the preamble, one block per conflicting
+    // slot, the per-instance `pulled in by` lines with the `^` marker, the
+    // `(and N more ...)` tail, the `--verbose-conflicts` footer, the
+    // `need_rebuild` trailer, and the advisory. Display-only: the
+    // exit-code consequence lives at the "display, then fail" gate.
+    // Portage: _emerge/depgraph.py, _show_slot_collision_notice;
+    // resolver/slot_collision.py
     if !result.slot_conflicts.is_empty() {
         let mut any_omitted = false;
-        // Real `need_rebuild`: installed parents with built slot-operator
-        // atoms that cannot be rebuilt, in first-seen order, printed once
-        // after all conflicts (real keeps a dict across the whole
-        // handler).
+        // Installed parents with built slot-operator atoms that cannot be
+        // rebuilt, in first-seen order, printed once after all conflicts.
         let mut need_rebuild: Vec<(String, String)> = Vec::new();
         let installed_pkgs: std::collections::HashSet<(String, String, String)> =
             all_installed_packages(root)
@@ -530,8 +420,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
             for inst in &c.instances {
                 println!();
                 if inst.installed {
-                    // Real's installed nomerge node: `(cpv, installed in
-                    // '<root>')` (see `build_residual_slot_conflicts`).
+                    // An installed instance names its position.
                     println!(
                         "  ({}/{}-{}:{}/{}::{}, installed in '{}') {} pulled in by",
                         c.category,
@@ -555,29 +444,23 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                         render_pkg_use_display(&inst.use_display)
                     );
                 }
-                // Whether a bare `(Argument)` parent shows: real files one
-                // under a reason only when the *other* package is already
-                // installed -- always the case for a residual record's
-                // installed side, never for merge-vs-merge records (whose
-                // instances are all scheduled for merge, so such a parent
-                // contributes no specific reason and is not shown).
+                // A bare `(Argument)` parent shows only when some other
+                // instance is already installed.
                 let show_argument_parents = c
                     .instances
                     .iter()
                     .any(|o| !std::ptr::eq(o, inst) && o.installed);
-                // Real compares against every *other* instance in the
-                // slot (`slot_collision.py`: `if other_pkg == pkg:
-                // continue`) -- identity, not version: a same-version
-                // merge/installed twin (a USE-only break, backlog #222)
-                // still sees its twin, so the USE parent classifies.
+                // Compare against every other instance in the slot by identity,
+                // not version: a same-version merge/installed twin still sees
+                // its twin, so the USE parent classifies.
+                // Portage: resolver/slot_collision.py
                 let others: Vec<ConflictOther> = c
                     .instances
                     .iter()
                     .filter(|o| !std::ptr::eq(*o, inst))
                     .map(|o| {
-                        // Flag sets for the `("use", flag)` branch: an
-                        // installed other's own vdb-recorded sets, like
-                        // the `use_display` on its header line.
+                        // An installed other's own vdb-recorded flag sets,
+                        // like the `use_display` on its header line.
                         let (iuse, use_flags) = if o.installed {
                             portage_repo::installed_pkg_iuse_and_use(
                                 root,
@@ -606,9 +489,8 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                     })
                     .collect();
                 let mut classified: Vec<ClassifiedParent> = Vec::new();
-                // (parent_cpv, atom, display, installed) for the selected
-                // line rendering below -- an installed parent renders
-                // `required by (<cpv>, installed in '<root>')`.
+                // An installed parent renders `required by (<cpv>, installed
+                // in '<root>')`.
                 let mut classified_installed: Vec<bool> = Vec::new();
                 for p in &inst.parents {
                     if p.parent_cpv.is_empty() && !show_argument_parents {
@@ -618,15 +500,11 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                         continue;
                     };
                     let (mut reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
-                    // Real `slot_collision.py`'s `("AtomArg", None)` key
-                    // (`elif isinstance(ppkg, AtomArg) and
-                    // other_pkg.installed`): a bare command-line parent
-                    // satisfied by every other instance is still shown
-                    // once some other instance is installed. Like real's
-                    // `elif`, it only fires when no version/slot/USE
-                    // reason did (so an argument parent that already
-                    // classifies, like pg1's `>=cgp1x-2`, renders exactly
-                    // once, as today).
+                    // A bare command-line parent satisfied by every other
+                    // instance is still shown once some other instance is
+                    // installed; only fires when no version/slot/USE reason
+                    // did.
+                    // Portage: resolver/slot_collision.py
                     if p.parent_cpv.is_empty()
                         && reasons.is_empty()
                         && others.iter().any(|o| o.installed)
@@ -656,11 +534,11 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                         }
                     }
                 }
-                // Representative selection: farthest version per `cp` for
-                // a `version` group, the first member for a `slot` group,
-                // every member of a `use` group (real shows all broken
-                // reverse dependencies -- "people can simply use a pager"),
-                // and every member under `--verbose-conflicts`.
+                // Representative selection: farthest version per `cp` for a
+                // `version` group, the first member for a `slot` group, every
+                // member of a `use` group, and every member under
+                // `--verbose-conflicts`.
+                // Portage: resolver/slot_collision.py
                 let mut selected: Vec<usize> = Vec::new();
                 for (reason, members) in &groups {
                     if verbose_conflicts {
@@ -706,10 +584,9 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                         }
                     }
                 }
-                // Real's `need_rebuild` scan runs over every `slot`-group
-                // parent (verbose or not): an unrebuildable parent is
-                // always shown, and recorded for the once-per-notice
-                // trailer below.
+                // The `need_rebuild` scan runs over every `slot`-group parent
+                // (verbose or not): an unrebuildable parent is always shown,
+                // and recorded for the once-per-notice trailer below.
                 for (reason, members) in &groups {
                     if !matches!(reason, SlotConflictReason::Slot(_)) {
                         continue;
@@ -738,9 +615,9 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                 }
                 selected.sort_unstable();
                 selected.dedup();
-                // Real shows `unconditional_use_deps` first (its own set
-                // order is nondeterministic; portuale keeps the stable
-                // classified order within each half).
+                // `unconditional_use_deps` first (Portage's own set order is
+                // nondeterministic; portuale keeps the stable classified
+                // order within each half).
                 selected.sort_by_key(|m| !classified[*m].use_unconditional);
                 for &m in &selected {
                     let p = &classified[m];
@@ -767,20 +644,13 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                         slot_violated,
                         &use_flags,
                     );
-                    // Real `highlight_violations` wraps the violated
-                    // spans in `BAD` red here (`--color y` only; plain
-                    // otherwise) -- and then marks the PRE-color
-                    // indices, so its `^` line drifts once ANSI codes
-                    // lengthen the line (genuine upstream bug: the
-                    // markers land left of their visible targets, and
-                    // real's own red varies by terminal colormap, so
-                    // byte-parity with the drift is unachievable
-                    // anyway). Portuale wraps the same spans but marks
-                    // the DISPLAYED string, so color and carets agree.
+                    // The violated spans render red under `--color y`; the `^`
+                    // markers are placed on the displayed string, so color
+                    // and carets agree (Portage marks pre-color indices and
+                    // drifts: a genuine upstream bug not reproduced here).
                     let (atom_display, shifted) = colorize_marked_spans(p.atom_str, &idx, color);
-                    // A bare command-line parent renders `<atom>
-                    // (Argument)` with no marker line (real shows no `^`
-                    // under one either); an installed parent names its
+                    // A bare command-line parent renders `<atom> (Argument)`
+                    // with no marker line; an installed parent names its
                     // position like an installed instance does.
                     if p.parent_cpv.is_empty() {
                         println!("    {atom_display} (Argument)");
@@ -831,8 +701,9 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
             );
             println!();
         }
-        // Real `slot_collision.py`'s `need_rebuild` trailer: installed
-        // parents with built slot-operator atoms that cannot be rebuilt.
+        // Installed parents with built slot-operator atoms that cannot
+        // be rebuilt.
+        // Portage: resolver/slot_collision.py
         if !need_rebuild.is_empty() {
             println!();
             println!("!!! The slot conflict(s) shown above involve package(s) which may need to");
@@ -853,10 +724,10 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
         ] {
             println!("{line}");
         }
-        // Real gates the hint on the reported depgraph's own
-        // `not _allow_backtracking` too (`depgraph.py:1750-1759`): a loop
-        // ended early by `need_config_change` reports a pass that still
-        // allowed backtracking (backlog #244).
+        // The `--backtrack` hint shows unless backtracking is off or already
+        // at >= 30; a loop ended early by `need_config_change` still counts
+        // as allowing backtracking.
+        // Portage: _emerge/depgraph.py
         if backtrack_max > 0 && backtrack_max < 30 && !result.settled_with_backtracking {
             println!("not be installed simultaneously. You may want to try a larger value of");
             println!("the --backtrack option, such as --backtrack=30, in order to see if");
@@ -956,10 +827,7 @@ pub(crate) fn show_cycle_redisplay(args: ShowCycleRedisplayArgs<'_>) {
                 blocker_lines: &mut thrown_away,
                 masked_deps: &result.masked_deps,
                 use_unsat_deps: &result.use_unsat_deps,
-                plain_miss_deps: &result.plain_miss_deps, // The legacy (gate-off) re-display keeps the user-flagged
-                // rendering it always had; the forced-verbose display is
-                // the gated path's main list above (whose re-display is
-                // skipped as duplicative).
+                plain_miss_deps: &result.plain_miss_deps,
                 force_sizes: false,
                 circular: &result.circular_dependency,
             });

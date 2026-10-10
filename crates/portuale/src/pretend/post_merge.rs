@@ -30,22 +30,13 @@ pub(crate) fn show_post_merge_notices(args: ShowPostMergeNoticesArgs<'_>) -> Opt
         verbose,
         ..
     } = opts;
-    // `elog_process` is no longer batched here: real runs it
-    // per-package inside `dblink.merge()` (before the post-merge
-    // `clean`, `vartree.py:6160-6198`), and backlog #42's clean now
-    // removes `${T}` -- so `ebuild_merge::process_merge_elog` is
-    // called from `merge_after_install`/`merge_binpkg` themselves.
-    // The `echo` summary still reaches stdout, the `save`/
-    // `save_summary` files the logdir, and `mail`/`mail_summary`
-    // the MTA exactly as before (see `elog.rs`).
+    // `elog` is no longer batched here: Portage runs it per-package inside
+    // the merge, so `process_merge_elog` is called from the merge paths
+    // themselves (see `elog.rs`).
     if !buildpkgonly {
-        // Real `post_emerge()` (`post_emerge.py:126-130`): once the
-        // merge changed the vdb, regenerate any stale GNU info
-        // directory index *before* the preserved-libs notice below.
-        // The vdb-changed gate is structural here: every merge
-        // failure returned early above, `--pretend` never reaches
-        // this branch, `buildpkgonly` merges nothing, and an empty
-        // mergelist changed nothing either.
+        // Regenerate any stale GNU info directory index once the merge
+        // changed the vdb, before the preserved-libs notice below.
+        // Portage: post_emerge.py, post_emerge
         if !entries.is_empty() {
             let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
             if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
@@ -53,24 +44,14 @@ pub(crate) fn show_post_merge_notices(args: ShowPostMergeNoticesArgs<'_>) -> Opt
                 return Some(ExitCode::from(1));
             }
         }
-        // Real `post_emerge()` (`post_emerge.py:141-152`): once the
-        // merge changed the vdb, warn about any library the merge/
-        // unmerge just preserved and point the user at
-        // `emerge @preserved-rebuild`.
+        // Warn about any library the merge/unmerge just preserved, pointing
+        // at `emerge @preserved-rebuild`, once the merge changed the vdb.
+        // Portage: post_emerge.py, post_emerge
         crate::preserved_libs::show_preserved_libs_notice(root, &color, quiet, verbose);
-        // Backlog #196: real `post_emerge()` (`post_emerge.py:155`)
-        // prints the GLEP 42 count notice a second time once the
-        // merge changed the vdb (after the preserved-libs notice and
-        // the config-file check, both mirrored above) -- same
-        // FEATURES-plus-nonzero-count gates, no `--quiet` gate. The
-        // vdb-changed gate is structural here: `--buildpkgonly`
-        // builds but never merges (real's `_pkgs_changed` stays
-        // false, so its `post_emerge` early-returns with no notice),
-        // and an empty mergelist changed nothing either. A merge
-        // failure prints the notice too when the vdb changed (real
-        // prints regardless of retval, `post_emerge.py:104-108,155`)
-        // -- see `merge_failure_news_notice` on the two failure
-        // arms above.
+        // Print the GLEP 42 count notice a second time once the merge
+        // changed the vdb. A merge failure prints it too when the vdb
+        // changed; see `merge_failure_news_notice` on the failure arms.
+        // Portage: post_emerge.py, post_emerge
         if !entries.is_empty() {
             display_news_notice_if_any(repos, root, config, &color);
         }
@@ -107,11 +88,11 @@ pub(crate) fn record_world_after_merge(args: RecordWorldAfterMergeArgs<'_>) -> O
         onlydeps,
         ..
     } = opts;
-    // Real `Scheduler._world_atom` / `saveNomergeFavorites`: record
-    // each directly-requested plain target in the world file. Real's
-    // own suppression set includes `--buildpkgonly` (which builds but
-    // never merges, so a package that isn't installed can't be a
-    // world member yet); `--oneshot`/`--onlydeps` are handled inside.
+    // Record each directly-requested plain target in the world file.
+    // `--buildpkgonly` builds but never merges, so a package that isn't
+    // installed can't be a world member yet; `--oneshot`/`--onlydeps`
+    // are handled inside.
+    // Portage: Scheduler._world_atom, saveNomergeFavorites
     if !buildpkgonly {
         if let Err(e) = update_world_file(UpdateWorldFileArgs {
             root,
@@ -125,12 +106,11 @@ pub(crate) fn record_world_after_merge(args: RecordWorldAfterMergeArgs<'_>) -> O
             eprintln!("emerge: {e}");
             return Some(ExitCode::from(1));
         }
-        // Real `saveNomergeFavorites`'s `@set` half: a directly-given
-        // `@name` set arg is recorded in `world_sets` (same
-        // suppression set as the world file). Backlog #232 review
-        // (Important-2): non-candidate sets are skipped
-        // (`depgraph.py:11366`) -- the same `usersets_world_candidate`
-        // filter as the deferral arm above.
+        // A directly-given `@name` set arg is recorded in `world_sets`
+        // (same suppression set as the world file). Non-candidate sets
+        // are skipped through the same `usersets_world_candidate` filter
+        // as the deferral arm.
+        // Portage: saveNomergeFavorites
         let record_sets: &[String] = if usersets_world_candidate(config_root) {
             selected_set_args
         } else {

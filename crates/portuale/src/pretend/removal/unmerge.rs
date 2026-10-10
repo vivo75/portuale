@@ -2,18 +2,12 @@
 
 use crate::pretend::*;
 
-/// Real `unmerge.py:355-447`'s "still listed in the following package
-/// sets" check for one selected `category/package-version`: the names of
-/// the user-editable sets (`installed_sets` -- `EditablePackageSet`s
-/// reached via `world_sets`) that still directly list a matching atom,
-/// *minus* any set whose matching atom is also satisfied by an installed
-/// newer version of the same cp in a different slot (real
-/// `unmerge.py:421-441`'s `higher_slot`: `pkg.slot_atom != inst_pkg.
-/// slot_atom` after the descending-order `pkg >= inst_pkg` break --
-/// removing this version leaves that set satisfied). Shared by
-/// `run_unmerge_pretend` and `run_prune_pretend`, matching real
-/// portage's own single `_unmerge_display` handling every
-/// `unmerge_action`.
+/// The "still listed in the following package sets" check for one selected
+/// `category/package-version`: names of the user-editable sets that still
+/// directly list a matching atom, minus any set whose atom is also satisfied
+/// by an installed newer version of the same cp in a different slot.
+/// Shared by the unmerge and prune paths.
+/// Portage: unmerge.py, _unmerge_display
 pub(crate) fn still_listed_parents<'a>(
     root: &Path,
     installed_sets: &'a [(String, Vec<String>)],
@@ -51,47 +45,36 @@ pub(crate) fn still_listed_parents<'a>(
 /// Arguments of [`run_unmerge_pretend`].
 pub(crate) struct RunUnmergePretendArgs<'a> {
     pub(crate) targets: &'a [&'a str],
-    /// Real `unmerge_action` -- `"unmerge"`, `"rage-clean"` (both remove
-    /// exactly the given atoms; `--rage-clean` only differs by skipping
-    /// `CLEAN_DELAY` + prerm/postrm, invisible at `--pretend`),
-    /// `"depclean"`, `"prune"`. Threaded into the `Couldn't find ... to
-    /// <action>` / `removal by <action>` / `Portage to <action> itself`
-    /// messages (real `f"... {unmerge_action}"`).
+    /// `"unmerge"`, `"rage-clean"` (both remove exactly the given atoms;
+    /// `--rage-clean` only differs by skipping `CLEAN_DELAY` + prerm/postrm,
+    /// invisible at `--pretend`), `"depclean"`, `"prune"`. Threaded into the
+    /// `Couldn't find ... to <action>` / `removal by <action>` messages.
     pub(crate) action: &'a str,
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
-    /// The `repos.conf` repos -- threaded into the post-removal GLEP 42
-    /// count notice (backlog #196 fix round 1: real `post_emerge` after
-    /// uninstall actions, `actions.py:4164-4175`).
+    /// The `repos.conf` repos, for the post-removal GLEP 42 count notice.
     pub(crate) repos: &'a [portage_repo::RepoConfig],
-    /// Real `_unmerge_display`'s `ordered` flag (`unmerge.py:459`): when
-    /// `true` the per-package blocks are rendered in `targets` order and
-    /// *not* regrouped/re-sorted by `cat/pn`. Only `--depclean`'s own
-    /// topologically-sorted cleanlist sets this (`run_depclean_pretend`);
-    /// a plain `--unmerge`/`-C` from the CLI is always unordered.
+    /// When `true` the per-package blocks render in `targets` order, not
+    /// regrouped by `cat/pn`. Only `--depclean`'s topologically-sorted
+    /// cleanlist sets this; a plain `--unmerge`/`-C` is always unordered.
     pub(crate) preserve_order: bool,
-    /// `false` for a real `emerge -C <atom>` (no `--pretend`): the
-    /// `>>> These are the packages that would be unmerged:` header is
-    /// suppressed and `execute_unmerge` runs after the display. `true`
-    /// for `-pC` and for the `--depclean`/`--prune` preview reuse.
+    /// `false` for a non-`--pretend` run: the header is suppressed and the
+    /// removal runs after the display. `true` for `-pC` and for the
+    /// `--depclean`/`--prune` preview reuse.
     pub(crate) pretend: bool,
-    /// `--ask`/`-a`: prompt `Would you like to unmerge these packages?`
-    /// before the removal (real `unmerge.py:621`), then run the
-    /// `CLEAN_DELAY` countdown. Always `false` when `pretend` is `true`.
+    /// `--ask`: prompt before the removal, then run the `CLEAN_DELAY`
+    /// countdown. Always `false` when `pretend` is `true`.
     pub(crate) ask: bool,
-    /// `--shell bash|brush`: which real shell backend runs each removed
-    /// package's `pkg_prerm`/`pkg_postrm` (and the `FEATURES=unmerge-backup`
-    /// `quickpkg`). Inert when `pretend` is `true`.
+    /// Which shell backend runs each removed package's
+    /// `pkg_prerm`/`pkg_postrm`. Inert when `pretend` is `true`.
     pub(crate) shell: ebuild_phases::ShellBackend,
-    /// `--debug`/`-d`: `PORTAGE_DEBUG=1` for the `pkg_prerm`/`pkg_postrm`
-    /// phases (and the `unmerge-backup` `quickpkg`). Inert when `pretend`.
+    /// `PORTAGE_DEBUG=1` for the `pkg_prerm`/`pkg_postrm` phases.
+    /// Inert when `pretend`.
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
-    /// Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): the
-    /// post-removal info-regen einfo lines are suppressed. `noinfo` is the
-    /// resolved-config `FEATURES` read (`config_features_list`), computed
-    /// by each caller from the `config` already in its scope.
+    /// Suppression of the post-removal info-regen einfo lines, plus the
+    /// resolved-config `FEATURES` read; computed by each caller.
     pub(crate) quiet: bool,
     pub(crate) noinfo: bool,
 }
@@ -118,16 +101,12 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // Expand every `@set` target into its member atoms first (real
-    // `root_config.sets[s].getAtoms()` / `_iter_atoms_for_pkg`), so the
+    // Expand every `@set` target into member atoms first, so the
     // vdb-matching loop below only ever sees ordinary atoms.
-    // `@world`/`@selected`/`@system`/`@installed` are the built-in sets;
-    // anything else `@name` is a custom set file (recursively expanded,
-    // cycle-guarded).
+    // Portage: _emerge/actions.py, unmerge
     let mut expanded: Vec<String> = Vec::new();
-    // Real `root_config.setconfig.active` -- the sets the user passed as
-    // `-C` targets. Excluded from the "still listed in package sets"
-    // check below (their members are being removed from the set anyway).
+    // The sets passed as `-C` targets are excluded from the "still listed
+    // in package sets" check below (their members are being removed anyway).
     let mut active_sets: HashSet<String> = HashSet::new();
     for target in targets {
         if let Some(name) = target.strip_prefix('@') {
@@ -163,10 +142,9 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         }
     }
 
-    // Real `_unmerge_display` (`unmerge.py:195`) prints this header only
-    // under `--pretend`/`--ask`, before the per-atom matching loop -- so
-    // it shows even when nothing ends up selected, but a real `emerge -C`
-    // removal run doesn't print it at all.
+    // This header shows only under `--pretend`/`--ask`, even when nothing
+    // ends up selected; a removal run doesn't print it at all.
+    // Portage: unmerge.py, _unmerge_display
     if pretend {
         println!(
             "{}",
@@ -177,23 +155,23 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         );
     }
 
-    // Real `PORTAGE_PACKAGE_ATOM` -- the one package `unmerge` always
-    // refuses to select, moving it to `protected` with an eerror note.
+    // The one package `unmerge` always refuses to select, moving it to
+    // `protected` with an eerror note.
+    // Portage: unmerge.py, _unmerge_display
     let portage_self = ("sys-apps".to_string(), "portage".to_string());
 
-    // Per-`(category, package)` accumulators, real portage's own `pkgmap`
-    // entry with its `selected`/`protected`/`omitted` sets, keyed by cp
-    // so multiple atoms hitting the same cp merge (real `unordered`
-    // dedup). `all_selected` dedups a version picked by two atoms.
+    // Per-`(category, package)` accumulators keyed by cp, so multiple
+    // atoms hitting the same cp merge. `all_selected` dedups a version
+    // picked by two atoms.
+    // Portage: unmerge.py, _unmerge_display
     let mut per_cp: HashMap<(String, String), (Vec<String>, Vec<String>)> = HashMap::new();
     let mut all_selected: HashSet<(String, String, String)> = HashSet::new();
     let mut order: Vec<(String, String)> = Vec::new();
 
     for atom_str in &expanded {
-        // A bare name (no `/`) borrows its category from the vdb: real
-        // `vartree.dep_match`'s own "null category" lookup. Ambiguous
-        // (installed under >1 category) is a hard error, real
-        // `AmbiguousPackageName`.
+        // A bare name (no `/`) borrows its category from the vdb.
+        // Ambiguous (installed under >1 category) is a hard error.
+        // Portage: vartree.py, dep_match
         let matches: Vec<(String, String, String, String)> = if !atom_str.contains('/') {
             let mut found: Vec<(String, String, String, String)> = Vec::new();
             for (cat, pkg, version, slot) in installed_cp_versions(root) {
@@ -261,8 +239,8 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // `sys-apps/portage` self-protection: real portage moves it out of
-    // `selected` into `protected` and prints the note.
+    // `sys-apps/portage` self-protection: move it from `selected` to
+    // `protected` with the note.
     if let Some((selected, protected)) = per_cp.get_mut(&portage_self)
         && !selected.is_empty()
     {
@@ -281,8 +259,8 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // Real `syslist = root_config.sets["system"].getAtoms()` -> the
-    // `@system` cps, for the "is part of your system profile" warning.
+    // The `@system` cps, for the "is part of your system profile" warning.
+    // Portage: _emerge/actions.py, unmerge
     let syslist: HashSet<(String, String)> = config
         .system_packages
         .iter()
@@ -290,15 +268,10 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         .map(|a| (a.category, a.package))
         .collect();
 
-    // Real `_unmerge_display`'s "still listed in the following package
-    // sets" warning: a `selected` package that a user-editable set
-    // (reached via `world_sets`) still lists would be re-pulled on the
-    // next `@world` update, so it's flagged. Real `unmerge.py:421-441`
-    // suppresses the flag for a set when an installed *higher-versioned*
-    // instance of the same cp *in a different slot* also matches the set
-    // atom (`pkg.slot_atom != inst_pkg.slot_atom` after the `pkg >=
-    // inst_pkg` break -> "a newer version, other slot") -- removing this
-    // version leaves the set satisfied by that one.
+    // The "still listed in the following package sets" warning: a selected
+    // package a user-editable set still lists would be re-pulled on the
+    // next `@world` update, so it's flagged (minus the higher-slot cover).
+    // Portage: unmerge.py, _unmerge_display
     let installed_sets: Vec<(String, Vec<String>)> = match collect_installed_sets(config_root, root)
     {
         Ok(sets) => sets
@@ -341,8 +314,7 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
     }
     let mut all_selected_display: Vec<String> = Vec::new();
     // `(category, package, version)` of every `selected` version, in the
-    // same order the preview blocks render -- real `unmerge()`'s own
-    // removal loop walks `pkgmap` in exactly this order.
+    // same order the preview blocks render; the removal loop walks this order.
     let mut removal_list: Vec<(String, String, String)> = Vec::new();
     for cp in &order {
         let (selected, protected) = per_cp.get_mut(cp).unwrap();
@@ -351,8 +323,7 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         }
         selected.sort_by(|a, b| vercmp_key(a, b));
         protected.sort_by(|a, b| vercmp_key(a, b));
-        // `omitted` = every other installed version of this cp, real
-        // `vartree.dep_match(cp)` minus selected/protected.
+        // `omitted` = every other installed version of this cp.
         let mut omitted: Vec<String> = portage_repo::installed_candidates(root, &cp.0, &cp.1)
             .into_iter()
             .map(|(v, _, _)| v)
@@ -360,10 +331,8 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
             .collect();
         omitted.sort_by(|a, b| vercmp_key(a, b));
 
-        // Real `_unmerge_display`: `if not (protected or omitted) and cp
-        // in syslist` -- a cp that would be *fully* removed and is a
-        // `@system` member. To stderr (real `writemsg_level(...,
-        // level=logging.WARNING)`).
+        // A cp that would be fully removed and is a `@system` member warns
+        // on stderr.
         if protected.is_empty() && omitted.is_empty() && syslist.contains(cp) {
             eprintln!(
                 "{}",
@@ -407,9 +376,9 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         color.c("GOOD", "'omitted'")
     );
 
-    // Real `unmerge()` (`unmerge.py:637-699`): once `_unmerge_display`
-    // returns EX_OK and we're not in `--pretend`, the packages are
-    // actually removed.
+    // Once the display is accepted and we're not in `--pretend`, the
+    // packages are actually removed.
+    // Portage: unmerge.py, unmerge
     if !pretend {
         if ask && !ask_confirm(color, "Would you like to unmerge these packages?") {
             return ExitCode::from(130);
@@ -430,17 +399,9 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Real `"unmerge-backup" in self.settings.features` -- not a
-/// `make.globals` default token, so absent unless `FEATURES` names it.
-///
-/// This is the **raw process-env fallback**, for the CLI boundaries
-/// with no resolved config (`ebuild <file>`) and for the two
-/// `execute_unmerge` reads (`unmerge-backup`, `split-elog`) that
-/// predate its resolved `config` param (backlog #196 fix round 1) and
-/// keep the old fallback. Every build/merge path reads the
-/// resolved list instead: `config_features_list`/`config_features_string`
-/// here, `MergeOptions::set_resolved_features`, and
-/// `ebuild_phases::features_string`/`emerge_build::resolved_features`.
+/// Whether a `FEATURES` token is on in the raw process env. This is the
+/// fallback for the CLI boundaries with no resolved config; every
+/// build/merge path reads the resolved list instead.
 pub(crate) fn feature_enabled(token: &str) -> bool {
     std::env::var("FEATURES")
         .map(|f| f.split_whitespace().any(|t| t == token))
@@ -453,19 +414,13 @@ pub(crate) struct ExecuteUnmergeArgs<'a> {
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
-    /// Real `--quiet` (`noiselimit < 0`): suppresses the info-regen einfo
-    /// lines. `noinfo` is the resolved-config `FEATURES` read, threaded
-    /// from the caller (real `"noinfo" not in settings.features`,
-    /// `post_emerge.py:127`).
+    /// Suppression of the info-regen einfo lines, plus the resolved-config
+    /// `FEATURES` read; threaded from the caller.
     pub(crate) quiet: bool,
     pub(crate) noinfo: bool,
-    /// Backlog #196 fix round 1: real calls `post_emerge` after the
-    /// uninstall actions (clean/depclean/prune/unmerge/rage-clean --
-    /// `actions.py:4164-4175`, except deselect/buildpkgonly/fetchonly/
-    /// pretend), whose tail is the GLEP 42 count notice. `repos` +
-    /// `config` feed that notice; the vdb-changed gate is structural
-    /// (every caller only reaches here with a non-empty `removal_list`
-    /// and `pretend == false`).
+    /// The `repos.conf` repos + resolved config, for the post-removal
+    /// GLEP 42 count notice. The vdb-changed gate is structural (callers
+    /// only reach here with a non-empty `removal_list` and no `--pretend`).
     pub(crate) repos: &'a [portage_repo::RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
 }
@@ -484,20 +439,13 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
     } = args;
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let mut options = ebuild_merge::MergeOptions::from_env(shell, debug);
-    // #333: `FEATURES=unmerge-orphans` keeps what the resolved
-    // `CONFIG_PROTECT` protects (real `dblink.isprotected`), not the
-    // process env's value.
+    // `FEATURES=unmerge-orphans` keeps what the resolved `CONFIG_PROTECT`
+    // protects, not the process env's value.
     options.apply_config_protect(config);
-    // Real `dblink._pre_unmerge_backup`: `FEATURES=unmerge-backup` -> a
-    // `quickpkg` of each package before it's removed. Its `BINPKG_FORMAT`
-    // follows the same resolved chain as every other `PackageOptions`
-    // construction site (backlog #173: calling env over
-    // `make.conf`/profile/`make.globals`, real `config` precedence) --
-    // resolved here, since this path carries no graph entry. A failed
-    // resolution keeps the old env-only fallback inside
-    // `package_options_from_env`'s `None` arm. `resolved_features` stays
-    // `None` on purpose: the `FEATURES` tokens keep their raw
-    // process-env fallback (only the format joins the chain).
+    // `FEATURES=unmerge-backup` -> a `quickpkg` of each package before it's
+    // removed. `BINPKG_FORMAT` follows the resolved chain; a failed
+    // resolution keeps the old env-only fallback. `resolved_features` stays
+    // `None` on purpose: only the format joins the chain.
     let unmerge_config =
         ebuild_phases::resolve_unmerge_config(&portage_repo::config_root_from_env(), root);
     let backup = feature_enabled("unmerge-backup")
@@ -524,18 +472,14 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
             options: &options,
             backup: backup.as_ref(),
             is_replacement: false,
-            replacement_preserved: &BTreeMap::new(), // Standalone `emerge -C`: no replacing package, so neither
-            // feed (backlog #224).
-            replacement_needed: &[], // The entry is deleted at once, as before (S4.1 defers only
-            // the replace loop's deletes).
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
             deferred_delete: None,
         }) {
-            // Backlog #196 fix round 1: real `post_emerge` prints the
-            // notice regardless of retval -- gated on the vdb having
-            // changed. `idx > 0` is that gate here (at least one
-            // package was already removed this run); a failure on the
-            // very first removal changed nothing and stays silent,
-            // exactly like real's `:112-117` early return.
+            // The notice prints when the vdb changed (at least one package
+            // was already removed); a failure on the very first removal
+            // changed nothing and stays silent.
+            // Portage: post_emerge.py, post_emerge
             if idx > 0 {
                 display_news_notice_if_any(repos, root, config, color);
             }
@@ -543,19 +487,16 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
             return ExitCode::from(1);
         }
         if let Err(e) = deselect_from_world(root, category, package) {
-            // The package itself is already removed above, so the vdb
-            // changed -- the notice prints (same real arm).
+            // The package itself is already removed above, so the notice prints.
+            // Portage: post_emerge.py, post_emerge
             display_news_notice_if_any(repos, root, config, color);
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
         }
     }
-    // Real `dblink.unmerge()` -> `self._elog_process(phasefilter=("prerm",
-    // "postrm"))`: hand each removed package's `pkg_prerm`/`pkg_postrm`
-    // `elog`/`ewarn`/`eerror` output to the `echo`/`save`/`save_summary`
-    // modules. `${T}` for a removal is `unmerge_one_installed`'s own
-    // `run_phase_from_saved_env` builddir (`<PORTAGE_TMPDIR>/portage/
-    // <cat>/<pf>/temp`), which only ever holds prerm/postrm logs here.
+    // Hand each removed package's `pkg_prerm`/`pkg_postrm` elog output to
+    // the `echo`/`save`/`save_summary` modules.
+    // Portage: dblink.py, unmerge
     let items: Vec<(String, std::path::PathBuf)> = removal_list
         .iter()
         .map(|(category, package, version)| {
@@ -577,28 +518,19 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
         split_elog: feature_enabled("split-elog"),
     });
 
-    // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
-    // removed something, regenerate any stale GNU info directory index,
+    // After the removal, regenerate any stale GNU info directory index,
     // then warn about any library the removal preserved.
+    // Portage: post_emerge.py, post_emerge
     if let Err(e) = crate::info_files::post_merge_info_update(root, color, quiet, noinfo) {
-        // Every removal already landed above, so the vdb changed -- the
-        // notice prints (same real arm as below).
+        // Every removal already landed above, so the notice prints.
+        // Portage: post_emerge.py, post_emerge
         display_news_notice_if_any(repos, root, config, color);
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
-    // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
-    // removed something, warn about any library the removal preserved.
     crate::preserved_libs::show_preserved_libs_notice(root, color, false, false);
-    // Backlog #196 fix round 1: real `post_emerge()`'s tail
-    // (`post_emerge.py:155`) after the uninstall actions
-    // (`actions.py:4164-4175` -- clean/depclean/prune/unmerge/
-    // rage-clean; NOT deselect -- `run_deselect` never reaches here --
-    // and never under `--pretend`, which returns before any removal).
-    // The vdb-changed gate is structural: every caller only reaches
-    // here with a non-empty `removal_list`, so an empty selection
-    // (which returns before removal) prints no notice, like real's
-    // `:112-117` early return.
+    // The GLEP 42 count notice tail after the uninstall actions.
+    // Portage: post_emerge.py, post_emerge
     if !removal_list.is_empty() {
         display_news_notice_if_any(repos, root, config, color);
     }
@@ -606,14 +538,10 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Real `WorldSelectedPackagesSet.cleanPackage` (`_sets/files.py:336`),
-/// called by real `unmerge()` right after each package is removed: every
-/// world atom whose `cp` equals the removed package's `category/package`
-/// is dropped **unless** some installed version still satisfies it; all
-/// other atoms are kept untouched. The file is then rewritten sorted
-/// (real `.write`), with comment and `@set` lines not carried forward --
-/// matching real portage and `update_world_file`. A world file that ends
-/// up empty is written empty (real `replace([])`).
+/// Drop every world atom for the removed package unless some installed
+/// version still satisfies it; all other atoms are kept untouched. The file
+/// is rewritten sorted, with comment and `@set` lines not carried forward.
+/// Portage: _sets/files.py, WorldSelectedPackagesSet.cleanPackage
 pub(crate) fn deselect_from_world(
     root: &Path,
     category: &str,
@@ -649,15 +577,11 @@ pub(crate) fn deselect_from_world(
     Ok(())
 }
 
-/// One `    selected: 1.0 ` / `   protected: none ` / `     omitted: ...`
-/// row of `_unmerge_display`'s per-package block: the label
-/// right-justified into 14 columns (real `(mytype + ": ").rjust(14)`),
-/// then each version followed by a trailing space, or the literal
-/// `none ` when empty -- reproduced faithfully, trailing spaces and all.
-/// Real `_unmerge_display`: each `selected` version is
-/// `colorize("UNMERGE_WARN", v + " ")` (red), each `protected`/`omitted`
-/// version `colorize("GOOD", v + " ")` (green) -- the label and `none`
-/// stay plain.
+/// One `selected:` / `protected:` / `omitted:` row of the per-package block:
+/// the label right-justified into 14 columns, then each version followed by
+/// a trailing space, or the literal `none ` when empty, trailing spaces
+/// included. `selected` versions render red, `protected`/`omitted` green.
+/// Portage: unmerge.py, _unmerge_display
 pub(crate) fn print_unmerge_row(label: &str, versions: &[String], color: &Colorizer) {
     let head = format!("{label}: ");
     let padded = format!("{head:>14}");
@@ -677,23 +601,20 @@ pub(crate) fn print_unmerge_row(label: &str, versions: &[String], color: &Colori
     }
 }
 
-/// Every installed `(category, package, version, slot)` in the vdb under
-/// `root` -- real `vartree.dbapi.cpv_all()` split out, used only for
-/// `--unmerge`/`-C`'s own bare-name ("null category") resolution.
+/// Every installed `(category, package, version, slot)` in the vdb: used only
+/// for the bare-name ("null category") resolution.
+/// Portage: vartree.py, dbapi.cpv_all
 pub(crate) fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
     let mut out = Vec::new();
-    // The backend's listing (`files`: the same walk, each category and
-    // entry directory tested with `is_dir`; `-MERGING-<pf>` entries, which
-    // are never a `--unmerge`/`-C` resolution candidate, are skipped).
+    // `-MERGING-<pf>` entries are never a resolution candidate, so skipped.
     let Ok(entries) = portage_vdb::for_root(root).entries() else {
         return out;
     };
     for key in entries {
         let (category, dirname) = (key.category, key.pf);
         if let Some((name, version)) = split_pf(&dirname) {
-            // #116: through the vdb seam; the main slot only, as
-            // before (an absent `SLOT` is `""`, like the old
-            // `unwrap_or_default`).
+            // Through the vdb seam; the main slot only (an absent `SLOT`
+            // reads as `""`, like the old default).
             let slot = portage_repo::vdb_entry_slot(root, &category, &dirname)
                 .split('/')
                 .next()
@@ -705,14 +626,12 @@ pub(crate) fn installed_cp_versions(root: &Path) -> Vec<(String, String, String,
     out
 }
 
-/// Real `action_depclean`'s own argument handling (`actions.py:848-863`),
-/// shared by `--depclean` and `--prune`: resolve each bare name against
-/// the vdb null-category scan (ambiguous -> `!!! ... ambiguous` +
-/// `Err(1)`), then check every resulting atom -- one matching nothing
-/// prints `--- Couldn't find 'X' to <action>.` (stderr), and if *none*
-/// match, print `>>> No packages selected for removal by <action>` and
-/// return `Err(1)`. An empty `targets` is `Ok(vec![])` (the full,
-/// no-args form).
+/// Shared `--depclean`/`--prune` argument handling: resolve each bare name
+/// against the vdb null-category scan, then check every resulting atom. One
+/// matching nothing prints `--- Couldn't find 'X' to <action>`; if none
+/// match, print the empty message and return `Err(1)`. Empty `targets` is
+/// `Ok(vec![])` (the full, no-args form).
+/// Portage: _emerge/actions.py, action_depclean
 pub(crate) fn resolve_cleanup_args(
     targets: &[&str],
     root: &Path,

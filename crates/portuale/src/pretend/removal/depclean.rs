@@ -2,34 +2,24 @@
 
 use crate::pretend::*;
 
-/// One cleanlist package `--depclean-lib-check` keeps installed: it
-/// solely provides a library still needed at link level (`NEEDED.ELF.2`
-/// soname) by a package that is *not* itself being removed.
+/// One cleanlist package `--depclean-lib-check` keeps installed: it solely
+/// provides a library still needed at link level by a package that is not
+/// itself being removed.
 pub(crate) struct LibConsumerProtection {
     pub(crate) provider: portage_repo::InstalledPackage,
-    /// Surviving consumer cpv -> the sonames it needs from `provider`,
-    /// sorted (real `sorted(libs)` / `sorted(consumer.mycpv ...)`).
+    /// Surviving consumer cpv -> the sonames it needs from `provider`, sorted.
     pub(crate) consumers: Vec<(String, Vec<String>)>,
 }
 
-/// Real `_calc_depclean`'s `--depclean-lib-check` scan (`actions.py:
-/// 1381-1546`), narrowed to its pure computation. For every cleanlist
-/// package, take the `NEEDED.ELF.2`-indexed objects it owns that carry a
-/// `DT_SONAME`, and ask `needed_elf::find_consumers` (non-greedy, so a
-/// consumer already satisfied by *another* provider of the same soname
-/// is excluded -- real `actions.py:1454-1504`'s own multi-provider
-/// filter) which surviving objects still link against them. A consumer
-/// whose owning package is itself in the cleanlist is dropped (real
-/// `lib_consumer in clean_set`).
+/// The `--depclean-lib-check` scan, narrowed to its pure computation: for
+/// every cleanlist package, find surviving objects still linking against
+/// the sonames it provides. A consumer owned by a cleanlist package itself
+/// is dropped.
+/// Portage: _emerge/actions.py, _calc_depclean
 ///
-/// **Documented narrowing**: real's multi-provider filter only lets an
-/// *alternative* provider satisfy a consumer when that alternative's own
-/// package is not also being removed; `find_consumers` is not clean-set
-/// aware, so portuale can under-report in the (rare) case where the
-/// only surviving provider of a soname is itself another cleanlist
-/// member. Also real's intermediate `>>> Assigning files to packages...`
-/// progress line can appear with no WARNING following (all consumers
-/// satisfied elsewhere); portuale prints it only alongside the WARNING.
+/// Documented narrowing: the multi-provider filter can under-report when
+/// the only surviving provider of a soname is itself another cleanlist
+/// member; the progress line prints only alongside the WARNING.
 pub(crate) fn lib_consumer_scan(
     root: &Path,
     cleanlist: &[portage_repo::InstalledPackage],
@@ -42,8 +32,7 @@ pub(crate) fn lib_consumer_scan(
     let mut out: Vec<LibConsumerProtection> = Vec::new();
     for pkg in cleanlist {
         let pkg_cpv = pkg.cpv();
-        // The objects this package owns that provide a soname (real
-        // `pkg_dblink.getcontents()` ∩ the linkmap ∩ non-empty soname).
+        // The objects this package owns that provide a soname.
         let mut provided: Vec<(&str, &str)> = map
             .obj_properties
             .values()
@@ -95,22 +84,17 @@ pub(crate) fn lib_consumer_scan(
             });
         }
     }
-    // Real `sorted(consumer_map, key=cmp_sort_key(cmp_pkg_cpv))`.
+    // Sorted by provider cpv.
     out.sort_by_key(|p| p.provider.cpv());
     out
 }
 
-/// Real `_calc_depclean`'s `--depclean-lib-check` phase (`actions.py:
-/// 1356-1590`): run `lib_consumer_scan` on the tentative `result`, print
-/// the `>>> Checking for lib consumers...` progress and, when any
-/// provider must be kept, the `* ...one or more packages will not be
-/// removed` WARNING (real `bad(" * ")` prefix, `logging.WARNING` ->
-/// stderr) plus the per-provider `pulled in by:` / `needs <soname>`
-/// detail, then hand the protected providers to `recompute` (a second
-/// `depclean_cleanlist` / `prune_cleanlist` pass that seeds them as
-/// roots so their own deps also leave the cleanlist). A no-op when
-/// `lib_check` is off (`--depclean-lib-check=n`) or the cleanlist is
-/// already empty.
+/// The `--depclean-lib-check` phase: run `lib_consumer_scan` on the
+/// tentative cleanlist, warn about providers that must be kept, and hand
+/// them to `recompute` (a second pass seeding them as roots so their own
+/// deps leave the cleanlist too). A no-op when `lib_check` is off or the
+/// cleanlist is already empty.
+/// Portage: _emerge/actions.py, _calc_depclean
 pub(crate) fn apply_depclean_lib_check(
     root: &Path,
     result: portage_repo::DepcleanResult,
@@ -128,8 +112,7 @@ pub(crate) fn apply_depclean_lib_check(
     }
     eprintln!(">>> Assigning files to packages...");
 
-    // Real: `"".join(bad(" * ") + f"{line}\n" for line in textwrap.wrap(
-    // msg, 70))` -- the wrap is pinned here since it never changes.
+    // The wrap is pinned here since it never changes.
     let star = color.c("BAD", " * ");
     for line in [
         "In order to avoid breakage of link level dependencies, one or more",
@@ -138,9 +121,8 @@ pub(crate) fn apply_depclean_lib_check(
     ] {
         eprintln!("{star}{line}");
     }
-    // Real's second `msg` list: a blank ` * ` line, then `  <cpv> pulled
-    // in by:` and `    <consumer> needs <sonames>` per provider, then a
-    // trailing blank ` * ` line.
+    // Per-provider `pulled in by:` / `needs <sonames>` detail, framed by
+    // blank ` * ` lines.
     for prot in &protections {
         eprintln!("{star}");
         eprintln!("{star}  {} pulled in by:", prot.provider.cpv());
@@ -156,13 +138,11 @@ pub(crate) fn apply_depclean_lib_check(
     recompute(&providers)
 }
 
-/// Real `_calc_depclean`'s `unresolved_deps()` halt (`actions.py:1177-1248`):
-/// when a kept installed package has a hard runtime dependency no
-/// installed package satisfies, depclean/prune print the `bad(" * ")`-
-/// prefixed `Dependencies could not be completely resolved ...` block
-/// (`logging.ERROR` -> stderr) and exit 1 without removing anything.
-/// Returns `Some(exit 1)` when it halted, `None` to carry on. `is_prune`
-/// adds the real prune-only `use --nodeps` trailer.
+/// The unresolved-dependency halt: when a kept installed package has a hard
+/// runtime dependency nothing installed satisfies, print the block and exit
+/// 1 without removing anything. Returns `Some(exit 1)` when it halted,
+/// `None` to carry on. `is_prune` adds the prune-only `use --nodeps` trailer.
+/// Portage: _emerge/actions.py, _calc_depclean
 pub(crate) fn depclean_unresolved_halt(
     unresolved: &[(String, String)],
     is_prune: bool,
@@ -180,7 +160,7 @@ pub(crate) fn depclean_unresolved_halt(
         eprintln!("{star}    {parent}");
     }
     eprintln!("{star}");
-    // Real `textwrap.wrap(..., 65)` -- pinned, it never changes.
+    // Pinned wrap width; it never changes.
     eprintln!("{star}Have you forgotten to do a complete update prior to depclean? The");
     eprintln!("{star}most comprehensive command for this purpose is as follows:");
     eprintln!("{star}");
@@ -215,51 +195,34 @@ pub(crate) struct RunDepcleanPretendArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
-    /// The `repos.conf` repos -- threaded into the post-removal GLEP 42
-    /// count notice (backlog #196 fix round 1).
+    /// The `repos.conf` repos, for the post-removal GLEP 42 count notice.
     pub(crate) repos: &'a [portage_repo::RepoConfig],
     pub(crate) verbose: bool,
     pub(crate) lib_check: bool,
-    /// Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
-    /// "n"` -- `--depclean <atoms> --deselect=n` keeps the `world` set as
-    /// a protection root (a world member named as an arg is kept). See
-    /// `depclean_cleanlist`'s own `deselect` param.
+    /// `--depclean <atoms> --deselect=n` keeps the `world` set as a
+    /// protection root (a world member named as an arg is kept).
     pub(crate) deselect: bool,
-    /// `false` for a real `emerge --depclean` (no `--pretend`): after the
-    /// preview, `run_unmerge_pretend` removes the cleanlist, and the stats
-    /// block reads `Number removed:` instead of `Number to remove:`
-    /// (real `action_depclean:908-911`).
+    /// `false` for a non-`--pretend` run: after the preview the cleanlist
+    /// is really removed, and the stats block reads `Number removed:`
+    /// instead of `Number to remove:`.
     pub(crate) pretend: bool,
     pub(crate) ask: bool,
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
-    /// Threaded into the post-removal info-regen block (real `--quiet`
-    /// suppression + resolved-config `noinfo`); computed by the caller.
+    /// Suppression of the post-removal info-regen block; computed by the caller.
     pub(crate) quiet: bool,
     pub(crate) noinfo: bool,
 }
 
-/// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
-/// `_calc_depclean`, no package arguments): the packages nothing in
-/// `@world` ∪ `@system` needs, at runtime, are the cleanlist. Real
-/// `action_depclean` literally feeds its cleanlist to `unmerge(...,
-/// "unmerge", cleanlist, ordered=ordered)`, so the per-package block
-/// here is exactly `run_unmerge_pretend`'s (each cleanlist cpv passed as
-/// an `=cat/pkg-ver` atom) -- and **without `--pretend` that same
-/// `run_unmerge_pretend` really removes them** (`execute_unmerge` +
-/// per-package `deselect_from_world`), after the safety halt and
-/// `--depclean-lib-check` have already run. See
-/// `portage_repo::depclean_cleanlist`'s own doc comment for the graph
-/// and its documented narrowings.
-///
-/// `emerge -pc <atoms>` (the `--depclean <atoms>` narrowing): the world
-/// "selected" plain atoms are dropped (the named packages get deselected
-/// *and* removed), every other installed package becomes a protected
-/// root, and the cleanlist is just the `args`-matched packages nothing
-/// else needs -- see `depclean_cleanlist`'s own doc comment. Real
-/// `action_depclean` only shows the `* ` advisory block with no args, so
-/// this doesn't either.
+/// `emerge --depclean`: the packages nothing in `@world` ∪ `@system` needs
+/// at runtime are the cleanlist. The per-package block is exactly
+/// `run_unmerge_pretend`'s (each cleanlist cpv passed as an `=cat/pkg-ver`
+/// atom), and without `--pretend` that same call really removes them.
+/// With `<atoms>`, the named packages get deselected and the cleanlist is
+/// just the `args`-matched packages nothing else needs; the `* ` advisory
+/// block shows only with no args. See `portage_repo::depclean_cleanlist`.
+/// Portage: _emerge/actions.py, action_depclean; _calc_depclean
 pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode {
     let RunDepcleanPretendArgs {
         targets,
@@ -278,24 +241,20 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         quiet,
         noinfo,
     } = args;
-    // Bare-name targets get their category from the vdb, then each atom
-    // is checked against the vdb (real `action_depclean`, `:848-863`) --
-    // shared with `--prune`.
+    // Bare-name targets get their category from the vdb; shared with `--prune`.
+    // Portage: _emerge/actions.py, action_depclean
     let args = match resolve_cleanup_args(targets, root, "depclean") {
         Ok(a) => a,
         Err(code) => return code,
     };
 
-    // Real `action_depclean`'s own advisory block -- *only* with no
-    // package arguments (`not myfiles`), non-quiet. The "Depclean may
-    // break link level dependencies" first paragraph is real's own
-    // `if "preserve-libs" not in features and --depclean-lib-check == "n"`
-    // -- portuale has no preserve-libs feature, so it hinges purely on
-    // `--depclean-lib-check=n` (`!lib_check`).
+    // The advisory block: only with no package arguments, non-quiet. The
+    // first paragraph hinges purely on `--depclean-lib-check=n`, since
+    // portuale has no preserve-libs feature.
+    // Portage: _emerge/actions.py, action_depclean
     if args.is_empty() {
-        // Real `action_depclean`: each line is `colorize("WARN", " * ")`
-        // (yellow) + text, and each backtick-wrapped command inside the
-        // text is `good("`…`")` (green).
+        // Each line is a yellow ` * ` prefix; backtick-wrapped commands
+        // inside the text render green.
         let star = color.c("WARN", " * ");
         let green_ticks = |text: &str| -> String {
             let mut out = String::new();
@@ -314,11 +273,9 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
             out.push_str(rest);
             out
         };
-        // `None` = real's leading bare `writemsg_stdout("\n")`; `Some("")`
-        // = real's `msg.append("\n")` (still `WARN(" * ")`-prefixed);
-        // `Some(text)` = a ` * `-prefixed advisory line. The first
-        // paragraph (`Depclean may break link level dependencies...`)
-        // only when `--depclean-lib-check=n`.
+        // `None` = leading bare newline; `Some("")` = a prefixed blank line;
+        // `Some(text)` = an advisory line. The first paragraph shows only
+        // when `--depclean-lib-check=n`.
         let libcheck_off_paragraph = [
             Some("Depclean may break link level dependencies. Thus, it is"),
             Some("recommended to use a tool such as `revdep-rebuild` (from"),
@@ -349,10 +306,9 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         }
     }
 
-    // @world = the `world` file (parent `@selected`, real `show_parents`)
-    // plus each `world_sets` nested set's own atoms (parent `@<name>`) --
-    // kept as `(atom, label)` pairs for the `--verbose` reverse-dep
-    // display. `depclean_cleanlist` drops these seeds in `args` mode.
+    // `@world` = the `world` file plus each `world_sets` nested set's own
+    // atoms, kept as `(atom, label)` pairs for the `--verbose` reverse-dep
+    // display.
     let mut world_seeds: Vec<(String, String)> = Vec::new();
     match read_world_atoms(root) {
         Ok(atoms) => world_seeds.extend(atoms.into_iter().map(|a| (a, "@selected".to_string()))),
@@ -397,15 +353,14 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         lib_protected_providers: &[],
         package_provided: &config.package_provided,
     });
-    // Real `_calc_depclean`'s `unresolved_deps()` safety halt
-    // (`actions.py:1247`) -- checked before the lib scan.
+    // The `unresolved_deps()` safety halt, checked before the lib scan.
+    // Portage: _emerge/actions.py, _calc_depclean
     if let Some(code) = depclean_unresolved_halt(&result.unresolved, false, color) {
         return code;
     }
-    // Real `_calc_depclean`'s `--depclean-lib-check` phase: a cleanlist
-    // package still needed at link level by a survivor is kept (and its
-    // own deps with it, via a second `depclean_cleanlist` pass seeding
-    // the protected providers as roots).
+    // The `--depclean-lib-check` phase: a cleanlist package still needed
+    // at link level by a survivor is kept, with its own deps.
+    // Portage: _emerge/actions.py, _calc_depclean
     let result = apply_depclean_lib_check(root, result, lib_check, color, |providers| {
         portage_repo::depclean_cleanlist(portage_repo::DepcleanCleanlistArgs {
             root,
@@ -418,10 +373,9 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         })
     });
 
-    // Real `create_cleanlist`'s own `elif "--verbose": show_parents(pkg)`
-    // -- the reverse-dep blocks come right after the `* ` advisory and
-    // before `>>> Calculating removal order...` / the empty-cleanlist
-    // message.
+    // The reverse-dep blocks come right after the advisory and before the
+    // removal-order line / empty message.
+    // Portage: _emerge/actions.py, create_cleanlist
     if verbose {
         for (pkg, lines) in &result.kept_parents {
             println!("  {} pulled in by:", pkg.cpv());
@@ -455,9 +409,9 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         return ExitCode::SUCCESS;
     }
 
-    // Real `_calc_depclean`: this line only when there's something to
-    // remove; then `unmerge(..., "unmerge", cleanlist)` renders the
-    // per-package block.
+    // This line only when there's something to remove; then the
+    // per-package block renders through the shared unmerge path.
+    // Portage: _emerge/actions.py, _calc_depclean
     println!(">>> Calculating removal order...");
     let cpv_atoms: Vec<String> = result
         .cleanlist
@@ -465,9 +419,8 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    // Real `action_depclean`: `unmerge(root_config, myopts, "unmerge",
-    // cleanlist, ordered=ordered)` -- the same `unmerge()` the `-C` path
-    // uses. Without `--pretend`, `run_unmerge_pretend` removes them.
+    // Without `--pretend`, the shared unmerge path removes them.
+    // Portage: _emerge/actions.py, action_depclean
     let unmerge_rc = run_unmerge_pretend(RunUnmergePretendArgs {
         targets: &cpv_refs,
         action: "unmerge",
@@ -484,11 +437,9 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         quiet,
         noinfo,
     });
-    // Real `action_depclean` prints the stats block after `unmerge()`
-    // returns (`Number removed:` without `--pretend`). A mid-removal
-    // failure real-`sys.exit`s before this; portuale still prints it
-    // then propagates `unmerge_rc` -- a harmless cosmetic divergence on
-    // the error path only.
+    // The stats block prints after the removal returns. A mid-removal
+    // failure still prints it here, then propagates the code: a harmless
+    // cosmetic divergence on the error path only.
     stats();
     unmerge_rc
 }
