@@ -31,7 +31,7 @@ Whether an atom is installed or already in the graph: the `||`-preference predic
 - Backlog #90 (S1): Portage resolves `||` groups off `_dep_disjunctive_stack`, i.e. only after the main `dep_stack` has drained -- so by resolution time every plain dep this run will ever graph is already graphed. Portuale resolves `||` eagerly at pop time; a queued-but-unresolved atom approximates that drain state (cp-level, mirroring `atom_cp_installed`'s own cp-level style beside it -- version/USE precision would need the not-yet-selected instance). Residual risk: a queued dep that later proves unresolvable mispredicts the branch; the backtrack loop bounds that the way it bounds every speculative selection.
 
 ## fn visible_tree_matches
-- The visible tree candidates matching `atom_str` (USE deps ignored) after the backtrack loop's `runtime_pkg_mask` constraints, as `(version, slot)` -- the listing half of `atom_currently_satisfiable`, returned rather than collapsed to a bool so the bug-531656 downgrade guards can compare versions. Same small-duplication precedent as that function's own notes.
+- The visible tree candidates matching `atom_str` (USE deps ignored) after the `'backtrack` loop's `runtime_pkg_mask` constraints, as `(version, slot)` -- the listing half of `atom_currently_satisfiable`, returned rather than collapsed to a bool so the bug-531656 downgrade guards can compare versions. Same small-duplication precedent as that function's own notes.
 - #212/#276: a per-instance negative (`[binary]` `slot_operator_mask_built`, `[installed]` missing-dependency) hides no tree candidate (see `is_instance_only_mask`).
 
 ## fn downgrade_probe

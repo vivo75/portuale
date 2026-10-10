@@ -24,7 +24,7 @@ pub(crate) fn step_slot_conflict_abi(
             .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate))
     {
         // Same inputs the rebuild scan builds for its own refusal map: every
-        // cp this pass walked, the merge-bound set, and the R2 parents.
+        // cp this pass walked and the merge-bound set.
         let walked: HashSet<(String, String)> = pass
             .entries
             .iter()
