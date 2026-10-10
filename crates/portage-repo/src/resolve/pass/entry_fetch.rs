@@ -38,13 +38,8 @@ pub(crate) fn record_entry_fetch(args: RecordEntryFetchArgs<'_>) {
         candidate_remote,
         version,
     } = args;
-    // Real `output.py:633-641`'s own `f`/`F` fetch-restrict column
-    // (`not pkg.built` -> ebuild candidates only; a binary is already
-    // built and never re-fetched). `resolved.restrict` is the raw
-    // `RESTRICT`; `evaluated_metadata_tokens` resolves its USE
-    // conditionals the same way it does for `interactive`'s
-    // `PROPERTIES`. `fetch_restrict_satisfied` is real
-    // `not getfetchsizes(only_restricted=True)`.
+    // Ebuild candidates only: a binary is already built and never re-fetched.
+    // Portage: output.py, getfetchsizes (only_restricted)
     if candidate_source == CandidateSource::Ebuild
         && evaluated_metadata_tokens(EvaluatedMetadataTokensArgs {
             value_str: &resolved.restrict,
@@ -71,11 +66,8 @@ pub(crate) fn record_entry_fetch(args: RecordEntryFetchArgs<'_>) {
             });
     }
 
-    // Real `output.py:300-332`'s own `_calc_size` -> `counters.
-    // totalsize` (the `-v` `Total:` line's `Size of downloads`): the
-    // bytes still to fetch for this ebuild merge, per distfile.
-    // Runs for every merge-bound ebuild entry, not just
-    // fetch-restricted ones. See `GraphEntry::download_files`.
+    // The bytes still to fetch for this ebuild merge, per distfile.
+    // Portage: output.py, _calc_size. See `GraphEntry::download_files`.
     if candidate_source == CandidateSource::Ebuild {
         state.entries[entry_idx].download_files =
             fetch_bytes_to_download(FetchBytesToDownloadArgs {
@@ -90,12 +82,9 @@ pub(crate) fn record_entry_fetch(args: RecordEntryFetchArgs<'_>) {
                 distdir: ctx.distdir,
             });
     } else if candidate_remote {
-        // A `--getbinpkg` remote binary: real `_calc_size` -> real
-        // `bindbapi.getfetchsizes` returns `{<cpv>: SIZE}` from the
-        // binhost `Packages` index for a package not yet downloaded
-        // (`bintree.isremote`). Feeds both the `-v` per-line ` N KiB`
-        // suffix and the `Size of downloads:` counter. A local
-        // `$PKGDIR` binary is already present -> nothing to fetch.
+        // A `--getbinpkg` remote binary not yet downloaded: size from the
+        // binhost `Packages` index. A local `$PKGDIR` binary is already
+        // present, so nothing to fetch.
         let cpv = format!("{}/{}-{version}", key.0, key.1);
         let size = metadata.get("SIZE").and_then(|s| s.parse::<u64>().ok());
         if let Some(size) = size {

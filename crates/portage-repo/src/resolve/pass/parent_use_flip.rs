@@ -88,20 +88,10 @@ pub(crate) fn parent_use_flip(
     }
 
     if !ctx.autounmask_backtrack_enabled {
-        // Default (real `--autounmask-backtrack` off): the flip
-        // is RECORDED into `_needed_use_config_changes` and the
-        // resolve FAILS (real `_apply_parent_use_changes` runs
-        // only after `_create_graph` already failed,
-        // `depgraph.py:5677`, and the `_success_without_
-        // autounmask` tail `:5793` returns False) -- no merge
-        // rows. The change block plus the "terminated early"
-        // notice are the whole output (rc 1). The rescued dep's
-        // own key is latched in `parent_flip_recorded` so its
-        // masked/use-unsat/plain-miss disclosure is suppressed
-        // (real drops the collected item from
-        // `_unsatisfied_deps_for_display`, `:5820`
-        // `remaining_items`) and the abort renderer skips its
-        // row (see the `pretend` NVC loop's own gate).
+        // Default (`--autounmask-backtrack` off): record the flip and FAIL --
+        // no merge rows, just the change block and the "terminated early"
+        // notice. The rescued dep's key latches so its miss is suppressed.
+        // Portage: depgraph.py, _apply_parent_use_changes
         let parent_cpv = format!("{pc}/{pp}-{pv}");
         let parent_all = list_candidates(&ctx.repos, &pc, &pp).unwrap_or_default();
         let token = target_use
@@ -112,22 +102,11 @@ pub(crate) fn parent_use_flip(
         state.autounmask_use_changes.push(AutounmaskChange {
             atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
             token,
-            // A parent-flip rescue names the flipped parent, not
-            // the failed dep: no single forcing parent, legacy
-            // fill (backlog #205).
+            // No single forcing parent: legacy fill (backlog #205).
             trigger: None,
-            // When the change's own package is itself a
-            // top-level argument, real's dep chain is just the
-            // argument line: `_get_dep_chain` never prints the
-            // start node (`elif node is not start_node`,
-            // `depgraph.py:6357`), and the failed graph walks
-            // straight to the argument (oracle: the aup0b
-            // container probe prints a single `# required by
-            // =dev-libs/aup0b-1 (argument)`). Pre-fill it (the
-            // post-loop fill leaves non-empty chains alone); a
-            // non-argument parent keeps the generic fill, which
-            // already matches real there (oracle:
-            // `abort-au-plain`'s parent-plus-argument rows).
+            // Pre-fill the chain for a top-level parent (Portage never prints
+            // the start node); other parents keep the generic fill.
+            // Portage: depgraph.py, _get_dep_chain
             dep_chain: ctx
                 .top_level
                 .iter()
@@ -141,10 +120,8 @@ pub(crate) fn parent_use_flip(
                 .map(|t| vec![format!("required by {t} (argument)")])
                 .unwrap_or_default(),
         });
-        // Backlog #217: a failed dep rescued by a parent flip
-        // (real `_apply_parent_use_changes` collecting
-        // post-failure) pre-empts the `_success_without_
-        // autounmask` tail -- the notice stays.
+        // A parent-flip rescue pre-empts the `_success_without_autounmask`
+        // tail; the notice stays. Backlog #217.
         state.parent_flip_rescued = true;
         state
             .parent_flip_recorded
@@ -195,24 +172,16 @@ pub(crate) fn parent_use_flip(
             pe.use_expand_display = pv_disp;
             pe.use_expand_display_p = p_disp;
         }
-        // Record-and-fail: the dependency keeps its
-        // `NoVisibleCandidate` outcome (real's failed
-        // `_create_graph`), so no merge rows render -- only the
-        // change block and the notice.
+        // Record-and-fail: the dep keeps its miss, so only the change
+        // block and the notice render.
         Ok(ControlFlow::Continue((current_atom, atom)))
     } else {
-        // `--autounmask-backtrack=y`: fold the flip into
-        // `autounmask_use_config` (a `package.use` change on the
-        // parent) and let the driver re-walk the whole graph so
-        // `flag?`-gated deps of the parent re-evaluate against
-        // the flipped state (real `_needed_use_config_changes`
-        // -> `_backtrack_depgraph`). A parent flip that
-        // contradicts an accumulated change is real
-        // `_autounmask_breakage` territory (Slice 3).
+        // `--autounmask-backtrack=y`: fold the flip into `autounmask_use_config`
+        // and let the driver re-walk, so `flag?`-gated deps re-evaluate. A
+        // contradicting flip is `_autounmask_breakage` territory (Slice 3).
+        // Portage: _needed_use_config_changes, _backtrack_depgraph
         let key_pp = (pc.clone(), pp.clone());
-        // A3 overlay: the opposite-flip check reads the effective
-        // (overlay-then-`bp`) value, exactly like the old direct
-        // read of the single map.
+        // The opposite-flip check reads the effective (overlay-then-`bp`) value.
         if target_use.iter().any(|(f, want)| {
             overlay_use_want(&state.use_overlay, &bp.autounmask_use_config, &key_pp, f)
                 .is_some_and(|p| p != *want)
@@ -220,12 +189,9 @@ pub(crate) fn parent_use_flip(
             state.use_broke = true;
             return Ok(ControlFlow::Continue((current_atom, atom)));
         }
-        // A3 overlay: `newly` is computed against the effective
-        // value too (a flip folded on an *earlier* pass lives in
-        // `bp`, not the overlay -- without this the same flip
-        // would re-fire every pass and eat the backtrack budget).
-        // Writes go to the overlay only; `collect_feedback` + driver unions them
-        // into `bp` before deciding.
+        // `newly` is computed against the effective value too (a flip folded on
+        // an earlier pass lives in `bp`, not the overlay); writes go to the
+        // overlay only, `collect_feedback` + driver unions them into `bp`.
         let mut newly = false;
         for (f, want) in &target_use {
             if overlay_use_want(&state.use_overlay, &bp.autounmask_use_config, &key_pp, f)
@@ -240,10 +206,8 @@ pub(crate) fn parent_use_flip(
             }
         }
         if !newly {
-            // Already folded on an earlier pass yet the dep
-            // still failed this one -- let the ordinary
-            // NoVisibleCandidate path (with
-            // `parent_use_suggestion`) render it.
+            // Already folded on an earlier pass yet still failing: let the
+            // ordinary miss path render it.
             return Ok(ControlFlow::Continue((current_atom, atom)));
         }
         let parent_all = list_candidates(&ctx.repos, &pc, &pp).unwrap_or_default();
@@ -253,8 +217,7 @@ pub(crate) fn parent_use_flip(
             .collect::<Vec<_>>()
             .join(" ");
         let atom_form = autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config);
-        // A3 overlay: dedup spans the union (this pass's overlay
-        // plus `bp`'s committed records), like the old single vec.
+        // Dedup spans the union (overlay plus `bp`'s committed records).
         if !state
             .use_change_overlay
             .iter()
@@ -268,11 +231,7 @@ pub(crate) fn parent_use_flip(
                 atom: atom_form,
                 token,
                 dep_chain: Vec::new(),
-                // Backward-cascade overlay: the flip serves an
-                // already-resolved slot, and the current dep's
-                // owner is often not the forcing parent (e.g.
-                // the bare-depending top package) -- no single
-                // forcing parent, legacy fill (backlog #205).
+                // No single forcing parent: legacy fill (backlog #205).
                 trigger: None,
             });
         }

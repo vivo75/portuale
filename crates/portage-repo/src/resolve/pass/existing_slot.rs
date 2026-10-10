@@ -37,11 +37,8 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
         union_constraints,
     } = args;
     if let Some(&existing_idx) = state.resolved_slots.get(slot_key) {
-        // This exact category/package/slot was already resolved by
-        // an earlier atom. If the current atom's own constraint
-        // doesn't accept that already-resolved version, it's a real
-        // slot conflict -- report it and move on, without a second,
-        // independent resolution or any attempt to reconcile the two.
+        // Already resolved by an earlier atom. If the current atom rejects the
+        // resolved version, report a slot conflict and move on.
         let existing_version = match &state.entries[existing_idx].outcome {
             PretendOutcome::New { version } => version.to_string(),
             PretendOutcome::Upgrade { to, .. } => to.clone(),
@@ -51,12 +48,9 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                 "resolved_slots only ever indexes New/Upgrade/Downgrade/Reinstall entries"
             ),
         };
-        // Include the already-resolved version's own sub-slot: a
-        // *built* slot-operator atom (`cat/pkg:0/2=`, common in a
-        // binary package's recorded RDEPEND) carries an explicit
-        // sub-slot and won't match a `:slot`-only string even when
-        // the sub-slots agree -- which produced a spurious slot
-        // conflict for a package two binary parents both depend on.
+        // Match with the resolved version's own sub-slot: a built slot-operator
+        // atom (`cat/pkg:0/2=`) carries an explicit sub-slot and rejects a
+        // `:slot`-only string even when the sub-slots agree.
         let existing_sub = slot_conflict_meta(&ctx.repos, &key.0, &key.1, &existing_version).0;
         let existing_str = if existing_sub.is_empty() {
             format!("{}/{}-{existing_version}:{slot}", key.0, key.1)
@@ -81,19 +75,11 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                     excluded: ctx.excluded,
                 }));
         if !satisfied {
-            // #290: the same rebuild-trigger forgiveness as the
-            // AlreadyInstalled arm above. A provider pulled in only
-            // by the slot-operator forced upgrade (`pprov` not
-            // requested) reaches this merge arm, where the installed
-            // `:=` consumer's built atom (`>=pprov-1:0/1=`) fails the
-            // new sub-slot -- a rebuild trigger the scan schedules
-            // (`rR pcons`), not a conflict (real 3.0.82.2, bt > 0).
-            //
-            // Only with an installed instance in this slot that the
-            // atom still accepts (the instance the forced upgrade
-            // replaces): with none installed (`abiprov`, both
-            // versions merge-bound) the record is what drives the
-            // conflict-fired ABI rebuild probe (#214), so it stays.
+            // Rebuild-trigger forgiveness: an installed `:=` consumer whose built
+            // atom fails the new sub-slot is a scheduled rebuild, not a conflict --
+            // but only with an installed instance the atom still accepts and a
+            // backtrack budget (the record drives the ABI probe otherwise).
+            // Backlog #290, #214.
             let installed_accepts = installed_refs(ctx.root, &key.0, &key.1)
                 .iter()
                 .filter(|r| r.slot == slot)
@@ -129,20 +115,10 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
             }
             return ControlFlow::Break(());
         }
-        // Backlog #90 (S1): a bare `:=` that *matches* the
-        // already-resolved version still hides a sub-slot shift
-        // when its built binding points elsewhere and the bound
-        // consumer cannot be rebuilt -- the installed-bound
-        // instance never gets pulled (the raw `:=` reuses the
-        // just-selected one), so the two-instance record above
-        // never fires. Record the bound installed instance
-        // alongside instead of swallowing it: existing stays the
-        // merge, the bound version files as the installed side
-        // (the #57 installed-instance pattern), and the
-        // need_rebuild scan sees the stuck parent. Rebuildable
-        // consumers skip this (their update proceeds with a
-        // rebuild, like real) -- see
-        // `built_equals_shift_unrebuildable`.
+        // A matching bare `:=` can still hide a sub-slot shift when its built
+        // binding points at an unrebuildable consumer: record the bound
+        // installed instance alongside so the rebuild scan sees the parent.
+        // Backlog #90 (S1).
         if atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
             && atom.slot.is_none()
             && atom.sub_slot.is_none()
@@ -176,28 +152,12 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
             );
         }
 
-        // `match_from_list` above matched version + slot only. If
-        // this atom carries a `[flag]` use-dep, the already-resolved
-        // package still has to satisfy it -- and if it doesn't, but
-        // a `package.use` flip would (real `--autounmask-use` for a
-        // dep on a package already in the graph), fold the flip into
-        // `autounmask_use_config` and re-run the whole walk so the
-        // package is re-resolved with the flag and its `flag?`-gated
-        // deps appear (real `_need_restart` after
-        // `_needed_use_config_changes` grows).
-        //
-        // Real goes one step further first: a USE mismatch means
-        // the graphed instance does NOT satisfy this atom, so real
-        // pulls a second instance and reports the slot conflict
-        // (live-verified: the notice then carries `("use", flag)`
-        // parents). `version` above is the fresh USE-filtered pick,
-        // so it becomes the conflict's second instance -- unless it
-        // is the already-resolved version itself (selection
-        // prefers the highest flippable version, so a flippable
-        // mismatch resolves in place with an autounmask flip and
-        // no second instance exists to report). No `continue`
-        // here -- the flip suggestion below still runs (real
-        // shows both the notice and the change block).
+        // `match_from_list` matched version + slot only. A `[flag]` use-dep the
+        // resolved package fails means the instance does NOT satisfy this atom:
+        // pull a second instance and report the conflict (Portage carries
+        // `("use", flag)` parents); the flip suggestion below still runs, so
+        // both the notice and the change block show. No second instance when
+        // the fresh pick IS the resolved version (it resolves in place).
         if version != existing_version
             && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
         {
@@ -279,10 +239,8 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                     && let Some(flip) =
                         suggested_use_flip(existing_cand, &key.0, &key.1, use_deps, config)
                 {
-                    // A3 overlay: the three-way match reads the effective
-                    // (overlay-then-`bp`) value. Unlike the parent-flip
-                    // site above this one inserts non-conflicting flags
-                    // and flags only the conflicting one -- preserved.
+                    // The match reads the effective (overlay-then-`bp`) value;
+                    // non-conflicting flags insert, conflicting ones break.
                     // Writes go to the overlay only.
                     let mut newly = false;
                     for (f, on) in &flip {
@@ -293,13 +251,9 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                             f,
                         ) {
                             Some(prev) if prev == *on => {}
-                            // The accumulator already wants this
-                            // flag the *other* way for a different
-                            // atom -- flipping it now would just
-                            // re-break that one. Real
-                            // `_autounmask_breakage`: give up on
-                            // autounmask entirely (handled by the
-                            // driver below).
+                            // The accumulator already wants this flag the other way:
+                            // flipping it would re-break that atom (Portage
+                            // `_autounmask_breakage`; the driver gives up).
                             Some(_) => state.use_broke = true,
                             None => {
                                 state
@@ -324,9 +278,7 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                             &key.1,
                             config,
                         );
-                        // A3 overlay: dedup spans the union (this pass's
-                        // overlay plus `bp`'s committed records), like
-                        // the old single vec.
+                        // Dedup spans the union (overlay plus `bp`'s records).
                         if !state
                             .use_change_overlay
                             .iter()
@@ -340,42 +292,21 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                                 atom: atom_form,
                                 token,
                                 dep_chain: Vec::new(),
-                                // Backlog #244: unlike the parent-flip
-                                // arm above, this dep's owner *is* the
-                                // forcing parent -- its own `[flag]`
-                                // atom needs the change on the
-                                // already-resolved package (real
-                                // `_get_dep_chain` starts at the
-                                // requester, not at whoever pulled the
-                                // package in first; oracle:
-                                // `aubreaktop`, evidence
-                                // 2026-09-28-244).
+                                // This dep's owner IS the forcing parent (Portage's
+                                // `_get_dep_chain` starts at the requester).
+                                // Backlog #244.
                                 trigger: owner.clone(),
                             });
                         }
-                        // Real `_backtrack_depgraph` finishes
-                        // the attempt, then restarts with the
-                        // grown config -- the driver at the
-                        // bottom of `'backtrack` does the
-                        // `continue`, not here. Only with
-                        // `--autounmask-backtrack=y`; off (the
-                        // default), the change is recorded and
-                        // displayed but the graph is not
-                        // re-driven (a post-loop pass refreshes
-                        // this package's own USE line).
+                        // The driver re-drives, not here; only with
+                        // `--autounmask-backtrack=y`, else the change is only
+                        // recorded and displayed. Portage: _backtrack_depgraph
                         if ctx.autounmask_backtrack_enabled {
                             state.autounmask_grew = true;
                         }
-                        // Backlog #218: real needs no re-drive here
-                        // at all -- the flip lands while the flipped
-                        // package is still stacked, so its own dep
-                        // walk already sees it
-                        // (`expand_resolved_slot_with_flipped_use`'s
-                        // doc comment). Re-expand this pass's
-                        // already-flattened deps under the flipped
-                        // USE so the newly-gated atoms queue
-                        // in-walk; a no-op when the flip reveals
-                        // nothing new.
+                        // Re-expand this pass's already-flattened deps under the flipped
+                        // USE so newly-gated atoms queue in-walk (a no-op when the
+                        // flip reveals nothing new). Backlog #218.
                         let mut delta_use: HashSet<String> = existing_use.as_ref().clone();
                         if let Some(overlay) = state.use_overlay.get(key) {
                             for (f, on) in overlay {

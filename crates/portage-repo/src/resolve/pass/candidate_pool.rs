@@ -24,21 +24,9 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
         atom,
         bp,
     } = args;
-    // The resolved version may have come from any of `repos`, or
-    // from PKGDIR (`--usepkg`/`--usepkgonly`) or a remote binhost
-    // (`--getbinpkg`), so re-derive which one it actually lives in
-    // -- reusing `list_candidates`/`list_binary_candidates` rather
-    // than threading a repo location back out of `PretendOutcome`,
-    // since more than one source could carry the identical
-    // version. This step MUST agree with what `resolve_pretend`
-    // itself chose: real `_wrapped_select_pkg_highest_available_
-    // imp` returns `matched_packages[-1]` with `ebuild` built
-    // first in `dbs` order -- "ebuild type is the last resort"
-    // (`depgraph.py:8492`) -- so at a version tie a
-    // `--usepkg`/`--getbinpkg` binary that passed
-    // `binpkg-respect-use` beats the ebuild. Mirrors
-    // `resolve_pretend`'s own pool construction (`--usepkgonly`
-    // excludes ebuilds entirely).
+    // Re-derive which source the resolved version lives in; must agree
+    // with what `resolve_pretend` chose.
+    // Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp (ebuild last resort)
     let mut repo_candidates = if ctx.usepkgonly {
         Vec::new()
     } else {
@@ -58,10 +46,8 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
                 &key.1,
             ));
         }
-        // Same `--binpkg-respect-use` / `--binpkg-changed-deps`
-        // gates `resolve_pretend` applied when it chose this
-        // version -- a binary that was never eligible then can't
-        // be re-derived as the source here either.
+        // A binary that was never eligible at selection time can't be
+        // re-derived as the source here either.
         if ctx.binpkg_respect_use
             || ctx.newuse
             || ctx.changed_use
@@ -97,11 +83,9 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
                 })
             });
         }
-        // `_equiv_ebuild_visible` (see `resolve_pretend`): a
-        // binary re-derived here needs a visible ebuild at its
-        // own exact version, when any visible ebuild satisfies
-        // the atom. `--use-ebuild-visibility` enforces it even
-        // under `--usepkgonly` / a `--useoldpkg-atoms` match.
+        // A re-derived binary needs a visible ebuild at its own exact
+        // version when any visible ebuild satisfies the atom.
+        // Portage: _equiv_ebuild_visible
         let uev = use_ebuild_visibility();
         if (!ctx.usepkgonly || uev) && !binary_candidates.is_empty() {
             let some_ebuild_matches = repo_candidates.iter().any(|c| {
@@ -126,12 +110,9 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
             }
         }
         let binary_candidates = dedup_binary_instances(binary_candidates, atom, config);
-        // #212 (v2 `#24c`): mirror of `resolve_pretend`'s own
-        // `slot_operator_mask_built` pool filter -- a masked binary
-        // must not be re-derived as the entry source here either
-        // (this step MUST agree with what `resolve_pretend`
-        // chose). Plain (`!=cpv`) negatives read as `None` and are
-        // ignored; only the `[binary]`-marked form filters.
+        // Mirror `resolve_pretend`'s `slot_operator_mask_built` pool filter:
+        // a masked binary must not be re-derived here either. Plain
+        // (`!=cpv`) negatives read as `None` and are ignored.
         let masked_here = bp.masked_negatives_for(key);
         let binary_candidates: Vec<Candidate> = binary_candidates
             .into_iter()

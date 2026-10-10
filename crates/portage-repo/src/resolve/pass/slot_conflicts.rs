@@ -23,15 +23,9 @@ pub(crate) fn solve_pass_slot_conflicts(
             config,
         });
         if !solved.removed.is_empty() {
-            // The kept instance takes over the removed instance's
-            // merge row (real merges it; portuale holds one row per
-            // cp). A removal with no keeper deletes the row outright
-            // (degenerate all-unforced shape -- no notice was recorded
-            // for it either). Repointing keeps `required_by`, merge
-            // order and USE wiring stable; the removed version's own
-            // walked deps stay attached (all S2 oracle removals are
-            // leaves -- a non-leaf removal keeps stale deps, filed in
-            // the fn docs).
+            // The kept instance takes over the removed row (one row per cp);
+            // a removal with no keeper deletes it. Repointing keeps
+            // `required_by`, merge order and USE wiring stable.
             for (c, p, r, k) in &solved.removed {
                 let at = state.entries.iter().position(|e| {
                     e.category == *c
@@ -45,11 +39,8 @@ pub(crate) fn solve_pass_slot_conflicts(
                     state.entries.remove(idx);
                     continue;
                 }
-                // Repoint the row at the kept version. An installed
-                // keeper becomes AlreadyInstalled (no row, like real's
-                // kept installed node); a merge keeper stays New. Slot
-                // data comes from the vdb for an installed keeper,
-                // from the tree metadata otherwise.
+                // An installed keeper becomes AlreadyInstalled (no row); a merge
+                // keeper stays New. Slot data comes from the vdb or the tree.
                 let vdb_hit = installed_candidates(ctx.root, c, p)
                     .into_iter()
                     .find(|(v, _, _)| v == k);
@@ -67,10 +58,8 @@ pub(crate) fn solve_pass_slot_conflicts(
                 entry.slot = Some(slot);
                 entry.sub_slot = Some(sub_slot);
                 entry.repo_name = Some(repo);
-                // Per-flag `(flag, enabled)` pairs (the entry shape),
-                // not the `(VAR, body)` display pairs: vdb record for
-                // an installed keeper, tree candidate + effective USE
-                // for a merge keeper.
+                // Per-flag `(flag, enabled)` pairs: vdb record for an installed
+                // keeper, tree candidate + effective USE for a merge keeper.
                 if vdb_hit.is_some() {
                     let (iuse, use_flags) = installed_pkg_iuse_and_use(ctx.root, c, p, k);
                     entry.use_flags_display = iuse
@@ -96,17 +85,11 @@ pub(crate) fn solve_pass_slot_conflicts(
             state.slot_conflicts = solved.surviving;
             state.skipped_updates.extend(solved.skipped);
         }
-        // #142 S2 F3: a repointed row's keeper version was never walked
-        // (losing currents get no entry and no dep flatten), so its own
-        // blockers are not pending — but real's kept graph node carries
-        // them into `_validate_blockers`. Flatten the keeper's ebuild
-        // dep strings for blocker tokens here, before `resolve_blockers`
-        // runs below; the F2 owner-version gate then files exactly the
-        // keeper's blockers and drops the losers'. Only blockers are
-        // collected (a keeper merge dep would need a second walk — the
-        // documented non-leaf staleness in `direct_solve_slot_conflicts`'
-        // repoint arm stands). Installed keepers are exempt: their
-        // blockers come from the vdb scan when unwalked.
+        // A repointed keeper was never walked, so its blockers are not pending:
+        // flatten the keeper's ebuild dep strings for blocker tokens before
+        // `resolve_blockers` runs. Only blockers (a merge dep would need a
+        // second walk); installed keepers are exempt (vdb scan covers them).
+        // Portage: depgraph.py, _validate_blockers
         for (c, p, _removed, k) in &solved.removed {
             if installed_candidates(ctx.root, c, p)
                 .into_iter()
