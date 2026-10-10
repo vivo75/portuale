@@ -2,6 +2,7 @@
 Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, `match_from_list`, USE-dep evaluation, `extract_affecting_use`). Context moved out of the code comments (#336 Phase 7); the code keeps only the short why.
 
 ## module
+- Owner, 2026-10-10: the grammar scope cut below is temporary. The target is the full grammar of each supported EAPI, applied per ebuild according to its declared EAPI (backlog #341).
 - Origin: the "atom matching" slice from LLM/agent-context.md's depgraph/config resolution follow-up work. Ports `portage.dep.Atom` and `portage.dep.match_from_list` (lib/portage/dep/__init__.py).
 - Scope cut vs. the Portage grammar (PMS chapter 8): no extended/wildcard atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), no EAPI parametrization (Portage's grammar changes shape per EAPI; slot-operator support is EAPI 5+, but nothing here is EAPI-parametrized, so it is always recognized, like every other EAPI-gated feature already ported).
 - The Python harness (python/atom_harness.py) explicitly rejected atoms using the still-excluded features as INVALID, so both sides agreed on the same input language rather than Rust silently accepting a narrower one. (The bounded wildcard-atom API further down the file, for package.mask/.unmask/.accept_keywords matching only, does not change any of this.) NOTE: the Python mirror no longer exists (see AGENTS.md rule 4).

@@ -201,3 +201,30 @@ The owner approved items 1-27 and commented on two of them: item 2
 
     `agent-context.md` cited a `helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
     that no longer exists. Its pointer is dropped.
+
+## 2026-10-10, owner approvals for Phases 5-7
+
+29. **The Phase 7 pilot is approved as is** (`LLM/code-notes/portage-dep/lib.md`).
+    It is the template for the comment rollout. The owner adds that the
+    `portage-dep` scope cut against the Portage grammar is temporary:
+    portuale must support the full grammar of every supported EAPI and
+    apply each ebuild's declared EAPI rules. Filed as #341.
+30. **The split map is approved** (`2026-10-10-split-map.md`). The
+    owner's answers to its section 12:
+    1. Layout is "best practice", which is the repo's rust-skills rule
+       `proj-mod-rs-dir`: directory modules use `foo/mod.rs`,
+       consistently. Blame preservation does not matter (single
+       committer).
+    2. Tests go in `tests/` directories (`foo/tests/mod.rs`, …). The VDB
+       lint already skips `tests` path components, so it needs no change.
+    3. `portage-repo/src/lib.rs` is split into the ~38 modules in one go.
+    4. `pretend::run` phase S and `ebuild_merge.rs` go last.
+    5. Large shell/data consts (`MERGE_FLOW`, `SANDBOXED_SRC_PHASES`,
+       `ENVIRON_WHITELIST`, …) move to data files read with
+       `include_str!`.
+    6. No extra files are added to the map for now.
+31. **Execution order: Phase 6, then 5, then 7.** Phase 6 moves every file.
+    Phase 5's remaining display functions need the `pretend::run` split.
+    Phase 7's comments and code-notes must describe the final layout.
+    Branch `refactor/readability-2` in both repos. Commits stay local
+    until the owner asks for a push.

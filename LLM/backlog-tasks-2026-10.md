@@ -132,6 +132,8 @@ live"). The Python mirror was removed 2026-09-15 —
 
 340. **(filed 2026-10-10, found by #336 Phase 1) — two unit tests fail only under the full-workspace parallel run.** `emerge_build::tests::a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out` took 121 s once (the slow sibling's `sleep` was not killed), and `pretend::tests::ask_config_select_sigint_prints_interrupted_and_exits_130_like_real` failed once. Both pass alone 3/3. The first may be a real kill race in the build scheduler; the second may be a remnant of #321's pty race. Separately, ~300 unit tests in `crates/portuale` exec `target/release/portuale` without building it, so `cargo test` on a fresh tree runs no binary, or a stale one; `LLM/tools/gate.sh` builds first as a workaround. [A]
 
+341. **(filed 2026-10-10, owner, from the #336 Phase 7 pilot review) — full EAPI-aware atom grammar.** `portage-dep` parses one EAPI-agnostic superset (no EAPI parametrization, no extended/wildcard atoms, no build-ids; see `LLM/code-notes/portage-dep/lib.md` "module"). The goal: the full grammar of every supported EAPI, with each ebuild's dependency strings parsed and checked under its declared EAPI's rules (Portage's `_get_atom_re(eapi_attrs)`/`Atom(eapi=...)`). [A]
+
 ## Deliberate cuts — do NOT pick these
 
 - Fixing this by hiding old builds (filtering the binhost index to the newest `BUILD_ID` per `cpv` at load time) — it would make `--binpkg-respect-use` / `binpkg-changed-deps` fallbacks to an older, matching build impossible, which real Portage supports. The fix is to carry `BUILD_ID` through selection, download and metadata reads (#299–#301), not to drop instances. [A]
