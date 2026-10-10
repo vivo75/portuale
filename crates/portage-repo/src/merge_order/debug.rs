@@ -2,22 +2,14 @@
 
 use crate::merge_order::*;
 
-/// `PORTUALE_MO_SEL=1`: emit one `MO_SEL ` line per `select_nodes`
-/// iteration to stderr -- the portuale half of the real-vs-portuale
-/// merge-order trace harness (`TEST/scripts/mo-trace/`). The real half is
-/// `real-trace.py`, which injects an `RT_SEL` line with the same fields
-/// into real's `_serialize_tasks`; `align-traces.py` walks the two streams
-/// in step and reports the first iteration whose state diverges. Never
-/// on by default, so a normal run is byte-identical (there is no other
-/// output change).
+/// `PORTUALE_MO_SEL=1`: one `MO_SEL` line per `select_nodes` iteration to stderr.
+/// Never on by default, so a normal run is byte-identical.
 pub(crate) fn mo_sel_enabled() -> bool {
     std::env::var_os("PORTUALE_MO_SEL").is_some_and(|v| v != "0")
 }
 
-/// The version an entry is resolved at (the merge target for an
-/// upgrade/downgrade, the current version otherwise). `None` for
-/// `NoVisibleCandidate` and for a `Uninstall` removal (#72 B3), which is
-/// never a merge target.
+/// The version an entry is resolved at. `None` for `NoVisibleCandidate` and
+/// `Uninstall` removals, which are never merge targets.
 pub(crate) fn outcome_version(e: &GraphEntry) -> Option<&str> {
     match &e.outcome {
         PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
@@ -29,12 +21,8 @@ pub(crate) fn outcome_version(e: &GraphEntry) -> Option<&str> {
     }
 }
 
-/// Real `Package`'s `cat/pkg-ver` label for the trace `pick=` field.
-/// Prefixed `m:` for a merge-bound node (real `operation == "merge"`) or
-/// `n:` for a nomerge/installed one, so the aligner can see *which kind*
-/// of node each side removed when the frontiers differ -- the iter-1
-/// gnuconfig/elt-patches batch vs real's installed-nomerge batch is
-/// exactly the difference this harness exists to localize.
+/// The `cat/pkg-ver` label for the trace `pick=` field, prefixed `m:` for a
+/// merge-bound node or `n:` for a nomerge one.
 pub(crate) fn mo_sel_cpv(e: &GraphEntry, installed: bool) -> String {
     let kind = if installed { 'n' } else { 'm' };
     match outcome_version(e) {
@@ -55,12 +43,7 @@ pub(crate) struct MoSelTraceLineArgs<'a> {
     pub(crate) pick: &'a [String],
 }
 
-/// One `MO_SEL ` line (`PORTUALE_MO_SEL`) -- pure so the format is
-/// unit-pinned. Field order is the shared harness contract:
-/// `iter retlist alive asap prefer_asap drop_satisfied ig pick`; `asap`
-/// is the bracketed list of `asap_nodes` cpvs (a count was not enough:
-/// firefox's clang-runtime divergence is exactly one extra lingering
-/// asap node on portuale's side).
+/// One `MO_SEL ` line (`PORTUALE_MO_SEL`) -- pure so the format is unit-pinned.
 pub(crate) fn mo_sel_trace_line(args: MoSelTraceLineArgs<'_>) -> String {
     let MoSelTraceLineArgs {
         iter,
@@ -83,17 +66,12 @@ pub(crate) fn mo_sel_trace_line(args: MoSelTraceLineArgs<'_>) -> String {
     )
 }
 
-/// Dumps the freshly-built digraph in real portage's own
-/// `digraph.debug_print()` format (`portage/util/digraph.py:349`),
-/// preceded by the `\ndigraph:\n\n` header -- to **stderr**, under
-/// `emerge --pretend --debug` (or the legacy `PORTUALE_DEBUG_MERGE_GRAPH`
-/// env var). This is how the module was validated and the fastest way to
-/// localise a merge-order divergence: dump both, diff the node sets, then
-/// the edge sets, then the priorities, then `.order` (per this module's
-/// header).
+/// Dumps the freshly-built digraph in Portage's `digraph.debug_print()` format,
+/// to stderr under `--pretend --debug` (or `PORTUALE_DEBUG_MERGE_GRAPH`).
+/// Portage: portage/util/digraph.py, debug_print
 ///
-/// Real's format, per node in insertion order (`g.order` before
-/// `merge_order_bias` re-sorts it -- real `debug_print` iterates
+/// Portage's format, per node in insertion order (`g.order` before
+/// `merge_order_bias` re-sorts it -- Portage's `debug_print` iterates
 /// `self.nodes`, not `.order`):
 ///
 /// ```text
@@ -101,19 +79,9 @@ pub(crate) fn mo_sel_trace_line(args: MoSelTraceLineArgs<'_>) -> String {
 ///   (child..., <state>) (<max-priority>)
 /// (leaf..., <state>) (no children)
 /// ```
-///
-/// **Divergences from real** (see `resolver_trace`'s header):
-/// plain-text node labels; portuale's post-prune merge closure as the
-/// node set, with the top-level atoms appended as pseudo-`DependencyArg`
-/// nodes (`<atom> depends on` / `  <resolved-node> (soft)`) so a diff
-/// against real still lines up, rather than real's full `@world`/
-/// `@system` universe (proven unnecessary for ordering by the
-/// `_serialize_tasks` port).
-/// Real `depgraph.py:9917-9930`'s `\nruntime cycle digraph (<n> nodes):
-/// \n\n` + `debug_print()` of the cycle's induced subgraph + `runtime
-/// cycle leaf: <pkg>\n\n` -- to stderr, under `--pretend --debug`, once
-/// per relaxed runtime cycle. Same node/edge formatting as
-/// `debug_dump_graph`.
+/// The cycle's induced subgraph plus the reported leaf, to stderr under
+/// `--pretend --debug`, once per relaxed runtime cycle.
+/// Portage: depgraph.py, _serialize_tasks
 pub(crate) fn debug_dump_cycle(
     g: &Digraph,
     entries: &[GraphEntry],
@@ -140,8 +108,7 @@ pub(crate) fn debug_dump_cycle(
             }
         }
     }
-    // Real `cycle_digraph.order[-1]` -- the last node in `.order` within
-    // the subgraph is the leaf real reports.
+    // The last node in `.order` within the subgraph is the reported leaf.
     if let Some(&leaf) = g.order.iter().rev().find(|i| sub.contains(i)) {
         crate::resolver_trace::err(format_args!("runtime cycle leaf: {}\n\n", label(leaf)));
     }
@@ -170,8 +137,7 @@ pub(crate) fn debug_dump_graph(
     if !env && !crate::resolver_debug() {
         return;
     }
-    // The env var predates the `--debug` wiring and went to stderr
-    // directly; keep it working even without `--debug`.
+    // The env var predates the `--debug` wiring; keep it working without `--debug`.
     let emit = |s: String| {
         if crate::resolver_debug() {
             crate::resolver_trace::err(format_args!("{s}"));
@@ -195,9 +161,7 @@ pub(crate) fn debug_dump_graph(
         }
     }
 
-    // Pseudo-`DependencyArg` nodes for the top-level atoms, appended
-    // after the real graph (real interleaves them; portuale flattens set
-    // expansion before the resolver, so it only has the concrete atoms).
+    // Pseudo-`DependencyArg` nodes for the top-level atoms, appended last.
     let mut cp_idx: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
     for (j, e) in entries.iter().enumerate() {
         cp_idx

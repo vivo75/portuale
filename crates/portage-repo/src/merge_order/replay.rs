@@ -5,11 +5,9 @@ use crate::merge_order::*;
 /// A `(category, package)` key.
 pub(crate) type Cp = (String, String);
 
-/// The USE state `replay_create_graph` needs for one entry: its declared
-/// (profile-valid) `IUSE`, the flags its configuration enables *before*
-/// any autounmask change, and the flags no `package.use` change can touch
-/// (profile-forced or -masked). `None` for an entry whose USE cannot
-/// change (installed, binary, missing) -- its use-deps are not checked.
+/// The USE state `replay_create_graph` needs for one entry: declared `IUSE`, the
+/// enabled flags before any autounmask change, and the flags no change can
+/// touch. `None` for entries whose USE cannot change (installed, binary, missing).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ReplayUse {
     pub iuse: HashSet<String>,
@@ -17,11 +15,8 @@ pub(crate) struct ReplayUse {
     pub fixed: HashSet<String>,
 }
 
-/// The first dependency real's `_create_graph` fails on, as
-/// `(parent entry, index into its deps)`. `contradiction` marks the
-/// autounmask shape: the atom needs a USE flag the other way from a
-/// change already needed on the same package (real rejects the flip,
-/// `depgraph.py:7714`, and the dependency is unsatisfied).
+/// The first dependency the replayed walk fails on, as `(parent entry, dep index)`.
+/// `contradiction` marks the autounmask shape (a flip Portage rejects).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReplayFailure {
     pub parent: usize,
@@ -29,22 +24,17 @@ pub(crate) struct ReplayFailure {
     pub contradiction: bool,
 }
 
-/// What `replay_create_graph` saw: real's admission order, the edge that
-/// first admitted each entry (`None` for an argument or an unreached
-/// entry), the first failing dependency, and the USE changes the walk
-/// needed, per `cat/pkg` (real `_needed_use_config_changes`).
+/// What `replay_create_graph` saw: admission order, the edge admitting each entry,
+/// the first failing dependency, and the needed USE changes per `cat/pkg`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WalkReplay {
     pub admitted: Vec<usize>,
     pub admitted_by: Vec<Option<(usize, usize)>>,
-    /// For an argument entry: the index into `top_level_atoms` of the
-    /// atom that added it.
+    /// For an argument entry: the index into `top_level_atoms` of the adding atom.
     pub admitted_arg: Vec<Option<usize>>,
-    /// Every resolved `(parent, dep index, target)` edge, in walk order
-    /// (real's digraph parent-insertion order).
+    /// Every resolved `(parent, dep index, target)` edge, in walk order.
     pub edges: Vec<(usize, usize, usize)>,
-    /// Per `cat/pkg`, the `(parent, dep index)` whose atom first needed
-    /// each USE change the walk made (real's dep chain for the change).
+    /// Per `cat/pkg`, the `(parent, dep index)` first needing each USE change.
     pub flip_origin: HashMap<(String, String), (usize, usize)>,
     pub failure: Option<ReplayFailure>,
     pub needed: HashMap<(String, String), HashMap<String, bool>>,
@@ -60,32 +50,22 @@ pub(crate) struct ReplayCreateGraphArgs<'a> {
     pub(crate) use_of: &'a dyn Fn(usize) -> Option<ReplayUse>,
 }
 
-/// Backlog #244: real `_create_graph`'s walk replayed over a settled
-/// graph, stopping at the first dependency that fails -- the fail-fast
-/// half portuale's BFS pass (which walks everything and classifies
-/// afterwards, see `abort_outcome`) does not have.
+/// Portage's `_create_graph` walk replayed over a settled graph, stopping at the
+/// first failing dependency -- the fail-fast half the BFS pass does not have.
 ///
-/// Walk order is `build_digraph`'s own `.order` replay (arguments added
-/// in argv order and pushed, `_dep_stack` popped LIFO, disjunctive
-/// bundles deferred until the stack drains). Per popped node, each dep
-/// key is one `_add_pkg_dep_string` call: `_minimize_children`
-/// (`depgraph.py:4751-4775`) yields unresolvable atoms first, so a
-/// failing atom anywhere in the key fails the node before any of the
-/// key's children is admitted; earlier keys' children stay admitted.
+/// Walk order is `build_digraph`'s `.order` replay. Per popped node, each dep key
+/// is one `_add_pkg_dep_string` call; unresolvable atoms yield first, so a
+/// failing atom fails the key before any of its children is admitted.
 ///
-/// USE: an atom's use-deps are checked against the target's configured
-/// USE with the needed changes so far applied (real `_pkg_use_enabled`).
-/// With `allow_flips` a mismatch the target can take becomes a needed
-/// change -- unless the change contradicts one already needed, which is
-/// the failure (`depgraph.py:7714`); without it (real's
-/// `myparams["autounmask"] = False` clean pass) every mismatch fails.
-/// `needed_init` seeds the changes from earlier passes (real
-/// `_feedback_config`), keyed by `cat/pkg`.
+/// USE: checked against the target's configured USE with the needed changes so
+/// far applied. With `allow_flips` a takable mismatch becomes a needed change,
+/// unless it contradicts one already needed (the failure); without it every
+/// mismatch fails. `needed_init` seeds changes from earlier passes.
 ///
-/// Deliberately conservative: an edge counts as failing only when its
-/// `cat/pkg` has a `NoVisibleCandidate` entry naming this parent, or
-/// when the USE rule above fails it; an edge with no entry to land on
-/// at all (deps portuale never walks) is skipped.
+/// Deliberately conservative: an edge counts as failing only when its `cat/pkg`
+/// has a `NoVisibleCandidate` entry naming this parent, or when the USE rule
+/// fails it; an edge with no entry to land on at all is skipped.
+/// Portage: depgraph.py, _create_graph
 pub(crate) fn replay_create_graph(args: ReplayCreateGraphArgs<'_>) -> WalkReplay {
     let ReplayCreateGraphArgs {
         entries,
@@ -203,11 +183,8 @@ pub(crate) struct ReplayKeyArgs<'a> {
     pub(crate) out: &'a mut WalkReplay,
 }
 
-/// One `_add_pkg_dep_string` call of `replay_create_graph`: resolve every
-/// atom of `entries[i]`'s key `key`, fail the key on the first
-/// unresolvable one (unresolvable atoms are yielded first, so nothing of
-/// the key is admitted then), else admit the targets in atom order.
-/// Returns `true` once a failure is recorded.
+/// One `_add_pkg_dep_string` call: fail the key on the first unresolvable atom,
+/// else admit the targets in atom order. Returns `true` once a failure is recorded.
 pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
     let ReplayKeyArgs {
         entries,
@@ -223,8 +200,7 @@ pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
         out,
     } = args;
     let parent_cp = (entries[i].category.as_str(), entries[i].package.as_str());
-    // Pass 1: pick every atom's target and settle its USE; a failure
-    // stops the key before anything is admitted.
+    // Pass 1: pick every atom's target and settle its USE before admitting anything.
     let mut targets: Vec<(usize, usize)> = Vec::new();
     let mut flips: Vec<(Cp, Vec<(String, bool)>)> = Vec::new();
     for (ei, edge) in entries[i].deps.iter().enumerate() {
@@ -261,11 +237,8 @@ pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
                 ) && pre.edge_matches(&edge.atom, j)
             })
             .collect();
-        // Only the use-deps written unconditionally (`flag` / `-flag`) are
-        // checked: a `flag?` / `flag=` one depends on the parent's own USE,
-        // which real's walk may itself change (`_apply_parent_use_changes`)
-        // -- evaluating it against the settled parent would invent
-        // contradictions real never meets.
+        // Only unconditional `flag` / `-flag` use-deps are checked: conditional ones
+        // depend on the parent's own USE, which the walk may itself change.
         let written: HashSet<String> = portage_dep::parse_atom(&edge.atom)
             .and_then(|a| a.use_deps)
             .unwrap_or_default()
@@ -285,12 +258,8 @@ pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
             .into_iter()
             .filter(|d| written.contains(&d.flag))
             .collect();
-        // Real `_select_pkg_highest_available` over the graph: an
-        // instance whose IUSE can carry every use-dep flag, then the
+        // Highest-available over the graph: IUSE-carrying instances first, then the
         // usual merge-bound-then-highest ranking.
-        // Only the unconditional `flag` / `-flag` forms constrain the
-        // target (`use_deps_satisfied`'s own rule); a flag with a
-        // `(+)`/`(-)` default need not be declared.
         let wanted: Vec<(String, bool)> = use_deps
             .iter()
             .filter_map(|d| match d.op {
@@ -355,8 +324,7 @@ pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
                 let mut impossible = false;
                 for (f, on) in wanted {
                     if !u.iuse.contains(&f) {
-                        // Undeclared: satisfied or not by its `(+)`/`(-)`
-                        // default alone -- no change can help.
+                        // Undeclared: the default alone decides; no change can help.
                         if flag_names.contains(&f) {
                             impossible = true;
                         }

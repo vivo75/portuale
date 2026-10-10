@@ -7,9 +7,8 @@ use crate::merge_order::*;
 // ---------------------------------------------------------------------
 
 /// A `portage.util.digraph` restricted to what `_serialize_tasks` reads:
-/// per-node child/parent adjacency with a priority *list* per edge, plus
-/// `order` (the sequence nodes were added in, which real's own
-/// `leaf_nodes()` iterates and `_merge_order_bias` re-sorts in place).
+/// per-node child/parent adjacency with a priority list per edge, plus `order`.
+/// Portage: portage/util/digraph.py
 pub(crate) struct Digraph {
     /// Node `i` is `entries[i]`.
     pub(crate) n: usize,
@@ -17,15 +16,14 @@ pub(crate) struct Digraph {
     pub(crate) children: Vec<Vec<(usize, Vec<DepPriority>)>>,
     pub(crate) parents: Vec<Vec<usize>>,
     pub(crate) order: Vec<usize>,
-    /// Real `node.installed` -- a "nomerge" node, present only to
-    /// constrain and inform merge order, never emitted.
+    /// A "nomerge" node: constrains merge order, never emitted.
     pub(crate) installed: Vec<bool>,
     pub(crate) alive: Vec<bool>,
 }
 
 impl Digraph {
-    /// Real `digraph.child_nodes(node, ignore_priority)`: a child counts
-    /// when *at least one* of the edge's priorities survives the filter.
+    /// A child counts when at least one of the edge's priorities survives the filter.
+    /// Portage: portage/util/digraph.py, child_nodes
     pub(crate) fn child_nodes(&self, i: usize, ig: Option<Ignore>) -> Vec<usize> {
         self.children[i]
             .iter()
@@ -46,8 +44,8 @@ impl Digraph {
         self.parents[i].iter().any(|&p| self.alive[p])
     }
 
-    /// Real `digraph.leaf_nodes(ignore_priority)` -- every alive leaf, in
-    /// `order` sequence.
+    /// Every alive leaf, in `order` sequence.
+    /// Portage: portage/util/digraph.py, leaf_nodes
     pub(crate) fn leaf_nodes(&self, ig: Option<Ignore>) -> Vec<usize> {
         self.order
             .iter()
@@ -68,20 +66,17 @@ impl Digraph {
     }
 }
 
-/// Real `_SerializeFrontier`: per-node, per-level surviving-child counts
-/// plus per-level ready heaps. A node is a leaf under level L iff
-/// `surv[node][L] == 0`.
+/// Per-node, per-level surviving-child counts plus per-level ready heaps.
+/// A node is a leaf under level L iff `surv[node][L] == 0`.
+/// Portage: _serialize_frontier.py, _SerializeFrontier
 pub(crate) struct SerializeFrontier {
-    /// Level -> filter (`None` at level 0: a leaf iff it has no children
-    /// at all). The deduped union of both `PriorityRange` ladders, so
-    /// every filter the loop can ask about has a level.
+    /// Level -> filter (`None` at level 0). The deduped union of both ladders.
     pub(crate) levels: Vec<Option<Ignore>>,
     /// Per-node surviving-child count per level.
     pub(crate) surv: Vec<Vec<u32>>,
     /// `(parent, child)` -> survival bitmask over levels.
     pub(crate) edge_mask: HashMap<(usize, usize), u64>,
-    /// Node -> order-index; order-index -> node. Assigned once at build
-    /// from `order`; never changes afterwards.
+    /// Node -> order-index; order-index -> node. Assigned once at build.
     pub(crate) index: Vec<usize>,
     pub(crate) by_index: Vec<usize>,
     /// Per-level min-heap of order-indices currently believed leaf.
@@ -89,9 +84,8 @@ pub(crate) struct SerializeFrontier {
 }
 
 impl SerializeFrontier {
-    /// The filter union both ladders query: `None` first, then every
-    /// rung of `NORMAL` and `SATISFIED` in ladder order, deduplicated
-    /// (Portage deduplicates by object identity too).
+    /// The filter union both ladders query: `None` first, then every rung of
+    /// `NORMAL` and `SATISFIED`, deduplicated.
     pub(crate) fn build_levels() -> Vec<Option<Ignore>> {
         let mut levels: Vec<Option<Ignore>> = vec![None];
         for f in NORMAL
@@ -133,8 +127,7 @@ impl SerializeFrontier {
                 }
             }
         }
-        // Seed each level's ready heap with its initial leaves, in
-        // order-index order -- ascending pushes need no heapify.
+        // Seed each level's ready heap with its initial leaves.
         let mut ready: Vec<BinaryHeap<Reverse<usize>>> =
             (0..nlevels).map(|_| BinaryHeap::new()).collect();
         for &node in &g.order {
@@ -155,10 +148,7 @@ impl SerializeFrontier {
         }
     }
 
-    /// Bitmask of the levels whose filter an edge with `prios`
-    /// survives. Level 0 (`None`) is always set; for level L > 0 the
-    /// edge survives iff some priority passes the filter -- exactly
-    /// `Digraph::is_leaf`'s per-edge test, as in real `_compute_mask`.
+    /// Bitmask of the levels whose filter an edge with `prios` survives.
     pub(crate) fn compute_mask(levels: &[Option<Ignore>], prios: &[DepPriority]) -> u64 {
         let mut mask = 1u64;
         for (l, f) in levels.iter().enumerate().skip(1) {
@@ -170,9 +160,7 @@ impl SerializeFrontier {
         mask
     }
 
-    /// Level index for a filter, or `None` if untracked (every filter
-    /// the loop uses is tracked; the fallback is defensive, mirroring
-    /// real's `level_of` returning `None`).
+    /// Level index for a filter, or `None` if untracked (defensive fallback).
     pub(crate) fn level_of(&self, ig: Option<Ignore>) -> Option<usize> {
         self.levels.iter().position(|&f| f == ig)
     }
@@ -181,14 +169,7 @@ impl SerializeFrontier {
         self.surv.get(node).is_some_and(|counts| counts[level] == 0)
     }
 
-    /// The alive leaves under `level`, in `order` sequence -- the
-    /// frontier equivalent of `Digraph::leaf_nodes`. Drains the level's
-    /// heap, discarding stale entries (dead nodes and nodes that
-    /// stopped being leaves), and rebuilds it from the survivors;
-    /// entries pop in ascending order-index order, so the result is in
-    /// `order` and the rebuilt heap needs no heapify. `alive` is the
-    /// graph's liveness vector (nodes are never deleted here, only
-    /// flagged, unlike real's dict-keyed graph).
+    /// The alive leaves under `level`, in `order` sequence.
     pub(crate) fn ready_nodes(&mut self, level: usize, alive: &[bool]) -> Vec<usize> {
         let mut result: Vec<usize> = Vec::new();
         let mut seen: HashSet<usize> = HashSet::new();
@@ -216,14 +197,8 @@ impl SerializeFrontier {
         result
     }
 
-    /// Account for `node` leaving the graph. `children`/`parents` are
-    /// its adjacency as it stands (only the adjacency and the masks
-    /// matter here, so call before or after flipping `alive`). Each
-    /// removed edge decrements the parent's per-level counts wherever
-    /// the edge had survived; a count hitting zero pushes the parent's
-    /// index (lazily validated on pop). A removed node's own counts are
-    /// poisoned so `is_leaf` stays false for it, mirroring real's
-    /// `surv.pop`.
+    /// Account for `node` leaving the graph; counts/edges are read off the
+    /// adjacency as it stands.
     pub(crate) fn remove(
         &mut self,
         node: usize,
@@ -258,13 +233,8 @@ impl SerializeFrontier {
         }
     }
 
-    /// Account for `digraph.add(node, parent, priority)`: an edge from
-    /// `parent` to `node` whose priority list just grew to `priorities`.
-    /// Adding a priority only makes an edge survive more levels, so the
-    /// parent's counts only increase; a parent leaving a level's ready
-    /// set is handled lazily on pop. Not exercised by the selection
-    /// loop (which never adds edges); pinned by unit test for parity
-    /// with real's mutation surface.
+    /// Account for an edge whose priority list just grew: counts only increase.
+    /// Not exercised by the selection loop; pinned by unit test.
     #[allow(dead_code)]
     pub(crate) fn add_edge(
         &mut self,
@@ -302,16 +272,14 @@ impl SerializeFrontier {
     }
 }
 
-/// Real `PORTAGE_SERIALIZE_FRONTIER_DISABLE`: fall back to the plain
-/// `leaf_nodes()`/`is_leaf()` scans (frontier never built). An escape
-/// hatch for debugging and for A/B perf comparison, same as upstream.
+/// Fall back to plain `leaf_nodes()`/`is_leaf()` scans when
+/// `PORTAGE_SERIALIZE_FRONTIER_DISABLE` is set (debugging escape hatch).
+/// Portage: _serialize_frontier.py
 pub(crate) fn frontier_enabled() -> bool {
     std::env::var_os("PORTAGE_SERIALIZE_FRONTIER_DISABLE").is_none()
 }
 
-/// `Digraph::leaf_nodes` through the frontier when built, plain scan
-/// otherwise. The two agree by construction (same order, same filter);
-/// the equivalence unit tests pin it.
+/// `leaf_nodes` through the frontier when built, plain scan otherwise.
 pub(crate) fn leaves_via(
     frontier: Option<&mut SerializeFrontier>,
     g: &Digraph,
@@ -330,8 +298,7 @@ pub(crate) fn leaves_via(
     }
 }
 
-/// `Digraph::is_leaf` through the frontier when built, direct check
-/// otherwise.
+/// `is_leaf` through the frontier when built, direct check otherwise.
 pub(crate) fn is_leaf_via(
     frontier: Option<&SerializeFrontier>,
     g: &Digraph,

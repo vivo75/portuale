@@ -2,17 +2,9 @@
 
 use crate::merge_order::*;
 
-/// Real `mypriority.satisfied = inst_pkg`: whether an installed package
-/// matches `edge`'s atom (`installed_by_cp` is `installed_candidates_by_cp`
-/// -- real `vardb.match_pkgs(atom)`), with the `:=`/`:*`-style narrowing
-/// `build_digraph` documents: for a `buildtime_slot_op`/`runtime_slot_op`
-/// edge the match must carry the resolved child's own slot/sub-slot, so a
-/// sub-slot bump doesn't read as satisfied. `child_slot` `None` means the
-/// caller has no resolved child (plain atom check).
-///
-/// Extracted from `build_digraph` so the #68/#72 B2 satisfied-blocker
-/// predicate (`portuale`'s `replacement_wait_index`) reads exactly the
-/// same rule instead of re-deriving it (T4).
+/// Whether an installed package matches `edge`'s atom. For a slot-operator edge
+/// the match must carry the resolved child's own slot/sub-slot.
+/// `child_slot` `None` means no resolved child (plain atom check).
 pub(crate) fn edge_satisfied_with(
     installed_by_cp: &HashMap<(String, String), Vec<String>>,
     edge: &DepEdge,
@@ -41,11 +33,8 @@ pub(crate) fn edge_satisfied_with(
     true
 }
 
-/// The [`edge_satisfied_with`] rule against the live vdb, for callers that
-/// did not already cache `installed_candidates_by_cp`. #68/#72 B2 is the
-/// first such caller: `GraphEntry::deps` never carries the computed
-/// `DepPriority::satisfied` bit (`build_digraph` sets it on its own edge
-/// copies only), so the satisfied-blocker predicate must ask this itself.
+/// The `edge_satisfied_with` rule against the live vdb (the `satisfied` bit lives
+/// on the digraph's edge copies only, so this predicate asks it itself).
 pub fn dep_edge_satisfied_by_installed(
     root: &Path,
     edge: &DepEdge,
@@ -58,9 +47,8 @@ pub fn dep_edge_satisfied_by_installed(
     )
 }
 
-/// Every installed package's `cat/pkg-version:slot/sub_slot` candidate
-/// string, grouped by `cat/pkg` -- the input `DepPriority::satisfied`
-/// needs (real `vardb.match_pkgs(atom)`).
+/// Every installed package's `cat/pkg-version:slot/sub_slot` candidate string,
+/// grouped by `cat/pkg`.
 pub(crate) fn installed_candidates_by_cp(root: &Path) -> HashMap<(String, String), Vec<String>> {
     let mut by_cp: HashMap<(String, String), Vec<String>> = HashMap::new();
     for p in all_installed_packages(root) {
@@ -76,11 +64,8 @@ pub(crate) fn installed_candidates_by_cp(root: &Path) -> HashMap<(String, String
     by_cp
 }
 
-/// A synthetic `AlreadyInstalled` graph node for an installed package
-/// that the resolve never created an entry for -- pulled in only to
-/// complete real `_complete_graph`'s installed-dependency tree for merge
-/// ordering. `serialize_merge_order` filters every index `>= real_n`
-/// (these) back out of the scheduled list before returning.
+/// A synthetic `AlreadyInstalled` node for an installed package the resolve never
+/// made an entry for. Filtered back out of the scheduled list before returning.
 pub(crate) fn synthetic_installed_entry(
     category: String,
     package: String,
@@ -129,37 +114,10 @@ pub(crate) struct AddInstalledDependencyClosureArgs<'a> {
     pub(crate) dynamic_deps: bool,
 }
 
-/// Real `_complete_graph`'s effect on `_serialize_tasks`: every installed
-/// "nomerge" node in the digraph carries its own **recorded vdb
-/// dependency tree**, recursively -- so leaf selection clears a shallow
-/// installed subtree (`x11-libs/xtrans` -> `app-portage/elt-patches` ->
-/// `sys-apps/gentoo-functions`) before a deep one (`x11-base/xorg-proto`
-/// -> `dev-build/meson` -> the whole Python build stack) and merges the
-/// package sitting on the shallow one first.
-///
-/// `build_digraph` only follows `GraphEntry::deps`, and an
-/// `AlreadyInstalled` entry has none -- so portuale's graph truncated
-/// every installed node at depth 1 (`(no children)` in the `--debug`
-/// dump) and treated `meson`/`elt-patches` alike as instant leaves. This
-/// walks the forward transitive closure: fill `deps` on every installed
-/// entry from its vdb `*DEPEND` (USE-reduced against its recorded `USE`,
-/// with real `pkg.built` priorities so build deps are `optional`), and
-/// append a [`synthetic_installed_entry`] for each installed dependency
-/// not already present, to a fixpoint.
-///
-/// Bounded by the installed set. In complete mode this also seeds from
-/// the whole `@system` set (real `_complete_graph` seeds `@world` /
-/// `@system` as `SetArg`s and walks them deep): an installed `@system`
-/// package like `app-shells/bash` or `dev-libs/gmp` -- reached from
-/// `sys-libs/glibc`'s optional `sys-devel/gcc` edge -- is a graph node
-/// with its own tree even when nothing being merged reaches it. That
-/// installed bulk is `_ignore_optional` ballast: real drains it one node
-/// at a time in `DepPriorityNormalRange`, which paces the frontier so a
-/// package sitting on a real runtime cycle (`dev-lang/perl` on the
-/// `glibc`/`libcrypt` cycle) is not front-loaded past an unrelated merge
-/// (`dev-cpp/eigen`) via a premature `drop_satisfied`. The nodes real's
-/// own "Prune 'nomerge' root nodes" step then drops are removed again in
-/// `serialize_merge_order` right after `build_digraph`.
+/// Fill `deps` on every installed entry from its vdb `*DEPEND` and append a
+/// synthetic node per missing installed dependency, to a fixpoint. Bounded by
+/// the installed set; complete mode also seeds from the whole `@system` set.
+/// Portage: depgraph.py, _complete_graph
 pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosureArgs<'_>) {
     let AddInstalledDependencyClosureArgs {
         entries,
@@ -169,19 +127,10 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
         virtuals_only,
         dynamic_deps,
     } = args;
-    // `virtuals_only` (a plain `[ebuild N]` resolve, real not in complete
-    // mode): real still expands an installed `virtual/*` node to its
-    // provider (`virtual/pkgconfig` -> `dev-util/pkgconf`) -- new-style
-    // virtuals are "free" and always walked -- but leaves every
-    // non-virtual installed node a `(no children)` leaf. So only a node
-    // whose own category is `virtual` gets its deps walked; the provider
-    // it names is added as a leaf, not queued (unless it is itself a
-    // virtual).
+    // `virtuals_only` (a plain `[ebuild N]` resolve): only `virtual/*` nodes get
+    // their deps walked; the provider is added as a leaf, not queued.
     let installed = all_installed_packages(root);
-    // B1: every installed *version* of a cp, not one (a `cp -> single pkg`
-    // map silently dropped all but the last-installed slot; real's
-    // `_complete_graph` keeps every installed slot -- gtk:4's missing
-    // `docbook-xml-dtd-{4.2,4.4,4.5}` nodes were exactly this).
+    // Every installed version of a cp, not one (Portage keeps every installed slot).
     let by_cp: HashMap<(&str, &str), Vec<&crate::InstalledPackage>> = {
         let mut m: HashMap<(&str, &str), Vec<&crate::InstalledPackage>> = HashMap::new();
         for p in installed.iter() {
@@ -191,10 +140,7 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
         }
         m
     };
-    // Pick the installed version an edge's atom names -- the highest
-    // matching version when several match, the highest overall when the
-    // atom is absent/unparseable. The candidate string carries the main
-    // slot (`:4.2` style atoms are what pull sibling docbook slots in).
+    // The installed version the edge's atom names (highest match, else highest overall).
     let pick_installed =
         |atom: Option<&str>, cat: &str, pkg: &str| -> Option<&crate::InstalledPackage> {
             let cands = by_cp.get(&(cat, pkg))?;
@@ -224,21 +170,8 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
             })
         };
 
-    // A2 (#26): the closure edges come from the raw vdb snapshot
-    // (`installed_dep_string`, `InstalledMetaLayer::Raw`) -- deliberately
-    // NOT the same view the walk uses (the walk reads the *current
-    // ebuild*'s deps under `--dynamic-deps`). Phase 5 S1 removed the vdb
-    // built-`:=` append as a documented cut, so the ebuild view would
-    // lose the vdb's built :S/SS= atoms; the pre-A2 Raw graph (minus the
-    // injected libc) stays the closer approximation, exactly as under
-    // the old gate-off default. The injected-libc strip below is therefore only
-    // sound on the Raw path (Gate G0.3): `_inject_libc_dep` appends a
-    // bare `>=<libc-provider>-<version>` to every installed package's vdb
-    // `RDEPEND` (bug #753500), which the ebuild never declared -- real's
-    // default walk never sees it, but the `=n` snapshot does, and
-    // portuale keeps the historical strip there. A genuine ebuild-written
-    // `>=sys-libs/glibc-x` must NOT be stripped now that the default path
-    // reads the ebuild.
+    // Closure edges come from the raw vdb snapshot, not the ebuild view the walk
+    // uses; the injected-libc strip below is only sound on that Raw path.
     let libc_cps = crate::libc_provider_cps(root);
     let is_injected_libc = |atom: &str| -> bool {
         let Some(a) = portage_dep::parse_atom(atom) else {
@@ -254,24 +187,14 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
     };
 
     let vdb_edges = |cat: &str, pkg: &str, ver: &str| -> Vec<DepEdge> {
-        // Live md5-cache metadata for this exact installed cpv, from the
-        // vdb-recorded repo (backlog #86: never a priority search) --
-        // `None` when the version is gone there (the Raw fallback).
+        // Live md5-cache metadata for this installed cpv, from the vdb-recorded repo.
         let live = crate::live_metadata_for_installed(repos, root, cat, pkg, ver);
         let mut md: HashMap<String, String> = HashMap::new();
         let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
-        // A2 follow-up (unchanged by backlog #25 S1b, which scopes the
-        // overlay to the walk/scan sites): the closure stays on Raw
-        // under every option set -- the pre-A2 scheduler graph (raw
-        // minus the injected libc), which is closer to real's effective
-        // view than the ebuild alone.
+        // The closure stays on Raw under every option set.
         let layer = crate::InstalledMetaLayer::Raw;
         for k in ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
-            // The `false` below is dead under `Raw` (the flag only gates
-            // the Effective append); backlog #25 S1b scopes the overlay
-            // to the walk/scan sites, so the closure keeps Raw. Thread
-            // the real flag through `add_installed_dependency_closure`
-            // and its callers if this layer ever changes.
+            // The `false` below is dead under `Raw`; the overlay never reaches this seam.
             let s = crate::installed_dep_string(crate::InstalledDepStringArgs {
                 root,
                 dynamic_deps,
@@ -312,18 +235,8 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
         .collect();
     let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
 
-    // Seed 1: every installed dependency named by an *already-resolved*
-    // entry (merge-bound or installed) that the resolve never made a
-    // node for -- an installed package satisfying a dep is not walked, so
-    // `dev-perl/common-sense`'s edge to the installed `dev-lang/perl`
-    // (and perl's own deep tree) was simply missing. Real
-    // `_complete_graph` has every one of these.
-    // `virtuals_only`: a node just added is queued for its own dep walk
-    // only if the whole closure is wanted, or it is itself a `virtual/*`.
-    // B1: `present` is keyed by cpv, and `add_node` selects the installed
-    // version the edge's own atom names -- real keeps every installed
-    // slot, and keying by cp alone dropped all but the first
-    // (`docbook-xml-dtd:4.2`/`:4.4`/`:4.5` vs the already-present 4.1.2).
+    // Seed 1: installed dependencies named by already-resolved entries that the
+    // resolve never made a node for.
     let expandable = |cat: &str| !virtuals_only || cat == "virtual";
     let add_node = |entries: &mut Vec<GraphEntry>,
                     present: &mut HashSet<(String, String, String)>,
@@ -358,27 +271,9 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
         add_node(entries, &mut present, &mut queue, Some(&atom), &cat, &pkg);
     }
 
-    // Seed 1b (complete mode only): real `_complete_graph` seeds a
-    // `SetArg` for `@world`/`@system` and adds every atom in them, then
-    // walks the lot deep. Add each installed `@system` package as a node
-    // and queue its own dep walk. `serialize_merge_order`'s prune drops
-    // the ones no merge-bound package reaches -- but the deep-only
-    // members (`dev-libs/gmp` under `glibc` -> `gcc`, `sys-libs/readline`
-    // under `bash`, ...) stay, exactly as real's own post-prune graph
-    // keeps them.
+    // Seed 1b (complete mode only): each installed `@system` package as a node.
     //
-    // R5 (#17): real `_resolve` (`depgraph.py:5500`) processes this
-    // `SetArg`'s own atom list `sorted(arg.pset.getAtoms(), key=str)` --
-    // the same seed-order fact R3b already fixed for an *explicit*
-    // `@world`/`@system` top-level target (`pretend.rs`'s
-    // `expand_top_level_atoms`). This is the other place the identical
-    // unsorted-profile-order seed survives: *every* complete-mode probe
-    // (not just an explicit `@system`/`@world` argument) walks
-    // `system_atoms` here to build the installed closure, and an
-    // unsorted seed skews the DFS discovery order the pre-bias sort
-    // preserves -- exactly the `_serialize_tasks` "installed-chain"
-    // front-load family (`pyproject-metadata`, `freetype`, …) `TEST/
-    // findings/l0.md` "## I" names as the outstanding wall.
+    // Seed atoms are sorted so the DFS discovery order is deterministic.
     let mut system_atoms_sorted = system_atoms.to_vec();
     system_atoms_sorted.sort();
     if !virtuals_only {
@@ -397,8 +292,7 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
         }
     }
 
-    // Seed 2: every installed-outcome entry whose deps were never filled
-    // (and, in `virtuals_only` mode, is a `virtual/*`).
+    // Seed 2: installed-outcome entries whose deps were never filled.
     for (i, e) in entries.iter().enumerate() {
         if matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })
             && e.deps.is_empty()

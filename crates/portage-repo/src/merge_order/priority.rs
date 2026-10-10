@@ -2,20 +2,10 @@
 
 use crate::merge_order::*;
 
-/// Real `_emerge/DepPriority.py::DepPriority` -- the per-edge dependency
-/// classification that drives every `ignore_priority` decision in
-/// `_serialize_tasks`.
-///
-/// `cross` (a dependency crossing into a different `ROOT`) is always
-/// `false` here: portuale resolves one root at a time, so real's
-/// `self._cross(pkg.root)` is constantly false and the two
-/// `runtime_slot_op and not priority.cross` guards below collapse to
-/// plain `runtime_slot_op`. `ignored` is likewise not modelled -- real
-/// only ever sets it for `--root-deps=rdeps` / `--with-bdeps=n` on a
-/// built package, both of which portuale expresses by dropping the
-/// `DEPEND`/`BDEPEND` keys from the walk entirely (see
-/// `dep_edges_from_metadata`'s callers), which is what real's own
-/// `edepend["DEPEND"] = ""` does one line later.
+/// The per-edge dependency classification driving every `ignore_priority` decision.
+/// `cross` is always `false` (one root at a time); `ignored` is expressed by
+/// dropping keys from the walk. `satisfied` is filled in by `build_digraph`.
+/// Portage: _emerge/DepPriority.py, DepPriority
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DepPriority {
     pub buildtime: bool,
@@ -24,96 +14,51 @@ pub struct DepPriority {
     pub buildtime_slot_op: bool,
     pub runtime_slot_op: bool,
     pub optional: bool,
-    /// Real `mypriority.satisfied = inst_pkg` -- an already-installed
-    /// package matches this atom, so the edge can be relaxed to break a
-    /// cycle (`DepPrioritySatisfiedRange`). Filled in by
-    /// `build_digraph`, which is the first point at which every entry's
-    /// resolved slot is known.
+    /// An already-installed package matches this atom, so the edge can be relaxed
+    /// to break a cycle.
     pub satisfied: bool,
 }
 
-/// One resolved dependency of a `GraphEntry`, in real
-/// `_add_pkg_dep_string`'s own `deps`-tuple key order (`RDEPEND`,
-/// `IDEPEND`, `PDEPEND`, `DEPEND`, `BDEPEND` -- `depgraph.py:4253-4289`).
-///
-/// The atom string is kept alongside the resolved `category`/`package`
-/// so `build_digraph` can decide `DepPriority::satisfied` against the
-/// installed vdb once the whole graph is known.
+/// One resolved dependency of a `GraphEntry`, in `deps`-tuple key order
+/// (`RDEPEND`, `IDEPEND`, `PDEPEND`, `DEPEND`, `BDEPEND`).
+/// Portage: depgraph.py, _add_pkg_dep_string
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepEdge {
     pub atom: String,
-    /// The token with its use-deps evaluated against the parent's
-    /// USE (`portage_dep::evaluate_atom_conditionals`), for real's
-    /// `--debug` `Candidates:` line (#138; oracle
-    /// `logs/l111-s0-20260921/real-rest-debug.log`). Note the token
-    /// itself is already reduced-raw, not true-raw:
-    /// `dep_edges_from_metadata` runs `use_reduce_structured` first,
-    /// which evaluates `flag?()` conditionals away -- so real's first,
-    /// true-raw `Depstring:` stanza (`Depstring: plasma? ( ... )`) has
-    /// no portuale counterpart (known remainder, unnumbered display
-    /// gap). Falls back to the token when evaluation returns `None`.
+    /// The token with its use-deps evaluated against the parent's USE, for the
+    /// `--debug` `Candidates:` line. Falls back to the token when evaluation
+    /// returns `None`.
     pub evaluated: String,
     pub category: String,
     pub package: String,
     pub priority: DepPriority,
-    /// Real `depgraph._queue_disjunctive_deps`: this atom sits inside a
-    /// `|| ( … )` group, or is itself a `virtual/*` atom (which real's
-    /// `dep_check` expands into one). Real does **not** walk these
-    /// inline -- it collects each dep key's whole disjunctive set into
-    /// one bundle on `_dep_disjunctive_stack`, which `_create_graph`
-    /// only pops once the ordinary `_dep_stack` has drained completely.
-    /// That deferral is load-bearing for `.order`, and therefore for
-    /// merge order: it is why a `virtual/*` dependency lands hundreds of
-    /// positions later in real's graph than the sibling atoms declared
-    /// next to it.
+    /// Inside a `|| ( … )` group, or itself a `virtual/*` atom: deferred until the
+    /// ordinary stack drains, one bundle per dep key.
+    /// Portage: depgraph.py, _queue_disjunctive_deps
     pub disjunctive: bool,
-    /// For a `disjunctive` atom that came from an actual `|| ( … )`
-    /// group: `(group, branch)` -- `group` counts the `||` groups in
-    /// this dep key, `branch` the alternative within one group.
-    /// `build_digraph` keeps one branch per group (`dep_zapdeps`'
-    /// `choice_bins`: all-in-graph, then all-installed, then first) and
-    /// suppresses the rest. `None` for an inline atom or a bare deferred
-    /// `virtual/*`.
+    /// For a `disjunctive` atom from a `||` group: `(group, branch)`.
+    /// `None` for an inline atom or a bare deferred `virtual/*`.
     pub alt: Option<(u32, u32)>,
-    /// Which of real's own `deps`-tuple keys this came from
-    /// (0=`RDEPEND`, 1=`IDEPEND`, 2=`PDEPEND`, 3=`DEPEND`, 4=`BDEPEND`).
-    /// Disjunctive bundles are queued one per key, so the walk needs the
-    /// key boundaries.
+    /// Which `deps`-tuple key this came from (0=`RDEPEND` .. 4=`BDEPEND`).
     pub key: u8,
 }
 
-/// Real `depgraph._queue_disjunctive_deps`, run over one USE-reduced dep
-/// key: returns `(inline, disjunctive)` atom lists.
-///
-/// Real walks the `opconvert=True` reduced struct and, for each element:
-/// a `|| ( … )` group goes wholesale into the deferred bundle; a plain
-/// all-of group recurses (contributing to that same bundle); a bare atom
-/// is deferred too when its category is `virtual` ("Eventually this will
-/// check for PROPERTIES=virtual"), and yielded inline otherwise.
-///
-/// Portuale keeps every branch of a `||` group rather than resolving one
-/// up front; `build_digraph` then picks `dep_zapdeps`' first-satisfiable
-/// branch (see its own doc). Each disjunctive atom is tagged with the
-/// `(group, branch)` of the `|| ( … )` alternative it belongs to --
-/// `group` counts the distinct `||` groups reached in this key,
-/// `branch` the alternative within one group (a bare atom is its own
-/// single-atom branch; a nested `( … )` is a multi-atom branch). A
-/// `virtual/*` atom outside any `||` is deferred too (like real) with
-/// `group`/`branch` `u32::MAX` so `build_digraph` never groups it with a
-/// real alternative.
+/// Run over one USE-reduced dep key: returns `(inline, disjunctive)` atom lists.
+/// A `||` group goes wholesale into the deferred bundle; a bare `virtual/*`
+/// atom is deferred too, with `u32::MAX` markers so it never groups with a
+/// genuine alternative.
+/// Portage: depgraph.py, _queue_disjunctive_deps
 pub(crate) fn split_disjunctive(tokens: &[String]) -> (Vec<String>, Vec<(String, u32, u32)>) {
     let mut inline: Vec<String> = Vec::new();
     let mut disjunctive: Vec<(String, u32, u32)> = Vec::new();
-    // Depth of the innermost enclosing `|| ( … )`, if any: everything
-    // below one is disjunctive, however deeply nested.
+    // Everything below an enclosing `||` is disjunctive, however deeply nested.
     let mut any_of_depth: Option<usize> = None;
     let mut depth: usize = 0;
     let mut pending_any_of = false;
     let mut group: u32 = 0;
     let mut next_group: u32 = 0;
     let mut branch: u32 = 0;
-    // Depth at which the current `branch`'s nested `( … )` opened, if any;
-    // the branch stays fixed for every atom until that group's `)`.
+    // The branch stays fixed for every atom until that group's `)`.
     let mut branch_group_depth: Option<usize> = None;
     for tok in tokens {
         match tok.as_str() {
@@ -130,7 +75,7 @@ pub(crate) fn split_disjunctive(tokens: &[String]) -> (Vec<String>, Vec<(String,
                     && Some(depth) == any_of_depth.map(|d| d + 1)
                     && branch_group_depth.is_none()
                 {
-                    // A nested `( … )` alternative directly inside the `||`.
+                    // A nested alternative directly inside the `||`.
                     branch_group_depth = Some(depth);
                 }
                 pending_any_of = false;
@@ -166,12 +111,9 @@ pub(crate) fn split_disjunctive(tokens: &[String]) -> (Vec<String>, Vec<(String,
     (inline, disjunctive)
 }
 
-/// The dependency keys real walks, paired with the `DepPriority` each
-/// contributes -- real `depgraph.py:4253-4289`'s own `deps` tuple.
-/// `optional` is `pkg.built` for the two build-time keys (a built
-/// package's build deps are informational only); `IDEPEND` is a
-/// `runtime` priority like `RDEPEND` (real also sets `installtime`,
-/// which no `ignore_priority` predicate reads).
+/// The dependency keys walked, paired with the `DepPriority` each contributes.
+/// `optional` is `pkg.built` for the build-time keys.
+/// Portage: depgraph.py, _add_pkg_dep_string (deps tuple)
 pub(crate) fn key_priority(key: &str, built: bool) -> DepPriority {
     match key {
         "RDEPEND" | "IDEPEND" => DepPriority {
@@ -191,28 +133,10 @@ pub(crate) fn key_priority(key: &str, built: bool) -> DepPriority {
     }
 }
 
-/// `GraphEntry::deps`: flattens `metadata`'s own dep-key strings, one key
-/// at a time in `keys`' given order (so cross-key token order can't leak
-/// in), against `use_flags`. `use_reduce_flat` transparently drops
-/// `||`/`(`/`)` markers, listing every branch's atoms in written order --
-/// the *other* branches simply never correspond to a real entry, so the
-/// digraph's own lookup skips them for free.
-///
-/// One `DepEdge` per distinct `(atom, category, package, priority)`: real
-/// records a *list* of priorities per digraph edge (`digraph.add`'s
-/// `bisect.insort`), and `leaf_nodes`/`child_nodes` need every one of
-/// them, so an atom named by both `RDEPEND` and `DEPEND` contributes two
-/// edges here rather than being deduped to the first. The `atom` is part
-/// of the dedup key (not just `cat/pkg`) so the distinct branches of a
-/// `|| ( >=foo-2:2 >=foo-1:1 )` group both survive -- `build_digraph`
-/// matches each atom against the resolved entries individually, so the
-/// branch that doesn't resolve is dropped there, not here.
-///
-/// `built` is real `pkg.built` -- true for a binary candidate and for an
-/// installed package -- and only affects whether the build-time keys are
-/// marked `optional`. Callers that drop `DEPEND`/`BDEPEND` from `keys`
-/// entirely (real's `edepend["DEPEND"] = ""` for a built package under
-/// `--with-bdeps=n`) never reach that branch.
+/// Flattens `metadata`'s dep-key strings, one key at a time in `keys` order.
+/// One `DepEdge` per distinct `(atom, category, package, priority)`: an atom
+/// named by two keys contributes two edges. `built` marks build-time keys
+/// `optional`.
 pub(crate) fn dep_edges_from_metadata(
     metadata: &HashMap<String, String>,
     use_flags: &HashSet<String>,
@@ -234,10 +158,7 @@ pub(crate) fn dep_edges_from_metadata(
             _ => 4,
         };
         let toks: Vec<String> = d.split_whitespace().map(String::from).collect();
-        // The structured reduction keeps the `||`/`( … )` boundaries
-        // `split_disjunctive` needs; real reduces the same string with
-        // `opconvert=True` before handing it to
-        // `_queue_disjunctive_deps`.
+        // The structured reduction keeps the `||` boundaries `split_disjunctive` needs.
         let Ok(structured) = portage_use_reduce::use_reduce_structured(
             &toks,
             use_flags,
@@ -263,10 +184,8 @@ pub(crate) fn dep_edges_from_metadata(
             if dep_atom.blocker != portage_dep::Blocker::None {
                 continue;
             }
-            // Real `_wrapped_add_pkg_dep_string`: a `:=`/`:slot=` atom
-            // promotes its own key's priority to the slot-operator
-            // variant, which the `ignore_priority` ladder refuses to
-            // relax as readily as a plain one.
+            // A `:=`/`:slot=` atom promotes its key's priority to the slot-operator
+            // variant, which the ladder relaxes less readily.
             let mut priority = base;
             if dep_atom.slot_operator == Some(portage_dep::SlotOperator::Equals) {
                 if priority.buildtime {
@@ -304,10 +223,8 @@ pub(crate) fn dep_edges_from_metadata(
 // `ignore_priority` predicates
 // ---------------------------------------------------------------------
 
-/// One `ignore_priority` filter: a rung of `NORMAL` (`N*`) or
-/// `SATISFIED` (`S*`). An enum, not a `fn` pointer, so a filter has one
-/// identity whatever the codegen (function addresses are not unique
-/// across codegen units).
+/// One `ignore_priority` filter: a rung of `NORMAL` (`N*`) or `SATISFIED` (`S*`).
+/// An enum so a filter has one identity whatever the codegen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ignore {
     NOptional,
@@ -434,17 +351,15 @@ pub(crate) fn s_ignore_runtime(p: &DepPriority) -> bool {
     (!p.runtime_slot_op || p.satisfied) && (p.satisfied || p.optional || !p.buildtime)
 }
 
-/// Real `ignore_priority.__name__` for the `_serialize_tasks` trace
-/// (`PORTUALE_MO_SEL`), so a portuale `MO_SEL` line lines up field-for-
-/// field with the `RT_SEL` line `TEST/scripts/mo-trace/real-trace.py`
-/// injects into real's loop. `None` is real's `ignore_priority = None`.
+/// `ignore_priority.__name__` for the trace, so a portuale `MO_SEL` line lines up
+/// with the `RT_SEL` line the harness injects into Portage's loop.
 pub(crate) fn ignore_name(ig: Option<Ignore>) -> &'static str {
     ig.map_or("none", Ignore::name)
 }
 
-/// Real's two `DepPriority*Range` classes: an `ignore_priority` ladder
-/// indexed `NONE=0 .. MEDIUM`, plus the named rungs `_serialize_tasks`
-/// reaches for directly.
+/// The two `DepPriority*Range` ladders: an `ignore_priority` ladder plus the
+/// named rungs `_serialize_tasks` reaches for directly.
+/// Portage: _emerge/DepPriorityNormalRange.py, DepPrioritySatisfiedRange.py
 pub(crate) struct PriorityRange {
     pub(crate) ignore: &'static [Option<Ignore>],
     pub(crate) medium: usize,
@@ -493,9 +408,8 @@ impl PriorityRange {
 }
 
 impl std::fmt::Display for DepPriority {
-    /// Real `_emerge/DepPriority.py::DepPriority.__str__` -- the single
-    /// highest classification. `Priority:` lines and `digraph:` edge
-    /// labels both use it.
+    /// The single highest classification; `Priority:` lines and edge labels use it.
+    /// Portage: _emerge/DepPriority.py, __str__
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(crate::resolver_trace::dep_priority_str(self))
     }

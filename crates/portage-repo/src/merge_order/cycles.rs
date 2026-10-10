@@ -10,20 +10,14 @@ pub(crate) struct FindSmallestCycleArgs<'a> {
     pub(crate) range: &'a PriorityRange,
     pub(crate) asap: &'a [usize],
     pub(crate) prefer_asap: bool,
-    /// #142 S2 F4b: nodes temporarily ineligible for harvesting —
-    /// owners waiting on their unadmitted removal (real's validation
-    /// edge keeps them out of the leaf set, so real's cycle search
-    /// never sees them either). Empty everywhere else, including all
-    /// unit tests.
+    /// Nodes temporarily ineligible for harvesting (owners waiting on their
+    /// unadmitted removal); empty everywhere else, including all unit tests.
     pub(crate) ineligible: &'a HashSet<usize>,
 }
 
-/// Real `find_smallest_cycle`: the smallest `gather_deps` closure among
-/// the currently-mergeable nodes, searched from the lowest
-/// `ignore_priority` rung upward so as few dependencies as possible are
-/// relaxed. "In the case of multiple runtime cycles, where some cycles
-/// may depend on smaller independent cycles, it's optimal to merge
-/// smaller independent cycles before other cycles that depend on them."
+/// The smallest `gather_deps` closure among the currently-mergeable nodes,
+/// searched from the lowest `ignore_priority` rung upward.
+/// Portage: depgraph.py, find_smallest_cycle
 pub(crate) fn find_smallest_cycle(
     args: FindSmallestCycleArgs<'_>,
 ) -> Option<(HashSet<usize>, Option<Ignore>)> {
@@ -51,8 +45,7 @@ pub(crate) fn find_smallest_cycle(
     } else {
         mergeable.iter().copied().collect()
     };
-    // Real "Sort nodes for deterministic results" -- `sorted(nodes)`,
-    // i.e. `Package.__lt__`: `cp` then version.
+    // Sort nodes for deterministic results (cp, then version).
     cand.sort_by(|&a, &b| {
         (entries[a].category.as_str(), entries[a].package.as_str())
             .cmp(&(entries[b].category.as_str(), entries[b].package.as_str()))
@@ -77,8 +70,7 @@ pub(crate) fn find_smallest_cycle(
                 best = Some((cl, ig));
             }
         }
-        // "Exit this loop with the lowest possible priority, which
-        // minimizes the use of installed packages to break cycles."
+        // Exit with the lowest possible priority.
         if best.is_some() {
             break;
         }
@@ -86,11 +78,9 @@ pub(crate) fn find_smallest_cycle(
     best
 }
 
-/// Real `_serialize_tasks`' own final block for a multi-node cycle:
-/// harvest one node at a time from the induced subgraph, always taking a
-/// leaf at the lowest `ignore_priority` that produces one, and
-/// preferring an installed leaf "in order to avoid merging something too
-/// early as in bug 917259".
+/// Harvest one node at a time from the induced subgraph, always taking a leaf
+/// at the lowest `ignore_priority` that produces one, preferring an installed leaf.
+/// Portage: depgraph.py, _serialize_tasks
 pub(crate) fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
     let ladder: Vec<Option<Ignore>> = NORMAL
         .ignore
@@ -121,7 +111,7 @@ pub(crate) fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
             }
         }
         if leaves.is_empty() {
-            // Real `leaves = [cycle_digraph.order[-1]]`.
+            // Fall back to the last node in `.order` within the subgraph.
             leaves = vec![
                 *g.order
                     .iter()
@@ -139,44 +129,19 @@ pub(crate) fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
     out
 }
 
-/// Real `depgraph._serialize_tasks`' own selection loop, restricted to
-/// what a `--pretend` merge graph contains: no `Uninstall` tasks, no
-/// blocker nodes (portuale renders blockers separately), and therefore
-/// none of real's `myblocker_uninstalls` scheduling. What remains is the
-/// whole of real's leaf-selection machinery:
+/// The `--pretend` subset of Portage's `_serialize_tasks` leaf-selection loop:
+/// the `ignore_priority` ladder, `asap_nodes`, `find_smallest_cycle` and the
+/// `drop_satisfied` escalation.
+/// Portage: depgraph.py, _serialize_tasks
 ///
-/// * the `NONE .. MEDIUM_SOFT` `ignore_priority` ladder, with real's
-///   "greedily pop all of these nodes since no relationship has been
-///   ignored" batch at rung `NONE` and one-node-at-a-time selection
-///   (preferring a node that actually has a parent) at every relaxed rung;
-/// * `asap_nodes` -- real's `PDEPEND`-promotion path (bug #180045): every
-///   unsatisfied `runtime_post` child freed by a relaxed-rung selection
-///   is queued to be merged as soon as it becomes a leaf, ahead of the
-///   ordinary bias order, and is scanned under `DepPrioritySatisfiedRange`;
-/// * `find_smallest_cycle` for a genuine runtime cycle, with the
-///   `drop_satisfied` escalation to `DepPrioritySatisfiedRange` that lets
-///   an already-installed dependency break one.
+/// Every node's shortest child-to-node paths (all ties), each a recorded cycle.
+/// Portage: portage.util.digraph, get_cycles
 ///
-/// Port of real `portage.util.digraph.get_cycles` (+ `shortest_path` +
-/// `bfs`): every node's shortest child→node paths (all ties), each a
-/// recorded cycle. Real feeds this the stuck remainder with the
-/// `medium_soft` rung and counts the records (`large_cycle_count =
-/// len(cycles) > 3`); rotations of one ring count separately (a square
-/// records four), which is exactly what makes the count a "lot of
-/// cycles" signal rather than a ring census.
-///
-/// `ig` is the survival filter (real's `ignore_priority`); pass `None`
-/// for the unfiltered graph. Nodes with no path back to themselves
-/// contribute nothing. Only the count and the member union are consumed
-/// downstream, so traversal order is fixed (sorted indices) for
-/// determinism -- real keeps every tie, which makes its result set
-/// order-independent too (same reasoning as its PYTHONHASHSEED comment).
+/// `ig` is the survival filter; pass `None` for the unfiltered graph.
+/// Traversal order is fixed (sorted indices) for determinism.
 pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usize>> {
     use std::collections::VecDeque;
-    /// BFS shortest path, real `digraph.shortest_path`: first visit wins
-    /// per node (BFS order), returned on first reaching `end`. `None`
-    /// when `end` is unreachable (real raises `KeyError` for unknown
-    /// nodes instead -- every node here is known by construction).
+    /// BFS shortest path: first visit wins per node, returned on reaching `end`.
     fn shortest_path(
         g: &Digraph,
         start: usize,
@@ -214,10 +179,7 @@ pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usiz
 
     let mut all: Vec<Vec<usize>> = Vec::new();
     for &node in &g.order {
-        // Shortest child→node path length seen for this node; every
-        // path tied at the minimum is recorded (real appends paths not
-        // longer than the running minimum, then filters by the final
-        // minimum -- same set, same child order).
+        // Record every path tied at the shortest length seen for this node.
         let mut min_len: Option<usize> = None;
         let mut cands: Vec<Vec<usize>> = Vec::new();
         for (child, prios) in &g.children[node] {
@@ -241,26 +203,15 @@ pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usiz
     all
 }
 
-/// Port of real `circular_dependency_handler._prepare_reduced_merge_list`
-/// over an explicit drain set: leaf-drain (no filter, like real's plain
-/// `leaf_nodes()`), falling back to the lowest-order remaining node when
-/// nothing is a leaf. Real drains its whole stuck remainder -- cycle
-/// members plus everything left unscheduled downstream of them; the
-/// caller (`cycle_report`) passes exactly that set: members plus
-/// transitive requirers. A drained child frees its parents (checked
-/// against the shrinking remainder, not the static set), matching
-/// real's shrinking copy.
+/// Leaf-drain over an explicit drain set, falling back to the lowest-order
+/// remaining node when nothing is a leaf.
+/// Portage: circular_dependency_handler, _prepare_reduced_merge_list
 pub(crate) fn reduced_merge_order(
     g: &Digraph,
     drain: &HashSet<usize>,
     late: &[bool],
 ) -> Vec<usize> {
-    // A node is a leaf when it has no still-remaining child in the
-    // drain set -- self-edges count, exactly like real's plain
-    // `leaf_nodes()` on its shrinking copy (an unsatisfied buildtime
-    // self-loop is the only self-edge `build_digraph` keeps). Checking
-    // a static set instead would pin every ring member forever, since
-    // a drained child must free its parents.
+    // A node is a leaf when it has no still-remaining child in the drain set.
     let mut remaining: HashSet<usize> = drain.clone();
     let mut out: Vec<usize> = Vec::new();
     while !remaining.is_empty() {
@@ -273,16 +224,7 @@ pub(crate) fn reduced_merge_order(
             })
             .collect();
         if leaves.is_empty() {
-            // Real `node = tempgraph.order[0]` -- lowest-order remaining
-            // node in insertion order (the fallback only fires inside
-            // a ring, where every remaining node has a remaining child).
-            // Backlog #245: a cp that lives in both roots has its
-            // running-root (BDEPEND build-tool) instance inserted after
-            // the target-root one in real's graph, so among the remaining
-            // nodes the target-root ones go first; within a root the
-            // scheduler's own insertion order stands (`g.order`). `late`
-            // is `GraphEntry::targets_running_root` per node (empty = all
-            // target-rooted, the single-root case, which changes nothing).
+            // Lowest-order remaining node; target-rooted instances go first.
             let pos: HashMap<usize, usize> =
                 g.order.iter().enumerate().map(|(p, &i)| (i, p)).collect();
             leaves = remaining
@@ -305,23 +247,15 @@ pub(crate) fn reduced_merge_order(
     out
 }
 
-/// The `medium_soft` rung of the satisfied range -- the filter real's
-/// cycle handler passes to `get_cycles`. (Kept as an accessor because
-/// `PriorityRange`/`SATISFIED` stay private to this module.)
+/// The `medium_soft` rung of the satisfied range (the cycle handler's filter).
 pub(crate) fn satisfied_medium_soft_rung() -> Option<Ignore> {
     SATISFIED.ig_medium_soft()
 }
 
-/// Cycle report over a freshly built scheduling graph: all elementary
-/// cycles (entry indices) plus the reduced display order. The drain set
-/// is the cycle members plus everything transitively requiring them --
-/// real drains its whole stuck remainder (members plus everything left
-/// unscheduled downstream); portuale schedules everything, so the
-/// downstream cone is re-derived here from `required_by` (cp-level, like
-/// everywhere else). Built on demand -- callers only pay for it when a
-/// hard cycle was already reported (the only path that consumes either
-/// number). `top_level_atoms`/`root` feed `build_digraph` exactly as
-/// `serialize_merge_order` passes them.
+/// All elementary cycles (entry indices) plus the reduced display order.
+///
+/// The drain set is the cycle members plus everything transitively requiring
+/// them. Built on demand: only the hard-cycle report consumes either number.
 pub(crate) fn cycle_report(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
