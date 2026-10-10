@@ -1,0 +1,56 @@
+[package]
+name = "portage-repo"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The `md5-dict` aux-cache validator (`md5_dict.rs`): real's `_md5_` is
+# the md5 of the ebuild/eclass bytes (`cache/template.py::validate_entry`),
+# so the reader validates cache entries the way `_pull_valid_cache` does.
+# Same RustCrypto family and waiver as `portuale`/`portage-fetch`.
+md-5 = "0.10"
+portage-util = { path = "../portage-util" }
+portage-vdb = { path = "../portage-vdb" }
+portage-versions = { path = "../portage-versions" }
+portage-dep = { path = "../portage-dep" }
+portage-use-reduce = { path = "../portage-use-reduce" }
+portage-profile = { path = "../portage-profile" }
+portage-required-use = { path = "../portage-required-use" }
+# Real `output.py`'s own `f`/`F` fetch-restrict bracket column
+# (`getfetchsizes(cpv, only_restricted=True)`): the dry-run resolver
+# needs to know whether a `RESTRICT=fetch` package's own `SRC_URI`
+# distfiles are already in `DISTDIR` -- exactly the `SRC_URI` flatten +
+# `Manifest` size lookup `portage-fetch` already implements (and the
+# same layering real `output.py` uses, calling `portdb.getfetchsizes`).
+portage-fetch = { path = "../portage-fetch" }
+# Real `vartree._aux_env_search` (`dbapi/vartree.py:1059`): `emerge
+# --info <atom>`'s installed block reads CHOST/CFLAGS/CXXFLAGS/
+# FEATURES/LDFLAGS from the vdb's `environment.bz2`, which real
+# decompresses by spawning `bzip2 -d -c`. This crate stays
+# subprocess-free, so it decompresses in-process instead -- but with
+# the same zero-C-linkage discipline as the solver-backend waiver
+# below: `bzip2` 0.6's default backend is trifectatechfoundation's
+# pure-Rust libbz2-rs-sys (the C `bzip2-sys` backend is opt-in and NOT
+# enabled), so the musl-static story is untouched. Verify with
+# `grep -c bzip2-sys Cargo.lock` == 0 after any bump.
+bzip2 = "0.6"
+# Alternate dependency solvers behind `--solver=` (see `solver_bridge.rs`):
+# `portage-solver` is the shared vocabulary + `Solver` trait, and the two
+# `portage-atom-*` crates map Portage atoms onto the PubGrub (`pubgrub`)
+# and resolvo SAT engines. A deliberate, documented waiver of this
+# workspace's near-zero-dependency discipline for the `emerge` path (same
+# class as `portuale`'s `brush`/`regex` waivers, and `mrg`'s `clap` one):
+# the engines plus their Portage mappings are ~10 pure-Rust crates with
+# zero C linkage, so the musl-static story is untouched. Pinned to exact
+# crates.io releases (tracked in `docs/history/solver-backends-analysis.md`; the
+# reference checkout lives at `3rdparty/portage-cli`).
+portage-solver = "=0.3.0"
+portage-atom-pubgrub = "=0.8.0"
+portage-atom-resolvo = "=0.8.1"
+# Direct (not just transitive via `portage-atom-resolvo`): the resolvo
+# backend drives `resolvo::Problem`/`Solver` itself.
+resolvo = "=0.12.1"
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "mrg-director"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+portage-util = { path = "../portage-util" }
+# The contract-typed inputs/outputs (ResolveRequest/GraphResult/etc.) and
+# the re-export hooks (active_resolver) live in portage-repo. This crate
+# is the interchangeable-traits layer the mrg director names so each
+# component can be swapped independently; the filesystem-backed slots
+# (VdbReader, WgetFetcher) delegate to the same library reads/transports
+# the production paths run, so the seam and the path never drift.
+portage-repo = { path = "../portage-repo" }
+portage-fetch = { path = "../portage-fetch" }
+portage-profile = { path = "../portage-profile" }
+portage-versions = { path = "../portage-versions" }
+
+[lints]
+workspace = true

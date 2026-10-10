@@ -118,7 +118,7 @@ folds, in priority order: profile chain (`parent` files, cascading
    shuffle only under test-only `PORTAGE_SHUFFLE_DIRS`). Repeated runs
    MUST produce identical output and merge order.
 2. **No second implementation copy.** Expected outputs are grounded in
-   real Portage behaviour (differential test bed, upstream resolver
+   Portage behaviour (differential test bed, upstream resolver
    test cases), never in a mirrored reference implementation.
 3. **EAPI floor.** Only EAPI 5+ behaviour is specified; older-EAPI
    branches are out of scope.

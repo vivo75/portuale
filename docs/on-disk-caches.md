@@ -51,23 +51,23 @@ Authoritative state. One dir per `CAT/PF` with ~20 one-line files
 - **Portuale (backlog #102 S1):** `installed_candidates` keeps a
   per-`(root, cat, pkg)` in-process memo validated by the scanned
   category dirs' mtimes -- the same signal `_bump_mtime` maintains for
-  real's consumers -- plus a one-time inverted `move` map, instead of
+  Portage's consumers -- plus a one-time inverted `move` map, instead of
   re-scanning `var/db/pkg/<cat>` per query (12,684 scans, 906,881
   entries stat'ed on the reference workload). Same in-process-cache
-  property as real's `_aux_cache`: an external in-place file rewrite
+  property as Portage's `_aux_cache`: an external in-place file rewrite
   inside a running process is not picked up.
-- **Portuale (backlog #109):** the read path now mirrors real's, both
+- **Portuale (backlog #109):** the read path now mirrors Portage's, both
   halves. `vdb_aux_get` validates `<dir>/metadata` exactly as
   `_read_metadata_file` (`#format == METADATA_FILE_FORMAT_VERSION`,
   `#dir_mtime == st_mtime_ns`, both present; `split("=", 1)` last-wins)
   and serves any of the 23 `METADATA_FILE_FIELDS` from it with **no**
   per-key `open()` -- a field absent from a validated snapshot is `""`,
-  real's "complete snapshot" rule. A thread-local memo keyed on
+  Portage's "complete snapshot" rule. A thread-local memo keyed on
   `(root, cat, pkg, ver)` + the dir's `st_mtime_ns` (`_aux_cache`'s
   shape) fills all 23 fields on a validated-snapshot miss and resolves
   the fallback lazily per key; the `stat` stays on every call as the
-  validity signal, and the in-process staleness hole is real's own
-  (in-place field rewrite with the dir mtime held; why real calls
+  validity signal, and the in-process staleness hole is Portage's own
+  (in-place field rewrite with the dir mtime held; why Portage calls
   `_bump_mtime` around `aux_update`). Writer and reader share one
   definition of the field set and format version in `portage-repo`
   (`METADATA_FILE_FIELDS` / `METADATA_FILE_FORMAT_VERSION` /
@@ -114,7 +114,7 @@ The pregen side lives in the repo itself (`metadata/md5-cache` for
 every known resolved format (`bin/egencache:350-362`, an empty list
 defaulting to `md5-dict`); portuale's `--regen` writes only the
 `md5-dict` half and skips a `pms`-only repo with a message + exit 1
-rather than writing a directory real would leave alone (#55 L3).
+rather than writing a directory Portage would leave alone (#55 L3).
 
 ## 3. `/var/cache/edb/{mtimedb,counter}` (`_legacy_globals.py:20-27`)
 
@@ -196,7 +196,7 @@ Write-once per event (`pf:timestamp.log` under `elog/<cat>/`,
    buys cheaper iteration / `get_matches` but pays with `database is
    locked` timeouts (15 s, `sqlite.py:50`) and pid-aware reconnects.
    ~40k tiny files per repo is acceptable, and a reimplementation
-   *reads* `md5-cache` (memoised in memory) after real's own
+   *reads* `md5-cache` (memoised in memory) after Portage's own
    `validate_entry` rung: a present entry whose `_md5_`/`_eclasses_`/
    EAPI no longer match the ebuild is treated as a miss and regenerated
    through the depcachedir/depend-phase rungs (#46, `portage-repo::

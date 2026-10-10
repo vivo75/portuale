@@ -1,0 +1,16 @@
+{
+ "total_code_units": 940,
+ "total_lines": 99917,
+ "exact_duplicate_groups": 5,
+ "exact_duplicate_units": 16,
+ "near_duplicate_groups": 6,
+ "near_duplicate_units": 13,
+ "exact_duplicate_lines": 1020,
+ "near_duplicate_lines": 833,
+ "exact_duplicate_percent": 1.0208473032617071,
+ "near_duplicate_percent": 0.8336919643303943,
+ "sub_exact_groups": 905,
+ "sub_exact_units": 3974,
+ "sub_near_groups": 56,
+ "sub_near_units": 116
+}

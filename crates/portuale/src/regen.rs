@@ -1,0 +1,850 @@
+//! `emerge --regen` (real `_emerge/actions.py::action_regen` +
+//! `_emerge/MetadataRegen.py`): regenerate every repo's on-disk
+//! `metadata/md5-cache/<cat>/<pf>` by running each ebuild's `depend`
+//! phase and writing the result in real `portage.cache.flat_hash`
+//! (`md5_database`) format -- `KEY=value` lines, keys sorted, empty
+//! values omitted, `_md5_=<md5 of the ebuild file>` last.
+//!
+//! Real portage runs the `depend` phases through its scheduler, up to
+//! `--jobs` concurrently with the `--load-average` gate (real
+//! `action_regen(settings, portdb, max_jobs, max_load)` ->
+//! `MetadataRegen(portdb, max_jobs, max_load)` -> `AsyncScheduler` +
+//! `PollScheduler._can_add_job`: at most `max_jobs` tasks in flight, and
+//! no *additional* task while the 1-minute load average is at or above
+//! `max_load` -- the first task always runs so the scheduler can't
+//! deadlock; a bare `--jobs` is unlimited (`True`), `--jobs=0` means the
+//! CPU count (real `main.py:1023-1041`), absent means serial). Each
+//! ebuild's `depend` phase is independent, so the cache *content* a
+//! `--jobs`-threaded run writes is byte-identical to the serial one --
+//! this port runs the same work list through a `std::thread::scope`
+//! dispatch loop with the same two gates (see `emerge_build.rs`'s own
+//! `--jobs` scheduler, which shares `system_loadavg_1min`).
+//!
+//! Three deliberate, documented divergences, all in service of portuale's
+//! determinism (a hard constraint -- real interleaves completions
+//! nondeterministically on stderr):
+//! - `Processing <cp>` lines print up front in `cp` order, before any
+//!   work is dispatched (real prints them from its `_process_iter`
+//!   generator while tasks run concurrently).
+//! - failure lines (` * <err>`) report in work-list order after every
+//!   worker joins, not in completion order (real `_task_exit` reports as
+//!   each task exits). Same failure set, same exit code, stable order.
+//! - same-`(category, pf)` items never run concurrently: the builddir
+//!   (`${PORTAGE_TMPDIR}/portage/<cat>/<pf>`, incl. `temp/
+//!   .depend-metadata`) is keyed by cpv, not by repo, so an overlay and
+//!   its master carrying the same version would share it. Real serializes
+//!   the same sharing the other way -- real `doebuild()` takes a
+//!   per-builddir lock (`EbuildBuildDir.async_lock()`); portuale holds
+//!   the second item back at dispatch instead of blocking inside the
+//!   phase, same net effect with no lock machinery.
+//!
+//! Stale-entry pruning and the eclass masters chain (below) *do* change
+//! on-disk output and are implemented.
+//!
+//! The `_pull_valid_cache` shortcut (real `portage.dbapi.porttree::
+//! portdbapi._pull_valid_cache` called from `MetadataRegen.
+//! _iter_metadata_processes`) is implemented too: when the on-disk
+//! `metadata/md5-cache/<cat>/<pf>` entry is already valid -- its `_md5_`
+//! matches the ebuild file, its `EAPI` is supported, and every
+//! `_eclasses_` `(name, md5)` pair still matches the eclass file that
+//! wins across the repo's masters chain (real `cache/template.py::
+//! validate_entry` + `eclass_cache.py::validate_and_rewrite_cache`,
+//! `md5_database` with `store_eclass_paths = False`) -- the `depend`
+//! phase is skipped and the file left untouched. Performance only:
+//! the bytes a skipped entry would get rewritten with are identical.
+//!
+//! The `cp_retry` loop (real `metadata_regen_retry`,
+//! `MetadataRegen.py:15-52`) is implemented too: a `depend` phase that
+//! dies with an *unexpected* returncode (anything but 1 -- real
+//! `MetadataRegen._task_exit`) re-runs its whole cp, up to 3 passes
+//! total (real `max_tries=3`). One deliberate, documented divergence:
+//! real `emerge --regen`'s own `action_regen` runs a *single*
+//! `MetadataRegen` with no retry at all -- the retry loop above is the
+//! path `egencache` takes, and portuale (which has no egencache)
+//! folds it into its single regen path. The end state of a
+//! persistently-broken tree is identical either way (same failure
+//! set, exit 1); only the extra passes' `Processing <cp>` lines differ.
+//! A finally-failed cpv is dropped from the valid set before pruning
+//! (real `_task_exit`'s `_valid_pkgs.discard`), so a failed ebuild
+//! never leaves a (stale) cache entry behind.
+//!
+//! #55 L3: a repo whose resolved `cache-formats` name another known
+//! format but not `md5-dict` (e.g. `pms`, including an auto-detected
+//! `metadata/cache`) is skipped (with a stderr message and exit 1)
+//! before any `depend` phase runs. Real `egencache --update` writes
+//! every known resolved format, so `cache-formats = pms` would write
+//! `metadata/cache` -- a directory portuale has no writer for -- and
+//! never touches `metadata/md5-cache` (S0 cell h1); writing the
+//! md5-cache there would be the wrong directory. An empty list (a fresh
+//! tree) keeps egencache's `force=True` `("md5-dict",)` default. No
+//! repo-cache writer here runs on `FEATURES=metadata-transfer` (real
+//! `egencache` still writes the pregen targets; only the writable
+//! depcachedir changes).
+//!
+//! Like every real filesystem-mutating `emerge` action, this rejects
+//! `--pretend` (real `actions.py:4106-4111`) at the CLI layer before
+//! reaching here.
+
+use crate::ebuild_phases;
+use md5::{Digest as _, Md5};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+/// Real `portage.dbapi.porttree`'s own md5-cache key set
+/// (`portage.auxdbkeys`), plus the two synthetic keys
+/// `portage.cache.flat_hash` always adds (`_eclasses_`, `_<chf>_` =
+/// `_md5_`). Real `flat_hash.database.__init__` writes
+/// `sorted(known_keys | {"_eclasses_", "_md5_"})` -- and `_` (0x5F) sorts
+/// after every uppercase letter, so the two synthetic keys land last.
+const WRITE_KEYS: &[&str] = &[
+    "BDEPEND",
+    "DEFINED_PHASES",
+    "DEPEND",
+    "DESCRIPTION",
+    "EAPI",
+    "HOMEPAGE",
+    "IDEPEND",
+    "INHERIT",
+    "IUSE",
+    "KEYWORDS",
+    "LICENSE",
+    "PDEPEND",
+    "PROPERTIES",
+    "RDEPEND",
+    "REQUIRED_USE",
+    "RESTRICT",
+    "SLOT",
+    "SRC_URI",
+    "_eclasses_",
+    "_md5_",
+];
+
+/// One ebuild's `depend`-phase unit of `MetadataRegen` work: the ebuild
+/// file plus the repo whose cache entry it (re)writes. `category`/`pf`
+/// double as the dispatch key -- see `run_parallel`'s own doc comment --
+/// while `cp` (`cat/pkg`) is the retry unit -- see `run`'s own doc
+/// comment on `cp_retry`.
+struct RegenWorkItem {
+    ebuild_path: PathBuf,
+    repo_location: PathBuf,
+    masters: Vec<PathBuf>,
+    category: String,
+    pf: String,
+    cp: String,
+}
+
+/// A failed `RegenWorkItem`: the message for the ` * ...` failure
+/// report plus the phase's own returncode, which is what
+/// `metadata_regen_retry`'s `cp_retry` decision keys off (real
+/// `MetadataRegen._task_exit`: an *unexpected* returncode -- anything
+/// but 1 -- re-runs the whole cp).
+struct RegenFailure {
+    code: i32,
+    message: String,
+}
+
+/// Real `metadata_regen_retry`'s own default (`MetadataRegen.py:15`):
+/// one initial run plus up to two retries of the unexpectedly-failed
+/// cps.
+const MAX_TRIES: u32 = 3;
+
+/// Real `MetadataRegen._task_exit` (`MetadataRegen.py:199-212`): a
+/// failed phase whose returncode is not 1 marks its whole cp for a
+/// re-run (`cp_retry`). Returncode 1 is the "expected" failure (real
+/// `EbuildMetadataPhase` sets exactly 1 for invalid metadata, and
+/// `doebuild`'s own pre-spawn failures surface as 1) -- never retried.
+fn is_retryable_returncode(code: i32) -> bool {
+    code != 1
+}
+
+/// The retry set for the next pass, in first-seen cp order: every cp
+/// with at least one unexpectedly-failed item. Real iterates a `set`
+/// (`cp_retry`), i.e. nondeterministic order; portuale keeps work-list
+/// order -- determinism is the hard constraint, and the set of
+/// retried cps (hence the final cache content and exit code) is the
+/// same either way.
+fn select_retry_cps(cps_in_order: &[String], unexpected_cps: &HashSet<String>) -> Vec<String> {
+    cps_in_order
+        .iter()
+        .filter(|cp| unexpected_cps.contains(cp.as_str()))
+        .cloned()
+        .collect()
+}
+
+pub fn run(
+    config_root: &Path,
+    root: &Path,
+    debug: bool,
+    jobs: usize,
+    load_average: Option<f64>,
+) -> ExitCode {
+    // `--debug`/`-d`: run each `depend` phase with `PORTAGE_DEBUG=1`
+    // (real `bin/ebuild.sh` `set -x`).
+    let repos = match portage_repo::find_repos(config_root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    // #55 L3: real `egencache --update` builds its write targets with
+    // `iter_pregenerated_caches(force=True)` -- every known resolved
+    // format, defaulting an empty list to `("md5-dict",)`
+    // (`bin/egencache:350-362`) -- so `cache-formats = pms` writes
+    // `metadata/cache` only and `pms md5-dict` writes both dirs (S0
+    // cell h1/h3). Portuale has no `pms` writer (L1), so a repo whose
+    // resolved formats name `pms` (or only unknown names) without
+    // `md5-dict` is skipped with a message instead of writing a
+    // directory real would leave alone; it still exits non-zero because
+    // the requested regeneration was not performed.
+    let mut skipped_repo = false;
+    let repos: Vec<portage_repo::RepoConfig> = repos
+        .into_iter()
+        .filter(|repo| {
+            if portage_repo::regen_writes_md5_cache(repo) {
+                return true;
+            }
+            eprintln!(
+                "emerge: --regen: repository '{}': cache-formats = '{}' has no md5-dict \
+                 format; skipping (no pms cache writer)",
+                repo.name,
+                repo.cache_formats.join(" ")
+            );
+            skipped_repo = true;
+            false
+        })
+        .collect();
+
+    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
+
+    // Real `MetadataRegen._iter_metadata_processes`: iterate `cp_all()`
+    // and, per `cat/pkg`, every ebuild version.
+    // Real `metadata_regen_retry` (`MetadataRegen.py:15-52`, the path
+    // `egencache` runs its regen through -- plain `emerge --regen`'s
+    // own `action_regen` uses a single `MetadataRegen` with no retry):
+    // each pass prints `Regenerating cache entries...` then
+    // `Processing <cp>` per cp it iterates (stdout), and a pass whose
+    // phase died with an *unexpected* returncode re-runs the whole cp,
+    // up to `MAX_TRIES` passes total. Portuale folds that retry into
+    // its single regen path (there is no egencache here): the only
+    // divergence from `action_regen` is extra passes over broken cps --
+    // a persistently-broken tree ends failed with exit 1 either way.
+    // `done!` prints once at the very end (`action_regen`).
+    //
+    // The full work list is still collected before any `depend` phase
+    // runs, and each pass's `Processing <cp>` lines still print up
+    // front -- see the module doc comment for why the lines print up
+    // front rather than from the workers.
+    //
+    // Real `MetadataRegen`'s own `_valid_pkgs`: every `(category, pf)`
+    // actually found on disk, per repo location -- fed to `_cleanup`'s
+    // "global cleanse" diff against the on-disk cache afterward
+    // (`MetadataRegen.py:142-189`). Plain `emerge --regen` (no explicit
+    // `cp` filter) always runs the global-cleanse variant.
+    let mut valid_per_repo: HashMap<PathBuf, HashSet<(String, String)>> = HashMap::new();
+    let mut work: Vec<RegenWorkItem> = Vec::new();
+    let mut cps_in_order: Vec<String> = Vec::new();
+    for cp in portage_repo::all_cp(&repos) {
+        cps_in_order.push(cp.clone());
+        let (category, package) = match cp.split_once('/') {
+            Some(x) => x,
+            None => continue,
+        };
+        for repo in &repos {
+            let pkg_dir = repo.location.join(category).join(package);
+            let Ok(entries) = portage_util::read_dir_entries(&pkg_dir) else {
+                continue;
+            };
+            for entry in entries {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let Some(pf) = name.strip_suffix(".ebuild") else {
+                    continue;
+                };
+                valid_per_repo
+                    .entry(repo.location.clone())
+                    .or_default()
+                    .insert((category.to_string(), pf.to_string()));
+                work.push(RegenWorkItem {
+                    ebuild_path: entry.path(),
+                    repo_location: repo.location.clone(),
+                    masters: repo.masters.clone(),
+                    category: category.to_string(),
+                    pf: pf.to_string(),
+                    cp: cp.clone(),
+                });
+            }
+        }
+    }
+
+    // One slot per work item, filled by whichever pass runs it last --
+    // mirroring real's `cpv_failed`/`cpv_successful` bookkeeping (a cpv
+    // that fails and then succeeds on retry counts as successful: only
+    // the last outcome per item matters).
+    let mut results: Vec<Option<Result<(), RegenFailure>>> =
+        (0..work.len()).map(|_| None).collect();
+    let mut pending_cps: Vec<String> = cps_in_order.clone();
+    let mut tries = MAX_TRIES;
+    // `MAX_TRIES` is always >= 1, so at least the initial full pass runs.
+    while !pending_cps.is_empty() && tries > 0 {
+        println!("Regenerating cache entries...");
+        for cp in &pending_cps {
+            println!("Processing {cp}");
+        }
+        let pending_set: HashSet<&str> = pending_cps.iter().map(String::as_str).collect();
+        let pass_indices: Vec<usize> = (0..work.len())
+            .filter(|&i| pending_set.contains(work[i].cp.as_str()))
+            .collect();
+        let pass_results: Vec<(usize, Result<(), RegenFailure>)> = if jobs <= 1 {
+            pass_indices
+                .into_iter()
+                .map(|i| {
+                    (
+                        i,
+                        run_work_item(&work[i], root, config_root, &portage_tmpdir, debug),
+                    )
+                })
+                .collect()
+        } else {
+            run_parallel(
+                &work,
+                &pass_indices,
+                root,
+                config_root,
+                &portage_tmpdir,
+                debug,
+                jobs,
+                load_average,
+            )
+        };
+        for (i, r) in pass_results {
+            results[i] = Some(r);
+        }
+        tries -= 1;
+        // Real `metadata_regen_retry`'s `while scheduler.cp_retry and
+        // tries > 0`: re-run the unexpectedly-failed cps while attempts
+        // remain.
+        let unexpected_cps: HashSet<String> = work
+            .iter()
+            .zip(results.iter())
+            .filter_map(|(item, r)| match r {
+                Some(Err(f)) if is_retryable_returncode(f.code) => Some(item.cp.clone()),
+                _ => None,
+            })
+            .collect();
+        pending_cps = if tries > 0 {
+            select_retry_cps(&cps_in_order, &unexpected_cps)
+        } else {
+            Vec::new()
+        };
+    }
+
+    let mut failures = 0u32;
+    for (item, r) in work.iter().zip(results.iter()) {
+        if let Some(Err(f)) = r {
+            eprintln!(" * {}", f.message);
+            failures += 1;
+            // Real `_task_exit`'s `self._valid_pkgs.discard(...)`: a
+            // finally-failed cpv is not valid, so `_cleanup`'s
+            // global-cleanse diff deletes any (stale) on-disk entry for
+            // it -- a failed ebuild never leaves a cache entry behind.
+            if let Some(valid) = valid_per_repo.get_mut(&item.repo_location) {
+                valid.remove(&(item.category.clone(), item.pf.clone()));
+            }
+        }
+    }
+
+    // Prune stale entries: an on-disk `metadata/md5-cache/<cat>/<pf>`
+    // whose ebuild no longer exists in that same repo (real `_cleanup`'s
+    // `dead_nodes` diff -- `del auxdb[y]` per repo location).
+    for repo in &repos {
+        let valid = valid_per_repo.get(&repo.location);
+        prune_stale_entries(&repo.location, valid);
+    }
+
+    println!("done!");
+    if failures == 0 && !skipped_repo {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+/// One `RegenWorkItem`'s `depend` phase + cache write (real
+/// `EbuildMetadataPhase` + `portdb._write_cache`, via `regen_one`).
+fn run_work_item(
+    item: &RegenWorkItem,
+    root: &Path,
+    config_root: &Path,
+    portage_tmpdir: &Path,
+    debug: bool,
+) -> Result<(), RegenFailure> {
+    regen_one(
+        &item.ebuild_path,
+        &item.repo_location,
+        &item.masters,
+        &item.category,
+        &item.pf,
+        root,
+        config_root,
+        portage_tmpdir,
+        debug,
+    )
+}
+
+/// Real `AsyncScheduler._schedule_tasks` for the `MetadataRegen` case:
+/// dispatch one pass's work-list items (global indices into `work`, in
+/// order) onto up to `jobs` worker threads, holding off *additional*
+/// workers while the 1-minute load average is at or above
+/// `load_average` (real `PollScheduler._can_add_job` -- the first
+/// worker always runs, so this can't deadlock), and never running two
+/// items with the same `(category, pf)` concurrently (the builddir is
+/// shared per cpv across repos -- see the module doc comment). Results
+/// come back as `(global index, outcome)` pairs, so the caller folds
+/// them into pass order deterministically regardless of completion
+/// order.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn run_parallel(
+    work: &[RegenWorkItem],
+    pass_indices: &[usize],
+    root: &Path,
+    config_root: &Path,
+    portage_tmpdir: &Path,
+    debug: bool,
+    jobs: usize,
+    load_average: Option<f64>,
+) -> Vec<(usize, Result<(), RegenFailure>)> {
+    use std::collections::VecDeque;
+    use std::sync::mpsc;
+
+    let mut results: Vec<Option<(usize, Result<(), RegenFailure>)>> =
+        (0..pass_indices.len()).map(|_| None).collect();
+    if pass_indices.is_empty() {
+        return Vec::new();
+    }
+    std::thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel::<(usize, (usize, Result<(), RegenFailure>))>();
+        let mut pending: VecDeque<usize> = (0..pass_indices.len()).collect();
+        let mut in_flight = 0usize;
+        let mut in_flight_keys: HashSet<(String, String)> = HashSet::new();
+        let mut done = 0usize;
+        while done < pass_indices.len() {
+            // Dispatch in work-list order while there is capacity. The
+            // first pending item whose builddir key isn't already running
+            // goes next; anything key-blocked waits for a completion.
+            while in_flight < jobs {
+                if in_flight >= 1
+                    && let Some(la) = load_average
+                    && crate::emerge_build::system_loadavg_1min() > la
+                {
+                    break;
+                }
+                let pos = next_dispatchable_in(&pending, &in_flight_keys, work, pass_indices);
+                let Some(pos) = pos else { break };
+                let slot = pending.remove(pos).expect("position came from pending");
+                let idx = pass_indices[slot];
+                in_flight_keys.insert((work[idx].category.clone(), work[idx].pf.clone()));
+                in_flight += 1;
+                let tx = tx.clone();
+                let item = &work[idx];
+                scope.spawn(move || {
+                    let r = run_work_item(item, root, config_root, portage_tmpdir, debug);
+                    let _ = tx.send((slot, (idx, r)));
+                });
+            }
+            // Progress is guaranteed: the load gate never blocks the
+            // first dispatch, and with nothing in flight no key is
+            // blocked -- so a pending item always dispatches, and a
+            // completion is always on its way when we wait here.
+            let (slot, r) = rx.recv().expect("a worker result is always pending");
+            in_flight -= 1;
+            let idx = pass_indices[slot];
+            in_flight_keys.remove(&(work[idx].category.clone(), work[idx].pf.clone()));
+            results[slot] = Some(r);
+            done += 1;
+        }
+    });
+    results
+        .into_iter()
+        .map(|r| r.expect("every work item reported exactly once"))
+        .collect()
+}
+
+/// First dispatchable slot in `pending`: the first position whose
+/// builddir key isn't already running -- the "in work-list order, skip
+/// what would race" half of `run_parallel`'s dispatch (`pending` holds
+/// positions into `pass_indices`, whose entries are global work
+/// indices). Split out so the ordering/blocking rule is unit-testable
+/// without running a `depend` phase.
+fn next_dispatchable_in(
+    pending: &std::collections::VecDeque<usize>,
+    in_flight_keys: &HashSet<(String, String)>,
+    work: &[RegenWorkItem],
+    pass_indices: &[usize],
+) -> Option<usize> {
+    pending.iter().position(|&slot| {
+        let idx = pass_indices[slot];
+        !in_flight_keys.contains(&(work[idx].category.clone(), work[idx].pf.clone()))
+    })
+}
+
+/// Real `MetadataRegen._cleanup`'s "global cleanse" (`MetadataRegen.py:
+/// 142-166`): every on-disk cache entry under `repo_location`'s
+/// `metadata/md5-cache/<cat>/` not in `valid` (i.e. no matching ebuild
+/// was found this run) gets removed. `valid` is `None` when the repo
+/// had no `cp` at all this run -- every existing entry is then stale.
+fn prune_stale_entries(repo_location: &Path, valid: Option<&HashSet<(String, String)>>) {
+    let empty = HashSet::new();
+    let valid = valid.unwrap_or(&empty);
+    let cache_root = repo_location.join("metadata/md5-cache");
+    let Ok(cats) = portage_util::read_dir_entries(&cache_root) else {
+        return;
+    };
+    for cat_entry in cats {
+        if !cat_entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let category = cat_entry.file_name().to_string_lossy().to_string();
+        let Ok(files) = portage_util::read_dir_entries(&cat_entry.path()) else {
+            continue;
+        };
+        for f in files {
+            if !f.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
+            let pf = f.file_name().to_string_lossy().to_string();
+            if !valid.contains(&(category.clone(), pf)) {
+                let _ = std::fs::remove_file(f.path());
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn regen_one(
+    ebuild_path: &Path,
+    repo_location: &Path,
+    masters: &[PathBuf],
+    category: &str,
+    pf: &str,
+    root: &Path,
+    config_root: &Path,
+    portage_tmpdir: &Path,
+    debug: bool,
+) -> Result<(), RegenFailure> {
+    // Every `Err` below carries the returncode real
+    // `EbuildMetadataPhase` would report for the same outcome, so the
+    // caller can replay `MetadataRegen._task_exit`'s `cp_retry`
+    // decision (`returncode != 1` re-runs the cp). Only the phase's own
+    // non-1 exit is retryable; every setup/IO failure is code 1 --
+    // real's `doebuild`-before-spawn int retval and its
+    // metadata-invalid arm are both 1, never retried.
+    let fail = |code: i32, message: String| RegenFailure { code, message };
+    // Real `MetadataRegen._iter_metadata_processes`'s
+    // `portdb._pull_valid_cache(cpv, ebuild_path, repo_path)` shortcut:
+    // a valid on-disk entry skips the `depend` phase entirely (perf
+    // only -- the rewrite would be byte-identical). The file is left
+    // untouched, preserving its mtime.
+    if portage_repo::md5_dict::cache_entry_is_valid(
+        ebuild_path,
+        repo_location,
+        masters,
+        category,
+        pf,
+        // The repo's pregen cache is `flat_hash.md5_database`:
+        // `_eclasses_` is `name\tmd5` pairs (`store_eclass_paths = False`).
+        false,
+    ) {
+        return Ok(());
+    }
+    let env =
+        ebuild_phases::compute_environment(ebuild_path, portage_tmpdir).map_err(|e| fail(1, e))?;
+    let md = ebuild_phases::run_depend_phase(&env, root, config_root, debug)
+        .map_err(|e| fail(e.code, e.message))?;
+
+    let out =
+        render_entry(&md, ebuild_path, repo_location, masters, false).map_err(|e| fail(1, e))?;
+    let cache_dir = repo_location.join("metadata/md5-cache").join(category);
+    write_entry(&cache_dir, pf, &out).map_err(|e| fail(1, e))?;
+    Ok(())
+}
+
+/// Render one `depend`-phase result as the bytes real
+/// `flat_hash._setitem` writes (`portage.cache.flat_hash.database`):
+/// `for k in self._write_keys: v = values.get(k); if not v: continue;
+/// write f"{k}={v}\n"` -- sorted keys, empty values skipped, with the two
+/// synthetic keys `_eclasses_`/`_md5_` added exactly like real's
+/// `EbuildMetadataPhase` + `_write_cache` do. Shared by `--regen` (the
+/// repo's `metadata/md5-cache`) and C3's depcachedir write-back
+/// (`ebuild_phases::depend_phase_metadata`): same key set, different
+/// destination directory *and* `_eclasses_` shape -- the repo cache is
+/// `flat_hash.md5_database` (pairs), the depcachedir
+/// `mtime_md5_database` (triples with the eclass dir,
+/// `store_eclass_paths = True`; S0 cell (a)).
+pub(crate) fn render_entry(
+    md: &std::collections::HashMap<String, String>,
+    ebuild_path: &Path,
+    repo_location: &Path,
+    masters: &[PathBuf],
+    store_eclass_paths: bool,
+) -> Result<String, String> {
+    let ebuild_bytes =
+        std::fs::read(ebuild_path).map_err(|e| format!("{}: {e}", ebuild_path.display()))?;
+    let ebuild_md5 = format!("{:x}", Md5::digest(&ebuild_bytes));
+
+    // Real `flat_hash._setitem`: `for k in self._write_keys: v =
+    // values.get(k); if not v: continue; write f"{k}={v}\n"`. Sorted
+    // keys, empty values skipped.
+    let mut fields: BTreeMap<&str, String> = BTreeMap::new();
+    for &key in WRITE_KEYS {
+        if key == "_md5_" || key == "_eclasses_" {
+            continue;
+        }
+        if let Some(v) = md.get(key)
+            && !v.is_empty()
+        {
+            fields.insert(key, v.clone());
+        }
+    }
+    if let Some(ec) = eclasses_field(md, repo_location, masters, store_eclass_paths) {
+        fields.insert("_eclasses_", ec);
+    }
+    fields.insert("_md5_", ebuild_md5);
+
+    let mut out = String::new();
+    for &key in WRITE_KEYS {
+        if let Some(v) = fields.get(key) {
+            out.push_str(key);
+            out.push('=');
+            out.push_str(v);
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+/// Write one rendered cache entry into `dir` (`<...>/<category>`), real
+/// `flat_hash._setitem`'s tempfile-then-`os.rename` dance: a unique
+/// temporary sibling first so concurrent writers (C3's provider can run
+/// in several `portuale` processes at once -- the C2 concurrency pin
+/// spawns sixteen) never collide, then an atomic rename over the final
+/// name. The caller decides whether a failure is fatal (`--regen`) or
+/// best-effort (the depcachedir write-back, whose fallback is the
+/// in-process memo).
+pub(crate) fn write_entry(dir: &Path, pf: &str, body: &str) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let tmp = dir.join(format!(
+        ".{pf}.{}.{}.regen",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&tmp, body.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let final_path = dir.join(pf);
+    std::fs::rename(&tmp, &final_path).map_err(|e| format!("{}: {e}", final_path.display()))?;
+    Ok(())
+}
+
+/// Real `metadata.database._setitem`: `_eclasses_` is serialized as
+/// `name\tmd5\tname\tmd5...` (`serialize_eclasses(..., "md5")`). Built
+/// from the `depend` phase's own `INHERITED` list -- for each eclass
+/// name, the md5 of the file that wins across the repo's own masters
+/// chain.
+///
+/// Real `eclass_cache.cache.update_eclasses` (`eclass_cache.py:108-148`)
+/// walks `porttrees` (`masters` in declared order, then the repo itself
+/// -- `repository/config.py:1267-1276`) and, for a same-named eclass
+/// present in more than one tree, keeps the *earliest* (most-master)
+/// copy only when a later tree's copy has the exact same `mtime`
+/// (treated as "identical to the master"); a later tree with a
+/// genuinely differing copy overrides it. Since `mtime` is a real-world
+/// proxy for "did the content change", and this crate only ever cares
+/// about the resulting content hash, the equivalent, simpler rule used
+/// here is: the *last* tree in `masters`-then-self order that has the
+/// file wins outright. This produces the identical MD5 in every case
+/// where content actually differs across the chain (real's whole
+/// mtime-equality dance only matters when content is identical anyway,
+/// in which case either copy's MD5 is the same) -- a documented,
+/// behavior-preserving simplification.
+fn eclasses_field(
+    md: &std::collections::HashMap<String, String>,
+    repo_location: &Path,
+    masters: &[PathBuf],
+    store_eclass_paths: bool,
+) -> Option<String> {
+    let names = md.get("INHERITED").map(String::as_str).unwrap_or("");
+    let names: Vec<&str> = names.split_whitespace().collect();
+    if names.is_empty() {
+        return None;
+    }
+    let porttrees: Vec<&Path> = masters
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(std::iter::once(repo_location))
+        .collect();
+    let mut parts = Vec::new();
+    for name in names {
+        let (tree, bytes) = porttrees.iter().rev().find_map(|tree| {
+            let path = tree.join("eclass").join(format!("{name}.eclass"));
+            std::fs::read(&path).ok().map(|bytes| (*tree, bytes))
+        })?;
+        parts.push(name.to_string());
+        if store_eclass_paths {
+            // Real `serialize_eclasses(..., paths=True)`: the eclass's
+            // own directory (no filename) between name and checksum.
+            parts.push(tree.join("eclass").display().to_string());
+        }
+        parts.push(format!("{:x}", Md5::digest(&bytes)));
+    }
+    Some(parts.join("\t"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::collections::VecDeque;
+
+    fn work_item(category: &str, pf: &str) -> RegenWorkItem {
+        RegenWorkItem {
+            ebuild_path: PathBuf::from(format!("/repo/{category}/pkg/{pf}.ebuild")),
+            repo_location: PathBuf::from("/repo"),
+            masters: Vec::new(),
+            category: category.to_string(),
+            pf: pf.to_string(),
+            cp: format!("{category}/pkg"),
+        }
+    }
+
+    fn key(category: &str, pf: &str) -> (String, String) {
+        (category.to_string(), pf.to_string())
+    }
+
+    /// Dispatch is work-list order, skipping only what would share a
+    /// builddir with something already running (real `doebuild()`'s own
+    /// per-builddir lock, held at dispatch instead of inside the phase).
+    #[test]
+    fn dispatch_takes_the_first_item_whose_key_is_not_running() {
+        let work = vec![
+            work_item("dev-libs", "a-1.0"),
+            work_item("dev-libs", "a-1.0"),
+            work_item("dev-libs", "b-1.0"),
+        ];
+        let pass: Vec<usize> = vec![0, 1, 2];
+        let pending: VecDeque<usize> = (0..3).collect();
+        // Nothing running: the head goes.
+        assert_eq!(
+            next_dispatchable_in(&pending, &HashSet::new(), &work, &pass),
+            Some(0)
+        );
+        // Head's key running: the same-key second item is skipped, the
+        // next key goes.
+        let running: HashSet<(String, String)> = [key("dev-libs", "a-1.0")].into();
+        assert_eq!(
+            next_dispatchable_in(&pending, &running, &work, &pass),
+            Some(2)
+        );
+        // Every key running: nothing is dispatchable (the caller waits
+        // for a completion instead of spinning).
+        let all: HashSet<(String, String)> =
+            [key("dev-libs", "a-1.0"), key("dev-libs", "b-1.0")].into();
+        assert_eq!(next_dispatchable_in(&pending, &all, &work, &pass), None);
+        // Empty queue: nothing to dispatch.
+        assert_eq!(
+            next_dispatchable_in(&VecDeque::new(), &HashSet::new(), &work, &pass),
+            None
+        );
+        // A retry-pass subset mapping resolves keys through the pass
+        // indices, not the slot positions.
+        let subset: Vec<usize> = vec![2, 0];
+        let sub_pending: VecDeque<usize> = (0..2).collect();
+        assert_eq!(
+            next_dispatchable_in(&sub_pending, &running, &work, &subset),
+            Some(0)
+        );
+    }
+
+    /// Real `metadata_regen_retry`'s `cp_retry` (`MetadataRegen.py:15-52`
+    /// + `_task_exit`, `MetadataRegen.py:199-212`).
+    ///
+    /// Only an *unexpected* returncode (anything but 1) re-runs the
+    /// whole cp, up to `MAX_TRIES` passes total, in first-seen cp order
+    /// (real iterates a set -- nondeterministic; the retried set is the
+    /// same).
+    #[test]
+    fn retry_decision_matches_portage_task_exit() {
+        // Returncode 1 is the "expected" failure: invalid metadata,
+        // pre-spawn `doebuild` retval -- never retried. (0/SUCCESS
+        // never reaches the retry decision at all.)
+        assert!(!is_retryable_returncode(1));
+        // Anything else (a real phase death: 2 for a sandbox hit or a
+        // bash syntax error, -1 for a signal) re-runs the cp.
+        assert!(is_retryable_returncode(2));
+        assert!(is_retryable_returncode(-1));
+        assert!(is_retryable_returncode(130));
+        // The pass budget is real's own `max_tries=3` default.
+        assert_eq!(MAX_TRIES, 3);
+    }
+
+    #[test]
+    fn retry_set_is_the_unexpectedly_failed_cps_in_first_seen_order() {
+        let cps = ["b/cp", "a/cp", "c/cp"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        // Only the unexpectedly-failed cps come back, in work-list
+        // order regardless of set order.
+        let unexpected: HashSet<String> =
+            ["c/cp", "b/cp"].into_iter().map(str::to_string).collect();
+        assert_eq!(
+            select_retry_cps(&cps, &unexpected),
+            vec!["b/cp".to_string(), "c/cp".to_string()]
+        );
+        // Nothing unexpected: no retry pass.
+        assert!(select_retry_cps(&cps, &HashSet::new()).is_empty());
+    }
+
+    /// S0 cell (a): the two rungs serialize `_eclasses_` differently --
+    /// the repo cache (`md5_database`) as `name\tmd5` pairs, the
+    /// depcachedir (`mtime_md5_database`, `store_eclass_paths = True`)
+    /// as `name\tdir\tmd5` triples -- and `render_entry` serves both.
+    /// The phase-env `INHERITED` is never written (real
+    /// `EbuildMetadataPhase._async_start` pops it and records
+    /// `_eclasses_` instead).
+    #[test]
+    fn render_entry_writes_the_eclass_shape_of_each_rung() {
+        let dir = TempDir::new("portuale-regen-render").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        let ebuild = repo.join("dev-libs/pkg/pkg-1.0.ebuild");
+        std::fs::create_dir_all(ebuild.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(repo.join("eclass")).unwrap();
+        std::fs::write(&ebuild, "EAPI=8\n").unwrap();
+        std::fs::write(repo.join("eclass/myclass.eclass"), "# eclass\n").unwrap();
+
+        let mut md = std::collections::HashMap::new();
+        md.insert("EAPI".to_string(), "8".to_string());
+        md.insert("INHERITED".to_string(), "myclass".to_string());
+        let eclass_md5 = format!("{:x}", Md5::digest(b"# eclass\n"));
+
+        let pairs = render_entry(&md, &ebuild, &repo, &[], false).unwrap();
+        assert!(
+            pairs.contains(&format!("_eclasses_=myclass\t{eclass_md5}\n")),
+            "{pairs}"
+        );
+        assert!(!pairs.contains("INHERITED="), "{pairs}");
+
+        let triples = render_entry(&md, &ebuild, &repo, &[], true).unwrap();
+        assert!(
+            triples.contains(&format!(
+                "_eclasses_=myclass\t{}\t{eclass_md5}\n",
+                repo.join("eclass").display()
+            )),
+            "{triples}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

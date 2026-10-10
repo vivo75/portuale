@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# musl static-build smoke test (see docs/agent-context.md: "Rust CI also gates
+# musl static-build smoke test (see LLM/agent-context.md: "Rust CI also gates
 # on a musl static build smoke-tested inside a minimal (scratch/busybox-
 # level) container").
 #
@@ -64,7 +64,7 @@ capture() {
 }
 
 # Real `emerge` / `ebuild` inside the scratch image, against the fixture
-# tree copied to /fixtures (see fixtures/ and rust/portage-repo).
+# tree copied to /fixtures (see fixtures/ and crates/portage-repo).
 run_emerge() {
     "${ENGINE}" run --rm --entrypoint /bin/emerge \
         -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
@@ -88,7 +88,7 @@ merge_names() {
 
 # A `--pretend` shape: this exit status, exactly these cpvs in this
 # order, and every needle present somewhere in the output. A refusal can
-# still have a merge list -- real prints the plan it cannot carry out,
+# still have a merge list -- Portage prints the plan it cannot carry out,
 # then the blocked-packages error -- so the status is a parameter.
 assert_pretend_rc() {
     local desc="$1" expected_rc="$2" expected="$3"
@@ -147,15 +147,16 @@ assert_rc() {
     return 0
 }
 
-# Build context: rust/, the vendored phase runtime (bin/, cnf/ -- embedded
-# into the binary by build.rs, #322) plus the fixture tree. `fixtures/` is a symlink to
+# Build context: the Cargo workspace (Cargo.toml, Cargo.lock, .cargo/,
+# crates/), the vendored phase runtime (bin/, cnf/ -- embedded into the
+# binary by build.rs, #322) plus the fixture tree. `fixtures/` is a symlink to
 # ../pmtest/fixtures, outside any build context rooted at the repo, so the
 # Containerfile's `COPY fixtures/` would fail on it (#311). Stage a real
 # copy: `cp -a fixtures/.` follows the top-level link but keeps the tree's
 # own inner symlinks (e.g. make.profile) as they are.
 CONTEXT="$(mktemp -d "${TMPDIR:-/var/tmp}/musl-smoke-ctx.XXXXXX")"
 trap 'rm -rf "${CONTEXT}"' EXIT
-tar -C "${REPO_DIR}" --exclude=rust/target -cf - rust bin cnf | tar -C "${CONTEXT}" -xf -
+tar -C "${REPO_DIR}" --exclude=./target -cf - Cargo.toml Cargo.lock .cargo crates bin cnf | tar -C "${CONTEXT}" -xf -
 mkdir "${CONTEXT}/fixtures"
 cp -a "${REPO_DIR}/fixtures/." "${CONTEXT}/fixtures/"
 
@@ -226,13 +227,13 @@ assert_pretend_ok \
 # emerge --pretend against blockers (see fixtures/etc/portage/ and
 # the dev-libs/blockerpkg*/weakblockerpkg/graphblockerparent fixture
 # packages). Which of the two aborts is the opposite of what it looks
-# like, and both shapes come from the real-3.0.82.2 oracle the contract
+# like, and both shapes come from the Portage 3.0.82.2 oracle the contract
 # suite pins (`test_emerge_pretend_contract.py`, "strong (!!) blocker vs
 # an installed package ... is satisfied (rc 0, real `b`)" and
 # `test_weak_blocker_matches_another_new_package_in_the_same_graph`):
 #
 # - a strong blocker matching an *installed* package nothing else pulls
-#   in is **satisfied** by uninstalling it: real prints the lowercase
+#   in is **satisfied** by uninstalling it: Portage prints the lowercase
 #   `b` line next to an `[uninstall ]` row and exits 0;
 # - a weak blocker matching a package this same run would newly merge
 #   has no such out -- the parent is merging, not installed -- so it is
@@ -294,7 +295,7 @@ assert_pretend_ok \
 
 # emerge --pretend against REQUIRED_USE (see dev-libs/requiredusebadpkg):
 # a genuinely violated REQUIRED_USE constraint aborts the whole run, not
-# just the one package -- real depgraph.py's own severity for this.
+# just the one package -- Portage depgraph.py's own severity for this.
 capture emerge_pretend dev-libs/requiredusebadpkg
 assert_rc \
     "emerge --pretend reports a REQUIRED_USE violation inside the scratch container" \
@@ -308,8 +309,8 @@ assert_rc \
 # message shape, not the flag.)
 capture run_emerge --pretend --nobindeps dev-libs/newpkg
 assert_rc \
-    "emerge reports a real, unimplemented option by name inside the scratch container" \
-    2 'is a real emerge option, but is not yet implemented in portuale' \
+    "emerge reports an unimplemented Portage option by name inside the scratch container" \
+    2 'is a Portage emerge option, but is not yet implemented in portuale' \
     '"--nobindeps"'
 
 # ebuild dispatch: the applet's own usage, and a real command name it

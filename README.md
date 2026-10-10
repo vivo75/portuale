@@ -12,7 +12,7 @@ starting from `portage.versions`; a few portage features are still
 unported — see **Status** below.
 
 The four hard goals it is built to (see
-[`docs/agent-context.md`](docs/agent-context.md) for the full rationale):
+[`LLM/agent-context.md`](LLM/agent-context.md) for the full rationale):
 
 1. **Portability of change, not of source.** A behaviour change on either
    side lands with contract-suite cases the other side must then pass —
@@ -31,7 +31,7 @@ merged, and unmerged `app-arch/unzip`, `sys-fs/fuse`, and
 `app-arch/xz-utils` end to end against an actual Gentoo tree. Shipped:
 full `emerge --pretend` dependency resolution (atoms, slots, USE deps,
 blockers, slot conflicts, `USE_EXPAND`, `REQUIRED_USE`, autounmask,
-profile/`make.conf` config, overlays, the real `resolver/output.py`
+profile/`make.conf` config, overlays, Portage's `resolver/output.py`
 layout with ANSI colour); real ebuild phase execution via an embedded
 `brush` (Rust-native bash) driving unmodified `bin/*.sh`; real `SRC_URI`
 fetch; real filesystem merge/unmerge with `CONFIG_PROTECT`,
@@ -44,9 +44,9 @@ It is **not yet a complete replacement**. The distance to one is now
 dominated by a single large item — a full backtracking resolver — plus a
 short incremental tail (scheduler odds and ends, the deliberate
 sandbox/`FEATURES` cuts, some binhost/gpkg gaps). See
-[`docs/scope-backlog.md`](docs/scope-backlog.md) for the honest
+[`LLM/scope-backlog.md`](LLM/scope-backlog.md) for the honest
 distance-to-parity assessment, and
-[`docs/what-this-proves.md`](docs/what-this-proves.md) for the
+[`LLM/what-this-proves.md`](LLM/what-this-proves.md) for the
 slice-by-slice record with its cited-source grounding.
 
 ## Layout
@@ -57,7 +57,8 @@ Portage bash phase runtime (see [`bin/README.md`](bin/README.md) and
 [`3rdparty/README.md`](3rdparty/README.md)).
 
 ```
-rust/                      Rust workspace
+Cargo.toml                 Rust workspace root (cargo runs from the repo root)
+crates/                    the workspace crates
   portage-versions/        shared lib: vercmp / ververify
   portage-dep/             shared lib: Atom + match_from_list (v1 subset) + wildcard matcher
   portage-use-reduce/      shared lib: use_reduce(flat=True)
@@ -66,7 +67,7 @@ rust/                      Rust workspace
   portage-repo/            multi-repo/metadata/vdb access + resolution + dep-graph walk
   portage-fetch/           shared lib: SRC_URI fetch (Manifest digests, mirrors)
   *-harness/               neutral CLI harnesses (contract + benchmark testing)
-  portuale/                the real emerge / ebuild multicall binary
+  portuale/                the actual emerge / ebuild multicall binary
 fixtures/                  -> ../pmtest/fixtures (symlink): the one fixture tree,
                            read by the Rust tests here and by the contract suite there
 musl/                      musl static-build smoke test (minimal-Linux CI gate)
@@ -76,16 +77,16 @@ docs/                      all project documentation (see below)
 The test suite itself is **not** in this tree: it lives in the sibling
 `pmtest` repository, which tests portuale as one of several package
 managers. See "Test" below and
-[`docs/agent-context.md`](docs/agent-context.md) ("Where the tests
+[`LLM/agent-context.md`](LLM/agent-context.md) ("Where the tests
 live") for the old-path → new-home map.
 
 ## Build
 
 ```sh
-cd rust && cargo build --release
+cargo build --release
 ```
 
-Produces `rust/target/release/portuale`; create `emerge` and `ebuild`
+Produces `target/release/portuale`; create `emerge` and `ebuild`
 symlinks next to it for multicall dispatch (the tests do this
 automatically).
 
@@ -93,10 +94,10 @@ automatically).
 
 ```sh
 # in this repo: the whole Rust workspace (reads ./fixtures -> ../pmtest/fixtures)
-cd rust && cargo test --release
+cargo test --release
 
 # in the sibling pmtest repo: the black-box contract suite
-cd ../../pmtest && python3 -m pytest pytests-contract-suite -q
+cd ../pmtest && python3 -m pytest pytests-contract-suite -q
 ```
 
 The contract suite, the container differential bed, the benchmark and
@@ -113,11 +114,11 @@ Full pre-slice verification also runs `cargo fmt --check` and
 ## Run
 
 Live-verified per-slice examples are in
-[`docs/what-this-proves.md`](docs/what-this-proves.md). Quick taste:
+[`LLM/what-this-proves.md`](LLM/what-this-proves.md). Quick taste:
 
 ```sh
-rust/target/release/portuale emerge --pretend sys-apps/portage
-rust/target/release/versions-harness vercmp 1.0-r1 1.0
+target/release/portuale emerge --pretend sys-apps/portage
+target/release/versions-harness vercmp 1.0-r1 1.0
 ```
 
 ## Documentation
@@ -125,9 +126,9 @@ rust/target/release/versions-harness vercmp 1.0-r1 1.0
 | Doc | What it is |
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | **Start here for agent work.** The "next slice" workflow and the verification / commit rules. |
-| [`docs/agent-context.md`](docs/agent-context.md) | The full context: goals, hard constraints, architecture decisions, the bash-backend investigation, current state, and the open backlog. |
-| [`docs/what-this-proves.md`](docs/what-this-proves.md) | The living, append-only per-slice record — every feature, with its real-portage source grounding. |
-| [`docs/scope-backlog.md`](docs/scope-backlog.md) | What real portage behaviour is *not* yet ported (either side), the standing non-goals, and the distance to a drop-in replacement. |
-| [`docs/lessons-of-backlog-ops-2026-10-03.md`](docs/lessons-of-backlog-ops-2026-10-03.md), [`docs/recap-of-backlog-ops-2026-10-03.md`](docs/recap-of-backlog-ops-2026-10-03.md) | How to work on backlog items (condensed lessons) and the per-item status/residue/cut index for the closed batches. |
+| [`LLM/agent-context.md`](LLM/agent-context.md) | The full context: goals, hard constraints, architecture decisions, the bash-backend investigation, current state, and the open backlog. |
+| [`LLM/what-this-proves.md`](LLM/what-this-proves.md) | The living, append-only per-slice record — every feature, with its Portage source grounding. |
+| [`LLM/scope-backlog.md`](LLM/scope-backlog.md) | What Portage behaviour is *not* yet ported (either side), the standing non-goals, and the distance to a drop-in replacement. |
+| [`LLM/lessons-of-backlog-ops-2026-10-03.md`](LLM/lessons-of-backlog-ops-2026-10-03.md), [`LLM/recap-of-backlog-ops-2026-10-03.md`](LLM/recap-of-backlog-ops-2026-10-03.md) | How to work on backlog items (condensed lessons) and the per-item status/residue/cut index for the closed batches. |
 | [`docs/brush-pin.md`](docs/brush-pin.md) | The `brush` (embedded bash) dependency pin and its re-pin checklist. |
 | [`docs/diagrams/operation-diagrams.md`](docs/diagrams/operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code. |

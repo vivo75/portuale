@@ -6,14 +6,14 @@ Two report modes:
 
 * default -- validity per repo: for every `metadata/md5-cache/<cat>/<pf>`
   entry, is its `_md5_` the md5 of `<repo>/<cat>/<pn>/<pf>.ebuild`
-  (real `cache/template.py::validate_entry`'s `md5_database` rung)? An
+  (Portage `cache/template.py::validate_entry`'s `md5_database` rung)? An
   entry without an ebuild is reported separately; dot-dirs (pytest
   junk) are skipped.
 * `--against <regen-root>` -- key-level diff of the committed entries
   against a regenerated tree with the same repo layout (`<root>/<repo>`,
   one root per source tree). `_md5_` is excluded from the diff; diffs
   are split into `empty-vs-missing` (one side carries `KEY=`, the other
-  omits the key -- real's writer skips empty values) and `substantive`
+  omits the key -- Portage's writer skips empty values) and `substantive`
   (both sides non-empty and different, or one empty and one non-empty).
 
 Exit status: 0 always in report mode; the S1 guard test is the one that
@@ -87,7 +87,7 @@ def audit(repo: Path) -> dict:
         fields = parse_entry(entry)
         want = fields.get("_md5_")
         # A missing or malformed `_md5_` (the 31-zero fixture placeholder is
-        # both) fails real's validator the same way a mismatched one does.
+        # both) fails Portage's validator the same way a mismatched one does.
         if want is None or len(want) != 32:
             counts["stale"] += 1
             stale.append(f"{category}/{pf}")
@@ -124,7 +124,7 @@ def diff_entries(committed: Path, regenerated: Path) -> dict:
             if va == vb:
                 continue
             details.append(f"{key}: committed={va!r} regen={vb!r}")
-            # Missing-vs-empty only: real's writer omits empty values, so
+            # Missing-vs-empty only: Portage's writer omits empty values, so
             # `KEY=` on one side and no key on the other is the same
             # meaning. A value disappearing (None vs "x") is substantive.
             if va in (None, "") and vb in (None, ""):

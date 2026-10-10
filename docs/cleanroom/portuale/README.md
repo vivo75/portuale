@@ -23,7 +23,7 @@ Language: English throughout.
 ## Conformance vocabulary
 
 - **MUST** — behaviour the contract suite pins; diverging breaks compatibility.
-- **SHOULD** — behaviour real Portage exhibits that the suite checks loosely.
+- **SHOULD** — behaviour Portage exhibits that the suite checks loosely.
 - **MAY** — explicitly documented narrowing where the specification permits
   a simpler behaviour (each is marked as a *documented cut*).
 

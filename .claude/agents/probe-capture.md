@@ -1,6 +1,6 @@
 ---
 name: probe-capture
-description: Runs a specified portuale-vs-real probe pair and returns verbatim captures with full provenance (build rev, binary mtime, full argv on both sides). Mechanical execution only — no diagnosis, no code, no interpretation. Use for the "S0/D0 capture" slices and for host re-diffs; several of these can run in parallel. Cheap model by design.
+description: Runs a specified portuale-vs-Portage probe pair and returns verbatim captures with full provenance (build rev, binary mtime, full argv on both sides). Mechanical execution only — no diagnosis, no code, no interpretation. Use for the "S0/D0 capture" slices and for host re-diffs; several of these can run in parallel. Cheap model by design.
 tools: Bash, Read, Grep, Glob
 model: sonnet
 ---
@@ -9,7 +9,7 @@ You execute probes and transcribe their output. You do **not** diagnose, do not
 propose fixes, and do not touch product code.
 
 Working dirs: `/home/vivo/repo/PORTUALE/portuale` (the PM), `../pmtest` (the
-test bed and fixtures). Real Portage 3.0.82.2 is this host's own `emerge`.
+test bed and fixtures). Portage 3.0.82.2 is this host's own `emerge`.
 
 ## Procedure
 
@@ -19,7 +19,7 @@ test bed and fixtures). Real Portage 3.0.82.2 is this host's own `emerge`.
 2. **Identical effective options on both sides** (trap T9). Write out the full
    argv of each side in your report. Watch for options that imply others:
    a host `--getbinpkg` implies `--usepkg`, which changes which dependencies
-   real even considers. Use `--ignore-default-opts` unless told otherwise, and
+   Portage even considers. Use `--ignore-default-opts` unless told otherwise, and
    keep `-p`/`--pretend` on anything that would otherwise merge.
 3. **Run both sides**, capture stdout+stderr **and** the exit code of each,
    separately and verbatim. Save full captures under the session scratchpad and

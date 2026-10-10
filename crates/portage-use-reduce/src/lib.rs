@@ -1,0 +1,1549 @@
+// Rust port of `portage.dep.use_reduce` (lib/portage/dep/__init__.py),
+// restricted to `flat=True` mode -- the depgraph/config-resolution slice
+// after atom matching (see LLM/agent-context.md).
+//
+// Unlike atom.rs, this is NOT a narrowed grammar: flat mode's tokenizer
+// and bracket/use-conditional handling (the part of use_reduce this ports)
+// is fully self-contained in the real implementation and is ported as-is,
+// error behavior included. What's out of scope is a set of *optional
+// parameters* the harness simply never exercises: `masklist`, `excludeall`
+// (rare flag-override sets), `is_src_uri`/the "->" SRC_URI arrow token
+// (fetch-restriction syntax), `opconvert` (the operator-into-argument-list
+// shape, which nothing in portuale needs), and
+// `token_class`/`is_valid_flag` (tokens stay opaque strings here, matching
+// how config.py itself calls use_reduce for RESTRICT/PROPERTIES/IUSE-like
+// values -- see the grep in LLM/what-this-proves.md).
+//
+// `subset` (the `--with-test-deps` follow-up) IS now ported too --
+// `use_reduce_flat_subset`, grounded against real `select_subset`, which
+// needs the *full* nested `paren_reduce` structure (not `flat=True`'s
+// own eagerly-flattened one) to know where a `"||"` group's own
+// boundaries are before subset-filtering happens, so it gets its own
+// tree type (`DepNode`) and its own build/filter/reserialize pipeline
+// feeding into the *unmodified* `use_reduce_flat` below for the actual
+// final flattening -- see `use_reduce_flat_subset`'s own doc comment.
+//
+// `flat=True` is a real, heavily-used invocation mode (not a convenience
+// fiction): lib/portage/package/ebuild/config.py, _emerge/resolver/, and
+// _emirrordist all call use_reduce(..., flat=True) for exactly this "give
+// me a flat token list" need.
+//
+// `use_reduce_structured` (the `--changed-deps` structured-comparison
+// follow-up) ports real `use_reduce`'s own `flat=False`/`opconvert=False`
+// mode -- the full nested stack reducer with every redundant-bracket
+// optimization (`is_single`/`special_append`/`ends_in_any_of_dep`/
+// `last_any_of_operator_level`), verified byte-for-byte against real
+// `portage.dep.use_reduce` over thousands of randomized dep strings. It
+// stays atom-agnostic (no `token_class=Atom`): the caller re-parses the
+// serialized atom tokens for its own per-atom needs.
+//
+// `use_reduce_flat_disjunctive` (the real "||"-group resolution follow-up)
+// reuses the exact same DepNode/build_dep_tree/serialize_dep_tree
+// machinery `use_reduce_flat_subset` already needed, extended with a new
+// `resolve_disjunctions` walk: of every "||" alternative, picks the first
+// with the highest `AltPreference` a caller-supplied closure reports
+// (`Installed` > `Available` > `Unsatisfiable`) -- portuale's cut of real
+// `dep_zapdeps`'s `choice_bins`, enough to make `|| ( wine-vanilla
+// wine-staging … )` pick the installed `wine-staging` rather than the
+// first-listed one. The finer bins (`in_graph`/`any_slot`/`unsat_use_*`/
+// `other_*`) and full backtracking still aren't ported. This crate stays
+// atom-agnostic throughout, matching its own established "tokens stay
+// opaque strings" architecture -- portage-repo supplies the actual
+// installed/visibility-checking closure.
+
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+use regex::Regex;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMode {
+    /// Conditionals are active iff the flag is in `uselist` (negated for `!flag?`).
+    Normal,
+    /// Every conditional is active, regardless of `uselist` (real use_reduce's `matchall=True`).
+    All,
+    /// Every conditional is inactive, regardless of `uselist` (real use_reduce's `matchnone=True`).
+    None,
+}
+
+/// Parse/reduce error from a USE dependency string. Distinct variants
+/// mirror the real `portage.dep.use_reduce` error messages so `Display`
+/// reproduces them byte-for-byte (the contract suite pins these strings).
+#[derive(Debug)]
+pub enum Error {
+    /// `invalid use flag '{flag}' in conditional '{conditional}'`
+    InvalidUseFlag { flag: String, conditional: String },
+    /// `expected: {expected}, got: ')', token {token}` where `expected`
+    /// is either `dependency string` or `'('` at the call site.
+    ExpectedCloseParen {
+        expected: &'static str,
+        token: usize,
+    },
+    /// `no matching '(' for ')', token {token}`
+    NoMatchingOpen { token: usize },
+    /// `expected: '(', got: '||', token {token}`
+    ExpectedOpenGotOr { token: usize },
+    /// `expected: '(', got: '{token}', token {at}`
+    ExpectedOpenGotToken { token: String, at: usize },
+    /// `SRC_URI arrow are only allowed in SRC_URI: token {token}`
+    SrcUriArrow { token: usize },
+    /// `conditional '{s}' not followed by a group`
+    ConditionalNotFollowedByGroup { s: String },
+    /// `'||' not followed by a group`
+    OrNotFollowedByGroup,
+    /// `Missing ')' at end of string`
+    MissingCloseParen,
+    /// `Missing '(' at end of string`
+    MissingOpenParen,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::InvalidUseFlag { flag, conditional } => {
+                write!(
+                    f,
+                    "invalid use flag '{flag}' in conditional '{conditional}'"
+                )
+            }
+            Error::ExpectedCloseParen { expected, token } => {
+                write!(f, "expected: {expected}, got: ')', token {token}")
+            }
+            Error::NoMatchingOpen { token } => {
+                write!(f, "no matching '(' for ')', token {token}")
+            }
+            Error::ExpectedOpenGotOr { token } => {
+                write!(f, "expected: '(', got: '||', token {token}")
+            }
+            Error::ExpectedOpenGotToken { token, at } => {
+                write!(f, "expected: '(', got: '{token}', token {at}")
+            }
+            Error::SrcUriArrow { token } => {
+                write!(
+                    f,
+                    "SRC_URI arrow are only allowed in SRC_URI: token {token}"
+                )
+            }
+            Error::ConditionalNotFollowedByGroup { s } => {
+                write!(f, "conditional '{s}' not followed by a group")
+            }
+            Error::OrNotFollowedByGroup => write!(f, "'||' not followed by a group"),
+            Error::MissingCloseParen => write!(f, "Missing ')' at end of string"),
+            Error::MissingOpenParen => write!(f, "Missing '(' at end of string"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<Error> for String {
+    fn from(e: Error) -> String {
+        e.to_string()
+    }
+}
+
+fn useflag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
+}
+
+/// Whether a single `flag?`/`!flag?` USE-conditional token is active
+/// under `uselist`/`mode`. Exported (not just used internally by
+/// `use_reduce_flat`'s own bracket handling) so `portage-repo`'s own
+/// bespoke LICENSE-grammar parser can reuse the exact same conditional-
+/// resolution logic -- LICENSE (PMS 7.3.2) needs the real `||`-group
+/// structure `use_reduce_flat`'s own flattening deliberately discards
+/// (see that crate's own doc comment for why it needed a separate
+/// parser, not a reused one), but its USE-conditional semantics are
+/// identical to every other dependency-string-shaped value, so this one
+/// piece is shared rather than reimplemented a second time.
+pub fn is_active(
+    conditional: &str,
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<bool, Error> {
+    let (flag, negated) = match conditional.strip_prefix('!') {
+        Some(rest) => (&rest[..rest.len() - 1], true),
+        None => (&conditional[..conditional.len() - 1], false),
+    };
+    if !useflag_re().is_match(flag) {
+        return Err(Error::InvalidUseFlag {
+            flag: flag.to_string(),
+            conditional: conditional.to_string(),
+        });
+    }
+    Ok(match mode {
+        MatchMode::All => true,
+        MatchMode::None => false,
+        MatchMode::Normal => {
+            (uselist.contains(flag) && !negated) || (!uselist.contains(flag) && negated)
+        }
+    })
+}
+
+/// `tokens` is the dep string pre-split on whitespace (equivalent to
+/// Python's `depstr.split()`, which is the real function's own first
+/// step). Returns the flattened token list, or an error message mirroring
+/// `InvalidDependString`.
+pub fn use_reduce_flat(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<Vec<String>, Error> {
+    let mut stack: Vec<Vec<String>> = vec![Vec::new()];
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 2,
+                    });
+                }
+                // "(" always satisfies a pending "||"/"flag?" requirement,
+                // regardless of need_bracket's prior state.
+                need_bracket = false;
+                stack.push(Vec::new());
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
+                }
+                if stack.len() <= 1 {
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
+                }
+                let l = stack.pop().unwrap();
+                let top = stack.last_mut().unwrap();
+                let conditional = match top.last() {
+                    Some(last) if last.ends_with('?') => Some(top.pop().unwrap()),
+                    _ => None,
+                };
+                match conditional {
+                    Some(cond) => {
+                        if is_active(&cond, uselist, mode)? {
+                            stack.last_mut().unwrap().extend(l);
+                        }
+                    }
+                    None => stack.last_mut().unwrap().extend(l),
+                }
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
+                }
+                need_bracket = true;
+                stack.last_mut().unwrap().push("||".to_string());
+            }
+            "->" => {
+                // is_src_uri is always false for this harness (SRC_URI
+                // arrows are out of v1 scope), matching real use_reduce's
+                // behavior when is_src_uri=False.
+                return Err(Error::SrcUriArrow { token: pos + 1 });
+            }
+            _ => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                }
+                stack.last_mut().unwrap().push(token.clone());
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err(Error::MissingCloseParen);
+    }
+    if need_bracket {
+        return Err(Error::MissingOpenParen);
+    }
+
+    Ok(stack.pop().unwrap())
+}
+
+/// A single node of the nested-list shape real `paren_reduce` builds
+/// (`['foobar', 'foo?', ['bar', 'baz']]` -- a flag/`"||"` marker stays a
+/// sibling *string* immediately before its own nested group, never
+/// merged into it at parse time). Unlike real `paren_reduce`, this
+/// builder does none of its redundant-bracket-collapsing optimizations
+/// (`is_single`/`special_append`/etc.) -- those only ever change how
+/// *minimally* the tree is represented, never its semantics, and
+/// `select_subset` below (the only consumer) doesn't care either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DepNode {
+    Str(String),
+    Group(Vec<DepNode>),
+}
+
+/// Builds the nested `DepNode` tree from `tokens` -- same bracket/`"||"`/
+/// SRC_URI-arrow validation as `use_reduce_flat`'s own tokenizer (same
+/// error messages too), just building a tree instead of eagerly
+/// flattening, so a `subset` filter (`select_subset` below) has real
+/// group boundaries to walk before flattening happens at all.
+fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, Error> {
+    let mut stack: Vec<Vec<DepNode>> = vec![Vec::new()];
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 2,
+                    });
+                }
+                need_bracket = false;
+                stack.push(Vec::new());
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
+                }
+                if stack.len() <= 1 {
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
+                }
+                let l = stack.pop().unwrap();
+                stack.last_mut().unwrap().push(DepNode::Group(l));
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
+                }
+                need_bracket = true;
+                stack
+                    .last_mut()
+                    .unwrap()
+                    .push(DepNode::Str("||".to_string()));
+            }
+            "->" => {
+                return Err(Error::SrcUriArrow { token: pos + 1 });
+            }
+            _ => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                }
+                stack.last_mut().unwrap().push(DepNode::Str(token.clone()));
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err(Error::MissingCloseParen);
+    }
+    if need_bracket {
+        return Err(Error::MissingOpenParen);
+    }
+
+    Ok(stack.pop().unwrap())
+}
+
+/// Real `use_reduce`'s own `select_subset` (invoked whenever `subset` is
+/// given): walks the parsed tree keeping only atoms reachable through a
+/// conditional whose own flag is in `subset` -- `disjunction` is true
+/// while directly inside a `"||"` group's own member list (each member
+/// becomes its own list in the result rather than being spliced flat,
+/// mirroring real portage's own "one result entry per alternative"
+/// shape), `selected` is true once already inside a subset-matching
+/// conditional (inherited into every descendant, so a plain, non-`?`
+/// atom nested two levels under `test?` still gets kept). Every OTHER
+/// conditional (not in `subset`) is still evaluated normally via
+/// `is_active` -- `subset` only decides which already-active branch's
+/// atoms make it into the *output*, never which branches are active in
+/// the first place.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn select_subset(
+    nodes: &[DepNode],
+    disjunction: bool,
+    selected: bool,
+    subset: &HashSet<String>,
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<Vec<DepNode>, Error> {
+    let mut result: Vec<DepNode> = Vec::new();
+    let mut iter = nodes.iter();
+    while let Some(node) = iter.next() {
+        match node {
+            DepNode::Group(children) => {
+                // A bare "( ... )" grouping with no preceding flag?/"||"
+                // marker at all -- selection state just passes through
+                // unchanged, same as real select_subset's own
+                // AttributeError ("token has no .endswith") branch.
+                let sub = select_subset(children, false, selected, subset, uselist, mode)?;
+                if disjunction {
+                    if !sub.is_empty() {
+                        result.push(DepNode::Group(sub));
+                    }
+                } else {
+                    result.extend(sub);
+                }
+            }
+            DepNode::Str(s) if s.ends_with('?') => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() });
+                };
+                if is_active(s, uselist, mode)? {
+                    let flag = &s[..s.len() - 1];
+                    let now_selected = selected || subset.contains(flag);
+                    let sub = select_subset(children, false, now_selected, subset, uselist, mode)?;
+                    if disjunction {
+                        if !sub.is_empty() {
+                            result.push(DepNode::Group(sub));
+                        }
+                    } else {
+                        result.extend(sub);
+                    }
+                }
+            }
+            DepNode::Str(s) if s == "||" => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err(Error::OrNotFollowedByGroup);
+                };
+                let sub = select_subset(children, true, selected, subset, uselist, mode)?;
+                if !sub.is_empty() {
+                    if disjunction {
+                        result.extend(sub);
+                    } else {
+                        result.push(DepNode::Str("||".to_string()));
+                        result.push(DepNode::Group(sub));
+                    }
+                }
+            }
+            DepNode::Str(s) => {
+                if selected {
+                    result.push(DepNode::Str(s.clone()));
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// `paren_enclose` equivalent: re-serializes a `DepNode` tree back into
+/// a flat token stream (`Group` becomes a literal `"("`/`")"` pair
+/// around its own contents), so the already subset-filtered result can
+/// be fed straight into the ordinary (unmodified) `use_reduce_flat`
+/// bracket/conditional handling below for its own final flattening.
+fn serialize_dep_tree(nodes: &[DepNode], out: &mut Vec<String>) {
+    for node in nodes {
+        match node {
+            DepNode::Str(s) => out.push(s.clone()),
+            DepNode::Group(children) => {
+                out.push("(".to_string());
+                serialize_dep_tree(children, out);
+                out.push(")".to_string());
+            }
+        }
+    }
+}
+
+/// The placeholder atom real `use_reduce` (EAPI 7+, `empty_groups_always_
+/// true` false, which is also the `eapi=None` default) substitutes for a
+/// `|| ( )` group that reduced to nothing -- kept verbatim so a
+/// structured comparison against the real function agrees.
+const EMPTY_ANY_OF: &str = "__const__/empty-any-of";
+
+fn ends_in_any_of_dep(stack: &[Vec<DepNode>], k: isize) -> bool {
+    if k < 0 {
+        return false;
+    }
+    matches!(
+        stack.get(k as usize).and_then(|l| l.last()),
+        Some(DepNode::Str(s)) if s == "||"
+    )
+}
+
+/// Real `use_reduce`'s own `last_any_of_operator_level`: the level of the
+/// last `||` operator still in effect for the current level, or `-1` if a
+/// non-operator token breaks the chain first.
+fn last_any_of_operator_level(stack: &[Vec<DepNode>], mut k: isize) -> isize {
+    while k >= 0 {
+        if let Some(DepNode::Str(s)) = stack[k as usize].last() {
+            if s == "||" {
+                return k;
+            }
+            if !s.ends_with('?') {
+                return -1;
+            }
+        }
+        k -= 1;
+    }
+    -1
+}
+
+/// Real `use_reduce`'s own `special_append` (non-`opconvert` path): "use
+/// extend instead of append if possible -- this kills all redundant
+/// brackets."
+fn special_append(stack: &mut [Vec<DepNode>], level: usize, l: Vec<DepNode>, is_single: bool) {
+    if !is_single {
+        stack[level].push(DepNode::Group(l));
+        return;
+    }
+    let l0_is_or = matches!(l.first(), Some(DepNode::Str(s)) if s == "||");
+    if l0_is_or && ends_in_any_of_dep(stack, level as isize - 1) {
+        // `l == ["||", Group]` -> splice the group's own contents.
+        if let Some(DepNode::Group(inner)) = l.into_iter().nth(1) {
+            stack[level].extend(inner);
+        }
+    } else if l.len() == 1 && matches!(l[0], DepNode::Group(_)) {
+        let last = last_any_of_operator_level(stack, level as isize - 1);
+        let DepNode::Group(inner) = l.into_iter().next().unwrap() else {
+            unreachable!()
+        };
+        if last == -1 {
+            stack[level].extend(inner);
+        } else {
+            stack[level].push(DepNode::Group(inner));
+        }
+    } else {
+        stack[level].extend(l);
+    }
+}
+
+/// Real `portage.dep.use_reduce`'s own `flat=False`, `opconvert=False`
+/// mode (`_use_reduce_cached`, `lib/portage/dep/__init__.py`): the nested
+/// stack reducer with every redundant-bracket optimization
+/// (`is_single`/`special_append`/`ends_in_any_of_dep`/
+/// `last_any_of_operator_level`) ported as-is, so two dependency strings
+/// that real `use_reduce` would collapse to the same structure collapse
+/// to the same structure here too. Conditionals are evaluated against
+/// `uselist`/`mode` exactly like the flat path; an inactive `flag? ( )`
+/// group is dropped, an emptied `|| ( )` becomes the real
+/// `__const__/empty-any-of` placeholder atom. Stays token/atom-agnostic
+/// (no `token_class=Atom` conversion, no `evaluate_conditionals` on the
+/// atom's own USE-deps -- the caller does both as a per-atom post-pass,
+/// keeping this crate's established "tokens are opaque strings"
+/// architecture). Returns the reduced tree re-serialized to a flat token
+/// stream (`(`/`)` around every `Group`), the same shape
+/// `serialize_dep_tree` already produces for the subset/disjunctive
+/// paths.
+pub fn use_reduce_structured(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<Vec<String>, Error> {
+    let mut stack: Vec<Vec<DepNode>> = vec![Vec::new()];
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 1,
+                    });
+                }
+                need_bracket = false;
+                stack.push(Vec::new());
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
+                }
+                if stack.len() <= 1 {
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
+                }
+                let mut l = stack.pop().unwrap();
+                let level = stack.len() - 1;
+
+                let is_single =
+                    l.len() == 1 || (l.len() == 2 && matches!(&l[0], DepNode::Str(s) if s == "||"));
+                let mut ignore = false;
+
+                if let Some(DepNode::Str(last)) = stack[level].last() {
+                    let last = last.clone();
+                    if last == "||" && l.is_empty() {
+                        l.push(DepNode::Str(EMPTY_ANY_OF.to_string()));
+                        stack[level].pop();
+                    } else if last.ends_with('?') {
+                        if !is_active(&last, uselist, mode)? {
+                            ignore = true;
+                        }
+                        stack[level].pop();
+                    }
+                }
+
+                if !l.is_empty() && !ignore {
+                    let ends_level = ends_in_any_of_dep(&stack, level as isize);
+                    let ends_above = ends_in_any_of_dep(&stack, level as isize - 1);
+                    if !ends_above && !ends_level {
+                        stack[level].extend(l);
+                    } else if stack[level].is_empty() {
+                        special_append(&mut stack, level, l, is_single);
+                    } else if is_single && ends_level {
+                        stack[level].pop();
+                        special_append(&mut stack, level, l, is_single);
+                    } else if ends_level && ends_above {
+                        stack[level].pop();
+                        stack[level].extend(l);
+                    } else {
+                        special_append(&mut stack, level, l, is_single);
+                    }
+                }
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
+                }
+                need_bracket = true;
+                stack
+                    .last_mut()
+                    .unwrap()
+                    .push(DepNode::Str("||".to_string()));
+            }
+            "->" => {
+                return Err(Error::SrcUriArrow { token: pos + 1 });
+            }
+            _ => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                }
+                stack.last_mut().unwrap().push(DepNode::Str(token.clone()));
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err(Error::MissingCloseParen);
+    }
+    if need_bracket {
+        return Err(Error::MissingOpenParen);
+    }
+
+    let mut out = Vec::new();
+    serialize_dep_tree(&stack.pop().unwrap(), &mut out);
+    Ok(out)
+}
+
+/// Real `use_reduce`'s own `subset` parameter (`lib/portage/dep/
+/// __init__.py`): real portage handles this as a genuine two-pass
+/// operation even when `flat=True` is also given -- `subset` filtering
+/// (`select_subset`, over the full nested `paren_reduce` structure) runs
+/// *first*, producing an already-filtered dependency string, which is
+/// *then* reduced normally (`flat=True`'s own bracket/conditional
+/// handling). This mirrors that exactly: `build_dep_tree` (this crate's
+/// own `paren_reduce` equivalent) -> `select_subset` -> `serialize_dep_tree`
+/// (this crate's own `paren_enclose` equivalent) -> the ordinary
+/// `use_reduce_flat`, completely unmodified. Grounded against real
+/// portage's own `--with-test-deps` call site in `depgraph.py`:
+/// `use_reduce(dep_string, uselist=use_enabled | {"test"}, ...,
+/// subset={"test"})` extracts exactly the *additional* deps a `test?`
+/// conditional (anywhere in the string, at any nesting depth)
+/// contributes once `"test"` is forced on, discarding every
+/// unconditional dep and every dep gated only by some *other*
+/// conditional -- see `select_subset`'s own doc comment for the exact
+/// walk.
+pub fn use_reduce_flat_subset(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+    subset: &HashSet<String>,
+) -> Result<Vec<String>, Error> {
+    let tree = build_dep_tree(tokens)?;
+    let filtered = select_subset(&tree, false, false, subset, uselist, mode)?;
+    let mut reserialized = Vec::new();
+    serialize_dep_tree(&filtered, &mut reserialized);
+    use_reduce_flat(&reserialized, uselist, mode)
+}
+
+/// One "alternative" inside a `"||"` group -- a single atom, a bracketed
+/// multi-atom group, or a conditional (`flag?`) itself, each consumed as
+/// one logical unit even though a conditional spans two sibling
+/// `DepNode`s (the `flag?` marker plus its own `Group`) -- real
+/// portage's own dependency-specification grammar allows a bare
+/// conditional directly as a `"||"` alternative, not just atoms/groups.
+fn next_alternative<'a>(
+    iter: &mut std::slice::Iter<'a, DepNode>,
+) -> Option<Result<Vec<DepNode>, Error>> {
+    let node = iter.next()?;
+    Some(match node {
+        DepNode::Str(s) if s.ends_with('?') => match iter.next() {
+            Some(group @ DepNode::Group(_)) => Ok(vec![node.clone(), group.clone()]),
+            _ => Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() }),
+        },
+        other => Ok(vec![other.clone()]),
+    })
+}
+
+/// How much a caller prefers one `"||"` alternative -- portuale's port of
+/// real `dep_zapdeps`'s `choice_bins` (`lib/portage/dep/dep_check.py`).
+///
+/// Real fills nine lists and picks the first atom of the first *selectable*
+/// choice across them, in bin order (`dep_check.py:812-816`):
+///
+/// ```text
+/// for allow_masked in (False, True):
+///     for choices in choice_bins:
+///         for choice in choices:
+///             if choice.all_available or allow_masked:
+///                 return choice.atoms
+/// ```
+///
+/// with `choice_bins` equal to (soft lines 392-402, where real's
+/// `preferred_in_graph` / `preferred_installed` / `preferred_any_slot`
+/// are all aliases of one list):
+///
+/// ```text
+/// 0  preferred_in_graph          ( = preferred_installed = preferred_any_slot )
+/// 1  preferred_non_installed
+/// 2  unsat_use_in_graph
+/// 3  unsat_use_installed
+/// 4  unsat_use_non_installed
+/// 5  other_installed
+/// 6  other_installed_some
+/// 7  other_installed_any_slot
+/// 8  other
+/// ```
+///
+/// Every bin's choices have `all_available = True` except bins 5-8
+/// (`other_*`, reached when some atom is only available via a masked /
+/// force path), which real still *returns* on its `allow_masked` second
+/// pass -- ported as of slice 2/4 of backlog #22
+/// (`docs/history/022-agent-task-22-zapdeps.fable.md`): `resolve_disjunctions`
+/// runs a first pass considering only [`is_selectable`](AltPreference::is_selectable)
+/// ranks (real's `allow_masked=False`), and only when THAT finds nothing
+/// at all does a second pass consider the `other_*` bins too (real's
+/// `allow_masked=True`) -- see `resolve_disjunctions`'s own doc comment.
+/// One exception: portuale's own bolt-on circular-self-dep guard (no
+/// real equivalent) stays hard-`Unsatisfiable` in both passes -- see
+/// `portage-repo::disjunction_preference`'s own doc comment.
+///
+/// The enum is ordered by real bin ordinal (higher discriminant = more
+/// preferred), with one extra lowest sentinel [`AltPreference::Unsatisfiable`]
+/// for "no atom in this alternative resolves at all, not even into an
+/// `other_*` bin" (portuale's circular-self-dep guard only, since real's
+/// own classification always lands an atom in *some* bin). Deriving
+/// `Ord` over the variants gives selection exactly real's bin-order in
+/// EITHER pass: `Installed` (bin 0) > `Available` (bin 1) >
+/// `UnsatUseInGraph` (2) > `UnsatUseInstalled` (3) >
+/// `UnsatUseNonInstalled` (4) > `OtherInstalled` (5) >
+/// `OtherInstalledSome` (6) > `OtherInstalledAnySlot` (7) > `Other` (8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum AltPreference {
+    /// No atom in this alternative resolves to anything at all -- real
+    /// has no equivalent state (see the enum's own doc comment); this is
+    /// portuale's circular-self-dep guard only. Never selected, in
+    /// either pass.
+    #[default]
+    Unsatisfiable,
+    /// Real `other` (bin 8): every atom resolves to *something*, but at
+    /// least one only via a masked/forced USE change. Second-pass-only
+    /// (`is_selectable` is false).
+    Other,
+    /// Real `other_installed_any_slot` (bin 7): no atom's full match
+    /// exists at all (not even ignoring `[use]`), but some atom's bare
+    /// `cat/pkg` is installed in some slot (bug 522652's fuzzy match).
+    /// Second-pass-only.
+    OtherInstalledAnySlot,
+    /// Real `other_installed_some` (bin 6): like `OtherInstalledAnySlot`,
+    /// but at least one (not all) atom's FULL vdb match (version/slot/
+    /// `[use]`) succeeds. Second-pass-only.
+    OtherInstalledSome,
+    /// Real `other_installed` (bin 5): every non-blocker atom's FULL vdb
+    /// match succeeds, yet the alternative still isn't `all_available`
+    /// (its own `atom.without_use` tree match fails -- typically masked
+    /// or keyword-rejected). Second-pass-only.
+    OtherInstalled,
+    /// Real `unsat_use_non_installed` (bin 4): every atom's `cat/pkg` is
+    /// resolvable and its USE-deps are unmasked, but no single candidate
+    /// satisfies every alternative's USE-deps and the best alternative is
+    /// not installed and not in the graph. Selectable.
+    UnsatUseNonInstalled,
+    /// Real `unsat_use_installed` (bin 3): like `UnsatUseNonInstalled`
+    /// but every atom's `cat/pkg` is already installed. Selectable.
+    UnsatUseInstalled,
+    /// Real `unsat_use_in_graph` (bin 2): like `UnsatUseNonInstalled`
+    /// but every atom is already in the merge graph. Selectable.
+    UnsatUseInGraph,
+    /// Real `preferred_non_installed` (bin 1): resolvable, every
+    /// alternative's USE-deps unmasked and satisfiable, but at least one
+    /// atom's `cat/pkg` is not installed. This is what makes
+    /// `|| ( foo[a] foo[b] )` prefer `foo[b]` (whose USE-deps the tree can
+    /// satisfy without a masked change) over the USE-unsatisfiable
+    /// `foo[a]`. Selectable.
+    Available,
+    /// Real `preferred_in_graph` / `preferred_installed` /
+    /// `preferred_any_slot` (bin 0): every non-blocker atom's `cat/pkg` is
+    /// already installed (real `all_installed` over `Atom(atom.cp)`) or
+    /// already in the graph, and USE-deps are satisfiable -- what makes
+    /// `virtual/wine`'s `|| ( wine-vanilla wine-staging … )` pick the
+    /// installed `wine-staging` instead of failing REQUIRED_USE on the
+    /// first-listed `wine-vanilla`. The top bin; once found,
+    /// `resolve_disjunctions` breaks early. Selectable.
+    Installed,
+}
+
+impl AltPreference {
+    /// Whether real `dep_zapdeps`'s selection loop would pick an
+    /// alternative ranked this way on its FIRST pass (`allow_masked =
+    /// False`, `dep_check.py` soft 812-816) -- real's own
+    /// `choice.all_available` gate. `resolve_disjunctions` only falls
+    /// through to considering the non-selectable `other_*` bins (its own
+    /// second pass) when no alternative anywhere is `is_selectable`.
+    pub fn is_selectable(self) -> bool {
+        matches!(
+            self,
+            AltPreference::Installed
+                | AltPreference::Available
+                | AltPreference::UnsatUseInGraph
+                | AltPreference::UnsatUseInstalled
+                | AltPreference::UnsatUseNonInstalled
+        )
+    }
+}
+
+/// Real `_add_pkg_dep_string`'s own `"||"` resolution, considerably
+/// simplified: of every alternative, picks the **first one with the
+/// highest [`AltPreference`]** the caller-supplied probe reports (this
+/// crate stays atom-agnostic, matching its own "tokens stay opaque
+/// strings" architecture -- see the module doc comment), instead of
+/// flattening every alternative into the result the way plain
+/// `use_reduce_flat` always has. An alternative an inactive
+/// conditional emptied (it flattens to zero atoms) is dropped before
+/// ranking at all -- real `use_reduce` never lets it reach
+/// `dep_zapdeps` (the flat branch removes the conditional and never
+/// merges its list), so the probe is never called with an empty slice.
+/// When every alternative empties that way, the whole `"||"` group is
+/// dropped if `empty_groups_always_true` (real
+/// `_get_eapi_attrs(eapi).empty_groups_always_true`, true at EAPI <= 6)
+/// and otherwise becomes real's own unsatisfiable
+/// `__const__/empty-any-of` placeholder atom (`dep/__init__.py:864-869`,
+/// EAPI 7+, including the `eapi=None` default real `dep_check` uses for
+/// installed packages) -- emitted as a `||`-chosen atom so it fails
+/// downstream candidate lookup exactly like real's placeholder does.
+///
+/// Falls back to keeping the *whole* `"||"` group exactly as
+/// `use_reduce_flat` would have flattened it (literal `"||"` marker,
+/// every alternative's own atoms, no selection at all) whenever *no*
+/// alternative is currently satisfiable -- so a dependency portuale
+/// can't currently resolve is never silently dropped, preserving the
+/// exact "never silently wrong about whether a dependency exists"
+/// invariant `resolve_pretend_graph`'s own doc comment (portage-repo)
+/// already established for the unconditional-flatten v1 this replaces.
+/// Real's `other_*` bins and the `allow_masked` second pass still aren't
+/// ported (`AltPreference::is_selectable`'s own doc comment); everything
+/// else -- the fine `unsat_use_*` bins and, as of slice 2, in-bin
+/// upgrade-preference ordering via `tie_break` below -- is.
+///
+/// Called only when 2+ alternatives tie at the best selectable
+/// [`AltPreference`] rank a single `"||"` group's probe produced --
+/// real `dep_zapdeps`'s own in-bin ordering pass (`dep_check.py` soft
+/// 738-802: prefer an upgrade via `vercmp` over the intersecting
+/// `cp_map`, or `all_installed_slots`, or `all_in_graph`, unless doing so
+/// would sacrifice an upgrade). `portage-use-reduce` stays atom-agnostic
+/// (design rule 2, `docs/history/022-agent-task-22-zapdeps.fable.md`): it hands
+/// the caller the tied alternatives' own flattened atom lists, in
+/// original left-to-right order, and the caller (which owns candidate
+/// lookup, `cp`/version parsing and `vercmp`) returns which original
+/// index wins. A trivial `&mut |_| 0` reproduces the pre-slice-2
+/// behaviour (first-listed-in-bin always wins).
+pub type TieBreak<'a> = dyn FnMut(&[Vec<String>]) -> usize + 'a;
+
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+pub fn use_reduce_flat_disjunctive(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+    empty_groups_always_true: bool,
+    alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
+    tie_break: &mut TieBreak<'_>,
+) -> Result<Vec<String>, Error> {
+    let tree = build_dep_tree(tokens)?;
+    let resolved = resolve_disjunctions(
+        &tree,
+        uselist,
+        mode,
+        empty_groups_always_true,
+        alternative_satisfiable,
+        tie_break,
+    )?;
+    let mut reserialized = Vec::new();
+    serialize_dep_tree(&resolved, &mut reserialized);
+    use_reduce_flat(&reserialized, uselist, mode)
+}
+
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn resolve_disjunctions(
+    nodes: &[DepNode],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+    empty_groups_always_true: bool,
+    alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
+    tie_break: &mut TieBreak<'_>,
+) -> Result<Vec<DepNode>, Error> {
+    let mut result: Vec<DepNode> = Vec::new();
+    // Real `_create_graph` fully drains the plain `dep_stack` before
+    // popping a single entry off `_dep_disjunctive_stack`
+    // (`depgraph.py:3257-3268`), so every non-`||` dependency of a
+    // package enters the graph -- and thus the merge list -- ahead of
+    // whichever atom a `||` group resolves to. Portuale's single flatten
+    // can't interleave two stacks, but it can mirror the *ordering*: emit
+    // this level's plain results first, then the `||`-chosen ones, each
+    // bucket in its own original order. A `||` group that stays
+    // unresolved (no satisfiable alternative -> literal `"||"` fallback)
+    // is left in place, not deferred -- it isn't a resolved dependency to
+    // schedule.
+    let mut deferred: Vec<DepNode> = Vec::new();
+    let mut iter = nodes.iter();
+    while let Some(node) = iter.next() {
+        match node {
+            DepNode::Group(children) => {
+                let resolved = resolve_disjunctions(
+                    children,
+                    uselist,
+                    mode,
+                    empty_groups_always_true,
+                    alternative_satisfiable,
+                    tie_break,
+                )?;
+                result.push(DepNode::Group(resolved));
+            }
+            DepNode::Str(s) if s.ends_with('?') => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() });
+                };
+                let resolved = resolve_disjunctions(
+                    children,
+                    uselist,
+                    mode,
+                    empty_groups_always_true,
+                    alternative_satisfiable,
+                    tie_break,
+                )?;
+                result.push(DepNode::Str(s.clone()));
+                result.push(DepNode::Group(resolved));
+            }
+            DepNode::Str(s) if s == "||" => {
+                let Some(DepNode::Group(alternatives)) = iter.next() else {
+                    return Err(Error::OrNotFollowedByGroup);
+                };
+                // Real `dep_zapdeps` classifies every alternative into a
+                // `choice_bin` and takes the first entry of the
+                // best-ranked non-empty bin, in TWO passes (`allow_masked`
+                // False then True, `dep_check.py` soft 812-816): every
+                // alternative is ranked regardless, a real tie at the
+                // best bin is handed to `tie_break` (in-bin
+                // upgrade-preference ordering, soft 738-802), and the
+                // second pass -- considering the non-`is_selectable`
+                // `other_*` bins -- only runs when the first finds
+                // NOTHING at all.
+                let mut ranked: Vec<(AltPreference, Vec<DepNode>, Vec<String>)> = Vec::new();
+                let mut alt_iter = alternatives.iter();
+                while let Some(alt) = next_alternative(&mut alt_iter) {
+                    let alt_nodes = alt?;
+                    let mut flat = Vec::new();
+                    serialize_dep_tree(&alt_nodes, &mut flat);
+                    let Ok(flat_atoms) = use_reduce_flat(&flat, uselist, mode) else {
+                        continue;
+                    };
+                    // Backlog #238: real `use_reduce` drops an
+                    // alternative an inactive conditional emptied before
+                    // `dep_zapdeps` ever ranks the group (the flat branch
+                    // removes the conditional and never merges its list),
+                    // so it never reaches the probe -- it is not a
+                    // rankable choice. (Before this, the emptied
+                    // alternative was probed with an empty slice and came
+                    // back vacuously satisfiable, silently dropping the
+                    // whole group.)
+                    if flat_atoms.is_empty() {
+                        continue;
+                    }
+                    let rank = alternative_satisfiable(&flat_atoms);
+                    ranked.push((rank, alt_nodes, flat_atoms));
+                }
+                if ranked.is_empty() {
+                    // Every alternative was emptied by inactive
+                    // conditionals -- real `use_reduce`
+                    // (`dep/__init__.py:864-869`): `|| ( )` is dropped
+                    // when `empty_groups_always_true` (EAPI <= 6) and
+                    // becomes the unsatisfiable
+                    // `__const__/empty-any-of` atom otherwise (EAPI 7+,
+                    // including the `eapi=None` default real `dep_check`
+                    // uses for installed packages). The placeholder is a
+                    // `||`-chosen atom (deferred, like a selected
+                    // alternative) so it fails downstream candidate
+                    // lookup exactly like real's placeholder does.
+                    if !empty_groups_always_true {
+                        deferred.push(DepNode::Str(EMPTY_ANY_OF.to_string()));
+                    }
+                    continue;
+                }
+                let mut selectable: Vec<&(AltPreference, Vec<DepNode>, Vec<String>)> = ranked
+                    .iter()
+                    .filter(|(r, _, _)| r.is_selectable())
+                    .collect();
+                if selectable.is_empty() {
+                    // Real's `allow_masked = True` pass: still never
+                    // picks portuale's own circular-self-dep guard (no
+                    // real equivalent -- see `AltPreference::Unsatisfiable`'s
+                    // own doc comment), only a genuine `other_*` bin.
+                    selectable = ranked
+                        .iter()
+                        .filter(|(r, _, _)| *r != AltPreference::Unsatisfiable)
+                        .collect();
+                }
+                let best_rank = selectable.iter().map(|(r, _, _)| *r).max();
+                let chosen_nodes = match best_rank {
+                    None => None,
+                    Some(best_rank) => {
+                        let mut tied: Vec<(Vec<DepNode>, Vec<String>)> = selectable
+                            .into_iter()
+                            .filter(|(r, _, _)| *r == best_rank)
+                            .map(|(_, nodes, flat)| (nodes.clone(), flat.clone()))
+                            .collect();
+                        let winner = if tied.len() == 1 {
+                            0
+                        } else {
+                            let flats: Vec<Vec<String>> =
+                                tied.iter().map(|(_, flat)| flat.clone()).collect();
+                            tie_break(&flats).min(tied.len() - 1)
+                        };
+                        Some(tied.swap_remove(winner).0)
+                    }
+                };
+                let chosen = match chosen_nodes {
+                    Some(alt_nodes) => Some(resolve_disjunctions(
+                        &alt_nodes,
+                        uselist,
+                        mode,
+                        empty_groups_always_true,
+                        alternative_satisfiable,
+                        tie_break,
+                    )?),
+                    None => None,
+                };
+                match chosen {
+                    Some(alt_nodes) => deferred.extend(alt_nodes),
+                    None => {
+                        result.push(DepNode::Str("||".to_string()));
+                        result.push(DepNode::Group(alternatives.clone()));
+                    }
+                }
+            }
+            DepNode::Str(s) => {
+                result.push(DepNode::Str(s.clone()));
+            }
+        }
+    }
+    result.extend(deferred);
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    fn set(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// These tests only exercise the satisfiable-or-not split, so map the
+    /// old `bool` probe onto `Available` / `Unsatisfiable`. The
+    /// `Installed` preference is covered by the `portage-repo`
+    /// integration tests and the contract suite.
+    fn pref(satisfiable: bool) -> AltPreference {
+        if satisfiable {
+            AltPreference::Available
+        } else {
+            AltPreference::Unsatisfiable
+        }
+    }
+
+    #[test]
+    fn subset_extracts_only_the_gated_atoms() {
+        let result = use_reduce_flat_subset(
+            &toks("foobar test? ( dev-libs/a dev-libs/b )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_excludes_deps_gated_by_a_different_conditional() {
+        let result = use_reduce_flat_subset(
+            &toks("foo? ( dev-libs/a ) test? ( dev-libs/b )"),
+            &set(&["foo", "test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_still_honors_a_nested_non_subset_conditional_normally() {
+        // test? ( bar? ( dev-libs/a ) ) -- "bar" isn't in the subset, so
+        // it's still evaluated normally (is_active) rather than being
+        // treated as always-selected; only actually-active branches
+        // contribute, exactly like without subset filtering at all.
+        let result_bar_on = use_reduce_flat_subset(
+            &toks("test? ( bar? ( dev-libs/a ) )"),
+            &set(&["test", "bar"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result_bar_on, vec!["dev-libs/a"]);
+
+        let result_bar_off = use_reduce_flat_subset(
+            &toks("test? ( bar? ( dev-libs/a ) )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result_bar_off.is_empty());
+    }
+
+    #[test]
+    fn subset_negated_conditional_never_contributes() {
+        // "!test?" never matches "test" in the subset (real portage's
+        // own `token[:-1] in subset` check keeps the leading "!"), so
+        // this stays excluded even though "!test?" is itself active
+        // (test is NOT in uselist here).
+        let result = use_reduce_flat_subset(
+            &toks("!test? ( dev-libs/a )"),
+            &set(&[]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn subset_preserves_an_any_of_group_that_survives_filtering() {
+        // || ( foo? ( dev-libs/a ) test? ( dev-libs/b ) ) -- "foo" is
+        // off, so only the test-gated alternative survives; the "||"
+        // marker itself is preserved (matching use_reduce_flat's own
+        // existing flat convention) since something inside it did.
+        let result = use_reduce_flat_subset(
+            &toks("|| ( foo? ( dev-libs/a ) test? ( dev-libs/b ) )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["||", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_of_an_unconditional_dep_string_yields_nothing() {
+        let result = use_reduce_flat_subset(
+            &toks("dev-libs/a dev-libs/b"),
+            &set(&[]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn disjunctive_picks_the_first_satisfiable_alternative() {
+        // "b" is the only satisfiable alternative -- "a" and "c" must
+        // both be dropped entirely, not just deprioritized.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b dev-libs/c )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |atoms| pref(atoms == ["dev-libs/b"]),
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_falls_back_to_every_alternative_when_none_satisfiable() {
+        // Nothing is satisfiable -- matches plain use_reduce_flat's own
+        // "flatten everything" output exactly, so nothing regresses
+        // when portuale can't currently resolve any alternative.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |_| AltPreference::Unsatisfiable,
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["||", "dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_treats_a_bracketed_multi_atom_alternative_as_one_unit() {
+        // || ( ( dev-libs/a dev-libs/b ) dev-libs/c ) -- the first
+        // alternative is the PAIR (a AND b together); it's only chosen
+        // if BOTH are satisfiable at once, not either one alone.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |atoms| pref(atoms == ["dev-libs/a", "dev-libs/b"]),
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_skips_the_bracketed_pair_when_only_one_half_is_satisfiable() {
+        // Same shape as above, but only "dev-libs/a" alone is
+        // satisfiable -- the bracketed pair needs BOTH, so it's
+        // rejected and the bare "dev-libs/c" alternative wins instead.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |atoms| pref(atoms == ["dev-libs/c"]),
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/c"]);
+    }
+
+    #[test]
+    fn disjunctive_skips_an_emptied_alternative_and_selects_the_survivor() {
+        // Backlog #238: `|| ( foo? ( dev-libs/a ) dev-libs/b )` with
+        // "foo" off -- real `use_reduce` drops the emptied alternative
+        // before `dep_zapdeps` ranks the group, so the surviving
+        // "dev-libs/b" is selected (real reduces the same string to the
+        // bare `dev-libs/b` atom). The probe must never see the emptied
+        // alternative: it panics on an empty slice. Before the fix the
+        // emptied alternative won vacuously and the whole group
+        // contributed nothing.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( foo? ( dev-libs/a ) dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |atoms: &[String]| {
+                assert!(
+                    !atoms.is_empty(),
+                    "an emptied alternative must never reach the probe"
+                );
+                pref(atoms == ["dev-libs/b"])
+            },
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_emptied_group_becomes_empty_any_of_placeholder() {
+        // Backlog #238, EAPI 7+ (`empty_groups_always_true` false): the
+        // upstream `test_eapi` pg1 `=dev-libs/C-2` shape -- `|| ( foo? (
+        // dev-libs/a ) )` with "foo" off empties the whole group, and
+        // real `use_reduce` (`dep/__init__.py:864-869`) substitutes the
+        // unsatisfiable `__const__/empty-any-of` atom. No alternative
+        // survives, so the probe runs zero times.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( foo? ( dev-libs/a ) )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            false,
+            &mut |_: &[String]| -> AltPreference {
+                panic!("no surviving alternative may reach the probe")
+            },
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["__const__/empty-any-of"]);
+    }
+
+    #[test]
+    fn disjunctive_emptied_group_is_dropped_when_empty_groups_always_true() {
+        // Backlog #238, EAPI <= 6 (`empty_groups_always_true` true): the
+        // upstream `test_eapi` pg1 `=dev-libs/C-1` shape -- the same
+        // fully-emptied group is dropped, and the package merges bare.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( foo? ( dev-libs/a ) )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |_: &[String]| -> AltPreference {
+                panic!("no surviving alternative may reach the probe")
+            },
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn disjunctive_prefers_an_installed_alternative_over_an_earlier_available_one() {
+        // Real `dep_zapdeps`'s `preferred_installed` (choice bin 0) beats
+        // `preferred_non_installed` (bin 1): of `|| ( a b )` where `a`
+        // would need a merge and `b` is already installed, `b` wins even
+        // though `a` is listed first. (This is the `virtual/wine` ->
+        // `wine-staging` case.)
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |atoms: &[String]| {
+                if atoms == ["dev-libs/b"] {
+                    AltPreference::Installed
+                } else {
+                    AltPreference::Available
+                }
+            },
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_defers_a_tie_to_tie_break_and_keeps_first_when_it_says_zero() {
+        // Both `a` and `b` rank `Available` (a real tie) -- `tie_break`
+        // decides, not "first satisfiable". A trivial `&mut |_| 0`
+        // (portage-repo's own pre-slice-2 shim at its two `--root-deps`
+        // call sites) reproduces the old first-listed-wins behaviour.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |_| AltPreference::Available,
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a"]);
+    }
+
+    #[test]
+    fn disjunctive_ties_call_tie_break_with_every_tied_alternatives_own_flat_atoms() {
+        // Same tie as above, but `tie_break` picks index 1 ("b") --
+        // proves resolve_disjunctions no longer breaks early on the
+        // first `Installed`/best-rank hit (it used to, pre-slice-2,
+        // which made a real tie-break decision impossible to reach at
+        // all) and that it hands `tie_break` exactly the tied
+        // alternatives' own already-flattened atom lists, in order.
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |_| AltPreference::Available,
+            &mut |alts: &[Vec<String>]| {
+                seen = alts.to_vec();
+                1
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+        assert_eq!(
+            seen,
+            vec![
+                vec!["dev-libs/a".to_string()],
+                vec!["dev-libs/b".to_string()]
+            ]
+        );
+    }
+
+    #[test]
+    fn disjunctive_never_calls_tie_break_for_a_single_alternative_at_the_best_rank() {
+        // "b" alone ranks Installed (beats "a"'s Available) -- there is
+        // no tie, so tie_break must not be consulted at all.
+        let mut called = false;
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |atoms: &[String]| {
+                if atoms == ["dev-libs/b"] {
+                    AltPreference::Installed
+                } else {
+                    AltPreference::Available
+                }
+            },
+            &mut |_| {
+                called = true;
+                0
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+        assert!(
+            !called,
+            "a single best-rank alternative must skip tie_break"
+        );
+    }
+
+    #[test]
+    fn disjunctive_leaves_non_disjunctive_deps_untouched() {
+        let result = use_reduce_flat_disjunctive(
+            &toks("dev-libs/a foo? ( dev-libs/b )"),
+            &set(&["foo"]),
+            MatchMode::Normal,
+            true,
+            &mut |_| AltPreference::Unsatisfiable,
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
+    }
+
+    /// Every expectation here was captured from real
+    /// `portage.dep.use_reduce(s, uselist=u, token_class=Atom)` (its
+    /// `flat=False`/`opconvert=False` default), serialized the same way
+    /// `serialize_dep_tree` does (`(`/`)` around every sublist).
+    #[test]
+    fn structured_matches_portage_use_reduce_normalization() {
+        let cases: &[(&str, &[&str], &[&str])] = &[
+            ("c/a c/b", &[], &["c/a", "c/b"]),
+            ("( c/a c/b )", &[], &["c/a", "c/b"]),
+            ("c/a ( ( c/b ) )", &[], &["c/a", "c/b"]),
+            ("|| ( c/a c/b )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            ("|| ( c/b c/a )", &[], &["||", "(", "c/b", "c/a", ")"]),
+            ("|| ( c/a )", &[], &["c/a"]),
+            (
+                "|| ( ( c/a c/b ) c/c )",
+                &[],
+                &["||", "(", "(", "c/a", "c/b", ")", "c/c", ")"],
+            ),
+            (
+                "|| ( c/a ( c/b c/c ) )",
+                &[],
+                &["||", "(", "c/a", "(", "c/b", "c/c", ")", ")"],
+            ),
+            (
+                "|| ( || ( c/a c/b ) c/c )",
+                &[],
+                &["||", "(", "c/a", "c/b", "c/c", ")"],
+            ),
+            ("c/a foo? ( c/b )", &["foo"], &["c/a", "c/b"]),
+            ("c/a foo? ( c/b )", &[], &["c/a"]),
+            ("|| ( c/a foo? ( c/b ) )", &[], &["c/a"]),
+            (
+                "|| ( c/a foo? ( c/b ) )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("|| ( foo? ( c/a c/b ) )", &["foo"], &["c/a", "c/b"]),
+            (
+                "|| ( foo? ( c/a ) bar? ( c/b ) )",
+                &[],
+                &["__const__/empty-any-of"],
+            ),
+            ("foo? ( bar? ( c/a ) )", &["foo"], &[]),
+            (
+                "|| ( c/a c/b ) c/c",
+                &[],
+                &["||", "(", "c/a", "c/b", ")", "c/c"],
+            ),
+            (
+                "c/c || ( c/a c/b )",
+                &[],
+                &["c/c", "||", "(", "c/a", "c/b", ")"],
+            ),
+            (
+                "|| ( c/a c/b ) || ( c/c c/d )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")", "||", "(", "c/c", "c/d", ")"],
+            ),
+            ("foo? ( c/a bar? ( c/b ) )", &["foo"], &["c/a"]),
+            (
+                "foo? ( c/a bar? ( c/b ) )",
+                &["foo", "bar"],
+                &["c/a", "c/b"],
+            ),
+            ("|| ( foo? ( c/a ) c/b )", &[], &["c/b"]),
+            (
+                "|| ( foo? ( c/a ) c/b )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            (
+                "|| ( ( foo? ( c/a ) c/x ) c/b )",
+                &[],
+                &["||", "(", "c/x", "c/b", ")"],
+            ),
+            (
+                "|| ( c/a || ( c/b c/c ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", "c/c", ")"],
+            ),
+            (
+                "|| ( || ( c/a c/b ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("( || ( c/a c/b ) )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            ("|| ( c/a ( c/b ) )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            (
+                "|| ( ( c/a ) ( c/b ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("|| ( ( c/a ) c/b )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            (
+                "foo? ( || ( c/a c/b ) )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("foo? ( || ( c/a c/b ) )", &[], &[]),
+            (
+                "|| ( foo? ( c/a c/b ) c/c )",
+                &["foo"],
+                &["||", "(", "(", "c/a", "c/b", ")", "c/c", ")"],
+            ),
+            ("|| ( foo? ( c/a c/b ) c/c )", &[], &["c/c"]),
+        ];
+        for (s, u, expected) in cases {
+            let got =
+                use_reduce_structured(&toks(s), &set(u), MatchMode::Normal).unwrap_or_else(|e| {
+                    panic!("use_reduce_structured({s:?}) errored: {e}");
+                });
+            assert_eq!(
+                got,
+                expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "input {s:?} uselist {u:?}"
+            );
+        }
+    }
+}

@@ -30,7 +30,7 @@ The `.py` helpers that `import portage` — `doins.py` (so `doins` /
 `newins` / `dodoc` / `newbin` / …), `dohtml.py`, `install.py`,
 `xpak-helper.py`, `gpkg-helper.py`, `xattr-helper.py` (and the old
 `chmod-lite.py`) — are **not vendored because they are all answered
-natively** (`rust/portuale/src/helpers/`, #326 S2–S7): in native mode
+natively** (`crates/portuale/src/helpers/`, #326 S2–S7): in native mode
 `PORTAGE_PYTHON` points at `portuale-python`, which execs
 `$PORTUALE_BIN __helper python`. The D1 transition table is gone, so
 anything unrecognised — `dohtml.py` included, which is never in scope
@@ -51,7 +51,7 @@ change noted in `phase-functions.sh`'s header. A plain
 this README) should otherwise be empty. A re-sync that adds or changes
 a Python call site needs its helper ported first — unknown names exit
 127 by design (#326 D1), so a new upstream helper would fail loudly
-until `rust/portuale/src/helpers/` answers it.
+until `crates/portuale/src/helpers/` answers it.
 
 ## Portuale-owned files (a re-sync must not overwrite)
 
@@ -65,7 +65,7 @@ never copies over them:
 
 ## Embedded in the binary (backlog #322)
 
-`rust/portuale/build.rs` compiles this whole directory, and the sibling
+`crates/portuale/build.rs` compiles this whole directory, and the sibling
 `cnf/sets/portage.conf` (a vendored copy of upstream's package-set
 definitions, same ref), into the `portuale` binary. Resolution order for the
 runtime (`ebuild_phases::resolve_bin_dir`): `$PORTUALE_BIN_DIR` (a set but wrong
@@ -74,4 +74,4 @@ then the embedded copy extracted to `$TMPDIR/portuale-rt.<pid>/bin` and
 removed at exit. So a lone binary in a container or on a minimal host runs
 phases and remote merges. `cargo` reruns the script when anything under `bin/`
 or `cnf/` changes; a container build needs `COPY bin/ bin/` and
-`COPY cnf/ cnf/` next to `rust/` (see `musl/Containerfile`).
+`COPY cnf/ cnf/` next to `crates/` (see `musl/Containerfile`).

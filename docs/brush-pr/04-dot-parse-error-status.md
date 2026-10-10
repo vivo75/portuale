@@ -23,7 +23,7 @@ caught 2
 after
 ```
 
-The failure mode that found this: real `bin/ebuild.sh:580` guards the saved
+The failure mode that found this: Portage's `bin/ebuild.sh:580` guards the saved
 environment with `source "${T}"/environment || die "error sourcing
 environment"`. Under brush the guard could never run — the parse error was
 fatal to the whole script, so a broken `${T}/environment` aborted the phase
@@ -74,5 +74,5 @@ their parse diagnostics differently.
 
 Full compat suite: 0 unexpected failures. Portuale-side, the
 `a_corrupt_saved_environment_fails_the_next_phase_in_both_backends` test
-corrupts a real `${T}/environment` and asserts both backends fail with real
+corrupts a real `${T}/environment` and asserts both backends fail with Portage's
 `ebuild.sh`'s own `error sourcing environment` die.

@@ -2,8 +2,8 @@
 
 `portuale` embeds [`brush`](https://github.com/reubeno/brush) (`brush-core`
 + `brush-builtins`) as its Rust-native bash backend for real ebuild phase
-execution — see [`agent-context.md`](agent-context.md)'s "The bash-execution backend" for why brush at all, and
-[`what-this-proves.md`](what-this-proves.md)'s "Bash-execution backend" /
+execution — see [`agent-context.md`](../LLM/agent-context.md)'s "The bash-execution backend" for why brush at all, and
+[`what-this-proves.md`](../LLM/what-this-proves.md)'s "Bash-execution backend" /
 "`ebuild --shell bash|brush`" sections for how it is wired in.
 
 `portuale/Cargo.toml` pins `brush-core` / `brush-builtins` **by exact
@@ -151,7 +151,7 @@ change lives in the **vendored** `bin/phase-functions.sh`
 (`ebuild_phases::bin_dir()` overlays `bin/` over the checkout's
 `bin/`; the upstream file stays pristine — see
 `3rdparty/repos.toml`'s `vendored_paths`). See
-[`what-this-proves.md`](what-this-proves.md)'s "brush strategy #2" section.
+[`what-this-proves.md`](../LLM/what-this-proves.md)'s "brush strategy #2" section.
 
 **Guard**: `ebuild_phases::tests::install_does_not_deadlock_on_an_eclass_
 scope_larger_than_the_pipe_buffer` (`portuale`), driven by the
@@ -212,12 +212,12 @@ spaces, so `EOF` no longer terminates the heredoc.
 function between phases. `toolchain-funcs.eclass`'s `_tc-has-openmp`
 (and others) trips this → the written `${T}/environment` is unparseable
 → the next phase's `source "${T}/environment" || die` aborts. Breaks a
-real `emerge <atom>` for essentially every compiled package.
+Portage's `emerge <atom>` for essentially every compiled package.
 
 **Response (2026-09-01):** the phase-execution default flipped from the
 embedded `brush` backend to a real `bash` subprocess (`ShellBackend::
 Bash`; `brush` stays available via `--shell brush`). See
-[`what-this-proves.md`](what-this-proves.md), "`--shell` default is now
+[`what-this-proves.md`](../LLM/what-this-proves.md), "`--shell` default is now
 `bash`".
 
 **Root-caused + fixed 2026-09-05** against `reubeno/brush` `main`
@@ -263,7 +263,7 @@ carried forward into every later pin, see "Current pin" above).
 5. **brace expansion vs IFS** — brace expansion built one space-joined
    string and relied on field splitting to separate its alternatives, so
    under `IFS=`/`IFS=:` (e.g. after `local IFS`) `{A..C}` stayed a single
-   word. Real `__filter_readonly_variables` builds bash's special-variable
+   word. Portage's `__filter_readonly_variables` builds bash's special-variable
    list with `printf '${!%s*} ' {A..Z} {a..z} _` *after* `local IFS`, so
    the list came back malformed and nothing was filtered — `BASHOPTS`,
    `EUID`, `PPID`, `SHELLOPTS`, `UID` were saved into `${T}/environment`
@@ -336,7 +336,7 @@ construct, `brush strategy #2` style — and get recorded here.
   the old 1 KiB empty image); the same shape is pinned fixture-side by
   `dev-libs/heredocpkg` (Bash/Brush image-set equality test) and by the
   corrupt-saved-environment regression test. See `TEST/findings/l2.md`
-  "#38 S2" and `docs/what-this-proves.md`'s Track-B slice note.
+  "#38 S2" and `LLM/what-this-proves.md`'s Track-B slice note.
 
 - **2026-09-20 — declaration builtins never assignment-expand an expanded
   name (`export ${var}=value`). STAGED as fix 06 2026-09-23 (backlog #94,
@@ -378,4 +378,4 @@ construct, `brush strategy #2` style — and get recorded here.
   bash interpreter.
 - [`shellgei/rusty_bash`](https://github.com/shellgei/rusty_bash) — an
   alternative Rust bash implementation, evaluated as a backend candidate
-  (see [`agent-context.md`](agent-context.md), "The bash-execution backend").
+  (see [`agent-context.md`](../LLM/agent-context.md), "The bash-execution backend").

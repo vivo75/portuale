@@ -10,7 +10,7 @@ nothing else. No product code, no tests, no fixtures, no commits.
 
 ## The checklist
 
-1. **`docs/backlog-tasks.md`** — flip the item's entry to `DONE <date>` (or
+1. **`LLM/backlog-tasks.md`** — flip the item's entry to `DONE <date>` (or
    `DONE-PARTIAL` / `CLOSED` / `WITHDRAWN` as instructed), citing commit hashes
    that are **reachable from the branch as it will be merged**; if the branch
    was rebased, the pre-rebase hashes in the plan are wrong and must be
@@ -20,14 +20,14 @@ nothing else. No product code, no tests, no fixtures, no commits.
    as the backlog flip. A plan still saying "proposed" after it shipped is the
    single most misleading staleness this repo produces; it has happened to four
    of six plans in one batch.
-3. **`docs/what-this-proves.md`** — append one paragraph with a **runnable,
+3. **`LLM/what-this-proves.md`** — append one paragraph with a **runnable,
    live-verified** example. Append only: earlier paragraphs are history, and are
    edited only to correct a claim that has since become false. If you cannot
    verify the example by running it, say so and leave the paragraph for the
    operator rather than inventing output.
 4. **Deferred residues get real backlog numbers.** Numbers are global across
    tiers and never reused: take the next free one by scanning **all** tiers —
-   `grep -nE '^[0-9]+\. \*\*' docs/backlog-tasks.md` — not just the tier you are
+   `grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks.md` — not just the tier you are
    writing in. Two items filed thirteen minutes apart into different tiers once
    both claimed the same number. Plan filenames are
    `<tier>.<item>-<slug>.opus.md`, so the numeric prefix must match the tier the

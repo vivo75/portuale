@@ -6,7 +6,7 @@ then building the installed-package database (VDB) in each of the three
 backends: `files`, `sqlite`, `redb`.
 
 Design and option reference: [`remote-merge.md`](remote-merge.md) (remote
-merge), [`feat-157-authoritative-vdb-database.md`](feat-157-authoritative-vdb-database.md)
+merge), [`feat-157-authoritative-vdb-database.md`](../LLM/feat-157-authoritative-vdb-database.md)
 (backends). This page is runnable examples only.
 
 **Status of each part** (nothing here replaces the L1/L4 beds):
@@ -231,8 +231,8 @@ podman exec server bash -c '
 
 Use `--rw [--root ROOT]` for the read-write mount. The mount commands are
 unverified in this example; see
-[`evidence/305-s7-fuse.md`](evidence/305-s7-fuse.md) and
-[`evidence/317-s5-host.md`](evidence/317-s5-host.md) for what was checked.
+[`evidence/305-s7-fuse.md`](../LLM/evidence/305-s7-fuse.md) and
+[`evidence/317-s5-host.md`](../LLM/evidence/317-s5-host.md) for what was checked.
 
 ## 7. Failure and gate checks
 

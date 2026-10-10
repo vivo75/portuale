@@ -10,7 +10,7 @@ Goal: let portuale use N CPUs where it is safe, without breaking the
 determinism contract or the musl-static story.
 
 Source grounding: cites below name **symbols, not line numbers** — the
-repo convention (`docs/08.102-108-perf-memoisation.md` header: "find
+repo convention (`LLM/08.102-108-perf-memoisation.md` header: "find
 things by symbol name, not line number"); the first draft's `path:line`
 cites had already drifted in 16 of 19 cases within hours of being
 written. Files: `rust/portuale/src/*.rs`,
@@ -23,15 +23,15 @@ written. Files: `rust/portuale/src/*.rs`,
 Three corrections, each measured on this host (24 CPU, 2089 installed
 packages, release build of `662b15d` minus the docs-only close-out):
 
-**(a) `--pretend` is no longer slower than real.** The `#102`–`#108`
+**(a) `--pretend` is no longer slower than Portage.** The `#102`–`#108`
 batch took the reference workload from 7.71–7.92 s to 3.98–3.99 s; a
 re-run today gives **3.88–3.90 s wall / 2.85–2.90 s user / ~1.0 s sys**
-against real Portage 3.0.82.2's 4.50–5.11 s / 4.07–4.16 s / ~0.2 s
+against Portage 3.0.82.2's 4.50–5.11 s / 4.07–4.16 s / ~0.2 s
 (`docs/performances-tuning.md`, "2026-09-20 batch"). The first draft's
 priority 1 ("the user is waiting for the plan") was written against a
 2 s deficit that is now a 0.6 s surplus. Parallelising the resolver is
 therefore no longer a *user-facing* win; it is a "be even faster than
-real" want, and it must be ranked below the two single-threaded items
+Portage" want, and it must be ranked below the two single-threaded items
 in §2.0 that are still unclaimed.
 
 **(b) The metadata-read premise is wrong; the I/O is the vdb.** The
@@ -47,7 +47,7 @@ workload: 160,351 `openat` (**40,651 ENOENT**), 202,281 `read`,
 are `/var/db/pkg/<cat>/<pf>/{USE,RDEPEND,repository,SLOT,BDEPEND,
 DEPEND,IUSE,IDEPEND,PDEPEND}` — one uncached `fs::read_to_string` per
 key per call, in `read_vdb_string` / `read_vdb_flag_set`. That is the
-residual ~1.0 s sys, and it is a **memoisation / real-parity** target
+residual ~1.0 s sys, and it is a **memoisation / Portage-parity** target
 (§2.0), not a parallelism one.
 
 **(c) Constraint "the caches are already thread-safe" is now false.**
@@ -101,7 +101,7 @@ Still accurate as a structural description; the cost weights have moved
   inside the scheduler stay deliberately serial (`--jobs`' own parse
   comment in `pretend.rs`: "The vdb merge step is always serialized
   regardless -- only the `install` phase runs in parallel, matching
-  real portage"; `--buildpkgonly` and the binary-merge paths stay
+  Portage"; `--buildpkgonly` and the binary-merge paths stay
   serial too).
 - **Not** work parallelism, despite using threads — do not count these
   as precedent: the decompressor stdin pump in `binpkg::
@@ -128,7 +128,7 @@ any single merge.
    Prefer `std::thread::scope` + `mpsc` (the two existing parallel sites
    already use exactly this) over adding `rayon` or a tokio work pool.
    No new C linkage, no new external fetch.
-3. **Merge correctness is serial at the package level.** Real
+3. **Merge correctness is serial at the package level.** Portage's
    `dblink.merge()` merges one package at a time (collision-protect,
    `CONTENTS`, `cfgfiledict`, preserve-libs registry). Keep that:
    parallelize **within** one package's merge, never two packages'
@@ -160,7 +160,7 @@ any single merge.
      runs at a 98.1 % hit rate (70,237 / 71,572) on one thread. N
      workers means up to N independent fills — more total work and N×
      the memo memory, against a baseline that is already faster than
-     real. Fanning out the *consumers* of these memos can be net
+     Portage. Fanning out the *consumers* of these memos can be net
      negative, and nothing in the current numbers says it won't be.
    - Therefore §2.2 has a **prerequisite**, not just an
      implementation: convert its target memos back to
@@ -191,13 +191,13 @@ any single merge.
 ## 2. Resolver: `emerge --pretend` / `--ask`
 
 Re-ranked: the two single-threaded items in §2.0 come first, because
-they are larger, measured, real-grounded, and carry none of §1.4's risk.
+they are larger, measured, Portage-grounded, and carry none of §1.4's risk.
 
 ### 2.0 Do these before any thread (recommended, not parallelism) — DONE 2026-09-21
 
-**(a) Read the vdb `metadata` snapshot, like real does. DONE** (#109,
+**(a) Read the vdb `metadata` snapshot, like Portage does. DONE** (#109,
 S1–S4 `bcc69fd`/`c909bfa`/`6f158d7`/`5759a29`, branch `feat/parallel`):
-`vdb_aux_get` validates the consolidated `metadata` file like real
+`vdb_aux_get` validates the consolidated `metadata` file like Portage's
 `_read_metadata_file` and serves in-set keys from it, with a
 per-instance memo keyed on the package dir's `st_mtime_ns`
 (`_aux_cache`'s shape). `strace` on the reference workload: `openat`
@@ -227,7 +227,7 @@ non-result), `binpkg_respect_use_ok`'s memo residual (12.63 %),
 and `repo_aux_metadata` (10.08 % after #119, cold fills/validation), plus
 the second `run_pass` (#107, 75.46 % subtree — diagnosed 2026-09-21: the
 restart is the reverse-dependency pin feedback, and removing it needs
-real's complete-graph parent-atom model, so it is parked, not a thread
+Portage's complete-graph parent-atom model, so it is parked, not a thread
 target) — **none of it parallel-friendly**. §2.2's visibility pool is
 blocked on §1.4 and would now buy well under a second of mostly-serial
 work at the cost of the `Rc → Arc` migration; **do not write it.** §2.1
@@ -305,7 +305,7 @@ memoisation batch has touched it.
 `#96` (`34060fce`) made every merge write atomic: regular files go
 through `replace_file_atomic`, symlinks through
 `replace_symlink_atomic`, each copying to `unique_sibling_path(dest)`
-(`.{basename}._portage_merge_.{pid}[.N]`, real `movefile.py`'s own
+(`.{basename}._portage_merge_.{pid}[.N]`, Portage `movefile.py`'s own
 prefix), setting owner/mode/mtime, then `rename(2)` over `dest`. Two
 consequences for §3.1, both favourable:
 
@@ -362,8 +362,8 @@ hashing parallelizes for free with 3.1.
 ### 3.3 Inter-package parallel merge (NOT recommended by default)
 
 Merging two packages into the same `${ROOT}` concurrently reintroduces
-exactly the `collision-protect` / `CONTENTS` / `cfgfiledict` races real
-portage serializes away — and portuale's own `--jobs` parse already
+exactly the `collision-protect` / `CONTENTS` / `cfgfiledict` races
+Portage serializes away — and portuale's own `--jobs` parse already
 documents the same rule ("the vdb merge step is always serialized
 regardless"). Options if ever wanted: (a) keep package merges serial
 (recommended — binpkg runs are usually I/O-bound inside one large
@@ -377,25 +377,25 @@ do (b) in the first slice. §1.6 (`set_var`) also binds here.
 - **Build parallelism (exists): `-jN` / `--jobs[=N]`** — package-level
   concurrency in `run_build_scheduler`, plus `--load-average` gate.
   Keep as-is.
-- **Inner-toolchain parallelism: already done and real-faithful.**
+- **Inner-toolchain parallelism: already done and Portage-faithful.**
   *(Corrected 2026-09-20 — the draft listed "verify it is actually
   threaded" as an open action and mis-cited `pretend.rs`, which holds
   `BUILD_VARS`, not the make-flag default.)*
   `portage_profile::phase_environ` fills `MAKEOPTS=-j$nproc` and
   `GNUMAKEFLAGS=--load-average $nproc --output-sync=line` when neither
-  `MAKEOPTS` nor `MAKEFLAGS` is set — real `doebuild.py:646-653`'s own
+  `MAKEOPTS` nor `MAKEFLAGS` is set — Portage `doebuild.py:646-653`'s own
   behaviour, pinned by a unit test — and
-  `ebuild_package::makeopts_to_job_count` mirrors real
+  `ebuild_package::makeopts_to_job_count` mirrors Portage
   `util/cpuinfo.py:55-70`'s greedy regex, also unit-pinned. So
   `emerge -j8` on a 24-CPU host already expands to 8 × 24 make jobs by
-  default, **exactly as real portage does**. Nothing to verify and
+  default, **exactly as Portage does**. Nothing to verify and
   nothing to fix; the oversubscription note in `--help` is optional
-  documentation (real's own man page carries the same warning).
+  documentation (Portage's own man page carries the same warning).
 - **Install/merge parallelism (new, separate option):** the
   `src_install` phase + `merge_tree` + `pkg_preinst/postinst` half is
   filesystem- and single-package-scoped, while builds are CPU-scoped —
   one number cannot serve both. Proposed surface (portuale-specific;
-  real portage has only `--jobs`):
+  Portage has only `--jobs`):
   - `--install-jobs=N` (name bikeshed-able; `--merge-jobs` is the
     alternative): worker count for §3.1's copy pool and for parallel
     `src_install` file staging where safe. Default: follow `--jobs`
@@ -473,7 +473,7 @@ touching the VDB format, or winning a benchmark by skipping a
   runs and against serial (`--install-jobs=1`).
 - **Performance:** the same workload every other perf slice uses —
   `/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg
-  net-libs/rest`, best of 3 warm, interleaved with real `emerge` on the
+  net-libs/rest`, best of 3 warm, interleaved with Portage's `emerge` on the
   same tree — plus a fixed binpkg-set merge for §3. Record wall / user
   / sys / peak RSS before and after, in the commit body **and** in
   `performances-tuning.md`'s running table. Two lessons from

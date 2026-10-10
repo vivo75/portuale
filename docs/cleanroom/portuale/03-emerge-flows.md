@@ -99,7 +99,7 @@ flowchart TD
 - `--buildpkg-exclude` atoms skip matching entries
   (`entry_matches_any` `:353`).
 
-## 3.6 Source merge (real `emerge <atom>`)
+## 3.6 Source merge (Portage's `emerge <atom>`)
 
 Entry: `emerge_build::run_source_merge` (`:270`) → `run_merge_loop`
 (`:440`) → `merge_one_source_entry` (`:522`) → per-entry
@@ -212,7 +212,7 @@ Entry: `run_depclean_pretend` (`pretend.rs:5857`).
 
 - `run_prune_pretend` (`:5337`): for each installed `cat/pkg` (or the
   given atoms), keep the highest-versioned instance per slot and remove
-  the rest. Real `action_depclean` with `unmerge_action == "prune"`.
+  the rest. Portage's `action_depclean` with `unmerge_action == "prune"`.
 - `run_prune_nodeps_pretend` (`:5436`) / `run_clean_pretend` (`:5468`)
   via `run_prune_nodeps_or_clean` (`:5492`): identical to prune except
   dependency resolution is skipped (`--nodeps` semantics).

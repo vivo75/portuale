@@ -1,0 +1,58 @@
+// Neutral CLI test-harness binary for portuale's use_reduce(flat=True)
+// (see LLM/agent-context.md and portage-use-reduce/src/lib.rs's doc comment). Same
+// argv/output contract as python/use_reduce_harness.py.
+//
+// Usage:
+//   use-reduce-harness reduce <mode> <uselist> <token...>
+//       mode: "normal" | "matchall" | "matchnone"
+//       uselist: comma-separated enabled flags, or "-" for none
+//       token...: the dep string's whitespace-separated tokens (the CLI
+//                 shell already splits argv on whitespace for us, which is
+//                 exactly what use_reduce's own depstr.split() first step
+//                 does internally)
+//     -> comma-joined flattened tokens (possibly empty), or "ERROR"
+//   use-reduce-harness batch
+//     -> reads "reduce <mode> <uselist> <token...>" lines from stdin, one
+//        result per line
+
+use portage_use_reduce::{MatchMode, use_reduce_flat};
+use std::collections::HashSet;
+use std::process::ExitCode;
+
+fn format_reduce(mode: &str, uselist_arg: &str, tokens: &[String]) -> Result<String, String> {
+    let mode = match mode {
+        "normal" => MatchMode::Normal,
+        "matchall" => MatchMode::All,
+        "matchnone" => MatchMode::None,
+        other => return Err(format!("unknown mode {other:?}")),
+    };
+    let uselist: HashSet<String> = if uselist_arg == "-" {
+        HashSet::new()
+    } else {
+        uselist_arg.split(',').map(String::from).collect()
+    };
+    Ok(match use_reduce_flat(tokens, &uselist, mode) {
+        Ok(result) => result.join(","),
+        Err(_) => "ERROR".to_string(),
+    })
+}
+
+fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
+    match op {
+        "reduce" => {
+            let [mode, uselist, tokens @ ..] = args else {
+                return Err("reduce expects at least 2 args (mode, uselist)".to_string());
+            };
+            let tokens: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
+            format_reduce(mode, uselist, &tokens)
+        }
+        other => Err(format!("unknown op {other:?}")),
+    }
+}
+
+fn main() -> ExitCode {
+    harness_common::main_dispatch(
+        "use-reduce-harness <reduce mode uselist token... | batch>",
+        dispatch,
+    )
+}

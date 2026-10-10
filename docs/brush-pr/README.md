@@ -84,7 +84,7 @@ in [`../brush-pin.md`](../brush-pin.md).
 
 ## Before / after (pristine `25bffd54` worktree vs. `main` with the fixes)
 
-Real portage phase-boundary flow — `source` a stack of eclasses
+Portage phase-boundary flow — `source` a stack of eclasses
 (`multilib` / `toolchain-funcs` / `flag-o-matic`; ~170 functions),
 `declare -f > env`, `source env` (what `__save_ebuild_env` does at every
 phase boundary):

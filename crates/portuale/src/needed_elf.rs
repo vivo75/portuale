@@ -1,0 +1,2044 @@
+// Real `NeededEntry` (`lib/portage/util/_dyn_libs/NeededEntry.py`): the
+// data model for one parsed line of a real `NEEDED.ELF.2` file -- the
+// aux vdb metadata real, unmodified `bin/misc-functions.sh
+// install_qa_check`'s own real `scanelf`-driven step generates, and
+// which `ebuild_merge::populate_vdb_tmp` now copies into every real vdb
+// entry that has one (see that function's own doc comment).
+//
+// Each step confirmed with the user before implementing: real parsing
+// (`NeededEntry`), real `LinkageMap.rebuild()`'s own initial data-
+// gathering loop (`read_all_needed_entries`), `rebuild()`'s own
+// remaining indexing logic (`rebuild`), and now `findConsumers()` +
+// `_find_libs_to_preserve()`'s own graph-reachability decision
+// (`find_consumers`/`find_libs_to_preserve`, plus the small primitives
+// they both need: `getlibpaths`, a minimal `LibGraph`). Deliberately
+// still missing: the live-`scanelf`-for-orphaned-preserved-libs branch
+// inside real `rebuild()` itself (`LinkageMapELF.py:233-324` -- the one
+// place real portage falls back to a raw ELF header read rather than
+// `NEEDED.ELF.2`, out of scope until preserve-libs actually needs it).
+//
+// What this slice does NOT do, even though the pure-computation port is
+// now complete: wire `find_libs_to_preserve`'s own output into a real
+// merge/unmerge's actual control flow (calling it at the right point in
+// `ebuild_merge::merge_after_install`, writing results into the real
+// `preserved_libs_registry.json` via the already-existing
+// `write_plib_registry`, and making `ebuild_unmerge::remove_contents`
+// skip deleting a preserved path). That's a real, separate control-flow
+// integration task across two already-tested files, not a "port this
+// Python function" task -- left for a following slice so it can be
+// scoped and reviewed on its own, without risk to the already-shipped
+// preserve-libs *consult/unregister* side. `#[allow(dead_code)]` below
+// is deliberate: this module has no real caller yet, the same "narrow,
+// additive, no wiring until the next slice needs it" shape portuale
+// has used before (e.g. `masters =` parsing landing before eclass
+// masters-chain search consumed it).
+#![allow(dead_code)]
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+/// Real `NeededEntry.__slots__`: one parsed `NEEDED.ELF.2` line.
+/// `soname` is a plain (possibly empty) string, not `Option`, matching
+/// real Python exactly -- real `scanelf` genuinely reports an empty
+/// soname for some real libraries (e.g. musl's own `libc.so`, which has
+/// no `DT_SONAME` at all; this is precisely why real `misc-functions.sh`
+/// deliberately never uses `scanelf -q`, see that script's own comment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeededEntry {
+    pub arch: String,
+    pub filename: String,
+    pub soname: String,
+    pub runpaths: Vec<String>,
+    pub needed: Vec<String>,
+    /// Real `NeededEntry._MULTILIB_CAT_INDEX`: the optional 6th field,
+    /// `None` when the field is either absent (real, pre-multilib-
+    /// category `NEEDED.ELF.2` data) or present-but-empty.
+    pub multilib_category: Option<String>,
+}
+
+impl NeededEntry {
+    /// Real `NeededEntry.parse()`: `arch;filename;soname;rpaths;needed`,
+    /// semicolon-delimited, an optional 6th `multilib_category` field,
+    /// any further fields silently ignored (real "extra fields may exist
+    /// for future extensions"). `None` for a malformed line (real
+    /// `InvalidData`, fewer than 5 fields) -- callers skip it and keep
+    /// going, the same tolerance real `LinkageMap.rebuild()` itself
+    /// already has for a bad line (`writemsg_level` + `continue`, never
+    /// aborting the whole read over one bad entry).
+    ///
+    /// `rpaths`'s own real `"  -  "` sentinel (two spaces, a dash, two
+    /// spaces) means "no rpath at all" -- real `scanelf`'s own `%r`
+    /// output for an object with none, since `bin/misc-functions.sh`
+    /// deliberately never passes `scanelf -q` (which would otherwise
+    /// omit rpath-less-and-soname-less libraries like musl's `libc.so`
+    /// entirely) and so must handle this literal placeholder itself.
+    pub fn parse(line: &str) -> Option<Self> {
+        let fields: Vec<&str> = line.split(';').collect();
+        if fields.len() < 5 {
+            return None;
+        }
+        let multilib_category = fields
+            .get(5)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        let rpaths = if fields[3] == "  -  " { "" } else { fields[3] };
+        let runpaths = rpaths
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        let needed = fields[4]
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+
+        Some(Self {
+            arch: fields[0].to_string(),
+            filename: fields[1].to_string(),
+            soname: fields[2].to_string(),
+            runpaths,
+            needed,
+            multilib_category,
+        })
+    }
+
+    /// Parses every line of a real `NEEDED.ELF.2` file's own text,
+    /// silently skipping any malformed line (see `parse`'s own doc
+    /// comment for why that matches real tolerance).
+    pub fn parse_file(text: &str) -> Vec<Self> {
+        text.lines().filter_map(Self::parse).collect()
+    }
+
+    /// Real `NeededEntry.__str__` (`NeededEntry.py:67-87`): "format this
+    /// entry for writing to a NEEDED.ELF.2 file" -- used when real
+    /// portage itself *rewrites* the file (`vardbapi.removeFromContents`/
+    /// `writeContentsToContentsFile`, see `ebuild_merge::remove_from_
+    /// contents`'s own doc comment), as opposed to the original real
+    /// `scanelf`-generated file this module's own `parse`/`parse_file`
+    /// read. Two real asymmetries from the read side, both intentional,
+    /// not bugs: an empty `runpaths` serializes as a plain empty string
+    /// here (`":".join([])`), never the `"  -  "` sentinel `scanelf`
+    /// itself emits; and the 6th (`multilib_category`) field is *always*
+    /// present, even when `None` (as `""`), unlike the original file
+    /// which may omit it entirely for pre-multilib-category data.
+    pub fn to_needed_line(&self) -> String {
+        format!(
+            "{};{};{};{};{};{}\n",
+            self.arch,
+            self.filename,
+            self.soname,
+            self.runpaths.join(":"),
+            self.needed.join(","),
+            self.multilib_category.as_deref().unwrap_or("")
+        )
+    }
+}
+
+/// Real `ELFHeader.read` + `compute_multilib_category`
+/// (`portage/util/_dyn_libs/NeededEntry.py`, `portage/dep/soname/
+/// multilib_category.py`): read one ELF header's own `EI_CLASS`,
+/// `e_machine` and `e_flags` and classify it into the real multilib
+/// category (`x86_64`, `x86_32`, `x86_x32`, `arm_64`, ...), or `None`
+/// for a non-ELF/unreadable file or an unrecognized machine/class
+/// combination (real's own `None` return, which makes the entry an
+/// "unrecognized ELF file" and keeps its 6th `NEEDED.ELF.2` field
+/// empty). Used by `ebuild_phases::write_post_install_soname_deps` to
+/// add the trailing field real's `_post_src_install_soname_symlinks`
+/// writes back.
+pub fn compute_multilib_category(path: &Path) -> Option<String> {
+    const ELFCLASS32: u8 = 1;
+    const ELFCLASS64: u8 = 2;
+    fn u16_at(data: &[u8], off: usize, le: bool) -> Option<u16> {
+        let b = data.get(off..off + 2)?;
+        Some(if le {
+            u16::from_le_bytes([b[0], b[1]])
+        } else {
+            u16::from_be_bytes([b[0], b[1]])
+        })
+    }
+    fn u32_at(data: &[u8], off: usize, le: bool) -> Option<u32> {
+        let b = data.get(off..off + 4)?;
+        Some(if le {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        })
+    }
+
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 20 || &data[0..4] != b"\x7fELF" {
+        return None;
+    }
+    let ei_class = data[4];
+    let le = match data[5] {
+        1 => true,
+        2 => false,
+        _ => return None,
+    };
+    let e_machine = u16_at(&data, 18, le)?;
+    let flags_off = if ei_class == ELFCLASS64 { 48 } else { 36 };
+    let e_flags = u32_at(&data, flags_off, le)?;
+
+    // Real constants (portage/util/elf/constants.py).
+    const EM_SPARC: u16 = 2;
+    const EM_386: u16 = 3;
+    const EM_68K: u16 = 4;
+    const EM_MIPS: u16 = 8;
+    const EM_PARISC: u16 = 15;
+    const EM_SPARC32PLUS: u16 = 18;
+    const EM_PPC: u16 = 20;
+    const EM_PPC64: u16 = 21;
+    const EM_S390: u16 = 22;
+    const EM_ARM: u16 = 40;
+    const EM_SH: u16 = 42;
+    const EM_SPARCV9: u16 = 43;
+    const EM_ARC: u16 = 45;
+    const EM_IA_64: u16 = 50;
+    const EM_X86_64: u16 = 62;
+    const EM_ARC_COMPACT: u16 = 93;
+    const EM_ALTERA_NIOS2: u16 = 113;
+    const EM_MCST_ELBRUS: u16 = 175;
+    const EM_AARCH64: u16 = 183;
+    const EM_ARC_COMPACT2: u16 = 195;
+    const EM_AMDGPU: u16 = 224;
+    const EM_RISCV: u16 = 243;
+    const EM_BPF: u16 = 247;
+    const EM_ARC_COMPACT3_64: u16 = 253;
+    const EM_ARC_COMPACT3: u16 = 255;
+    const EM_LOONGARCH: u16 = 258;
+    const EM_ALPHA: u16 = 0x9026;
+    const EF_MIPS_ABI: u32 = 0x0000_F000;
+    const EF_MIPS_ABI2: u32 = 0x0000_0020;
+    const E_MIPS_ABI_O32: u32 = 0x0000_1000;
+    const E_MIPS_ABI_O64: u32 = 0x0000_2000;
+    const E_MIPS_ABI_EABI32: u32 = 0x0000_3000;
+    const E_MIPS_ABI_EABI64: u32 = 0x0000_4000;
+    const EF_RISCV_RVC: u32 = 0x0001;
+    const EF_RISCV_FLOAT_ABI_DOUBLE: u32 = 0x0004;
+    const EF_LOONGARCH_ABI_MASK: u32 = 0x07;
+
+    let prefix = match e_machine {
+        EM_386 => "x86",
+        EM_68K => "m68k",
+        EM_AARCH64 => "arm",
+        EM_ALPHA => "alpha",
+        EM_AMDGPU => "amdgpu",
+        EM_ALTERA_NIOS2 => "nios2",
+        EM_ARC | EM_ARC_COMPACT | EM_ARC_COMPACT2 | EM_ARC_COMPACT3 | EM_ARC_COMPACT3_64 => "arc",
+        EM_ARM => "arm",
+        EM_BPF => "bpf",
+        EM_IA_64 => "ia64",
+        EM_LOONGARCH => "loong",
+        EM_MCST_ELBRUS => "e2k",
+        EM_MIPS => "mips",
+        EM_PARISC => "hppa",
+        EM_PPC | EM_PPC64 => "ppc",
+        EM_RISCV => "riscv",
+        EM_S390 => "s390",
+        EM_SH => "sh",
+        EM_SPARC | EM_SPARC32PLUS | EM_SPARCV9 => "sparc",
+        EM_X86_64 => "x86",
+        _ => return None,
+    };
+
+    let suffix = match prefix {
+        "loong" => match e_flags & EF_LOONGARCH_ABI_MASK {
+            0b001 => "lp64s".to_string(),
+            0b010 => "lp64f".to_string(),
+            0b011 => "lp64d".to_string(),
+            0b101 => "ilp32s".to_string(),
+            0b110 => "ilp32f".to_string(),
+            0b111 => "ilp32d".to_string(),
+            _ => return None,
+        },
+        "mips" => {
+            let abi = e_flags & EF_MIPS_ABI;
+            if abi != 0 {
+                match abi {
+                    E_MIPS_ABI_EABI32 => "eabi32",
+                    E_MIPS_ABI_EABI64 => "eabi64",
+                    E_MIPS_ABI_O32 => "o32",
+                    E_MIPS_ABI_O64 => "o64",
+                    _ => return None,
+                }
+                .to_string()
+            } else if e_flags & EF_MIPS_ABI2 != 0 {
+                "n32".to_string()
+            } else if ei_class == ELFCLASS64 {
+                "n64".to_string()
+            } else {
+                return None;
+            }
+        }
+        "riscv" => match (ei_class, e_flags) {
+            (ELFCLASS64, EF_RISCV_RVC) => "lp64".to_string(),
+            (ELFCLASS64, f) if f == EF_RISCV_RVC | EF_RISCV_FLOAT_ABI_DOUBLE => "lp64d".to_string(),
+            (ELFCLASS32, EF_RISCV_RVC) => "ilp32".to_string(),
+            (ELFCLASS32, f) if f == EF_RISCV_RVC | EF_RISCV_FLOAT_ABI_DOUBLE => {
+                "ilp32d".to_string()
+            }
+            _ => return None,
+        },
+        _ => match ei_class {
+            ELFCLASS64 => "64".to_string(),
+            ELFCLASS32 if e_machine == EM_X86_64 => "x32".to_string(),
+            ELFCLASS32 => "32".to_string(),
+            _ => return None,
+        },
+    };
+    Some(format!("{prefix}_{suffix}"))
+}
+
+/// One `fnmatch`-style exclusion pattern list (real
+/// `SonameDepsProcessor._exclude_pattern`: `shlex.split` the
+/// `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` value, `lstrip("/")` each
+/// pattern, match any of them). The `shlex` part is a minimal
+/// whitespace/quote split -- real's own excludes are bare path globs.
+fn exclude_patterns(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for c in value.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => current.push(c),
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c.is_whitespace() => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out.into_iter()
+        .map(|p| p.trim_start_matches('/').to_string())
+        .collect()
+}
+
+/// Real `SonameDepsProcessor` (`portage/util/_dyn_libs/soname_deps.py`):
+/// turn one package's `NEEDED.ELF.2` entries into the `PROVIDES` and
+/// `REQUIRES` strings real writes into `build-info` (and therefore into
+/// the archive's `metadata/PROVIDES`/`metadata/REQUIRES`, #39).
+/// `(provides, requires)`, each `None` when the corresponding map is
+/// empty -- real writes no file at all in that case. Entries without a
+/// recognized `multilib_category` are the caller's own "unrecognized
+/// ELF" case and must be filtered before calling this (real
+/// `SonameDepsProcessor.add` asserts on a missing category).
+pub fn generate_soname_deps(
+    entries: &[NeededEntry],
+    provides_exclude: &str,
+    requires_exclude: &str,
+) -> (Option<String>, Option<String>) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let provides_exclude = exclude_patterns(provides_exclude);
+    let requires_exclude = exclude_patterns(requires_exclude);
+    let excluded = |patterns: &[String], name: &str| {
+        patterns
+            .iter()
+            .any(|p| crate::install_mask::fnmatch(name, p))
+    };
+
+    let mut basename_map: BTreeMap<String, Vec<&NeededEntry>> = BTreeMap::new();
+    // cat -> soname -> set of expanded runpath sets.
+    let mut requires_map: BTreeMap<String, BTreeMap<String, BTreeSet<Vec<String>>>> =
+        BTreeMap::new();
+    let mut provides_unfiltered: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut provides_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for entry in entries {
+        let Some(cat) = entry.multilib_category.as_deref() else {
+            continue;
+        };
+        let basename = basename(&entry.filename).to_string();
+        basename_map.entry(basename).or_default().push(entry);
+
+        if !entry.needed.is_empty()
+            && !excluded(&requires_exclude, entry.filename.trim_start_matches('/'))
+        {
+            let origin = dirname(&entry.filename);
+            let runpaths: Vec<String> = entry
+                .runpaths
+                .iter()
+                .map(|r| normalize_path(&expand_origin(r, &origin)))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            for needed in &entry.needed {
+                if !excluded(&requires_exclude, needed) {
+                    requires_map
+                        .entry(cat.to_string())
+                        .or_default()
+                        .entry(needed.clone())
+                        .or_default()
+                        .insert(runpaths.clone());
+                }
+            }
+        }
+
+        if entry.soname.is_empty() {
+            continue;
+        }
+        provides_unfiltered
+            .entry(cat.to_string())
+            .or_default()
+            .insert(entry.soname.clone());
+        if !excluded(&provides_exclude, entry.filename.trim_start_matches('/'))
+            && !excluded(&provides_exclude, &entry.soname)
+        {
+            provides_map
+                .entry(cat.to_string())
+                .or_default()
+                .insert(entry.soname.clone());
+        }
+    }
+
+    // Real `_intersect`: a provided soname is never a requirement;
+    // an internal library without an soname is resolved through a
+    // matching DT_RUNPATH entry.
+    let cats: BTreeSet<String> = requires_map
+        .keys()
+        .chain(provides_map.keys())
+        .cloned()
+        .collect();
+    let mut drop_requires: Vec<(String, String)> = Vec::new();
+    for cat in &cats {
+        let Some(reqs) = requires_map.get_mut(cat) else {
+            continue;
+        };
+        for (soname, consumers) in reqs.iter_mut() {
+            if provides_unfiltered
+                .get(cat)
+                .is_some_and(|p| p.contains(soname))
+            {
+                drop_requires.push((cat.clone(), soname.clone()));
+                continue;
+            }
+            if let Some(basename_entries) = basename_map.get(soname) {
+                let mut resolved = false;
+                for entry in basename_entries {
+                    if entry.multilib_category.as_deref() != Some(cat.as_str()) {
+                        continue;
+                    }
+                    let obj_dir = dirname(&entry.filename);
+                    consumers.retain(|runpaths| !runpaths.contains(&obj_dir));
+                    if consumers.is_empty() {
+                        resolved = true;
+                        break;
+                    }
+                }
+                if resolved {
+                    drop_requires.push((cat.clone(), soname.clone()));
+                }
+            }
+        }
+        for (cat, soname) in drop_requires.drain(..) {
+            if let Some(reqs) = requires_map.get_mut(&cat) {
+                reqs.remove(&soname);
+            }
+        }
+    }
+
+    let format = |map: &BTreeMap<String, BTreeSet<String>>| -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        for (cat, sonames) in map {
+            if sonames.is_empty() {
+                continue;
+            }
+            parts.push(format!("{cat}:"));
+            parts.extend(sonames.iter().cloned());
+        }
+        (!parts.is_empty()).then(|| format!("{}\n", parts.join(" ")))
+    };
+    let requires = format(
+        &requires_map
+            .iter()
+            .map(|(cat, reqs)| (cat.clone(), reqs.keys().cloned().collect()))
+            .collect(),
+    );
+    let provides = format(&provides_map);
+    (provides, requires)
+}
+
+/// Real `LinkageMap.rebuild()`'s own initial data-gathering loop
+/// (`LinkageMapELF.py:218-231`): for every real installed package (real
+/// `dbapi.cpv_all()`, walked here the same way `ebuild_merge::
+/// find_owners` already walks every installed package's own vdb
+/// directory), its own real vdb-stored `NEEDED.ELF.2` (real `aux_get(cpv,
+/// [self._needed_aux_key])`), parsed via `NeededEntry::parse_file`.
+/// Degrades gracefully to an empty entry list for a package with no such
+/// file at all (real `aux_get` itself already tolerates a missing aux
+/// file the same way, returning `""`) -- a `cpv` is still included, with
+/// an empty `Vec`, matching real `rebuild()`'s own unconditional per-cpv
+/// walk (it never skips a `cpv` just because it happens to own no ELF
+/// content). Returns `(cpv, entries)` pairs in sorted vdb directory-
+/// listing order, for portuale's own determinism -- real `cpv_all()`
+/// has no particular real ordering guarantee, so this doesn't lose
+/// anything real by sorting.
+///
+/// Still just the raw per-package data: no soname map, no multilib/
+/// runpath resolution (real `rebuild()`'s own `libs`/`obj_properties`
+/// indexing, `providers`/`consumers` bucketing, `$ORIGIN` expansion --
+/// all real, separately-scoped future work), so nothing here yet answers
+/// "what does path X provide" or "what needs path X" -- only "what did
+/// each installed package's own real `NEEDED.ELF.2` say".
+pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
+    // `read_file_all` is the old walk, moved into `FilesDb` unchanged
+    // (the `-MERGING-` skip included); a missing, unreadable or non-UTF-8
+    // file is still an empty row.
+    portage_vdb::for_root(root)
+        .read_file_all("NEEDED.ELF.2")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, data)| {
+            let entries = data
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(|text| NeededEntry::parse_file(&text))
+                .unwrap_or_default();
+            (format!("{}/{}", key.category, key.pf), entries)
+        })
+        .collect()
+}
+
+/// Real `_approx_multilib_categories` (`LinkageMapELF.py:29-46`): maps a
+/// real ELF `e_machine` value (real `NEEDED.ELF.2`'s own `arch` field,
+/// already stripped of its real `EM_` prefix by real, unmodified
+/// `bin/misc-functions.sh` before it's ever written) to an approximate
+/// multilib category -- only ever consulted when a `NeededEntry` has no
+/// `multilib_category` field of its own (real, pre-multilib-category
+/// `NEEDED.ELF.2` data, or portuale's own fixtures, which never emit
+/// that optional 6th field). Falls back to the raw `arch` string
+/// unchanged for anything not in the table, exactly like real portage.
+fn approx_multilib_category(arch: &str) -> String {
+    match arch {
+        "386" => "x86_32",
+        "68K" => "m68k_32",
+        "AARCH64" => "arm_64",
+        "ALPHA" => "alpha_64",
+        "ARM" => "arm_32",
+        "IA_64" => "ia64_64",
+        "MIPS" => "mips_o32",
+        "PARISC" => "hppa_64",
+        "PPC" => "ppc_32",
+        "PPC64" => "ppc_64",
+        "S390" => "s390_64",
+        "SH" => "sh_32",
+        "SPARC" => "sparc_32",
+        "SPARC32PLUS" => "sparc_32",
+        "SPARCV9" => "sparc_64",
+        "X86_64" => "x86_64",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Real `portage.util.normalize_path` (`lib/portage/util/__init__.py:
+/// 139-153`): a lexical, non-symlink-resolving path normalizer (real
+/// `os.path.normpath`, with real portage's own leading-`//`-vs-`/` fix)
+/// -- collapses `.`/empty segments, resolves `..` segments against
+/// already-collapsed real segments, never touches the filesystem.
+fn normalize_path(path: &str) -> String {
+    let absolute = path.starts_with('/');
+    let mut out: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => continue,
+            ".." => {
+                if matches!(out.last(), Some(&last) if last != "..") {
+                    out.pop();
+                } else if !absolute {
+                    out.push("..");
+                }
+            }
+            _ => out.push(seg),
+        }
+    }
+    let joined = out.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
+    }
+}
+
+/// Real dynamic-linker `$ORIGIN`/`${ORIGIN}` runpath expansion (real
+/// `rebuild()`'s own `varexpand(x, {"ORIGIN": os.path.dirname(entry.
+/// filename)}, ...)`) -- narrowed to just this one real substitution
+/// (portage's own general `varexpand` handles arbitrary `${VAR}`/`$VAR`
+/// references; `ORIGIN` is the only one `rebuild()` itself ever
+/// supplies a value for).
+fn expand_origin(rpath: &str, origin: &str) -> String {
+    rpath
+        .replace("${ORIGIN}", origin)
+        .replace("$ORIGIN", origin)
+}
+
+/// Real `LinkageMap.rebuild`'s own preserved-libs branch: preserved
+/// libraries are registered in no `NEEDED.ELF.2` file, so real runs
+/// the real, unmodified `scanelf` binary over them (`scanelf -BF
+/// '%a;%F;%S;%r;%n'`, deliberately without `-q` so soname-less
+/// libraries like musl's `libc.so` are not omitted) and indexes every
+/// reported line exactly like `NEEDED.ELF.2` data, owned by the
+/// preserving cpv.
+///
+/// `preserved` is real `getPreservedLibs()` (preserving cpv -> paths).
+/// Only still-existing regular files and symlinks are scanned --
+/// directories are never passed (real `scanelf` would recurse into
+/// them and index files nothing preserves), anything else `scanelf`
+/// reports nothing for is skipped with real `InvalidData` tolerance.
+/// Each line's real `EM_`-prefixed arch (`EM_X86_64`) is stripped to the
+/// bare `e_machine` name (`l[3:]`) before parsing, and the multilib
+/// category comes from a live ELF header read
+/// (`compute_multilib_category`, real `ELFHeader.read` +
+/// `compute_multilib_category`) -- `None` falls back to the approximate
+/// table in `rebuild`, exactly like real `_approx_multilib_categories`.
+///
+/// Deliberate cuts vs. real (documented, no fixture instance):
+/// - Real generates a dummy `("", x, "", "", "")` line for a preserved
+///   path `scanelf` reports nothing for (a non-ELF file), so
+///   `findConsumers` never raises `KeyError`. Portuale's own
+///   `find_consumers` instead returns `Err` there and every caller
+///   already treats that as "no consumers" -- the dummy line's own
+///   empty provider/consumer sets -- so no dummy is emitted.
+/// - Real infers an implicit soname from the basename for an
+///   empty-soname shared object (bug 715162, via the `file` binary).
+///   Skipped: a `NEEDED.ELF.2`-indexed library with an empty soname
+///   provides nothing either, so both paths agree.
+/// - A missing `scanelf` binary degrades to no entries (real raises
+///   `CommandNotFound`), but loudly: a stderr warning names the
+///   missing tool, since silent degradation would turn bump-2-style
+///   preserves into `{}` with zero log output. A `scanelf` that runs
+///   but fails still degrades silently (real tolerates unscannable
+///   lines the same way).
+///
+/// Returns `(owner, entries)` groups ready to append to
+/// `read_all_needed_entries`'s own output before `rebuild` (an owner
+/// already present there gains the scanned entries, matching real
+/// grouping everything by owner for the bundled-library runpath
+/// inference -- see `owner_entries_with_preserved_orphans`).
+pub fn scan_preserved_lib_entries(
+    root: &Path,
+    preserved: &BTreeMap<String, Vec<String>>,
+) -> Vec<(String, Vec<NeededEntry>)> {
+    let mut targets: Vec<(String, String)> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (cpv, paths) in preserved {
+        for p in paths {
+            // First-wins on a duplicate path across cpvs; real `plibs.update(...)` is last-wins (only observable if two cpvs register the same path).
+            if !seen.insert(p.clone()) {
+                continue;
+            }
+            let full = root.join(p.trim_start_matches('/'));
+            let is_scannable = std::fs::symlink_metadata(&full)
+                .map(|m| m.file_type().is_file() || m.file_type().is_symlink())
+                .unwrap_or(false);
+            if is_scannable {
+                targets.push((cpv.clone(), full.to_string_lossy().into_owned()));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut args = vec!["-BF".to_string(), "%a;%F;%S;%r;%n".to_string()];
+    args.extend(targets.iter().map(|(_, full)| full.clone()));
+    // Real `os.path.join(EPREFIX or "/", "usr/bin/scanelf")`
+    // (`LinkageMap.rebuild`): the EPREFIXed absolute path first, then
+    // `PATH`. Portuale assumes an empty `EPREFIX` like every other
+    // real-execution path, so that is `/usr/bin/scanelf`, falling back
+    // to a `PATH` lookup.
+    let scanelf_bin = if std::path::Path::new("/usr/bin/scanelf").is_file() {
+        "/usr/bin/scanelf".to_string()
+    } else {
+        "scanelf".to_string()
+    };
+    let output = std::process::Command::new(&scanelf_bin)
+        .args(&args)
+        .output();
+    let Ok(output) = output else {
+        eprintln!(
+            "!!! Command Not Found: {scanelf_bin} -- preserved-library orphan scan skipped, preserve-libs decisions may miss consumers"
+        );
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let root_str = root.to_string_lossy();
+    let root_prefix = format!("{}/", root_str.trim_end_matches('/'));
+    // Which preserving cpv each scanned absolute path belongs to, so a
+    // reported line is grouped under its real owner (real
+    // `plibs.pop(entry.filename)`).
+    let mut path_owner: BTreeMap<String, String> = BTreeMap::new();
+    for (cpv, full) in &targets {
+        path_owner
+            .entry(full.clone())
+            .or_insert_with(|| cpv.clone());
+    }
+    let mut by_owner: BTreeMap<String, Vec<NeededEntry>> = BTreeMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        // Real `l[3:]`: strip scanelf's own `EM_`-prefixed arch
+        // (`EM_X86_64` -> `X86_64`, the `e_machine` name real
+        // `_approx_multilib_categories` maps).
+        let Some(line) = line.get(3..) else {
+            continue;
+        };
+        let Some(mut entry) = NeededEntry::parse(line) else {
+            continue;
+        };
+        let full = entry.filename.clone();
+        let Some(rel) = full.strip_prefix(&root_prefix) else {
+            continue;
+        };
+        entry.filename = format!("/{rel}");
+        entry.multilib_category = compute_multilib_category(Path::new(&full));
+        if let Some(owner) = path_owner.get(&full) {
+            by_owner.entry(owner.clone()).or_default().push(entry);
+        }
+    }
+    by_owner.into_iter().collect()
+}
+
+/// Real `LinkageMap._ObjectKey`'s own generated key (`LinkageMapELF.py:
+/// 98-148`): a real `(dev, ino)` pair when the object still exists on
+/// disk (real `os.stat`, follows symlinks, matching real `_obj_key`
+/// exactly) -- the same file reachable via multiple filesystem paths
+/// (symlinks, hardlinks) collapses to one entry, every path kept as an
+/// `alt_paths` entry (see `ObjProperties`). Falls back to the object's
+/// own literal path string when it doesn't exist: real `_obj_key`
+/// instead falls back to `os.path.realpath(...)` (symlink-resolved, but
+/// tolerant of a nonexistent target) -- a deliberate, narrower
+/// simplification for a case that should be rare in practice (a real
+/// `NEEDED.ELF.2` entry, read moments after real `scanelf` itself
+/// confirmed the object's existence, no longer existing by the time this
+/// runs).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ObjKey {
+    Inode(u64, u64),
+    Path(String),
+}
+
+pub fn obj_key(root: &Path, obj: &str) -> ObjKey {
+    let abs = root.join(obj.trim_start_matches('/'));
+    match std::fs::metadata(&abs) {
+        Ok(meta) => {
+            use std::os::unix::fs::MetadataExt;
+            ObjKey::Inode(meta.dev(), meta.ino())
+        }
+        Err(_) => ObjKey::Path(obj.to_string()),
+    }
+}
+
+/// Real `LinkageMap._obj_properties_class` (a real `slot_dict_class`):
+/// everything real `rebuild()` records about one indexed object, keyed
+/// by its own `ObjKey`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjProperties {
+    /// Real `arch` (the multilib category, real or approximated).
+    pub category: String,
+    pub needed: BTreeSet<String>,
+    pub runpaths: Vec<String>,
+    pub soname: String,
+    /// Every real filename this exact object was indexed under -- always
+    /// has at least one entry (the first-seen one, real `myprops` is
+    /// only ever created once per `ObjKey`).
+    pub alt_paths: Vec<String>,
+    /// The real owning `cpv` (`category/pf`).
+    pub owner: String,
+}
+
+/// Real `LinkageMap._soname_map_class` (a real `slot_dict_class`): every
+/// real object that provides this soname (`DT_SONAME` matches it), and
+/// every real object that needs it (this soname appears in its own
+/// `DT_NEEDED` list) -- within one multilib category's own map.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SonameMap {
+    pub providers: BTreeSet<ObjKey>,
+    pub consumers: BTreeSet<ObjKey>,
+}
+
+/// Real `LinkageMap._libs`/`_obj_properties`, populated by `rebuild`.
+#[derive(Debug, Clone, Default)]
+pub struct LinkageMap {
+    /// Real `self._libs`: multilib category -> soname -> providers/
+    /// consumers.
+    pub libs: BTreeMap<String, BTreeMap<String, SonameMap>>,
+    pub obj_properties: BTreeMap<ObjKey, ObjProperties>,
+}
+
+/// Real `LinkageMap.rebuild()`'s own remaining indexing logic
+/// (`LinkageMapELF.py:325-469`, everything after the initial data-
+/// gathering loop `read_all_needed_entries` already covers): consumes
+/// `owner_entries` (real shape: every installed package's own real
+/// `NEEDED.ELF.2` entries, exactly what `read_all_needed_entries`
+/// returns) and builds the real soname providers/consumers map.
+///
+/// Per entry: the real multilib category (its own `multilib_category`
+/// field, or `approx_multilib_category`'s own fallback), real
+/// `normalize_path`'d filename, and real `$ORIGIN`-expanded (then also
+/// `normalize_path`'d) runpaths. Then, real "implicit runpath" inference
+/// for bundled libraries (`LinkageMapELF.py:380-410`): within the *same*
+/// owner package's own entries, if a needed soname is provided by
+/// another entry from that same owner, and that provider's own directory
+/// isn't already in the runpaths, it's added -- accounting for internal
+/// library resolution a package may implement itself (e.g. bundled
+/// libraries), without requiring an explicit rpath for it.
+///
+/// Finally, real per-object indexing: an object already indexed under
+/// the same `ObjKey` (a hardlink/symlink alias, or simply listed twice)
+/// only ever contributes its own filename as an extra `alt_paths` entry
+/// -- real "only one set of data can be correct... mixing data may
+/// corrupt the index" -- never re-indexed into `libs`. A newly-seen
+/// object's own soname (if non-empty) is added as a provider, and every
+/// one of its own needed sonames as a consumer, both keyed by its real
+/// multilib category.
+pub fn rebuild(root: &Path, owner_entries: &[(String, Vec<NeededEntry>)]) -> LinkageMap {
+    struct Resolved {
+        owner: String,
+        category: String,
+        filename: String,
+        soname: String,
+        runpaths: Vec<String>,
+        needed: Vec<String>,
+    }
+
+    let mut resolved_by_owner: Vec<Vec<Resolved>> = Vec::new();
+    for (owner, entries) in owner_entries {
+        let mut resolved: Vec<Resolved> = Vec::new();
+        for entry in entries {
+            let category = entry
+                .multilib_category
+                .clone()
+                .unwrap_or_else(|| approx_multilib_category(&entry.arch));
+            let filename = normalize_path(&entry.filename);
+            let origin = Path::new(&filename)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let runpaths = entry
+                .runpaths
+                .iter()
+                .map(|r| normalize_path(&expand_origin(r, &origin)))
+                .collect();
+            resolved.push(Resolved {
+                owner: owner.clone(),
+                category,
+                filename,
+                soname: entry.soname.clone(),
+                runpaths,
+                needed: entry.needed.clone(),
+            });
+        }
+        resolved_by_owner.push(resolved);
+    }
+
+    for entries in &mut resolved_by_owner {
+        let providers: BTreeMap<(String, String), String> = entries
+            .iter()
+            .filter(|e| !e.soname.is_empty())
+            .map(|e| ((e.category.clone(), e.soname.clone()), e.filename.clone()))
+            .collect();
+        for entry in entries.iter_mut() {
+            let mut implicit = Vec::new();
+            for soname in &entry.needed {
+                if let Some(provider_filename) =
+                    providers.get(&(entry.category.clone(), soname.clone()))
+                {
+                    let provider_dir = Path::new(provider_filename)
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if !entry.runpaths.contains(&provider_dir) {
+                        implicit.push(provider_dir);
+                    }
+                }
+            }
+            entry.runpaths.extend(implicit);
+        }
+    }
+
+    let mut map = LinkageMap::default();
+    for entries in &resolved_by_owner {
+        for entry in entries {
+            let key = obj_key(root, &entry.filename);
+            if let Some(existing) = map.obj_properties.get_mut(&key) {
+                existing.alt_paths.push(entry.filename.clone());
+                continue;
+            }
+            map.obj_properties.insert(
+                key.clone(),
+                ObjProperties {
+                    category: entry.category.clone(),
+                    needed: entry.needed.iter().cloned().collect(),
+                    runpaths: entry.runpaths.clone(),
+                    soname: entry.soname.clone(),
+                    alt_paths: vec![entry.filename.clone()],
+                    owner: entry.owner.clone(),
+                },
+            );
+
+            let arch_map = map.libs.entry(entry.category.clone()).or_default();
+            if !entry.soname.is_empty() {
+                arch_map
+                    .entry(entry.soname.clone())
+                    .or_default()
+                    .providers
+                    .insert(key.clone());
+            }
+            for needed_soname in &entry.needed {
+                arch_map
+                    .entry(needed_soname.clone())
+                    .or_default()
+                    .consumers
+                    .insert(key.clone());
+            }
+        }
+    }
+    map
+}
+
+/// Real `os.path.dirname`: everything before the last `/`, or `""` if
+/// there is none -- unlike `Path::parent()`, `dirname("/foo")` is `"/"`
+/// (not `None`), matching real Python's own behavior exactly (needed
+/// here since `$ORIGIN`/soname-symlink logic both rely on that).
+fn dirname(path: &str) -> String {
+    match path.rfind('/') {
+        Some(0) => "/".to_string(),
+        Some(i) => path[..i].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Real `os.path.basename`: everything after the last `/`.
+fn basename(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) => &path[i + 1..],
+        None => path,
+    }
+}
+
+/// Real `grabfile()` (`lib/portage/util/__init__.py:156-185`), narrowed
+/// to what `getlibpaths`'s own `read_ld_so_conf` actually needs:
+/// whitespace-normalizes each line, strips a `#`-prefixed token onward
+/// (an inline, not just a leading, comment), skips anything left empty.
+/// A missing file degrades to an empty result, matching real
+/// `grabfile`'s own tolerance for a nonexistent file.
+fn grab_lines(path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let tokens: Vec<&str> = line
+                .split_whitespace()
+                .take_while(|tok| !tok.starts_with('#'))
+                .collect();
+            if tokens.is_empty() {
+                None
+            } else {
+                Some(tokens.join(" "))
+            }
+        })
+        .collect()
+}
+
+/// Real `getlibpaths()` (`lib/portage/util/__init__.py:1945-1963`): the
+/// real default dynamic-linker library search path -- `LD_LIBRARY_PATH`
+/// (explicit parameter here, not an ambient env read, the same
+/// "explicit parameter over ambient env read inside library code"
+/// reasoning `portage_fetch::FetchOptions::gentoo_mirrors` already
+/// established), every line of the real, root-scoped `/etc/ld.so.conf`
+/// (real `grabfile` semantics, see `grab_lines`), then the real
+/// `/usr/lib`/`/lib` defaults -- each `normalize_path`'d. Real
+/// `/etc/ld.so.conf.d/*.conf`'s own `include` directive expansion is
+/// deliberately not reproduced here, the same v1 cut portuale's own
+/// `env_update.rs` module doc comment already documents and confirmed
+/// with the user for the *other* real `/etc/ld.so.conf` reader in this
+/// portuale (`run_env_update`'s own candidate-lib-dir scan) -- a rare,
+/// admin-configured mechanism, not populated by anything portuale's
+/// own fixtures do.
+pub fn getlibpaths(root: &Path, ld_library_path: Option<&str>) -> Vec<String> {
+    let mut rval: Vec<String> = ld_library_path
+        .unwrap_or("")
+        .split(':')
+        .map(String::from)
+        .collect();
+    rval.extend(grab_lines(&root.join("etc/ld.so.conf")));
+    rval.push("/usr/lib".to_string());
+    rval.push("/lib".to_string());
+    rval.into_iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| normalize_path(&s))
+        .collect()
+}
+
+/// Real `portage.util.digraph`, narrowed to exactly what real
+/// `_find_libs_to_preserve()` uses: `add(node, parent)` (real "adds the
+/// specified node with the specified parent" -- an edge where `parent`
+/// depends on `node`), `root_nodes()` (real: nodes with no parent --
+/// nothing in the graph depends on them), and `child_nodes()` (real:
+/// what a node itself depends on). Nodes are `ObjKey`s here (real
+/// `_LibGraphNode` wraps an `_ObjectKey`, the exact same real dedup-by-
+/// inode identity `ObjKey` already gives this port); `alt_paths` are
+/// tracked alongside, the same real "multiple recorded paths can be the
+/// same real object" bookkeeping `path_to_node` itself does.
+#[derive(Debug, Clone, Default)]
+struct LibGraph {
+    children: BTreeMap<ObjKey, BTreeSet<ObjKey>>,
+    parents: BTreeMap<ObjKey, BTreeSet<ObjKey>>,
+    alt_paths: BTreeMap<ObjKey, BTreeSet<String>>,
+}
+
+impl LibGraph {
+    fn ensure_node(&mut self, key: &ObjKey) {
+        self.children.entry(key.clone()).or_default();
+        self.parents.entry(key.clone()).or_default();
+    }
+
+    fn add(&mut self, node: &ObjKey, parent: Option<&ObjKey>) {
+        self.ensure_node(node);
+        if let Some(parent) = parent {
+            self.ensure_node(parent);
+            self.children.get_mut(parent).unwrap().insert(node.clone());
+            self.parents.get_mut(node).unwrap().insert(parent.clone());
+        }
+    }
+
+    /// Real `path_to_node`: registers (or reuses) the graph node for
+    /// `path`'s own real object identity, recording `path` itself as one
+    /// of that node's own `alt_paths` -- deliberately *not* itself an
+    /// `add()` call (real `path_to_node` doesn't add an edge either; the
+    /// caller decides separately whether and how this node connects).
+    fn path_to_node(&mut self, root: &Path, path: &str) -> ObjKey {
+        let key = obj_key(root, path);
+        self.alt_paths
+            .entry(key.clone())
+            .or_default()
+            .insert(path.to_string());
+        key
+    }
+
+    fn root_nodes(&self) -> Vec<ObjKey> {
+        self.parents
+            .iter()
+            .filter(|(_, parents)| parents.is_empty())
+            .map(|(node, _)| node.clone())
+            .collect()
+    }
+
+    fn child_nodes(&self, node: &ObjKey) -> Vec<ObjKey> {
+        self.children
+            .get(node)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    }
+}
+
+/// Real `LinkageMap.findConsumers()` (`LinkageMapELF.py:817-960`),
+/// narrowed to the one real calling convention `_find_libs_to_preserve`
+/// itself actually uses: `obj` is always a path string (never an
+/// already-resolved `_ObjectKey`), and `exclude_providers` is always
+/// exactly one real callable (`(installed_instance.isowner,)`, a real
+/// 1-tuple at the one real call site) rather than a general collection
+/// -- `exclude_provider: Option<&dyn Fn(&str) -> bool>` here.
+///
+/// Real "shadowed by another version" check first: if a same-directory
+/// soname symlink exists and doesn't actually point at `obj` itself
+/// (dev/inode comparison), `obj` has no consumers of its own (real bug
+/// context: binutils-style per-`CHOST` symlink indirection). Then real
+/// `exclude_providers`/`greedy` consumer-satisfaction filtering: a
+/// consumer is dropped from the result if some *other*, non-excluded
+/// provider of the same soname already satisfies it (found in its own
+/// runpath or the real default lib path, `defpath`) -- so only
+/// consumers that would actually break stay in the result. Finally, only
+/// consumers that can actually *reach* `obj` itself (`obj`'s own
+/// directory is in the consumer's own runpath or `defpath`) are
+/// returned at all.
+///
+/// `Err` for a real `KeyError` (matching portuale's own established
+/// error-string convention) -- `obj` itself not a real indexed object at
+/// all.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+pub fn find_consumers(
+    root: &Path,
+    map: &LinkageMap,
+    defpath: &[String],
+    obj: &str,
+    exclude_provider: Option<&dyn Fn(&str) -> bool>,
+    greedy: bool,
+) -> Result<BTreeSet<String>, String> {
+    let obj_key_val = obj_key(root, obj);
+    let Some(obj_props) = map.obj_properties.get(&obj_key_val) else {
+        return Err(format!("{obj_key_val:?} ({obj}) not in object list"));
+    };
+
+    // Real shadowed-by-symlink check.
+    if !obj_props.soname.is_empty() {
+        let soname_link = root
+            .join(dirname(obj).trim_start_matches('/'))
+            .join(&obj_props.soname);
+        let obj_path = root.join(obj.trim_start_matches('/'));
+        if let (Ok(soname_st), Ok(obj_st)) = (
+            std::fs::metadata(&soname_link),
+            std::fs::metadata(&obj_path),
+        ) {
+            use std::os::unix::fs::MetadataExt;
+            if (obj_st.dev(), obj_st.ino()) != (soname_st.dev(), soname_st.ino()) {
+                return Ok(BTreeSet::new());
+            }
+        }
+    }
+
+    let category = &obj_props.category;
+    let soname = &obj_props.soname;
+    let soname_node = map
+        .libs
+        .get(category)
+        .and_then(|arch_map| arch_map.get(soname));
+
+    let defpath_keys: BTreeSet<ObjKey> = defpath.iter().map(|p| obj_key(root, p)).collect();
+    let mut satisfied_consumer_keys: BTreeSet<ObjKey> = BTreeSet::new();
+
+    if let Some(soname_node) = soname_node
+        && (exclude_provider.is_some() || !greedy)
+    {
+        let mut relevant_dir_keys: BTreeSet<ObjKey> = BTreeSet::new();
+        for provider_key in &soname_node.providers {
+            if !greedy && *provider_key == obj_key_val {
+                continue;
+            }
+            let Some(provider_props) = map.obj_properties.get(provider_key) else {
+                continue;
+            };
+            for p in &provider_props.alt_paths {
+                let excluded = exclude_provider.is_some_and(|f| f(p));
+                if !excluded {
+                    relevant_dir_keys.insert(obj_key(root, &dirname(p)));
+                }
+            }
+        }
+
+        if !relevant_dir_keys.is_empty() {
+            for consumer_key in &soname_node.consumers {
+                let Some(consumer_props) = map.obj_properties.get(consumer_key) else {
+                    continue;
+                };
+                let mut path_keys = defpath_keys.clone();
+                path_keys.extend(consumer_props.runpaths.iter().map(|p| obj_key(root, p)));
+                if relevant_dir_keys.intersection(&path_keys).next().is_some() {
+                    satisfied_consumer_keys.insert(consumer_key.clone());
+                }
+            }
+        }
+    }
+
+    let mut result = BTreeSet::new();
+    if let Some(soname_node) = soname_node {
+        let objs_dir_key = obj_key(root, &dirname(obj));
+        for consumer_key in &soname_node.consumers {
+            if satisfied_consumer_keys.contains(consumer_key) {
+                continue;
+            }
+            let Some(consumer_props) = map.obj_properties.get(consumer_key) else {
+                continue;
+            };
+            let mut path_keys = defpath_keys.clone();
+            path_keys.extend(consumer_props.runpaths.iter().map(|p| obj_key(root, p)));
+            if path_keys.contains(&objs_dir_key) {
+                result.extend(consumer_props.alt_paths.iter().cloned());
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Real `dblink._find_libs_to_preserve()` (`vartree.py:3491-3595`),
+/// narrowed to its own pure computation: the real gating conditions
+/// (`_linkmap_broken`, `_plib_registry is None`, `FEATURES=preserve-libs`
+/// off, no `_installed_instance`) are the *caller's* own responsibility
+/// to check before calling this at all -- see this module's own doc
+/// comment for why wiring this into a real merge/unmerge is deliberately
+/// not part of this slice.
+///
+/// `old_contents`: the *previous* same-slot instance's own real
+/// `CONTENTS` paths (real `installed_instance.getcontents()`) -- already
+/// `ROOT`-relative absolute paths in portuale's own convention, unlike
+/// real Python's own `f_abs[root_len:]` stripping (which starts from a
+/// `ROOT`-joined absolute path; portuale's `CONTENTS` entries never
+/// carry `ROOT` in the first place, so there's nothing to strip).
+/// `old_owner_is_owner`: real `installed_instance.isowner` (does the
+/// *old*, being-replaced/removed instance own this path). `new_owner_is_
+/// owner`: real `self.isowner`, gated by real `not unmerge` at the one
+/// real call site that matters (`vartree.py:3585`/`3589`) -- folded into
+/// this closure by the caller instead of a separate `unmerge: bool`
+/// parameter: a real unmerge-only caller passes a closure that always
+/// returns `false`, exactly matching what `not unmerge and self.isowner
+/// (f)` collapses to when `unmerge` is `true`.
+///
+/// Real algorithm: build a dependency graph from real `findConsumers`
+/// results (an edge from each provider to each of its own real
+/// consumers, skipping a consumer that's itself being removed and isn't
+/// also a provider); walk from every real "root" consumer (nothing
+/// depends on it, and it isn't itself a provider) to find every provider
+/// transitively reachable -- those are the real preserve candidates.
+/// For each, real hardlink/soname-symlink classification decides what to
+/// actually preserve (skipping a candidate the *new* package already
+/// replaces both the real file *and* the soname symlink for).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+pub fn find_libs_to_preserve(
+    root: &Path,
+    map: &LinkageMap,
+    defpath: &[String],
+    old_contents: &[String],
+    old_owner_is_owner: &dyn Fn(&str) -> bool,
+    new_owner_is_owner: &dyn Fn(&str) -> bool,
+) -> BTreeSet<String> {
+    let mut graph = LibGraph::default();
+    let mut consumer_map: BTreeMap<ObjKey, BTreeSet<String>> = BTreeMap::new();
+    let mut provider_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+
+    for f in old_contents {
+        let Ok(consumers) = find_consumers(root, map, defpath, f, Some(old_owner_is_owner), true)
+        else {
+            continue;
+        };
+        if consumers.is_empty() {
+            continue;
+        }
+        let provider_node = graph.path_to_node(root, f);
+        graph.add(&provider_node, None);
+        provider_nodes.insert(provider_node.clone());
+        consumer_map.insert(provider_node, consumers);
+    }
+
+    for (provider_node, consumers) in &consumer_map {
+        for c in consumers {
+            let consumer_node = graph.path_to_node(root, c);
+            if old_owner_is_owner(c) && !provider_nodes.contains(&consumer_node) {
+                continue;
+            }
+            graph.add(provider_node, Some(&consumer_node));
+        }
+    }
+
+    let mut preserve_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+    for consumer_node in graph.root_nodes() {
+        if provider_nodes.contains(&consumer_node) {
+            continue;
+        }
+        let mut node_stack = graph.child_nodes(&consumer_node);
+        while let Some(provider_node) = node_stack.pop() {
+            if preserve_nodes.contains(&provider_node) {
+                continue;
+            }
+            preserve_nodes.insert(provider_node.clone());
+            node_stack.extend(graph.child_nodes(&provider_node));
+        }
+    }
+
+    let mut preserve_paths: BTreeSet<String> = BTreeSet::new();
+    for preserve_node in &preserve_nodes {
+        let Some(alt_paths) = graph.alt_paths.get(preserve_node) else {
+            continue;
+        };
+        let mut hardlinks: BTreeSet<String> = BTreeSet::new();
+        let mut soname_symlinks: BTreeSet<String> = BTreeSet::new();
+        let soname = map
+            .obj_properties
+            .get(preserve_node)
+            .map(|p| p.soname.clone())
+            .unwrap_or_default();
+        let mut have_replacement_soname_link = false;
+        let mut have_replacement_hardlink = false;
+
+        for f in alt_paths {
+            let f_abs = root.join(f.trim_start_matches('/'));
+            let Ok(meta) = std::fs::symlink_metadata(&f_abs) else {
+                continue;
+            };
+            if meta.file_type().is_file() {
+                hardlinks.insert(f.clone());
+                if new_owner_is_owner(f) {
+                    have_replacement_hardlink = true;
+                    if basename(f) == soname {
+                        have_replacement_soname_link = true;
+                    }
+                }
+            } else if basename(f) == soname {
+                soname_symlinks.insert(f.clone());
+                if new_owner_is_owner(f) {
+                    have_replacement_soname_link = true;
+                }
+            }
+        }
+
+        if have_replacement_hardlink && have_replacement_soname_link {
+            continue;
+        }
+
+        if !hardlinks.is_empty() {
+            preserve_paths.extend(hardlinks);
+            preserve_paths.extend(soname_symlinks);
+        }
+    }
+
+    preserve_paths
+}
+
+/// Every recorded path of every object that lists `soname` in its own
+/// `DT_NEEDED` -- a soname-keyed reverse lookup across all multilib
+/// categories. Used by `ebuild_merge::find_unused_preserved_libs` as the
+/// fallback consumer scan for a preserved library whose owning package
+/// has already left the vdb (so the library itself is no longer an
+/// indexed object -- real portage's own `scanelf`-for-orphaned-
+/// preserved-libs `rebuild()` branch, `LinkageMapELF.py:233-324`, keeps
+/// such a library in the map; portuale deliberately never ported that
+/// branch, so this basename==soname reverse lookup stands in for it).
+pub fn soname_consumers(map: &LinkageMap, soname: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for arch_map in map.libs.values() {
+        let Some(node) = arch_map.get(soname) else {
+            continue;
+        };
+        for consumer_key in &node.consumers {
+            if let Some(props) = map.obj_properties.get(consumer_key) {
+                out.extend(props.alt_paths.iter().cloned());
+            }
+        }
+    }
+    out
+}
+
+/// Real `_find_unneeded_preserved_nodes()` (`vartree.py:1899-1943`):
+/// given `consumers_by_preserved` (a registered preserved-library path
+/// -> the paths that link against it, both sides already filtered to
+/// files that exist on disk -- a preserved consumer is kept in the map
+/// so cycle propagation works), return the subset of `preserved_paths`
+/// that nothing needs.
+///
+/// A preserved library is *needed* iff it has a consumer that is not
+/// itself a preserved library, or a consumer that is a preserved library
+/// which is itself needed (transitively). Everything else is unneeded --
+/// including a group of preserved libraries that only consume each other
+/// in a cycle with no outside consumer (real bug 652382). Paths are
+/// deduplicated by real `_obj_key` (dev/inode) so a hardlink alias
+/// counts once.
+pub fn find_unneeded_preserved(
+    root: &Path,
+    consumers_by_preserved: &BTreeMap<String, BTreeSet<String>>,
+    preserved_paths: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let exists = |p: &str| std::fs::symlink_metadata(root.join(p.trim_start_matches('/'))).is_ok();
+
+    let mut alt_paths: BTreeMap<ObjKey, BTreeSet<String>> = BTreeMap::new();
+    let mut preserved_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+    for p in preserved_paths {
+        if !exists(p) {
+            continue;
+        }
+        let key = obj_key(root, p);
+        alt_paths.entry(key.clone()).or_default().insert(p.clone());
+        preserved_nodes.insert(key);
+    }
+
+    // `children[c]` = preserved libs consumed by `c`; `parents[p]` = the
+    // consumers of preserved lib `p`.
+    let mut children: BTreeMap<ObjKey, BTreeSet<ObjKey>> = BTreeMap::new();
+    let mut parents: BTreeMap<ObjKey, BTreeSet<ObjKey>> = BTreeMap::new();
+    for (pres, consumers) in consumers_by_preserved {
+        let pk = obj_key(root, pres);
+        if !preserved_nodes.contains(&pk) {
+            continue;
+        }
+        for c in consumers {
+            if !exists(c) {
+                continue;
+            }
+            let ck = obj_key(root, c);
+            alt_paths.entry(ck.clone()).or_default().insert(c.clone());
+            children.entry(ck.clone()).or_default().insert(pk.clone());
+            parents.entry(pk.clone()).or_default().insert(ck.clone());
+        }
+    }
+
+    let mut needed: BTreeSet<ObjKey> = BTreeSet::new();
+    let mut stack: Vec<ObjKey> = Vec::new();
+    for pn in &preserved_nodes {
+        let has_outside_consumer = parents
+            .get(pn)
+            .into_iter()
+            .flatten()
+            .any(|c| !preserved_nodes.contains(c));
+        if has_outside_consumer {
+            needed.insert(pn.clone());
+            stack.push(pn.clone());
+        }
+    }
+    while let Some(node) = stack.pop() {
+        for child in children.get(&node).into_iter().flatten() {
+            if preserved_nodes.contains(child) && needed.insert(child.clone()) {
+                stack.push(child.clone());
+            }
+        }
+    }
+
+    let mut out = BTreeSet::new();
+    for pn in &preserved_nodes {
+        if !needed.contains(pn)
+            && let Some(paths) = alt_paths.get(pn)
+        {
+            out.extend(paths.iter().cloned());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+
+    #[test]
+    fn parse_reads_a_real_minimal_five_field_line() {
+        // Real, live-verified output for a real dynamically-linked ELF
+        // binary with no DT_SONAME of its own (`/usr/bin/true`, see
+        // `ebuild_merge.rs`'s own `real_merge_copies_a_real_needed_elf2_
+        // into_the_vdb` test): the empty soname field is exactly why
+        // real scanelf is never invoked with `-q`.
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6").unwrap();
+        assert_eq!(entry.arch, "X86_64");
+        assert_eq!(entry.filename, "/usr/bin/true");
+        assert_eq!(entry.soname, "");
+        assert_eq!(entry.runpaths, Vec::<String>::new());
+        assert_eq!(entry.needed, vec!["libc.so.6".to_string()]);
+        assert_eq!(entry.multilib_category, None);
+    }
+
+    #[test]
+    fn parse_reads_a_soname_multiple_rpaths_and_multiple_needed() {
+        let entry = NeededEntry::parse(
+            "X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;/usr/lib/foo:/usr/lib/bar;libc.so.6,libm.so.6",
+        )
+        .unwrap();
+        assert_eq!(entry.soname, "libfoo.so.1");
+        assert_eq!(
+            entry.runpaths,
+            vec!["/usr/lib/foo".to_string(), "/usr/lib/bar".to_string()]
+        );
+        assert_eq!(
+            entry.needed,
+            vec!["libc.so.6".to_string(), "libm.so.6".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_treats_the_real_dash_sentinel_rpath_as_empty() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;  -  ;libc.so.6").unwrap();
+        assert_eq!(entry.runpaths, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_reads_the_optional_sixth_multilib_category_field() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;x86_64").unwrap();
+        assert_eq!(entry.multilib_category, Some("x86_64".to_string()));
+    }
+
+    #[test]
+    fn parse_treats_an_empty_sixth_field_as_no_multilib_category() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;").unwrap();
+        assert_eq!(entry.multilib_category, None);
+    }
+
+    #[test]
+    fn parse_ignores_extra_fields_beyond_the_sixth() {
+        let entry =
+            NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;x86_64;future;fields").unwrap();
+        assert_eq!(entry.multilib_category, Some("x86_64".to_string()));
+    }
+
+    #[test]
+    fn parse_rejects_a_line_with_fewer_than_five_fields() {
+        assert_eq!(NeededEntry::parse("X86_64;/usr/bin/true;;"), None);
+        assert_eq!(NeededEntry::parse(""), None);
+    }
+
+    #[test]
+    fn parse_file_skips_malformed_lines_and_keeps_going() {
+        let text = "X86_64;/usr/bin/true;;;libc.so.6\n\
+                     bad-line\n\
+                     X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;\n";
+        let entries = NeededEntry::parse_file(text);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].filename, "/usr/bin/true");
+        assert_eq!(entries[1].filename, "/usr/lib/libfoo.so.1");
+    }
+
+    #[test]
+    fn to_needed_line_round_trips_through_parse() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;x86_64").unwrap();
+        let line = entry.to_needed_line();
+        let reparsed = NeededEntry::parse(line.trim_end_matches('\n')).unwrap();
+        assert_eq!(entry, reparsed);
+    }
+
+    /// Real `__str__`'s own two asymmetries from the read side: an empty
+    /// `runpaths` serializes as a plain empty string, never the `"  -  "`
+    /// sentinel `scanelf` itself emits; the 6th field is always present
+    /// (as `""` when `None`), even though the original 5-field line
+    /// omitted it entirely.
+    #[test]
+    fn to_needed_line_writes_the_portage_rewrite_format_not_the_scanelf_read_format() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;  -  ;libc.so.6").unwrap();
+        assert_eq!(
+            entry.to_needed_line(),
+            "X86_64;/usr/bin/true;;;libc.so.6;\n"
+        );
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        TempDir::new("portuale-needed-elf-test").keep()
+    }
+
+    #[test]
+    fn read_all_needed_entries_covers_every_installed_package_including_ones_without_one() {
+        let root = tempdir();
+        let with_needed = root.join("var/db/pkg/dev-libs/withneeded-1.0");
+        let without_needed = root.join("var/db/pkg/dev-libs/withoutneeded-1.0");
+        std::fs::create_dir_all(&with_needed).unwrap();
+        std::fs::create_dir_all(&without_needed).unwrap();
+        std::fs::write(
+            with_needed.join("NEEDED.ELF.2"),
+            "X86_64;/usr/bin/withneeded;;;libc.so.6\n",
+        )
+        .unwrap();
+
+        let all = read_all_needed_entries(&root);
+        assert_eq!(
+            all,
+            vec![
+                (
+                    "dev-libs/withneeded-1.0".to_string(),
+                    vec![NeededEntry::parse("X86_64;/usr/bin/withneeded;;;libc.so.6").unwrap()]
+                ),
+                ("dev-libs/withoutneeded-1.0".to_string(), vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_all_needed_entries_degrades_gracefully_when_var_db_pkg_is_missing() {
+        let root = tempdir();
+        assert_eq!(read_all_needed_entries(&root), Vec::new());
+    }
+
+    fn make_object(root: &std::path::Path, relative: &str) {
+        let abs = root.join(relative.trim_start_matches('/'));
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(&abs, b"fake elf content").unwrap();
+    }
+
+    #[test]
+    fn rebuild_indexes_a_simple_provider_and_consumer() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/consumer");
+
+        let owner_entries = vec![
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/consumer-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/consumer;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+
+        let map = rebuild(&root, &owner_entries);
+        let soname_map = &map.libs["x86_64"]["libfoo.so.1"];
+        let provider_key = obj_key(&root, "/usr/lib/libfoo.so.1");
+        let consumer_key = obj_key(&root, "/usr/bin/consumer");
+        assert!(soname_map.providers.contains(&provider_key));
+        assert!(soname_map.consumers.contains(&consumer_key));
+        assert_eq!(
+            map.obj_properties[&provider_key].owner,
+            "dev-libs/provider-1.0"
+        );
+    }
+
+    #[test]
+    fn rebuild_falls_back_to_the_approx_multilib_category_when_the_field_is_absent() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        let owner_entries = vec![(
+            "dev-libs/provider-1.0".to_string(),
+            vec![NeededEntry::parse("AARCH64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        assert!(
+            map.libs.contains_key("arm_64"),
+            "{:?}",
+            map.libs.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rebuild_expands_origin_in_runpaths() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/foo/consumer");
+        let owner_entries = vec![(
+            "dev-libs/pkg-1.0".to_string(),
+            vec![
+                NeededEntry::parse("X86_64;/usr/lib/foo/consumer;;$ORIGIN/../bar;libfoo.so.1")
+                    .unwrap(),
+            ],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let key = obj_key(&root, "/usr/lib/foo/consumer");
+        assert_eq!(
+            map.obj_properties[&key].runpaths,
+            vec!["/usr/lib/bar".to_string()]
+        );
+    }
+
+    #[test]
+    fn rebuild_infers_an_implicit_runpath_for_a_same_owner_bundled_provider() {
+        let root = tempdir();
+        make_object(&root, "/opt/bundled/libbundled.so.1");
+        make_object(&root, "/opt/bundled/consumer");
+        // Same owner, no explicit rpath on the consumer -- real bundled-
+        // library internal resolution (LinkageMapELF.py:380-410).
+        let owner_entries = vec![(
+            "dev-libs/pkg-1.0".to_string(),
+            vec![
+                NeededEntry::parse("X86_64;/opt/bundled/libbundled.so.1;libbundled.so.1;;")
+                    .unwrap(),
+                NeededEntry::parse("X86_64;/opt/bundled/consumer;;;libbundled.so.1").unwrap(),
+            ],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let key = obj_key(&root, "/opt/bundled/consumer");
+        assert_eq!(
+            map.obj_properties[&key].runpaths,
+            vec!["/opt/bundled".to_string()]
+        );
+    }
+
+    #[test]
+    fn rebuild_does_not_infer_an_implicit_runpath_across_different_owners() {
+        let root = tempdir();
+        make_object(&root, "/opt/a/libshared.so.1");
+        make_object(&root, "/opt/b/consumer");
+        let owner_entries = vec![
+            (
+                "dev-libs/a-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/opt/a/libshared.so.1;libshared.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/b-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/opt/b/consumer;;;libshared.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let key = obj_key(&root, "/opt/b/consumer");
+        assert!(map.obj_properties[&key].runpaths.is_empty());
+    }
+
+    #[test]
+    fn rebuild_dedups_the_same_real_object_reached_via_two_recorded_paths() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/real-lib.so.1");
+        let real = root.join("usr/lib/real-lib.so.1");
+        let hardlink = root.join("usr/lib/alt-name.so.1");
+        std::fs::hard_link(&real, &hardlink).unwrap();
+
+        let owner_entries = vec![(
+            "dev-libs/pkg-1.0".to_string(),
+            vec![
+                NeededEntry::parse("X86_64;/usr/lib/real-lib.so.1;real-lib.so.1;;").unwrap(),
+                NeededEntry::parse("X86_64;/usr/lib/alt-name.so.1;real-lib.so.1;;").unwrap(),
+            ],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        assert_eq!(map.obj_properties.len(), 1, "{:?}", map.obj_properties);
+        let (_, props) = map.obj_properties.iter().next().unwrap();
+        assert_eq!(
+            props.alt_paths,
+            vec![
+                "/usr/lib/real-lib.so.1".to_string(),
+                "/usr/lib/alt-name.so.1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn obj_key_falls_back_to_a_path_key_when_the_object_no_longer_exists() {
+        let root = tempdir();
+        assert_eq!(
+            obj_key(&root, "/usr/lib/gone.so.1"),
+            ObjKey::Path("/usr/lib/gone.so.1".to_string())
+        );
+    }
+
+    #[test]
+    fn obj_key_uses_the_real_inode_when_the_object_exists() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/real.so.1");
+        assert!(matches!(
+            obj_key(&root, "/usr/lib/real.so.1"),
+            ObjKey::Inode(_, _)
+        ));
+    }
+
+    #[test]
+    fn getlibpaths_reads_ld_so_conf_and_appends_the_real_defaults() {
+        let root = tempdir();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(
+            root.join("etc/ld.so.conf"),
+            "# a comment\n/opt/foo/lib\n/opt/bar/lib # inline comment\n\n",
+        )
+        .unwrap();
+
+        let paths = getlibpaths(&root, None);
+        assert_eq!(
+            paths,
+            vec![
+                "/opt/foo/lib".to_string(),
+                "/opt/bar/lib".to_string(),
+                "/usr/lib".to_string(),
+                "/lib".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn getlibpaths_includes_ld_library_path_when_given() {
+        let root = tempdir();
+        let paths = getlibpaths(&root, Some("/opt/a/lib:/opt/b/lib"));
+        assert_eq!(
+            paths,
+            vec![
+                "/opt/a/lib".to_string(),
+                "/opt/b/lib".to_string(),
+                "/usr/lib".to_string(),
+                "/lib".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn getlibpaths_degrades_gracefully_when_ld_so_conf_is_missing() {
+        let root = tempdir();
+        assert_eq!(
+            getlibpaths(&root, None),
+            vec!["/usr/lib".to_string(), "/lib".to_string()]
+        );
+    }
+
+    #[test]
+    fn find_consumers_finds_a_consumer_via_the_default_lib_path() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers =
+            find_consumers(&root, &map, &defpath, "/usr/lib/libfoo.so.1", None, true).unwrap();
+        assert_eq!(consumers, BTreeSet::from(["/usr/bin/app".to_string()]));
+    }
+
+    #[test]
+    fn find_consumers_requires_the_providers_own_directory_to_be_reachable() {
+        let root = tempdir();
+        make_object(&root, "/opt/hidden/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/opt/hidden/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        // Not "/opt/hidden" -- app's own runpath and the default lib
+        // path both miss it, so it can never actually be found.
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers =
+            find_consumers(&root, &map, &defpath, "/opt/hidden/libfoo.so.1", None, true).unwrap();
+        assert!(consumers.is_empty());
+    }
+
+    #[test]
+    fn find_consumers_excludes_a_consumer_already_satisfied_by_a_non_excluded_provider() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/excluded/libfoo.so.1");
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/excluded-1.0".to_string(),
+                vec![
+                    NeededEntry::parse("X86_64;/usr/lib/excluded/libfoo.so.1;libfoo.so.1;;")
+                        .unwrap(),
+                ],
+            ),
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let exclude = |p: &str| p == "/usr/lib/excluded/libfoo.so.1";
+
+        // Querying the excluded provider: app is satisfied elsewhere
+        // (the real, non-excluded /usr/lib/libfoo.so.1), so it's not
+        // reported as a real consumer of the excluded one.
+        let consumers = find_consumers(
+            &root,
+            &map,
+            &defpath,
+            "/usr/lib/excluded/libfoo.so.1",
+            Some(&exclude),
+            true,
+        )
+        .unwrap();
+        assert!(consumers.is_empty(), "{consumers:?}");
+    }
+
+    #[test]
+    fn find_consumers_returns_empty_for_an_object_shadowed_by_a_different_soname_symlink() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1.2.3");
+        // A same-directory soname symlink pointing at a DIFFERENT real
+        // file -- the real object queried below is shadowed.
+        make_object(&root, "/usr/lib/other.so.1");
+        std::os::unix::fs::symlink(
+            root.join("usr/lib/other.so.1"),
+            root.join("usr/lib/libfoo.so.1"),
+        )
+        .unwrap();
+
+        let owner_entries = vec![(
+            "dev-libs/provider-1.0".to_string(),
+            vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1.2.3;libfoo.so.1;;").unwrap()],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers = find_consumers(
+            &root,
+            &map,
+            &defpath,
+            "/usr/lib/libfoo.so.1.2.3",
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(consumers.is_empty());
+    }
+
+    #[test]
+    fn find_consumers_errors_for_an_object_not_in_the_map() {
+        let root = tempdir();
+        let map = LinkageMap::default();
+        assert!(find_consumers(&root, &map, &[], "/nope", None, true).is_err());
+    }
+
+    #[test]
+    fn find_libs_to_preserve_preserves_a_lib_still_needed_by_a_surviving_consumer() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/oldpkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/apppkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec!["/usr/lib/libfoo.so.1".to_string()];
+        let old_owner = |p: &str| p == "/usr/lib/libfoo.so.1";
+        let new_owner = |_: &str| false;
+
+        let preserved =
+            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        assert_eq!(
+            preserved,
+            BTreeSet::from(["/usr/lib/libfoo.so.1".to_string()])
+        );
+    }
+
+    #[test]
+    fn find_libs_to_preserve_does_not_preserve_when_the_new_package_fully_replaces_it() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1.2.3");
+        // A real soname *symlink* (not a hardlink -- `alt_paths` for a
+        // preserve node is only ever populated from paths portuale's
+        // own `old_contents`/consumer walk actually mentions, matching
+        // real portage's own `path_to_node` semantics, never from a
+        // filesystem-wide inode scan; both the real file and its own
+        // soname symlink must be real `old_contents` entries in their
+        // own right, exactly as real vdb `CONTENTS` would record both).
+        std::os::unix::fs::symlink(
+            root.join("usr/lib/libfoo.so.1.2.3"),
+            root.join("usr/lib/libfoo.so.1"),
+        )
+        .unwrap();
+        make_object(&root, "/usr/bin/app");
+
+        let owner_entries = vec![
+            (
+                "dev-libs/oldpkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1.2.3;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/apppkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec![
+            "/usr/lib/libfoo.so.1.2.3".to_string(),
+            "/usr/lib/libfoo.so.1".to_string(),
+        ];
+        let old_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
+        // The *new* package being merged replaces both the real file
+        // and the soname symlink itself -- nothing to preserve.
+        let new_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
+
+        let preserved =
+            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        assert!(preserved.is_empty(), "{preserved:?}");
+    }
+
+    #[test]
+    fn find_libs_to_preserve_preserves_nothing_when_there_are_no_real_consumers() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/unused.so.1");
+        let owner_entries = vec![(
+            "dev-libs/oldpkg-1.0".to_string(),
+            vec![NeededEntry::parse("X86_64;/usr/lib/unused.so.1;unused.so.1;;").unwrap()],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec!["/usr/lib/unused.so.1".to_string()];
+        let old_owner = |p: &str| p == "/usr/lib/unused.so.1";
+        let new_owner = |_: &str| false;
+
+        let preserved =
+            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        assert!(preserved.is_empty());
+    }
+
+    /// #39: real `compute_multilib_category` (`multilib_category.py`) on
+    /// hand-built ELF headers -- one per branch of the machine/class
+    /// mapping (class suffix, x32's `EM_X86_64`+`ELFCLASS32`, the
+    /// specialized riscv/mips/loong flag logic).
+    #[test]
+    fn compute_multilib_category_classifies_real_elf_headers() {
+        fn header(class: u8, machine: u16, flags: u32) -> Vec<u8> {
+            let mut data = vec![0u8; 64];
+            data[0..4].copy_from_slice(b"\x7fELF");
+            data[4] = class;
+            data[5] = 1; // little-endian
+            data[6] = 1; // EV_CURRENT
+            data[18..20].copy_from_slice(&machine.to_le_bytes());
+            let off = if class == 2 { 48 } else { 36 };
+            data[off..off + 4].copy_from_slice(&flags.to_le_bytes());
+            data
+        }
+        let dir = tempdir();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let cat = |class, machine, flags| {
+            compute_multilib_category(&write(
+                &format!("{class}-{machine}-{flags}.elf"),
+                &header(class, machine, flags),
+            ))
+        };
+        assert_eq!(cat(2, 62, 0).as_deref(), Some("x86_64"));
+        assert_eq!(cat(1, 3, 0).as_deref(), Some("x86_32"));
+        assert_eq!(cat(1, 62, 0).as_deref(), Some("x86_x32"));
+        assert_eq!(cat(2, 183, 0).as_deref(), Some("arm_64"));
+        assert_eq!(cat(1, 40, 0).as_deref(), Some("arm_32"));
+        assert_eq!(cat(2, 243, 0x0005).as_deref(), Some("riscv_lp64d"));
+        assert_eq!(cat(2, 243, 0x0001).as_deref(), Some("riscv_lp64"));
+        assert_eq!(cat(2, 8, 0).as_deref(), Some("mips_n64"));
+        assert_eq!(cat(1, 8, 0x0000_2000).as_deref(), Some("mips_o64"));
+        assert_eq!(cat(2, 258, 0b011).as_deref(), Some("loong_lp64d"));
+        // A non-ELF file and an unknown machine both yield real's `None`.
+        assert_eq!(compute_multilib_category(&write("not-elf", b"hello")), None);
+        assert_eq!(cat(2, 0xffff, 0), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #39: real `SonameDepsProcessor` output -- provides become
+    /// `PROVIDES`, needed sonames become `REQUIRES` unless the package
+    /// itself provides them, and the exclude patterns filter both.
+    #[test]
+    fn generate_soname_deps_matches_the_portage_soname_deps_processor() {
+        let entries = vec![
+            NeededEntry::parse("X86_64;/usr/bin/x;;;libc.so.6;x86_64").unwrap(),
+            NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64").unwrap(),
+            // Consumes the soname it also provides: must not land in
+            // REQUIRES (real `_intersect`).
+            NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;libfoo.so.1;x86_64")
+                .unwrap(),
+        ];
+        let (provides, requires) = generate_soname_deps(&entries, "", "");
+        assert_eq!(provides.as_deref(), Some("x86_64: libfoo.so.1\n"));
+        assert_eq!(requires.as_deref(), Some("x86_64: libc.so.6\n"));
+
+        // Real `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` globs.
+        let (provides, requires) = generate_soname_deps(&entries, "libfoo.so*", "libc.so*");
+        assert_eq!(provides, None);
+        assert_eq!(requires, None);
+
+        // An entry with no multilib category is the caller's own
+        // "unrecognized ELF" case and contributes nothing.
+        let no_cat = vec![NeededEntry::parse("X86_64;/usr/bin/x;;;libc.so.6;").unwrap()];
+        assert_eq!(generate_soname_deps(&no_cat, "", ""), (None, None));
+    }
+}

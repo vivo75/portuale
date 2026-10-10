@@ -1,0 +1,5777 @@
+// Real `emerge --buildpkgonly` execution, WITHOUT `--pretend`: actually
+// builds a binary package for every entry pretend.rs's own dry-run gate
+// already proved is safe to build. `GraphResult::buildpkgonly_deps_unsatisfied`
+// being `false` (the gate `pretend.rs` already checks before calling
+// anything here) means no needs-building entry's own `required_by` set
+// includes another needs-building entry -- i.e. none of them depend on
+// each other at all, real `--buildpkgonly`'s whole point (every real
+// dependency must already be satisfied by something already installed) --
+// so there is no cross-entry build ordering to compute here, unlike a
+// real merge's own topological sort.
+//
+// Reuses `ebuild_package::run_package` (task #105-#109) as-is: "package"
+// IS the real, unmodified `doebuild()` action `--buildpkgonly` itself is
+// built on (see `resolve_pretend_graph`'s own doc comment -- real
+// `--buildpkgonly` is a resolution-time depgraph check, not a distinct
+// execution mode of its own). `run_package`'s own `install` chain now
+// really fetches a nonempty `SRC_URI` too (see `ebuild_phases::
+// fetch_sources`/`crate::fetch`'s own module doc comments) -- this
+// module used to refuse any entry with a real `SRC_URI` outright (no
+// fetch machinery existed yet); that refusal is gone now that fetching
+// is real, and a fetch/digest failure simply surfaces as an ordinary
+// `run_package` error like any other build failure would.
+//
+// `GraphEntry` doesn't carry the winning candidate's own repo location
+// (see its own doc comment -- deliberately not threaded through the
+// whole graph-resolution/Python-mirror pair, which has no real-execution
+// need for it at all). `locate_candidate` re-derives it via
+// `portage_repo::list_candidates`, the same repo/version lookup
+// `resolve_pretend_graph` already did internally to pick this entry's
+// winning version in the first place.
+//
+// KNOWN, DOCUMENTED GAPS (same "narrow v1, document the cut" pattern as
+// every other real-execution slice in portuale):
+//   - A `CandidateSource::Binary` entry (would only appear via
+//     `--usepkg`) is skipped outright -- it's already a binary, there is
+//     nothing to build.
+//   - Builds run strictly in `entries` order, which `resolve_pretend_graph`
+//     now returns in real portage's dependency-first *merge* order
+//     (`topological_merge_order`) -- so even if the `--buildpkgonly` gate
+//     above were relaxed, a dep would still build before its dependent.
+//   - A build failure aborts immediately, unless real `--keep-going` is
+//     given (now real, see `run_buildpkgonly`'s own doc comment) -- no
+//     cleanup of any already-built packages either way, portuale's
+//     own single-invocation-at-a-time CLI usage never needs partial-
+//     build cleanup.
+
+use crate::ebuild_merge;
+use crate::ebuild_package::{self, PackageOptions};
+use crate::ebuild_phases;
+use portage_repo::{Candidate, CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
+use std::path::{Path, PathBuf};
+
+/// The version this entry would actually build at, or `None` for an
+/// outcome real `--buildpkgonly` never builds anything for
+/// (`AlreadyInstalled`/`NoVisibleCandidate` -- the latter can't reach
+/// here at all, since it aborts the whole resolution before any
+/// `GraphEntry` exists for it).
+fn entry_version(outcome: &PretendOutcome) -> Option<&str> {
+    match outcome {
+        PretendOutcome::New { version } => Some(version),
+        PretendOutcome::Upgrade { to, .. } => Some(to),
+        PretendOutcome::Downgrade { to, .. } => Some(to),
+        PretendOutcome::Reinstall { version, .. } => Some(version),
+        // #72 B3: a removal builds nothing.
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => None,
+    }
+}
+
+/// This entry's own `mtimedb["resume"]` mergelist item (`ResumeCpv`), or
+/// `None` for an entry real's `_save_resume_list` would never record
+/// (`Scheduler.py:2414-2418` only keeps `Package`s with
+/// `operation == "merge"` -- an already-installed no-op, a blocker
+/// removal, or an entry with no visible candidate merges nothing). The
+/// `ResumeEntryKind` tag comes straight from the resolved source, the
+/// same tag `entries_not_merged` (`pretend.rs`) already writes on the
+/// failure path -- so the up-front save and the per-merge shrink below
+/// name every entry identically.
+pub(crate) fn resume_cpv(entry: &GraphEntry) -> Option<crate::mtimedb::ResumeCpv> {
+    let version = entry_version(&entry.outcome)?;
+    let kind = match entry.source {
+        CandidateSource::Ebuild => crate::mtimedb::ResumeEntryKind::Ebuild,
+        CandidateSource::Binary => crate::mtimedb::ResumeEntryKind::Binary,
+    };
+    Some((
+        kind,
+        entry.category.clone(),
+        entry.package.clone(),
+        version.to_string(),
+    ))
+}
+
+/// Re-finds the winning candidate for `category/package` at exactly
+/// `version` -- the same repo/version lookup `resolve_pretend_graph`
+/// already did internally to pick this entry's winning version in the
+/// first place, just not retained on `GraphEntry` (see the module doc
+/// comment). When more than one repo has this exact version (a real, if
+/// rare, overlay-shadows-main-repo case), prefers the highest-priority
+/// repo, the same tie-break `resolve_pretend`'s own candidate selection
+/// already uses elsewhere in this crate.
+fn locate_candidate(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<Candidate> {
+    let candidates = portage_repo::list_candidates(repos, category, package).ok()?;
+    candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+        .cloned()
+}
+
+/// Real doebuild()'s own `<repo>/<category>/<package>/<package>-<version>.ebuild`
+/// path convention.
+fn ebuild_path(candidate: &Candidate, category: &str, package: &str, version: &str) -> PathBuf {
+    candidate
+        .repo_location
+        .join(category)
+        .join(package)
+        .join(format!("{package}-{version}.ebuild"))
+}
+
+/// Actually builds a binary package (never merges) for every entry in
+/// `entries` that real `--buildpkgonly` would build -- see the module
+/// doc comment for the full scope. Without `keep_going`, returns the
+/// *first* failure encountered (message already includes which package
+/// failed) and stops there, matching portuale's own long-established
+/// default. With real `--keep-going` (real `main.py`'s own `y_or_n`
+/// option, narrowed by portuale's own CLI transcription to the bare/
+/// `y` form -- see `pretend.rs`'s own `keep_going` doc comment), every
+/// entry is still attempted regardless of earlier failures -- safe here
+/// specifically because the gate `pretend.rs` already checks before
+/// calling this at all (`GraphResult::buildpkgonly_deps_unsatisfied`)
+/// guarantees no entry depends on another, so unlike real portage's own
+/// general `--keep-going` (which must also skip every *dependent* of a
+/// failed package, tracked via real `Scheduler.py`'s own mergelist
+/// recalculation), there is nothing here that a failure could ever
+/// invalidate for a later entry. Failures are collected and returned
+/// together at the end as a single combined error listing every one --
+/// `Ok(())` only once every entry has a real binary package on disk.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+pub fn run_buildpkgonly(
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &PackageOptions,
+    keep_going: bool,
+    // Backlog #197: the scheduler-display mode (background + Jobs
+    // visibility). `--buildpkgonly` prints real's `Emerging (N of M)`
+    // line through the same `_status_msg` path, so the blank rule
+    // applies; its serial loop emits no `>>> Jobs:` events (a cut,
+    // stated on `StatusDisplay`), so the mode only carries the blank
+    // half here.
+    mode: StatusMode,
+) -> Result<(), String> {
+    // The run-wide half of real `config.environ()`, once for the whole
+    // run (`--buildpkgonly` has no `MergeOptions`; `entry_phase_env_tail`
+    // adds the per-entry half). #37 S2.
+    let run_wide = run_wide_phase_env(config);
+    // Real `Scheduler._pkg_count` for this run (backlog #177).
+    let progress = merge_progress_map(entries);
+    // Backlog #197: real `Scheduler` owns one `JobStatusDisplay` per
+    // merge run (no Jobs events fire on this path -- see `mode`).
+    let total_builds = entries.iter().filter(|e| scheduler_needs_build(e)).count();
+    let display = StatusDisplay::new(mode, total_builds, progress_color());
+    let mut failures = Vec::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        if entry.source == CandidateSource::Binary {
+            continue;
+        }
+        let Some(version) = entry_version(&entry.outcome) else {
+            continue;
+        };
+        let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, version)
+        else {
+            let failure = format!(
+                "{}/{}-{version}: could not locate its own ebuild file \
+                 (repo layout changed since resolution?)",
+                entry.category, entry.package
+            );
+            if keep_going {
+                failures.push(failure);
+                continue;
+            }
+            return Err(failure);
+        };
+        let path = ebuild_path(&candidate, &entry.category, &entry.package, version);
+        // Real `MergeListItem._start`'s per-package line (backlog #177):
+        // real `--buildpkgonly` prints the same `Emerging (N of M)`
+        // line (it is not fetch-only), and -- like real, whose
+        // `PackageMerge._should_show_status` is false for buildpkgonly
+        // -- no `Installing`/`Completed` line follows. This replaces the
+        // `>>> Building binary for ...` line portuale used to print,
+        // which has no real counterpart (real builds the binpkg
+        // silently on stdout; only `emerge.log` records it, which
+        // portuale does not write -- see the S0 table).
+        let color = progress_color();
+        let entry_progress = progress[idx];
+        display.status(&emerging_line(entry, version, entry_progress, root, &color));
+        // Real per-package `package.env` (backlog #129): `--buildpkgonly`
+        // carries no `MergeOptions`, but `config` already has the
+        // resolved `package_env_vars` table (`Config::package_env_vars`),
+        // so this matches the same `cat/pkg-ver:slot/sub` identity the
+        // merge scheduler's `entry_build_env` does, just reading `config`
+        // directly instead of threading it through a `MergeOptions`.
+        let cpv_slot = entry_cpv_slot(entry, version);
+        // Real per-package `PORTAGE_TMPDIR` (backlog #99, #129 residue):
+        // re-derive the tmpdir this entry's build directories live under
+        // from its matched `package.env` value, same as the merge
+        // scheduler's `entry_portage_tmpdir`. A missing matched directory
+        // is real's `_check_temp_dir` failure and aborts the entry.
+        let process_tmpdir = std::env::var_os("PORTAGE_TMPDIR").map(PathBuf::from);
+        let entry_tmpdir = match crate::ebuild_phases::resolve_entry_portage_tmpdir(
+            &config.package_env_vars,
+            &cpv_slot,
+            portage_tmpdir,
+            process_tmpdir.as_deref(),
+        ) {
+            Ok(dir) => dir,
+            Err(e) => {
+                let failure = format!("{}/{}-{version}: {e}", entry.category, entry.package);
+                if keep_going {
+                    failures.push(failure);
+                    continue;
+                }
+                return Err(failure);
+            }
+        };
+        let portage_tmpdir = entry_tmpdir.as_path();
+        let build_env =
+            buildpkgonly_entry_build_env(config, repos, entry, &candidate, &cpv_slot, &run_wide);
+        let use_flags = build_env
+            .iter()
+            .find(|(k, _)| k == "USE")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
+        // Real `_emerge/EbuildBuild._start_pre_clean` before the build
+        // and `_buildpkgonly_success_hook_exit` (`EbuildBuild.py:525-535`)
+        // after the package: `--buildpkgonly` pre-cleans like every other
+        // build and post-cleans unconditionally -- the phase itself, not
+        // a `noclean` gate, is what honors `keeptemp`/`keepwork` (real's
+        // `_clean_exit` treats a failed clean as a failed build).
+        // Backlog #42.
+        let clean_failure = |phase: &str| -> Option<String> {
+            match ebuild_phases::run_clean(
+                &path,
+                root,
+                portage_tmpdir,
+                &build_env,
+                options.debug,
+                &options.config_root,
+                options.shell,
+                None,
+            ) {
+                Ok(0) => None,
+                Ok(status) => Some(format!(
+                    "{}/{}-{version}: {phase} clean failed ({status})",
+                    entry.category, entry.package
+                )),
+                Err(e) => Some(format!(
+                    "{}/{}-{version}: {phase} clean failed: {e}",
+                    entry.category, entry.package
+                )),
+            }
+        };
+        // Real per-package `FEATURES` (backlog #130): `build_env` already
+        // carries this entry's fully resolved `FEATURES` (the per-entry
+        // `package.env` fold when one matched, the run-wide value
+        // otherwise -- `buildpkgonly_entry_build_env`'s own doc comment),
+        // so re-derive the binpkg-affecting `PackageOptions` fields from
+        // it here rather than the caller's single shared, run-wide value.
+        let mut per_entry_options = options.clone();
+        if let Some(features) = build_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "FEATURES")
+            .map(|(_, v)| v.as_str())
+        {
+            per_entry_options.set_resolved_features(features);
+        }
+        let failure = match clean_failure("pre") {
+            Some(failure) => Some(failure),
+            None => match ebuild_package::run_package(
+                &path,
+                root,
+                portage_tmpdir,
+                &per_entry_options,
+                &build_env,
+                use_flags,
+            ) {
+                Ok(0) => clean_failure("post"),
+                Ok(_) => Some(format!(
+                    "{}/{}-{version}: build failed",
+                    entry.category, entry.package
+                )),
+                Err(e) => Some(format!(
+                    "{}/{}-{version}: {e}",
+                    entry.category, entry.package
+                )),
+            },
+        };
+        if let Some(failure) = failure {
+            if keep_going {
+                failures.push(failure);
+                continue;
+            }
+            return Err(failure);
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} package(s) failed to build (--keep-going):\n{}",
+            failures.len(),
+            failures.join("\n")
+        ))
+    }
+}
+
+/// Real `Scheduler._allocate_config` (`Scheduler.py:1899-1913`) calls
+/// `config.reload()` for every package task, and `reload()` re-reads
+/// `env.d` (`config.py:2691-2699`), so a package built after a merge that
+/// installed an `/etc/env.d/*` file (and ran `env-update`) sees the new
+/// variables (backlog #332). Returns the reloaded config when
+/// `<eroot>/etc/profile.env` changed since `config` was resolved (or last
+/// reloaded), `None` otherwise -- the caller then keeps its old code path
+/// byte for byte. A config without a recorded `eroot` never reloads.
+fn env_d_reloaded(config: &portage_profile::Config) -> Option<portage_profile::Config> {
+    if config.envd_eroot.as_os_str().is_empty() || !config.env_d_changed(&config.envd_eroot) {
+        return None;
+    }
+    let mut reloaded = config.clone();
+    reloaded.reload_env_d(&config.envd_eroot);
+    Some(reloaded)
+}
+
+/// Backlog #333 on top of #332: real's per-task `config.reload()` also
+/// feeds the task's `dblink`, whose protect object reads
+/// `settings["CONFIG_PROTECT"]` / `["CONFIG_PROTECT_MASK"]`
+/// (`vartree.py:2063-2072`), so a path an earlier merge of the same run
+/// added to `CONFIG_PROTECT` through `/etc/env.d` is protected for the
+/// later merges. The new `(config_protect, config_protect_mask)` pair
+/// when `profile.env` changed since `options.resolved_config` was
+/// resolved, `None` otherwise (the run-wide values stand).
+pub(crate) fn reloaded_config_protect(
+    options: &ebuild_merge::MergeOptions,
+) -> Option<(String, String)> {
+    let reloaded = options
+        .resolved_config
+        .as_deref()
+        .and_then(env_d_reloaded)?;
+    let mut probe = ebuild_merge::MergeOptions {
+        config_protect: options.config_protect.clone(),
+        config_protect_mask: options.config_protect_mask.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    probe.apply_config_protect(&reloaded);
+    Some((probe.config_protect, probe.config_protect_mask))
+}
+
+/// [`run_buildpkgonly`]'s per-entry `config.environ()` (backlog #129):
+/// `run_wide` plus `entry`'s matched `package.env` build vars
+/// ([`matched_package_env_vars`], layered before the tail so an
+/// incremental's base is the run-wide value, matching `entry_build_env`'s
+/// order) with the per-package `FEATURES` fold ([`resolved_features_for`])
+/// on top, then [`entry_phase_env_tail`]'s resolved `USE`/`IUSE_EFFECTIVE`/
+/// `USE_EXPAND` and `SLOT`/repo identity rows. A free function (not a
+/// closure in the loop) so it is directly unit-testable without a real
+/// build, the same way `entry_build_env` already is.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn buildpkgonly_entry_build_env(
+    config: &portage_profile::Config,
+    repos: &[RepoConfig],
+    entry: &GraphEntry,
+    candidate: &Candidate,
+    cpv_slot: &str,
+    run_wide: &[(String, String)],
+) -> Vec<(String, String)> {
+    // Backlog #332: a package task re-reads env.d (`env_d_reloaded`).
+    // `run_wide` was computed once at the top of the run; when
+    // `profile.env` changed since, recompute it from the reloaded config.
+    let reloaded = env_d_reloaded(config);
+    let (config, run_wide) = match &reloaded {
+        Some(r) => (r, run_wide_phase_env(r)),
+        None => (config, run_wide.to_vec()),
+    };
+    let run_wide = run_wide.as_slice();
+    let profile_only_variables = config
+        .resolved_incremental("PROFILE_ONLY_VARIABLES")
+        .unwrap_or_default();
+    let mut build_env = run_wide.to_vec();
+    build_env.extend(matched_package_env_vars(
+        &config.package_env_vars,
+        cpv_slot,
+        &profile_only_variables,
+        run_wide,
+    ));
+    let run_wide_features = run_wide
+        .iter()
+        .find(|(k, _)| k == "FEATURES")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    let calling_features = std::env::var("FEATURES").unwrap_or_default();
+    if let Some(features) = resolved_features_for(
+        &config.package_env_vars,
+        cpv_slot,
+        run_wide_features,
+        &calling_features,
+    ) {
+        build_env.push(("FEATURES".to_string(), features.clone()));
+        build_env.push(("PORTAGE_FEATURES".to_string(), features));
+    }
+    build_env.extend(entry_phase_env_tail(
+        Some(config),
+        repos,
+        entry,
+        Some(candidate),
+    ));
+    // Real per-package `BINPKG_COMPRESS` (backlog #147 S2): the
+    // matched scalars are layered above, so re-derive the xpak pipe
+    // command from them here -- the install phases save this env and
+    // real `__dyn_package` reads it back through the saved
+    // `${T}/environment`. Unmatched entries recompute the run-wide
+    // command byte-identically (backlog #180: the re-derivation falls
+    // back through the calling env to the config's own file chain, so
+    // a `make.conf` value survives it).
+    crate::ebuild_package::refresh_entry_compression_command(&mut build_env, Some(config));
+    build_env
+}
+
+/// Real `emerge <atom>` with no `--pretend` and no `--buildpkgonly`/
+/// `--getbinpkgonly`: portuale's first source build-and-merge path for
+/// `emerge` itself. Iterates the resolved entries (already in real
+/// dependency-first merge order, so every dependency merges before its
+/// dependents), and for each `New` **source** entry runs the full real
+/// `install` phase chain plus the vdb merge -- `ebuild_merge::run_merge`
+/// (`pretend`→`setup`→…→`install` via embedded `brush` + real
+/// `SRC_URI` fetch, then `merge_tree` + `pkg_preinst`/`pkg_postinst` +
+/// `env_update()`). `AlreadyInstalled` entries are skipped.
+///
+/// An `Upgrade`/`Downgrade`/`Reinstall` is handled too: `run_merge`
+/// merges the new version, then `ebuild_merge::unmerge_replaced_same_slot`
+/// (inside `merge_after_install`) unmerges the replaced same-slot
+/// version -- real `dblink.treewalk()`'s own merge-then-unmerge order,
+/// with that version's own `pkg_prerm`/`pkg_postrm` run from its saved
+/// vdb environment.
+///
+/// A `Binary` entry (only reachable with `--usepkg` without
+/// `--getbinpkg`) is a hard error here -- pass `--getbinpkg` for the
+/// mixed path (`emerge_getbinpkg::run_merge_plan`). Failure handling
+/// (stop at the first, or `--keep-going` -> drop the failed package's
+/// dependents and continue) is `run_merge_loop`'s.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+pub fn run_source_merge(
+    entries: &[GraphEntry],
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+    keep_going: bool,
+    buildpkg: Option<&ebuild_package::PackageOptions>,
+    buildpkg_exclude: &[String],
+    jobs: usize,
+    load_average: Option<f64>,
+    // Real `Scheduler._background_mode`: redirect each package's build
+    // output to `${T}/build.log` instead of the terminal. Always true for
+    // `jobs` >1 (a `-j` run must not interleave); otherwise driven by
+    // `--quiet-build=y` / `-q`. When set, the single-job path runs the
+    // same captured-build-then-serialized-merge split the scheduler uses.
+    capture_log: bool,
+    // Backlog #197: the scheduler-display mode (background + Jobs
+    // visibility), computed once by the caller from the CLI flags and
+    // the mergelist length. A serial captured run (`capture_log`) is
+    // always background (see `scheduler_status_mode`); the mode only
+    // carries the display half, never the capture decision itself.
+    mode: StatusMode,
+) -> Result<(), String> {
+    // Backlog #197: real `Scheduler` owns one `JobStatusDisplay` per
+    // merge run (`maxval` is the build-bound count here -- see
+    // `StatusDisplay`'s own doc comment for the installed-noop
+    // narrowing).
+    let total_builds = entries.iter().filter(|e| scheduler_needs_build(e)).count();
+    let display = StatusDisplay::new(mode, total_builds, progress_color());
+    if jobs > 1 {
+        // The `-jN` dispatch policy, one of the director's two
+        // `SchedulerPolicy` implementations: a bare `-j` (mapped to
+        // `usize::MAX` by the CLI layer) runs uncapped (real
+        // `max_jobs is True`), a numbered `--jobs=N` runs capped --
+        // both keep the `--load-average` gate for additional builds.
+        if jobs == usize::MAX {
+            let policy = mrg_director::UnlimitedPolicy::new(load_average);
+            return run_build_scheduler(
+                entries,
+                repos,
+                root,
+                portage_tmpdir,
+                options,
+                keep_going,
+                buildpkg,
+                buildpkg_exclude,
+                &policy,
+                &display,
+            );
+        }
+        let policy = mrg_director::LoadAwarePolicy::new(jobs, load_average);
+        return run_build_scheduler(
+            entries,
+            repos,
+            root,
+            portage_tmpdir,
+            options,
+            keep_going,
+            buildpkg,
+            buildpkg_exclude,
+            &policy,
+            &display,
+        );
+    }
+    // The serial loop merges through the director's source engine (the
+    // same `SourceEngine::merge_entry` the mixed dispatcher runs per
+    // source unit) rather than calling `merge_one_source_entry`
+    // directly, so the merge-engine slot carries the production
+    // source-merge traffic. The captured-build split stays inline: it is
+    // scheduler machinery (build-half concurrency), not per-unit
+    // execution.
+    let engine = crate::merge_engines::SourceEngine {
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        buildpkg,
+        buildpkg_exclude,
+        display: &display,
+    };
+    // Real `Scheduler._pkg_count` for this run (backlog #177): every
+    // entry below prints its own positional snapshot of these counters.
+    let progress = merge_progress_map(entries);
+    run_merge_loop(entries, keep_going, root, |idx, entry| {
+        let entry_progress = progress[idx];
+        let bp = buildpkg.filter(|opts| {
+            entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
+        });
+        if capture_log && scheduler_needs_build(entry) {
+            // Backlog #197: the captured serial split is background by
+            // construction (see `scheduler_status_mode`), so these are
+            // real's serial-background `>>> Jobs:` events: start,
+            // build-end, merge-land around the same halves the `-jN`
+            // scheduler runs -- and, on failure, real `_build_exit` /
+            // `_merge_exit`'s failure arms (`Scheduler.py:1641-1658` /
+            // `:1543-1561`), each fired exactly once like the `-jN`
+            // scheduler above.
+            display.job_started();
+            let path = match build_one_source_entry(
+                entry,
+                repos,
+                root,
+                portage_tmpdir,
+                options,
+                bp,
+                true,
+                entry_progress,
+                &display,
+            ) {
+                Ok(path) => {
+                    display.build_finished();
+                    path
+                }
+                Err(e) => {
+                    display.job_failed();
+                    display.build_finished();
+                    return Err(e);
+                }
+            };
+            if let Err(e) = merge_one_built_entry(
+                entry,
+                repos,
+                &path,
+                root,
+                portage_tmpdir,
+                options,
+                entry_progress,
+                &display,
+            ) {
+                display.job_failed();
+                return Err(e);
+            }
+            display.merge_finished();
+            Ok(())
+        } else {
+            engine.merge_entry(entry, entry_progress)
+        }
+    })
+}
+
+/// Real `--buildpkg-exclude`'s own `InternalPackageSet.findAtomForPackage`
+/// check: does `entry`'s resolved cpv (+ slot) match any of `atoms`
+/// (each an ordinary package atom)?
+pub(crate) fn entry_matches_any(entry: &GraphEntry, atoms: &[String]) -> bool {
+    if atoms.is_empty() {
+        return false;
+    }
+    let Some(version) = entry_version(&entry.outcome) else {
+        return false;
+    };
+    let slot = entry.slot.as_deref().unwrap_or("0");
+    let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
+    let cpv_slot = format!(
+        "{}/{}-{version}:{slot}/{sub_slot}",
+        entry.category, entry.package
+    );
+    atoms.iter().any(|atom| {
+        portage_dep::match_from_list(atom, &[cpv_slot.as_str()]).is_some_and(|m| !m.is_empty())
+    })
+}
+
+/// Real `Package.binpkg_wanted`'s own `"live" not in self.properties`
+/// half (`_emerge/Package.py:621-637`): this candidate's own evaluated
+/// `PROPERTIES` (real USE-conditional-reduced against the *build*, not
+/// the resolve-time, USE set -- `entry.use_flags_display`'s own enabled
+/// subset is the same set `entry_build_env`'s `USE=` export already
+/// uses) contains the bare token `live`. `PROPERTIES` has no `||`-group
+/// semantics (same reasoning `portage_repo::evaluated_metadata_tokens`'
+/// own doc comment gives), so a flat `use_reduce` is faithful.
+fn entry_is_live(candidate: &Candidate, entry: &GraphEntry) -> bool {
+    if candidate.properties.trim().is_empty() {
+        return false;
+    }
+    let use_flags: std::collections::HashSet<String> = entry
+        .use_flags_display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.clone())
+        .collect();
+    let tokens: Vec<String> = candidate
+        .properties
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    portage_use_reduce::use_reduce_flat(&tokens, &use_flags, portage_use_reduce::MatchMode::Normal)
+        .map(|flat| flat.iter().any(|t| t == "live"))
+        .unwrap_or(false)
+}
+
+/// Real `Package.binpkg_wanted(exclude)` (`_emerge/Package.py:621-637`),
+/// narrowed to the `buildpkg` (not `buildsyspkg`) half portuale's own
+/// `--buildpkg`/`FEATURES=buildpkg` already models: `--buildpkg-exclude`
+/// (`entry_matches_any`) always wins outright; otherwise a
+/// `PROPERTIES=live` build is skipped unless `FEATURES=buildpkg-live`
+/// (real default -- `buildpkg_live` -- is on). A candidate this can't
+/// even locate falls through to `true` (not live, by construction) --
+/// the real build path a moment later raises its own clear "could not
+/// locate its own ebuild file" error instead of this filter silently
+/// swallowing it.
+pub(crate) fn entry_buildpkg_wanted(
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+    buildpkg_exclude: &[String],
+    buildpkg_live: bool,
+) -> bool {
+    if entry_matches_any(entry, buildpkg_exclude) {
+        return false;
+    }
+    if buildpkg_live {
+        return true;
+    }
+    let Some(version) = entry_version(&entry.outcome) else {
+        return true;
+    };
+    match locate_candidate(repos, &entry.category, &entry.package, version) {
+        Some(candidate) => !entry_is_live(&candidate, entry),
+        None => true,
+    }
+}
+
+/// The shared per-entry loop for `run_source_merge` /
+/// `emerge_getbinpkg::run_merge_plan`. Without `keep_going` it stops at
+/// the first failure (`merge_one`'s own `Err`), portuale's long-
+/// standing default. With real `--keep-going` (real `Scheduler`'s own
+/// `_calc_resume_list`) it records the failure, drops every entry that
+/// (transitively) depends on the failed one via the `GraphEntry`'s
+/// reverse-dependency edges (`required_by`), and merges the rest --
+/// then returns a combined `Err` naming what failed and what was
+/// skipped (real `emerge` also exits non-zero when anything failed
+/// under `--keep-going`).
+pub(crate) fn run_merge_loop<F>(
+    entries: &[GraphEntry],
+    keep_going: bool,
+    root: &Path,
+    mut merge_one: F,
+) -> Result<(), String>
+where
+    F: FnMut(usize, &GraphEntry) -> Result<(), String>,
+{
+    use std::collections::{HashMap, HashSet};
+
+    // cp -> the cps that depend on it (each entry's own `required_by`).
+    let dependents: HashMap<(String, String), Vec<(String, String)>> = entries
+        .iter()
+        .map(|e| {
+            (
+                (e.category.clone(), e.package.clone()),
+                e.required_by.clone(),
+            )
+        })
+        .collect();
+
+    let mut skip: HashSet<(String, String)> = HashSet::new();
+    let mut failures: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+
+    for (idx, entry) in entries.iter().enumerate() {
+        let cp = (entry.category.clone(), entry.package.clone());
+        if skip.contains(&cp) {
+            skipped.push(format!("{}/{}", entry.category, entry.package));
+            continue;
+        }
+        if let Err(e) = merge_one(idx, entry) {
+            if !keep_going {
+                return Err(e);
+            }
+            failures.push(e);
+            // Real `_calc_resume_list`: every (transitive) dependent of
+            // the failed package can no longer be merged.
+            let mut queue = vec![cp];
+            while let Some(x) = queue.pop() {
+                if let Some(deps) = dependents.get(&x) {
+                    for p in deps {
+                        if skip.insert(p.clone()) {
+                            queue.push(p.clone());
+                        }
+                    }
+                }
+            }
+        } else if let Some(cpv) = resume_cpv(entry) {
+            // Real `Scheduler.py:1595-1602`: each successful merge removes
+            // its own package from the up-front-saved resume list (and
+            // commits), so a SIGKILL leaves exactly the tail for
+            // `--resume`. A no-op "merge" (already installed) was never
+            // saved, so its own removal is a silent no-op.
+            crate::mtimedb::remove_merged_entry(root, &cpv);
+        }
+    }
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut msg = format!(
+        "{} package(s) failed to merge (--keep-going):\n{}",
+        failures.len(),
+        failures
+            .iter()
+            .map(|f| format!("  {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    if !skipped.is_empty() {
+        msg.push_str(&format!(
+            "\n{} dependent package(s) not merged:\n{}",
+            skipped.len(),
+            skipped
+                .iter()
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    Err(msg)
+}
+
+/// One entry of `run_source_merge`'s own loop -- also the `Source`-entry
+/// arm of `emerge_getbinpkg::run_merge_plan` (`emerge --getbinpkg`'s
+/// mixed source+binary merge). `AlreadyInstalled` is a silent no-op; a
+/// `Binary` entry is a hard error here (the mixed dispatcher routes
+/// those to `merge_binpkg` before ever calling this).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+pub(crate) fn merge_one_source_entry(
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+    buildpkg: Option<&ebuild_package::PackageOptions>,
+    progress: mrg_director::MergeProgress,
+    display: &StatusDisplay,
+) -> Result<(), String> {
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let version = match &entry.outcome {
+        // #72 B3: a blocker-removal task is not a merge. Executing it is
+        // a documented non-goal (`LLM/02.072-uninstall_merge_rows.md`
+        // §7); the entry is skipped exactly like an installed no-op.
+        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::Uninstall { .. } => {
+            return Ok(());
+        }
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        PretendOutcome::NoVisibleCandidate => {
+            return Err(format!("{cp}: no visible ebuild to merge"));
+        }
+    };
+    if entry.source == CandidateSource::Binary {
+        return Err(format!(
+            "{cp}-{version}: resolved to a binary package -- pass `--getbinpkg` \
+             for a mixed source+binary merge, or `--getbinpkgonly` for binary-only"
+        ));
+    }
+
+    let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
+        return Err(format!(
+            "{cp}-{version}: could not locate its own ebuild file \
+             (repo layout changed since resolution?)"
+        ));
+    };
+    let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
+
+    // Real `MergeListItem._start`'s per-package line (backlog #177).
+    let color = progress_color();
+    display.status(&emerging_line(entry, &version, progress, root, &color));
+    if buildpkg.is_some() {
+        println!(">>> Building package for {cp}-{version}...");
+    }
+    // The resolved `USE` for this entry, so `bin/ebuild.sh`'s own `use()`
+    // (and every USE-conditional in the ebuild's phases) sees the real
+    // flags -- `phase_env_vars` otherwise leaves `USE=""`. Narrowing: the
+    // IUSE-declared enabled flags only (`GraphEntry::use_flags_display`),
+    // not the implicit/arch part of the effective set.
+    let mut per_entry = options.clone();
+    per_entry.build_env = entry_build_env(options, entry, repos);
+    if let Some((protect, mask)) = reloaded_config_protect(options) {
+        per_entry.config_protect = protect;
+        per_entry.config_protect_mask = mask;
+    }
+    // Real per-package `FEATURES` (#98): this entry's gates (Rust-side
+    // `feature_enabled` and the vdb-environment regeneration) read the
+    // per-entry folded list. `None` (no match) keeps the run-wide value.
+    if let Some(features) = entry_resolved_features(
+        options,
+        entry,
+        &std::env::var("FEATURES").unwrap_or_default(),
+    ) {
+        per_entry.set_resolved_features(&features);
+    }
+    // Real per-package `PORTAGE_TMPDIR` (#99): this entry's build
+    // directories live under the matched value, so the pre-clean and
+    // the merge below share the resolved root.
+    let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
+    let portage_tmpdir = entry_tmpdir.as_path();
+    // Real `_emerge/EbuildBuild._start_pre_clean` (`EbuildBuild.py:207-
+    // 229`) and `Scheduler.py:969-981`/`:1119-1139`: the `clean` phase
+    // runs before every build, unconditionally (`noclean` only skips the
+    // *post*-merge clean). Without it a stale `.installed` marker or an
+    // already-`instprep`ped image from an earlier build in the same
+    // `${PORTAGE_BUILDDIR}` silently skips `install` (backlog #42, found
+    // in #38 S4).
+    let clean_status = ebuild_phases::run_clean(
+        &path,
+        root,
+        portage_tmpdir,
+        &per_entry.build_env,
+        per_entry.debug,
+        &per_entry.config_root,
+        per_entry.shell,
+        per_entry.log_file.as_deref(),
+    )?;
+    if clean_status != 0 {
+        return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
+    }
+    // Real `PackageMerge._start`'s per-package line (backlog #177),
+    // printed from `run_merge`'s pre-merge hook: real wraps the finished
+    // `EbuildBuild` in a `PackageMerge` (`Scheduler._build_exit`,
+    // `Scheduler.py:1615-1621`), so `Installing` lands after the build
+    // phase output (and the `--buildpkg` packaging) and before the
+    // `EbuildMerge` vdb merge -- the same point the `-jN` scheduler's
+    // build/merge split prints it (before the serialized `run_qmerge`).
+    // A failed build never reaches the hook, so no `Installing` prints
+    // for it, exactly like real queuing no merge for a failed build.
+    let installing = installing_line(entry, &version, progress, root, &color);
+    let print_installing = || display.status(&installing);
+    let status = ebuild_merge::run_merge_with_hook(
+        &path,
+        root,
+        portage_tmpdir,
+        &per_entry,
+        buildpkg,
+        Some(&print_installing as &dyn Fn()),
+    )?;
+    if status != 0 {
+        return Err(format!("{cp}-{version}: merge failed ({status})"));
+    }
+    // Real `PackageMerge._install_exit`'s per-package line (backlog
+    // #177): this is the `Completed (N of M) cpv::repo` real prints
+    // where portuale used to print its own `merged.` line.
+    display.status(&completed_line(entry, &version, progress, root, &color));
+    Ok(())
+}
+
+/// Real per-package `PORTAGE_TMPDIR` (backlog #99) for one scheduler
+/// entry: re-derive the tmpdir this entry's build directories live under
+/// from its matched `package.env` value
+/// (`ebuild_phases::resolve_entry_portage_tmpdir`), so the pre-clean,
+/// the phase chain, the build log and the post-merge clean all share
+/// the same per-entry root. A missing matched directory is real's
+/// `_check_temp_dir` failure and aborts the entry before anything runs.
+fn entry_portage_tmpdir(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    version: &str,
+    portage_tmpdir: &Path,
+) -> Result<PathBuf, String> {
+    let cpv_slot = entry_cpv_slot(entry, version);
+    crate::ebuild_phases::resolve_entry_portage_tmpdir(
+        &options.package_env_vars,
+        &cpv_slot,
+        portage_tmpdir,
+        options.process_tmpdir.as_deref(),
+    )
+}
+
+/// Real per-package `FEATURES` (backlog #98) for one `cat/pkg-ver:slot/sub`
+/// identity, given the `package.env` table and the run-wide folded
+/// `FEATURES` list to fold onto: `FEATURES` is an incremental, so the
+/// matched env-file value folds in `[run-wide, pkg, calling-env]` order
+/// (`regenerate()`, `config.py:2735`, `:2778-2825`) instead of replacing
+/// it. `None` when nothing matched — the caller then keeps the run-wide
+/// value untouched, so entries without a `package.env` `FEATURES` entry
+/// keep byte-identical output. Raw pieces, not `&MergeOptions`, so
+/// `run_buildpkgonly` (backlog #129, no `MergeOptions` in scope) shares
+/// this with the merge scheduler's [`entry_resolved_features`].
+fn resolved_features_for(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    run_wide_features: &str,
+    calling_features: &str,
+) -> Option<String> {
+    let pkg_raw = crate::ebuild_phases::match_package_env_incremental_raw(
+        package_env_vars,
+        cpv_slot,
+        "FEATURES",
+    );
+    if pkg_raw.is_empty() {
+        return None;
+    }
+    Some(crate::ebuild_phases::fold_package_env_incremental(
+        run_wide_features,
+        &pkg_raw,
+        calling_features,
+    ))
+}
+
+/// [`resolved_features_for`] for one scheduler entry: `calling_features`
+/// is the raw calling-environment value (a parameter, not an ambient
+/// read, so the fold stays unit-testable); the run-wide base is
+/// `options.features` (the resolved list on `emerge` paths, the raw
+/// process fallback elsewhere). `None` when the entry is not buildable
+/// either.
+pub(crate) fn entry_resolved_features(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    calling_features: &str,
+) -> Option<String> {
+    let version = entry_version(&entry.outcome)?;
+    let cpv_slot = entry_cpv_slot(entry, version);
+    resolved_features_for(
+        &options.package_env_vars,
+        &cpv_slot,
+        &options.features,
+        calling_features,
+    )
+}
+
+/// `[("USE", "<space-joined enabled IUSE flags>")]` for `entry` -- the
+/// build-phase env every `emerge <atom>` source build/merge passes so
+/// `bin/ebuild.sh`'s `use()` sees the resolved flags. Empty vec (no
+/// `USE` entry) when the entry declares no enabled flags, so
+/// `phase_env_vars`' own `USE=""` stands. `GraphEntry::use_flags_display`
+/// is already the package's IUSE, enabled-resolved and bare-name-sorted.
+fn build_use_env(entry: &GraphEntry) -> Vec<(String, String)> {
+    let enabled: Vec<&str> = entry
+        .use_flags_display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.as_str())
+        .collect();
+    if enabled.is_empty() {
+        Vec::new()
+    } else {
+        vec![("USE".to_string(), enabled.join(" "))]
+    }
+}
+
+/// The `cat/pkg-ver:slot/sub` identity real `_grab_pkg_env` matches a
+/// build-bound entry against (`entry_package_env_vars` and the
+/// per-package `PORTAGE_TMPDIR` resolution below share it). Missing
+/// `SLOT` means slot `0`, and a missing sub-slot repeats the slot.
+fn entry_cpv_slot(entry: &GraphEntry, version: &str) -> String {
+    let slot = entry.slot.as_deref().unwrap_or("0");
+    let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
+    format!(
+        "{}/{}-{version}:{slot}/{sub_slot}",
+        entry.category, entry.package
+    )
+}
+
+/// The `package.env` build vars that match one `cat/pkg-ver:slot/sub`
+/// identity -- real `_grab_pkg_env` folding a matching
+/// `/etc/portage/package.env` entry's env file into `configdict["pkg"]`,
+/// with real's acceptance set (`match_package_env_vars`). Incrementals
+/// fold onto `base_env` (the run-wide resolved env) instead of replacing
+/// it, matching `regenerate()`'s layer stacking. Raw pieces, not
+/// `&MergeOptions`, so `run_buildpkgonly` (backlog #129, no
+/// `MergeOptions` in scope) shares this with the merge scheduler's
+/// [`entry_package_env_vars`].
+fn matched_package_env_vars(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    profile_only_variables: &[String],
+    base_env: &[(String, String)],
+) -> Vec<(String, String)> {
+    if package_env_vars.is_empty() {
+        return Vec::new();
+    }
+    crate::ebuild_phases::match_package_env_vars(
+        package_env_vars,
+        cpv_slot,
+        profile_only_variables,
+        base_env,
+        &portage_profile::config_env_all(),
+    )
+}
+
+/// [`matched_package_env_vars`] for one scheduler entry: `entry`'s cpv
+/// against `options.package_env_vars`, layered over `options.build_env`.
+fn entry_package_env_vars(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+) -> Vec<(String, String)> {
+    let Some(version) = entry_version(&entry.outcome) else {
+        return Vec::new();
+    };
+    let cpv_slot = entry_cpv_slot(entry, version);
+    let profile_only_variables = options
+        .resolved_config
+        .as_deref()
+        .and_then(|config| config.resolved_incremental("PROFILE_ONLY_VARIABLES"))
+        .unwrap_or_default();
+    matched_package_env_vars(
+        &options.package_env_vars,
+        &cpv_slot,
+        &profile_only_variables,
+        &options.build_env,
+    )
+}
+
+/// `SLOT`, `PORTAGE_REPO_NAME`, `PORTAGE_REPO_REVISIONS` for `entry` --
+/// the per-entry identity real `doebuild_environment()` sets
+/// (`doebuild.py:483`) and `EbuildPhase._setup_repo_revisions` builds
+/// (`EbuildPhase.py:73-108`). `SLOT` is the ebuild's own `SLOT`
+/// (`slot/sub_slot` when a sub-slot is declared, bare slot otherwise,
+/// matching the ebuild global real `config.environ()` carries), never
+/// empty (`entry.slot` unset -> `"0"`; the `.keep_<cp>-` bug is exactly
+/// an empty slot). `PORTAGE_REPO_REVISIONS` is `"{}"` until portuale
+/// tracks a repo revision (real `json.dumps({}, sort_keys=True)`).
+/// `PORTAGE_REPO_NAME` is omitted only when no repo is known at all.
+fn entry_identity_env(entry: &GraphEntry, candidate: Option<&Candidate>) -> Vec<(String, String)> {
+    let slot = entry
+        .slot
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.slot.as_str()))
+        .unwrap_or("0");
+    let sub_slot = entry
+        .sub_slot
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.sub_slot.as_str()))
+        .unwrap_or(slot);
+    let slot_value = if sub_slot.is_empty() || sub_slot == slot {
+        slot.to_string()
+    } else {
+        format!("{slot}/{sub_slot}")
+    };
+    let repo_name = entry
+        .repo_name
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.repo_name.as_str()))
+        .unwrap_or("");
+    let mut env = vec![
+        ("SLOT".to_string(), slot_value),
+        ("PORTAGE_REPO_REVISIONS".to_string(), "{}".to_string()),
+    ];
+    if !repo_name.is_empty() {
+        env.push(("PORTAGE_REPO_NAME".to_string(), repo_name.to_string()));
+    }
+    env
+}
+
+/// The run-wide half of real `config.environ()` for a build:
+/// `portage_profile::phase_environ(config, None)` plus the dynamic
+/// `doebuild_environment()` value that needs portuale's compressor table,
+/// `PORTAGE_COMPRESSION_COMMAND` (`doebuild.py:697-750`, set for every
+/// build regardless of `BINPKG_FORMAT`). `BINPKG_COMPRESS*` are
+/// `environ_filter`ed, so they are read from the calling env / config
+/// directly; `MAKEOPTS` from the (already-defaulted) export set.
+pub(crate) fn run_wide_phase_env(config: &portage_profile::Config) -> Vec<(String, String)> {
+    let mut env = portage_profile::phase_environ(config, None);
+    let lookup = |key: &str| {
+        env.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var(key).ok())
+            .or_else(|| config.other_vars.get(key).cloned())
+    };
+    if let Some(cmd) = ebuild_package::phase_compression_command(lookup) {
+        env.push(("PORTAGE_COMPRESSION_COMMAND".to_string(), cmd));
+    }
+    env
+}
+
+/// The package metadata keys real `config.setcpv` loads into
+/// `configdict["pkg"]` (`_setcpv_aux_keys`, `config.py:171-189`) that
+/// survive `environ_filter` and stay exported in the saved environment:
+/// `bin/ebuild.sh` unsets `IUSE`/`REQUIRED_USE`/`PROPERTIES`/`RESTRICT`/
+/// `INHERITED`/`EAPI` before sourcing the ebuild (`:634-635`), so only
+/// these three keep real's `declare -x`; `SLOT`/`EAPI`/`INHERITED` are
+/// computed elsewhere. Values from the md5-cache (real `aux_get`; an
+/// omitted key is `""`).
+const EXPORTED_PKG_METADATA: [&str; 3] = ["DEFINED_PHASES", "KEYWORDS", "LICENSE"];
+
+fn entry_metadata_env(entry: &GraphEntry, candidate: &Candidate) -> Vec<(String, String)> {
+    let pf = format!("{}-{}", entry.package, candidate.version);
+    // H4: the repo-metadata decision point (#41's `repo_aux_metadata`:
+    // repo md5-cache -> depcachedir -> depend phase) is reached through
+    // the `RepoCache` slot on this production path, the same
+    // interchangeable-traits seam the scheduler/merge/news/fetch/
+    // packages/binpkg slots use. `Md5Cache::metadata` delegates to the
+    // identical function the direct call used, so this is
+    // behaviour-neutral.
+    let cache = mrg_director::Md5Cache::new(&candidate.repo_location, &candidate.repo_name);
+    let Ok(metadata) = mrg_director::RepoCache::metadata(&cache, &entry.category, &pf) else {
+        return Vec::new();
+    };
+    EXPORTED_PKG_METADATA
+        .iter()
+        .map(|k| (k.to_string(), metadata.get(*k).cloned().unwrap_or_default()))
+        .collect()
+}
+
+/// The per-entry tail of [`entry_build_env`]: resolved `USE` (or the
+/// legacy enabled-IUSE-only `USE` when no config is in scope), the
+/// `IUSE_EFFECTIVE`/`USE_EXPAND` rows, and the `SLOT`/repo identity.
+/// Shared with `run_buildpkgonly`, whose `PackageOptions` carries no
+/// `MergeOptions`.
+///
+/// With `config` set (`emerge <atom>` and friends, #37 S2) the `USE` is
+/// real `PORTAGE_USE`: the resolver's full effective set
+/// (`candidate_effective_use_flags`, which includes the implicit profile
+/// flags no package declares in `IUSE`) narrowed by `portage_use` to
+/// `IUSE ∪ IUSE_EFFECTIVE`. Without a config (standalone `ebuild <file>
+/// merge`/`qmerge`, tests) the previous enabled-IUSE-only `USE` stands.
+fn entry_phase_env_tail(
+    config: Option<&portage_profile::Config>,
+    repos: &[RepoConfig],
+    entry: &GraphEntry,
+    candidate: Option<&Candidate>,
+) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    let Some(config) = config else {
+        env.extend(build_use_env(entry));
+        return env;
+    };
+    if let Some(candidate) = candidate {
+        env.extend(entry_metadata_env(entry, candidate));
+        let enabled = portage_repo::candidate_effective_use_flags(
+            repos,
+            config,
+            &entry.category,
+            &entry.package,
+            &candidate.version,
+        );
+        let iuse: Vec<String> = candidate
+            .iuse
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        env.extend(portage_profile::phase_environ_pkg(
+            config,
+            Some(portage_profile::PhaseUse {
+                iuse: &iuse,
+                enabled: &enabled,
+            }),
+        ));
+    }
+    env.extend(entry_identity_env(entry, candidate));
+    env
+}
+
+/// The full per-entry build-phase env: the run-wide resolved env the
+/// caller stashed on `options.build_env` (`portage_profile::
+/// phase_environ(config, None)`), then any per-package `package.env`
+/// build vars on top of those, then [`entry_phase_env_tail`].
+fn entry_build_env(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+) -> Vec<(String, String)> {
+    let candidate = entry_version(&entry.outcome)
+        .and_then(|version| locate_candidate(repos, &entry.category, &entry.package, version));
+    // Backlog #332: re-read env.d for this package task
+    // (`env_d_reloaded`); unchanged `profile.env` keeps the old path.
+    let reloaded = options.resolved_config.as_deref().and_then(env_d_reloaded);
+    let mut env = match &reloaded {
+        Some(r) => run_wide_phase_env(r),
+        None => options.build_env.clone(),
+    };
+    env.extend(entry_package_env_vars(options, entry));
+    // Per-package `FEATURES` (#98): the folded per-entry list overrides
+    // the run-wide `FEATURES`/`PORTAGE_FEATURES` pair downstream
+    // (last-wins), so the phase env and every `extra_env` gate see it.
+    // `None` (no match) appends nothing, so entries without a
+    // `package.env` `FEATURES` entry keep byte-identical output.
+    let calling_features = std::env::var("FEATURES").unwrap_or_default();
+    if let Some(features) = entry_resolved_features(options, entry, &calling_features) {
+        env.push(("FEATURES".to_string(), features.clone()));
+        env.push(("PORTAGE_FEATURES".to_string(), features));
+    }
+    env.extend(entry_phase_env_tail(
+        reloaded.as_ref().or(options.resolved_config.as_deref()),
+        repos,
+        entry,
+        candidate.as_ref(),
+    ));
+    // Real per-package `BINPKG_COMPRESS` (backlog #147 S2): same
+    // re-derivation as `buildpkgonly_entry_build_env` -- this env
+    // feeds the merge-scheduler builds whose `package_after_install`
+    // side effect (`FEATURES=buildpkg` / `-b`) reads it back through
+    // the saved `${T}/environment`. The resolved config may be absent
+    // on the config-less paths (`None`: pairs-then-env only).
+    crate::ebuild_package::refresh_entry_compression_command(
+        &mut env,
+        reloaded.as_ref().or(options.resolved_config.as_deref()),
+    );
+    env
+}
+
+/// `(cat/pkg, version)` for an entry the scheduler will build -- the
+/// same outcome→version mapping `merge_one_source_entry` does inline.
+fn scheduler_cp_version(entry: &GraphEntry) -> Result<(String, String), String> {
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let version = match &entry.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        // #72 B3: unreachable via `scheduler_needs_build` (a removal is
+        // never scheduled); kept explicit so no wildcard hides it.
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => {
+            return Err(format!("{cp}: not a buildable entry"));
+        }
+    };
+    Ok((cp, version))
+}
+
+/// Whether the scheduler must actually run a build for this entry (a
+/// `New`/`Upgrade`/`Downgrade`/`Reinstall` from source). `AlreadyInstalled`
+/// and `Binary` entries are treated as already satisfied.
+fn scheduler_needs_build(entry: &GraphEntry) -> bool {
+    entry.source != CandidateSource::Binary
+        && matches!(
+            entry.outcome,
+            PretendOutcome::New { .. }
+                | PretendOutcome::Upgrade { .. }
+                | PretendOutcome::Downgrade { .. }
+                | PretendOutcome::Reinstall { .. }
+        )
+}
+
+/// Whether this entry counts toward real's merge progress counters --
+/// real `Scheduler.py:296-304` counts only `operation == "merge"`
+/// mergelist entries (uninstalls and nomerge nodes are not counted and
+/// print no progress line). Portuale's equivalents are the outcomes that
+/// actually merge: `New`/`Reinstall`/`Upgrade`/`Downgrade`.
+/// `AlreadyInstalled`/`Uninstall`/`NoVisibleCandidate` neither count nor
+/// print, exactly like the mergelist entries real skips in
+/// `MergeListItem._start` (`pkg.installed` returns early).
+pub(crate) fn entry_counts_toward_progress(entry: &GraphEntry) -> bool {
+    matches!(
+        entry.outcome,
+        PretendOutcome::New { .. }
+            | PretendOutcome::Reinstall { .. }
+            | PretendOutcome::Upgrade { .. }
+            | PretendOutcome::Downgrade { .. }
+    )
+}
+
+/// Every merging entry's own real `(curval, maxval)` snapshot (real
+/// `Scheduler._pkg_count`, copied per `MergeListItem` at task creation
+/// after `curval += 1`, `Scheduler.py:2273`/`2355`): `max` is the count
+/// of merging entries, `cur` the 1-based ordinal in merge order. One
+/// snapshot **per entry position** (`out[i]` belongs to `entries[i]`; a
+/// non-merging entry carries `MergeProgress::single()`, which it never
+/// prints) -- keyed positionally, not by `(category, package)`, so two
+/// merging entries for the same cat/pkg in one run (e.g. two slots of
+/// one package) keep their own `cur` instead of collapsing onto one map
+/// slot (review of backlog #177). Callers pass `progress[i]` into the
+/// merge functions, so the run-level loops own the only scan.
+///
+/// Narrowing: real assigns `curval` in task-start order, which under
+/// `--jobs` can differ from merge-list order when independent packages
+/// start out of order. Portuale's scheduler dispatches in index order
+/// (the `find` scans `0..n`), so list ordinal and start ordinal agree
+/// whenever dependencies force the order -- and in the common serial
+/// case they are identical by construction. Real also recomputes
+/// `maxval` per `--keep-going` pass (`Scheduler.py:1307-1312`); portuale
+/// keeps the run's original total (a failure-path-only difference).
+pub(crate) fn merge_progress_map(entries: &[GraphEntry]) -> Vec<mrg_director::MergeProgress> {
+    let max = entries
+        .iter()
+        .filter(|e| entry_counts_toward_progress(e))
+        .count();
+    let mut cur = 0usize;
+    entries
+        .iter()
+        .map(|entry| {
+            if entry_counts_toward_progress(entry) {
+                cur += 1;
+                mrg_director::MergeProgress { cur, max }
+            } else {
+                mrg_director::MergeProgress::single()
+            }
+        })
+        .collect()
+}
+
+/// The colouriser for the merge progress lines: real `actions.py:2816-
+/// 2828` resolves module-global `havecolor` from `--color y|n` over
+/// `NO_COLOR`/`NOCOLOR`/`TERM`/isatty (`color::resolve_havecolor` ports
+/// exactly that gate). The merge path threads no `--color` value down
+/// (unlike the pretend renderer, which takes `color_opt`), so this
+/// resolves the ambient default -- colour on a tty, off when piped.
+/// Either way the line *shape* is real's; only the escapes differ.
+pub(crate) fn progress_color() -> crate::color::Colorizer {
+    crate::color::Colorizer::new(crate::color::resolve_havecolor(None))
+}
+
+/// Backlog #197: real `Scheduler._background_mode`
+/// (`3rdparty/portage/lib/_emerge/Scheduler.py:470-531`) as a value.
+/// `background` is real `Scheduler._background`: a parallel `--jobs`
+/// run, `--quiet`, or `--quiet-build=y` -- except that a one-package
+/// mergelist without `--quiet`/`--quiet-build=y` resets to serial and
+/// non-background (real also resets `max_jobs` there; portuale keeps
+/// its dispatch and only takes the display half -- a scheduled build
+/// under `-jN` still captures its phase output). `show_jobs` is real
+/// `JobStatusDisplay.quiet == false`, i.e. `background && (!quiet ||
+/// verbose)` (`Scheduler.py:524-527`): `--quiet` without `--verbose`
+/// suppresses the `>>> Jobs:` lines but not the status lines
+/// themselves. Two deliberate cuts, both stated: interactive packages
+/// (real forces non-background with a `>>> Sending package output to
+/// stdio` notice; portuale models no `interactive` PROPERTIES) and the
+/// `--pretend`/`--fetchonly`/`--fetch-all-uri` exemption (those modes
+/// never reach the merge code that reads this value).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct StatusMode {
+    /// Real `Scheduler._background`: status lines print with no leading
+    /// blank, and build output is captured, not streamed.
+    pub background: bool,
+    /// Real `JobStatusDisplay` is live: `>>> Jobs:` lines print.
+    pub show_jobs: bool,
+}
+
+impl StatusMode {
+    /// A mode for unit tests: serial, non-background, no Jobs lines.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        StatusMode {
+            background: false,
+            show_jobs: false,
+        }
+    }
+}
+
+/// Backlog #197: real's scheduler-display predicate. `jobs` is the CLI
+/// `--jobs` value (`usize::MAX` is a bare `-j`, i.e. real's `max_jobs
+/// is True`); `quiet` is `--quiet`; `quiet_build` is the `--quiet-build`
+/// tri-state (`Some(true)` is bare/`=y` -- real `main.py` normalizes
+/// both to `"y"` before `_background_mode` reads it, so bare counts);
+/// `mergelist_len` is the resolved entry count; `verbose` is
+/// `--verbose`.
+pub(crate) fn scheduler_status_mode(
+    jobs: usize,
+    quiet: bool,
+    quiet_build: Option<bool>,
+    mergelist_len: usize,
+    verbose: bool,
+) -> StatusMode {
+    let background_quiet = quiet || quiet_build == Some(true);
+    let mut background = jobs > 1 || background_quiet;
+    if mergelist_len <= 1 && !background_quiet {
+        background = false;
+    }
+    StatusMode {
+        background,
+        show_jobs: background && (!quiet || verbose),
+    }
+}
+
+/// Backlog #197: real `_emerge/JobStatusDisplay.py` (the `>>> Jobs:`
+/// line) plus the `Scheduler._status_msg` half (`Scheduler.py:2383-
+/// 2397`) that prefixes every status line with a blank line unless the
+/// scheduler is in background mode. One value per merge run, shared by
+/// reference (the `-jN` scheduler prints from worker threads, so the
+/// counters live behind a mutex; every `println!` still happens under
+/// its own call, exactly like the existing merge-path prints).
+///
+/// Real's `maxval` counts every `operation == "merge"` mergelist entry
+/// (`Scheduler.py:296-304`); portuale's is the build-bound count (see
+/// `scheduler_needs_build`) -- the two agree whenever every entry
+/// builds, and the installed-noop counting quirk is out of scope.
+/// Real's `merge_wait` arm is implemented but always reads 0 here:
+/// portuale serializes every vdb merge immediately behind its build and
+/// models neither the merge-wait queue nor `FEATURES=merge-wait`.
+pub(crate) struct StatusDisplay {
+    mode: StatusMode,
+    color: crate::color::Colorizer,
+    state: std::sync::Mutex<StatusState>,
+}
+
+struct StatusState {
+    maxval: usize,
+    curval: usize,
+    running: usize,
+    failed: usize,
+    /// A `>>> Jobs:` line has been printed: real's `displayMessage`
+    /// re-displays the current status after every status line once one
+    /// is on screen (`JobStatusDisplay.displayMessage`, verified in the
+    /// n197 probe: each `Emerging`/`Installing`/`Completed` is followed
+    /// by a `>>> Jobs:` repeat).
+    displayed: bool,
+}
+
+impl StatusDisplay {
+    pub(crate) fn new(mode: StatusMode, maxval: usize, color: crate::color::Colorizer) -> Self {
+        StatusDisplay {
+            mode,
+            color,
+            state: std::sync::Mutex::new(StatusState {
+                maxval,
+                curval: 0,
+                running: 0,
+                failed: 0,
+                displayed: false,
+            }),
+        }
+    }
+
+    /// A display for unit tests: non-background, no Jobs lines, so
+    /// `status` prints exactly `"\n{line}\n"` under test capture.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        StatusDisplay::new(
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            },
+            1,
+            crate::color::Colorizer::new(false),
+        )
+    }
+
+    /// Real `Scheduler._status_msg` + `JobStatusDisplay.displayMessage`
+    /// (non-tty half): the leading blank unless in background mode, the
+    /// `>>> ` line itself on stdout, then the current `>>> Jobs:` status
+    /// again when the display is live and showing (the n197 probe shows
+    /// the repeat after every status line; real's tty `\r`-redraw half
+    /// is not ported -- portuale prints plain lines on a tty too).
+    pub(crate) fn status(&self, line: &str) {
+        if !self.mode.background {
+            println!();
+        }
+        println!("{line}");
+        let redisplay = self.mode.show_jobs && self.state.lock().unwrap().displayed;
+        if redisplay {
+            self.print_jobs();
+        }
+    }
+
+    /// Real `_schedule_tasks_imp`'s `running = self._jobs` on task
+    /// start: print the `>>> Jobs: 0 of N complete, 1 running` line
+    /// *before* the worker thread prints its `>>> Emerging` line, so
+    /// the order matches real's event order.
+    pub(crate) fn job_started(&self) {
+        self.state.lock().unwrap().running += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Real `_build_exit`'s tail (`running = self._jobs` after the
+    /// token release): the build slot is free, the merge is pending.
+    pub(crate) fn build_finished(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.running = state.running.saturating_sub(1);
+        drop(state);
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Real `_merge_exit`'s `curval += 1`: the merge landed.
+    pub(crate) fn merge_finished(&self) {
+        self.state.lock().unwrap().curval += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Real `_build_exit`/`_do_merge_exit`'s `failed =
+    /// len(self._failed_pkgs)`: record a failure on the display.
+    pub(crate) fn job_failed(&self) {
+        self.state.lock().unwrap().failed += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    fn print_jobs(&self) {
+        println!("{}", self.jobs_line());
+        self.state.lock().unwrap().displayed = true;
+    }
+
+    /// Real `JobStatusDisplay._display_status` on a non-tty
+    /// (`JobStatusDisplay.py`): `>>> Jobs: {cur} of {max} complete`
+    /// plus the `, {r} running` / `, {f} failed` / `, {w} merge wait`
+    /// arms only when nonzero, padded with spaces to the 68-column jobs
+    /// field (real's `max_display_width - 32` at the non-tty width of
+    /// 100; the tty term-width half is cut -- portuale always uses the
+    /// non-tty rule, stated here). Real appends `Load avg: {triple}`
+    /// after the padding; portuale cuts it exactly like #185 cut the
+    /// resolution seconds (repeated-run determinism is a jointly-owned
+    /// gate; nondeterministic values ride `--json` only -- coordinator
+    /// ruling B14, batch-2026-09-27). The counters wear `INFORM`, like
+    /// real's `number_style`; the padding is measured on the plain text,
+    /// like real's `plain_output` gauge.
+    pub(crate) fn jobs_line(&self) -> String {
+        let state = self.state.lock().unwrap();
+        jobs_line(
+            &self.color,
+            state.curval,
+            state.maxval,
+            state.running,
+            state.failed,
+            0,
+        )
+    }
+}
+
+/// Backlog #197: the pure `>>> Jobs:` shape (real
+/// `JobStatusDisplay._display_status`), split out for unit tests.
+/// `merge_wait` is always 0 from portuale (see [`StatusDisplay`]); the
+/// arm stays because it is part of the shape. Real's `Load avg:`
+/// trailer is cut (see [`StatusDisplay::jobs_line`]); the padding that
+/// precedes it is kept, so the line keeps real's shape and column.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn jobs_line(
+    color: &crate::color::Colorizer,
+    curval: usize,
+    maxval: usize,
+    running: usize,
+    failed: usize,
+    merge_wait: usize,
+) -> String {
+    let mut plain = format!("Jobs: {curval} of {maxval} complete");
+    let mut styled = format!(
+        "Jobs: {} of {} complete",
+        color.c("INFORM", &curval.to_string()),
+        color.c("INFORM", &maxval.to_string()),
+    );
+    for (value, label) in [
+        (running, "running"),
+        (failed, "failed"),
+        (merge_wait, "merge wait"),
+    ] {
+        if value > 0 {
+            plain.push_str(&format!(", {value} {label}"));
+            styled.push_str(&format!(
+                ", {} {label}",
+                color.c("INFORM", &value.to_string()),
+            ));
+        }
+    }
+    // Real `self._jobs_column_width = width - 32` at the non-tty
+    // `width = max_display_width = 100`. The padding stays even though
+    // real's `Load avg:` trailer is cut (see `jobs_line`'s doc
+    // comment), so the line keeps real's shape and column.
+    let padding = 68usize.saturating_sub(plain.len());
+    styled.push_str(&" ".repeat(padding));
+    format!(">>> {styled}")
+}
+
+/// Real `_emerge/MergeListItem.py::_start` (`MergeListItem.py:60-85`):
+/// `{Emerging|Emerging binary|Fetching} ({cur} of {max}) {cpv}::{repo}`,
+/// plus ` for {root}` when `ROOT != "/"`. The counters wear
+/// `MERGE_LIST_PROGRESS`, the `cpv::repo` wears `PKG_MERGE` (source) or
+/// `PKG_BINARY_MERGE` (binary); everything else is uncoloured. Real
+/// prints it via the scheduler's `statusMessage` path, which prefixes
+/// `>>> ` (`JobStatusDisplay._format_msg`) on stdout -- hence the
+/// literal prefix here. `version` is the entry's merge version.
+pub(crate) fn emerging_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let binary = entry.source == CandidateSource::Binary;
+    let action = if binary {
+        "Emerging binary"
+    } else {
+        "Emerging"
+    };
+    let pkg_color = if binary {
+        "PKG_BINARY_MERGE"
+    } else {
+        "PKG_MERGE"
+    };
+    let mut line = format!(
+        ">>> {action} ({} of {}) {}",
+        color.c("MERGE_LIST_PROGRESS", &progress.cur.to_string()),
+        color.c("MERGE_LIST_PROGRESS", &progress.max.to_string()),
+        color.c(
+            pkg_color,
+            &format!(
+                "{}/{}-{version}::{}",
+                entry.category,
+                entry.package,
+                entry_repo(entry)
+            )
+        ),
+    );
+    if root.as_os_str() != "/" {
+        line.push_str(&format!(" for {}", root.display()));
+    }
+    line
+}
+
+/// Real `_emerge/PackageMerge.py::_start` (`PackageMerge.py:32-54`):
+/// `Installing ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}` when
+/// `ROOT != "/"` (note: `to`, not the `for` the Emerging line uses).
+/// Same colours as [`emerging_line`]. Real suppresses it under
+/// `--fetchonly`/`--pretend`/`--buildpkgonly` (`_should_show_status`);
+/// portuale's merge functions never run in those modes, so no gate is
+/// needed at the call sites.
+pub(crate) fn installing_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let binary = entry.source == CandidateSource::Binary;
+    let pkg_color = if binary {
+        "PKG_BINARY_MERGE"
+    } else {
+        "PKG_MERGE"
+    };
+    let mut line = format!(
+        ">>> Installing ({} of {}) {}",
+        color.c("MERGE_LIST_PROGRESS", &progress.cur.to_string()),
+        color.c("MERGE_LIST_PROGRESS", &progress.max.to_string()),
+        color.c(
+            pkg_color,
+            &format!(
+                "{}/{}-{version}::{}",
+                entry.category,
+                entry.package,
+                entry_repo(entry)
+            )
+        ),
+    );
+    if root.as_os_str() != "/" {
+        line.push_str(&format!(" to {}", root.display()));
+    }
+    line
+}
+
+/// Real `_emerge/PackageMerge.py::_install_exit` (`PackageMerge.py:56-
+/// 79`): `Completed ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}`
+/// when `ROOT != "/"`. Same colours and suppression as
+/// [`installing_line`].
+pub(crate) fn completed_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let binary = entry.source == CandidateSource::Binary;
+    let pkg_color = if binary {
+        "PKG_BINARY_MERGE"
+    } else {
+        "PKG_MERGE"
+    };
+    let mut line = format!(
+        ">>> Completed ({} of {}) {}",
+        color.c("MERGE_LIST_PROGRESS", &progress.cur.to_string()),
+        color.c("MERGE_LIST_PROGRESS", &progress.max.to_string()),
+        color.c(
+            pkg_color,
+            &format!(
+                "{}/{}-{version}::{}",
+                entry.category,
+                entry.package,
+                entry_repo(entry)
+            )
+        ),
+    );
+    if root.as_os_str() != "/" {
+        line.push_str(&format!(" to {}", root.display()));
+    }
+    line
+}
+
+/// The entry's `::repo` for the progress lines: `repo_name` is always
+/// `Some` for a merging entry (`GraphEntry::repo_name`'s own doc
+/// comment); an empty fallback keeps a would-be `None` loud (a visibly
+/// wrong `cpv::`) rather than silently reshaping the line.
+pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
+    entry.repo_name.as_deref().unwrap_or("")
+}
+
+/// A resumed *binary* entry's `::repo` for the merge progress lines.
+/// Real re-resolves a `["binary", root, cpv, "merge"]` resume item from
+/// its bintree (`depgraph.py::_loadResumeCommand` matches
+/// `pkg_type == "binary"` against the binary tree only), so the resumed
+/// Package -- and the `(N of M) cpv::repo` line (`PackageMerge._make_msg`,
+/// `PackageMerge.py:25`, `pkg.cpv + _repo_separator + pkg.repo`) --
+/// carries the *binary's* repository (the `Packages` index `REPO` field
+/// real `bintree` surfaces as the package's `repository`), never the
+/// ebuild repo. Mirrors the resolver's own pool order: the local
+/// `$PKGDIR` index first (real `bintree.isremote` prefers a local file),
+/// then the configured remote binhosts in order (`find_remote_binpkg`).
+/// A record without `REPO` yields `"__unknown__"` -- real
+/// `portage.versions._unknown_repo`, and exactly what
+/// `binary_candidates_from_index` (hence a fresh binary merge) reports
+/// for the same record. `None` when no binary pool lists the version at
+/// all: the caller keeps the ebuild-repo fallback (today's display; the
+/// merge itself then reports it cannot locate the entry, same as a
+/// non-resume run).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+pub(crate) fn resume_binary_repo(
+    local: &portage_repo::BinaryIndex,
+    binrepos: &[portage_profile::BinRepo],
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<String> {
+    if let Some(cand) = portage_repo::list_binary_candidates(local, category, package)
+        .into_iter()
+        .find(|c| c.version == version)
+    {
+        return Some(cand.repo_name);
+    }
+    let (_, record) = portage_repo::find_remote_binpkg(binrepos, root, category, package, version)?;
+    Some(
+        record
+            .get("REPO")
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "__unknown__".to_string()),
+    )
+}
+
+/// A minimal source `GraphEntry` for `emerge --resume` (`pretend.rs`):
+/// the saved `mtimedb` resume list only records `cat/pkg-ver`, so the
+/// display/USE/blocker fields are all empty. `required_by` is empty too --
+/// the resume mergelist is already in dependency-first merge order, so
+/// `run_merge_loop`'s `--keep-going` dependent-drop has nothing to key on
+/// (and `--resume` doesn't pass `--keep-going` anyway). `source` is the
+/// resumed mergelist entry's own recorded `ResumeEntryKind` (real's own
+/// `type` tag): `CandidateSource::Binary` always resolves from the local
+/// `$PKGDIR` (`remote_binary: false`) -- see `mtimedb.rs`'s own module
+/// doc comment for why re-deriving "was this fetched remotely" isn't
+/// attempted.
+///
+/// `repo_name` is re-derived from `repos` (the highest-priority repo
+/// carrying this exact version -- the same tie-break
+/// `locate_candidate` uses), because the merge progress lines print
+/// real's `cpv::repo` shape (backlog #177) and the saved resume list
+/// records only `cat/pkg-ver`. `None` when no repo carries the version
+/// anymore (the merge then reports it cannot locate the ebuild, same as
+/// a non-resume run). For a resumed *binary* entry the caller passes the
+/// binary's own repository (`resume_binary_repo`, real's bintree
+/// re-resolution, backlog #186) in `binary_repo`, which wins over the
+/// ebuild lookup; `None` keeps the ebuild lookup as the fallback.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+pub(crate) fn resume_entry(
+    category: &str,
+    package: &str,
+    version: &str,
+    source: CandidateSource,
+    repos: &[RepoConfig],
+    binary_repo: Option<&str>,
+) -> GraphEntry {
+    let repo_name = if source == CandidateSource::Binary {
+        binary_repo.map(str::to_string).or_else(|| {
+            portage_repo::list_candidates(repos, category, package)
+                .ok()
+                .and_then(|cs| {
+                    cs.iter()
+                        .filter(|c| c.version == version)
+                        .max_by_key(|c| c.repo_priority)
+                        .map(|c| c.repo_name.clone())
+                })
+        })
+    } else {
+        portage_repo::list_candidates(repos, category, package)
+            .ok()
+            .and_then(|cs| {
+                cs.iter()
+                    .filter(|c| c.version == version)
+                    .max_by_key(|c| c.repo_priority)
+                    .map(|c| c.repo_name.clone())
+            })
+    };
+    GraphEntry {
+        discovery: 0,
+        category: category.to_string(),
+        package: package.to_string(),
+        outcome: PretendOutcome::New {
+            version: version.to_string(),
+        },
+        blockers: Vec::new(),
+        slot: None,
+        sub_slot: None,
+        repo_name,
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: Vec::new(),
+        source,
+        provenance: Default::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
+
+/// Real portage's `PORTAGE_LOG_FILE` (`PORTAGE_LOGDIR` unset →
+/// `${T}/build.log`, i.e. `${PORTAGE_BUILDDIR}/temp/build.log`; with
+/// `FEATURES=compress-build-logs`, `${T}/build.log.gz` --
+/// `prepare_build_dirs.py`'s own `f"build.log{compress_log_ext}"`).
+/// The resolved `FEATURES` list for build-path decisions: `MergeOptions::
+/// features` when the caller resolved a config (#37 S2), else the raw
+/// process env (standalone `ebuild <file>` / tests, where `features` is
+/// empty). The same precedence `ebuild_phases::features_string` uses for
+/// the phase-execution gates.
+///
+/// `pub(crate)` for the binary-merge digest-failure path
+/// (`emerge_getbinpkg`): real `Binpkg` prepares the same builddir before
+/// `BinpkgVerifier` runs, so the failure log lives at this same path.
+pub(crate) fn resolved_features(options: &ebuild_merge::MergeOptions) -> String {
+    if options.features.is_empty() {
+        std::env::var("FEATURES").unwrap_or_default()
+    } else {
+        options.features.clone()
+    }
+}
+
+/// `pub(crate)` for the binary-merge digest-failure path
+/// (`emerge_getbinpkg`): real logs `BinpkgVerifier`'s digest block to
+/// this same `PORTAGE_LOG_FILE`.
+pub(crate) fn build_log_path(
+    portage_tmpdir: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    features: &str,
+) -> PathBuf {
+    let builddir = portage_tmpdir
+        .join("portage")
+        .join(category)
+        .join(format!("{package}-{version}"));
+    // Real `PORTAGE_LOGDIR`/`PORTAGE_LOG_FILE_SEP`/`FEATURES=split-log`
+    // -- the same "env var, not full config resolution" shortcut this
+    // whole CLI boundary already uses elsewhere (`DISTDIR`/`FEATURES`
+    // tokens/...); read once here, right where the log path itself is
+    // decided, and handed to the pure logic in
+    // `ensure_portage_logdir_symlink` so that function stays directly
+    // unit-testable with no env-var involvement at all.
+    let logdir = std::env::var_os("PORTAGE_LOGDIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty());
+    let sep = std::env::var("PORTAGE_LOG_FILE_SEP").unwrap_or_else(|_| ":".to_string());
+    let split_log = features.split_whitespace().any(|t| t == "split-log");
+    // Real `compress_log_ext` (`prepare_build_dirs.py:397-399`): the
+    // `.gz` suffix applies to BOTH the `${T}` path and the
+    // `PORTAGE_LOG_FILE` below, so the symlink and its target agree.
+    let compress = features
+        .split_whitespace()
+        .any(|t| t == "compress-build-logs");
+    let path = builddir.join("temp").join(if compress {
+        "build.log.gz"
+    } else {
+        "build.log"
+    });
+    ensure_portage_logdir_symlink(
+        &path,
+        &builddir,
+        category,
+        &format!("{package}-{version}"),
+        logdir.as_deref(),
+        &sep,
+        split_log,
+        compress,
+    );
+    path
+}
+
+/// Real `prepare_build_dirs()`'s own `PORTAGE_LOGDIR`/`FEATURES=
+/// split-log` handling (`prepare_build_dirs.py:368-468`): when
+/// `logdir` is given (`PORTAGE_LOGDIR` set, `build_log_path`'s own
+/// doc comment), the real build log lives there permanently --
+/// `<logdir>/<CATEGORY><sep><PF><sep><logid_time>.log`, or under
+/// `split_log`, `<logdir>/build/<CATEGORY>/<PF><sep><logid_time>.log`
+/// -- and `tmpdir_log_path` (`${T}/build.log`) becomes a symlink to it
+/// rather than the real file. With `compress`
+/// (`FEATURES=compress-build-logs`, `prepare_build_dirs.py:397-399`'s
+/// own `compress_log_ext = ".gz"`), both names gain the `.gz` suffix
+/// and phase output is gzip-encoded into the file
+/// (`ebuild_phases::open_log_file`'s pump thread -- real
+/// `EbuildPhase._open_log`'s `gzip.GzipFile(mode="ab")`). Everything
+/// downstream that opens `tmpdir_log_path` still just opens the path
+/// `build_log_path` returned, symlinks transparently followed by
+/// `std::fs`, so this is the only place that needs to know about
+/// `PORTAGE_LOGDIR` at all. A no-op when `logdir` is `None`
+/// (`PORTAGE_LOGDIR` unset or empty -- real's own `if
+/// mysettings.get("PORTAGE_LOGDIR", "") == "": del it`) or when it
+/// can't be created (real's own "Permission issues... Disabling
+/// logging").
+///
+/// `logid_time`: a `.logid` marker file's own mtime (real's own
+/// `os.stat(logid_path).st_mtime`), created on first use and reused
+/// afterward -- so every phase of the same build (each its own fresh
+/// shell, `ebuild_phases::run_one_phase`'s own doc comment) and a
+/// resumed one all share one timestamp, matching real exactly.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn ensure_portage_logdir_symlink(
+    tmpdir_log_path: &Path,
+    builddir: &Path,
+    category: &str,
+    pf: &str,
+    logdir: Option<&Path>,
+    sep: &str,
+    split_log: bool,
+    compress: bool,
+) {
+    let Some(logdir) = logdir else {
+        return;
+    };
+    if std::fs::create_dir_all(logdir).is_err() {
+        // Real: permission issues here disable logging for this build
+        // entirely (`tmpdir_log_path` stays the real file).
+        return;
+    }
+
+    let logid_path = builddir.join(".logid");
+    let logid_time = std::fs::metadata(&logid_path)
+        .and_then(|m| m.modified())
+        .or_else(|_| {
+            std::fs::create_dir_all(builddir)?;
+            std::fs::write(&logid_path, [])?;
+            std::fs::metadata(&logid_path)?.modified()
+        })
+        .unwrap_or_else(|_| std::time::SystemTime::now());
+    let stamp = crate::elog::utc_stamp_at(logid_time);
+
+    // Real `compress_log_ext`: the `.gz` goes on the real log file
+    // name itself (both `split-log` and flat layouts).
+    let ext = if compress { ".log.gz" } else { ".log" };
+    let (log_subdir, real_log) = if split_log {
+        let subdir = logdir.join("build").join(category);
+        let file = subdir.join(format!("{pf}{sep}{stamp}{ext}"));
+        (subdir, file)
+    } else {
+        let file = logdir.join(format!("{category}{sep}{pf}{sep}{stamp}{ext}"));
+        (logdir.to_path_buf(), file)
+    };
+    if std::fs::create_dir_all(&log_subdir).is_err() {
+        return;
+    }
+
+    // Real's own idempotent re-symlink check (`make_new_symlink`):
+    // skip if it already points at the right place.
+    let needs_new = std::fs::read_link(tmpdir_log_path)
+        .map(|target| target != real_log)
+        .unwrap_or(true);
+    if needs_new {
+        if let Some(parent) = tmpdir_log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::remove_file(tmpdir_log_path);
+        let _ = std::os::unix::fs::symlink(&real_log, tmpdir_log_path);
+    }
+}
+
+/// Last `n` lines of `path`, or a short "(build log unavailable)" note.
+/// A `.gz` path (`FEATURES=compress-build-logs`) is gunzipped first --
+/// real's own failure display (`Scheduler.py`) and QA scan
+/// (`doebuild.py`) both wrap a `.gz`-suffixed log in
+/// `gzip.GzipFile(mode="rb")` before reading.
+fn tail_of(path: &Path, n: usize) -> String {
+    let is_gz = path.extension().is_some_and(|ext| ext == "gz");
+    let text: Option<String> = if is_gz {
+        std::fs::File::open(path).ok().and_then(|f| {
+            use std::io::Read;
+            let mut decoder = flate2::read::MultiGzDecoder::new(f);
+            let mut s = String::new();
+            decoder.read_to_string(&mut s).ok().map(|_| s)
+        })
+    } else {
+        std::fs::read_to_string(path).ok()
+    };
+    match text {
+        Some(s) => {
+            let lines: Vec<&str> = s.lines().collect();
+            let start = lines.len().saturating_sub(n);
+            lines[start..].join("\n")
+        }
+        None => "(build log unavailable)".to_string(),
+    }
+}
+
+/// Real `_emerge/EbuildBuild` (+ `EbuildBinpkg`): the `install` phase
+/// chain and any `--buildpkg` binpkg for one source entry, WITHOUT the
+/// vdb merge. Returns the located ebuild path for `merge_one_built_entry`
+/// to reuse. Safe to run from a scheduler worker thread -- every build
+/// gets its own `${PORTAGE_BUILDDIR}` (`<tmpdir>/portage/<cat>/<pkg>-<ver>`)
+/// and `run_commands` passes the environment explicitly (no
+/// `std::env::set_var`). When `capture_log` is set, the `install` phase's
+/// stdout+stderr go to `${T}/build.log` instead of the terminal (real
+/// `PORTAGE_LOG_FILE`); on a build failure the tail of that log is folded
+/// into the returned error so the scheduler can show it.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn build_one_source_entry(
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+    buildpkg: Option<&ebuild_package::PackageOptions>,
+    capture_log: bool,
+    progress: mrg_director::MergeProgress,
+    display: &StatusDisplay,
+) -> Result<PathBuf, String> {
+    let (cp, version) = scheduler_cp_version(entry)?;
+    let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
+        return Err(format!(
+            "{cp}-{version}: could not locate its own ebuild file \
+             (repo layout changed since resolution?)"
+        ));
+    };
+    let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
+    // Real `MergeListItem._start`'s per-package line (backlog #177) --
+    // the build half of the scheduler split prints it when the build
+    // starts, exactly where real starts the `EbuildBuild` chain.
+    let color = progress_color();
+    display.status(&emerging_line(entry, &version, progress, root, &color));
+    // Real per-package `PORTAGE_TMPDIR` (#99): this entry's build log,
+    // pre-clean and phase chain all live under the matched value.
+    let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
+    let portage_tmpdir = entry_tmpdir.as_path();
+
+    let log_path = capture_log.then(|| {
+        build_log_path(
+            portage_tmpdir,
+            &entry.category,
+            &entry.package,
+            &version,
+            &resolved_features(options),
+        )
+    });
+    if let Some(lp) = &log_path {
+        // Real `prepare_build_dirs` truncates a stale build.log.
+        // Truncate (don't delete): with `PORTAGE_LOGDIR` set, `lp` is
+        // a symlink to the real log file, and deleting it would drop
+        // the link and strand the new log in `${T}` instead of the
+        // logdir. `set_len(0)` follows the link to the real file.
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(lp) {
+            let _ = f.set_len(0);
+        }
+    }
+    // A captured parallel build runs through real `bash` (not the
+    // embedded `brush`), whose stdout+stderr redirect to `build.log`
+    // cleanly at the OS level -- real portage uses real bash for builds
+    // regardless of portuale's default backend.
+    let shell = if log_path.is_some() {
+        ebuild_phases::ShellBackend::Bash
+    } else {
+        options.shell
+    };
+    let build_env = entry_build_env(options, entry, repos);
+    // Real `_emerge/EbuildBuild._start_pre_clean`: the `clean` phase runs
+    // before every build, unconditionally (`noclean` only skips the
+    // post-merge clean) -- see `merge_one_source_entry`'s own call for
+    // the full grounding. Backlog #42.
+    let clean_status = ebuild_phases::run_clean(
+        &path,
+        root,
+        portage_tmpdir,
+        &build_env,
+        options.debug,
+        &options.config_root,
+        shell,
+        log_path.as_deref(),
+    )?;
+    if clean_status != 0 {
+        return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
+    }
+    let status = ebuild_phases::run_commands_logged(
+        &path,
+        &["install"],
+        root,
+        portage_tmpdir,
+        &options.distdir,
+        options.debug,
+        &options.config_root,
+        shell,
+        log_path.as_deref(),
+        &build_env,
+    )?;
+    if status != 0 {
+        let mut msg = format!("{cp}-{version}: build failed ({status})");
+        if let Some(lp) = &log_path {
+            msg.push_str(&format!(
+                "\n----- last lines of {} -----\n{}\n----------",
+                lp.display(),
+                tail_of(lp, 40)
+            ));
+        }
+        return Err(msg);
+    }
+    if let Some(package_options) = buildpkg {
+        println!(">>> Building package for {cp}-{version}...");
+        // Real `Package.use.enabled` is what real `_pkgindex_entry`
+        // writes as this binpkg's own `USE` field -- the same resolved
+        // flag set the `install` phase itself just ran with, not the
+        // ebuild's own default (`use_flags_display`-derived `USE` env
+        // var `entry_build_env` already resolved for that phase, reused
+        // verbatim here rather than re-derived, so the two can never
+        // drift apart).
+        let use_flags = build_env
+            .iter()
+            .find(|(k, _)| k == "USE")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
+        // Real per-package `FEATURES` (backlog #130): the shared,
+        // run-wide `PackageOptions` `buildpkg` carries doesn't see this
+        // entry's own `package.env` `FEATURES` fold otherwise -- clone it
+        // and re-derive the binpkg-affecting tokens
+        // (`binpkg-multi-instance`/`buildpkg-live`/`binpkg-signing`) from
+        // the same per-entry folded list `entry_resolved_features`
+        // already computes for the phase env. `None` (no match) keeps
+        // `package_options`'s own already-resolved value.
+        let mut per_entry_package_options = package_options.clone();
+        let per_entry_features = entry_resolved_features(
+            options,
+            entry,
+            &std::env::var("FEATURES").unwrap_or_default(),
+        );
+        if let Some(features) = &per_entry_features {
+            per_entry_package_options.set_resolved_features(features);
+        }
+        // Real `EbuildBinpkg._start`'s per-package `BUILD_ID` gate
+        // (backlog #147 S1 ruling (i)): the layout stays run-wide,
+        // the export follows this entry's own token -- the folded
+        // list when one matched, the run-wide value otherwise.
+        let per_entry_binpkg_multi_instance = per_entry_features
+            .as_deref()
+            .map(|features| {
+                features
+                    .split_whitespace()
+                    .any(|t| t == "binpkg-multi-instance")
+            })
+            .unwrap_or(per_entry_package_options.binpkg_multi_instance);
+        let status = ebuild_package::package_after_install(
+            &path,
+            root,
+            portage_tmpdir,
+            &per_entry_package_options,
+            use_flags,
+            per_entry_binpkg_multi_instance,
+        )?;
+        if status != 0 {
+            return Err(format!("{cp}-{version}: binpkg build failed ({status})"));
+        }
+    }
+    Ok(path)
+}
+
+/// Real `_emerge/EbuildMerge` (always serialized -- only the build above
+/// runs in parallel): the vdb merge for a source entry whose `install`
+/// phase already ran. Reuses `run_qmerge` (which checks the same real
+/// `${PORTAGE_BUILDDIR}/.installed` marker `install` leaves behind and
+/// runs `merge_after_install`, including the same-slot replace of an
+/// upgraded/reinstalled version).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn merge_one_built_entry(
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+    progress: mrg_director::MergeProgress,
+    display: &StatusDisplay,
+) -> Result<(), String> {
+    let (cp, version) = scheduler_cp_version(entry)?;
+    // `merge_after_install`'s `pkg_preinst`/`pkg_postinst` see this
+    // entry's resolved `USE` too (see `merge_one_source_entry`).
+    let mut per_entry = options.clone();
+    per_entry.build_env = entry_build_env(options, entry, repos);
+    if let Some((protect, mask)) = reloaded_config_protect(options) {
+        per_entry.config_protect = protect;
+        per_entry.config_protect_mask = mask;
+    }
+    // Real per-package `FEATURES` (#98): the merge half's gates
+    // (`feature_enabled`, the vdb-environment regeneration) read the
+    // per-entry folded list, not the run-wide one. `set_resolved_features`
+    // re-derives the merge-time tokens from it; `None` (no match) keeps
+    // the run-wide value untouched.
+    if let Some(features) = entry_resolved_features(
+        options,
+        entry,
+        &std::env::var("FEATURES").unwrap_or_default(),
+    ) {
+        per_entry.set_resolved_features(&features);
+    }
+    // Real per-package `PORTAGE_TMPDIR` (#99): the merge half runs under
+    // the same resolved root the build half used (resolved again here so
+    // this function keeps its standalone `portage_tmpdir` contract).
+    let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
+    let portage_tmpdir = entry_tmpdir.as_path();
+    // This function is only ever reached once `build_one_source_entry`
+    // already captured the same package's own `install` phase to this
+    // exact path (both callers only route here when `capture_log` is
+    // true) -- reusing it here (`MergeOptions::log_file`'s own doc
+    // comment) means `pkg_preinst`/`pkg_postinst`'s own output lands
+    // appended after `install`'s, in one continuous per-package log,
+    // instead of leaking straight to the terminal the way it
+    // previously did under `-jN`/`--quiet-build`.
+    per_entry.log_file = Some(build_log_path(
+        portage_tmpdir,
+        &entry.category,
+        &entry.package,
+        &version,
+        &resolved_features(options),
+    ));
+    // Real `PackageMerge._start`'s per-package line (backlog #177) --
+    // the merge half of the scheduler split prints it right before the
+    // serialized vdb merge, exactly where real starts `EbuildMerge`.
+    let color = progress_color();
+    display.status(&installing_line(entry, &version, progress, root, &color));
+    let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
+    if status != 0 {
+        return Err(format!("{cp}-{version}: merge failed ({status})"));
+    }
+    // Real `dblink.merge()`'s tail (`dbapi/vartree.py:6183-6198`): the
+    // `clean` phase runs after a successful merge unless
+    // `FEATURES=noclean` (the postinst-failure gate collapses into
+    // `status != 0` above). `run_qmerge` itself deliberately does *not*
+    // clean -- real `doebuild qmerge` implies noclean (see its own doc
+    // comment) -- so this is where the `emerge` scheduler/captured
+    // build+merge split gets the real post-merge behavior. Backlog #42.
+    if !ebuild_merge::feature_enabled(&per_entry, "noclean") {
+        ebuild_phases::run_clean(
+            ebuild_path,
+            root,
+            portage_tmpdir,
+            &per_entry.build_env,
+            per_entry.debug,
+            &per_entry.config_root,
+            per_entry.shell,
+            per_entry.log_file.as_deref(),
+        )?;
+    }
+    // Real `PackageMerge._install_exit`'s per-package line (backlog
+    // #177): this is the `Completed (N of M) cpv::repo` real prints
+    // where portuale used to print its own `merged.` line.
+    display.status(&completed_line(entry, &version, progress, root, &color));
+    Ok(())
+}
+
+/// Marks every (transitive) dependent of `idx` as skipped -- real
+/// `Scheduler._calc_resume_list` after a failed build under
+/// `--keep-going`.
+fn scheduler_skip_dependents(
+    idx: usize,
+    entries: &[GraphEntry],
+    cp_to_idx: &std::collections::HashMap<(String, String), usize>,
+    skip: &mut std::collections::HashSet<usize>,
+    skipped: &mut Vec<String>,
+) {
+    let mut queue = vec![idx];
+    while let Some(x) = queue.pop() {
+        for r_cp in &entries[x].required_by {
+            if let Some(&r_idx) = cp_to_idx.get(r_cp)
+                && skip.insert(r_idx)
+            {
+                skipped.push(format!(
+                    "{}/{}",
+                    entries[r_idx].category, entries[r_idx].package
+                ));
+                queue.push(r_idx);
+            }
+        }
+    }
+}
+
+/// Real `_emerge/Scheduler.py`'s core: run up to `jobs` package *builds*
+/// (`install` phase) concurrently, dispatching a build only once every
+/// dependency it has in the merge set is already merged, and serializing
+/// the vdb merge step (real portage merges one package at a time to avoid
+/// `collision-protect` / `CONTENTS` races). `jobs == usize::MAX` (a bare
+/// `--jobs`/`-j`) means "as many as the graph allows".
+///
+/// Real portage's `--load-average` gate: the current system 1-minute load
+/// average (Linux `/proc/loadavg`), or `0.0` if it can't be read (a
+/// non-Linux host, or a sandboxed `/proc`) -- which disables the throttle
+/// rather than stalling. Shared with `regen.rs`'s own `--jobs` dispatch
+/// (real `PollScheduler._can_add_job` gates `MetadataRegen` the same way).
+pub(crate) fn system_loadavg_1min() -> f64 {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
+        .unwrap_or(0.0)
+}
+
+/// KNOWN, DOCUMENTED CUTS (same "narrow v1" pattern as the rest of this
+/// module): each build's own phase output is inherited straight to the
+/// terminal and so interleaves under `-j` >1 (real portage captures
+/// per-package build logs -- a later slice); each `run_commands` call
+/// still spins up its own tokio runtime; a non-`--keep-going` failure
+/// returns immediately but still waits for already-running builds to
+/// finish (`thread::scope` join), it does not kill them.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+fn run_build_scheduler(
+    entries: &[GraphEntry],
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+    keep_going: bool,
+    buildpkg: Option<&ebuild_package::PackageOptions>,
+    buildpkg_exclude: &[String],
+    // The `-jN` dispatch policy (real `_emerge/Scheduler.py`'s jobs +
+    // `--load-average` gate): the director's `SchedulerPolicy` trait,
+    // so a capped (`LoadAwarePolicy`) or uncapped (`UnlimitedPolicy`)
+    // scheduler is one caller-side value, never a loop change here.
+    policy: &dyn mrg_director::SchedulerPolicy,
+    // Backlog #197: the run's status display (the `>>> Jobs:` events
+    // below plus the blank/`>>>` rule inside the build/merge halves).
+    display: &StatusDisplay,
+) -> Result<(), String> {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::mpsc;
+
+    let n = entries.len();
+    let cp_to_idx: HashMap<(String, String), usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| ((e.category.clone(), e.package.clone()), i))
+        .collect();
+
+    // idx -> the indices (present in this graph) it depends on. `d`'s
+    // `required_by` lists the cps that depend on `d`, so the edge is
+    // `d -> r` for every `r` in `d.required_by`.
+    let mut deps: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    for (d_idx, d) in entries.iter().enumerate() {
+        for r_cp in &d.required_by {
+            if let Some(&r_idx) = cp_to_idx.get(r_cp) {
+                deps[r_idx].insert(d_idx);
+            }
+        }
+    }
+
+    // Entries that need no build (AlreadyInstalled / Binary) count as
+    // already merged, so their dependents become dispatchable immediately.
+    // (Backlog #197: the `>>> Jobs:` `maxval` lives on the run's
+    // `StatusDisplay`, computed by the caller -- see `run_source_merge`.)
+    let mut merged: HashSet<usize> = (0..n)
+        .filter(|&i| !scheduler_needs_build(&entries[i]))
+        .collect();
+    let mut started: HashSet<usize> = HashSet::new();
+    let mut skip: HashSet<usize> = HashSet::new();
+    let mut failures: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    // One registry for this whole scheduler call, shared only with the
+    // worker threads *it* spawns below -- see `ebuild_phases::
+    // SCHEDULER_REGISTRY`'s own doc comment for why this must not be a
+    // single process-wide singleton (an unrelated `cargo test` thread's
+    // subprocess must never be reachable from here).
+    let registry = ebuild_phases::new_scheduler_registry();
+    // Real `Scheduler._pkg_count` for this run (backlog #177): every
+    // build/merge half below prints its entry's own snapshot.
+    let progress = merge_progress_map(entries);
+
+    std::thread::scope(|scope| -> Result<(), String> {
+        let (tx, rx) = mpsc::channel::<(usize, Result<PathBuf, String>)>();
+        let mut in_flight = 0usize;
+        loop {
+            // The policy's two halves, asked in the order the trait
+            // contract names: `max_jobs` caps concurrency, then
+            // `should_start` gates one more build on the live 1-minute
+            // load average -- real `Scheduler._run` never gates the
+            // first build, so the DAG cannot deadlock. Identical
+            // decisions to the old inline `in_flight < jobs` +
+            // load-average gate for `LoadAwarePolicy`.
+            while in_flight < policy.max_jobs() {
+                if !policy.should_start(in_flight, system_loadavg_1min()) {
+                    break;
+                }
+                let next = (0..n).find(|&i| {
+                    scheduler_needs_build(&entries[i])
+                        && !started.contains(&i)
+                        && !skip.contains(&i)
+                        && !merged.contains(&i)
+                        && deps[i].iter().all(|d| merged.contains(d))
+                });
+                let Some(idx) = next else { break };
+                started.insert(idx);
+                in_flight += 1;
+                // Backlog #197: real `_schedule_tasks_imp`'s `running =
+                // self._jobs` -- the `>>> Jobs: 0 of N complete, R
+                // running` line prints at dispatch, *before* the worker
+                // prints its `>>> Emerging` line (real's event order).
+                display.job_started();
+                // Real `Scheduler._pkg_count` (backlog #177): the
+                // entry's own positional snapshot -- the worker
+                // closure below is `move` and cannot borrow the map.
+                let entry_progress = progress[idx];
+                let tx = tx.clone();
+                let bp = buildpkg.filter(|opts| {
+                    entry_buildpkg_wanted(
+                        &entries[idx],
+                        repos,
+                        buildpkg_exclude,
+                        opts.buildpkg_live,
+                    )
+                });
+                let entry = &entries[idx];
+                let registry = registry.clone();
+                scope.spawn(move || {
+                    // Registers every real subprocess this worker
+                    // thread spawns into `registry` for the closure's
+                    // own lifetime -- see `ebuild_phases::
+                    // SCHEDULER_REGISTRY`'s own doc comment.
+                    let _guard = ebuild_phases::scope_scheduler_registry(registry);
+                    let r = build_one_source_entry(
+                        entry,
+                        repos,
+                        root,
+                        portage_tmpdir,
+                        options,
+                        bp,
+                        // Capture each build's phase output to its own
+                        // `${T}/build.log` so parallel builds don't
+                        // interleave on the terminal (real portage's
+                        // `--quiet-build`, on by default under `--jobs`).
+                        true,
+                        entry_progress,
+                        display,
+                    );
+                    let _ = tx.send((idx, r));
+                });
+            }
+
+            if in_flight == 0 {
+                break;
+            }
+
+            let (idx, build_result) = rx
+                .recv()
+                .map_err(|e| format!("scheduler channel closed unexpectedly: {e}"))?;
+            in_flight -= 1;
+
+            let failure = match build_result {
+                Ok(path) => {
+                    // Backlog #197: real `_build_exit`'s tail -- the
+                    // build slot is free (`running` drops) before the
+                    // serialized merge starts.
+                    display.build_finished();
+                    let entry = &entries[idx];
+                    let entry_progress = progress[idx];
+                    let err = merge_one_built_entry(
+                        entry,
+                        repos,
+                        &path,
+                        root,
+                        portage_tmpdir,
+                        options,
+                        entry_progress,
+                        display,
+                    )
+                    .err();
+                    if err.is_some() {
+                        // Backlog #197: real `_merge_exit` /
+                        // `_do_merge_exit`'s failure arm
+                        // (`Scheduler.py:1543-1561`): `failed` rises
+                        // (its `>>> Jobs:` line prints). The build slot
+                        // is already free from the tail above, so no
+                        // `running` event fires here -- and the `Some`
+                        // arm below fires none either, so each failure
+                        // prints exactly real's lines.
+                        display.job_failed();
+                    }
+                    err
+                }
+                Err(e) => {
+                    // Backlog #197: real `_build_exit`'s failure arm
+                    // (`Scheduler.py:1641-1658`) -- `failed` rises
+                    // before the freed build slot (`running` drops)
+                    // prints. (Real also prints its `>>> Failed to
+                    // emerge ...` tail between the two; portuale's
+                    // source-build failure rendering is unchanged by
+                    // this slice.)
+                    display.job_failed();
+                    display.build_finished();
+                    Some(e)
+                }
+            };
+
+            match failure {
+                None => {
+                    merged.insert(idx);
+                    // Real `Scheduler.py:1595-1602`, same as the serial
+                    // loop: each successful merge leaves the saved resume
+                    // list (order-free removal by value, so parallel
+                    // completion order is fine).
+                    if let Some(cpv) = resume_cpv(&entries[idx]) {
+                        crate::mtimedb::remove_merged_entry(root, &cpv);
+                    }
+                    // Backlog #197: real `_merge_exit`'s `curval += 1`.
+                    display.merge_finished();
+                }
+                Some(e) => {
+                    // Backlog #197: no display events here -- the
+                    // build-failure arm above already fired `job_failed`
+                    // + `build_finished`, and the merge-failure arm
+                    // already fired `job_failed`. Each failure prints
+                    // exactly real's lines (failed-set, then the
+                    // running-drop where real drops it).
+                    if !keep_going {
+                        // Real `_keep_scheduling`/`_terminate_tasks`
+                        // (`PollScheduler.py:106-126`): once any package
+                        // fails without `--keep-going`, real portage
+                        // stops scheduling new work AND sends kill
+                        // signals to what's already running, rather than
+                        // letting it finish. `return Err(e)` here already
+                        // does the first half (the outer `loop` never
+                        // starts another build), but without this,
+                        // `std::thread::scope`'s own implicit join would
+                        // otherwise just wait for every other in-flight
+                        // build to run to completion anyway -- wasted
+                        // work whose result is discarded regardless.
+                        ebuild_phases::kill_registered_children(&registry);
+                        return Err(e);
+                    }
+                    failures.push(e);
+                    scheduler_skip_dependents(idx, entries, &cp_to_idx, &mut skip, &mut skipped);
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut msg = format!(
+        "{} package(s) failed to merge (--keep-going):\n{}",
+        failures.len(),
+        failures
+            .iter()
+            .map(|f| format!("  {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    if !skipped.is_empty() {
+        msg.push_str(&format!(
+            "\n{} dependent package(s) not merged:\n{}",
+            skipped.len(),
+            skipped
+                .iter()
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    Err(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_repo::find_repos;
+    use portage_util::TempDir;
+    use std::fs;
+
+    fn fixtures_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        let dir = TempDir::new("emerge_build_test").keep();
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn ensure_portage_logdir_symlink_is_a_noop_without_a_logdir() {
+        let tmp = tempdir();
+        let t_dir = tmp.join("t");
+        fs::create_dir_all(&t_dir).unwrap();
+        let log_path = t_dir.join("build.log");
+        fs::write(&log_path, "already here").unwrap();
+        ensure_portage_logdir_symlink(
+            &log_path,
+            &tmp.join("builddir"),
+            "dev-libs",
+            "foo-1.0",
+            None,
+            ":",
+            false,
+            false,
+        );
+        // Real file untouched -- no PORTAGE_LOGDIR means no symlink.
+        assert_eq!(fs::read_to_string(&log_path).unwrap(), "already here");
+        assert!(
+            fs::symlink_metadata(&log_path)
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn ensure_portage_logdir_symlink_points_t_build_log_at_the_real_logdir() {
+        let tmp = tempdir();
+        let builddir = tmp.join("builddir");
+        let t_dir = builddir.join("temp");
+        fs::create_dir_all(&t_dir).unwrap();
+        let log_path = t_dir.join("build.log");
+        let logdir = tmp.join("logdir");
+
+        ensure_portage_logdir_symlink(
+            &log_path,
+            &builddir,
+            "dev-libs",
+            "foo-1.0",
+            Some(&logdir),
+            ":",
+            false,
+            false,
+        );
+
+        let target = fs::read_link(&log_path).expect("build.log must be a symlink");
+        assert!(
+            target.starts_with(&logdir),
+            "{target:?} should live under {logdir:?}"
+        );
+        assert_eq!(target.parent().unwrap(), logdir);
+        let name = target.file_name().unwrap().to_str().unwrap();
+        // Real "<CATEGORY><sep><PF><sep><logid_time>.log".
+        assert!(name.starts_with("dev-libs:foo-1.0:"), "{name}");
+        assert!(name.ends_with(".log"), "{name}");
+        // Writing through the symlink lands in the real logdir file.
+        std::fs::write(&log_path, b"hello").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "hello");
+
+        // Idempotent: calling again doesn't churn the symlink or drop
+        // the timestamp (the .logid marker file makes it stable).
+        let before = fs::read_link(&log_path).unwrap();
+        ensure_portage_logdir_symlink(
+            &log_path,
+            &builddir,
+            "dev-libs",
+            "foo-1.0",
+            Some(&logdir),
+            ":",
+            false,
+            false,
+        );
+        assert_eq!(fs::read_link(&log_path).unwrap(), before);
+    }
+
+    #[test]
+    fn ensure_portage_logdir_symlink_honors_split_log_and_the_separator() {
+        let tmp = tempdir();
+        let builddir = tmp.join("builddir");
+        let t_dir = builddir.join("temp");
+        fs::create_dir_all(&t_dir).unwrap();
+        let log_path = t_dir.join("build.log");
+        let logdir = tmp.join("logdir");
+
+        ensure_portage_logdir_symlink(
+            &log_path,
+            &builddir,
+            "dev-libs",
+            "foo-1.0",
+            Some(&logdir),
+            "-",
+            true, // split_log
+            false,
+        );
+
+        let target = fs::read_link(&log_path).expect("build.log must be a symlink");
+        // Real "<logdir>/build/<CATEGORY>/<PF><sep><logid_time>.log".
+        assert_eq!(
+            target.parent().unwrap(),
+            logdir.join("build").join("dev-libs")
+        );
+        let name = target.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("foo-1.0-"), "{name}");
+        assert!(!name.contains(':'), "{name} should use the '-' separator");
+    }
+
+    #[test]
+    fn ensure_portage_logdir_symlink_gains_the_gz_suffix_when_compressed() {
+        // Real `prepare_build_dirs.py:397-399` (`compress_log_ext`):
+        // with `FEATURES=compress-build-logs` the real log file is
+        // `<...>.log.gz` in both the flat and `split-log` layouts.
+        for split_log in [false, true] {
+            let tmp = tempdir();
+            let builddir = tmp.join("builddir");
+            let t_dir = builddir.join("temp");
+            fs::create_dir_all(&t_dir).unwrap();
+            let log_path = t_dir.join("build.log.gz");
+            let logdir = tmp.join("logdir");
+
+            ensure_portage_logdir_symlink(
+                &log_path,
+                &builddir,
+                "dev-libs",
+                "foo-1.0",
+                Some(&logdir),
+                ":",
+                split_log,
+                true, // compress
+            );
+
+            let target = fs::read_link(&log_path).expect("build.log.gz must be a symlink");
+            let name = target.file_name().unwrap().to_str().unwrap();
+            assert!(name.ends_with(".log.gz"), "{name}");
+            if split_log {
+                // Real `<logdir>/build/<CATEGORY>/<PF><sep><logid_time>.log.gz`.
+                assert!(name.starts_with("foo-1.0:"), "{name}");
+                assert_eq!(
+                    target.parent().unwrap(),
+                    logdir.join("build").join("dev-libs")
+                );
+            } else {
+                // Real `<logdir>/<CATEGORY><sep><PF><sep><logid_time>.log.gz`.
+                assert!(name.starts_with("dev-libs:foo-1.0:"), "{name}");
+                assert_eq!(target.parent().unwrap(), logdir);
+            }
+        }
+    }
+
+    #[test]
+    fn tail_of_gunzips_a_compressed_build_log() {
+        // Real `Scheduler.py` / `doebuild.py` wrap a `.gz`-suffixed log
+        // in `gzip.GzipFile(mode="rb")` before reading: the failure tail
+        // must decode, not print binary.
+        let tmp = tempdir();
+        let log_path = tmp.join("build.log.gz");
+        {
+            let f = fs::File::create(&log_path).unwrap();
+            let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+            use std::io::Write;
+            enc.write_all(b"line1\nline2\nline3\nline4\n").unwrap();
+            enc.finish().unwrap();
+        }
+        assert_eq!(tail_of(&log_path, 2), "line3\nline4");
+        assert_eq!(
+            tail_of(&tmp.join("missing.log.gz"), 2),
+            "(build log unavailable)"
+        );
+    }
+
+    #[test]
+    fn locate_candidate_finds_the_real_fixture_ebuild_file() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let candidate = locate_candidate(&repos, "dev-libs", "packagepkg", "1.0").unwrap();
+        let path = ebuild_path(&candidate, "dev-libs", "packagepkg", "1.0");
+        assert!(path.ends_with("dev-libs/packagepkg/packagepkg-1.0.ebuild"));
+        assert!(path.is_file(), "{path:?} should exist");
+    }
+
+    #[test]
+    fn locate_candidate_is_none_for_a_version_that_does_not_exist() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        assert!(locate_candidate(&repos, "dev-libs", "packagepkg", "99.0").is_none());
+    }
+
+    fn live_test_entry() -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "propertiespkg".into(),
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            blockers: vec![],
+            slot: None,
+            sub_slot: None,
+            repo_name: None,
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source: CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn entry_is_live_reads_a_real_properties_live_fixture() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let live_candidate = locate_candidate(&repos, "dev-libs", "propertiespkg", "1.0").unwrap();
+        assert!(entry_is_live(&live_candidate, &live_test_entry()));
+
+        let non_live_candidate = locate_candidate(&repos, "dev-libs", "packagepkg", "1.0").unwrap();
+        assert!(!entry_is_live(&non_live_candidate, &live_test_entry()));
+    }
+
+    #[test]
+    fn entry_buildpkg_wanted_skips_a_live_build_only_when_buildpkg_live_is_off() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let entry = live_test_entry();
+
+        // Real default (buildpkg-live on): a live build is still packaged.
+        assert!(entry_buildpkg_wanted(&entry, &repos, &[], true));
+        // FEATURES=-buildpkg-live: a live build is skipped...
+        assert!(!entry_buildpkg_wanted(&entry, &repos, &[], false));
+
+        // ...but a non-live package is unaffected either way.
+        let mut non_live = entry.clone();
+        non_live.package = "packagepkg".to_string();
+        assert!(entry_buildpkg_wanted(&non_live, &repos, &[], true));
+        assert!(entry_buildpkg_wanted(&non_live, &repos, &[], false));
+
+        // --buildpkg-exclude still wins outright, regardless of buildpkg-live.
+        assert!(!entry_buildpkg_wanted(
+            &entry,
+            &repos,
+            &["dev-libs/propertiespkg".to_string()],
+            true
+        ));
+    }
+
+    #[test]
+    fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
+        // Neither outcome ever has a resolvable version (see
+        // entry_version), so this must return Ok(()) without attempting
+        // any real execution at all -- proven by using a nonexistent
+        // ROOT/PORTAGE_TMPDIR/PackageOptions that would fail loudly if
+        // touched.
+        let entries = vec![
+            GraphEntry {
+                discovery: 0,
+                category: "dev-libs".into(),
+                package: "samepkg".into(),
+                outcome: PretendOutcome::AlreadyInstalled {
+                    version: "1.0".into(),
+                },
+                blockers: vec![],
+                slot: None,
+                sub_slot: None,
+                repo_name: None,
+                oldbest: vec![],
+                use_flags_display: vec![],
+                use_expand_display: vec![],
+                use_expand_display_p: vec![],
+                keyword_mask: None,
+                new_slot: false,
+                interactive: false,
+                fetch_restrict: false,
+                fetch_restrict_satisfied: false,
+                download_files: Vec::new(),
+                required_by: vec![],
+                source: CandidateSource::Ebuild,
+                provenance: Default::default(),
+                keyword_suggestion: None,
+                use_suggestion: None,
+                parent_use_suggestion: None,
+                targets_running_root: false,
+                remote_binary: false,
+                build_id: None,
+                deps: Vec::new(),
+            },
+            GraphEntry {
+                discovery: 0,
+                category: "dev-libs".into(),
+                package: "nosuchpkg".into(),
+                outcome: PretendOutcome::NoVisibleCandidate,
+                blockers: vec![],
+                slot: None,
+                sub_slot: None,
+                repo_name: None,
+                oldbest: vec![],
+                use_flags_display: vec![],
+                use_expand_display: vec![],
+                use_expand_display_p: vec![],
+                keyword_mask: None,
+                new_slot: false,
+                interactive: false,
+                fetch_restrict: false,
+                fetch_restrict_satisfied: false,
+                download_files: Vec::new(),
+                required_by: vec![],
+                source: CandidateSource::Ebuild,
+                provenance: Default::default(),
+                keyword_suggestion: None,
+                use_suggestion: None,
+                parent_use_suggestion: None,
+                targets_running_root: false,
+                remote_binary: false,
+                build_id: None,
+                deps: Vec::new(),
+            },
+        ];
+        let bogus = PathBuf::from("/nonexistent/does/not/exist");
+        let result = run_buildpkgonly(
+            &entries,
+            &portage_profile::Config::default(),
+            &[],
+            &bogus,
+            &bogus,
+            &PackageOptions {
+                debug: false,
+                pkgdir: bogus.clone(),
+                distdir: bogus.clone(),
+                shell: PackageOptions::default().shell,
+                // Pinned to "bzip2" (near-universal base package) rather
+                // than real Default's "zstd", so these tests don't
+                // depend on the test-running host actually having zstd
+                // installed -- real xpak/tbz2 building is codec-
+                // agnostic either way.
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resume_cpv_maps_source_and_binary_and_skips_non_merges() {
+        // The up-front resume save (real `Scheduler._save_resume_list`'s
+        // `operation == "merge"` filter) records every entry that will
+        // actually merge -- source and binary alike -- and nothing else.
+        let src = resume_entry(
+            "dev-libs",
+            "src-pkg",
+            "1.0",
+            CandidateSource::Ebuild,
+            &[],
+            None,
+        );
+        assert_eq!(
+            resume_cpv(&src),
+            Some((
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "src-pkg".to_string(),
+                "1.0".to_string(),
+            ))
+        );
+        let bin = resume_entry(
+            "dev-libs",
+            "bin-pkg",
+            "2.0",
+            CandidateSource::Binary,
+            &[],
+            None,
+        );
+        assert_eq!(
+            resume_cpv(&bin),
+            Some((
+                crate::mtimedb::ResumeEntryKind::Binary,
+                "dev-libs".to_string(),
+                "bin-pkg".to_string(),
+                "2.0".to_string(),
+            ))
+        );
+        let mut installed = resume_entry(
+            "dev-libs",
+            "old-pkg",
+            "3.0",
+            CandidateSource::Ebuild,
+            &[],
+            None,
+        );
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "3.0".into(),
+        };
+        assert_eq!(resume_cpv(&installed), None);
+        let mut uninstalled = resume_entry(
+            "dev-libs",
+            "gone-pkg",
+            "4.0",
+            CandidateSource::Ebuild,
+            &[],
+            None,
+        );
+        uninstalled.outcome = PretendOutcome::NoVisibleCandidate;
+        assert_eq!(resume_cpv(&uninstalled), None);
+    }
+
+    #[test]
+    fn resume_binary_repo_comes_from_the_binary_pool_not_the_ebuild_repos() {
+        // #186: real `depgraph.py::_loadResumeCommand` re-resolves a
+        // `["binary", root, cpv, "merge"]` resume item from the bintree,
+        // so the resumed `(N of M) cpv::repo` line names the binary's own
+        // repository. Local `$PKGDIR` index first, then the configured
+        // remote binhosts; a record without `REPO` is `"__unknown__"`
+        // (what a fresh binary merge shows for it); nothing anywhere is
+        // `None` (the caller then keeps the ebuild fallback).
+        use std::collections::HashMap;
+        let record = |cpv: &str, repo: Option<&str>| {
+            let mut m = HashMap::new();
+            m.insert("CPV".to_string(), cpv.to_string());
+            if let Some(r) = repo {
+                m.insert("REPO".to_string(), r.to_string());
+            }
+            m
+        };
+        let local = portage_repo::BinaryIndex::from_entries(vec![
+            record("dev-libs/bin-a-1.0", Some("binhostrepo")),
+            record("dev-libs/bin-norepo-1.0", None),
+            record("dev-libs/bin-s-1.0", Some("localrepo")),
+        ]);
+        let here = Path::new("/");
+        assert_eq!(
+            resume_binary_repo(&local, &[], here, "dev-libs", "bin-a", "1.0"),
+            Some("binhostrepo".to_string())
+        );
+        assert_eq!(
+            resume_binary_repo(&local, &[], here, "dev-libs", "bin-norepo", "1.0"),
+            Some("__unknown__".to_string())
+        );
+        assert_eq!(
+            resume_binary_repo(&local, &[], here, "dev-libs", "missing", "1.0"),
+            None
+        );
+
+        // Remote hit through a `file://` binhost the local index lacks.
+        let remote_dir = tempdir();
+        fs::write(
+            remote_dir.join("Packages"),
+            "TIMESTAMP: 0\nPACKAGES: 2\n\nCPV: dev-libs/bin-r-2.0\nREPO: remoterepo\n\nCPV: dev-libs/bin-s-1.0\nREPO: remoterepo\n",
+        )
+        .unwrap();
+        let binrepos = vec![portage_profile::BinRepo {
+            name: "tmpremote".to_string(),
+            sync_uri: format!("file://{}", remote_dir.display()),
+            priority: 1,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+        }];
+        assert_eq!(
+            resume_binary_repo(&local, &binrepos, here, "dev-libs", "bin-r", "2.0"),
+            Some("remoterepo".to_string())
+        );
+        // The local index shadows the binhost for the same version.
+        assert_eq!(
+            resume_binary_repo(&local, &binrepos, here, "dev-libs", "bin-s", "1.0"),
+            Some("localrepo".to_string())
+        );
+        let _ = fs::remove_dir_all(&remote_dir);
+    }
+
+    #[test]
+    fn resume_entry_uses_the_binary_repo_for_binary_entries_only() {
+        // #186: `binary_repo` wins for a `Binary` entry (even when an
+        // ebuild repo would resolve -- here there are no repos at all,
+        // so the fallback would be `None` either way and the win is
+        // exact), is ignored for an `Ebuild` entry, and `None` keeps the
+        // ebuild fallback.
+        let bin = resume_entry(
+            "dev-libs",
+            "bin-pkg",
+            "2.0",
+            CandidateSource::Binary,
+            &[],
+            Some("binhostrepo"),
+        );
+        assert_eq!(bin.repo_name.as_deref(), Some("binhostrepo"));
+        let src = resume_entry(
+            "dev-libs",
+            "src-pkg",
+            "1.0",
+            CandidateSource::Ebuild,
+            &[],
+            Some("binhostrepo"),
+        );
+        assert_eq!(src.repo_name, None);
+        let fallback = resume_entry(
+            "dev-libs",
+            "bin-pkg",
+            "2.0",
+            CandidateSource::Binary,
+            &[],
+            None,
+        );
+        assert_eq!(fallback.repo_name, None);
+    }
+
+    #[test]
+    fn run_merge_loop_shrinks_the_saved_resume_list_per_successful_merge() {
+        // #168 through the production serial loop: with the full mergelist
+        // saved up front, each successful merge removes exactly that entry
+        // (real `Scheduler.py:1595-1602`), so a SIGKILL mid-run leaves the
+        // tail and the last merge deletes the key.
+        let root = tempdir();
+        let entries = vec![
+            resume_entry(
+                "dev-libs",
+                "loop-a",
+                "1.0",
+                CandidateSource::Ebuild,
+                &[],
+                None,
+            ),
+            resume_entry(
+                "dev-libs",
+                "loop-b",
+                "1.0",
+                CandidateSource::Ebuild,
+                &[],
+                None,
+            ),
+            resume_entry(
+                "dev-libs",
+                "loop-c",
+                "1.0",
+                CandidateSource::Ebuild,
+                &[],
+                None,
+            ),
+        ];
+        let full: Vec<crate::mtimedb::ResumeCpv> =
+            entries.iter().map(|e| resume_cpv(e).unwrap()).collect();
+        crate::mtimedb::write_resume_list(
+            &root,
+            &["dev-libs/loop-a"],
+            &full,
+            &crate::mtimedb::ResumeOpts::default(),
+        )
+        .unwrap();
+
+        run_merge_loop(&entries, false, &root, |_, entry| {
+            // By the time this entry's own merge runs, every earlier entry
+            // has already left the on-disk list.
+            let pos = full
+                .iter()
+                .position(|(_, _, p, _)| p == &entry.package)
+                .expect("loop entry is in the saved list");
+            let (_, remaining, _) =
+                crate::mtimedb::read_resume_list(&root).expect("resume list mid-run");
+            assert_eq!(remaining, full[pos..]);
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(crate::mtimedb::read_resume_list(&root).is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "packagepkg".into(),
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source: CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }];
+
+        let result = run_buildpkgonly(
+            &entries,
+            &portage_profile::Config::default(),
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                // Pinned to "bzip2" (near-universal base package) rather
+                // than real Default's "zstd", so these tests don't
+                // depend on the test-running host actually having zstd
+                // installed -- real xpak/tbz2 building is codec-
+                // agnostic either way.
+                binpkg_compress: "bzip2".to_string(),
+                // Pinned explicitly (backlog #173): this test asserts
+                // XPAK magic via the xpak reader, not the (now gpkg)
+                // default.
+                binpkg_format: "xpak".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let tbz2 = pkgdir.join("dev-libs/packagepkg-1.0.tbz2");
+        assert!(tbz2.is_file(), "{tbz2:?} should exist");
+        let bytes = fs::read(&tbz2).unwrap();
+        assert!(
+            bytes.windows(8).any(|w| w == b"XPAKPACK"),
+            "missing real XPAK magic bytes"
+        );
+
+        // #39: `packagepkg` installs a real file, so the
+        // `_post_src_install_uid_fix` size walk must record a positive
+        // `SIZE` in the archive's metadata.
+        let meta = crate::binpkg::read_xpak_metadata(&tbz2).expect("xpak metadata parses");
+        assert!(
+            meta.get("SIZE")
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .is_some_and(|n| n > 0),
+            "SIZE must be positive for a package with a real file, got {:?}",
+            meta.get("SIZE")
+        );
+
+        let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
+        assert!(packages.contains("CPV: dev-libs/packagepkg-1.0"));
+    }
+
+    /// Backlog #129: `--buildpkgonly`'s per-entry env now matches
+    /// `package.env` the same way the merge scheduler's `entry_build_env`
+    /// does -- Phase 2 S0 cell A/F's own oracle (a matched `CFLAGS`/`CC`
+    /// wins over the run-wide value), applied to the third build path.
+    /// Direct unit test of `buildpkgonly_entry_build_env` (no real build),
+    /// the same pattern `entry_build_env_resolves_full_use_expand_and_
+    /// entry_identity` already uses for the merge-scheduler sibling.
+    #[test]
+    fn buildpkgonly_entry_build_env_matches_package_env_and_folds_flags() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let candidate = locate_candidate(&repos, "dev-libs", "penvbuildpkg", "1.0")
+            .expect("penvbuildpkg-1.0 fixture candidate resolves");
+        let entry = source_entry(
+            "penvbuildpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/penvbuildpkg".to_string(),
+                vec![
+                    (
+                        "CFLAGS".to_string(),
+                        "-Os -march=buildpkgonlypenv".to_string(),
+                    ),
+                    ("CC".to_string(), "buildpkgonly-cc".to_string()),
+                ],
+            )],
+            ..portage_profile::Config::default()
+        };
+        let run_wide = run_wide_phase_env(&config);
+        let cpv_slot = entry_cpv_slot(&entry, "1.0");
+        let build_env =
+            buildpkgonly_entry_build_env(&config, &repos, &entry, &candidate, &cpv_slot, &run_wide);
+        let get = |key: &str| {
+            build_env
+                .iter()
+                .filter(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .next_back()
+        };
+        assert_eq!(
+            get("CFLAGS").as_deref(),
+            Some("-Os -march=buildpkgonlypenv")
+        );
+        assert_eq!(get("CC").as_deref(), Some("buildpkgonly-cc"));
+
+        // An unmatched entry (different cpv) keeps the run-wide value --
+        // #129 must not leak a matched entry's vars onto its neighbours.
+        let other = source_entry(
+            "newpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let other_candidate = locate_candidate(&repos, "dev-libs", "newpkg", "1.0")
+            .expect("newpkg-1.0 fixture candidate resolves");
+        let other_cpv_slot = entry_cpv_slot(&other, "1.0");
+        let other_env = buildpkgonly_entry_build_env(
+            &config,
+            &repos,
+            &other,
+            &other_candidate,
+            &other_cpv_slot,
+            &run_wide,
+        );
+        assert_ne!(
+            other_env
+                .iter()
+                .find(|(k, _)| k == "CFLAGS")
+                .map(|(_, v)| v.as_str()),
+            Some("-Os -march=buildpkgonlypenv"),
+            "an unmatched neighbour must not see the matched entry's package.env value"
+        );
+    }
+
+    /// Backlog #98/#129: a `package.env` `FEATURES` entry is an
+    /// incremental -- it folds onto the run-wide list
+    /// (`[run-wide, pkg, calling-env]`), it does not replace it.
+    #[test]
+    fn buildpkgonly_entry_build_env_folds_matched_features() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let candidate = locate_candidate(&repos, "dev-libs", "penvbuildpkg", "1.0")
+            .expect("penvbuildpkg-1.0 fixture candidate resolves");
+        let entry = source_entry(
+            "penvbuildpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/penvbuildpkg".to_string(),
+                vec![("FEATURES".to_string(), "splitdebug".to_string())],
+            )],
+            ..portage_profile::Config::default()
+        };
+        let run_wide = run_wide_phase_env(&config);
+        let run_wide_features = run_wide
+            .iter()
+            .find(|(k, _)| k == "FEATURES")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let cpv_slot = entry_cpv_slot(&entry, "1.0");
+        let build_env =
+            buildpkgonly_entry_build_env(&config, &repos, &entry, &candidate, &cpv_slot, &run_wide);
+        let features = build_env
+            .iter()
+            .filter(|(k, _)| k == "FEATURES")
+            .map(|(_, v)| v.clone())
+            .next_back()
+            .expect("FEATURES is exported");
+        assert!(
+            features.split_whitespace().any(|t| t == "splitdebug"),
+            "matched FEATURES must fold in, got {features:?}"
+        );
+        for tok in run_wide_features.split_whitespace() {
+            assert!(
+                features.split_whitespace().any(|t| t == tok),
+                "the run-wide FEATURES token {tok:?} must survive the fold, got {features:?}"
+            );
+        }
+    }
+
+    /// Backlog #99/#129 (Phase 2 S0 cell E): a matched `PORTAGE_TMPDIR`
+    /// that does not exist on disk is real's exact `_check_temp_dir`
+    /// failure, and `run_buildpkgonly` now re-derives the tmpdir per
+    /// entry instead of only ever using the run-wide one.
+    #[test]
+    fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_match() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+        let missing = portage_tmpdir.join("no-such-buildpkgonly-tmpdir");
+
+        let entries = vec![source_entry(
+            "penvbuildpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/penvbuildpkg".to_string(),
+                vec![(
+                    "PORTAGE_TMPDIR".to_string(),
+                    missing.to_str().unwrap().to_string(),
+                )],
+            )],
+            ..portage_profile::Config::default()
+        };
+
+        let result = run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir,
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        );
+        let err = result.expect_err("a missing matched PORTAGE_TMPDIR must fail the entry");
+        assert!(
+            err.contains(&format!(
+                "The directory specified in your PORTAGE_TMPDIR variable, '{}',",
+                missing.display()
+            )),
+            "expected real's exact _check_temp_dir message, got: {err}"
+        );
+        assert!(
+            err.contains("does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting."),
+            "expected real's exact _check_temp_dir message, got: {err}"
+        );
+    }
+
+    /// Backlog #130: `--buildpkgonly` re-derives `PackageOptions`'
+    /// binpkg-affecting fields (`binpkg_multi_instance` here) from the
+    /// per-entry `package.env` `FEATURES` fold, not the single shared,
+    /// Real per-package `FEATURES` (backlog #147 S1 ruling (i)):
+    /// the binpkg layout is run-wide-only (real's bintree binds its
+    /// allocator once, `bintree.py:529-531` -- S0 A1x/A2 prove both
+    /// directions), while the `BUILD_ID` export follows the entry's
+    /// own token (real `EbuildBinpkg.py:47-48`). With run-wide
+    /// multi-instance ON, a per-entry `-binpkg-multi-instance`
+    /// negation still takes the multi path (layout ignores it) but
+    /// exports no `BUILD_ID` (the gate honors it) -- S0 A2 shape.
+    /// Needs no Portage checkout: the install/package phases run through
+    /// the native helpers (#326 S2-S7), verified live with
+    /// `PORTUALE_PORTAGE_CHECKOUT=/nonexistent`.
+    #[test]
+    fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![
+            source_entry(
+                "packagepkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "newpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        let config = portage_profile::Config {
+            package_env_vars: vec![
+                (
+                    "dev-libs/packagepkg".to_string(),
+                    vec![("FEATURES".to_string(), "binpkg-multi-instance".to_string())],
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    vec![("FEATURES".to_string(), "-binpkg-multi-instance".to_string())],
+                ),
+            ],
+            ..portage_profile::Config::default()
+        };
+
+        let result = run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                binpkg_multi_instance: true,
+                // Pinned explicitly (backlog #173): this test pins the
+                // `.xpak` multi-instance paths, not the (now gpkg)
+                // default.
+                binpkg_format: "xpak".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        // Layout is run-wide: the negated neighbour takes the multi
+        // path too, not the single-instance default.
+        let matched = pkgdir.join("dev-libs/packagepkg/packagepkg-1.0-1.xpak");
+        assert!(
+            matched.is_file(),
+            "{matched:?} should exist -- run-wide multi-instance layout"
+        );
+        let negated = pkgdir.join("dev-libs/newpkg/newpkg-1.0-1.xpak");
+        assert!(
+            negated.is_file(),
+            "{negated:?} should exist -- the per-entry negation must not move the layout"
+        );
+        // ...while the `BUILD_ID` export follows the entry's own
+        // token: present for the match, absent for the negation.
+        let index = std::fs::read_to_string(pkgdir.join("Packages")).expect("index written");
+        let stanza = |cpv: &str| {
+            index
+                .split("\n\n")
+                .find(|block| block.contains(&format!("CPV: {cpv}\n")))
+                .unwrap_or_else(|| panic!("{cpv} stanza should exist"))
+        };
+        assert!(
+            stanza("dev-libs/packagepkg-1.0")
+                .lines()
+                .any(|line| line.starts_with("BUILD_ID: 1")),
+            "the matched entry's index stanza should carry its BUILD_ID"
+        );
+        assert!(
+            stanza("dev-libs/newpkg-1.0")
+                .lines()
+                .all(|line| !line.starts_with("BUILD_ID")),
+            "the negated entry's index stanza should carry no BUILD_ID"
+        );
+    }
+
+    /// Real per-package `BINPKG_COMPRESS` (backlog #147 S2): a
+    /// `package.env` scalar match must reach the xpak tar pipe for
+    /// that entry only (real `doebuild_environment()` reads the
+    /// package's own `mysettings`, `doebuild.py:697` -- S0 B-xpak
+    /// proves gzip magic with a zstd run-wide). The observable is
+    /// the archive magic: the matched entry compresses with its own
+    /// codec, its unmatched neighbour in the same run keeps the
+    /// run-wide one. Needs no Portage checkout: the install/package
+    /// phases run through the native helpers (#326 S2-S7), verified live
+    /// with `PORTUALE_PORTAGE_CHECKOUT=/nonexistent`, like the
+    /// multi-instance test above.
+    #[test]
+    fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![
+            source_entry(
+                "penvbuildpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "newpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        // In-memory package.env table (no committed fixture change --
+        // the scalars are env-driven, not ebuild-driven): gzip for the
+        // matched package only. Run-wide stays on the bzip2 fallback
+        // (no `BINPKG_COMPRESS` in this config or process env), so the
+        // neighbour pins the unchanged run-wide behavior too.
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/penvbuildpkg".to_string(),
+                vec![("BINPKG_COMPRESS".to_string(), "gzip".to_string())],
+            )],
+            ..portage_profile::Config::default()
+        };
+
+        let result = run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                binpkg_format: "xpak".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let magic_of = |path: std::path::PathBuf| {
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+            assert!(
+                bytes.len() > 4,
+                "{path:?} should hold a real archive, not an empty file"
+            );
+            bytes[..4].to_vec()
+        };
+        let matched = pkgdir.join("dev-libs/penvbuildpkg-1.0.tbz2");
+        assert_eq!(
+            magic_of(matched.clone()),
+            b"\x1f\x8b\x08\x00".to_vec(),
+            "{matched:?} should be gzip-compressed -- the matched entry's package.env \
+             BINPKG_COMPRESS=gzip must reach the xpak pipe, not just the run-wide bzip2"
+        );
+        let unmatched = pkgdir.join("dev-libs/newpkg-1.0.tbz2");
+        assert_eq!(
+            magic_of(unmatched.clone())[..3],
+            b"BZh".to_vec(),
+            "{unmatched:?} should keep the run-wide bzip2 bytes -- the neighbour must not \
+             inherit the match"
+        );
+    }
+
+    fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: package.into(),
+            outcome,
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source: CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+    /// Backlog #177: the merge progress counters -- real
+    /// `Scheduler._pkg_count` (`Scheduler.py:296-304`): only merging
+    /// outcomes count, and each merging entry's `cur` is its 1-based
+    /// ordinal in merge order. The map is positional (`out[i]` belongs to
+    /// `entries[i]`), so two merging entries for the same cat/pkg -- two
+    /// slots of one package in a single run -- keep their own `cur`
+    /// (review of #177). Grounded in the cited real source (there
+    /// is no Python mirror); the `testrepo` repo name is this module's
+    /// own `source_entry` fixture value.
+    #[test]
+    fn merge_progress_map_counts_only_merging_entries_in_order() {
+        let mut slot1 = source_entry(
+            "same-pkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        slot1.slot = Some("1".into());
+        let mut slot2 = source_entry(
+            "same-pkg",
+            PretendOutcome::Upgrade {
+                from: "0.9".into(),
+                to: "1.0".into(),
+            },
+        );
+        slot2.slot = Some("2".into());
+        let entries = vec![
+            slot1,
+            source_entry(
+                "b-pkg",
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".into(),
+                },
+            ),
+            slot2,
+            source_entry(
+                "d-pkg",
+                PretendOutcome::Uninstall {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        let map = merge_progress_map(&entries);
+        assert_eq!(map.len(), 4);
+        // The two same-cat/pkg entries print their own `cur`.
+        assert_eq!(map[0], mrg_director::MergeProgress { cur: 1, max: 2 });
+        assert_eq!(map[2], mrg_director::MergeProgress { cur: 2, max: 2 });
+        // Non-merging entries carry the never-printed placeholder.
+        assert_eq!(map[1], mrg_director::MergeProgress::single());
+        assert_eq!(map[3], mrg_director::MergeProgress::single());
+        // And the lines really read `(1 of 2)` / `(2 of 2)`.
+        let plain = crate::color::Colorizer::new(false);
+        let root = std::path::Path::new("/");
+        assert_eq!(
+            emerging_line(&entries[0], "1.0", map[0], root, &plain),
+            ">>> Emerging (1 of 2) dev-libs/same-pkg-1.0::testrepo"
+        );
+        assert_eq!(
+            emerging_line(&entries[2], "1.0", map[2], root, &plain),
+            ">>> Emerging (2 of 2) dev-libs/same-pkg-1.0::testrepo"
+        );
+    }
+
+    /// Backlog #177: the exact progress-line strings -- real
+    /// `_emerge/MergeListItem.py::_start` (`MergeListItem.py:60-85`) for
+    /// `Emerging`/`Emerging binary`, real `_emerge/PackageMerge.py`
+    /// (`PackageMerge.py:32-79`) for `Installing`/`Completed`. Colour
+    /// escapes are `color.rs`'s port of `output.py:68-92`
+    /// (`MERGE_LIST_PROGRESS` = yellow `\x1b[33;01m`, `PKG_MERGE` =
+    /// darkgreen `\x1b[32m`, `PKG_BINARY_MERGE` = purple `\x1b[35m`,
+    /// reset `\x1b[39;49;00m`); `ROOT != "/"` appends ` for {root}`
+    /// (Emerging) vs ` to {root}` (Installing/Completed).
+    #[test]
+    fn merge_progress_lines_match_portage_exact_text() {
+        use std::path::Path;
+        let plain = crate::color::Colorizer::new(false);
+        let root = Path::new("/");
+        let two_of_three = mrg_director::MergeProgress { cur: 2, max: 3 };
+        let a = source_entry(
+            "a-pkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let mut b = source_entry(
+            "b-pkg",
+            PretendOutcome::New {
+                version: "2.0".into(),
+            },
+        );
+        b.source = CandidateSource::Binary;
+
+        // Source, colour off, `ROOT == "/"`: the bare shape.
+        assert_eq!(
+            emerging_line(&a, "1.0", two_of_three, root, &plain),
+            ">>> Emerging (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+        );
+        // Binary: `Emerging binary`, same counters.
+        assert_eq!(
+            emerging_line(&b, "2.0", two_of_three, root, &plain),
+            ">>> Emerging binary (2 of 3) dev-libs/b-pkg-2.0::testrepo"
+        );
+        assert_eq!(
+            installing_line(&a, "1.0", two_of_three, root, &plain),
+            ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+        );
+        assert_eq!(
+            completed_line(&a, "1.0", two_of_three, root, &plain),
+            ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+        );
+
+        // `ROOT != "/"`: `for` on Emerging, `to` on Installing/Completed.
+        let alt = Path::new("/altroot");
+        assert_eq!(
+            emerging_line(&a, "1.0", two_of_three, alt, &plain),
+            ">>> Emerging (2 of 3) dev-libs/a-pkg-1.0::testrepo for /altroot"
+        );
+        assert_eq!(
+            installing_line(&a, "1.0", two_of_three, alt, &plain),
+            ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot"
+        );
+        assert_eq!(
+            completed_line(&a, "1.0", two_of_three, alt, &plain),
+            ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot"
+        );
+
+        // Colour on: only the two counters and the `cpv::repo` wear
+        // escapes; the action word, parens, `of`, and `for ROOT` stay
+        // plain -- exactly real `colorize()`'s call sites.
+        let live = crate::color::Colorizer::new(true);
+        assert_eq!(
+            emerging_line(&a, "1.0", two_of_three, root, &live),
+            ">>> Emerging (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[32mdev-libs/a-pkg-1.0::testrepo\x1b[39;49;00m"
+        );
+        assert_eq!(
+            emerging_line(&b, "2.0", two_of_three, root, &live),
+            ">>> Emerging binary (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[35mdev-libs/b-pkg-2.0::testrepo\x1b[39;49;00m"
+        );
+        assert_eq!(
+            installing_line(&a, "1.0", two_of_three, root, &live),
+            ">>> Installing (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[32mdev-libs/a-pkg-1.0::testrepo\x1b[39;49;00m"
+        );
+    }
+
+    /// #37 S2: with a resolved config in scope, `entry_build_env` threads
+    /// the full effective `USE` (implicit profile flags included), the
+    /// per-package `USE_EXPAND` values, and the entry's `SLOT`/repo
+    /// identity -- the S0 oracle's exact row set
+    /// (`TEST/findings/l2.md` "S0 recon (#37)").
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let mut config = portage_profile::Config::default();
+        // The profile layers `effective_use_flags` replays: implicit
+        // arch/elibc/kernel flags no package declares in IUSE.
+        config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+        config.iuse_effective = [
+            "abi_x86_64",
+            "amd64",
+            "elibc_glibc",
+            "kernel_linux",
+            "riscv",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        config.use_expand = ["ABI_X86"].iter().map(|s| s.to_string()).collect();
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox".to_string());
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.build_env = portage_profile::phase_environ(&config, None);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+
+        let mut entry = source_entry(
+            "archusepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let env = entry_build_env(&options, &entry, &repos);
+        // Later pairs win in both backends (`Command::envs` / successive
+        // `export`s), so read the *last* pair: the run-wide base carries
+        // empty `USE_EXPAND` placeholders that the per-entry rows override.
+        fn get<'a>(env: &'a [(String, String)], k: &str) -> Option<&'a str> {
+            env.iter()
+                .rev()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.as_str())
+        }
+        // `archusepkg` declares `IUSE="amd64 riscv"`; the implicit flags
+        // come from the resolver's full effective set, not from IUSE.
+        assert_eq!(
+            get(&env, "USE"),
+            Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+        );
+        assert_eq!(
+            get(&env, "IUSE_EFFECTIVE"),
+            Some("abi_x86_64 amd64 elibc_glibc kernel_linux riscv")
+        );
+        assert_eq!(get(&env, "ABI_X86"), Some("64"));
+        assert_eq!(get(&env, "SLOT"), Some("0"));
+        assert_eq!(get(&env, "PORTAGE_REPO_REVISIONS"), Some("{}"));
+        assert_eq!(get(&env, "PORTAGE_REPO_NAME"), Some("testrepo"));
+        // The run-wide half rides along, folded `FEATURES` included.
+        assert_eq!(get(&env, "FEATURES"), Some("sandbox"));
+        // Real `environ_filter`/`AA`-pop rows stay out (S0 findings).
+        for absent in ["O", "AA", "SRC_URI", "PORTAGE_USE"] {
+            assert_eq!(get(&env, absent), None, "{absent}");
+        }
+
+        // A declared sub-slot renders `slot/sub_slot`; a missing
+        // `entry.repo_name` falls back to the candidate's own repo.
+        entry.sub_slot = Some("5".to_string());
+        entry.repo_name = None;
+        let env = entry_build_env(&options, &entry, &repos);
+        assert_eq!(get(&env, "SLOT"), Some("0/5"));
+        assert!(
+            get(&env, "PORTAGE_REPO_NAME").is_some_and(|v| !v.is_empty()),
+            "repo fallback missing"
+        );
+    }
+
+    /// Backlog #98: the per-entry folded `FEATURES` list. A matched env
+    /// file value folds onto the run-wide list in `[run-wide, pkg,
+    /// calling-env]` order (S0 cells B/C); no match returns `None`, so
+    /// the run-wide value — and every gate reading it — stays untouched.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn entry_resolved_features_folds_the_matched_env_file_value() {
+        let options_for = |features: &str, pkg_raw: &str| {
+            let mut options = ebuild_merge::MergeOptions::default();
+            options.features = features.to_string();
+            if !pkg_raw.is_empty() {
+                options.package_env_vars = vec![(
+                    "dev-libs/penvccpkg".to_string(),
+                    vec![("FEATURES".to_string(), pkg_raw.to_string())],
+                )];
+            }
+            options
+        };
+        let entry = source_entry(
+            "penvccpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        // No match: None, the run-wide value stands.
+        assert_eq!(
+            entry_resolved_features(&options_for("sandbox", ""), &entry, ""),
+            None
+        );
+        // Env file only: the token joins the folded, sorted list (S0 C).
+        assert_eq!(
+            entry_resolved_features(
+                &options_for("sandbox userfetch", "probe-feature"),
+                &entry,
+                ""
+            ),
+            Some("probe-feature sandbox userfetch".to_string())
+        );
+        // A `-tok` in the calling env prunes the pkg token (S0 B).
+        assert_eq!(
+            entry_resolved_features(
+                &options_for("sandbox userfetch", "probe-feature"),
+                &entry,
+                "-probe-feature"
+            ),
+            Some("sandbox userfetch".to_string())
+        );
+        // A pkg `-tok` does not prune a calling-env token.
+        assert_eq!(
+            entry_resolved_features(
+                &options_for("sandbox", "-userfetch probe-feature"),
+                &entry,
+                "userfetch"
+            ),
+            Some("probe-feature sandbox userfetch".to_string())
+        );
+        // A non-matching atom contributes nothing.
+        let mut options = options_for("sandbox", "probe-feature");
+        options.package_env_vars = vec![(
+            "dev-libs/otherpkg".to_string(),
+            vec![("FEATURES".to_string(), "probe-feature".to_string())],
+        )];
+        assert_eq!(entry_resolved_features(&options, &entry, ""), None);
+    }
+
+    /// #37 S2 end-to-end: a real source merge with a resolved config
+    /// threads the full effective `USE`, the resolved (folded)
+    /// `FEATURES` -- which must win over `phase_env_vars`' raw process-env
+    /// base -- and the entry's `SLOT` into the phase, under **both**
+    /// backends. `build-info/USE` is what real `__dyn_install` writes from
+    /// the phase `${USE}`; the `.keep_*` marker is written by the external
+    /// `ebuild-helpers/keepdir` subprocess, which is why an unexported
+    /// `SLOT` used to produce a bare `-` (S0's `l2-env-*` findings).
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
+        for (shell, label) in [
+            (ebuild_phases::ShellBackend::Bash, "bash"),
+            (ebuild_phases::ShellBackend::Brush, "brush"),
+        ] {
+            let config_root = fixtures_root();
+            let repos = find_repos(&config_root).unwrap();
+            let root = tempdir();
+            let portage_tmpdir = tempdir();
+            let mut config = portage_profile::Config::default();
+            config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+            config.iuse_effective = ["abi_x86_64", "amd64", "elibc_glibc", "kernel_linux"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let mut config_env = config.clone();
+            config_env.other_vars.insert(
+                "FEATURES".to_string(),
+                "resolved features token".to_string(),
+            );
+            let mut options = ebuild_merge::MergeOptions {
+                distdir: tempdir(),
+                config_root: config_root.clone(),
+                shell,
+                ..ebuild_merge::MergeOptions::default()
+            };
+            options.build_env = portage_profile::phase_environ(&config_env, None);
+            options.resolved_config = Some(std::sync::Arc::new(config));
+            // The `${T}`/`build-info` files asserted below are the
+            // subject; keep the builddir the way real `FEATURES=noclean`
+            // does (the default post-merge clean is pinned separately).
+            options.features = "noclean".to_string();
+
+            let entries = vec![source_entry(
+                "phaseenvpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            )];
+            run_source_merge(
+                &entries,
+                &repos,
+                &root,
+                &portage_tmpdir,
+                &options,
+                false,
+                None,
+                &[],
+                1,
+                None,
+                false,
+                StatusMode::for_tests(),
+            )
+            .unwrap_or_else(|e| panic!("{label}: source merge succeeds: {e}"));
+
+            let keep = root.join("var/lib/phaseenvtest/.keep_dev-libs_phaseenvpkg-0");
+            assert!(
+                keep.exists(),
+                "{label}: keepdir marker missing: {}",
+                keep.display()
+            );
+            let t_dir = portage_tmpdir.join("portage/dev-libs/phaseenvpkg-1.0/temp");
+            assert_eq!(
+                fs::read_to_string(t_dir.join("phase-env-use.txt")).unwrap(),
+                "USE=abi_x86_64 amd64 elibc_glibc kernel_linux\n",
+                "{label}: USE"
+            );
+            assert_eq!(
+                fs::read_to_string(t_dir.join("phase-env-slot.txt")).unwrap(),
+                "SLOT=0\n",
+                "{label}: SLOT"
+            );
+            assert_eq!(
+                fs::read_to_string(t_dir.join("phase-env-features.txt")).unwrap(),
+                "FEATURES=resolved features token\n",
+                "{label}: the resolved FEATURES must win over the raw process-env base"
+            );
+            let build_use = fs::read_to_string(
+                portage_tmpdir.join("portage/dev-libs/phaseenvpkg-1.0/build-info/USE"),
+            )
+            .expect("build-info/USE should be written by the real __dyn_install");
+            assert_eq!(
+                build_use.trim(),
+                "abi_x86_64 amd64 elibc_glibc kernel_linux",
+                "{label}: build-info/USE"
+            );
+
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_dir_all(&portage_tmpdir);
+        }
+    }
+
+    /// Backlog #332: real `Scheduler._allocate_config`
+    /// (`Scheduler.py:1899-1913`) calls `config.reload()` for every
+    /// package task, which re-reads `env.d` (`config.py:2691-2699`).
+    /// `entry_build_env` is portuale's `_allocate_config` point: once
+    /// `<eroot>/etc/profile.env` changes after the config was resolved,
+    /// the env it returns carries the new variable; with `profile.env`
+    /// untouched it equals the pre-#332 env exactly (fast path).
+    /// Expected value from real source (`config.py:2691-2699`), the bed
+    /// finding being `PT_HELPER_DOINS` missing from later packages.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn entry_build_env_rereads_profile_env_changed_after_resolve() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let eroot = tempdir();
+        fs::create_dir_all(eroot.join("etc")).unwrap();
+        fs::write(eroot.join("etc/profile.env"), "export ENVDRELOAD_OLD='x'\n").unwrap();
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["amd64".to_string()];
+        config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
+        config.envd_eroot = eroot.clone();
+        config.envd_raw = "export ENVDRELOAD_OLD='x'\n".to_string();
+        config
+            .envd_vars
+            .insert("ENVDRELOAD_OLD".to_string(), "x".to_string());
+        config
+            .other_vars
+            .insert("ENVDRELOAD_OLD".to_string(), "x".to_string());
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.build_env = run_wide_phase_env(&config);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+        let entry = source_entry(
+            "archusepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let before = entry_build_env(&options, &entry, &repos);
+        assert_eq!(before, entry_build_env(&options, &entry, &repos));
+        assert!(before.iter().all(|(k, _)| k != "ENVDRELOAD_VAR"));
+
+        // A merge ran `env-update`: the file now carries a new variable.
+        fs::write(
+            eroot.join("etc/profile.env"),
+            "export ENVDRELOAD_OLD='x'\nexport ENVDRELOAD_VAR='1'\n",
+        )
+        .unwrap();
+        let after = entry_build_env(&options, &entry, &repos);
+        let last = |k: &str| {
+            after
+                .iter()
+                .rev()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(last("ENVDRELOAD_VAR"), Some("1"));
+        assert_eq!(last("ENVDRELOAD_OLD"), Some("x"));
+        assert_eq!(last("SLOT"), Some("0"));
+        let _ = fs::remove_dir_all(&eroot);
+    }
+
+    /// Backlog #332 end to end: `envdreload-a` installs
+    /// `/etc/env.d/99envdreload` (`ENVDRELOAD_VAR=1`); the merge's
+    /// `env-update` rewrites `<root>/etc/profile.env`; `envdreload-b`,
+    /// built afterwards in the same run, must see the variable in its
+    /// `src_install` (real reloads config before every package task,
+    /// `Scheduler._allocate_config`), as the bed's `helper-doins` /
+    /// `PT_HELPER_DOINS` pair showed.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn source_merge_second_package_sees_env_d_installed_by_the_first() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["amd64".to_string()];
+        config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
+        config.envd_eroot = root.clone();
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.build_env = run_wide_phase_env(&config);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+        options.features = "noclean".to_string();
+        let entries = vec![
+            source_entry(
+                "envdreload-a",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "envdreload-b",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("source merge succeeds");
+        let seen =
+            portage_tmpdir.join("portage/dev-libs/envdreload-b-1.0/temp/envdreload-seen.txt");
+        assert_eq!(fs::read_to_string(seen).unwrap(), "ENVDRELOAD_VAR=1\n");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// #333: a two-entry source merge with `CONFIG_PROTECT` resolved
+    /// from the config (`/etc /usr/share/cfgprotme`), none in the
+    /// process env. `cfgprotlate-a` installs `/etc/env.d/99cfgprotlate`
+    /// (`CONFIG_PROTECT="/usr/share/cfgprotlate"`) and its merge runs
+    /// env-update; `cfgprotlate-b` then installs one file under each path
+    /// over a locally modified copy. Real (Portage 3.0.82.2 in the bed
+    /// image, `env -i emerge`, same shape: pmtest
+    /// `differential-test-bed/scripts/333-config-protect.sh`) keeps both
+    /// local files and writes `._cfg0000_x` /
+    /// `._cfg0000_y`: the config's fold protects `x`
+    /// (`dblink._get_protect_obj`, `vartree.py:2063-2072`), and the
+    /// per-task `config.reload()` (`Scheduler.py:1899-1913`) protects
+    /// `y`.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn source_merge_protects_the_config_fold_and_env_d_added_paths() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        for (dir, name) in [("usr/share/cfgprotme", "x"), ("usr/share/cfgprotlate", "y")] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+            fs::write(root.join(dir).join(name), "local\n").unwrap();
+        }
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["amd64".to_string()];
+        config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
+        config.envd_eroot = root.clone();
+        config.incremental_sources.insert(
+            "CONFIG_PROTECT".to_string(),
+            vec![vec!["/etc".to_string(), "/usr/share/cfgprotme".to_string()]],
+        );
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.apply_config_protect(&config);
+        options.build_env = run_wide_phase_env(&config);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+        options.features = "noclean".to_string();
+        let entries = ["cfgprotlate-a", "cfgprotlate-b"].map(|p| {
+            source_entry(
+                p,
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            )
+        });
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("source merge succeeds");
+        let read = |p: &str| fs::read_to_string(root.join(p)).unwrap_or_else(|e| format!("<{e}>"));
+        assert_eq!(read("usr/share/cfgprotme/x"), "local\n");
+        assert_eq!(read("usr/share/cfgprotme/._cfg0000_x"), "from-package\n");
+        assert_eq!(read("usr/share/cfgprotlate/y"), "local\n");
+        assert_eq!(read("usr/share/cfgprotlate/._cfg0000_y"), "from-package\n");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// #160: real `config.environ()`'s `filter_calling_env`
+    /// (`lib/portage/package/ebuild/config.py:3275-3305`, bug #189417) is
+    /// what keeps a variable the ebuild `unset` in an earlier phase unset:
+    /// every phase after `${T}/environment` exists spawns with only the
+    /// `special_env_vars.environ_whitelist` keys from the config/calling
+    /// env, and the saved environment supplies the rest. `unsetcflagspkg`'s
+    /// `src_compile` is `dev-build/ninja-1.13.2-r1`'s own `unset CFLAGS`
+    /// shape, so real's `__dyn_install` writes no `build-info/CFLAGS` and
+    /// the vdb gets no `CFLAGS` row (the l3-20260925T074707Z Class 4 row).
+    /// `CXXFLAGS` (never unset) is the control: its row must stay.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn source_merge_omits_a_vdb_aux_file_the_ebuild_unset_in_an_earlier_phase() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            shell: ebuild_phases::ShellBackend::Bash,
+            ..ebuild_merge::MergeOptions::default()
+        };
+        // Real `bin/phase-functions.sh:1257` chgrps `${T}/environment` to
+        // `${PORTAGE_GRPNAME:-portage}`; unprivileged, the default
+        // `portage` group makes that fail and bash prints a `chgrp: …
+        // Operation not permitted` line per phase straight to the harness
+        // stderr. Point it at this process's own gid -- the group the file
+        // already has -- so the chgrp is a permitted no-op. Ownership is
+        // unchanged, so the aux-file assertion below is not weakened.
+        let gid = unsafe { libc::getegid() };
+        options.build_env = vec![
+            ("CFLAGS".to_string(), "-O2 -pipe".to_string()),
+            ("CXXFLAGS".to_string(), "-O2 -pipe".to_string()),
+            ("PORTAGE_GRPNAME".to_string(), gid.to_string()),
+        ];
+        // Keep the builddir: the observed `${T}` file is copied into the
+        // merged image, and the vdb read below happens on the final tree.
+        options.features = "noclean".to_string();
+
+        let entries = vec![source_entry(
+            "unsetcflagspkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("source merge succeeds");
+
+        let observed = fs::read_to_string(root.join("usr/share/unsetcflagspkg/unset-observed.txt"))
+            .expect("the install phase ran and merged its observation");
+        assert_eq!(
+            observed, "CFLAGS=<unset>\nCXXFLAGS=-O2 -pipe\n",
+            "src_install must still see the `unset CFLAGS` from src_compile (bug #189417)"
+        );
+
+        let vdb = root.join("var/db/pkg/dev-libs/unsetcflagspkg-1.0");
+        assert!(
+            !vdb.join("CFLAGS").exists(),
+            "#160: real omits the vdb CFLAGS row its ebuild unset"
+        );
+        assert_eq!(
+            fs::read_to_string(vdb.join("CXXFLAGS")).unwrap().trim(),
+            "-O2 -pipe",
+            "an aux file the package still has a value for must stay"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// #158: a byte-identical installed file survives a re-merge when the
+    /// ebuild's own `pkg_preinst` helper is gated on `REPLACING_VERSIONS`
+    /// (real `dblink.treewalk`, `vartree.py:4768-4771`). Without the var
+    /// the fixture's preinst `rm`s the file; with it the preinst returns
+    /// early and `merge_tree`'s `needs_move` (real `_needs_move`,
+    /// `vartree.py:6363`) leaves the existing inode -- the property that
+    /// keeps real's OWNER (`/usr/share/man/man1/awk.1`'s `1:1`, #158)
+    /// instead of recreating the file from the image.
+    #[test]
+    fn reinstall_leaves_a_byte_identical_file_a_preinst_helper_would_remove() {
+        use std::os::unix::fs::MetadataExt;
+
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let merge = |outcome: PretendOutcome| {
+            run_source_merge(
+                &[source_entry("identicalownerpkg", outcome)],
+                &repos,
+                &root,
+                &portage_tmpdir,
+                &options,
+                false,
+                None,
+                &[],
+                1,
+                None,
+                false,
+                StatusMode::for_tests(),
+            )
+            .expect("merge succeeds");
+        };
+
+        // First merge: no same-slot instance yet, so the fixture's preinst
+        // `rm` is a no-op and the image's `identical.txt` lands.
+        merge(PretendOutcome::New {
+            version: "4".into(),
+        });
+        let dest = root.join("usr/share/identicalownerpkg/identical.txt");
+        let before = fs::symlink_metadata(&dest)
+            .expect("the fixture installed its file")
+            .ino();
+
+        // Re-merge the same version: `installed_instance_pf` sees the
+        // just-written vdb entry, `REPLACING_VERSIONS=4` is set for the
+        // preinst, the fixture returns early, and the byte-identical
+        // destination is left in place (same inode, same owner).
+        merge(PretendOutcome::Reinstall {
+            version: "4".into(),
+            changed_flags: vec![],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: true,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        });
+        let after = fs::symlink_metadata(&dest).expect("still installed").ino();
+        assert_eq!(
+            before, after,
+            "#158: a byte-identical file must keep its inode (and owner) through a re-merge"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// #37 S2: `--buildpkgonly` threads the same resolved env as the
+    /// `-b` merge path -- the archive's `metadata/USE`/`metadata/FEATURES`
+    /// (real `__dyn_install` writes both into `build-info` from the phase
+    /// env) and the `Packages` index `USE` field carry the effective
+    /// flags, not the raw harness env / empty standalone env.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+        config.iuse_effective = ["abi_x86_64", "amd64", "elibc_glibc", "kernel_linux"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox".to_string());
+
+        let entries = vec![source_entry(
+            "phaseenvpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                binpkg_format: "gpkg".to_string(),
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("--buildpkgonly succeeds");
+
+        let archive = pkgdir.join("dev-libs/phaseenvpkg-1.0.gpkg.tar");
+        let meta = crate::binpkg::read_gpkg_metadata(&archive)
+            .expect("portuale's gpkg reader parses the real writer's output");
+        assert_eq!(
+            meta.get("USE").map(String::as_str),
+            Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+        );
+        assert_eq!(meta.get("FEATURES").map(String::as_str), Some("sandbox"));
+        assert_eq!(meta.get("SLOT").map(String::as_str), Some("0"));
+        // #39: real `_post_src_install_write_metadata` always writes
+        // `IUSE` (empty for a no-IUSE ebuild), the profile-computed
+        // `IUSE_EFFECTIVE`, and `_post_src_install_uid_fix`'s own
+        // `${D}`-walk `SIZE`.
+        assert_eq!(meta.get("IUSE").map(String::as_str), Some(""));
+        assert_eq!(
+            meta.get("IUSE_EFFECTIVE").map(String::as_str),
+            Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+        );
+        // `phaseenvpkg` installs only a `keepdir` (the `.keep_*` marker
+        // lands at merge time), so its image holds no regular file and
+        // real's own walk writes `0` -- the member must be *present*.
+        assert!(
+            meta.get("SIZE")
+                .and_then(|s| s.parse::<u64>().ok())
+                .is_some(),
+            "SIZE must be the real installed-size walk, got {:?}",
+            meta.get("SIZE")
+        );
+
+        let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
+        assert!(
+            packages.contains("USE: abi_x86_64 amd64 elibc_glibc kernel_linux"),
+            "Packages index USE missing the resolved flags:
+{packages}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+        let _ = fs::remove_dir_all(&pkgdir);
+    }
+
+    #[test]
+    fn run_source_merge_builds_and_merges_a_new_package_end_to_end() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        // `samepkg` is packagepkg's RDEPEND -- already installed, so it's
+        // an AlreadyInstalled entry that must be skipped silently.
+        let entries = vec![
+            source_entry(
+                "samepkg",
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "packagepkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("source merge succeeds");
+
+        assert_eq!(
+            fs::read_to_string(root.join("usr/share/packagepkg/hello.txt"))
+                .unwrap()
+                .trim(),
+            "hello from packagepkg"
+        );
+        let vdb = root.join("var/db/pkg/dev-libs/packagepkg-1.0");
+        assert!(vdb.join("CONTENTS").is_file());
+        assert_eq!(
+            fs::read_to_string(vdb.join("RDEPEND")).unwrap().trim(),
+            "dev-libs/samepkg"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Backlog #42 regression: `merge_one_source_entry` (the serial
+    /// `emerge` source path) pre-cleans before every build, exactly like
+    /// real `_emerge/EbuildBuild._start_pre_clean`. With a stale
+    /// `.installed` marker and a tampered `${D}` left by an earlier build
+    /// in the same `${PORTAGE_BUILDDIR}` (kept here via `noclean`), the
+    /// next run must discard them and rebuild -- previously `install`
+    /// printed "already installed; skipping" and merged the stale image,
+    /// which is how a `-B` after a source merge shipped stripped
+    /// binaries (#38 S4).
+    #[test]
+    fn source_merge_pre_cleans_a_stale_installed_image() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let entry = source_entry(
+            "packagepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+
+        // First merge with noclean: the build state survives.
+        let options = ebuild_merge::MergeOptions {
+            features: "noclean".to_string(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        merge_one_source_entry(
+            &entry,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            None,
+            mrg_director::MergeProgress::single(),
+            &StatusDisplay::for_tests(),
+        )
+        .expect("first merge succeeds");
+        let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
+        assert!(
+            builddir.join(".installed").exists(),
+            "noclean must keep the first build's state"
+        );
+
+        // Tamper: replace the real image file with a stale one, keeping
+        // the `.installed` marker -- the exact state the missing
+        // pre-clean treated as "already built".
+        let image = builddir.join("image/usr/share/packagepkg");
+        std::fs::remove_file(image.join("hello.txt")).unwrap();
+        std::fs::write(image.join("stale.txt"), "stale\n").unwrap();
+
+        // Second merge, no noclean: the pre-clean drops the stale
+        // `.installed`/image, so `install` really re-runs.
+        let options = ebuild_merge::MergeOptions {
+            features: "sandbox".to_string(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        merge_one_source_entry(
+            &entry,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            None,
+            mrg_director::MergeProgress::single(),
+            &StatusDisplay::for_tests(),
+        )
+        .expect("second merge succeeds");
+        assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
+        assert!(
+            !root.join("usr/share/packagepkg/stale.txt").exists(),
+            "the stale image must not be merged"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Backlog #42: real `_buildpkgonly_success_hook_exit` runs the
+    /// `clean` phase after a successful `--buildpkgonly` package, so the
+    /// builddir is gone afterwards (the phase itself, not a `noclean`
+    /// gate, honors `keepwork`).
+    #[test]
+    fn buildpkgonly_post_cleans_the_builddir() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![source_entry(
+            "packagepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        run_buildpkgonly(
+            &entries,
+            &portage_profile::Config::default(),
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("--buildpkgonly succeeds");
+
+        // Backlog #173: the default format is gpkg now (real
+        // `cnf/make.globals:43`), so the incidental artefact assertion
+        // follows the default rather than pinning the old xpak shape.
+        assert!(pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar").is_file());
+        let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
+        assert!(
+            !builddir.join(".installed").exists(),
+            "the buildpkgonly tail must clean .installed"
+        );
+        assert!(
+            !builddir.join("image").exists(),
+            "the buildpkgonly tail must clean the image"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+        let _ = fs::remove_dir_all(&pkgdir);
+    }
+
+    #[test]
+    fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
+        // Real `Scheduler._background_mode`: under `capture_log` (always
+        // true for `--jobs` >1, opt-in via `--quiet-build`/`-q`
+        // otherwise), a package's own `install` phase output already
+        // went to its own `build.log` -- but `pkg_preinst`/`pkg_postinst`
+        // (run separately, not part of `install`'s own `actionmap_deps`
+        // chain -- `merge_after_install`'s own doc comment) previously
+        // had no log file threaded to them at all, so their own output
+        // always leaked straight to the terminal regardless of
+        // `capture_log`. `hookoutputpkg`'s `pkg_preinst`/`pkg_postinst`
+        // each echo an observable marker for this test to look for in
+        // the captured log instead.
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        let entries = vec![source_entry(
+            "hookoutputpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            // The `${T}/build.log` this test reads is removed by the real
+            // post-merge clean; keep it the way real `FEATURES=noclean`
+            // does (the clean itself is pinned separately, #42).
+            features: "noclean".to_string(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            true, // capture_log
+            StatusMode::for_tests(),
+        )
+        .expect("source merge succeeds");
+
+        let log = build_log_path(&portage_tmpdir, "dev-libs", "hookoutputpkg", "1.0", "");
+        let log_text =
+            fs::read_to_string(&log).unwrap_or_else(|e| panic!("{}: {e}", log.display()));
+        assert!(
+            log_text.contains("HOOKOUTPUTPKG-PREINST-MARKER"),
+            "pkg_preinst output missing from the captured log:\n{log_text}"
+        );
+        assert!(
+            log_text.contains("HOOKOUTPUTPKG-POSTINST-MARKER"),
+            "pkg_postinst output missing from the captured log:\n{log_text}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Backlog #197: real `Scheduler._background_mode`
+    /// (`Scheduler.py:470-531`) -- the serial shapes stay foreground
+    /// with no Jobs display, anything parallel/quiet/captured goes
+    /// background, and `--quiet` without `--verbose` kills the Jobs
+    /// display but keeps the (unblanked) status lines.
+    #[test]
+    fn scheduler_status_mode_matches_portages_background_gates() {
+        // Serial, nothing quiet: foreground, no Jobs.
+        assert_eq!(
+            scheduler_status_mode(1, false, None, 3, false),
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            }
+        );
+        // `-j2`: background with Jobs.
+        assert_eq!(
+            scheduler_status_mode(2, false, None, 3, false),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+        // `-j2 --quiet`: background, Jobs suppressed.
+        assert_eq!(
+            scheduler_status_mode(2, true, None, 3, false),
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            }
+        );
+        // `-j2 --quiet --verbose`: background, Jobs back on.
+        assert_eq!(
+            scheduler_status_mode(2, true, None, 3, true),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+        // `--quiet` serial: background (even single-package), no Jobs.
+        assert_eq!(
+            scheduler_status_mode(1, true, None, 1, false),
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            }
+        );
+        // `--quiet --verbose` serial (the n197 probe's s3 shape):
+        // background, Jobs on.
+        assert_eq!(
+            scheduler_status_mode(1, true, None, 1, true),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+        // `--quiet-build=y` serial (no `--quiet`/`--verbose`): real's
+        // `myopts.get("--quiet-build") == "y"` arm -- background, and
+        // the Jobs display is live (no `--quiet` to suppress it).
+        assert_eq!(
+            scheduler_status_mode(1, false, Some(true), 2, false),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+        // `--quiet-build=n` serial: foreground, like an uncaptured run.
+        assert_eq!(
+            scheduler_status_mode(1, false, Some(false), 2, false),
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            }
+        );
+        // `-j2` with a one-package mergelist and no quiet: real resets
+        // `max_jobs` to 1 and leaves background mode.
+        assert_eq!(
+            scheduler_status_mode(2, false, None, 1, false),
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            }
+        );
+        // Same single-package `-j2` under `--quiet`: background stays.
+        assert_eq!(
+            scheduler_status_mode(2, true, None, 1, false),
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            }
+        );
+        // Bare `-j` (`usize::MAX`, real's `max_jobs is True`) counts as
+        // parallel.
+        assert_eq!(
+            scheduler_status_mode(usize::MAX, false, None, 3, false),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+    }
+
+    /// Backlog #197: the `>>> Jobs:` shape (real
+    /// `JobStatusDisplay._display_status` on a non-tty) -- conditional
+    /// `running`/`failed`/`merge wait` arms, space padding to the
+    /// 68-column jobs field. Real's `Load avg:` trailer is cut
+    /// (coordinator ruling B14 -- see [`StatusDisplay::jobs_line`]); the
+    /// padding that precedes it is kept, so the first case below is the
+    /// n197 probe's s2 line up to the cut (including all 36 pad
+    /// spaces).
+    #[test]
+    fn jobs_line_matches_portages_display_status_shape() {
+        let color = crate::color::Colorizer::new(false);
+        assert_eq!(
+            jobs_line(&color, 0, 3, 1, 0, 0),
+            ">>> Jobs: 0 of 3 complete, 1 running                                    ",
+        );
+        assert_eq!(
+            jobs_line(&color, 2, 3, 0, 0, 0),
+            ">>> Jobs: 2 of 3 complete                                               ",
+        );
+        assert_eq!(
+            jobs_line(&color, 1, 3, 1, 2, 1),
+            ">>> Jobs: 1 of 3 complete, 1 running, 2 failed, 1 merge wait            ",
+        );
+        // Coloured: the counters wear `INFORM`, the padding is still
+        // measured on the plain text (real's `plain_output` gauge) and
+        // the line still ends at real's column.
+        let tty_color = crate::color::Colorizer::new(true);
+        let line = jobs_line(&tty_color, 0, 3, 1, 0, 0);
+        assert!(line.starts_with(">>> Jobs: "), "{line}");
+        assert!(line.contains(&tty_color.c("INFORM", "0")), "{line}");
+        // The escape codes around the counts move the byte indices, so
+        // count the trailing spaces instead: 68 - 32.
+        assert_eq!(&line[line.len() - 36..], &" ".repeat(36), "{line}");
+    }
+
+    /// Backlog #197: the display counters feed the `>>> Jobs:` line --
+    /// dispatch raises `running`, a freed build slot drops it, a landed
+    /// merge raises `curval`, a failure raises `failed` (real
+    /// `_schedule_tasks_imp` / `_build_exit` / `_merge_exit`). The line
+    /// is deterministic (no live trailer -- B14), so the full shape is
+    /// pinned here, not just the head.
+    #[test]
+    fn status_display_counters_feed_the_jobs_line() {
+        let display = StatusDisplay::new(
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            },
+            3,
+            crate::color::Colorizer::new(false),
+        );
+        assert_eq!(
+            display.jobs_line(),
+            ">>> Jobs: 0 of 3 complete                                               "
+        );
+        display.job_started();
+        display.job_started();
+        assert_eq!(
+            display.jobs_line(),
+            ">>> Jobs: 0 of 3 complete, 2 running                                    "
+        );
+        display.build_finished();
+        assert_eq!(
+            display.jobs_line(),
+            ">>> Jobs: 0 of 3 complete, 1 running                                    "
+        );
+        display.merge_finished();
+        assert_eq!(
+            display.jobs_line(),
+            ">>> Jobs: 1 of 3 complete, 1 running                                    "
+        );
+        display.job_failed();
+        display.build_finished();
+        assert_eq!(
+            display.jobs_line(),
+            ">>> Jobs: 1 of 3 complete, 1 failed                                     "
+        );
+    }
+
+    /// Backlog #197 fix round 1: one failed `-jN` build fires each
+    /// failure event exactly once. Real `_build_exit`'s failure arm
+    /// assigns absolutely (`Scheduler.py:1662`, `failed =
+    /// len(self._failed_pkgs)` -- 1 for a single failure), then drops
+    /// the freed build slot (`running`, `:1663-1665`): exactly two
+    /// `>>> Jobs:` lines, ending at `failed == 1`. The pre-fix code
+    /// fired `job_failed` + `build_finished` twice (once in the `Err`
+    /// arm, once in the `Some` arm), reaching `failed == 2`. Drives
+    /// the real scheduler (`run_build_scheduler`) over the `schedbad`
+    /// fixture (its `src_install` dies) with a caller-owned display,
+    /// so the counters pin the wiring, not just the display.
+    #[test]
+    fn run_build_scheduler_single_failure_counts_failed_exactly_once() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        let bad = source_entry(
+            "schedbad",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![bad];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let display = StatusDisplay::new(
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            },
+            1,
+            crate::color::Colorizer::new(false),
+        );
+        let policy = mrg_director::LoadAwarePolicy::new(2, None);
+        let err = run_build_scheduler(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            &policy,
+            &display,
+        )
+        .expect_err("schedbad's own failure must fail the run");
+        assert!(err.contains("schedbad-1.0"), "{err}");
+        assert_eq!(
+            display.jobs_line(),
+            ">>> Jobs: 0 of 1 complete, 1 failed                                     "
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn run_build_scheduler_builds_two_leaves_in_parallel_then_the_parent() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        // schedparent RDEPENDs schedleaf-a + schedleaf-b (both leaves,
+        // buildable, not installed). required_by wires the DAG so the
+        // scheduler builds the leaves first (concurrently under jobs=2)
+        // and schedparent only after both have merged.
+        let leaf_a = source_entry(
+            "schedleaf-a",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let mut leaf_a = leaf_a;
+        leaf_a.required_by = vec![("dev-libs".into(), "schedparent".into())];
+        let mut leaf_b = source_entry(
+            "schedleaf-b",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        leaf_b.required_by = vec![("dev-libs".into(), "schedparent".into())];
+        let parent = source_entry(
+            "schedparent",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![leaf_a, leaf_b, parent];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            2,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("parallel source merge succeeds");
+
+        for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
+            assert!(
+                root.join(format!("var/db/pkg/dev-libs/{pkg}/CONTENTS"))
+                    .is_file(),
+                "{pkg} should be merged"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn system_loadavg_1min_reads_a_plausible_value() {
+        // Linux CI: /proc/loadavg exists and its first field is a
+        // non-negative float. Anywhere it can't be read, the throttle is
+        // simply disabled (0.0), never a stall.
+        let la = system_loadavg_1min();
+        assert!(la >= 0.0 && la.is_finite(), "{la}");
+    }
+
+    #[test]
+    fn run_build_scheduler_with_a_high_load_average_never_throttles() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        let mut leaf_a = source_entry(
+            "schedleaf-a",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        leaf_a.required_by = vec![("dev-libs".into(), "schedparent".into())];
+        let mut leaf_b = source_entry(
+            "schedleaf-b",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        leaf_b.required_by = vec![("dev-libs".into(), "schedparent".into())];
+        let parent = source_entry(
+            "schedparent",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![leaf_a, leaf_b, parent];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        // A load average of 1e9 can never be exceeded -> the throttle is
+        // a no-op and every package still builds and merges.
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            2,
+            Some(1e9),
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("high --load-average must not stall the scheduler");
+        for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
+            assert!(
+                root.join(format!("var/db/pkg/dev-libs/{pkg}/CONTENTS"))
+                    .is_file()
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        // schedbad's src_install dies; schedbaddep RDEPENDs it (so it must
+        // be skipped); schedok is independent and must still merge.
+        let mut bad = source_entry(
+            "schedbad",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        bad.required_by = vec![("dev-libs".into(), "schedbaddep".into())];
+        let baddep = source_entry(
+            "schedbaddep",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let ok = source_entry(
+            "schedok",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![bad, baddep, ok];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let err = run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            true,
+            None,
+            &[],
+            2,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect_err("a failed build must make the whole run fail under --keep-going");
+        assert!(err.contains("schedbad-1.0"), "{err}");
+        assert!(err.contains("schedbaddep"), "{err}");
+
+        assert!(
+            root.join("var/db/pkg/dev-libs/schedok-1.0/CONTENTS")
+                .is_file(),
+            "the independent schedok must still merge"
+        );
+        assert!(
+            !root.join("var/db/pkg/dev-libs/schedbaddep-1.0").exists(),
+            "schedbaddep depends on the failed schedbad and must be skipped"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
+        // Real `Scheduler._keep_scheduling`/`_terminate_tasks`
+        // (`PollScheduler.py:106-126`): once any package fails without
+        // `--keep-going`, real portage sends kill signals to whatever's
+        // still running rather than letting it finish -- its own result
+        // would be discarded regardless. `schedbad` (fails almost
+        // instantly, in `install`, the last phase) and `schedslow`
+        // (sleeps 120s in `compile`, well before `install`) are
+        // independent leaves under `jobs=2`, so both start together;
+        // `schedbad` fails long before `schedslow`'s own sleep would
+        // ever finish on its own.
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        let bad = source_entry(
+            "schedbad",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let slow = source_entry(
+            "schedslow",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![bad, slow];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let started = std::time::Instant::now();
+        let err = run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false, // keep_going
+            None,
+            &[],
+            2,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect_err("schedbad's own failure must fail the whole run");
+        assert!(err.contains("schedbad-1.0"), "{err}");
+        // Real generously bounded (loaded machines, #308): well under schedslow's own 120s sleep,
+        // proving the scheduler didn't just wait it out.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "run_source_merge took {:?}, schedslow's sleep should have been killed",
+            started.elapsed()
+        );
+
+        let marker = portage_tmpdir
+            .join("portage/dev-libs/schedslow-1.0/temp/schedslow-slept-to-completion");
+        assert!(
+            !marker.exists(),
+            "schedslow's own sleep must have been killed, not left to finish"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn entry_matches_any_checks_the_resolved_cpv_against_buildpkg_exclude_atoms() {
+        let e = {
+            let mut e = source_entry(
+                "packagepkg",
+                PretendOutcome::New {
+                    version: "1.2".into(),
+                },
+            );
+            e.slot = Some("0".into());
+            e.sub_slot = Some("0".into());
+            e
+        };
+        assert!(!entry_matches_any(&e, &[]));
+        assert!(entry_matches_any(&e, &["dev-libs/packagepkg".to_string()]));
+        assert!(entry_matches_any(
+            &e,
+            &[">=dev-libs/packagepkg-1".to_string()]
+        ));
+        assert!(entry_matches_any(
+            &e,
+            &["dev-libs/packagepkg:0".to_string()]
+        ));
+        assert!(!entry_matches_any(&e, &["dev-libs/other".to_string()]));
+        assert!(!entry_matches_any(
+            &e,
+            &["dev-libs/packagepkg:1".to_string()]
+        ));
+        assert!(!entry_matches_any(
+            &e,
+            &["<dev-libs/packagepkg-1".to_string()]
+        ));
+        // A non-mergeable outcome never matches.
+        let ai = source_entry(
+            "packagepkg",
+            PretendOutcome::AlreadyInstalled {
+                version: "1.2".into(),
+            },
+        );
+        assert!(!entry_matches_any(
+            &ai,
+            &["dev-libs/packagepkg".to_string()]
+        ));
+    }
+
+    #[test]
+    fn run_source_merge_rejects_a_binary_entry() {
+        // The error is raised before any real execution, so a bogus
+        // ROOT/tmpdir that would fail loudly if touched is safe here.
+        let bogus = PathBuf::from("/nonexistent/does/not/exist");
+        let options = ebuild_merge::MergeOptions::default();
+
+        let mut binary = source_entry(
+            "packagepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        binary.source = CandidateSource::Binary;
+        let err = run_source_merge(
+            &[binary],
+            &[],
+            &bogus,
+            &bogus,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .unwrap_err();
+        assert!(err.contains("binary package"), "{err}");
+    }
+
+    #[test]
+    fn run_merge_loop_without_keep_going_stops_at_the_first_failure() {
+        let a = source_entry(
+            "aaa",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        let b = source_entry(
+            "bbb",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        let mut seen: Vec<String> = Vec::new();
+        // No resume list under this fresh root, so the per-merge shrink
+        // is a silent no-op.
+        let err = run_merge_loop(&[a, b], false, &tempdir(), |_, e| {
+            seen.push(e.package.clone());
+            Err(format!("{} boom", e.package))
+        })
+        .unwrap_err();
+        assert_eq!(err, "aaa boom");
+        assert_eq!(seen, vec!["aaa".to_string()]);
+    }
+
+    #[test]
+    fn run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents() {
+        // dep <- mid <- top   (top depends on mid depends on dep);
+        // `other` is independent. `dep` fails, so `mid` and `top` are
+        // dropped, `other` still merges, and the combined Err names all.
+        let mut dep = source_entry(
+            "dep",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        dep.required_by = vec![("dev-libs".into(), "mid".into())];
+        let mut mid = source_entry(
+            "mid",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        mid.required_by = vec![("dev-libs".into(), "top".into())];
+        let top = source_entry(
+            "top",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        let other = source_entry(
+            "other",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+
+        let mut merged: Vec<String> = Vec::new();
+        // No resume list under this fresh root, so the per-merge shrink
+        // is a silent no-op.
+        let err = run_merge_loop(&[dep, mid, top, other], true, &tempdir(), |_, e| {
+            if e.package == "dep" {
+                return Err("dep boom".into());
+            }
+            merged.push(e.package.clone());
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(merged, vec!["other".to_string()]);
+        assert!(
+            err.contains("1 package(s) failed to merge (--keep-going):"),
+            "{err}"
+        );
+        assert!(err.contains("  dep boom"), "{err}");
+        assert!(err.contains("2 dependent package(s) not merged:"), "{err}");
+        assert!(err.contains("  dev-libs/mid"), "{err}");
+        assert!(err.contains("  dev-libs/top"), "{err}");
+    }
+
+    #[test]
+    fn run_source_merge_upgrade_replaces_the_installed_version() {
+        // Merge binpkgrmpkg-1.0 (New), then 2.0 (Upgrade) -- 2.0's files
+        // land, 1.0's own file is unmerged, 1.0's vdb entry is gone, and
+        // 1.0's pkg_prerm/pkg_postrm run from its own saved vdb env (the
+        // fixture's five hooks each append `<phase>-<PVR>` to a ROOT log).
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+
+        run_source_merge(
+            &[source_entry(
+                "binpkgrmpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            )],
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("1.0 merges");
+        run_source_merge(
+            &[source_entry(
+                "binpkgrmpkg",
+                PretendOutcome::Upgrade {
+                    from: "1.0".into(),
+                    to: "2.0".into(),
+                },
+            )],
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+            StatusMode::for_tests(),
+        )
+        .expect("2.0 upgrade merges");
+
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS")
+                .is_file()
+        );
+        assert!(!root.join("var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists());
+        assert!(root.join("usr/share/binpkgrmpkg/payload-2.0.txt").is_file());
+        assert!(!root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap(),
+            "setup-1.0\npreinst-1.0\npostinst-1.0\n\
+             setup-2.0\npreinst-2.0\nprerm-1.0\npostrm-1.0\npostinst-2.0\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "fetchpkg".into(),
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source: CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }];
+
+        let result = run_buildpkgonly(
+            &entries,
+            &portage_profile::Config::default(),
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                // Pinned to "bzip2" (near-universal base package) rather
+                // than real Default's "zstd", so these tests don't
+                // depend on the test-running host actually having zstd
+                // installed -- real xpak/tbz2 building is codec-
+                // agnostic either way.
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        );
+        // `fetchpkg`'s own fixture has a real, nonempty SRC_URI but no
+        // Manifest entry at all -- refused before any network access is
+        // even attempted (see `crate::fetch::fetch_src_uri`'s own doc
+        // comment: unverifiable content is worse than a loud failure).
+        let err = result.expect_err("an unverifiable SRC_URI must be refused");
+        assert!(err.contains("no Manifest entry"), "{err}");
+        assert!(
+            !pkgdir.join("dev-libs/fetchpkg-1.0.tbz2").exists(),
+            "must not have built anything"
+        );
+    }
+
+    fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: category.into(),
+            package: package.into(),
+            outcome: PretendOutcome::New {
+                version: version.into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source: CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+    /// Without real `--keep-going`, a failing entry stops the whole run
+    /// immediately -- a later, independently-buildable entry in the same
+    /// list never even gets attempted.
+    #[test]
+    fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        // fetchpkg (no Manifest entry, always fails) listed *before*
+        // packagepkg (builds cleanly) -- proves packagepkg is never even
+        // attempted once fetchpkg fails.
+        let entries = vec![
+            buildpkgonly_entry("dev-libs", "fetchpkg", "1.0"),
+            buildpkgonly_entry("dev-libs", "packagepkg", "1.0"),
+        ];
+
+        let result = run_buildpkgonly(
+            &entries,
+            &portage_profile::Config::default(),
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+            StatusMode::for_tests(),
+        );
+        let err = result.expect_err("fetchpkg must still fail");
+        assert!(err.contains("no Manifest entry"), "{err}");
+        assert!(
+            !pkgdir.join("dev-libs/packagepkg-1.0.tbz2").exists(),
+            "packagepkg must never be attempted once fetchpkg fails without --keep-going"
+        );
+    }
+
+    /// With real `--keep-going`, a failing entry does *not* stop the
+    /// run -- packagepkg still gets built despite fetchpkg's own
+    /// failure, and the final error names both entries.
+    #[test]
+    fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![
+            buildpkgonly_entry("dev-libs", "fetchpkg", "1.0"),
+            buildpkgonly_entry("dev-libs", "packagepkg", "1.0"),
+        ];
+
+        let result = run_buildpkgonly(
+            &entries,
+            &portage_profile::Config::default(),
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            true,
+            StatusMode::for_tests(),
+        );
+        let err = result.expect_err("fetchpkg still fails overall");
+        assert!(err.contains("dev-libs/fetchpkg-1.0"), "{err}");
+        assert!(err.contains("no Manifest entry"), "{err}");
+
+        // Backlog #173: the default format is gpkg now (real
+        // `cnf/make.globals:43`).
+        assert!(
+            pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar").is_file(),
+            "packagepkg must still be built with --keep-going, despite fetchpkg's own failure"
+        );
+    }
+}

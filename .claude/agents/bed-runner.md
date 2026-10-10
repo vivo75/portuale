@@ -6,7 +6,7 @@ model: sonnet
 ---
 
 You run the container/VM differential bed and report what it found. The bed
-compares portuale against a real `emerge` on a real Gentoo tree; it is the only
+compares portuale against Portage's `emerge` on a real Gentoo tree; it is the only
 thing that catches what the fixture suite cannot.
 
 Everything lives in `/home/vivo/repo/PORTUALE/pmtest/differential-test-bed/`
@@ -15,7 +15,7 @@ Everything lives in `/home/vivo/repo/PORTUALE/pmtest/differential-test-bed/`
 - `differential-test-bed/run/l0-resolver.sh [atomlist]` — resolver parity at
   real-tree scale. Exit 0 green, 1 unexplained divergences, 2 setup error.
 - `differential-test-bed/run/l0-fixture-oracle.sh` — the hand-written fixture
-  tree against real.
+  tree against Portage.
 - `differential-test-bed/run/l1-merge-from-binpkg.sh` — merge behaviour.
 - `differential-test-bed/run/l2-portuale-builder.sh`,
   `l2-instprep-repro.sh`, `l3-source-parity.sh` — build/source levels.

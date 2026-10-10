@@ -73,6 +73,6 @@ flowchart TD
   `run` still exits non-zero.
 - `--jobs N` (N > 1) routes to `run_build_scheduler`, which runs the
   `install` phase of independent entries concurrently but always
-  serialises the vdb merge step — matching real portage.
+  serialises the vdb merge step — matching Portage.
 - `sys-apps/portage` is not special here (it is special only for
   `--unmerge`, which refuses to remove `PORTAGE_PACKAGE_ATOM`).

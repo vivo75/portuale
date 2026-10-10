@@ -1,0 +1,31 @@
+MULTI_emptytree-system	[order] merge order diverges at #304: real sys-auth/pambase vs portuale sys-apps/portage
+app-containers_podman	[truncated] autounmask backtracking terminated early (real Total 8 / 8 lines, portuale Total 43 / 43 lines) -- merge-list set/order/totals comparison suppressed
+app-editors_gedit	[advice] real-only: masked-atom: >=app-crypt/gcr-3.27.90:0=[gtk]
+app-editors_gedit	[advice] real-only: masked: !!! All ebuilds that could satisfy ">=app-crypt/gcr-3.27.90:0=[gtk]" have been masked.
+app-editors_gedit	[advice] real-only: masked: !!! One of the following masked packages is required to complete your request:
+app-editors_gedit	[error] real-only message: !!! All ebuilds that could satisfy ">=app-crypt/gcr-3.27.90:0=[gtk]" have been masked.
+app-editors_gedit	[error] real-only message: !!! One of the following masked packages is required to complete your request:
+app-office_libreoffice	[order] merge order diverges at #28: real app-arch/cpio vs portuale media-gfx/graphite2
+dev-lang_ruby	[order] merge order diverges at #20: real dev-ruby/did_you_mean vs portuale dev-ruby/matrix
+dev-ruby_rake	[order] merge order diverges at #20: real dev-ruby/did_you_mean vs portuale dev-ruby/matrix
+gnome-base_nautilus	[advice] real-only: masked-atom: >=app-crypt/gcr-3.27.90:0=[gtk]
+gnome-base_nautilus	[advice] real-only: masked: !!! All ebuilds that could satisfy ">=app-crypt/gcr-3.27.90:0=[gtk]" have been masked.
+gnome-base_nautilus	[advice] real-only: masked: !!! One of the following masked packages is required to complete your request:
+gnome-base_nautilus	[error] real-only message: !!! All ebuilds that could satisfy ">=app-crypt/gcr-3.27.90:0=[gtk]" have been masked.
+gnome-base_nautilus	[error] real-only message: !!! One of the following masked packages is required to complete your request:
+gui-libs_gtk_4	[order] merge order diverges at #30: real x11-base/xcb-proto vs portuale dev-python/pyproject-metadata
+kde-apps_kdecore-meta	[order] merge order diverges at #95: real x11-libs/libXau vs portuale dev-python/pyproject-metadata
+kde-plasma_plasma-meta	[advice] real-only: masked-atom: >=x11-base/xwayland-23.1.0[libei]
+kde-plasma_plasma-meta	[advice] real-only: masked: !!! All ebuilds that could satisfy ">=x11-base/xwayland-23.1.0[libei]" have been masked.
+kde-plasma_plasma-meta	[advice] real-only: masked: !!! One of the following masked packages is required to complete your request:
+kde-plasma_plasma-meta	[error] real-only message: !!! All ebuilds that could satisfy ">=x11-base/xwayland-23.1.0[libei]" have been masked.
+kde-plasma_plasma-meta	[error] real-only message: !!! One of the following masked packages is required to complete your request:
+kde-plasma_plasma-meta	[truncated] autounmask backtracking terminated early (real Total 4 / 4 lines, portuale Total 465 / 465 lines) -- merge-list set/order/totals comparison suppressed
+mail-client_thunderbird	[order] merge order diverges at #38: real dev-lang/nasm vs portuale media-libs/freetype
+media-gfx_gimp	[order] merge order diverges at #54: real dev-libs/libyaml vs portuale media-libs/freetype
+media-video_vlc	[order] merge order diverges at #7: real sys-libs/mtdev vs portuale x11-libs/xtrans
+net-analyzer_wireshark	[order] merge order diverges at #47: real dev-libs/libgit2 vs portuale dev-python/pyproject-metadata
+net-misc_networkmanager	[order] merge order diverges at #26: real x11-libs/pixman vs portuale dev-python/pyproject-metadata
+www-client_firefox	[order] merge order diverges at #37: real dev-lang/nasm vs portuale media-libs/freetype
+x11-base_xorg-server	[order] merge order diverges at #74: real x11-drivers/xf86-video-vesa vs portuale x11-drivers/xf86-video-amdgpu
+x11-libs_gtk__3	[order] merge order diverges at #30: real dev-libs/libgit2 vs portuale dev-python/pyproject-metadata

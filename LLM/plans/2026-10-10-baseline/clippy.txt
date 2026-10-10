@@ -1,0 +1,5 @@
+    Checking portage-repo v0.1.0 (/home/vivo/repo/PORTUALE/portuale/rust/portage-repo)
+    Checking mrg-director v0.1.0 (/home/vivo/repo/PORTUALE/portuale/rust/mrg-director)
+    Checking portuale v0.1.0 (/home/vivo/repo/PORTUALE/portuale/rust/portuale)
+    Finished `release` profile [optimized] target(s) in 11.76s
+clippy rc=0

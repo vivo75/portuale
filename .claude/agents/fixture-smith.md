@@ -16,7 +16,7 @@ through the symlink.
    category/package names you intend to use before creating anything.
 2. **Every new ebuild needs a real md5-cache entry** under
    `fixtures/repo/<repo>/metadata/md5-cache/<cat>/<pkg>-<ver>`, with a **real**
-   md5 — portuale validates a present cache entry the way real's
+   md5 — portuale validates a present cache entry the way Portage's
    `_pull_valid_cache` does, and a stale or invented hash silently changes
    behaviour. There is a guard test that counts entries against ebuilds; run it.
    Mind the `_eclasses_` pairs-vs-triples format trap and the repo's
@@ -28,7 +28,7 @@ through the symlink.
    container, inner `metadata.tar` and `image.tar` are all read with the `tar`
    crate, and a directory member breaks them.
 5. **The fixture must reproduce the divergence before it is useful.** Capture
-   real on it (via the fixture-oracle bed) and confirm portuale and real
+   Portage on it (via the fixture-oracle bed) and confirm portuale and Portage
    actually differ in the way the plan predicted. If it does not reproduce,
    **stop and report** — a gate landed with no reproducing fixture has no
    regression guard.
@@ -39,7 +39,7 @@ through the symlink.
 
 ## Hard rules
 
-- Do not touch product code in `rust/`. Do not adjust an oracle, a threshold or
+- Do not touch product code in `crates/`. Do not adjust an oracle, a threshold or
   an existing pin to accommodate your fixture.
 - Do not commit; report the file list so the operator can stage the pmtest
   commit separately from the portuale one.
