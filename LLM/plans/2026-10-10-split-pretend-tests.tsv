@@ -1,0 +1,21 @@
+# #336 Phase 6: helper -> topic for pretend tests that call no production fn
+# (split_tests.py --helper-topics). Majority wins per test.
+test_news_context	news
+news_notice_test_tree	news
+news_resolve_env	news
+eselect_stub	news
+ask_read_news_declined	news
+pty_pair	prompt
+pty_slave_path	prompt
+wait_pty_output	prompt
+wait_pty_status	prompt
+sigint_prompt_child	prompt
+read_stdout_until_marker	prompt
+ctrl_c_at_prompt	prompt
+ask_pretend_unowned_root	prompt
+true_spelling_matches_bare	flag_spellings
+stale_resume_root	resume
+single_resume_root	resume
+world_entry	world
+entry_with_use	entry_line
+copy_tree	remote
