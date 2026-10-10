@@ -1,11 +1,7 @@
 use super::*;
 
-/// L1-a: under `--usepkgonly` the ebuild candidate pool is emptied
-/// wholesale, so a dependency whose only satisfier is an installed
-/// version with no binary package must still resolve `AlreadyInstalled`
-/// (real `--usepkgonly` restricts the *merge* pool, not installed-
-/// satisfaction) -- not `NoVisibleCandidate`, which in a real `-K`
-/// merge lands on the resume list ("no visible ebuild to merge").
+/// Under `--usepkgonly` a dependency satisfied only by an installed
+/// version with no binpkg still resolves `AlreadyInstalled`.
 #[test]
 fn usepkgonly_dependency_satisfied_by_an_installed_version_with_no_binpkg() {
     let root = fixtures_root();
@@ -29,18 +25,14 @@ fn usepkgonly_dependency_satisfied_by_an_installed_version_with_no_binpkg() {
         )
         .expect("resolve_pretend(dev-libs/samepkg) failed")
     };
-    // As a dependency under --usepkgonly: satisfied by the vdb.
     assert_eq!(
         call(true, false),
         PretendOutcome::AlreadyInstalled {
             version: "1.0".to_string()
         }
     );
-    // A top-level --usepkgonly atom still reports the missing binary
-    // (real requires something mergeable for a named package).
+    // A top-level atom still reports the missing binary.
     assert_eq!(call(true, true), PretendOutcome::NoVisibleCandidate);
-    // Without --usepkg the ebuild pool is intact -> the ordinary
-    // installed-vs-ebuild path already handled it (unchanged).
     assert_eq!(
         call(false, false),
         PretendOutcome::AlreadyInstalled {
@@ -49,17 +41,13 @@ fn usepkgonly_dependency_satisfied_by_an_installed_version_with_no_binpkg() {
     );
 }
 
-/// L0 finding L: a dependency atom `foo[bar]` whose already-installed
-/// `foo` lacks `bar` must not resolve `AlreadyInstalled` -- real
-/// portage reinstalls `foo` with `bar` (and autounmasks it). Gated
-/// on `autounmask_use`.
+/// A dependency atom `foo[bar]` whose installed `foo` lacks `bar`
+/// reinstalls instead of resolving `AlreadyInstalled`.
 #[test]
 fn installed_dep_missing_a_use_flag_reinstalls_not_already_installed() {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    // dev-libs/flipinstdep: installed at 1.0 without `wantflag`
-    // (in IUSE, default-off); `dev-libs/flipinstconsumer` RDEPENDs
-    // `dev-libs/flipinstdep[wantflag]`.
+    // flipinstdep installed at 1.0 without `wantflag`; flipinstconsumer RDEPENDs `flipinstdep[wantflag]`.
     let call = |autounmask_use: bool| {
         resolve_pretend(
             &SelectSource {
@@ -71,7 +59,6 @@ fn installed_dep_missing_a_use_flag_reinstalls_not_already_installed() {
             "dev-libs/flipinstdep[wantflag]",
             &SelectOptions {
                 selective: false,
-                // is_top_level (a dependency)
                 usepkg: false,
                 autounmask_use,
                 ..SelectOptions::default()
@@ -91,18 +78,14 @@ fn installed_dep_missing_a_use_flag_reinstalls_not_already_installed() {
             slot_operator_rebuild: false,
         }
     );
-    // `--autounmask-use=n`: the earlier `matched` filter drops the
-    // candidate entirely instead (no flip allowed).
+    // `--autounmask-use=n`: the `matched` filter drops the candidate entirely instead.
     assert_eq!(call(false), PretendOutcome::NoVisibleCandidate);
 }
 
 #[test]
 fn emptytree_reinstalls_an_installed_dependency_that_would_otherwise_be_hidden() {
-    // dev-libs/deeppkg2 is installed and satisfies deeppkg's RDEPEND,
-    // so without --deep/--emptytree it's AlreadyInstalled (and not
-    // shown). Under --emptytree it becomes a bare Reinstall (the dep
-    // path runs `dependency_avoid_update_candidate` ->
-    // `already_installed_or_reinstall(empty=true)`).
+    // Under --emptytree an installed dep becomes a bare Reinstall
+    // instead of AlreadyInstalled.
     assert_eq!(
         graph_empty("dev-libs/deeppkg")
             .into_iter()
@@ -122,13 +105,8 @@ fn emptytree_reinstalls_an_installed_dependency_that_would_otherwise_be_hidden()
 
 #[test]
 fn resolve_pretend_matches_a_sub_slot_restricted_atom_against_the_real_sub_slot() {
-    // dev-libs/subslotpkg's own SLOT is "0/2" -- an exact sub-slot
-    // match, unlike a slot-operator atom (":="/"pkg:slot="), which
-    // `matches_slot`'s own doc comment already established needs no
-    // candidate-side sub-slot data at all to match correctly. This
-    // is the plain PMS 8.3.3 "cat/pkg:slot/sub-slot" restriction
-    // form instead, which DOES need it -- see `Candidate::sub_slot`'s
-    // own doc comment for the bug this closes.
+    // Exact sub-slot match on the plain PMS 8.3.3 `:slot/sub-slot`
+    // form (unlike `:slot=` atoms, this needs candidate sub-slot data).
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let outcome = resolve_pretend(
@@ -155,9 +133,8 @@ fn resolve_pretend_matches_a_sub_slot_restricted_atom_against_the_real_sub_slot(
 
 #[test]
 fn resolve_pretend_rejects_a_sub_slot_restricted_atom_that_does_not_match() {
-    // Same candidate (SLOT "0/2"), but the atom itself asks for
-    // sub-slot "3" -- a genuine mismatch, proving this is real
-    // matching and not just "always accept regardless of sub-slot".
+    // Same candidate (SLOT "0/2") but sub-slot "3": a genuine
+    // mismatch, not an always-accept path.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let outcome = resolve_pretend(
@@ -177,12 +154,8 @@ fn resolve_pretend_rejects_a_sub_slot_restricted_atom_that_does_not_match() {
     assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
 }
 
-/// Backlog #212 (v2 `#24c`): only a `!=cpv[binary]` negative reads
-/// as a `slot_operator_mask_built` record. A plain `!=cpv` (real's
-/// slot-conflict / missing-dependency negatives), another package's
-/// marked negative, and a positive marked atom all read as `None`;
-/// [`is_binary_only_mask`] answers the same question for the
-/// string-constraint readers.
+/// Only a `!=cpv[binary]` negative reads as a
+/// `slot_operator_mask_built` record; other negatives read as `None`.
 #[test]
 fn slot_operator_binary_masked_version_reads_only_marked_negatives() {
     assert_eq!(
@@ -218,32 +191,13 @@ fn slot_operator_binary_masked_version_reads_only_marked_negatives() {
     assert!(!is_binary_only_mask("=dev-libs/maskchild-1.0[binary]"));
 }
 
-/// Backlog #233: a dependency atom no ebuild satisfies but an
-/// installed instance does settles `AlreadyInstalled` -- real
-/// `_wrapped_select_pkg_highest_available_imp`
-/// (`depgraph.py:7799-7840`) iterates the installed db for every
-/// resolve (no `--usepkg` gate; the old gate here was the L1-a
-/// narrowing). The live shape is an installed world member's stale
-/// recorded built slot-operator atom:
-/// `dev-libs/reinstslottarget:0/1=` (installed 1.0 at `SLOT="0/1"`,
-/// only the `0/2` ebuild left in the tree) -- the `@world` walk
-/// aborted `NoVisibleCandidate` on it (rc 1) before the #210
-/// reverse-dependency scan could withhold the reinstall, while real
-/// 3.0.82.2 merges the unrelated world updates and withholds
-/// silently (rc 0; S0 probe `probe.log`, offline comparator
-/// simulation clean). Flags mirror that cell (`--changed-slot
-/// --update --deep --newuse`, no `--usepkg`). A top-level atom with
-/// the same shape still reports (real needs something mergeable for
-/// a package named on the command line).
+/// A stale built slot-operator dep with no ebuild reports
+/// `NoVisibleCandidate` at this level; the walk rewrites the
+/// dependency case one layer up.
 #[test]
 fn stale_built_slot_operator_dep_with_no_ebuild_reports_at_this_level() {
-    // At `resolve_pretend` level the L1-a gate stands (see the
-    // fallback's own comment): without `--usepkg`/`--usepkgonly` a
-    // dependency with no usable ebuild candidate reports
-    // `NoVisibleCandidate` even when the vdb could satisfy it --
-    // the runtime-keyed installed hearing lives one layer up (the
-    // queue loop's #233 rewrite), and the build-time-keyed pins
-    // below depend on this level reporting.
+    // The L1-a gate stands here: no usable ebuild means
+    // `NoVisibleCandidate` even when the vdb could satisfy it.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let call = |is_top_level: bool| {
@@ -260,14 +214,12 @@ fn stale_built_slot_operator_dep_with_no_ebuild_reports_at_this_level() {
                 update: true,
                 with_bdeps: false,
                 changed_slot: true,
-                // selective (real sets it with --update)
                 is_top_level,
                 ..SelectOptions::default()
             },
         )
         .expect("resolve_pretend(dev-libs/reinstslottarget:0/1=) failed")
     };
-    // Both levels report here; the walk rewrites the dependency one.
     assert_eq!(call(false), PretendOutcome::NoVisibleCandidate);
     assert_eq!(call(true), PretendOutcome::NoVisibleCandidate);
 }

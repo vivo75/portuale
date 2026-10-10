@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn candidate_iuse_and_use_reads_a_binarys_own_baked_use() {
-    // A binary candidate carries the flags it was built with
-    // (`binary_use`) over its own `iuse` -- no md5-cache read, no
-    // profile recompute (real `pkg.use.enabled` for a built package).
+    // A binary candidate carries its built-with flags over its own
+    // `iuse` (Portage `pkg.use.enabled` for a built package).
     let c = Candidate {
         version: "1.0".to_string(),
         keywords: vec!["amd64".to_string()],
@@ -65,9 +64,7 @@ fn best_binary_build_time_is_the_newest_binary_of_the_version() {
 
 #[test]
 fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_binary() {
-    // `ebuild_visible_at` asks the TREE (not the pool): `newpkg` has
-    // a visible ebuild, `rebuiltbinarypkg` does not (it is the
-    // ebuild-gone bolt).
+    // `ebuild_visible_at` asks the tree: `newpkg` is visible, `rebuiltbinarypkg` is not.
     let repos = find_repos(&fixtures_root()).expect("fixture repos.conf resolves");
     let config = test_config();
     assert!(
@@ -79,10 +76,8 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
         "rebuiltbinarypkg has no ebuild"
     );
 
-    // real `identical_binary` (same BUILD_TIME) vs
-    // `identical_binary`+`_equiv_ebuild_visible` (differing, ebuild
-    // gone, --update): the latter only fires under `--update`
-    // (real's `not avoid_update`).
+    // Portage `identical_binary` vs `identical_binary`+`_equiv_ebuild_visible`:
+    // the latter only fires under `--update`.
     let root = TempDir::new("portuale-btre").keep();
     let vdb = root.join("var/db/pkg/dev-libs/rebuiltbinarypkg-1.0");
     std::fs::create_dir_all(&vdb).unwrap();
@@ -179,10 +174,8 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
 
 #[test]
 fn newuse_reinstalls_when_vdb_use_differs_from_current_use() {
-    // dev-libs/reinstallpkg is installed at 1.0 with IUSE="foo" but an
-    // empty vdb USE file (foo was off at merge time); the fixture
-    // profile chain enables "foo" globally now, so --newuse must
-    // report a Reinstall for the changed "foo" flag.
+    // reinstallpkg installed with foo off; the profile enables foo now,
+    // so --newuse reports a Reinstall for the changed flag.
     assert_eq!(
         resolve_real_newuse("dev-libs", "reinstallpkg"),
         PretendOutcome::Reinstall {
@@ -199,9 +192,7 @@ fn newuse_reinstalls_when_vdb_use_differs_from_current_use() {
 
 #[test]
 fn newuse_does_not_reinstall_when_use_has_not_changed() {
-    // dev-libs/samepkg has no IUSE at all (declared or in the vdb),
-    // so there's nothing for --newuse to detect a change in -- must
-    // stay AlreadyInstalled even with --newuse enabled.
+    // samepkg has no IUSE at all, so --newuse has nothing to detect.
     assert_eq!(
         resolve_real_newuse("dev-libs", "samepkg"),
         PretendOutcome::AlreadyInstalled {
@@ -212,15 +203,9 @@ fn newuse_does_not_reinstall_when_use_has_not_changed() {
 
 #[test]
 fn newuse_forced_flags_suppresses_a_spurious_reinstall() {
-    // dev-libs/usemaskreinstallpkg is installed with an empty vdb
-    // IUSE, but its own ebuild now declares
-    // IUSE="masked_newly_added_flag" -- a flag
-    // fixtures/repo/profiles/base/use.mask masks off, so
-    // it's never enabled either before or after. Without
-    // reinstall_flags_for_use_change's own "flags -= forced_flags"
-    // step (real depgraph.py's own line, ported exactly), this
-    // would incorrectly report a Reinstall just because the flag
-    // now exists in IUSE at all.
+    // A newly added IUSE flag that use.mask forces off is never
+    // enabled before or after, so no Reinstall (the forced-flags cut).
+    // Portage: depgraph.py, reinstall_flags_for_use_change
     assert_eq!(
         resolve_real_newuse("dev-libs", "usemaskreinstallpkg"),
         PretendOutcome::AlreadyInstalled {
@@ -231,9 +216,7 @@ fn newuse_forced_flags_suppresses_a_spurious_reinstall() {
 
 #[test]
 fn changed_deps_reinstalls_when_vdb_rdepend_differs_from_the_current_ebuild() {
-    // dev-libs/changeddepspkg is installed with a vdb-recorded
-    // RDEPEND="dev-libs/samepkg", but its current ebuild's own
-    // RDEPEND is "dev-libs/newpkg" instead.
+    // changeddepspkg's vdb RDEPEND names samepkg; its ebuild names newpkg.
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "changeddepspkg", true),
         PretendOutcome::Reinstall {
@@ -250,9 +233,7 @@ fn changed_deps_reinstalls_when_vdb_rdepend_differs_from_the_current_ebuild() {
 
 #[test]
 fn changed_deps_still_fires_when_with_bdeps_is_false() {
-    // The changed dependency here is RDEPEND, which --with-bdeps=n
-    // never excludes (only DEPEND/BDEPEND are ever dropped) -- so
-    // this must still detect the change.
+    // RDEPEND survives --with-bdeps=n (only DEPEND/BDEPEND drop).
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "changeddepspkg", false),
         PretendOutcome::Reinstall {
@@ -269,12 +250,8 @@ fn changed_deps_still_fires_when_with_bdeps_is_false() {
 
 #[test]
 fn changed_deps_detects_an_atom_moved_between_two_dep_keys() {
-    // dev-libs/movedkeydepspkg's vdb recorded RDEPEND="dev-libs/samepkg";
-    // its current ebuild has that exact atom in PDEPEND instead, with
-    // nothing else on either side. The net atom set is identical, so
-    // the pre-slice merged-into-one-string comparison saw no change;
-    // the per-key comparison catches it (real `_changed_deps` compares
-    // `built_deps` to `unbuilt_deps` element-wise).
+    // The same atom moved from RDEPEND to PDEPEND: the net set is
+    // identical, but the per-key comparison catches it (Portage `_changed_deps`).
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "movedkeydepspkg", false),
         PretendOutcome::Reinstall {
@@ -291,13 +268,8 @@ fn changed_deps_detects_an_atom_moved_between_two_dep_keys() {
 
 #[test]
 fn changed_deps_ignores_a_built_slot_operator_deps_resolved_slot() {
-    // dev-libs/slotopdepspkg's current ebuild has
-    // RDEPEND="dev-libs/slotoptarget:="; its vdb recorded the built
-    // form "dev-libs/slotoptarget:2=" (the slot it was merged
-    // against). Real `strip_slots` normalizes the built `:2=` back to
-    // `:=` before comparing, so this is NOT a changed dependency --
-    // without that normalization every `:=` dep would spuriously
-    // trigger a --changed-deps reinstall.
+    // The vdb's built `:2=` normalizes back to `:=` before comparing
+    // (Portage `strip_slots`), so this is NOT a changed dependency.
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "slotopdepspkg", true),
         PretendOutcome::AlreadyInstalled {
@@ -308,12 +280,8 @@ fn changed_deps_ignores_a_built_slot_operator_deps_resolved_slot() {
 
 #[test]
 fn changed_deps_detects_an_any_of_group_reorder() {
-    // dev-libs/anyofreorderdepspkg's vdb recorded
-    // RDEPEND="|| ( dev-libs/reorderdepa dev-libs/reorderdepb )";
-    // its current ebuild swaps the two alternatives. Real
-    // `_changed_deps` compares structured `use_reduce(token_class=
-    // Atom)` output, so the `||`-alternative order is significant --
-    // the pre-slice flat set comparison missed it.
+    // Swapped `||` alternatives count: order is significant in
+    // Portage's structured `_changed_deps` comparison.
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "anyofreorderdepspkg", false),
         PretendOutcome::Reinstall {
@@ -330,10 +298,7 @@ fn changed_deps_detects_an_any_of_group_reorder() {
 
 #[test]
 fn changed_deps_detects_a_plain_atom_reorder_but_not_a_redundant_bracket() {
-    // Faithful to real portage's own Python-list `!=`: order is
-    // significant even in AND context, so dev-libs/orderchangeddepspkg
-    // (vdb `reorderdepa reorderdepb`, ebuild `reorderdepb reorderdepa`)
-    // is a change...
+    // Order is significant even in AND context (Portage's list `!=`)...
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "orderchangeddepspkg", false),
         PretendOutcome::Reinstall {
@@ -346,10 +311,7 @@ fn changed_deps_detects_a_plain_atom_reorder_but_not_a_redundant_bracket() {
             slot_operator_rebuild: false,
         }
     );
-    // ...but a redundant-bracket difference is not (real `use_reduce`
-    // collapses `( a b )` to `a b`): dev-libs/redundantbracketdepspkg
-    // has vdb `reorderdepa reorderdepb` and ebuild
-    // `( dev-libs/reorderdepa dev-libs/reorderdepb )`.
+    // ...but redundant brackets are not (Portage `use_reduce` collapses them).
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "redundantbracketdepspkg", false),
         PretendOutcome::AlreadyInstalled {
@@ -381,10 +343,8 @@ fn changed_deps_report_reports_without_reinstalling() {
 
 #[test]
 fn changed_deps_report_is_silent_when_changed_deps_is_also_given() {
-    // Real portage: "This is completely silent... if --changed-deps
-    // ... is enabled" -- the Vec must stay empty even though the
-    // underlying dependency change is real (changed_deps=true here
-    // actually reinstalls it, proven by the second assertion).
+    // Silent when --changed-deps is also given; the second assert
+    // proves the underlying change still reinstalls.
     let result = graph_changed_deps_report("dev-libs/changeddepspkg", true, true);
     assert!(result.changed_deps_report.is_empty());
     let changeddepspkg = result
@@ -414,13 +374,8 @@ fn changed_deps_report_is_empty_without_the_flag() {
 
 #[test]
 fn changed_deps_ignores_a_libc_only_dependency_change() {
-    // dev-libs/libcnoisepkg's own vdb RDEPEND names sys-libs/glibc,
-    // its current ebuild names sys-libs/musl instead -- both are
-    // real virtual/libc providers (the fixture vdb's own
-    // virtual/libc entry RDEPENDs on "|| ( sys-libs/glibc
-    // sys-libs/musl )"), so real strip_libc_deps must strip both
-    // before comparing, leaving only the identical
-    // "dev-libs/samepkg" on each side -- no reinstall.
+    // glibc-vs-musl is libc noise both sides strip (Portage
+    // `strip_libc_deps`), leaving identical deps: no reinstall.
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "libcnoisepkg", true),
         PretendOutcome::AlreadyInstalled {
@@ -431,10 +386,7 @@ fn changed_deps_ignores_a_libc_only_dependency_change() {
 
 #[test]
 fn changed_deps_does_not_fire_for_a_package_with_no_recorded_difference() {
-    // dev-libs/samepkg's own vdb has no RDEPEND file at all, and its
-    // current ebuild declares none either -- both sides flatten to
-    // an empty set, so no reinstall is reported even with
-    // --changed-deps enabled.
+    // No RDEPEND on either side flattens to an empty set: no reinstall.
     assert_eq!(
         resolve_real_changed_deps("dev-libs", "samepkg", true),
         PretendOutcome::AlreadyInstalled {
@@ -445,9 +397,7 @@ fn changed_deps_does_not_fire_for_a_package_with_no_recorded_difference() {
 
 #[test]
 fn newrepo_reinstalls_when_vdb_repository_differs_from_the_repo_currently_providing_it() {
-    // dev-libs/newrepopkg is installed with a vdb "repository" file
-    // recording "oldrepo", but the current best candidate for this
-    // exact version lives in "testrepo" instead.
+    // newrepopkg's vdb records "oldrepo"; the candidate lives in "testrepo".
     assert_eq!(
         resolve_real_newrepo("dev-libs", "newrepopkg"),
         PretendOutcome::Reinstall {
@@ -464,9 +414,7 @@ fn newrepo_reinstalls_when_vdb_repository_differs_from_the_repo_currently_provid
 
 #[test]
 fn newrepo_does_not_fire_when_vdb_repository_matches() {
-    // dev-libs/samerepopkg is installed with a vdb "repository" file
-    // recording "testrepo" -- exactly matching the repo that
-    // currently provides this version, so --newrepo must not fire.
+    // samerepopkg's vdb records "testrepo", matching the provider: no fire.
     assert_eq!(
         resolve_real_newrepo("dev-libs", "samerepopkg"),
         PretendOutcome::AlreadyInstalled {
@@ -477,12 +425,8 @@ fn newrepo_does_not_fire_when_vdb_repository_matches() {
 
 #[test]
 fn newrepo_fires_via_the_unknown_repo_sentinel_when_no_repository_file_was_ever_recorded() {
-    // dev-libs/samepkg has no vdb "repository" file at all (real
-    // portage predates this tracking, or a hand-installed/synthetic
-    // entry) -- real portage.versions._unknown_repo ("__unknown__")
-    // applies, which never equals a real repo name, so --newrepo
-    // still fires even though nothing about this package actually
-    // changed.
+    // No vdb "repository" file: the `__unknown__` sentinel never
+    // equals a repo name, so --newrepo fires (Portage `_unknown_repo`).
     assert_eq!(
         resolve_real_newrepo("dev-libs", "samepkg"),
         PretendOutcome::Reinstall {
@@ -506,14 +450,8 @@ fn split_slot_defaults_sub_slot_to_the_slot_itself_when_no_slash_is_present() {
 
 #[test]
 fn newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag() {
-    // dev-libs/changedusepkg is installed with an empty vdb IUSE,
-    // and its current ebuild now declares IUSE="brandnewflag" -- a
-    // real, unmasked, not-globally-enabled flag. --newuse's own
-    // presence-diff term reacts to the flag simply existing in IUSE
-    // now, regardless of enablement; --changed-use's own, narrower
-    // formula never looks at IUSE presence at all, only at
-    // enablement of flags declared on both sides -- proving the two
-    // are genuinely different checks.
+    // --newuse reacts to a flag merely existing in IUSE now;
+    // --changed-use only looks at enablement of shared flags.
     assert_eq!(
         resolve_real_newuse("dev-libs", "changedusepkg"),
         PretendOutcome::Reinstall {

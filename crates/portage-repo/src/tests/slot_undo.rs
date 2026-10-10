@@ -1,10 +1,9 @@
 use super::*;
 
-/// #250: real's build-edge satisfaction is `vardb.match_pkgs(atom)`,
-/// which honours use-deps: an installed `dev-util/u250make` built
-/// `-foo` does not satisfy `dev-util/u250make[foo]`, so the
-/// `u250json -> u250make` build edge stays unbreakable (the pmtest
-/// fixture; real's playground in `LLM/evidence/2026-09-30-250/`).
+/// Build-edge satisfaction honours use-deps: an installed `u250make`
+/// built `-foo` does not satisfy `u250make[foo]`, so the build edge
+/// stays unbreakable.
+/// Portage: vardb.match_pkgs
 #[test]
 fn run_pass_use_mismatched_installed_instance_leaves_the_build_edge_hard() {
     let dir = slotundo_temp_dir("250-edge");
@@ -46,9 +45,8 @@ fn run_pass_use_mismatched_installed_instance_leaves_the_build_edge_hard() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a bare leaf atom resolves to a single `New`
-/// entry at the tree version and slot, carrying no old slot and
-/// pulling no arguments.
+/// A bare leaf atom resolves to a single `New` entry at the tree
+/// version and slot, carrying no old slot and pulling no arguments.
 #[test]
 fn run_pass_resolves_a_leaf_to_a_new_entry() {
     let dir = slotundo_temp_dir("161-run-new");
@@ -95,7 +93,7 @@ fn run_pass_resolves_a_leaf_to_a_new_entry() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: an atom with no visible candidate resolves to a
+/// An atom with no visible candidate resolves to a
 /// `NoVisibleCandidate` entry, not an error.
 #[test]
 fn run_pass_reports_a_missing_atom_as_nvc() {
@@ -122,10 +120,9 @@ fn run_pass_reports_a_missing_atom_as_nvc() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a top-level atom for the installed version
-/// resolves to a bare reasonless `Reinstall` (real's `[ebuild R]`
-/// for an explicitly requested package -- `is_top_level &&
-/// !selective`).
+/// A top-level atom for the installed version resolves to a bare
+/// reasonless `Reinstall` (Portage's `[ebuild R]` for an explicitly
+/// requested package -- `is_top_level && !selective`).
 #[test]
 fn run_pass_reinstalls_the_requested_installed_version() {
     let dir = slotundo_temp_dir("161-run-inst");
@@ -157,8 +154,8 @@ fn run_pass_reinstalls_the_requested_installed_version() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: the same installed version reached only as a
-/// dependency resolves `AlreadyInstalled` with no merge.
+/// The same installed version reached only as a dependency resolves
+/// `AlreadyInstalled` with no merge.
 #[test]
 fn run_pass_keeps_a_satisfied_dependency_installed() {
     let dir = slotundo_temp_dir("161-run-depinst");
@@ -188,8 +185,7 @@ fn run_pass_keeps_a_satisfied_dependency_installed() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: with `--update`, an older installed instance
-/// upgrades to the tree version.
+/// With `--update`, an older installed instance upgrades to the tree version.
 #[test]
 fn run_pass_upgrades_an_older_installed_version() {
     let dir = slotundo_temp_dir("161-run-up");
@@ -234,8 +230,7 @@ fn run_pass_upgrades_an_older_installed_version() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: with `--update`, a newer installed instance
-/// downgrades to the tree version.
+/// With `--update`, a newer installed instance downgrades to the tree version.
 #[test]
 fn run_pass_downgrades_a_newer_installed_version() {
     let dir = slotundo_temp_dir("161-run-down");
@@ -261,8 +256,7 @@ fn run_pass_downgrades_a_newer_installed_version() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: dependencies walk transitively, and each
-/// walked child records its parent atom.
+/// Dependencies walk transitively, and each walked child records its parent atom.
 #[test]
 fn run_pass_walks_dependencies_and_records_parent_atoms() {
     let dir = slotundo_temp_dir("161-run-deps");
@@ -283,15 +277,14 @@ fn run_pass_walks_dependencies_and_records_parent_atoms() {
     let mut names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["needer", "paired"]);
-    // (`parent_atoms` rows are collected under `--debug` only, like
-    // every `resolver_trace` row -- pinned by the contract suite, so
-    // there is no unit-observable assertion for them here.)
+    // No unit assertion: `parent_atoms` rows collect under `--debug`
+    // only (pinned by the contract suite).
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: with `--newuse`, an installed instance whose
-/// built USE misses a now-enabled flag reinstalls with the flag
-/// change recorded -- and the newly-enabled conditional dep walks.
+/// With `--newuse`, an installed instance whose built USE misses a
+/// now-enabled flag reinstalls with the flag change recorded -- and
+/// the newly-enabled conditional dep walks.
 #[test]
 fn run_pass_newuse_reinstalls_a_flag_change() {
     let dir = slotundo_temp_dir("161-run-newuse");
@@ -321,13 +314,9 @@ fn run_pass_newuse_reinstalls_a_flag_change() {
         }
         other => panic!("expected a USE-change reinstall, got {other:?}"),
     }
-    // The reinstall renders the recorded USE with the changed
-    // flag marked.
+    // The reinstall renders the recorded USE with the changed flag marked.
     assert_eq!(pkg.use_flags_display, vec![("wantdep".to_string(), false)]);
-    // The same-slot same-sub installed instance is not its own
-    // oldbest: the `Reinstall` filter keeps only *other*
-    // slot/sub instances (a reinstall in place supersedes, not
-    // coexists).
+    // An in-place reinstall records no oldbest (it supersedes, not coexists).
     assert!(
         pkg.oldbest.is_empty(),
         "an in-place reinstall records no oldbest"
@@ -336,17 +325,13 @@ fn run_pass_newuse_reinstalls_a_flag_change() {
         pkg.use_expand_display_p,
         vec![("USE".to_string(), "-wantdep%".to_string())]
     );
-    // The conditional dep itself resolves on the retry walk the
-    // recorded flag change drives (contract-suite pinned); this
-    // pass pins the flag delta.
+    // This pass pins the flag delta; the dep resolves on the retry
+    // walk (contract-suite pinned).
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6r: a second atom resolving to an already-graphed
-/// `Reinstall` reuses it -- the `resolved_slots` revisit reads the
-/// entry's own version back out instead of resolving (and
-/// conflicting) twice. Same shape as the use-unsat dedup pair,
-/// but installed, so the first outcome is a reinstall.
+/// A second atom resolving to an already-graphed `Reinstall` reuses
+/// it instead of resolving (and conflicting) twice.
 #[test]
 fn run_pass_revisiting_a_reinstall_reuses_the_entry() {
     let dir = slotundo_temp_dir("161-run-rereinst");
@@ -384,8 +369,8 @@ fn run_pass_revisiting_a_reinstall_reuses_the_entry() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: without `--newuse` the same USE mismatch stays
-/// a bare reinstall with no flag change and no extra walk.
+/// Without `--newuse` the same USE mismatch stays a bare reinstall
+/// with no flag change and no extra walk.
 #[test]
 fn run_pass_without_newuse_keeps_a_use_mismatch_quiet() {
     let dir = slotundo_temp_dir("161-run-nouse");
@@ -421,8 +406,8 @@ fn run_pass_without_newuse_keeps_a_use_mismatch_quiet() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: under `--usepkgonly` with no binary packages,
-/// even a tree-present leaf has no mergeable candidate.
+/// Under `--usepkgonly` with no binaries, even a tree-present leaf
+/// has no mergeable candidate.
 #[test]
 fn run_pass_usepkgonly_without_binaries_reports_nvc() {
     let dir = slotundo_temp_dir("161-run-binonly");
@@ -448,9 +433,8 @@ fn run_pass_usepkgonly_without_binaries_reports_nvc() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: under `--nodeps` only the requested atom
-/// resolves -- dependencies never walk, and no dep-driven rows
-/// appear.
+/// Under `--nodeps` only the requested atom resolves; dependencies
+/// never walk.
 #[test]
 fn run_pass_nodeps_resolves_only_the_requested_atom() {
     let dir = slotundo_temp_dir("161-run-nodeps");
@@ -473,8 +457,8 @@ fn run_pass_nodeps_resolves_only_the_requested_atom() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: in selective mode the requested installed
-/// version stays `AlreadyInstalled` instead of the bare reinstall.
+/// In selective mode the requested installed version stays
+/// `AlreadyInstalled` instead of the bare reinstall.
 #[test]
 fn run_pass_selective_keeps_the_requested_version() {
     let dir = slotundo_temp_dir("161-run-sel");
@@ -500,8 +484,8 @@ fn run_pass_selective_keeps_the_requested_version() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: multiple atoms resolve in walk order (the
-/// seed stack runs argv reversed) -- both merge.
+/// Multiple atoms resolve in walk order (the seed stack runs argv
+/// reversed).
 #[test]
 fn run_pass_resolves_multiple_atoms_in_order() {
     let dir = slotundo_temp_dir("161-run-multi");
@@ -527,9 +511,8 @@ fn run_pass_resolves_multiple_atoms_in_order() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a use-dep the resolved USE satisfies (here
-/// `[-wantdep]`, off by default and untouched by the profile)
-/// resolves the atom normally.
+/// A use-dep the resolved USE satisfies (here `[-wantdep]`, off by
+/// default and untouched by the profile) resolves normally.
 #[test]
 fn run_pass_satisfies_a_disabled_use_dep() {
     let dir = slotundo_temp_dir("161-run-usedep");
@@ -555,8 +538,8 @@ fn run_pass_satisfies_a_disabled_use_dep() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a use-dep nothing enables reports the atom
-/// unsatisfiable instead of resolving.
+/// A use-dep nothing enables reports the atom unsatisfiable instead
+/// of resolving.
 #[test]
 fn run_pass_reports_an_unenabled_use_dep_unsatisfied() {
     let dir = slotundo_temp_dir("161-run-nouse");
@@ -587,8 +570,7 @@ fn run_pass_reports_an_unenabled_use_dep_unsatisfied() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: two unsatisfiable use-deps on one cp file a
-/// single use-unsat report.
+/// Two unsatisfiable use-deps on one cp file a single use-unsat report.
 #[test]
 fn run_pass_dedups_use_unsat_reports() {
     let dir = slotundo_temp_dir("161-run-usedup");
@@ -613,8 +595,8 @@ fn run_pass_dedups_use_unsat_reports() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: a `New` into a slot with nothing installed is
-/// still a plain new slot row only when another slot is installed.
+/// A `New` into an uninstalled slot is a new-slot row only when
+/// another slot is installed.
 #[test]
 fn run_pass_marks_a_new_slot_row() {
     let dir = slotundo_temp_dir("161-run-newslot");
@@ -648,8 +630,8 @@ fn run_pass_marks_a_new_slot_row() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S6: reinstalling at a moved sub-slot records the
-/// installed instance for the `[oldver]` bracket.
+/// Reinstalling at a moved sub-slot records the installed instance
+/// for the `[oldver]` bracket.
 #[test]
 fn run_pass_records_oldbest_for_a_moved_reinstall() {
     let dir = slotundo_temp_dir("161-run-oldbest");

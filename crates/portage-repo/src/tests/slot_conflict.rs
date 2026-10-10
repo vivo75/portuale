@@ -2,10 +2,8 @@ use super::*;
 
 #[test]
 fn record_slot_conflict_merges_same_triple_and_appends_new() {
-    // Real keeps one collision handler per conflicting slot: a second
-    // distinct atom hitting the same (slot, existing, current) triple
-    // re-renders the record (rebuilt from the live pullers) instead
-    // of appending a duplicate notice block.
+    // One collision handler per conflicting slot: a second atom on the
+    // same triple re-renders the record instead of appending a duplicate.
     let mk = |atom: &str, current: &str| SlotConflict {
         category: "dev-libs".to_string(),
         package: "t".to_string(),
@@ -39,9 +37,8 @@ fn record_slot_conflict_merges_same_triple_and_appends_new() {
     assert_eq!(v.len(), 2);
 }
 
-/// Backlog #161 S3: the record forms with the merge version
-/// resolved, the installed version preserved, and the consumer at
-/// its recorded slot and repository.
+/// The record forms with the merge version resolved, the installed
+/// version preserved, the consumer at its recorded slot and repo.
 #[test]
 fn build_residual_forms_a_record_for_a_broken_pin() {
     let dir = slotundo_temp_dir("161-resid");
@@ -72,8 +69,7 @@ fn build_residual_forms_a_record_for_a_broken_pin() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: a `New` merge-bound entry feeds the merge
-/// version the same way an `Upgrade` one does.
+/// A `New` entry feeds the merge version like an `Upgrade` one.
 #[test]
 fn build_residual_reads_the_merge_version_from_a_new_entry() {
     let dir = slotundo_temp_dir("161-resid-new");
@@ -92,8 +88,8 @@ fn build_residual_reads_the_merge_version_from_a_new_entry() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: a dropped pin whose consumer is itself
-/// merge-bound this pass is replaced, not reported.
+/// A dropped pin whose consumer is itself merge-bound is replaced,
+/// not reported.
 #[test]
 fn build_residual_skips_a_consumer_being_replaced() {
     let dir = slotundo_temp_dir("161-resid-repl");
@@ -121,8 +117,7 @@ fn build_residual_skips_a_consumer_being_replaced() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: a pin the merged version satisfies after all
-/// reconciles silently -- no record.
+/// A pin the merged version satisfies after all reconciles silently.
 #[test]
 fn build_residual_reconciles_a_pin_the_merge_satisfies() {
     let dir = slotundo_temp_dir("161-resid-rec");
@@ -141,10 +136,8 @@ fn build_residual_reconciles_a_pin_the_merge_satisfies() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: the merge version comes from the target cp's
-/// own entry -- a same-category neighbour's entry never supplies
-/// it. (The neighbour sorts last so a loosened skip that reads it
-/// would overwrite the target's version.)
+/// The merge version comes from the target cp's own entry, never a
+/// neighbour's.
 #[test]
 fn build_residual_reads_the_merge_version_from_the_target_entry() {
     let dir = slotundo_temp_dir("161-resid-cp");
@@ -163,10 +156,8 @@ fn build_residual_reads_the_merge_version_from_the_target_entry() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: of several installed versions the pin matches,
-/// the record preserves the first match only when no greater one
-/// matches -- a higher matching version wins, a non-matching one
-/// never does.
+/// Of the installed versions the pin matches, the greatest wins; a
+/// non-matching one never displaces.
 #[test]
 fn build_residual_keeps_the_highest_matching_installed() {
     let dir = slotundo_temp_dir("161-resid-inst");
@@ -191,8 +182,8 @@ fn build_residual_keeps_the_highest_matching_installed() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: between two matching installed versions the
-/// greater one is preserved (real's `matches[-1]`).
+/// Between two matching installed versions the greater wins (Portage
+/// `matches[-1]`).
 #[test]
 fn build_residual_prefers_the_greatest_matching_installed() {
     let dir = slotundo_temp_dir("161-resid-max");
@@ -218,10 +209,8 @@ fn build_residual_prefers_the_greatest_matching_installed() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: puller atoms file by version match *and* USE
-/// satisfaction, deduplicated: a USE-mismatching atom files
-/// nowhere, a version-missing atom files nowhere, and identical
-/// pullers file once per side.
+/// Puller atoms file by version match and USE satisfaction,
+/// deduplicated per side.
 #[test]
 fn build_residual_files_puller_parents_by_version_and_use() {
     let dir = slotundo_temp_dir("161-resid-pull");
@@ -275,8 +264,7 @@ fn build_residual_files_puller_parents_by_version_and_use() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: with two records each pin folds into its own
-/// record only, and a stray pin for an unknown cp folds nowhere.
+/// Each pin folds into its own record only; a stray pin folds nowhere.
 #[test]
 fn build_residual_folds_each_pin_into_its_own_record() {
     let dir = slotundo_temp_dir("161-resid-two");
@@ -340,8 +328,7 @@ fn build_residual_folds_each_pin_into_its_own_record() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S3: two identical pins fold one parent line, not
-/// two.
+/// Two identical pins fold one parent line, not two.
 #[test]
 fn build_residual_dedups_identical_pins() {
     let dir = slotundo_temp_dir("161-resid-dup");
@@ -360,9 +347,8 @@ fn build_residual_dedups_identical_pins() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #291: the bt0 lone-record re-file matches a built
-/// `:S/SS=` puller against the installed instance's own vdb sub-slot,
-/// not the tree's metadata for that version.
+/// A built `:S/SS=` puller re-files against the installed vdb
+/// sub-slot, not the tree's metadata for that version.
 #[test]
 fn merge_same_slot_conflicts_refiles_a_built_puller_under_the_installed_sub_slot() {
     let base = slotundo_temp_dir("291-refile");

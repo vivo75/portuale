@@ -1,21 +1,11 @@
-/// Backlog #162 (`lib.rs` mutation cluster 2): direct unit tests for the
-/// eight pure selection predicates P7b's `cargo mutants` run left missed
-/// (`TEST/findings/mutants.md` "## `portage-repo/src/lib.rs`", ~102
-/// missed). Each test observes the predicate's own return value -- no
-/// end-to-end contract reproduction -- so every in-body operator flip
-/// changes an asserted outcome. Kept self-contained (own config, scratch
-/// repo/vdb/entry helpers) so the other Track U branches' blocks rebase
-/// mechanically.
+/// Direct unit tests for the eight pure selection predicates: each
+/// test observes the predicate's own return value.
 use crate::*;
 use portage_util::TempDir;
 
-// ---- S1: `bare_cp` (real `3rdparty/portage/lib/portage/update.py`
-// `parse_updates`: `atom.blocker or atom != atom.cp` rejects
-// everything but a bare `cat/pkg`; the `slotmove` slot side is
-// `valid_slot_name`'s job, not this predicate's). ----
+// ---- S1: `bare_cp` (Portage `update.py parse_updates`). ----
 
-/// `bare_cp` keeps the `(category, package)` of a plain `cat/pkg`
-/// -- the whole-body `None`/`Some((...)` mutants all fail here.
+/// `bare_cp` keeps the `(category, package)` of a plain `cat/pkg`.
 #[test]
 fn bare_cp_accepts_a_plain_cat_pkg() {
     assert_eq!(
@@ -28,9 +18,7 @@ fn bare_cp_accepts_a_plain_cat_pkg() {
     );
 }
 
-/// `bare_cp` rejects each non-bare form individually, so every
-/// `||`-arm flip (`||` -> `&&` returns `Some` for a
-/// single-violation input) and both `!=` flips fail here.
+/// `bare_cp` rejects each non-bare form individually.
 #[test]
 fn bare_cp_rejects_every_non_bare_form() {
     for rejected in [
@@ -70,10 +58,7 @@ fn atoms_162(atoms: &[&str]) -> Vec<String> {
     atoms.iter().map(|a| a.to_string()).collect()
 }
 
-// ---- S2: `clean_selection` (real `emerge --prune --nodeps`
-// selection, `3rdparty/portage` `unmerge.py` `_unmerge_display`:
-// every cp with more than one matched version keeps the highest
-// and selects the rest). ----
+// ---- S2: `clean_selection` (Portage `emerge --prune --nodeps` selection). ----
 
 /// Scratch vdb for the `clean_selection` legs: `multi` spans two
 /// versions in one slot, `single` has one (skipped), `spread`
@@ -92,8 +77,6 @@ fn clean_root_162() -> std::path::PathBuf {
 
 /// Empty args walk every installed cp: `multi` keeps 2.0, `spread`
 /// keeps 4.0 across both slots, the single-version cp is skipped.
-/// Kills the whole-body `vec![]` row, the three
-/// `versions.len() < 2` flips and the cross-slot best flip.
 #[test]
 fn clean_selection_reports_every_multi_version_cp() {
     let root = clean_root_162();
@@ -113,8 +96,7 @@ fn clean_selection_reports_every_multi_version_cp() {
 }
 
 /// A version-range atom restricts the best/rest split to its own
-/// match set, and a cp mismatch filters everything out -- the
-/// `==` flips on the atom/cp guard fail here.
+/// match set, and a cp mismatch filters everything out.
 #[test]
 fn clean_selection_version_pinned_atom_selects_only_its_set() {
     let root = clean_root_162();
@@ -127,10 +109,7 @@ fn clean_selection_version_pinned_atom_selects_only_its_set() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// An atom matching nothing installed selects nothing: the
-/// `parse && match` flip (`&&` -> `||` admits the cp-matched but
-/// version-missed package) and the `!is_empty` deletion (which
-/// admits it the other way round) both fail here.
+/// An atom matching nothing installed selects nothing.
 #[test]
 fn clean_selection_impossible_version_matches_nothing() {
     let root = clean_root_162();
@@ -186,9 +165,7 @@ fn entry_162(
 // `Reinstall` with USE/slot churn enables it). ----
 
 /// Any `Upgrade`/`Downgrade` enables when `if_new_ver` is set, and
-/// neither does when it is not -- the deleted `Reinstall`-arm
-/// neighbour legs live below; both whole-body rows (already
-/// S0-caught) fail here too.
+/// neither does when it is not.
 #[test]
 fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
     let entries = vec![
@@ -252,9 +229,7 @@ fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
 }
 
 /// A new-slot `New` enables on `if_new_ver` or `if_new_slot`
-/// alone; a same-slot `New` never does even with every flag set --
-/// the `e.new_slot` guard flips and the `||` -> `&&` flip fail
-/// here.
+/// alone; a same-slot `New` never does even with every flag set.
 #[test]
 fn complete_graph_auto_enable_new_only_for_a_new_slot() {
     let new_slot = vec![entry_162(
@@ -314,9 +289,7 @@ fn complete_graph_auto_enable_new_only_for_a_new_slot() {
 }
 
 /// A `Reinstall` with USE churn enables on `if_new_use`, one with
-/// a slot change on `if_new_ver`, and a churn-free one never does
-/// -- the deleted `Reinstall` arm, the `||` -> `&&` flip and the
-/// `!changed_flags` deletion fail here.
+/// a slot change on `if_new_ver`; a churn-free one never does.
 #[test]
 fn complete_graph_auto_enable_reinstall_needs_churn() {
     let use_churn = |changed: Vec<String>| {
@@ -366,9 +339,7 @@ fn complete_graph_auto_enable_reinstall_needs_churn() {
 }
 
 /// A `Reinstall` with only a slot change enables on `if_new_ver`
-/// alone, and the crossed shape (USE churn without `if_new_use`,
-/// slot change without `if_new_ver`) stays off -- the two
-/// remaining `&&`/`||` flips fail here.
+/// alone; the crossed shape stays off.
 #[test]
 fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
     let slot_churn = entry_162(
@@ -439,8 +410,7 @@ fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
     }));
 }
 
-/// Settled entries never enable, whatever the flags -- pins the
-/// `_ => false` arm the mutants never touch.
+/// Settled entries never enable, whatever the flags.
 #[test]
 fn complete_graph_auto_enable_settled_entries_stay_off() {
     let entries = vec![
@@ -510,9 +480,7 @@ fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
 // wording: `>=cpv` when nothing is higher, `>=cpv:slot` when only
 // other slots are, `=cpv` when the same slot has more). ----
 
-/// Nothing higher anywhere renders the bare `>=cpv` -- the
-/// whole-body rows (already S0-caught) plus the outer `!higher`
-/// deletion and the `&&` widening inside the probe fail here.
+/// Nothing higher anywhere renders the bare `>=cpv`.
 #[test]
 fn check_if_latest_atom_form_renders_gte_when_nothing_is_higher() {
     let config = cfg_162();
@@ -534,9 +502,7 @@ fn check_if_latest_atom_form_renders_gte_when_nothing_is_higher() {
     );
 }
 
-/// A higher version in another slot only renders `>=cpv:slot` --
-/// the `||` narrowing, the `Greater` flip and the inner `!higher`
-/// deletion fail here.
+/// A higher version in another slot only renders `>=cpv:slot`.
 #[test]
 fn check_if_latest_atom_form_renders_slot_when_only_other_slots_are_higher() {
     let config = cfg_162();
@@ -558,9 +524,7 @@ fn check_if_latest_atom_form_renders_slot_when_only_other_slots_are_higher() {
     );
 }
 
-/// A higher version in the same slot renders `=cpv` -- the
-/// `!same_slot` deletion and the same-slot `Greater` flip fail
-/// here.
+/// A higher version in the same slot renders `=cpv`.
 #[test]
 fn check_if_latest_atom_form_renders_equals_when_its_slot_is_higher() {
     let config = cfg_162();
@@ -583,8 +547,7 @@ fn check_if_latest_atom_form_renders_equals_when_its_slot_is_higher() {
 }
 
 /// With visibility checking on, a keyword-masked higher candidate
-/// does not count -- the visibility `&&` widening and the
-/// `!check_visibility` deletion (masked side) fail here.
+/// does not count.
 #[test]
 fn check_if_latest_atom_form_ignores_a_masked_higher_candidate() {
     let config = cfg_162();
@@ -607,8 +570,7 @@ fn check_if_latest_atom_form_ignores_a_masked_higher_candidate() {
 }
 
 /// With visibility checking off, that same masked candidate counts
-/// again -- the `||` narrowing and the `!check_visibility`
-/// deletion (unmasked side) fail here.
+/// again.
 #[test]
 fn check_if_latest_atom_form_counts_a_masked_candidate_without_visibility() {
     let config = cfg_162();
@@ -654,8 +616,7 @@ fn repo_pkgs_162(dir: &Path, pkgs: &[(&str, &str, &str, &str)]) -> Vec<RepoConfi
     }]
 }
 
-/// One scratch ebuild plus its real md5-cache entry (the
-/// md5-cache validation guard fails otherwise), in the #161
+/// One scratch ebuild plus its md5-cache entry, in the #161
 /// `blocker_161_write_pkg_full` shape with an `IUSE` line.
 fn write_pkg_162(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str) {
     use md5::Digest as _;
@@ -681,8 +642,8 @@ fn write_pkg_162(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str) {
     std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
 }
 
-/// One queued-but-unresolved atom for the `#90 (S1)` drain-state
-/// legs (`atoms_all_in_graph`'s `queued_cps` shortcut).
+/// One queued-but-unresolved atom for the drain-state legs
+/// (`atoms_all_in_graph`'s `queued_cps` shortcut).
 fn qatom_162(atom: &str) -> QueueItem {
     QueueItem {
         atom: atom.to_string(),
@@ -700,13 +661,7 @@ fn self_162(cat: &str, pkg: &str) -> RootCp {
     (false, cat.to_string(), pkg.to_string())
 }
 
-// ---- S5: `disjunction_preference` (real `dep_check.py`
-// `dep_zapdeps`' whole choice-bin classification, soft 449-523 and
-// 599-724: `Unsatisfiable` < `Other` < `OtherInstalledAnySlot` <
-// `OtherInstalledSome` < `OtherInstalled` < `UnsatUseNonInstalled` <
-// `UnsatUseInstalled` < `UnsatUseInGraph` < `Available` <
-// `Installed`). `self_cp` is a non-tree consumer everywhere except
-// the circular legs. ----
+// ---- S5: `disjunction_preference` (Portage `dep_zapdeps` choice bins). ----
 /// Arguments of [`disj_162`].
 struct Disj162Args<'a> {
     repos: &'a [RepoConfig],
@@ -752,9 +707,8 @@ struct Disj162CircArgs<'a> {
     circular_dependency: &'a HashMap<RootCp, Vec<CircularDepChild>>,
 }
 
-/// `disj_162` with an explicit `circular_dependency` map (backlogs
-/// #216/#221) -- owner cp → circular-child records, like the
-/// `'backtrack` loop carries.
+/// `disj_162` with an explicit `circular_dependency` map: owner cp
+/// to circular-child records, like the backtrack loop carries.
 fn disj_162_circ(args: Disj162CircArgs<'_>) -> portage_use_reduce::AltPreference {
     let Disj162CircArgs {
         repos,
@@ -783,10 +737,7 @@ fn disj_162_circ(args: Disj162CircArgs<'_>) -> portage_use_reduce::AltPreference
     })
 }
 
-/// A resolvable but uninstalled alternative ranks `Available` --
-/// the `avail || running_root` narrowing, the `!avail` deletion,
-/// the `!all_available` deletion and the whole-body `Default`
-/// (which is `Unsatisfiable`) fail here.
+/// A resolvable but uninstalled alternative ranks `Available`.
 #[test]
 fn disjunction_preference_ranks_a_fresh_alternative_available() {
     let dir = dir_162("disj-avail");
@@ -807,8 +758,7 @@ fn disjunction_preference_ranks_a_fresh_alternative_available() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An installed alternative ranks `Installed` -- the
-/// `installed || in_graph` narrowing fails here.
+/// An installed alternative ranks `Installed`.
 #[test]
 fn disjunction_preference_ranks_an_installed_alternative_installed() {
     let dir = dir_162("disj-inst");
@@ -831,10 +781,8 @@ fn disjunction_preference_ranks_an_installed_alternative_installed() {
 }
 
 /// An alternative on the resolving package itself, not installed and
-/// matching nothing in-graph (backlog #216 narrows the old
-/// unconditional refusal: an in-graph self match is real's pass-1
-/// `preferred_in_graph` pick), is circular and ranks `Unsatisfiable`
-/// -- the blocker-`==` flip fails here.
+/// matching nothing in-graph, is circular and ranks `Unsatisfiable`.
+/// Portage: pass-1 preferred_in_graph pick
 #[test]
 fn disjunction_preference_rejects_a_circular_self_alternative() {
     let dir = dir_162("disj-circ");
@@ -856,8 +804,7 @@ fn disjunction_preference_rejects_a_circular_self_alternative() {
 }
 
 /// The same self alternative with the package installed is no
-/// circle and ranks `Installed` -- the `!installed` deletion
-/// fails here.
+/// circle and ranks `Installed`.
 #[test]
 fn disjunction_preference_keeps_an_installed_self_alternative() {
     let dir = dir_162("disj-circ-inst");
@@ -879,11 +826,9 @@ fn disjunction_preference_keeps_an_installed_self_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Backlog #216: the same self alternative with the package already
-/// merge-bound in-graph is real's pass-1 `preferred_in_graph` pick,
-/// not a circle -- it ranks `Installed` (the cycle forms, then the
-/// `circular_dependency` map re-resolves it). The in-graph `&&`
-/// widening fails here.
+/// The same self alternative with the package already merge-bound
+/// in-graph is no circle and ranks `Installed`.
+/// Portage: pass-1 preferred_in_graph pick
 #[test]
 fn disjunction_preference_keeps_an_in_graph_self_alternative() {
     let dir = dir_162("disj-circ-graph");
@@ -913,14 +858,9 @@ fn disjunction_preference_keeps_an_in_graph_self_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// g221c (L0 `dev-lang/rust`): a `:slot` atom naming a different slot
-/// than the graphed instance is NOT in-graph -- real's
-/// `graph_db.match_pkgs(atom)` checks the slot, so the older-slot
-/// branch ranks `Available` and the retry takes `-bin`. The
-/// slot-blind candidate used to rank it `Installed`, beating
-/// `-bin` and re-closing the cycle through the older slot's own
-/// self edge. The `Available` (not `Unsatisfiable`) also pins that
-/// the circular-self gate let it through (see the next test).
+/// A `:slot` atom naming a different slot than the graphed instance
+/// is NOT in-graph: the older-slot branch ranks `Available`.
+/// Portage: graph_db.match_pkgs checks the slot
 #[test]
 fn disjunction_preference_cross_slot_atom_is_not_in_graph() {
     let dir = dir_162("disj-crossslot");
@@ -988,11 +928,8 @@ fn disjunction_preference_same_slot_atom_stays_in_graph() {
 }
 
 /// The circular-self gate still lets a cross-slot self atom through:
-/// the gate asks cp-presence ([`atom_cp_present_in_graph`]), not
-/// instance identity -- real merges the second instance as an
-/// ordinary dependency, so slot precision here would wrongly refuse
-/// it as circular. Ranks `Available` (the bins use the slot-precise
-/// rule), never `Unsatisfiable`.
+/// the gate asks cp-presence, not instance identity (Portage merges
+/// the second instance as an ordinary dependency).
 #[test]
 fn disjunction_preference_cross_slot_self_atom_still_proceeds() {
     let dir = dir_162("disj-crossself");
@@ -1025,11 +962,9 @@ fn disjunction_preference_cross_slot_self_atom_still_proceeds() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Backlog #216: with the self edge recorded in the
-/// `circular_dependency` map, the in-graph self alternative demotes
-/// to `Other` (real `dep_zapdeps`' `circular_atom`,
-/// `dep_check.py:688-691`) -- the re-resolve takes the bootstrap
-/// branch. The demotion `return` fails here.
+/// With the self edge recorded in the `circular_dependency` map, the
+/// in-graph self alternative demotes to `Other`.
+/// Portage: dep_check.py, dep_zapdeps circular_atom
 #[test]
 fn disjunction_preference_demotes_a_recorded_circular_self_alternative() {
     let dir = dir_162("disj-circ-demote");
@@ -1071,10 +1006,9 @@ fn disjunction_preference_demotes_a_recorded_circular_self_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Backlog #216: the demotion spares an atom an installed instance
-/// satisfies (real's own `vardb.match(atom)` exemption -- a "cycle"
-/// through an installed package is no deadlock). Still `Installed`;
-/// the exemption `continue` fails here.
+/// The demotion spares an atom an installed instance satisfies (a
+/// "cycle" through an installed package is no deadlock).
+/// Portage: vardb.match
 #[test]
 fn disjunction_preference_circular_demotion_spares_an_installed_atom() {
     let dir = dir_162("disj-circ-exempt");
@@ -1117,9 +1051,7 @@ fn disjunction_preference_circular_demotion_spares_an_installed_atom() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An uninstalled alternative on another package is not circular
-/// -- the `cp == self` flip and both circular-`&&` widenings fail
-/// here.
+/// An uninstalled alternative on another package is not circular.
 #[test]
 fn disjunction_preference_keeps_an_uninstalled_other_alternative() {
     let dir = dir_162("disj-other");
@@ -1140,9 +1072,8 @@ fn disjunction_preference_keeps_an_uninstalled_other_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A queued-but-unresolved atom counts as in-graph (the `#90 (S1)`
-/// drain-state shortcut), promoting the alternative to
-/// `Installed`.
+/// A queued-but-unresolved atom counts as in-graph, promoting the
+/// alternative to `Installed`.
 #[test]
 fn disjunction_preference_counts_a_queued_atom_as_in_graph() {
     let dir = dir_162("disj-queued");
@@ -1164,9 +1095,7 @@ fn disjunction_preference_counts_a_queued_atom_as_in_graph() {
 }
 
 /// An alternative whose USE-dep the tree cannot satisfy (and no
-/// installed instance helps) ranks `UnsatUseNonInstalled` -- the
-/// use-block shortcut flip, the `if use_ok` inversion and the
-/// masked-probe inversion (unmasked side) fail here.
+/// installed instance helps) ranks `UnsatUseNonInstalled`.
 #[test]
 fn disjunction_preference_ranks_a_use_unsatisfiable_alternative() {
     let dir = dir_162("disj-unsat");
@@ -1188,9 +1117,7 @@ fn disjunction_preference_ranks_a_use_unsatisfiable_alternative() {
 }
 
 /// The same alternative with the violated flag in `use.mask`
-/// demotes to plain `Other` (real soft 705) -- the
-/// `!all_use_unmasked` deletion and the masked-probe inversion
-/// (masked side) fail here.
+/// demotes to plain `Other` (Portage soft 705).
 #[test]
 fn disjunction_preference_demotes_a_masked_use_violation_to_other() {
     let dir = dir_162("disj-masked");
@@ -1216,11 +1143,9 @@ fn disjunction_preference_demotes_a_masked_use_violation_to_other() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An alternative satisfied by an installed instance's recorded
-/// vdb USE (real `_dep_check_composite_db` over the vardb,
-/// `dbapi._match_use`'s built-package branch) keeps bin 0 even
-/// when the profile leaves the flag off -- both installed-USE
-/// `||` narrowings fail here.
+/// An alternative satisfied by an installed instance's recorded vdb
+/// USE keeps bin 0 even when the profile leaves the flag off.
+/// Portage: _dep_check_composite_db / dbapi._match_use
 #[test]
 fn disjunction_preference_matches_an_installed_alternatives_vdb_use_direct() {
     let dir = dir_162("disj-vdbuse");
@@ -1249,9 +1174,8 @@ fn disjunction_preference_matches_an_installed_alternatives_vdb_use_direct() {
 }
 
 /// An alternative satisfiable only in an uninstalled slot ranks
-/// `UnsatUseNonInstalled`, not `UnsatUseInstalled` (real soft
-/// 599-607: the *slot* of the best USE-ignoring candidate must be
-/// installed) -- the slot-check `&&` widening fails here.
+/// `UnsatUseNonInstalled`, not `UnsatUseInstalled` (Portage soft
+/// 599-607).
 #[test]
 fn disjunction_preference_needs_the_target_slot_installed() {
     let dir = dir_162("disj-slot");
@@ -1280,10 +1204,8 @@ fn disjunction_preference_needs_the_target_slot_installed() {
 }
 
 /// No tree candidate but an installed cp behind a blocker-shaped
-/// group ranks `Other`: blockers stay out of the installed fold
-/// (real's own `if not atom.blocker` guard, soft 715-724) -- the
-/// blocker-filter flip and the cp-level `!is_empty` deletion fail
-/// here.
+/// group ranks `Other`: blockers stay out of the installed fold.
+/// Portage: dep_check.py (if not atom.blocker, soft 715-724)
 #[test]
 fn disjunction_preference_ranks_an_unavailable_group_other() {
     let dir = dir_162("disj-other2");
@@ -1306,8 +1228,7 @@ fn disjunction_preference_ranks_an_unavailable_group_other() {
 }
 
 /// No tree candidate but a fully matching installed instance
-/// ranks `OtherInstalled` -- the cp-level `is_empty` flip
-/// (installed side) fails here.
+/// ranks `OtherInstalled`.
 #[test]
 fn disjunction_preference_ranks_a_fully_installed_group_other_installed() {
     let dir = dir_162("disj-oinst");
@@ -1329,11 +1250,7 @@ fn disjunction_preference_ranks_a_fully_installed_group_other_installed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- S5b: `disjunction_preference`'s backlog #221 `circular_atom`
-// demotion (real `dep_zapdeps`, `dep_check.py:673-691`, bugs 703440,
-// 705986): on the restart after a stranded walk, an alternative with
-// an atom matching a recorded in-cycle child of the resolving parent
-// ranks `Other`, so the re-walk takes the cycle-breaking branch. ----/// Arguments of [`disj_circ_162`].
+// ---- S5b: `disjunction_preference`'s `circular_atom` demotion. ---- (Portage `dep_zapdeps`) /// Arguments of [`disj_circ_162`].
 struct DisjCirc162Args<'a> {
     repos: &'a [RepoConfig],
     config: &'a portage_profile::Config,
@@ -1392,10 +1309,8 @@ fn circ_map_162(
     map
 }
 
-/// An alternative matching the parent's recorded in-cycle child --
-/// otherwise `Installed` via the in-graph branch -- ranks `Other`:
-/// the bug-703440 `|| ( bootstrap cmake )` re-pick. The empty-map
-/// leg fails here.
+/// An alternative matching the parent's recorded in-cycle child
+/// ranks `Other` (the bug-703440 `|| ( bootstrap cmake )` re-pick).
 #[test]
 fn disjunction_preference_demotes_a_recorded_circular_child_to_other() {
     let dir = dir_162("disj-circ-hit");
@@ -1442,8 +1357,7 @@ fn disjunction_preference_demotes_a_recorded_circular_child_to_other() {
 }
 
 /// A recorded child for another parent, or for a version the atom
-/// does not match, leaves the rank alone -- the lookup-key and the
-/// `atom.match(child)` flips fail here.
+/// does not match, leaves the rank alone.
 #[test]
 fn disjunction_preference_ignores_a_non_matching_circular_record() {
     let dir = dir_162("disj-circ-miss");
@@ -1488,10 +1402,9 @@ fn disjunction_preference_ignores_a_non_matching_circular_record() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An atom satisfied by an installed version is not a circular dep
-/// (real's `if vardb.match(atom): continue`) -- the installed
-/// exemption holds `Installed` even with a matching record. The
-/// exemption deletion fails here.
+/// An atom satisfied by an installed version is not a circular dep:
+/// the exemption holds `Installed` even with a matching record.
+/// Portage: vardb.match
 #[test]
 fn disjunction_preference_exempts_an_installed_satisfying_circular_atom() {
     let dir = dir_162("disj-circ-inst");
@@ -1516,11 +1429,7 @@ fn disjunction_preference_exempts_an_installed_satisfying_circular_atom() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- S6: `promote_tied_alternative` (real `dep_zapdeps`'s
-// in-bin upgrade-preference pass, `dep_check.py` soft 738-802:
-// `all_installed_slots` first, then a strict upgrade (no
-// downgrade anywhere on a shared cp), then the in-graph
-// alternative). ----
+// ---- S6: `promote_tied_alternative` (Portage `dep_zapdeps` upgrade pass). ----
 
 /// Shared tree for the promotion legs: `up` spans two versions,
 /// `plain` spans two, `plainb` has one, `slota` spans two slots.
@@ -1572,10 +1481,7 @@ fn promote_162(args: Promote162Args<'_>) -> usize {
     })
 }
 
-/// A strict upgrade on the shared cp promotes the newer
-/// alternative -- the whole-body `-> 0`, two `< 2` early-return
-/// flips, the break-on-self flip, the position flip and the
-/// upgrade-arm `||` narrowing fail here.
+/// A strict upgrade on the shared cp promotes the newer alternative.
 #[test]
 fn promote_tied_alternative_prefers_the_strict_upgrade() {
     let dir = dir_162("prom-up");
@@ -1595,8 +1501,7 @@ fn promote_tied_alternative_prefers_the_strict_upgrade() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Disjoint cps never promote -- the whole-body `-> 1` (already
-/// S0-caught) fails here too.
+/// Disjoint cps never promote.
 #[test]
 fn promote_tied_alternative_keeps_disjoint_order() {
     let dir = dir_162("prom-disj");
@@ -1616,9 +1521,7 @@ fn promote_tied_alternative_keeps_disjoint_order() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Three alternatives promote the newest past both older ones --
-/// the `< 2` -> `>` flip (which returns 0 for any longer list)
-/// fails here.
+/// Three alternatives promote the newest past both older ones.
 #[test]
 fn promote_tied_alternative_promotes_through_a_longer_list() {
     let dir = dir_162("prom-long");
@@ -1639,7 +1542,7 @@ fn promote_tied_alternative_promotes_through_a_longer_list() {
 }
 
 /// An upgrade on one shared cp plus a downgrade on another is no
-/// promotion -- both mixed-shape flips fail here.
+/// promotion.
 #[test]
 fn promote_tied_alternative_rejects_a_mixed_upgrade_and_downgrade() {
     let dir = dir_162("prom-mixed");
@@ -1662,9 +1565,7 @@ fn promote_tied_alternative_rejects_a_mixed_upgrade_and_downgrade() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// With equal versions the in-graph alternative promotes -- the
-/// two `!...` deletions and the inner-`&&` widening in the
-/// in-graph arm fail here.
+/// With equal versions the in-graph alternative promotes.
 #[test]
 fn promote_tied_alternative_prefers_the_in_graph_alternative() {
     let dir = dir_162("prom-graph");
@@ -1693,9 +1594,7 @@ fn promote_tied_alternative_prefers_the_in_graph_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// With both alternatives in-graph nothing promotes -- the two
-/// outer-`&&` widenings in the in-graph arm (already S0-caught)
-/// fail here too.
+/// With both alternatives in-graph nothing promotes.
 #[test]
 fn promote_tied_alternative_keeps_order_when_both_are_in_graph() {
     let dir = dir_162("prom-bothgraph");
@@ -1736,8 +1635,7 @@ fn promote_tied_alternative_keeps_order_when_both_are_in_graph() {
 }
 
 /// A downgrade-only alternative stays put even when it is the one
-/// in-graph -- the `!has_upgrade` deletion in the downgrade guard
-/// fails here.
+/// in-graph.
 #[test]
 fn promote_tied_alternative_rejects_an_in_graph_downgrade() {
     let dir = dir_162("prom-downgraph");
@@ -1767,8 +1665,7 @@ fn promote_tied_alternative_rejects_an_in_graph_downgrade() {
 }
 
 /// An alternative installed in every needed slot promotes over
-/// one that is not -- the `!all_installed_slots` deletion fails
-/// here.
+/// one that is not.
 #[test]
 fn promote_tied_alternative_prefers_the_installed_slots_alternative() {
     let dir = dir_162("prom-slots");
@@ -1790,9 +1687,7 @@ fn promote_tied_alternative_prefers_the_installed_slots_alternative() {
 }
 
 /// An uninstalled alternative does not take the installed-slots
-/// promotion even against an installed one -- the
-/// `all_installed_slots &&` widening (already S0-caught) fails
-/// here too.
+/// promotion even against an installed one.
 #[test]
 fn promote_tied_alternative_rejects_an_uninstalled_alternative() {
     let dir = dir_162("prom-noslots");
@@ -1813,9 +1708,8 @@ fn promote_tied_alternative_rejects_an_uninstalled_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Cp-installed but in the wrong slot is not
-/// `all_installed_slots` (real soft 599-607) -- the slot-check
-/// `&&` widening fails here.
+/// Cp-installed but in the wrong slot is not `all_installed_slots`
+/// (Portage soft 599-607).
 #[test]
 fn promote_tied_alternative_needs_the_candidate_slot_installed() {
     let dir = dir_162("prom-wrongslot");
@@ -1837,7 +1731,7 @@ fn promote_tied_alternative_needs_the_candidate_slot_installed() {
 }
 
 /// Blockers never enter a `cp_map`: the blocker alternative keeps
-/// no shared cp and loses -- the blocker-skip flip fails here.
+/// no shared cp and loses.
 #[test]
 fn promote_tied_alternative_ignores_blockers_in_cp_maps() {
     let dir = dir_162("prom-blocker");
@@ -1858,8 +1752,7 @@ fn promote_tied_alternative_ignores_blockers_in_cp_maps() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A single alternative always wins index 0 -- pins the early
-/// return the `< 2` mutants never touch.
+/// A single alternative always wins index 0.
 #[test]
 fn promote_tied_alternative_returns_zero_for_a_single_alternative() {
     let dir = dir_162("prom-single");
@@ -1879,11 +1772,7 @@ fn promote_tied_alternative_returns_zero_for_a_single_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- S7: `alternative_downgrade_demoted` (real `depgraph`
-// bug-531656 `conflict_downgrade`/`installed_downgrade`: an
-// otherwise-available `||` alternative demotes to `other` when it
-// would install below what the graph already holds and no visible
-// candidate makes the downgrade desirable). ----
+// ---- S7: `alternative_downgrade_demoted` (Portage bug-531656 downgrade). ----
 
 /// Shared tree for the demotion legs: `pkg` spans two versions in
 /// slot 0.
@@ -1941,10 +1830,7 @@ fn demote_entries_162() -> Vec<GraphEntry> {
     )]
 }
 
-/// An alternative resolving below the graphed version demotes --
-/// the whole-body `-> false`, the three graph-filter comparison
-/// flips, the `!= Less` flip and the `!downgrade_probe` deletion
-/// fail here.
+/// An alternative resolving below the graphed version demotes.
 #[test]
 fn alternative_downgrade_demoted_flags_an_older_alternative() {
     let dir = dir_162("demote-older");
@@ -1963,10 +1849,7 @@ fn alternative_downgrade_demoted_flags_an_older_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An alternative at the graphed version does not demote -- the
-/// whole-body `-> true` (already S0-caught) plus the graph-filter
-/// `&&` widenings fail here (a widened filter would admit the
-/// decoy other-slot entry and demote).
+/// An alternative at the graphed version does not demote.
 #[test]
 fn alternative_downgrade_demoted_keeps_the_graphed_version() {
     let dir = dir_162("demote-same");
@@ -1995,8 +1878,7 @@ fn alternative_downgrade_demoted_keeps_the_graphed_version() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The resolving package's own alternative never demotes -- both
-/// skip-guard flips (`||` -> `&&`, `==` -> `!=`) fail here.
+/// The resolving package's own alternative never demotes.
 #[test]
 fn alternative_downgrade_demoted_skips_the_resolving_package() {
     let dir = dir_162("demote-self");
@@ -2015,9 +1897,7 @@ fn alternative_downgrade_demoted_skips_the_resolving_package() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A blocker alternative never demotes -- the blocker-guard flip
-/// (`!=` -> `==`, which would evaluate the blocker against the
-/// graph and demote) fails here.
+/// A blocker alternative never demotes.
 #[test]
 fn alternative_downgrade_demoted_skips_blockers() {
     let dir = dir_162("demote-blocker");
@@ -2037,10 +1917,8 @@ fn alternative_downgrade_demoted_skips_blockers() {
 }
 
 /// With an empty graph a queued same-cp atom stands in for the
-/// not-yet-graphed selection (the `#90 (S1)` hypothetical): the
-/// installed best is above the alternative, so it demotes -- the
-/// queued-filter comparison flips and the hypothetical-match
-/// `!is_empty` deletion fail here.
+/// not-yet-graphed selection: the installed best is above, so it
+/// demotes.
 #[test]
 fn alternative_downgrade_demoted_uses_the_queued_hypothetical() {
     let dir = dir_162("demote-queued");
@@ -2060,9 +1938,7 @@ fn alternative_downgrade_demoted_uses_the_queued_hypothetical() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A queued atom on another cp is not a hypothetical for this
-/// one -- the queued-filter `||` -> `&&` flip (which would fold
-/// the other cp's installed versions in and demote) fails here.
+/// A queued atom on another cp is not a hypothetical for this one.
 #[test]
 fn alternative_downgrade_demoted_ignores_other_cp_queue() {
     let dir = dir_162("demote-queue-other");
@@ -2082,9 +1958,7 @@ fn alternative_downgrade_demoted_ignores_other_cp_queue() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Under `--update` the hypothetical is the tree best, no vdb
-/// needed -- pins the update arm the queued-filter mutants never
-/// touch.
+/// Under `--update` the hypothetical is the tree best, no vdb needed.
 #[test]
 fn alternative_downgrade_demoted_uses_the_tree_hypothetical_under_update() {
     let dir = dir_162("demote-update");

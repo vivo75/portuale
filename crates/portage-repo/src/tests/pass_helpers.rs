@@ -1,18 +1,10 @@
 use super::*;
 
-/// Backlog #194 (review round 1): under `--onlydeps
-/// --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on an EAPI-8
-/// root, real keeps walking `IDEPEND` (`depgraph.py:4186-4193`;
-/// oracle cell `[B, E, F]`), so an atom present in both a
-/// build-time key and `IDEPEND` is a runtime edge -- not
-/// `buildtime_hard` (real `DepPriority`: an unbreakable
-/// merge-order edge). Pinned at the classification level: the key
-/// selection still carries `IDEPEND`, and one shared atom enqueued
-/// with those sets lands soft.
+/// An atom in both a build-time key and the walked `IDEPEND` is a
+/// runtime edge, not `buildtime_hard`.
 #[test]
 fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
-    // rdeps blanked, ideps kept, EAPI 8: IDEPEND still classifies;
-    // with ideps blanked (or below EAPI 8) nothing does.
+    // EAPI 8 with ideps kept classifies; blanked ideps (or EAPI 7) classifies nothing.
     assert_eq!(
         onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
             onlydeps_blanks_runtime: true,
@@ -48,7 +40,6 @@ fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
         .map(|v| v.into_iter().filter(|t| t != "||").collect())
         .unwrap_or_default()
     };
-    // One atom in both a build-time key and the walked IDEPEND.
     let buildtime_atoms = flatten("dev-libs/odw0e");
     let runtime_atoms = flatten("dev-libs/odw0e");
     assert!(buildtime_atoms.contains("dev-libs/odw0e"));
@@ -77,16 +68,11 @@ fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
     );
 }
 
-/// Backlog #194 (review round 1): the read-time EAPI gate drops
-/// `IDEPEND` from an EAPI-7 cache entry that still carries it.
-/// Real `egencache` could never emit such an entry (real
-/// `bin/ebuild.sh`'s `depend` phase unsets `IDEPEND` below EAPI 8),
-/// so no fixture pins this path -- the adversarial entry is fed to
-/// the gate directly.
+/// The read-time EAPI gate drops `IDEPEND` from an EAPI-7 cache
+/// entry that still carries it.
 #[test]
 fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
-    // EAPI 7 + IDEPEND present: dropped even with no onlydeps
-    // blanking.
+    // EAPI 7 drops IDEPEND even with no onlydeps blanking.
     assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
         key: "IDEPEND",
         eapi_has_idepend: false,
@@ -135,18 +121,9 @@ fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
     }));
 }
 
-/// #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`)
-/// on its two observed shapes. (1) An installed parent's dynamic deps
-/// (the r25 shape, real's own probe in
-/// `LLM/evidence/2026-09-29-236/playground/r25-debug.log`): the live
-/// `minlib:=` picks the tree's `2.0` (`0/2`), the appended built
-/// `>=minlib-1.0:0/1=` the installed `1.0`; installed-first elimination
-/// drops `2.0` and both atoms bind the installed instance. (2) An
-/// ebuild parent's version range (the fixture's `libgit2-glib`,
-/// `libgit2-glib.log` there): `<minlib-3` picks `2.0`, `>=minlib-1.5`
-/// the tree's `3.0`; ascending elimination keeps `2.0` (the only
-/// match of `<3`) and drops `3.0`. A single selection, or atoms whose
-/// selections match nothing else, pass through unchanged.
+/// Collapses co-selected atoms onto one pick like Portage's
+/// `_minimize_children`: installed-first for dynamic deps,
+/// ascending for version ranges.
 #[test]
 fn minimize_children_collapses_like_portage() {
     use md5::Digest as _;
@@ -230,10 +207,9 @@ fn minimize_children_collapses_like_portage() {
             (">=dev-libs/minlib-1.5".to_string(), up("2.0")),
         ]
     );
-    // (3) #107's mesa shape: both atoms carry use-deps. The installed
-    // instance's recorded `USE` satisfies `[abi]`, so real's
-    // `findAtomForPackage(pkg, modified_use=_pkg_use_enabled(pkg))`
-    // matches it and the tree pick is eliminated.
+    // (3) both atoms carry use-deps the installed USE satisfies, so
+    // the tree pick is eliminated.
+    // Portage: depgraph.py, findAtomForPackage
     let out = minimize_children(
         &base,
         &repos,
@@ -251,11 +227,8 @@ fn minimize_children_collapses_like_portage() {
             ("dev-libs/minlib:0/1=[abi]".to_string(), installed.clone()),
         ]
     );
-    // Disjoint selections (each atom matches only its own pick) are
-    // left alone; so is a use-dep atom the installed instance's
-    // recorded USE does not satisfy (`foo` is not in its IUSE), and
-    // one no ebuild candidate satisfies either (`foo` is in no
-    // candidate's IUSE here).
+    // Disjoint selections pass through, as do use-deps neither the
+    // installed USE nor any ebuild candidate satisfies.
     let disjoint = vec![
         ("<dev-libs/minlib-2".to_string(), installed.clone()),
         (">=dev-libs/minlib-3".to_string(), up("3.0")),
@@ -275,13 +248,10 @@ fn minimize_children_collapses_like_portage() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// #266: real `findAtomForPackage(pkg,
-/// modified_use=self._pkg_use_enabled(pkg))` evaluates a use-dep atom
-/// against a not-yet-built package's own candidate effective USE, so
-/// `>=minlib2-1[bar]` alongside `<minlib2-3` collapses onto the lower
-/// pick when that pick builds `bar`, and stays split when it does
-/// not. Grounded on real 3.0.82.2's ResolverPlayground
-/// (`LLM/evidence/2026-10-01-266/r266_pg.py`).
+/// A use-dep atom is matched against a not-yet-built package's own
+/// candidate effective USE: collapses when the lower pick builds the
+/// flag, stays split otherwise.
+/// Portage: depgraph.py, findAtomForPackage
 #[test]
 fn minimize_children_matches_use_deps_against_candidate_use() {
     use md5::Digest as _;

@@ -1,15 +1,8 @@
 use super::*;
 
-/// Backlog #303: under `--update` a provider the pass *downgraded*
-/// (held back by an installed consumer's built `:=` pin) is a missed
-/// update. Real's first pass makes the same downgrade, then
-/// `_slot_operator_update_probe` (`depgraph.py:3131`) finds the
-/// installed instance and backtracks to replace the consumer. The scan
-/// therefore treats the downgrade's `from` slot/sub-slot as the
-/// provider's new slot and flags the stale consumer. Expected value:
-/// host real Portage on `-uDN sys-apps/systemd` (libfido2 `rRg`,
-/// libcbor kept at the installed 0.14), see
-/// `LLM/backlog-tasks-2026-10.md` #303.
+/// Under `--update` a provider the pass downgraded is a missed
+/// update: the downgrade's `from` slot/sub-slot feeds the scan.
+/// Portage: depgraph.py, _slot_operator_update_probe
 #[test]
 fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update() {
     let dir = TempDir::new("portage-repo-slotop-303").keep();
@@ -163,7 +156,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     assert!(empty_sched.is_empty() && empty_abi.is_empty());
 
     // Not reachable -> the post-walk vdb scan is suppressed entirely
-    // (real: no slot-op rebuild for a consumer outside the required
+    // (Portage: no slot-op rebuild for a consumer outside the required
     // sets). The S5 probe is not complete-mode gated, but `bar`'s
     // upgrade carries no unbuilt `:=` dep, so nothing fires here.
     let (none_sched, none_abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
@@ -182,10 +175,9 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     });
     assert!(none_sched.is_empty() && none_abi.is_empty());
 
-    // #24 S3: a cp already in `already` stays reported even once it is
-    // in the graph as the rebuild this scan asked for last pass --
-    // that is how `abi_rebuilds` survives to the settling pass. A
-    // *different* in-graph cp is still skipped.
+    // A cp already in `already` stays reported once in the graph as
+    // the asked-for rebuild (`abi_rebuilds` survives); a different
+    // in-graph cp is still skipped.
     let stale_rebuild = GraphEntry {
         discovery: 0,
         category: "dev-libs".into(),
@@ -228,8 +220,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         "the causing-rebuilds pair survives into the settling pass"
     );
 
-    // The `--solver=` bridges keep the pre-S3 synthesiser; it must
-    // still build the one entry, flagged `slot_operator_rebuild`.
+    // The `--solver=` bridges must still build the one flagged entry.
     let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
         root: &dir,
         repos: &[],
@@ -254,14 +245,10 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #211 (v2 `#24b`): real `_slot_operator_update_probe`'s
-/// new-child-slot arm (`depgraph.py:3121-3126`, bug 486580) -- a
-/// provider merged into a fresh slot schedules the installed
+/// A provider merged into a fresh slot schedules the installed
 /// consumers bound to the old slot, even with an empty `reachable`
-/// set, as long as they were walked this pass. Guards: a superseded
-/// installed child in the bound slot, a higher (or equal) version,
-/// `--update` (or a directly-requested provider), and a visible tree
-/// candidate for the consumer.
+/// set, as long as they were walked this pass.
+/// Portage: depgraph.py, _slot_operator_update_probe (bug 486580)
 #[test]
 fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     use md5::Digest as _;
@@ -352,18 +339,14 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         BTreeSet::from([massc.clone()]),
         "the consumer bound to the abandoned slot rebuilds"
     );
-    // #269: real's `_slot_operator_update_backtrack`
-    // (`depgraph.py:2442`) files the child (provider) reinstall only
-    // when `new_child_slot is None` -- the new-slot arm records the
-    // consumer alone, so it contributes no `(provider, consumer)`
-    // display pair (real's `_forced_rebuilds` stays empty: no
-    // provider `r`, no `causing rebuilds` block).
+    // The new-slot arm records the consumer alone, so no display pair.
+    // Portage: depgraph.py, _slot_operator_update_backtrack
     assert!(
         abi.is_empty(),
         "the new-slot arm records the consumer alone: {abi:?}"
     );
     // No `--update` and provider not directly requested: withheld,
-    // mirroring real's `want_update` gate.
+    // mirroring Portage's `want_update` gate.
     let (withheld, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &base,
         repos: &repos,
@@ -379,8 +362,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         config: &test_config(),
     });
     assert!(withheld.is_empty(), "without --update the probe withholds");
-    // ...unless the provider itself is directly requested (real's
-    // arg-chain disjunct).
+    // ...unless the provider is directly requested (Portage arg-chain).
     let top = HashSet::from([("dev-libs".to_string(), "massb".to_string())]);
     let top_atoms = HashSet::from(["dev-libs/massb".to_string()]);
     let (via_arg, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
@@ -398,13 +380,8 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         config: &test_config(),
     });
     assert_eq!(via_arg, BTreeSet::from([massc.clone()]));
-    // #252: with `--update` and the provider directly requested,
-    // real's greedy request-argument expansion pins the installed
-    // slot (`massb:1`), and the update probe's reverse-deps gate
-    // refuses every slot-2 candidate against it -- the replace set
-    // stays empty (probed on real 3.0.82.2: the `mmprov` shape
-    // merges only the provider upgrade). Same call as `via_arg`
-    // above, only with `update` on.
+    // With `--update` and the provider requested, the greedy pin holds
+    // the installed slot and the replace set stays empty.
     let top_atoms = HashSet::from(["dev-libs/massb".to_string()]);
     let (greedy_pinned, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &base,
@@ -424,11 +401,8 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         greedy_pinned.is_empty(),
         "a requested provider below the highest slot probes nothing"
     );
-    // A lower-version fresh slot is a downgrade real never probes --
-    // but only when nothing higher is available: with `massb-2.0` on
-    // the tree the probe fires through it (real ranges over every
-    // available package, highest acceptable wins, #269), and the
-    // graph's downgrade entry does not veto that.
+    // A lower-version fresh slot is a downgrade never probed -- unless
+    // nothing higher is available; a graph downgrade never vetoes that.
     let older = GraphEntry {
         outcome: PretendOutcome::New {
             version: "0.9".into(),
@@ -507,7 +481,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     assert!(pure_downgrade.is_empty(), "downgrades never probe");
     let _ = fs::remove_dir_all(&old_base);
     // No tree candidate for the consumer: no replacement parent, no
-    // schedule (real finds nothing and does nothing).
+    // schedule (Portage finds nothing and does nothing).
     let (nocand, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &base,
         repos: &[],
@@ -542,15 +516,8 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// Backlog #268: the two cuts of the `#252` pin gate, at scan level.
-/// Scratch `massb`/`massc` shape with a twist: the tree's highest
-/// package `massb-2.0` (`2/2`) soft-blocks the bound slot
-/// (`RDEPEND="!dev-libs/massb:1"`), so real's greedy revision with
-/// blocker lookahead discards the `massb:1` pin and the probe fires;
-/// and the request atoms are explicit (`massb:2`,
-/// `=massb-1.0`-style), which span a single slot and pin nothing.
-/// Every call below schedules the consumer alone (no display pair --
-/// the new-slot arm, #269).
+/// The two cuts of the pin gate: a blocker-discarded pin refuses
+/// nothing, and an explicit single-slot atom pins nothing.
 #[test]
 fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
     use md5::Digest as _;
@@ -659,11 +626,8 @@ fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
         BTreeSet::from([massc.clone()]),
         "an explicit slot atom pins nothing"
     );
-    // Cut (a): an exact-version atom spans one slot and takes no
-    // greedy pin -- but since #288 it is an argument *parent* of its
-    // cp, and real's update probe refuses every candidate it does not
-    // match (`=massb-1.0` vetoes the new-slot `massb-2.0`; real
-    // 3.0.82.2 merges nothing for the `mmprov` twin, probe `D-arg-pin`).
+    // Cut (a): an exact-version atom spans one slot, but as an argument
+    // parent it vetoes the new-slot candidate, so nothing probes.
     let ver_atom = HashSet::from(["=dev-libs/massb-1.0".to_string()]);
     let (versioned, ..) = scan(&ver_atom);
     assert!(
@@ -673,14 +637,10 @@ fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// Backlog #211 R2: real `_slot_operator_check_reverse_dependencies`
-/// (`depgraph.py:2472-2573`, gates `:2622`/`:2738`) refuses the whole
-/// replacement when the fresh candidate violates another parent's
-/// atom -- on the new-slot arm and the same-slot arm alike. A parent
-/// whose pin the candidate still satisfies (built `:S/SS=`, relaxed
-/// to `:=`) never vetoes; neither does the consumer itself (real's
-/// `replacement_parent` skip), an out-of-scope parent real never
-/// walked, a parent this run replaces, or an excluded one.
+/// A replacement whose fresh candidate violates another parent's atom
+/// is refused on both arms; satisfied, self, out-of-scope, replaced
+/// or excluded parents never veto.
+/// Portage: depgraph.py, _slot_operator_check_reverse_dependencies
 #[test]
 fn slot_operator_update_probe_refusal_vetoes_both_arms() {
     use md5::Digest as _;
@@ -768,11 +728,10 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
     // so the whole replacement is refused -- nothing schedules.
     let (refused, ..) = scan(&[fresh.clone(), consumer.clone(), veto_parent.clone()], &[]);
     assert!(refused.is_empty(), "a vetoed replacement schedules nothing");
-    // Out of scope (neither walked nor reachable): real never walks
-    // the parent, so there is no veto.
+    // Out of scope: Portage never walks the parent, so no veto.
     let (unscoped, ..) = scan(&[fresh.clone(), consumer.clone()], &[]);
     assert_eq!(unscoped, BTreeSet::from([massc.clone()]));
-    // Excluded: real's `excluded_pkgs` skip.
+    // Excluded: Portage's `excluded_pkgs` skip.
     let (excluded_out, ..) = scan(
         &[fresh.clone(), consumer.clone(), veto_parent.clone()],
         &["dev-libs/massv".to_string()],
@@ -824,12 +783,9 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// Backlog #211 item 2: the new-child-slot arm also probes
-/// `Upgrade`/`Downgrade`/`Reinstall` entries in a slot the consumer
-/// is not bound to. Real's candidate loop (`_iter_similar_available`,
-/// `depgraph.py:2660-2695`) ranges over every available package, not
-/// only fresh-slot merges; entries at the bound slot stay with the
-/// same-slot arm and never leak into the new arm.
+/// The new-child-slot arm also probes entries in a slot the consumer
+/// is not bound to; bound-slot entries stay with the same-slot arm.
+/// Portage: depgraph.py, _iter_similar_available
 #[test]
 fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
     use md5::Digest as _;
@@ -921,10 +877,8 @@ fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
         config: &test_config(),
     });
     assert_eq!(scheduled, BTreeSet::from([massn]));
-    // #269: the new-slot arm records the consumer alone (real's
-    // `_slot_operator_update_backtrack`, `depgraph.py:2442`), so the
-    // bound-slot-mismatched `Upgrade` entry schedules `massn` with no
-    // `(provider, consumer)` display pair.
+    // The new-slot arm records the consumer alone: no display pair.
+    // Portage: depgraph.py, _slot_operator_update_backtrack
     assert!(
         abi.is_empty(),
         "the new-slot arm records the consumer alone: {abi:?}"
@@ -932,13 +886,9 @@ fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// Backlog #304: the new-slot arm needs a replacement parent whose own
-/// atom accepts the new slot (real `_slot_operator_update_probe`,
-/// `depgraph.py:2667-2760`). `pinned`'s current ebuild says
-/// `dev-libs/massm:0=`, so a slot-1 `massm` can never be pulled in by
-/// rebuilding it (host: `gnome-keyring`'s `gcr:0/1=` vs the installed
-/// `gcr:4`, expected value from real Portage -- no rebuild); `open`'s
-/// says `dev-libs/massm:=` and does rebuild.
+/// The new-slot arm needs a replacement parent whose own atom accepts
+/// the new slot: `pinned` (`:0=`) never rebuilds, `open` (`:=`) does.
+/// Portage: depgraph.py, _slot_operator_update_probe
 #[test]
 fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot() {
     use md5::Digest as _;
@@ -1037,10 +987,9 @@ fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot
 
 #[test]
 fn slot_operator_rebuild_scan_honours_with_bdeps() {
-    // #65 S1: an installed consumer's DEPEND/BDEPEND are read only
-    // when `with_bdeps` is true (real empties them otherwise,
-    // `_emerge/depgraph.py:4194-4247`); RDEPEND/PDEPEND/IDEPEND are
-    // runtime/install-time keys and stay unconditional.
+    // DEPEND/BDEPEND read only with `with_bdeps` (Portage empties them
+    // otherwise); RDEPEND/PDEPEND/IDEPEND stay unconditional.
+    // Portage: _emerge/depgraph.py:4194-4247
     let dir = TempDir::new("portage-repo-slotop-bdeps").keep();
     let mk = |name: &str, key: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -1111,11 +1060,8 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
             .any(|(_, c)| c == "dev-libs/dep-1.0" || c == "dev-libs/bdep-1.0")
     );
 
-    // bdeps on (--with-bdeps=y / the default without --usepkg) but
-    // consumers only *reachable*, not walked: S2 keeps the build-time
-    // keys off. Real's complete-mode-only reachability never probes
-    // an installed parent's optional build-time dep
-    // (depgraph.py:3114,3802-3806,4277/4287).
+    // Reachable-but-unwalked consumers keep build-time keys off.
+    // Portage: depgraph.py:3114,3802-3806,4277/4287
     let (scheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &dir,
         repos: &[],
@@ -1206,11 +1152,8 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S1: a `Reinstall` parent counts toward the scan's
-/// `new_slot` map (the `Upgrade | Downgrade | Reinstall` arm), and
-/// the skip predicate's clauses each suppress independently: an
-/// `undone` consumer, and a consumer outside `reachable` while the
-/// reachable set is non-empty.
+/// A `Reinstall` parent counts toward the `new_slot` map; the skip
+/// clauses (`undone`, unreachable-while-gated) suppress independently.
 #[test]
 fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
     let dir = slotundo_temp_dir("161-scan");
@@ -1302,24 +1245,9 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #269: the new-slot arm ranges over every *available*
-/// package, not just the scheduled entries. The `mmprov`/`mmcons`
-/// shape from the #253 recipe with only `mmcons` requested: installed
-/// `mmprov-1` (`0/1`) + `mmprov-2` (`1/1`) + `mmcons-1` bound
-/// `mmprov:0/1=`, tree `mmprov-3` (`1/2`). Real 3.0.82.2 (container
-/// probe 2026-10-01, `emerge --ignore-default-opts --pretend --color=n
-/// --backtrack=20 --update --deep app-misc/mmcons
-/// `dev-libs/slotconflictoldconsumer`
-/// `dev-libs/slotconflictnewconsumer`) merges `mmprov-3` bare plus
-/// the `mmcons-1` rebuild (`rR`) with no `causing rebuilds` block:
-/// the update probe (`_slot_operator_update_probe` with
-/// `new_child_slot=True`, `depgraph.py:3121-3126`) finds `mmprov-3`
-/// among the *available* packages (`_iter_similar_available`) even
-/// though no pass scheduled it, and the backtrack
-/// (`_slot_operator_update_backtrack`, `depgraph.py:2442`) records
-/// the consumer alone. The pre-#269 scan only ranged over the
-/// scheduled `New`/`Upgrade` entries, so with no provider entry it
-/// scheduled nothing at all here.
+/// The new-slot arm ranges over every available package, not just the
+/// scheduled entries: with no provider entry it still finds the move.
+/// Portage: depgraph.py, _slot_operator_update_probe/_backtrack
 #[test]
 fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
     use md5::Digest as _;
@@ -1372,7 +1300,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
         volatile: false,
         module_specific_options: vec![],
     }];
-    // No provider entry at all (real's pass 0 schedules none either):
+    // No provider entry at all (Portage's pass 0 schedules none either):
     // the consumer sits in the graph as walked/AlreadyInstalled.
     let consumer = GraphEntry {
         outcome: PretendOutcome::AlreadyInstalled {
@@ -1386,8 +1314,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
     let mmcons = ("app-misc".to_string(), "mmcons".to_string());
     let mmprov = ("app-misc".to_string(), "mmprov".to_string());
-    // Only `mmcons` requested (never the provider): the #252 greedy
-    // pin stays out, and `want_update` rides on `--update`.
+    // Only `mmcons` requested: the greedy pin stays out.
     let top = HashSet::from([mmcons.clone()]);
     let top_atoms = HashSet::from(["app-misc/mmcons".to_string()]);
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
@@ -1413,7 +1340,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
         abi.is_empty(),
         "the new-slot arm records the consumer alone: {abi:?}"
     );
-    // The #252 shape (provider requested too) still probes nothing.
+    // Provider requested too: still probes nothing.
     let mut both = top.clone();
     both.insert(mmprov.clone());
     let both_atoms = HashSet::from(["app-misc/mmcons".to_string(), "app-misc/mmprov".to_string()]);

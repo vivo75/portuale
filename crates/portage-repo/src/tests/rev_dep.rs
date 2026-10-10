@@ -1,11 +1,7 @@
 use super::*;
 
-/// Backlog #161 S1: `is_built_slot_op` is real's
-/// `Atom.slot_operator_built` gate -- a *built* `=` atom naming both
-/// slot and sub-slot. Each conjunct is load-bearing: `:=` (no slot),
-/// `:2=` (no sub-slot) and `:2` (no operator) are all *not* built
-/// ops, and the companion normaliser strips the slot binding only
-/// for a built op.
+/// A built slot op names both slot and sub-slot with `=`; `:=`,
+/// `:2=` and `:2` are not built ops (Portage `slot_operator_built`).
 #[test]
 fn is_built_slot_op_requires_equals_operator_and_both_slots() {
     let built = |s: &str| {
@@ -28,13 +24,9 @@ fn is_built_slot_op_requires_equals_operator_and_both_slots() {
     assert_eq!(norm("dev-libs/bar"), "dev-libs/bar");
 }
 
-/// Backlog #25 S1b-fix: `relax_built_slot_operator_atom` is real's
-/// `Atom.with_slot("=")` as `_slot_operator_check_reverse_-
-/// dependencies` applies it (`depgraph.py:2494-2502`) -- the
-/// recorded `:S/SS=` binding relaxes to bare `:=`, keeping the
-/// version operator, `[use]` deps and `::repo`. Non-built atoms
-/// (bare `:=`, `:S=` without sub-slot, plain slots, unversioned)
-/// and unparseable text pass through verbatim.
+/// A recorded `:S/SS=` binding relaxes to bare `:=`, keeping version,
+/// use-deps and repo; anything not built passes through verbatim.
+/// Portage: depgraph.py, _slot_operator_check_reverse_dependencies
 #[test]
 fn relax_built_slot_operator_atom_keeps_everything_but_the_binding() {
     assert_eq!(
@@ -74,9 +66,8 @@ fn relax_built_slot_operator_atom_keeps_everything_but_the_binding() {
         relax_built_slot_operator_atom("not an atom ((("),
         "not an atom ((("
     );
-    // The relaxed form still matches the new-slot candidate and the
-    // old one, while the raw recorded form rejects the new slot --
-    // the exact property the rebuild-trigger predicate needs.
+    // The relaxed form matches both slots; the raw form rejects the
+    // new one -- the property the rebuild-trigger predicate needs.
     let cands = [
         "dev-libs/provpkg-1.0:0/1::testrepo",
         "dev-libs/provpkg-2.0:0/2::testrepo",
@@ -93,11 +84,8 @@ fn relax_built_slot_operator_atom_keeps_everything_but_the_binding() {
     );
 }
 
-/// Backlog #25 S1b-fix: `built_slot_operator_rebuild_trigger` fires
-/// for a recorded binding the probe's relaxation accepts (the
-/// slotop upgrade shape) and stays silent for a version veto (the
-/// r25 withhold shape), for a non-built atom, and for unparseable
-/// text.
+/// Fires for a recorded binding the probe's relaxation accepts;
+/// silent for a version veto, a non-built atom, unparseable text.
 #[test]
 fn built_slot_operator_rebuild_trigger_only_forgives_rebuilds() {
     assert!(built_slot_operator_rebuild_trigger(
@@ -124,10 +112,8 @@ fn built_slot_operator_rebuild_trigger_only_forgives_rebuilds() {
 
 #[test]
 fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
-    // #54: an installed consumer's pin is only found when its cp is in
-    // `reachable` (the `@world ∪ @selected ∪ @system ∪` argument-cp
-    // closure, `ResolveCtx::slot_op_reachable`) or is itself a graph
-    // entry this pass -- not merely because it is installed.
+    // A pin is found only when its cp is reachable or itself a graph
+    // entry -- not merely because it is installed.
     let dir = TempDir::new("portage-repo-revdep").keep();
     let mk = |name: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -139,8 +125,7 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
             fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
         }
     };
-    // `pinner` records a pin on `target` that this run's upgrade
-    // breaks (the `keeper`/`paired` fixture-oracle shape, #54).
+    // `pinner` records a pin this run's upgrade breaks.
     mk("pinner-1.0", "=dev-libs/target-1.0");
     mk("target-1.0", "");
 
@@ -157,8 +142,8 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
     let entries = [target_upgrade];
     let hard_want: HashMap<(String, String), Vec<String>> = HashMap::new();
 
-    // Not reachable, and `pinner` is not itself a graph entry -> the
-    // consumer scan skips it entirely (real never walks to it either).
+    // Not reachable and not a graph entry: skipped (Portage never
+    // walks to it either).
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
         repos: &[],
         root: &dir,
@@ -179,10 +164,8 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
         "an unreachable installed consumer must yield no pin"
     );
 
-    // Reachable (as if `pinner` were in @world, directly or
-    // transitively) -> the pin is found. Enforced-vs-dropped is
-    // `rev_dep_pin_holdable`'s call (exercised by the contract suite);
-    // only "found at all" matters here.
+    // Reachable: the pin is found (enforced-vs-dropped belongs to
+    // `rev_dep_pin_holdable`, pinned by the contract suite).
     let reachable: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
@@ -211,20 +194,10 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
 
 #[test]
 fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
-    // Backlog #210: a same-version slot/sub-slot change without a
-    // revbump counts as a version change (real `_complete_graph`,
-    // `depgraph.py:8611-8618`) -- a `Reinstall { slot_changed: true }`
-    // entry fills the upgrading map, so a reachable installed
-    // consumer's recorded pin is found. Pre-fix the map held only
-    // `Upgrade`/`Downgrade` and this shape yielded no pin at all.
-    //
-    // Both pin flavours fire: the plain slot-bound pin
-    // (`target:0/1`) verbatim, and the built slot-operator binding
-    // (`target:0/1=`) verbatim too -- the Upgrade path strips the
-    // latter into the rebuild domain (#24 S5), but the reinstall
-    // re-seed constrains selection with the recorded atom as-is
-    // (`depgraph.py:8677-8754`). A `slot_changed: false` reinstall
-    // still yields nothing.
+    // A same-version slot change without a revbump fills the upgrading
+    // map (Portage `_complete_graph`), so the recorded pin is found.
+    // Both pin flavours fire verbatim; a `slot_changed: false`
+    // reinstall still yields nothing.
     let dir = TempDir::new("portage-repo-revdep-210").keep();
     let mk = |name: &str, slot: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -315,12 +288,8 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
 
 #[test]
 fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
-    // Backlog #210 (Q2a): a top-level argument that settles
-    // `AlreadyInstalled` is a no-op request, not a digraph node in
-    // real, so it is never a constraint source -- even though it
-    // carries a graph entry and complete-mode arg-seeding pulls it
-    // into `reachable`. A consumer the required sets reach stays a
-    // source, whether or not it was also requested.
+    // A no-op top-level request is never a constraint source, even
+    // though it carries a graph entry and is reachable (Portage).
     let dir = TempDir::new("portage-repo-revdep-210-gate").keep();
     let mk = |name: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -357,8 +326,7 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
     };
     let entries = [target_reinstall, consumer_noop];
     let hard_want: HashMap<(String, String), Vec<String>> = HashMap::new();
-    // Complete-mode `reachable`, arg-seeded: the requested consumer is
-    // in it, exactly as `ResolveCtx::slot_op_reachable` would have it.
+    // Complete-mode reachable, arg-seeded like `slot_op_reachable`.
     let reachable: HashSet<(String, String)> = HashSet::from([
         ("dev-libs".to_string(), "target".to_string()),
         ("dev-libs".to_string(), "consumer".to_string()),
@@ -368,8 +336,8 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
         ("dev-libs".to_string(), "consumer".to_string()),
     ]);
 
-    // Requested but not world-reached: the no-op argument's pin is
-    // skipped (real reinstalls silently here).
+    // Requested but not world-reached: the pin is skipped (Portage
+    // reinstalls silently here).
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
         repos: &[],
         root: &dir,
@@ -420,16 +388,9 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
 
 #[test]
 fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall() {
-    // Backlog #222, on the committed fixtures (upstream
-    // `test_complete_graph.py` pg0: `dev-libs/cgp0x-2.8.0` IUSE
-    // `+icu`, installed with `USE=""`; installed `dev-libs/cgp0q`
-    // records `dev-libs/cgp0x:2[-icu]`): a same-version USE-change
-    // reinstall moves no version, so the stripped-constraint scan
-    // finds nothing -- but the flip breaks the installed consumer's
-    // `[use]` bound, which real fails in its complete-mode
-    // end-of-walk loop (`depgraph.py:8751-8791`). The pin is
-    // dropped for the residual report (the merge's USE is decided;
-    // real fails rather than reflipping it), never enforced.
+    // A USE-change reinstall moves no version but breaks the
+    // installed consumer's `[use]` bound: dropped, never enforced.
+    // Portage: depgraph.py, complete-mode end-of-walk loop
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let entry = GraphEntry {
@@ -453,8 +414,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
     let reachable: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "cgp0q".to_string())]);
 
-    // Complete mode off (`--complete-graph-if-new-use=n`, real rc 0):
-    // no pin at all.
+    // Complete mode off: no pin at all.
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
         repos: &repos,
         root: &root,
@@ -475,8 +435,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         "complete mode off must yield no USE-break pin, got enforced={enforced:?} dropped={dropped:?}"
     );
 
-    // Complete mode on (real rc 1): the broken `[use]` pin drops for
-    // the residual installed-instance report.
+    // Complete mode on: the broken pin drops for the residual report.
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
         repos: &repos,
         root: &root,
@@ -506,8 +465,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         ("cgp0x", "cgp0q"),
     );
 
-    // Unreachable consumer (the shared-world shape -- real rc 0 with
-    // that world): still nothing.
+    // Unreachable consumer: still nothing.
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
         repos: &repos,
         root: &root,

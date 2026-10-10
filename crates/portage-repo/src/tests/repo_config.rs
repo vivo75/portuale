@@ -2,11 +2,8 @@ use super::*;
 
 #[test]
 fn find_repos_defaults_masters_to_the_main_repo_alone_when_unset() {
-    // Real config.py's own default (RepoConfigLoader.__init__,
-    // lib/portage/repository/config.py:1229-1260): no explicit
-    // "masters =" key at all -- every non-main repo implicitly
-    // masters the main repo alone; the main repo can never be its
-    // own master.
+    // Portage: config.py RepoConfigLoader (no "masters" key: every
+    // non-main repo masters the main repo alone).
     let root = masters_test_root("default");
     std::fs::create_dir_all(root.join("etc/portage")).unwrap();
     std::fs::write(
@@ -45,8 +42,7 @@ fn find_repos_reads_sync_fields_volatile_and_git_module_options() {
     );
     // Not under /var/db/repos -> volatile heuristic yields true.
     assert!(main.volatile);
-    // Only the git-module keys are picked up for sync-type = git; the
-    // stray rsync key is ignored.
+    // Only git-module keys apply for sync-type = git.
     assert_eq!(
         main.module_specific_options,
         vec![(
@@ -71,10 +67,8 @@ fn find_repos_explicit_volatile_key_wins_over_the_heuristic() {
 
 #[test]
 fn find_repos_resolves_an_explicit_masters_key_to_the_named_repos_own_locations() {
-    // Real explicit "masters = name1 name2" overrides the default
-    // outright -- resolved to each named repo's own location, in
-    // declared order; an unknown name is silently dropped (real
-    // config.py only warns, never a hard error).
+    // Explicit "masters" overrides the default outright, in declared
+    // order; unknown names drop (Portage config.py only warns).
     let root = masters_test_root("explicit");
     std::fs::create_dir_all(root.join("etc/portage")).unwrap();
     std::fs::write(
@@ -89,17 +83,13 @@ fn find_repos_resolves_an_explicit_masters_key_to_the_named_repos_own_locations(
     let repos = find_repos(&root).expect("repos.conf resolves");
     let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
     let downstream = repos.iter().find(|r| r.name == "downstream").unwrap();
-    // Only "overlay" resolves -- "unknownrepo" is silently dropped,
-    // and "main" is NOT implicitly included just because it's the
-    // main repo (an explicit key fully replaces the default).
+    // An explicit key fully replaces the default (no implicit main).
     assert_eq!(downstream.masters, vec![overlay.location.clone()]);
 }
 
 #[test]
 fn find_repos_treats_an_explicit_empty_masters_key_as_no_masters_at_all() {
-    // Real explicit "masters = " (present but empty) is genuinely
-    // different from the key being absent: it means "no masters",
-    // not "fall back to the default main-repo-alone behavior".
+    // Explicit-but-empty "masters =" means no masters (Portage).
     let root = masters_test_root("empty");
     std::fs::create_dir_all(root.join("etc/portage")).unwrap();
     std::fs::write(
@@ -117,11 +107,8 @@ fn find_repos_treats_an_explicit_empty_masters_key_as_no_masters_at_all() {
 
 #[test]
 fn find_repos_reads_layout_conf_masters_repo_name_and_profile_formats() {
-    // Real three-tier masters (config.py:237-245/484-490): with NO
-    // repos.conf `masters` key, a repo's own `metadata/layout.conf`
-    // `masters =` is the middle tier (before the implicit main-repo
-    // default). `repo-name` overrides the section name; `profile-
-    // formats` is captured verbatim.
+    // Portage three-tier masters: layout.conf `masters =` beats the
+    // implicit default; `repo-name` overrides the section name.
     let root = masters_test_root("layout-conf");
     std::fs::create_dir_all(root.join("etc/portage")).unwrap();
     std::fs::write(
@@ -135,8 +122,7 @@ fn find_repos_reads_layout_conf_masters_repo_name_and_profile_formats() {
     std::fs::create_dir_all(root.join("main/metadata")).unwrap();
     std::fs::create_dir_all(root.join("overlay/metadata")).unwrap();
     std::fs::create_dir_all(root.join("downstream/metadata")).unwrap();
-    // downstream: no repos.conf masters, but layout.conf says
-    // `masters = overlay` -> that wins over the implicit `[main]`.
+    // layout.conf `masters = overlay` wins over the implicit main.
     std::fs::write(
         root.join("downstream/metadata/layout.conf"),
         "masters = overlay\nrepo-name = renamed-downstream\n\
@@ -155,8 +141,7 @@ fn find_repos_reads_layout_conf_masters_repo_name_and_profile_formats() {
         .expect("layout.conf repo-name override applied");
     assert_eq!(renamed.masters, vec![overlay.location.clone()]);
     assert_eq!(renamed.profile_formats, vec!["portage-2".to_string()]);
-    // A repos.conf `masters` key still wins over layout.conf: give
-    // downstream one and confirm layout.conf's is ignored.
+    // A repos.conf `masters` key still wins over layout.conf.
     std::fs::write(
         root.join("etc/portage/repos.conf"),
         "[DEFAULT]\nmain-repo = main\n\n\
@@ -179,11 +164,8 @@ fn find_repos_reads_layout_conf_masters_repo_name_and_profile_formats() {
 
 #[test]
 fn find_repos_reads_profiles_repo_name_and_drops_a_mismatched_section() {
-    // Real `_read_repo_name` + the `config.py:1121` mismatch check:
-    // `profiles/repo_name` is the canonical name source (over the
-    // `[section]` name); a section whose name differs from the
-    // resolved name -- and isn't one of the repo's aliases -- is
-    // dropped entirely.
+    // `profiles/repo_name` is canonical; a mismatched section without
+    // an alias is dropped (Portage `_read_repo_name`, config.py).
     let root = masters_test_root("repo-name-file");
     std::fs::create_dir_all(root.join("etc/portage")).unwrap();
     std::fs::write(
@@ -199,8 +181,7 @@ fn find_repos_reads_profiles_repo_name_and_drops_a_mismatched_section() {
         std::fs::create_dir_all(root.join(r).join("metadata")).unwrap();
     }
     std::fs::write(root.join("main/profiles/repo_name"), "main\n").unwrap();
-    // `aliased`: repo_name file says `aliased-repo`, differs from the
-    // section, but the section is listed as an alias -> kept.
+    // `aliased` mismatches but is listed as an alias: kept.
     std::fs::write(root.join("aliased/profiles/repo_name"), "aliased-repo\n").unwrap();
     std::fs::write(
         root.join("aliased/metadata/layout.conf"),
@@ -221,13 +202,8 @@ fn find_repos_reads_profiles_repo_name_and_drops_a_mismatched_section() {
 
 #[test]
 fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_time_pin() {
-    // #91 S1, on the committed fixtures: `whtarget-1.0` records a
-    // runtime-key `~whblocker-1.0` pin (the hermetic host-qemu
-    // shape) while `rdctarget-1.0` records the build-time-key
-    // `~rdcblocker-1.0` pin (D1, #79). Both consumers reachable,
-    // both upgrades otherwise selected: the runtime pin must be
-    // enforced as a slot constraint, the build-time pin ignored
-    // entirely (neither enforced nor dropped).
+    // The runtime-key pin enforces as a slot constraint; the
+    // build-time-key pin is ignored entirely.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let upgrade = |pkg: &str| GraphEntry {

@@ -1,13 +1,8 @@
 use super::*;
 
-/// Backlog #129 (review minor 3): the two `SkippedUpdate` sources
-/// (backtrack-mask rows, direct-solve rows) collapse per slot
-/// keeping the highest missed pkg, like real `_get_missed_updates`
-/// (`lib/_emerge/depgraph.py:1553-1562`) -- a consecutive `dedup()`
-/// could not do this. A slot present in both sources renders once,
-/// at the higher version, whichever source holds it; equal
-/// versions all stay (one row per parent) and exact duplicates
-/// collapse to one, with mask rows leading.
+/// Both `SkippedUpdate` sources collapse per slot keeping the highest
+/// missed pkg (Portage `_get_missed_updates`); equal versions stay per
+/// parent, exact duplicates collapse, mask rows lead.
 #[test]
 fn collapse_skipped_updates_keeps_the_highest_version_per_slot() {
     fn row(pkg: &str, ver: &str, atom: &str) -> SkippedUpdate {
@@ -54,10 +49,8 @@ fn collapse_skipped_updates_keeps_the_highest_version_per_slot() {
     );
 }
 
-/// Backlog #292: a higher pkg replacing a lower one of its slot keeps
-/// the slot's first position (real `_get_missed_updates` dict key
-/// order, `depgraph.py:1544-1560`): slot X's lower row, block Y, then
-/// X's higher row render X, Y -- not Y, X.
+/// A higher pkg replacing a lower one keeps the slot's first position
+/// (Portage `_get_missed_updates` dict key order).
 #[test]
 fn collapse_skipped_updates_keeps_a_slots_first_position() {
     fn row(pkg: &str, ver: &str) -> SkippedUpdate {
@@ -86,15 +79,8 @@ fn collapse_skipped_updates_keeps_a_slots_first_position() {
     );
 }
 
-/// Backlog #129 (review round 2): rows naming the same missed pkg
-/// render as one block with every parent line inside (real
-/// `_show_missed_update_slot_conflicts`,
-/// `lib/_emerge/depgraph.py:1650+`, over the single per-`(root,
-/// slot_atom)` entry, `:1553-1562`) -- the `blk0b blk0c blk0a
-/// --backtrack=0` oracle shape (bed `l0-fx-20260927T125711Z`: one
-/// `dev-libs/blk0x:0` block for `-3` with both parents). Groups
-/// keep first-seen order, parents keep row order; a different
-/// missed version stays its own block.
+/// Rows naming the same missed pkg render as one block with every
+/// parent inside (Portage `_show_missed_update_slot_conflicts`).
 #[test]
 fn group_skipped_updates_merges_parents_of_the_same_missed_pkg() {
     fn row(ver: &str, atom: &str, consumer: &str) -> SkippedUpdate {

@@ -1,11 +1,5 @@
-/// Backlog #163: `lib.rs` result/display-assembly unit tests.
-///
-/// Every test observes the assembled result structures (fields of the
-/// returned result, rows, outcomes) directly -- never a contract pin's
-/// full text output. Scratch-repo harness in the #161/#162 style
-/// (`repo_pkgs_163` / `write_pkg_163` mirror `repo_pkgs_162` /
-/// `write_pkg_162`); self-contained so the other Track U branches'
-/// blocks rebase mechanically.
+/// Result/display-assembly unit tests: each test observes the
+/// assembled structures directly, never a contract pin's text.
 use crate::*;
 use portage_util::TempDir;
 
@@ -76,14 +70,11 @@ fn masked_163(cat: &str, pkg: &str, atom: &str) -> MaskedDepReport {
     }
 }
 
-// ---- S1: `abort_outcome` (Slice 3: real's abandon sites as data --
-// the renderer switches to `partial` in Slice 4). ----
+// ---- S1: `abort_outcome` (abandon sites as data). ----
 
 /// A masked-only dep with a merge-bound requirer aborts as
 /// `MaskedDep` with the report's atom, the first merge-bound
-/// requirer's cpv, and an empty partial (real shows no list at
-/// all). Pins the shape the S0 run already covers (its rows are
-/// all caught there).
+/// requirer's cpv, and an empty partial (Portage shows no list).
 #[test]
 fn abort_outcome_masked_dep_aborts_with_the_merge_bound_requirer() {
     let entries = vec![
@@ -118,9 +109,7 @@ fn abort_outcome_masked_dep_aborts_with_the_merge_bound_requirer() {
 }
 
 /// A merge-bound requirer whose cp is absent still completes, even
-/// with a same-category merge-bound decoy present: the `&&`
-/// conjunction (and its second `==`) must not match the decoy.
-/// Pins the shape the S0 run already covers.
+/// with a same-category merge-bound decoy present.
 #[test]
 fn abort_outcome_ghost_requirer_completes_despite_a_same_category_merge() {
     let entries = vec![
@@ -147,10 +136,7 @@ fn abort_outcome_ghost_requirer_completes_despite_a_same_category_merge() {
 }
 
 /// An installed-only requirer aborts as `UnsatisfiedAtom` with the
-/// recorded atom and the installed cpv. Kills the
-/// `AlreadyInstalled` arm deletion (which drops the fallback and
-/// completes) and both `==` flips of the installed requirer
-/// lookup (which miss the requirer and complete).
+/// recorded atom and the installed cpv.
 #[test]
 fn abort_outcome_installed_only_requirer_aborts_with_the_installed_cpv() {
     let entries = vec![
@@ -189,10 +175,7 @@ fn abort_outcome_installed_only_requirer_aborts_with_the_installed_cpv() {
 }
 
 /// A ghost requirer still completes with a same-category installed
-/// decoy present: the installed lookup's `&&` must not match the
-/// decoy. Kills the `&&` -> `||` flip and the second `==` -> `!=`
-/// flip of the installed requirer lookup (both match the decoy
-/// and abort).
+/// decoy present.
 #[test]
 fn abort_outcome_ghost_requirer_completes_despite_a_same_category_installed_entry() {
     let entries = vec![
@@ -219,10 +202,7 @@ fn abort_outcome_ghost_requirer_completes_despite_a_same_category_installed_entr
 }
 
 /// A masked report for another package in the same category does
-/// not abort as masked: the report lookup's `&&` must not match a
-/// same-category report. Kills the `&&` -> `||` flip and the second
-/// `==` -> `!=` flip of the masked-report lookup (both match the
-/// neighbour report and abort as `MaskedDep`).
+/// not abort as masked.
 #[test]
 fn abort_outcome_masked_report_for_another_package_does_not_abort_as_masked() {
     let entries = vec![
@@ -257,8 +237,7 @@ fn abort_outcome_masked_report_for_another_package_does_not_abort_as_masked() {
 }
 
 /// A masked report for the same package in another category does
-/// not abort as masked either. Pins the shape the S0 run already
-/// covers.
+/// not abort as masked either.
 #[test]
 fn abort_outcome_masked_report_for_the_same_package_in_another_category_does_not_abort_as_masked() {
     let entries = vec![
@@ -316,8 +295,7 @@ fn abort_outcome_nvc_entry_with_no_requirer_is_rescued() {
     );
 }
 
-/// No NVC entries and no cycles completes: the cycle gate's `!`
-/// must stay. Pins the shape the S0 run already covers.
+/// No NVC entries and no cycles completes.
 #[test]
 fn abort_outcome_empty_graph_completes() {
     let entries = vec![entry_163("dev-libs", "top", new_163("1.0"), &[])];
@@ -338,7 +316,7 @@ fn abort_outcome_empty_graph_completes() {
 /// A reported cycle aborts as `UnserializableCycle` with the
 /// display members, and `partial` holds exactly the matching
 /// entries in display order -- a merge-bound non-member stays
-/// out. Pins the shape the S0 run already covers.
+/// out.
 #[test]
 fn abort_outcome_cycle_members_collect_the_matching_partial_in_order() {
     let entries = vec![
@@ -370,8 +348,8 @@ fn abort_outcome_cycle_members_collect_the_matching_partial_in_order() {
 }
 #[test]
 fn abort_outcome_cycle_idx_keeps_both_root_instances_of_one_cpv() {
-    // Backlog #245/#287: a cp merged in both roots shares one cpv
-    // string; the drain's indices keep the two rows apart and in order.
+    // A cp merged in both roots shares one cpv string; the drain's
+    // indices keep the two rows apart and in order.
     let target = entry_163("dev-lang", "comp", new_163("1.0"), &[]);
     let mut running = entry_163("dev-lang", "comp", new_163("1.0"), &[]);
     running.targets_running_root = true;
@@ -495,18 +473,11 @@ fn owner_163(cat: &str, pkg: &str) -> (String, String) {
     (cat.to_string(), pkg.to_string())
 }
 
-// ---- S2: `use_unsat_parent_row` (real `_show_unsatisfied_dep`'s
-// parent-flag flip row, `depgraph.py:6756-6846`: the requesting
-// parent flips its own USE to satisfy a conditional use-dep). ----
+// ---- S2: `use_unsat_parent_row` (Portage's parent-flag flip row). ----
 
 /// An `=`-conditional use-dep on a flag the parent has off (the
-/// child has it on) suggests `+flag` with the parent's cpv. Real
-/// `violated_conditionals` sees the parent-lacks-child-has mismatch
-/// as violated-conditional (`dep/__init__.py:1541-1549`), so the row
-/// fires; a `?` with the parent off would be satisfied instead (no
-/// row). Kills the whole-body `None` row and every whole-body `Some`
-/// row with a wrong value, plus the `!flag_is_settable` deletion
-/// (which returns `None` here).
+/// child has it on) suggests `+flag` with the parent's cpv.
+/// Portage: dep/__init__.py violated_conditionals
 #[test]
 fn use_unsat_parent_row_suggests_enabling_an_off_flag() {
     let dir = dir_163("parent-on");
@@ -537,8 +508,7 @@ fn use_unsat_parent_row_suggests_enabling_an_off_flag() {
 }
 
 /// A conditional use-dep on a default-on flag the parent has on
-/// suggests `-flag`. Kills the `!parent_use.contains` deletion in
-/// the other direction (which suggests `+flag` here).
+/// suggests `-flag`.
 #[test]
 fn use_unsat_parent_row_suggests_disabling_an_on_flag() {
     let dir = dir_163("parent-off");
@@ -568,12 +538,8 @@ fn use_unsat_parent_row_suggests_disabling_an_on_flag() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An *installed* requesting parent flips on its own vdb-recorded USE
-/// (real `_pkg_use_enabled(myparent)` for a built package): the r135
-/// S0 shape -- parent installed -flip, display atom `[flip=]`
-/// (`EqualParent`), vdb `USE` empty and vdb `IUSE` declaring flip, so
-/// the row proposes `+flip` on the parent's own cpv. Kills the
-/// `AlreadyInstalled`-blindness (no row for installed parents).
+/// An installed requesting parent flips on its own vdb-recorded USE
+/// (Portage `_pkg_use_enabled` for a built package).
 #[test]
 fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag() {
     let dir = dir_163("parent-installed");
@@ -607,11 +573,8 @@ fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A merge-bound chain node whose dep on the child sits behind
-/// `qml? ( ... )` renders real's `[qml]` qualifier (the r135 S0
-/// `(b)` shape: `extract_affecting_use` finds qml gating the edge,
-/// qml enabled in the node's effective USE). Kills the
-/// always-bare-row behaviour.
+/// A merge-bound chain node whose dep sits behind `qml? ( ... )`
+/// renders the `[qml]` qualifier (Portage).
 #[test]
 fn chain_suffix_qualifies_a_flag_gated_merge_bound_edge() {
     let dir = dir_163("chain-qml");
@@ -703,10 +666,7 @@ fn chain_suffix_stays_bare_on_an_ungated_edge() {
 }
 
 /// An installed chain node qualifies from its vdb `RDEPEND` against
-/// its recorded `USE` (the live `[installed]` `[qml]`/`[kde]` rows):
-/// the gate is read from the vdb, the repo candidate at the same
-/// version only grounds keywords/repo. Kills the installed-blindness
-/// (bare rows for installed nodes).
+/// its recorded `USE`; the repo candidate only grounds keywords/repo.
 #[test]
 fn chain_suffix_qualifies_a_gated_installed_edge_from_the_vdb() {
     let dir = dir_163("chain-installed");
@@ -764,8 +724,7 @@ fn chain_suffix_qualifies_a_gated_installed_edge_from_the_vdb() {
 }
 
 /// No owner, and a display atom with no conditional use-deps, both
-/// return `None` (the `owner?` early return and the empty-flags
-/// early return).
+/// return `None`.
 #[test]
 fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
     let dir = dir_163("parent-none");
@@ -798,10 +757,7 @@ fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
 }
 
 /// A flip that would newly violate the parent's `REQUIRED_USE`
-/// appends the violation note. Kills the `!new_sat` deletion
-/// (which drops the note here) and the `!is_empty` deletion of
-/// the `REQUIRED_USE` gate (which skips the check for a
-/// non-empty constraint and drops the note too).
+/// appends the violation note.
 #[test]
 fn use_unsat_parent_row_notes_a_newly_violated_required_use() {
     let dir = dir_163("parent-req");
@@ -831,9 +787,7 @@ fn use_unsat_parent_row_notes_a_newly_violated_required_use() {
 }
 
 /// A flip that keeps `REQUIRED_USE` satisfied carries no note: the
-/// `&&` conjunction must not fire on `old_sat` alone. Kills the
-/// `&&` -> `||` flip of the violation gate (which appends the note
-/// here).
+/// `&&` conjunction must not fire on `old_sat` alone.
 #[test]
 fn use_unsat_parent_row_omits_the_note_when_required_use_stays_satisfied() {
     let dir = dir_163("parent-req-ok");
@@ -879,10 +833,8 @@ struct WritePkg163Args<'a> {
     keywords: &'a str,
 }
 
-/// One scratch ebuild plus its real md5-cache entry (the md5-cache
-/// validation guard fails otherwise), in the #161/#162 shape:
-/// `SLOT`, `KEYWORDS`, `IUSE`, `RDEPEND` lines in both the ebuild
-/// and the cache entry.
+/// One scratch ebuild plus its md5-cache entry, in the #161/#162
+/// shape: `SLOT`, `KEYWORDS`, `IUSE`, `RDEPEND` lines in both.
 fn write_pkg_163(args: WritePkg163Args<'_>) {
     let WritePkg163Args {
         repo,
@@ -966,13 +918,10 @@ fn install_163(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &st
     }
 }
 
-// ---- S3: `refresh_entry_use_display` (the post-walk USE-line
-// re-render: real `_pkg_use_enabled` consults the flip tier for the
-// display regardless of the walked graph). ----
+// ---- S3: `refresh_entry_use_display` (post-walk USE-line re-render). ----
 
 /// A `New` entry's display comes from the resolved candidate's own
-/// IUSE with the profile-effective USE. Kills the whole-body `()`
-/// row and the `New`-arm deletion (both leave the display empty).
+/// IUSE with the profile-effective USE.
 #[test]
 fn refresh_entry_use_display_renders_a_new_entry_from_the_candidate() {
     let dir = dir_163("refresh-new");
@@ -998,8 +947,7 @@ fn refresh_entry_use_display_renders_a_new_entry_from_the_candidate() {
 
 /// An `Upgrade` entry renders the target candidate with the
 /// installed instance as the diff base; a `Downgrade` the same in
-/// the other direction. Kills the combined
-/// `Upgrade|Downgrade`-arm deletion (both stay empty).
+/// the other direction.
 #[test]
 fn refresh_entry_use_display_renders_upgrade_and_downgrade_against_the_installed_base() {
     let dir = dir_163("refresh-updown");
@@ -1081,9 +1029,8 @@ fn refresh_entry_use_display_renders_upgrade_and_downgrade_against_the_installed
         entries[0].use_flags_display,
         vec![("alpha".to_string(), false)]
     );
-    // The installed base shows in the `-pv` line: `alpha` was on
-    // (`-alpha*`), and `beta` -- dropped from IUSE by the
-    // downgrade target -- renders as removed (`(-beta%*)`).
+    // Like above, but `beta` -- dropped from IUSE by the downgrade
+    // target -- renders as removed (`(-beta%*)`).
     assert_eq!(
         entries[0].use_expand_display,
         vec![("USE".to_string(), "-alpha* (-beta%*)".to_string())]
@@ -1093,9 +1040,7 @@ fn refresh_entry_use_display_renders_upgrade_and_downgrade_against_the_installed
 
 /// A `Reinstall` entry whose trigger flag the new ebuild dropped
 /// from IUSE still shows the `(-flag%*)` removed row at plain `-p`
-/// through the trigger set. Kills the `Reinstall`-arm deletion of
-/// the version lookup and the `Reinstall{changed_flags}`-arm
-/// deletion of the trigger set (both render an empty line here).
+/// through the trigger set.
 #[test]
 fn refresh_entry_use_display_force_shows_a_dropped_reinstall_trigger_flag() {
     let dir = dir_163("refresh-reinst");
@@ -1142,9 +1087,7 @@ fn refresh_entry_use_display_force_shows_a_dropped_reinstall_trigger_flag() {
 
 /// Entries for another cp are skipped, even when their version
 /// matches a candidate of the refreshed cp: the `||` conjunction
-/// must skip on either mismatch. Kills the `||` -> `&&` flip, and
-/// both `!=` -> `==` flips (which skip the refreshed entry
-/// itself).
+/// must skip on either mismatch.
 #[test]
 fn refresh_entry_use_display_skips_entries_for_another_cp() {
     let dir = dir_163("refresh-skip");
@@ -1176,8 +1119,7 @@ fn refresh_entry_use_display_skips_entries_for_another_cp() {
 
 /// The candidate is picked by exact version: with two versions in
 /// the tree the display comes from the entry's own, not the first
-/// non-matching one. Kills the `==` -> `!=` flip of the version
-/// lookup.
+/// non-matching one.
 #[test]
 fn refresh_entry_use_display_picks_the_candidate_at_the_entry_version() {
     let dir = dir_163("refresh-ver");
@@ -1230,9 +1172,7 @@ fn refresh_entry_use_display_skips_settled_entries() {
 // ---- shared resolve_pretend harness (S4) ----
 
 /// Option bundle for `resolve_163`, mirroring `resolve_pretend`'s
-/// trailing flags positionally (see the `resolve` helper in the
-/// main test module for the same shape). Defaults are the plain
-/// top-level selective resolve.
+/// trailing flags; defaults are the plain top-level selective resolve.
 #[derive(Default)]
 struct RpOpts163 {
     newuse: bool,
@@ -1278,10 +1218,8 @@ impl RpOpts163 {
     }
 }
 
-/// Direct `resolve_pretend` call over a scratch repo + scratch vdb.
-/// `binpkgs` stages `config.scanned_binpkgs` records (the S6 binary
-/// legs' shape); the binary pool derives from the same config, like
-/// production's `ResolveCtx::new`.
+/// Direct `resolve_pretend` call over a scratch repo + scratch vdb;
+/// `binpkgs` stages `scanned_binpkgs` records like `ResolveCtx::new`.
 fn resolve_163(
     repos: &[RepoConfig],
     root: &Path,
@@ -1340,14 +1278,10 @@ fn binpkg_163(cpv: &str, slot: &str, extra: &[(&str, &str)]) -> HashMap<String, 
     m
 }
 
-// ---- S4: `resolve_pretend` (the single-atom v1 pretend decision:
-// best visible candidate vs installed, real
-// `_wrapped_select_pkg_highest_available_imp` + the `avoid_update`
-// / fallback / autounmask levels around it). ----
+// ---- S4: `resolve_pretend` (single-atom pretend decision). ----
 
 /// A fresh top-level atom resolves `New` at the best visible
-/// version. Pins the baseline the S0 run already covers (its rows
-/// are caught or unviable there).
+/// version.
 #[test]
 fn resolve_pretend_fresh_top_level_atom_resolves_new_at_the_best_version() {
     let dir = dir_163("rp-new");
@@ -1369,8 +1303,6 @@ fn resolve_pretend_fresh_top_level_atom_resolves_new_at_the_best_version() {
 /// `--emptytree` rebuilds everything: an installed same-version
 /// top-level atom with a newer tree version resolves `Upgrade`
 /// while a non-empty selective resolve keeps the installed one.
-/// Pins the `selective && !empty` conjunction the S0 run already
-/// covers.
 #[test]
 fn resolve_pretend_emptytree_upgrades_past_the_installed_version() {
     for (tag, empty, selective, expected) in [
@@ -1409,7 +1341,6 @@ fn resolve_pretend_emptytree_upgrades_past_the_installed_version() {
 
 /// A non-empty selective top-level resolve over an installed
 /// version with a newer tree version keeps the installed one.
-/// Pins the shape the S0 run already covers.
 #[test]
 fn resolve_pretend_selective_top_level_keeps_the_installed_version() {
     let dir = dir_163("rp-sel");
@@ -1430,8 +1361,7 @@ fn resolve_pretend_selective_top_level_keeps_the_installed_version() {
 }
 
 /// `--usepkgonly` pulls a binary-only package from the staged
-/// index. Kills the `usepkg || usepkgonly` -> `&&` flip (which
-/// leaves the binary pool empty and reports `NoVisibleCandidate`).
+/// index.
 #[test]
 fn resolve_pretend_usepkgonly_pulls_a_binary_only_package() {
     let dir = dir_163("rp-binonly");
@@ -1448,9 +1378,8 @@ fn resolve_pretend_usepkgonly_pulls_a_binary_only_package() {
 }
 
 /// The installed fallback under `--usepkg`/`--usepkgonly` covers a
-/// dependency whose only satisfier is installed (real restricts
-/// the *merge* pool, not installed-satisfaction). Pins the shape
-/// the S0 run already covers.
+/// dependency whose only satisfier is installed (Portage restricts
+/// the merge pool, not installed-satisfaction).
 #[test]
 fn resolve_pretend_usepkg_dependency_falls_back_to_the_installed_version() {
     let dir = dir_163("rp-usefallback");
@@ -1467,9 +1396,8 @@ fn resolve_pretend_usepkg_dependency_falls_back_to_the_installed_version() {
 }
 
 /// A dependency whose installed version still satisfies the atom
-/// is kept without searching for a newer one (real's
-/// `avoid_update` early return). Pins the early return all four
-/// `!`s guard.
+/// is kept without searching for a newer one (Portage's
+/// `avoid_update` early return).
 #[test]
 fn resolve_pretend_dependency_avoids_updating_a_satisfying_installed_version() {
     let dir = dir_163("rp-avoid");
@@ -1490,9 +1418,7 @@ fn resolve_pretend_dependency_avoids_updating_a_satisfying_installed_version() {
 }
 
 /// Each widened early-return guard changes the outcome on its own:
-/// `--update`, `--emptytree`, and a top-level atom each bypass the
-/// early return and upgrade past the installed version (the dep
-/// baseline keeps it). Pins the gate the S0 run already covers.
+/// `--update`, `--emptytree`, and a top-level atom each bypass it.
 #[test]
 fn resolve_pretend_early_return_bypass_flags_each_upgrade_past_installed() {
     for (tag, o) in [
@@ -1541,7 +1467,7 @@ fn resolve_pretend_early_return_bypass_flags_each_upgrade_past_installed() {
     }
 }
 /// A plain matching candidate is usable: no autounmask fallback
-/// runs. Pins the probe the S0 run already covers.
+/// runs.
 #[test]
 fn resolve_pretend_plain_matching_candidate_needs_no_fallback() {
     let dir = dir_163("rp-usable");
@@ -1555,8 +1481,7 @@ fn resolve_pretend_plain_matching_candidate_needs_no_fallback() {
 }
 
 /// A keyword-masked-only candidate resolves through the
-/// `--autounmask` keyword level. Pins the level loop the S0 run
-/// already covers.
+/// `--autounmask` keyword level.
 #[test]
 fn resolve_pretend_autounmask_keywords_relaxes_a_masked_candidate() {
     let dir = dir_163("rp-aukw");
@@ -1577,8 +1502,7 @@ fn resolve_pretend_autounmask_keywords_relaxes_a_masked_candidate() {
 }
 
 /// A positive extra constraint narrows the match; a negative one
-/// hides its version. Pins the filters the S0 run already
-/// covers.
+/// hides its version.
 #[test]
 fn resolve_pretend_extra_constraints_narrow_and_hide_versions() {
     for (tag, extra, expected) in [
@@ -1613,8 +1537,7 @@ fn resolve_pretend_extra_constraints_narrow_and_hide_versions() {
     }
 }
 
-/// A vacuous negative extra constraint changes nothing. Pins
-/// the probe the S0 run already covers.
+/// A vacuous negative extra constraint changes nothing.
 #[test]
 fn resolve_pretend_vacuous_negative_extra_constraint_resolves() {
     let dir = dir_163("rp-extravac");
@@ -1631,9 +1554,7 @@ fn resolve_pretend_vacuous_negative_extra_constraint_resolves() {
 
 /// A `[flag]` atom against a flippable candidate resolves through
 /// `--autounmask-use`, and without the flag it is
-/// `NoVisibleCandidate`. Pins the filter the S0 run already
-/// covers (its reachable rows are caught there; the `true`
-/// guard is unreachable -- see the report).
+/// `NoVisibleCandidate`.
 #[test]
 fn resolve_pretend_use_dep_atom_resolves_only_through_autounmask_use() {
     for (tag, autounmask_use, expected) in [
@@ -1655,8 +1576,7 @@ fn resolve_pretend_use_dep_atom_resolves_only_through_autounmask_use() {
 }
 
 /// A `[flag]` atom for a flag no candidate has is unfixable even
-/// with `--autounmask-use`. Pins the shape the S0 run already
-/// covers.
+/// with `--autounmask-use`.
 #[test]
 fn resolve_pretend_unfixable_use_dep_atom_stays_unresolved() {
     let dir = dir_163("rp-usebogus");
@@ -1672,15 +1592,7 @@ fn resolve_pretend_unfixable_use_dep_atom_stays_unresolved() {
 }
 
 /// `--useoldpkg-atoms` restricts the match to built candidates,
-/// and an atoms-matching binary is exempt from the
-/// ebuild-visibility check. One test, one global set/reset pair
-/// on a dedicated `dev-libs/opkg` cp: the atoms are
-/// process-global, so they must match no other test's cp, and two
-/// setters would race each other's reset under parallel runs.
-/// Kills the `source == Binary` -> `!=` flip and the `&&` ->
-/// `||` flip of the oldpkg filter (both resolve the newer
-/// ebuild), and the `!uev` deletion of the exemption (which drops
-/// the exempt binary).
+/// and a matching binary is exempt from the ebuild-visibility check.
 #[test]
 fn resolve_pretend_useoldpkg_prefers_and_exempts_built_candidates() {
     let dir = dir_163("rp-oldpkg");
@@ -1719,8 +1631,7 @@ fn resolve_pretend_useoldpkg_prefers_and_exempts_built_candidates() {
 }
 
 /// An excluded installed version is left as-is before any
-/// reinstall check runs. Pins the shape the S0 run already
-/// covers.
+/// reinstall check runs.
 #[test]
 fn resolve_pretend_excluded_installed_version_stays_installed_under_newuse() {
     let dir = dir_163("rp-excl");
@@ -1745,8 +1656,7 @@ fn resolve_pretend_excluded_installed_version_stays_installed_under_newuse() {
 
 /// A same-version install in another slot is a `New` into a fresh
 /// slot, not an installed match: `candidate_is_installed` needs
-/// both version and slot. Pins the shape the S0 run already
-/// covers.
+/// both version and slot.
 #[test]
 fn resolve_pretend_same_version_in_another_slot_is_a_new_slot_install() {
     let dir = dir_163("rp-newslot");
@@ -1763,8 +1673,7 @@ fn resolve_pretend_same_version_in_another_slot_is_a_new_slot_install() {
 }
 
 /// An installed same-version same-slot dependency atom is
-/// `AlreadyInstalled`: both `==`s of `candidate_is_installed`
-/// must hold. Pins the predicate the S0 run already covers.
+/// `AlreadyInstalled`: `candidate_is_installed` needs both `==`s.
 #[test]
 fn resolve_pretend_installed_same_version_is_already_installed() {
     let dir = dir_163("rp-ai");
@@ -1782,9 +1691,7 @@ fn resolve_pretend_installed_same_version_is_already_installed() {
 
 /// The `avoid_update` early return honours a hiding negative
 /// extra constraint: the installed version it rejects falls
-/// through to the ordinary search. Kills both `!` deletions of
-/// the negative arm (each keeps the installed version and
-/// reports `AlreadyInstalled`).
+/// through to the ordinary search.
 #[test]
 fn resolve_pretend_early_return_honours_a_hiding_negative_constraint() {
     let dir = dir_163("rp-extrahide");
@@ -1811,10 +1718,7 @@ fn resolve_pretend_early_return_honours_a_hiding_negative_constraint() {
 
 /// The `avoid_update` early return honours a pinning positive
 /// extra constraint even when the tree candidate is masked: the
-/// installed version it keeps is reported as-is (the masked tree
-/// alone would be `NoVisibleCandidate`). Kills the positive-arm
-/// `!` deletion (which drops the installed version and reports
-/// the miss).
+/// installed version it keeps is reported as-is.
 #[test]
 fn resolve_pretend_early_return_honours_a_pinning_positive_constraint() {
     let dir = dir_163("rp-extrapin");
@@ -1831,9 +1735,7 @@ fn resolve_pretend_early_return_honours_a_pinning_positive_constraint() {
 }
 
 /// A visible ebuild matching the atom disqualifies a binary with
-/// no ebuild at its version (`_equiv_ebuild_visible`). Pins the
-/// drop the S0 run already covers (its rows are caught
-/// there).
+/// no ebuild at its version (`_equiv_ebuild_visible`).
 #[test]
 fn resolve_pretend_visible_ebuild_disqualifies_a_version_skewed_binary() {
     let dir = dir_163("rp-equiv");
@@ -1849,11 +1751,8 @@ fn resolve_pretend_visible_ebuild_disqualifies_a_version_skewed_binary() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 /// A top-level `[flag]` atom the tree cannot currently satisfy
-/// upgrades past a satisfying installed version (real keeps the
-/// installed one only for dependencies). `--autounmask-use` keeps
-/// the flippable candidate in the pool so the gate is reached.
-/// Kills the `!is_top_level` deletion (which keeps the installed
-/// version; the neighbouring `&&` -> `||` is unviable).
+/// upgrades past a satisfying installed version (Portage keeps the
+/// installed one only for dependencies).
 #[test]
 fn resolve_pretend_top_level_use_dep_atom_upgrades_past_a_satisfying_installed_version() {
     let dir = dir_163("rp-74top");
@@ -1883,10 +1782,7 @@ fn resolve_pretend_top_level_use_dep_atom_upgrades_past_a_satisfying_installed_v
 }
 
 /// A dependency `[flag]` atom the tree satisfies upgrades past a
-/// satisfying installed version under `--update`. Kills the
-/// `!atom_currently_satisfiable` deletion (which keeps the
-/// installed version; the neighbouring `&&` -> `||` is
-/// unviable).
+/// satisfying installed version under `--update`.
 #[test]
 fn resolve_pretend_satisfiable_use_dep_atom_upgrades_under_update() {
     let dir = dir_163("rp-74sat");
@@ -1916,10 +1812,7 @@ fn resolve_pretend_satisfiable_use_dep_atom_upgrades_under_update() {
 
 /// A dependency `[flag]` atom the tree cannot currently satisfy
 /// keeps the satisfying installed version under `--update`
-/// (real's `_want_installed_pkg` keep). `--autounmask-use` keeps
-/// the flippable candidate in the pool so the gate is reached.
-/// Kills the `!d.is_empty()` deletion (which skips the keep and
-/// upgrades).
+/// (Portage's `_want_installed_pkg` keep).
 #[test]
 fn resolve_pretend_unsatisfiable_use_dep_atom_keeps_the_installed_version() {
     let dir = dir_163("rp-74keep");
@@ -1946,10 +1839,8 @@ fn resolve_pretend_unsatisfiable_use_dep_atom_keeps_the_installed_version() {
 }
 
 /// The `!update` shortcut's inner disjunction: a non-selective
-/// top-level atom skips it, an `--emptytree` dependency skips it,
-/// and `--update` skips it -- each upgrades past the installed
-/// version where the plain dependency keeps it. Pins the shortcut
-/// the S0 run already covers.
+/// top-level atom, an `--emptytree` dependency, and `--update` each
+/// skip it and upgrade past the installed version.
 #[test]
 fn resolve_pretend_update_shortcut_bypass_shapes_upgrade_past_installed() {
     // Baseline: plain dependency keeps the installed version.
@@ -2015,10 +1906,8 @@ fn resolve_pretend_update_shortcut_bypass_shapes_upgrade_past_installed() {
     }
 }
 
-/// `--newuse` with a gained flag reinstalls the installed version
-/// with the trigger set: the gained flag (`b`) plus the dropped
-/// effective flag (`a`, on in the vdb but default-off in the new
-/// ebuild). Pins the trigger the S0 run already covers.
+/// `--newuse` with a gained flag reinstalls with the trigger set:
+/// the gained flag plus the dropped effective flag.
 #[test]
 fn resolve_pretend_newuse_with_a_gained_flag_reinstalls() {
     let dir = dir_163("rp-newuse");
@@ -2050,8 +1939,8 @@ fn resolve_pretend_newuse_with_a_gained_flag_reinstalls() {
 }
 
 /// A dependency atom whose installed version lacks the requested
-/// `[flag]` reinstalls it (real never calls that "already
-/// installed"). Pins the flip check the S0 run already covers.
+/// `[flag]` reinstalls it (Portage never calls that "already
+/// installed").
 #[test]
 fn resolve_pretend_installed_version_missing_the_flag_reinstalls() {
     let dir = dir_163("rp-flip");
@@ -2085,10 +1974,6 @@ fn resolve_pretend_installed_version_missing_the_flag_reinstalls() {
 /// Each reinstall trigger also fires through the best-version
 /// path (past `--update`, which bypasses the `avoid_update`
 /// shortcut): the gate and its disjunction arm must agree.
-/// Kills the `&&` -> `||` flip of the `changed_slot` gate
-/// (13711) and the `||` -> `&&` flips of the `changed_deps`,
-/// `changed_slot`, and `new_repo` disjunction arms
-/// (13741/13742/13744).
 #[test]
 fn resolve_pretend_triggers_fire_through_the_best_version_path() {
     // Changed RDEPEND under --update.
@@ -2179,10 +2064,8 @@ fn resolve_pretend_triggers_fire_through_the_best_version_path() {
 }
 
 /// Each reinstall trigger fires on its own through the
-/// `avoid_update` shortcut as well: the option-on shapes
-/// reinstall with only their flag, the option-off shapes keep
-/// the installed version. Pins the shortcut shapes the S0 run
-/// already covers (the best-path arms live in the next test).
+/// `avoid_update` shortcut as well: option-on reinstalls, option-off
+/// keeps the installed version.
 #[test]
 fn resolve_pretend_each_reinstall_trigger_fires_on_its_own() {
     // Changed RDEPEND, option on and off.
@@ -2223,10 +2106,8 @@ fn resolve_pretend_each_reinstall_trigger_fires_on_its_own() {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
-    // Changed sub-slot (same main slot, so the installed instance
-    // still matches): the `slot_changed` probe compares the full
-    // slot, and a main-slot move is a new-slot install instead.
-    // Option on and off.
+    // Changed sub-slot with the same main slot: the `slot_changed`
+    // probe compares the full slot. Option on and off.
     for (tag, changed_slot, slot_changed) in [("on", true, true), ("off", false, false)] {
         let dir = dir_163(&format!("rp-tslot-{tag}"));
         let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0/1", "", "", "amd64")]);
@@ -2288,8 +2169,7 @@ fn resolve_pretend_each_reinstall_trigger_fires_on_its_own() {
 
 /// The `Reinstall` disjunction fires on each arm alone: `--emptytree`
 /// and a non-selective top-level atom each reinstall a changeless
-/// installed version where a plain dependency keeps it. Pins the
-/// disjunction the S0 run already covers.
+/// installed version where a plain dependency keeps it.
 #[test]
 fn resolve_pretend_reinstall_disjunction_fires_on_each_arm_alone() {
     // Baseline: plain dependency keeps the installed version.
@@ -2345,9 +2225,7 @@ fn resolve_pretend_reinstall_disjunction_fires_on_each_arm_alone() {
 }
 
 /// A selective top-level atom under `--update` keeps the
-/// installed version: the top-level arm needs `!selective`. Kills
-/// the `&&` -> `||` flip of the top-level arm (which reinstalls
-/// bare; the `!selective` deletion is already caught).
+/// installed version: the top-level arm needs `!selective`.
 #[test]
 fn resolve_pretend_top_level_arm_needs_non_selective() {
     let dir = dir_163("rp-rcond-upd");
@@ -2367,8 +2245,7 @@ fn resolve_pretend_top_level_arm_needs_non_selective() {
 
 /// The `!update` shortcut is reached past a non-empty exclude
 /// list: an excluded-but-unmatched dependency still keeps its
-/// installed version through the shortcut. Pins the shape the S0
-/// run already covers.
+/// installed version through the shortcut.
 #[test]
 fn resolve_pretend_update_shortcut_holds_past_an_unmatched_exclude() {
     let dir = dir_163("rp-upd-excl");
@@ -2391,11 +2268,9 @@ fn resolve_pretend_update_shortcut_holds_past_an_unmatched_exclude() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Upgrade and downgrade are decided against the installed
-/// version in the candidate's own slot: a newer same-slot tree
-/// version upgrades, an older one downgrades, and an other-slot
-/// install is ignored. Pins the slot/version comparison the S0 run
-/// already covers.
+/// Upgrade and downgrade are decided against the installed version
+/// in the candidate's own slot: newer upgrades, older downgrades,
+/// other-slot installs are ignored.
 #[test]
 fn resolve_pretend_upgrade_and_downgrade_follow_the_own_slot_version() {
     for (tag, tree, vdb, expected) in [
@@ -2445,11 +2320,8 @@ fn resolve_pretend_upgrade_and_downgrade_follow_the_own_slot_version() {
     }
 }
 /// `--binpkg-respect-use` (and `--newuse`, which opens the same
-/// gate) drops a binary built against different USE. With no
-/// ebuild matching the atom the visibility filter stays out, so
-/// the gate alone decides: the divergent binary must not win.
-/// Kills both `||` -> `&&` flips of the gate (each keeps the
-/// binary and resolves it).
+/// gate) drops a binary built against different USE; with no ebuild
+/// matching, the gate alone decides.
 #[test]
 fn resolve_pretend_respect_use_drops_a_use_divergent_binary() {
     let dir = dir_163("rp-respect");
@@ -2473,13 +2345,7 @@ fn resolve_pretend_respect_use_drops_a_use_divergent_binary() {
 
 /// The respect-use comparison is against the ebuild at the
 /// binary's own version: a same-version ebuild whose IUSE covers
-/// the baked USE keeps the binary in a skewed-slot shape. Kills
-/// the `==` -> `!=` flip of the ebuild lookup (which compares
-/// against no ebuild, drops the binary, and reports the
-/// installed ebuild instead of the new slot), the `==` -> `!=`
-/// flip of the version probe (which blinds the retain the same
-/// way), and the `||` -> `&&` flip of the retain predicate
-/// (which drops the binary the same way).
+/// the baked USE keeps the binary in a skewed-slot shape.
 #[test]
 fn resolve_pretend_respect_use_compares_against_the_same_version_ebuild() {
     let dir = dir_163("rp-respectver");
@@ -2515,11 +2381,8 @@ fn resolve_pretend_respect_use_compares_against_the_same_version_ebuild() {
 }
 
 /// A binary with no ebuild at its version is compared without one:
-/// with no visible ebuild at all the visibility filter stays out,
-/// so a real USE divergence still drops it. Kills the `&&` ->
-/// `||` and `==` -> `!=` flips of the ebuild lookup (each
-/// compares against the masked ebuild, accepts, and resolves the
-/// binary).
+/// with no visible ebuild the filter stays out, so a genuine USE
+/// divergence still drops it.
 #[test]
 fn resolve_pretend_lonely_binary_with_divergent_use_is_dropped() {
     let dir = dir_163("rp-lonely");
@@ -2542,9 +2405,8 @@ fn resolve_pretend_lonely_binary_with_divergent_use_is_dropped() {
 }
 
 /// `--binpkg-changed-deps` drops a binary built against different
-/// dependencies: the stale binary in its own slot must not win
-/// over the installed ebuild. Kills the `!binary_deps_changed`
-/// deletion (which keeps the binary and resolves its slot).
+/// dependencies: the stale binary must not win over the installed
+/// ebuild.
 #[test]
 fn resolve_pretend_changed_deps_drops_a_stale_binary() {
     let dir = dir_163("rp-bindeps");
@@ -2581,9 +2443,7 @@ fn resolve_pretend_changed_deps_drops_a_stale_binary() {
 }
 
 /// A keyword-masked ebuild does not make `some_ebuild_matches`:
-/// the visible newer binary still resolves. Kills the first
-/// `&&` -> `||` flip of the match probe (which counts the masked
-/// ebuild, runs the visibility filter, and drops the binary).
+/// the visible newer binary still resolves.
 #[test]
 fn resolve_pretend_masked_ebuild_does_not_match_for_visibility() {
     let dir = dir_163("rp-masketouch");
@@ -2600,11 +2460,8 @@ fn resolve_pretend_masked_ebuild_does_not_match_for_visibility() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A version-pinned atom does not match a newer ebuild for the
-/// visibility probe: the matching older binary still resolves.
-/// Kills the second `&&` -> `||` flip of the match probe (which
-/// counts the newer ebuild, runs the filter, and drops the
-/// binary).
+/// A version-pinned atom does not match a newer ebuild: the
+/// matching older binary still resolves.
 #[test]
 fn resolve_pretend_pinned_atom_does_not_match_a_newer_ebuild() {
     let dir = dir_163("rp-pintouch");
@@ -2622,9 +2479,7 @@ fn resolve_pretend_pinned_atom_does_not_match_a_newer_ebuild() {
 }
 
 /// A slot-skewed binary kept by the visibility check resolves
-/// into its own slot. Kills the `||` -> `&&` flip of the retain
-/// predicate (which drops the binary and reports the installed
-/// ebuild instead).
+/// into its own slot.
 #[test]
 fn resolve_pretend_kept_slot_skewed_binary_resolves_into_its_slot() {
     let dir = dir_163("rp-binslot");
@@ -2648,16 +2503,9 @@ fn resolve_pretend_kept_slot_skewed_binary_resolves_into_its_slot() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `--rebuilt-binaries` with a newer binary build reinstalls
-/// the installed version carrying the rebuild flag; without the
-/// flag the same shape reinstalls bare (the `--emptytree` arm).
-/// The `rebuilt` arm runs top-level selective under `--update`
-/// ( past the update block with the top-level arm shut) so the
-/// rebuild flag alone decides. Kills the `usepkg || usepkgonly`
-/// -> `&&` flip of the rebuild gate and the `||` -> `&&` flip
-/// of its disjunction arm (each reports the bare reinstall),
-/// and the `&&` -> `||` flip of the gate (which reports the
-/// rebuild reinstall without the flag).
+/// `--rebuilt-binaries` with a newer binary build reinstalls with
+/// the rebuild flag; without the flag the same shape reinstalls
+/// bare (the `--emptytree` arm).
 #[test]
 fn resolve_pretend_rebuilt_binaries_reinstalls_on_newer_build() {
     let bare = PretendOutcome::Reinstall {
@@ -2688,11 +2536,8 @@ fn resolve_pretend_rebuilt_binaries_reinstalls_on_newer_build() {
             "0",
             &[("BUILD_TIME", "2000")],
         )]);
-        // The `rebuilt` arm resolves top-level selective under
-        // `--update` (no shortcut, no bare arms) so the rebuild
-        // flag alone decides; the `bare` arm goes through
-        // `--emptytree` (the bare arm fires, the flag stays
-        // false).
+        // The `rebuilt` arm runs selective under `--update` so the flag
+        // alone decides; the `bare` arm goes through `--emptytree`.
         let mut o = RpOpts163::top();
         if tag == "bare" {
             o.selective = false;
@@ -2864,8 +2709,7 @@ fn plain_163(cat: &str, pkg: &str, atom: &str) -> PlainMissDepReport {
 // disclosure chains, and the abort classification). ----
 
 /// A non-buildpkgonly resolve never reports unsatisfied
-/// buildpkgonly deps, even with merge edges present. Pins the
-/// gate the S0 run already covers.
+/// buildpkgonly deps, even with merge edges present.
 #[test]
 fn assemble_result_no_buildpkgonly_flag_means_no_buildpkgonly_refusal() {
     let dir = dir_163("asm-nobpo");
@@ -2898,9 +2742,6 @@ fn assemble_result_no_buildpkgonly_flag_means_no_buildpkgonly_refusal() {
 
 /// A lone merge with no owners is no buildpkgonly edge, and a
 /// lone uninstall with no owners is no blocker edge either.
-/// The uninstall arm kills the `&&` -> `||` flip of the action
-/// filter (which reports an edge here); the merge arm pins the
-/// already-caught edge predicate.
 #[test]
 fn assemble_result_lone_entries_are_no_buildpkgonly_edge() {
     for (tag, outcome) in [
@@ -2938,7 +2779,6 @@ fn assemble_result_lone_entries_are_no_buildpkgonly_edge() {
 }
 
 /// A merge required by another merge is a buildpkgonly edge.
-/// Pins the disjunction the S0 run already covers.
 #[test]
 fn assemble_result_merge_requiring_a_merge_is_a_buildpkgonly_edge() {
     let dir = dir_163("asm-edge");
@@ -2969,8 +2809,7 @@ fn assemble_result_merge_requiring_a_merge_is_a_buildpkgonly_edge() {
 }
 
 /// Two chained uninstalls with no merge anywhere are still no
-/// buildpkgonly edge: uninstalls are not merge actions. Pins the
-/// filter the S0 run already covers.
+/// buildpkgonly edge: uninstalls are not merge actions.
 #[test]
 fn assemble_result_chained_uninstalls_are_no_buildpkgonly_edge() {
     let dir = dir_163("asm-uninst");
@@ -3016,10 +2855,7 @@ fn assemble_result_chained_uninstalls_are_no_buildpkgonly_edge() {
 
 /// A recorded autounmask change is not duplicated by the
 /// backtracking slice's records, while a record for another atom
-/// is appended. Kills the first-`==` -> `!=` flip of the dedup
-/// comparison (which duplicates the known atom and drops the new
-/// one); pins the already-caught gate and the second flip (whose
-/// duplicate the coalescing below repairs).
+/// is appended.
 #[test]
 fn assemble_result_recorded_autounmask_change_is_not_duplicated() {
     let dir = dir_163("asm-dedup");
@@ -3064,8 +2900,7 @@ fn assemble_result_recorded_autounmask_change_is_not_duplicated() {
 }
 
 /// A record with a new token for a known atom is appended, then
-/// coalesced into the atom's line. Kills the `&&` -> `||` flip of
-/// the dedup comparison (which drops the new token).
+/// coalesced into the atom's line.
 #[test]
 fn assemble_result_new_token_for_a_known_atom_is_coalesced() {
     let dir = dir_163("asm-coal");
@@ -3104,10 +2939,7 @@ fn assemble_result_new_token_for_a_known_atom_is_coalesced() {
 }
 
 /// Changes for different atoms stay on separate lines, and a
-/// repeated flag is not duplicated within a line. Kills the
-/// `==` -> `!=` flip of the coalescing lookup (which merges
-/// different atoms) and the `!any` deletion of the flag dedup
-/// (which doubles the flag).
+/// repeated flag is not duplicated within a line.
 #[test]
 fn assemble_result_coalescing_keeps_atoms_apart_and_flags_singular() {
     let dir = dir_163("asm-coal2");
@@ -3149,8 +2981,7 @@ fn assemble_result_coalescing_keeps_atoms_apart_and_flags_singular() {
 }
 
 /// An uncovered dependency `NoVisibleCandidate` gains a
-/// plain-miss disclosure naming the queued atom. Kills the
-/// `!matches!(NoVisibleCandidate)` deletion (which files none).
+/// plain-miss disclosure naming the queued atom.
 #[test]
 fn assemble_result_uncovered_nvc_gains_a_plain_miss_disclosure() {
     let dir = dir_163("asm-plain");
@@ -3190,10 +3021,7 @@ fn assemble_result_uncovered_nvc_gains_a_plain_miss_disclosure() {
 
 /// A `NoVisibleCandidate` claimed by each sibling disclosure gains
 /// no plain-miss row: every `||` arm of the coverage check must
-/// stay an `||`, and the `==`s inside each arm a `==`. Kills the
-/// three `||` -> `&&` flips (each files a duplicate row) and the
-/// first-`==` -> `!=` flip inside each arm predicate (each misses
-/// its arm's exact claim and files a row).
+/// stay an `||`, and the `==`s inside each arm a `==`.
 #[test]
 fn assemble_result_claimed_nvc_gains_no_plain_miss_row() {
     for (tag, setup, expected) in [
@@ -3246,10 +3074,7 @@ fn assemble_result_claimed_nvc_gains_no_plain_miss_row() {
 }
 
 /// A neighbour's claim does not cover the entry: sibling reports
-/// for another package leave the plain-miss row in place. Kills
-/// the `&&` -> `||` flips and the second-`==` -> `!=` flips inside
-/// each arm predicate (each treats the neighbour's claim as
-/// covering).
+/// for another package leave the plain-miss row in place.
 #[test]
 fn assemble_result_neighbour_claim_does_not_cover_the_entry() {
     for (tag, setup, expected) in [
@@ -3305,10 +3130,7 @@ fn assemble_result_neighbour_claim_does_not_cover_the_entry() {
 }
 
 /// The in-progress extra list covers only its own cp: a second
-/// uncovered entry in the same category is still filed. Kills the
-/// `&&` -> `||` flip and the second-`==` -> `!=` flip of the
-/// extra-list predicate (each treats the first row as covering
-/// the second).
+/// uncovered entry in the same category is still filed.
 #[test]
 fn assemble_result_extra_list_covers_only_its_own_cp() {
     let dir = dir_163("asm-extra");
@@ -3339,9 +3161,7 @@ fn assemble_result_extra_list_covers_only_its_own_cp() {
 }
 
 /// The in-progress extra list does not cover across categories
-/// either: same package, other category is still filed. Kills the
-/// first-`==` -> `!=` flip of the extra-list predicate (which
-/// treats the cross-category row as covering).
+/// either: same package, other category is still filed.
 #[test]
 fn assemble_result_extra_list_does_not_cover_across_categories() {
     let dir = dir_163("asm-extra-cat");
@@ -3370,11 +3190,8 @@ fn assemble_result_extra_list_does_not_cover_across_categories() {
     assert_eq!(result.plain_miss_deps.len(), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
-/// With `--autounmask-backtrack` off, a recorded use-config
-/// change refreshes just that package's USE line. Kills the
-/// `!autounmask_backtrack_enabled` deletion and the
-/// `!config.is_empty()` deletion (each skips the refresh and
-/// leaves the line empty).
+/// With `--autounmask-backtrack` off, a recorded use-config change
+/// refreshes just that package's USE line.
 #[test]
 fn assemble_result_use_config_change_refreshes_the_package_line() {
     let dir = dir_163("asm-refresh");
@@ -3415,8 +3232,7 @@ fn assemble_result_use_config_change_refreshes_the_package_line() {
 }
 
 /// With `--autounmask-backtrack` on, the same recorded change
-/// leaves the walked line alone. Kills the `&&` -> `||` flip of
-/// the refresh gate (which refreshes anyway).
+/// leaves the walked line alone.
 #[test]
 fn assemble_result_backtrack_on_leaves_the_walked_line_alone() {
     let dir = dir_163("asm-norefresh");
@@ -3458,8 +3274,6 @@ fn assemble_result_backtrack_on_leaves_the_walked_line_alone() {
 
 /// An autounmask change with an empty chain gains its `#required
 /// by` chain from the change's own atom through the entries.
-/// Pins the derivation the `&&` -> `||` flip would also run on a
-/// preset chain.
 #[test]
 fn assemble_result_change_gains_its_required_by_chain() {
     let dir = dir_163("asm-chain");
@@ -3499,8 +3313,7 @@ fn assemble_result_change_gains_its_required_by_chain() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A preset chain is kept as-is. Pins the keep (the `&&` ->
-/// `||` flip is unviable, so no mutant reaches this shape).
+/// A preset chain is kept as-is.
 #[test]
 fn assemble_result_preset_chain_is_kept() {
     let dir = dir_163("asm-chainkeep");
@@ -3539,9 +3352,7 @@ fn assemble_result_preset_chain_is_kept() {
 
 /// The change owner is the entry matching the change's own
 /// package: a same-category decoy listed first must not steal
-/// it. Kills the `&&` -> `||` flip of the owner lookup (which
-/// derives the chain from the decoy); pins the already-caught
-/// `==` flips.
+/// it.
 #[test]
 fn assemble_result_change_owner_is_the_matching_entry() {
     let dir = dir_163("asm-owner");
@@ -3583,8 +3394,7 @@ fn assemble_result_change_owner_is_the_matching_entry() {
 }
 
 /// A hard two-ring with no wired deps reports the cycle with an
-/// empty display and no large-count. Pins the count the S0 run
-/// already covers.
+/// empty display and no large-count.
 #[test]
 fn assemble_result_small_cycle_reports_no_large_count() {
     let dir = dir_163("asm-cycle2");
@@ -3631,10 +3441,8 @@ fn assemble_result_small_cycle_reports_no_large_count() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A hard triangle with wired deps reports three elementary
-/// cycles: a large count only above three. Kills the `>` ->
-/// `>=` flip (which reports a large cycle here); pins the
-/// already-caught `==` flip.
+/// A hard triangle with wired deps reports three elementary cycles:
+/// a large count only above three.
 #[test]
 fn assemble_result_triangle_reports_three_cycles_without_large_count() {
     let dir = dir_163("asm-cycle3");
@@ -3692,11 +3500,8 @@ fn assemble_result_triangle_reports_three_cycles_without_large_count() {
     assert_eq!(result.cycle_display.len(), 3);
     let _ = std::fs::remove_dir_all(&dir);
 }
-/// The slot-operator vdb scan reports a consumer bound to a
-/// rebuilt sub-slot: real's `_forced_rebuilds` display pairs. The
-/// scan runs exactly when neither the ignore flag nor a disabled
-/// rebuild gate suppresses it. Kills the match-guard `true`
-/// mutant (which reports no pairs here).
+/// The slot-operator vdb scan reports a consumer bound to a rebuilt
+/// sub-slot (Portage's `_forced_rebuilds` display pairs).
 #[test]
 fn assemble_result_slot_operator_scan_reports_the_rebuilt_consumer() {
     let dir = dir_163("asm-slotop");
@@ -3754,9 +3559,7 @@ fn assemble_result_slot_operator_scan_reports_the_rebuilt_consumer() {
 }
 
 /// The ignore flag and a disabled rebuild gate each suppress the
-/// scan. Kills the match-guard `false` mutant, the `||` -> `&&`
-/// flip, and the `!rebuild_if_new_slot` deletion (each runs the
-/// scan and reports the pair here).
+/// scan.
 #[test]
 fn assemble_result_slot_operator_scan_gates_suppress_the_pairs() {
     for (tag, ignore, rebuild) in [("ignore", true, true), ("disabled", false, false)] {

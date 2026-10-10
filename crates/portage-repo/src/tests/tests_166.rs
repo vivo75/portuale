@@ -1,10 +1,6 @@
-/// Backlog #166 (circular/instance-use solution residue): direct
-/// predicate-result legs in the #161/#162 scratch style. Each test
-/// observes the predicate's own return value -- no end-to-end contract
-/// reproduction -- so every in-body operator flip changes an asserted
-/// outcome. Kept self-contained (own scratch repo/vdb/entry helpers)
-/// so the other Track U branches' blocks rebase mechanically. Do not
-/// edit other items' `mod tests_16x` blocks.
+/// Direct predicate-result legs in the #161/#162 scratch style: each
+/// test observes the predicate's own return value. Do not edit other
+/// items' `mod tests_16x` blocks.
 use crate::*;
 use portage_util::TempDir;
 
@@ -13,9 +9,7 @@ use portage_util::TempDir;
 // both sides -- see `rebuild_if_entries`). ----
 
 /// Only a numeric `-r<n>` suffix strips, and the split is at the
-/// last `-r`: kills the whole-body `""`/`"xyzzy"` rows, both guard
-/// replacements, the `&&` -> `||` widening (empty rev strips) and
-/// the `!` deletion (numeric rev kept).
+/// last `-r`.
 #[test]
 fn strip_revision_166_strips_numeric_revisions_only() {
     assert_eq!(strip_revision("1.0-r1"), "1.0");
@@ -24,19 +18,15 @@ fn strip_revision_166_strips_numeric_revisions_only() {
     // strip to "1.0").
     assert_eq!(strip_revision("1.0-rx"), "1.0-rx");
     assert_eq!(strip_revision("1.0-r1x"), "1.0-r1x");
-    // Empty rev: `!rev.is_empty()` is false while `all(digits)` is
-    // vacuously true, so `&&` -> `||` would strip to "1.0".
+    // Empty rev: `&&` -> `||` would strip to "1.0" (`all` is
+    // vacuously true on the empty rev).
     assert_eq!(strip_revision("1.0-r"), "1.0-r");
     assert_eq!(strip_revision("1.0-r0"), "1.0");
     // Last `-r` wins: only the trailing numeric revision strips.
     assert_eq!(strip_revision("1.0-r1-r2"), "1.0-r1");
 }
 
-// ---- S2: `filter_usepkg_exclude_include` (real
-// `create_depgraph_params.py` `--usepkg-exclude`/`--usepkg-include`
-// handling, applied to the binary pool in `depgraph.py`'s own
-// break-out-of-the-loop rejection -- see the call site's doc
-// comment). ----
+// ---- S2: `filter_usepkg_exclude_include` (Portage usepkg-exclude/include). ----
 
 /// Hand-built binary candidate in the #162 `cand_162` shape (same
 /// fields; `candidate_str` renders `cat/pkg-ver:slot/sub::repo`).
@@ -62,10 +52,7 @@ fn cand_166(version: &str) -> Candidate {
     }
 }
 
-/// Exclude-only: the pinned version drops, the rest stays. Kills
-/// the either-empty gate widening (`&&` -> `||` keeps everything),
-/// the `||` -> `&&` narrowing in `is_included` (drops everything)
-/// and the `!` deletion (keeps the excluded row).
+/// Exclude-only: the pinned version drops, the rest stays.
 #[test]
 fn filter_usepkg_166_exclude_drops_only_the_match() {
     let out = filter_usepkg_exclude_include(
@@ -80,8 +67,7 @@ fn filter_usepkg_166_exclude_drops_only_the_match() {
 }
 
 /// Include-only: a non-matching candidate drops even though nothing
-/// excludes it. Kills the `!excluded && included` -> `||`
-/// widening (keeps the row through `!excluded` alone).
+/// excludes it.
 #[test]
 fn filter_usepkg_166_include_drops_a_non_match() {
     let out = filter_usepkg_exclude_include(
@@ -92,8 +78,7 @@ fn filter_usepkg_166_include_drops_a_non_match() {
         &["dev-libs/bar".to_string()],
     );
     assert!(out.is_empty(), "{out:?}");
-    // Pin: a matching include keeps the row (no mutant target;
-    // documents the `is_empty() ||` arm).
+    // A matching include keeps the row.
     let out = filter_usepkg_exclude_include(
         vec![cand_166("1.0")],
         "dev-libs",
@@ -104,11 +89,7 @@ fn filter_usepkg_166_include_drops_a_non_match() {
     assert_eq!(out.len(), 1);
 }
 
-// ---- S3: `rebuilt_binary_changed` (real `depgraph.py`'s two
-// independent `rebuilt_binary` triggers folded into one: the
-// `--rebuilt-binaries` BUILD_TIME comparison and the
-// no-ebuild-visible rejection of an installed built instance --
-// see the function's own doc comment). ----
+// ---- S3: `rebuilt_binary_changed` (Portage's two rebuilt_binary triggers). ----
 
 /// Fresh unique scratch dir per test (vdb lives under it, so the
 /// per-root aux caches never see a reused path).
@@ -126,9 +107,7 @@ fn install_166(root: &Path, cat: &str, pf: &str, build_time: &str) {
 }
 
 /// Timestamped (`--rebuilt-binaries-timestamp`) comparison: strictly
-/// newer past the floor reports, anything else does not. Kills the
-/// `&&` -> `||` widening (older binary reports through the floor
-/// arm), the three `>` rewrites and the `>=` -> `<` flip.
+/// newer past the floor reports, anything else does not.
 #[test]
 fn rebuilt_binary_166_timestamped_comparison() {
     let root = dir_166("rebuilt-ts");
@@ -143,8 +122,7 @@ fn rebuilt_binary_166_timestamped_comparison() {
             rebuilt_binaries_timestamp: ts,
         })
     };
-    // No binary candidate (or no BUILD_TIME): no verdict either way
-    // (pins both `let-else return false` arms; no mutant targets).
+    // No binary candidate (or no BUILD_TIME): no verdict either way.
     assert!(!changed(None, Some(50)));
     // Strictly newer past the floor: the only `true` shape here.
     assert!(changed(Some(200), Some(50)));
@@ -156,8 +134,7 @@ fn rebuilt_binary_166_timestamped_comparison() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Untimestamped comparison: any difference reports. Kills the `!=`
-/// -> `==` flip in both directions (newer reports, equal does not).
+/// Untimestamped comparison: any difference reports.
 #[test]
 fn rebuilt_binary_166_untimestamped_comparison() {
     let root = dir_166("rebuilt-plain");
@@ -174,8 +151,7 @@ fn rebuilt_binary_166_untimestamped_comparison() {
     };
     assert!(changed(Some(200)));
     assert!(!changed(Some(100)));
-    // No installed BUILD_TIME at all: the second `let-else` fires
-    // (no mutant target; documents the missing-record tolerance).
+    // No installed BUILD_TIME at all: the second `let-else` fires.
     let bare = dir_166("rebuilt-bare");
     std::fs::create_dir_all(bare.join("var/db/pkg/dev-libs/rebuilt-1.0")).unwrap();
     assert!(!rebuilt_binary_changed(RebuiltBinaryChangedArgs {
@@ -190,10 +166,7 @@ fn rebuilt_binary_166_untimestamped_comparison() {
     let _ = std::fs::remove_dir_all(&bare);
 }
 
-// ---- S4: `direct_solve_arg_mode` (real `_want_installed_pkg`,
-// `depgraph.py:7280-7302`, folded to what the direct solve needs:
-// the installed instance is "argued" exactly when the user asked
-// for that cp without `--exclude` and outside selective mode). ----
+// ---- S4: `direct_solve_arg_mode` (Portage `_want_installed_pkg`). ----
 
 /// Minimal visibility config in the #161 `test_config` shape
 /// (amd64-only, no overrides).
@@ -269,8 +242,7 @@ fn arg_top_166() -> HashSet<(String, String)> {
 }
 
 /// The argued shape (installed instance, top-level names the cp, no
-/// exclude, not selective) is the only `true`: kills the
-/// whole-body `-> false` row.
+/// exclude, not selective) is the only `true`.
 #[test]
 fn direct_solve_arg_mode_166_argues_the_requested_installed() {
     let root = dir_166("arg-true");
@@ -296,10 +268,7 @@ fn direct_solve_arg_mode_166_argues_the_requested_installed() {
 }
 
 /// Every missing precondition reports `false`: no installed
-/// instance (kills the `!any(installed)` deletion and the `||` ->
-/// `&&` narrowing, both of which proceed to `true`), selective
-/// mode, an unrequested cp, and a matching `--exclude` (kills the
-/// `!excluded.any` deletion, which reports `true`).
+/// instance, selective mode, an unrequested cp, a matching exclude.
 #[test]
 fn direct_solve_arg_mode_166_rejects_every_non_arg_shape() {
     let root = dir_166("arg-false");
@@ -344,12 +313,7 @@ fn direct_solve_arg_mode_166_rejects_every_non_arg_shape() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// ---- S5: `direct_solve_instance_use` (real
-// `pkg.with_use(self._pkg_use_enabled(pkg))`: a merge instance with
-// an entry reads its resolved display flags, a merge instance
-// without one reads the tree candidate effectively, an installed
-// instance reads its vdb record -- see the function's own doc
-// comment). ----
+// ---- S5: `direct_solve_instance_use` (Portage per-instance USE). ----
 
 /// Arguments of [`write_pkg_166`].
 struct WritePkg166Args<'a> {
@@ -362,10 +326,8 @@ struct WritePkg166Args<'a> {
     required_use: &'a str,
 }
 
-/// One scratch ebuild plus its real md5-cache entry (the md5-cache
-/// validation guard fails otherwise), in the #162
-/// `write_pkg_162` shape extended with `DEPEND`/`REQUIRED_USE`
-/// lines for the circular legs below.
+/// One scratch ebuild plus its md5-cache entry, in the #162
+/// `write_pkg_162` shape extended with `DEPEND`/`REQUIRED_USE` lines.
 fn write_pkg_166(args: WritePkg166Args<'_>) {
     let WritePkg166Args {
         repo,
@@ -526,8 +488,7 @@ static EMPTY_TOP_166: std::sync::LazyLock<HashSet<(String, String)>> =
     std::sync::LazyLock::new(HashSet::new);
 
 /// An installed instance reads vdb `USE` (enabled) over the tree
-/// `IUSE` (declared): kills the whole-body rows and the `==` ->
-/// `!=` version-find flip (which falls back to `enabled.clone()`).
+/// `IUSE` (declared).
 #[test]
 fn direct_solve_instance_use_166_installed_reads_vdb_over_tree_iuse() {
     let root = dir_166("iu-inst");
@@ -548,10 +509,7 @@ fn direct_solve_instance_use_166_installed_reads_vdb_over_tree_iuse() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- S6: `synthesize_surviving_conflict_entries` (files each
-// surviving conflict instance beside its merge-bound siblings, so
-// the final merge list prints conflicting instances adjacently --
-// see the function's own doc comment). ----
+// ---- S6: `synthesize_surviving_conflict_entries` (files instances adjacently). ----
 
 /// One conflict with a single merge-bound (non-installed) instance.
 fn synth_conflict_166() -> SlotConflict {
@@ -573,10 +531,7 @@ fn synth_owners_166() -> HashMap<(String, String), HashSet<(String, String)>> {
 }
 
 /// The surviving instance files directly after its last merge-bound
-/// sibling (not at the end, not before): kills both `+` -> `-`/`*`
-/// index shifts, both `&&` -> `||` widenings (which file behind the
-/// trailing decoy instead) and both `==` -> `!=` flips (which file
-/// behind the other-category same-package row, or at the end).
+/// sibling (not at the end, not before).
 #[test]
 fn synthesize_166_files_the_instance_beside_its_siblings() {
     let root = dir_166("synth-pos");
@@ -632,9 +587,7 @@ fn synthesize_166_files_the_instance_beside_its_siblings() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `new_slot` reports whether the cp is already installed: kills
-/// the `!is_empty()` deletion in both directions (installed reads
-/// `true`, fresh root reads `false`).
+/// `new_slot` reports whether the cp is already installed.
 #[test]
 fn synthesize_166_new_slot_tracks_the_installed_set() {
     let dir = dir_166("synth-slot-repo");
@@ -664,12 +617,7 @@ fn synthesize_166_new_slot_tracks_the_installed_set() {
     let _ = std::fs::remove_dir_all(&installed);
 }
 
-// ---- S7: `circular_dep_solutions` (real `_find_suggestions`,
-// `3rdparty/portage/lib/_emerge/resolver/circular_dependency.py:114`:
-// per-cycle-position USE assignments whose reduced dep drops the
-// pull atom while REQUIRED_USE still holds, minimised and checked
-// against grandparent use-deps). Cycles are handed in directly as
-// cpv strings over scratch repos -- no graph walk needed. ----
+// ---- S7: `circular_dep_solutions` (Portage `_find_suggestions`). ----
 
 /// The suggestion set rendered order-free (the trailing
 /// sort/dedup carries no mutants; the positions, flags and
@@ -693,13 +641,7 @@ fn sols_166(sols: &[CircularSuggestion]) -> std::collections::BTreeSet<String> {
 }
 
 /// Two entangled flags under `|| ( x y )` with both off: only
-/// "enable y" removes the atom while REQUIRED_USE holds. Kills the
-/// cur-construction `<<` -> `>>` (bit 1 never sets, no solution),
-/// the sol-diff `<<` -> `>>` plus both `&&` flips and both `!`
-/// deletions around the diff (all emit `[{}}` or a bloated pair),
-/// the REQUIRED_USE `!empty` deletion and the `!ok` deletion (both
-/// admit the violating empty assignment), and the `>` -> `<`
-/// pair on the MAX_AFFECTING_USE gates (retain/drop to nothing).
+/// "enable y" removes the atom while REQUIRED_USE holds.
 #[test]
 fn circular_166_two_flag_or_requirement_suggests_enabling_y() {
     let dir = dir_166("circ-a");
@@ -730,11 +672,7 @@ fn circular_166_two_flag_or_requirement_suggests_enabling_y() {
 }
 
 /// Ten entangled flags with only `f1` on: each "disable f1, enable
-/// fi" pair is a minimal solution (nine suggestions). Kills the
-/// REQUIRED_USE `!untouchable` deletion (collapses to nothing), the
-/// `<=` -> `>` expansion flip (stays unexpanded, nothing holds),
-/// and the `>` -> `==`/`>=` pair on both MAX_AFFECTING_USE gates
-/// (retain-to-one / give-up, both empty).
+/// fi" pair is a minimal solution (nine suggestions).
 #[test]
 fn circular_166_ten_flags_yield_nine_minimal_pairs() {
     let dir = dir_166("circ-b");
@@ -770,8 +708,7 @@ fn circular_166_ten_flags_yield_nine_minimal_pairs() {
 }
 
 /// No REQUIRED_USE at all with `x` on: "disable x" is the only
-/// solution. Kills the `&&` -> `||` widening on the REQUIRED_USE
-/// gate (skips the only solution).
+/// solution.
 #[test]
 fn circular_166_plain_gated_edge_suggests_disabling_x() {
     let dir = dir_166("circ-c");
@@ -804,11 +741,8 @@ fn circular_166_plain_gated_edge_suggests_disabling_x() {
 }
 
 /// Eleven gated flags with one disabled: the first MAX gate keeps
-/// the ten enabled ones and the second lets exactly ten through.
-/// Every retained flag gates its own occurrence of the pull atom,
-/// so the only solution disables all ten. Kills the second gate's
-/// `==` -> continue and `>=` -> continue (both give up at exactly
-/// ten where real proceeds).
+/// the ten enabled ones and the second lets exactly ten through, so
+/// the only solution disables all ten.
 #[test]
 fn circular_166_eleven_flags_retain_to_ten_and_proceed() {
     let dir = dir_166("circ-e");
@@ -843,8 +777,7 @@ fn circular_166_eleven_flags_retain_to_ten_and_proceed() {
 
 /// Eleven gated flags with two disabled: the retain drops to nine
 /// and the second gate lets fewer-than-ten through, so the only
-/// solution disables all nine. Kills the second gate's `<` ->
-/// continue (which gives up below ten where real proceeds).
+/// solution disables all nine.
 #[test]
 fn circular_166_eleven_flags_retain_to_nine_and_proceed() {
     let dir = dir_166("circ-f");
@@ -879,8 +812,7 @@ fn circular_166_eleven_flags_retain_to_nine_and_proceed() {
 }
 
 /// A three-ring with one gated edge per position: every position
-/// reports its own parent. Kills the parent-index `-` -> `+`
-/// rotation (identical on two-rings, wrong parent on three).
+/// reports its own parent.
 #[test]
 fn circular_166_three_ring_reports_each_parent() {
     let dir = dir_166("circ-d");
@@ -916,10 +848,7 @@ fn circular_166_three_ring_reports_each_parent() {
 }
 
 /// A merge instance with an entry reads its resolved display
-/// flags, and decoys (wrong category, wrong package) never match:
-/// kills the whole-body rows, the category/package `==` -> `!=`
-/// flips (which match the first decoy instead) and the first `&&`
-/// -> `||` widening (which matches the same-category decoy).
+/// flags, and decoys (wrong category, wrong package) never match.
 #[test]
 fn direct_solve_instance_use_166_merge_reads_its_own_entry() {
     let root = dir_166("iu-entry");

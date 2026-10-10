@@ -2,12 +2,8 @@ use super::*;
 
 #[test]
 fn exclude_leaves_an_already_installed_package_alone_even_with_update() {
-    // dev-libs/upgradepkg is installed at 1.0, a newer 2.0 is
-    // visible -- without --exclude, --update offers the upgrade
-    // (see the `upgrade` test below); --exclude matching it
-    // overrides --update entirely, same as real
-    // _want_update_pkg's/_replace_installed_atom's own
-    // excluded-checked-first precedent.
+    // --exclude matching it overrides --update entirely.
+    // Portage: _want_update_pkg / _replace_installed_atom (excluded-checked-first).
     assert_eq!(
         resolve_update_excluded(
             "dev-libs",
@@ -22,9 +18,7 @@ fn exclude_leaves_an_already_installed_package_alone_even_with_update() {
 
 #[test]
 fn exclude_matches_via_a_wildcard_atom_too() {
-    // Real WildcardPackageSet accepts wildcard atoms, not just plain
-    // ones -- ported here as the same two-tier matches_config_entry
-    // package.mask/.unmask already uses.
+    // Portage's WildcardPackageSet accepts wildcard atoms too.
     assert_eq!(
         resolve_update_excluded("dev-libs", "upgradepkg", &["dev-libs/*".to_string()]),
         PretendOutcome::AlreadyInstalled {
@@ -35,8 +29,7 @@ fn exclude_matches_via_a_wildcard_atom_too() {
 
 #[test]
 fn exclude_does_not_affect_a_non_matching_package() {
-    // A --exclude atom for an unrelated package has no effect at
-    // all -- --update still offers the upgrade normally.
+    // An unrelated --exclude atom changes nothing.
     assert_eq!(
         resolve_update_excluded(
             "dev-libs",
@@ -50,16 +43,8 @@ fn exclude_does_not_affect_a_non_matching_package() {
     );
 }
 
-/// instance's own slot (real's `pkg.slot_atom` node identity), not
-/// the cp. `fixtures/var/db/pkg` has `dev-libs/slotdedup-1.0` (slot
-/// 1, no deps) and `slotdedup-2.0` (slot 2, RDEPEND
-/// `dev-libs/slotdedupmarker`) installed;
-/// `fixtures/repo/dev-libs/slotdedupconsumer-1.0` RDEPENDs
-/// `dev-libs/slotdedup:1 dev-libs/slotdedup:2` (slot 1 first). With
-/// the old cp-keyed dedup the slot-2 visit was dropped, so its deps
-/// were never walked and `slotdedupmarker` never entered the graph --
-/// the #74 class B1 shape (`llvm-core/clang:22` shadowing `:23`,
-/// losing myst-parser).
+/// Installed instances dedup by slot, not by cp, so every slot's
+/// own deps are walked.
 #[test]
 fn other_outcomes_dedups_installed_instances_by_slot_not_cp() {
     let entries = graph_deep("dev-libs/slotdedupconsumer", Deep::Unlimited);
@@ -71,17 +56,8 @@ fn other_outcomes_dedups_installed_instances_by_slot_not_cp() {
     );
 }
 
-/// #148: a *surviving* slot conflict keeps both same-slot
-/// instances as merge rows (real's `l0-fx-20260922T192350Z` cell
-/// `-D dev-libs/slotusegroup`: `[ebuild N] slotusetarget-1.0`
-/// *and* `-2.0`, rc 1). `dev-libs/slotusegroup` RDEPENDs
-/// `slotuseplain slotusex slotusey`; slotusey/slotusex pull
-/// `>=slotusetarget-1.0[y]` / `[x]` (2.0 lacks `y` in IUSE and
-/// has `x` default-off) while slotuseplain pulls
-/// `>=slotusetarget-2.0`. Before the fix the walk's
-/// `resolved_slots` conflict arm recorded the `SlotConflict`
-/// and continued past `GraphEntry` creation, so the graph held
-/// one `slotusetarget` entry (1.0) and the merge list one row.
+/// A surviving slot conflict keeps both same-slot instances as
+/// merge rows.
 #[test]
 fn surviving_slot_conflict_graphs_both_same_slot_instances() {
     let entries = graph_deep("dev-libs/slotusegroup", Deep::Unlimited);
@@ -107,12 +83,8 @@ fn surviving_slot_conflict_graphs_both_same_slot_instances() {
 
 #[test]
 fn reinstall_atoms_forces_an_otherwise_already_installed_deep_dep_to_reinstall() {
-    // deeppkg (installed) RDEPENDs deeppkg2 (installed) RDEPENDs
-    // newpkg (New). Under `--deep` alone deeppkg2 resolves to
-    // AlreadyInstalled (the CLI filters it from the merge list).
     // `--reinstall-atoms dev-libs/deeppkg2` rewrites just that one to
-    // a bare Reinstall, exactly like a scoped --emptytree; deeppkg
-    // stays AlreadyInstalled and newpkg stays New.
+    // a bare Reinstall, exactly like a scoped --emptytree.
     let bare = PretendOutcome::Reinstall {
         version: "1.0".to_string(),
         changed_flags: Vec::new(),
@@ -156,11 +128,8 @@ fn reinstall_atoms_forces_an_otherwise_already_installed_deep_dep_to_reinstall()
 
 #[test]
 fn deep_not_requested_never_walks_an_already_installed_packages_own_dependencies() {
-    // dev-libs/deeppkg is already installed and stays AlreadyInstalled
-    // (no --update); its own RDEPEND chain (-> deeppkg2 -> newpkg) is
-    // never read at all without --deep, matching real portage's own
-    // default (deep=0, permanently "too deep" at every depth -- see
-    // `Deep::NotRequested`'s own doc comment).
+    // Without --deep an installed package's own RDEPEND chain is never
+    // read (Portage's deep=0 default; see `Deep::NotRequested`).
     assert_eq!(
         graph_deep("dev-libs/deeppkg", Deep::NotRequested),
         vec![(
@@ -174,9 +143,7 @@ fn deep_not_requested_never_walks_an_already_installed_packages_own_dependencies
 
 #[test]
 fn deep_unlimited_walks_the_whole_already_installed_chain() {
-    // Bare --deep: unlimited depth, so both already-installed steps
-    // (deeppkg -> deeppkg2) get walked, reaching deeppkg2's own
-    // RDEPEND on newpkg (New).
+    // Bare --deep walks the whole installed chain down to newpkg.
     assert_eq!(
         graph_deep("dev-libs/deeppkg", Deep::Unlimited),
         vec![
@@ -204,9 +171,8 @@ fn deep_unlimited_walks_the_whole_already_installed_chain() {
 
 #[test]
 fn deep_bounded_one_walks_exactly_one_level_of_already_installed_packages() {
-    // --deep=1: deeppkg (depth 0) recurses since 0 < 1, discovering
-    // deeppkg2 at depth 1 -- but deeppkg2 itself does NOT recurse
-    // (1 < 1 is false), so newpkg is never reached.
+    // --deep=1 walks exactly one level: deeppkg2 is found but never
+    // recursed, so newpkg is never reached.
     assert_eq!(
         graph_deep("dev-libs/deeppkg", Deep::Bounded(1)),
         vec![
