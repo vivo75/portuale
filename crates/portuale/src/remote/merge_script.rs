@@ -19,6 +19,24 @@ pub(crate) fn eapi_exports_merge_type(eapi: &str) -> bool {
     }
 }
 
+/// Arguments of [`phase_exports`].
+pub(crate) struct PhaseExportsArgs<'a> {
+    pub(crate) ebuild: &'a str,
+    pub(crate) build_dir: &'a str,
+    pub(crate) root: &'a str,
+    pub(crate) image_dir: &'a str,
+    pub(crate) temp_dir: &'a str,
+    pub(crate) work_subdir: &'a str,
+    pub(crate) home_dir: &'a str,
+    pub(crate) files_dir: &'a str,
+    pub(crate) bin_dir: &'a str,
+    pub(crate) tmpdir: &'a str,
+    pub(crate) colormap: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) phase: &'a str,
+    pub(crate) portuale_bin: &'a str,
+}
+
 /// `export` block for the new instance's phase script (`phase_script`;
 /// the replaced instance's prerm/postrm go through the merge driver's own
 /// `run_old_hook`, which deliberately exports no `MERGE_TYPE`: real's
@@ -37,23 +55,23 @@ pub(crate) fn eapi_exports_merge_type(eapi: &str) -> bool {
 /// `/` (no checkout on the client), and `PORTAGE_IPC_DAEMON` is unset
 /// (no IPC daemon, #326 D6 -- this also scrubs a value inherited over
 /// the local transport).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn phase_exports(
-    ebuild: &str,
-    build_dir: &str,
-    root: &str,
-    image_dir: &str,
-    temp_dir: &str,
-    work_subdir: &str,
-    home_dir: &str,
-    files_dir: &str,
-    bin_dir: &str,
-    tmpdir: &str,
-    colormap: &str,
-    staged: &crate::remote_bundle::StagedBundle,
-    phase: &str,
-    portuale_bin: &str,
-) -> String {
+pub(crate) fn phase_exports(args: PhaseExportsArgs<'_>) -> String {
+    let PhaseExportsArgs {
+        ebuild,
+        build_dir,
+        root,
+        image_dir,
+        temp_dir,
+        work_subdir,
+        home_dir,
+        files_dir,
+        bin_dir,
+        tmpdir,
+        colormap,
+        staged,
+        phase,
+        portuale_bin,
+    } = args;
     format!(
         concat!(
             "export EAPI={eapi} CATEGORY={category} PN={pn} PV={pv} PR={pr} PVR={pvr} P={p} PF={pf}\n",
@@ -106,6 +124,17 @@ pub(crate) fn phase_exports(
 
 // --- Client phases (slice 3) -------------------------------------------------
 
+/// Arguments of [`phase_script`].
+pub(crate) struct PhaseScriptArgs<'a> {
+    pub(crate) unit_dir: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) phase: &'a str,
+    pub(crate) root: &'a str,
+    pub(crate) workdir_parent: &'a str,
+    pub(crate) colormap: &'a str,
+    pub(crate) portuale_bin: &'a str,
+}
+
 /// One phase invocation, generated bash: recreate the local
 /// `run_phase_from_saved_env` + `run_one_phase_bash` setup client-side
 /// (fresh `bash bin/ebuild.sh <phase>` process per phase -- the readonly
@@ -117,16 +146,16 @@ pub(crate) fn phase_exports(
 /// `S` is deliberately *not* exported: ebuild.sh defaults it to
 /// `${WORKDIR}/${P}` with `P` from the saved env (exact local behavior).
 /// `PHASE_<phase>=<rc>` on stdout, phase log raw on stdout/stderr.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn phase_script(
-    unit_dir: &str,
-    staged: &crate::remote_bundle::StagedBundle,
-    phase: &str,
-    root: &str,
-    workdir_parent: &str,
-    colormap: &str,
-    portuale_bin: &str,
-) -> String {
+pub(crate) fn phase_script(args: PhaseScriptArgs<'_>) -> String {
+    let PhaseScriptArgs {
+        unit_dir,
+        staged,
+        phase,
+        root,
+        workdir_parent,
+        colormap,
+        portuale_bin,
+    } = args;
     // D keeps local's trailing slash. `UNITBIN` is the shipped runtime
     // dir (`$UNIT/bin`): `phase_exports` resolves `PORTAGE_PYTHON`
     // through it, so no shim falls back to `PATH` (#326 D5/S8.3).
@@ -146,22 +175,22 @@ pub(crate) fn phase_script(
             "exit $rc\n",
         ),
         unit = sh_quote(unit_dir),
-        exports = phase_exports(
-            &format!("{unit_dir}/build-info/{}.ebuild", staged.pf),
-            unit_dir,
+        exports = phase_exports(PhaseExportsArgs {
+            ebuild: &format!("{unit_dir}/build-info/{}.ebuild", staged.pf),
+            build_dir: unit_dir,
             root,
-            &format!("{unit_dir}/image"),
-            &format!("{unit_dir}/temp"),
-            &format!("{unit_dir}/work"),
-            &format!("{unit_dir}/homedir"),
-            &format!("{unit_dir}/files"),
-            &format!("{unit_dir}/bin"),
-            workdir_parent,
+            image_dir: &format!("{unit_dir}/image"),
+            temp_dir: &format!("{unit_dir}/temp"),
+            work_subdir: &format!("{unit_dir}/work"),
+            home_dir: &format!("{unit_dir}/homedir"),
+            files_dir: &format!("{unit_dir}/files"),
+            bin_dir: &format!("{unit_dir}/bin"),
+            tmpdir: workdir_parent,
             colormap,
             staged,
             phase,
-            portuale_bin,
-        ),
+            portuale_bin
+        }),
         phase = phase,
     )
 }
@@ -293,6 +322,18 @@ pub(crate) fn split_server_locale(
     out
 }
 
+/// Arguments of [`postinst_regen_script`].
+pub(crate) struct PostinstRegenScriptArgs<'a> {
+    pub(crate) unit_dir: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) root: &'a str,
+    pub(crate) workdir_parent: &'a str,
+    pub(crate) colormap: &'a str,
+    pub(crate) features: Option<&'a str>,
+    pub(crate) locale: &'a [(String, String)],
+    pub(crate) portuale_bin: &'a str,
+}
+
 /// The merge-time environment-regeneration postinst run (backlog #171):
 /// real `vartree.py:5334` sets `PORTAGE_UPDATE_ENV=<dbpkgdir>/
 /// environment.bz2` around *every* merge's postinst phase, and
@@ -333,17 +374,17 @@ pub(crate) fn split_server_locale(
 /// and the forwarded locale arrives pre-split (see
 /// `split_server_locale`); the unset also kills any `LC_ALL` leaking
 /// in from the sourced build-time environment.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn postinst_regen_script(
-    unit_dir: &str,
-    staged: &crate::remote_bundle::StagedBundle,
-    root: &str,
-    workdir_parent: &str,
-    colormap: &str,
-    features: Option<&str>,
-    locale: &[(String, String)],
-    portuale_bin: &str,
-) -> String {
+pub(crate) fn postinst_regen_script(args: PostinstRegenScriptArgs<'_>) -> String {
+    let PostinstRegenScriptArgs {
+        unit_dir,
+        staged,
+        root,
+        workdir_parent,
+        colormap,
+        features,
+        locale,
+        portuale_bin,
+    } = args;
     let mut extra = String::new();
     if let Some(list) = features.filter(|f| !f.is_empty()) {
         extra.push_str(&format!(
@@ -401,22 +442,22 @@ pub(crate) fn postinst_regen_script(
         ),
         unit = sh_quote(unit_dir),
         pf = staged.pf,
-        exports = phase_exports(
-            &format!("{unit_dir}/build-info/{}.ebuild", staged.pf),
-            unit_dir,
+        exports = phase_exports(PhaseExportsArgs {
+            ebuild: &format!("{unit_dir}/build-info/{}.ebuild", staged.pf),
+            build_dir: unit_dir,
             root,
-            &format!("{unit_dir}/image"),
-            &format!("{unit_dir}/temp"),
-            &format!("{unit_dir}/work"),
-            &format!("{unit_dir}/homedir"),
-            &format!("{unit_dir}/files"),
-            &format!("{unit_dir}/bin"),
-            workdir_parent,
+            image_dir: &format!("{unit_dir}/image"),
+            temp_dir: &format!("{unit_dir}/temp"),
+            work_subdir: &format!("{unit_dir}/work"),
+            home_dir: &format!("{unit_dir}/homedir"),
+            files_dir: &format!("{unit_dir}/files"),
+            bin_dir: &format!("{unit_dir}/bin"),
+            tmpdir: workdir_parent,
             colormap,
             staged,
-            "postinst",
-            portuale_bin,
-        ),
+            phase: "postinst",
+            portuale_bin
+        }),
         extra = extra,
     )
 }
@@ -462,19 +503,31 @@ pub(crate) struct LedgerSpec {
     pub file: String,
     pub line: String,
 }
+/// Arguments of [`merge_script()`].
+pub(crate) struct MergeScriptArgs<'a> {
+    pub(crate) unit_dir: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) root: &'a str,
+    pub(crate) vdb: &'a str,
+    pub(crate) stateless: bool,
+    pub(crate) protect_list: &'a str,
+    pub(crate) mask_list: &'a str,
+    pub(crate) ledger: Option<&'a LedgerSpec>,
+    pub(crate) portuale_bin: &'a str,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn merge_script(
-    unit_dir: &str,
-    staged: &crate::remote_bundle::StagedBundle,
-    root: &str,
-    vdb: &str,
-    stateless: bool,
-    protect_list: &str,
-    mask_list: &str,
-    ledger: Option<&LedgerSpec>,
-    portuale_bin: &str,
-) -> Result<String, String> {
+pub(crate) fn merge_script(args: MergeScriptArgs<'_>) -> Result<String, String> {
+    let MergeScriptArgs {
+        unit_dir,
+        staged,
+        root,
+        vdb,
+        stateless,
+        protect_list,
+        mask_list,
+        ledger,
+        portuale_bin,
+    } = args;
     // A placed client vdb must stay inside the unit's world: reject the
     // degenerate empty path before it becomes `//var/db/pkg`.
     if vdb.trim().is_empty() {

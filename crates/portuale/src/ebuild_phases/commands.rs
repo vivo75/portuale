@@ -2,6 +2,25 @@
 
 use crate::ebuild_phases::*;
 
+/// Arguments of [`run_commands_async`].
+pub(crate) struct RunCommandsAsyncArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) commands: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) distdir: &'a Path,
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) log_file: Option<&'a Path>,
+    /// Caller-supplied env, appended after portuale's own base vars so it
+    /// overrides them -- the `emerge <atom>` build/merge path passes the
+    /// resolved `USE` flags here (`bin/ebuild.sh`'s own `use()` reads the
+    /// `USE` var), which `phase_env_vars` otherwise leaves `""`. `&[]` for
+    /// a standalone `ebuild <file> <phase>` (no resolved graph entry).
+    pub(crate) build_env: &'a [(String, String)],
+}
+
 /// Drives `commands` against `ebuild_path` for real: computes the
 /// environment once, then for each of `commands` in order, runs its own
 /// `phase_prerequisites` chain, each phase in its own fresh embedded
@@ -30,24 +49,19 @@ use crate::ebuild_phases::*;
 /// a real fetched-and-verified distfile still made `unpack` report
 /// `"either does not exist or is not a regular file"` before this was
 /// added).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) async fn run_commands_async(
-    ebuild_path: &Path,
-    commands: &[&str],
-    root: &Path,
-    portage_tmpdir: &Path,
-    distdir: &Path,
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    log_file: Option<&Path>,
-    // Caller-supplied env, appended after portuale's own base vars so it
-    // overrides them -- the `emerge <atom>` build/merge path passes the
-    // resolved `USE` flags here (`bin/ebuild.sh`'s own `use()` reads the
-    // `USE` var), which `phase_env_vars` otherwise leaves `""`. `&[]` for
-    // a standalone `ebuild <file> <phase>` (no resolved graph entry).
-    build_env: &[(String, String)],
-) -> Result<i32, String> {
+pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result<i32, String> {
+    let RunCommandsAsyncArgs {
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        log_file,
+        build_env,
+    } = args;
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
     create_directories(&env)?;
 
@@ -74,16 +88,16 @@ pub(crate) async fn run_commands_async(
         .to_string();
     let features = features_string(&extra_env);
     let a = if chain.contains(&"unpack") {
-        let (a, _aa) = fetch_sources(
-            &env,
+        let (a, _aa) = fetch_sources(FetchSourcesArgs {
+            env: &env,
             root,
             distdir,
             debug,
             config_root,
             shell,
-            &features,
-            &use_flags,
-        )
+            features: &features,
+            use_flags: &use_flags,
+        })
         .await?;
         // Real `config.environ()` exports `A` but pops `AA` for every
         // EAPI >= 4 (`config.py:3331-3333`, `eapi_exports_AA`); the
@@ -113,16 +127,16 @@ pub(crate) async fn run_commands_async(
 
     for &command in commands {
         for phase in phase_prerequisites(command) {
-            let status = run_one_phase(
-                &env,
+            let status = run_one_phase(RunOnePhaseArgs {
+                env: &env,
                 root,
                 phase,
                 debug,
-                &extra_env,
+                extra_env: &extra_env,
                 config_root,
                 shell,
                 log_file,
-            )
+            })
             .await?;
             if status != 0 {
                 return Ok(status);
@@ -156,17 +170,17 @@ pub(crate) async fn run_commands_async(
                 // real's own 807 bytes for `porttest/docs` against the
                 // 372 the compressed image would give.
                 write_post_install_metadata(&env, root, build_env)?;
-                let qa_status = run_misc_functions(
-                    &env,
+                let qa_status = run_misc_functions(RunMiscFunctionsArgs {
+                    env: &env,
                     root,
-                    "install",
-                    "install_qa_check install_symlink_html_docs install_hooks",
-                    &extra_env,
+                    ebuild_phase_value: "install",
+                    dyn_command: "install_qa_check install_symlink_html_docs install_hooks",
+                    extra_env: &extra_env,
                     debug,
                     config_root,
                     shell,
                     log_file,
-                )
+                })
                 .await?;
                 if qa_status != 0 {
                     return Ok(qa_status);
@@ -277,7 +291,7 @@ pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, Strin
         build_env,
     } = args;
     let runtime = shared_runtime()?;
-    runtime.block_on(run_commands_async(
+    runtime.block_on(run_commands_async(RunCommandsAsyncArgs {
         ebuild_path,
         commands,
         root,
@@ -288,7 +302,7 @@ pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, Strin
         shell,
         log_file,
         build_env,
-    ))
+    }))
 }
 
 /// Opens `log_file` for append (creating it and its parent dir),

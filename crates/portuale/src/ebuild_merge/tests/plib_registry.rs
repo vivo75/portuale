@@ -91,23 +91,30 @@ fn plib_registry_is_not_rewritten_when_nothing_is_preserved() {
     let vdb = root.join("var/db/pkg/dev-libs/plain-1.0");
     std::fs::create_dir_all(&vdb).unwrap();
     std::fs::write(vdb.join("COUNTER"), "3\n").unwrap();
-    let preserved = preserve_libs_on_unmerge(
-        &root,
-        "dev-libs",
-        "plain",
-        "plain-1.0",
-        "0",
-        "obj /usr/lib/plain.so abc 1\n",
-        false,
-    )
+    let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
+        root: &root,
+        category: "dev-libs",
+        pn: "plain",
+        pf: "plain-1.0",
+        slot: "0",
+        contents_text: "obj /usr/lib/plain.so abc 1\n",
+        is_replacement: false,
+    })
     .unwrap();
     assert!(preserved.is_empty());
 
     let registry = read_plib_registry(&root);
     unregister_preserved_libs(&root, "dev-libs/plain-1.0", registry, &BTreeMap::new()).unwrap();
 
-    let removed =
-        prune_unused_preserved_libs(&root, false, &|_| false, &[], &BTreeMap::new(), &[]).unwrap();
+    let removed = prune_unused_preserved_libs(PruneUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|_| false,
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    })
+    .unwrap();
     assert!(removed.is_empty());
 
     let after = std::fs::metadata(&reg_path).unwrap();
@@ -175,26 +182,26 @@ fn plib_registry_with_an_unrelated_entry_is_not_rewritten_without_preserve_activ
     let vdb = root.join("var/db/pkg/dev-libs/plain-1.0");
     std::fs::create_dir_all(&vdb).unwrap();
     std::fs::write(vdb.join("COUNTER"), "3\n").unwrap();
-    let preserved = preserve_libs_on_unmerge(
-        &root,
-        "dev-libs",
-        "plain",
-        "plain-1.0",
-        "0",
-        "obj /usr/lib/plain.so abc 1\n",
-        false,
-    )
+    let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
+        root: &root,
+        category: "dev-libs",
+        pn: "plain",
+        pf: "plain-1.0",
+        slot: "0",
+        contents_text: "obj /usr/lib/plain.so abc 1\n",
+        is_replacement: false,
+    })
     .unwrap();
     assert!(preserved.is_empty());
     let being: BTreeSet<String> = ["/usr/lib/plain.so".to_string()].into_iter().collect();
-    let removed = prune_unused_preserved_libs(
-        &root,
-        true,
-        &|p| being.contains(p),
-        &[],
-        &BTreeMap::new(),
-        &[],
-    )
+    let removed = prune_unused_preserved_libs(PruneUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: true,
+        being_unmerged: &|p| being.contains(p),
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    })
     .unwrap();
     assert!(
         removed.is_empty(),
@@ -509,8 +516,16 @@ fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
     )
     .expect("seeding the registry succeeds");
 
-    let preserved =
-        preserve_libs_on_unmerge(&root, "dev-libs", "foo", "foo-1.0", "0", "", false).unwrap();
+    let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
+        root: &root,
+        category: "dev-libs",
+        pn: "foo",
+        pf: "foo-1.0",
+        slot: "0",
+        contents_text: "",
+        is_replacement: false,
+    })
+    .unwrap();
     assert!(preserved.is_empty());
     assert_eq!(
         std::fs::read_to_string(plib_registry_path(&root)).unwrap(),
@@ -520,8 +535,16 @@ fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
 
     // No entry at all: nothing to unregister, nothing written.
     let tmp2 = tempdir();
-    let preserved =
-        preserve_libs_on_unmerge(&tmp2, "dev-libs", "foo", "foo-1.0", "0", "", false).unwrap();
+    let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
+        root: &tmp2,
+        category: "dev-libs",
+        pn: "foo",
+        pf: "foo-1.0",
+        slot: "0",
+        contents_text: "",
+        is_replacement: false,
+    })
+    .unwrap();
     assert!(preserved.is_empty());
     assert!(!plib_registry_path(&tmp2).exists());
 }
@@ -547,17 +570,17 @@ fn replacement_unmerge_keeps_a_preserved_lib_needed_by_the_replacing_consumer() 
     )
     .unwrap();
 
-    crate::ebuild_unmerge::unmerge_pkgfiles(
-        &root,
-        "dev-libs",
-        "oldapp",
-        "oldapp-1.0",
-        &["newapp-1.0".to_string()],
-        &crate::ebuild_unmerge::UnmergeOptions::default(),
-        true,
-        &BTreeMap::new(),
-        &[],
-    )
+    crate::ebuild_unmerge::unmerge_pkgfiles(crate::ebuild_unmerge::UnmergePkgfilesArgs {
+        root: &root,
+        category: "dev-libs",
+        pn: "oldapp",
+        pf: "oldapp-1.0",
+        also_keep: &["newapp-1.0".to_string()],
+        options: &crate::ebuild_unmerge::UnmergeOptions::default(),
+        is_replacement: true,
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    })
     .expect("replacement unmerge succeeds");
 
     assert!(

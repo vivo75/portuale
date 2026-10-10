@@ -636,14 +636,14 @@ pub(crate) fn candidate_iuse_and_use(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
-    let use_flags = effective_use_flags(
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,
-        metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-        &candidate.keywords,
-        &candidate_str,
+        iuse: metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-    );
+    });
     Some((iuse, use_flags))
 }
 

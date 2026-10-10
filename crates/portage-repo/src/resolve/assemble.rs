@@ -26,20 +26,20 @@ pub(crate) fn assemble_result(
             // #268: raw request atoms for the `#252` gate (see above).
             let top_atoms: HashSet<String> =
                 ctx.top_level.iter().map(|s| (*s).to_string()).collect();
-            slot_operator_rebuild_scan(
-                ctx.root,
-                &ctx.repos,
-                &pass.entries,
-                &ctx.slot_op_reachable,
-                &params.slot_operator_replace_installed,
-                &params.slot_operator_undone,
-                ctx.with_bdeps,
-                ctx.update,
-                &ctx.top_level_cps,
-                &top_atoms,
-                ctx.excluded,
+            slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+                root: ctx.root,
+                repos: &ctx.repos,
+                entries: &pass.entries,
+                reachable: &ctx.slot_op_reachable,
+                already: &params.slot_operator_replace_installed,
+                undone: &params.slot_operator_undone,
+                with_bdeps: ctx.with_bdeps,
+                update: ctx.update,
+                top_level_cps: &ctx.top_level_cps,
+                top_level_atoms: &top_atoms,
+                excluded: ctx.excluded,
                 config,
-            )
+            })
             .1
         }
     };
@@ -89,16 +89,16 @@ pub(crate) fn assemble_result(
     // `topological_merge_order`. The insertion rank travels alongside
     // for the cycle reporter below (backlog #278: real `get_cycles`
     // iterates digraph insertion order).
-    let (sorted_entries, insertion_rank) = topological_merge_order(
-        pass.entries,
-        ctx.atoms,
+    let (sorted_entries, insertion_rank) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: pass.entries,
+        top_level_atoms: ctx.atoms,
         config,
-        ctx.root,
-        ctx.implicit_system_deps,
-        &ctx.repos,
-        ctx.dynamic_deps,
-        &params.circular_dependency,
-    );
+        root: ctx.root,
+        implicit_system_deps: ctx.implicit_system_deps,
+        repos: &ctx.repos,
+        dynamic_deps: ctx.dynamic_deps,
+        circular: &params.circular_dependency,
+    });
     pass.entries = sorted_entries;
 
     // Real depgraph.py:5706-5717 -- see GraphResult::
@@ -323,14 +323,14 @@ pub(crate) fn assemble_result(
     // which is exactly the residual record -- it carries the dropped
     // consumer pins on top of the same hard pullers -- so letting it
     // replace the walker's record keeps the union and the single block.
-    for sc in build_residual_slot_conflicts(
-        &ctx.repos,
+    for sc in build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &ctx.repos,
         config,
-        ctx.root,
-        &pass.entries,
-        &pass.slot_pullers,
-        &params.dropped_pins,
-    ) {
+        root: ctx.root,
+        entries: &pass.entries,
+        slot_pullers: &pass.slot_pullers,
+        dropped: &params.dropped_pins,
+    }) {
         record_slot_conflict(&mut pass.slot_conflicts, sc);
     }
 

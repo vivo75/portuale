@@ -12,14 +12,14 @@ fn prune_keeps_a_preserved_lib_whose_only_consumer_is_old_owned_in_replacement_m
     let tmp = tempdir();
     let (root, being) = seed_old_owned_consumer_root(&tmp);
 
-    let unneeded = find_unused_preserved_libs(
-        &root,
-        true,
-        &|p| being.contains(p),
-        &[],
-        &BTreeMap::new(),
-        &[],
-    );
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: true,
+        being_unmerged: &|p| being.contains(p),
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    });
     assert_eq!(
         unneeded,
         BTreeMap::from([(
@@ -29,14 +29,14 @@ fn prune_keeps_a_preserved_lib_whose_only_consumer_is_old_owned_in_replacement_m
         "standalone mode eliminates the about-to-be-unmerged consumer"
     );
 
-    let unneeded = find_unused_preserved_libs(
-        &root,
-        false,
-        &|p| being.contains(p),
-        &[],
-        &BTreeMap::new(),
-        &[],
-    );
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|p| being.contains(p),
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    });
     assert!(
         unneeded.is_empty(),
         "replacement mode keeps the old-owned consumer, so the lib is needed: {unneeded:?}"
@@ -93,14 +93,14 @@ fn prune_excludes_the_replaced_instance_linkage_data() {
     )
     .expect("seeding the registry succeeds");
 
-    let unneeded = find_unused_preserved_libs(
-        &root,
-        false,
-        &|_| false,
-        &["dev-libs/oldapp-1.0".to_string()],
-        &BTreeMap::new(),
-        &[],
-    );
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|_| false,
+        exclude_cpvs: &["dev-libs/oldapp-1.0".to_string()],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    });
     assert_eq!(
         unneeded,
         BTreeMap::from([(
@@ -110,7 +110,14 @@ fn prune_excludes_the_replaced_instance_linkage_data() {
         "with the replaced instance excluded nothing consumes the lib"
     );
 
-    let unneeded = find_unused_preserved_libs(&root, false, &|_| false, &[], &BTreeMap::new(), &[]);
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|_| false,
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    });
     assert!(
         unneeded.is_empty(),
         "without the exclusion the stale consumer keeps it (the corruption real excludes): {unneeded:?}"
@@ -165,7 +172,14 @@ fn prune_sees_just_preserved_files_missing_from_every_needed_elf2() {
     )
     .expect("seeding the registry succeeds");
 
-    let unneeded = find_unused_preserved_libs(&root, false, &|_| false, &[], &BTreeMap::new(), &[]);
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|_| false,
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    });
     assert_eq!(
         unneeded,
         BTreeMap::from([(
@@ -179,7 +193,14 @@ fn prune_sees_just_preserved_files_missing_from_every_needed_elf2() {
         "dev-libs/newapp-2.0".to_string(),
         vec!["/usr/lib/libB.so.1.0.0".to_string()],
     )]);
-    let unneeded = find_unused_preserved_libs(&root, false, &|_| false, &[], &feed, &[]);
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|_| false,
+        exclude_cpvs: &[],
+        replacement_preserved: &feed,
+        replacement_needed: &[],
+    });
     assert!(
         unneeded.is_empty(),
         "the just-preserved consumer keeps the lib alive: {unneeded:?}"

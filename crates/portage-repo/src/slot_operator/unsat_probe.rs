@@ -2,6 +2,20 @@
 
 use crate::*;
 
+/// Arguments of [`slot_operator_unsatisfied_probe`].
+#[cfg(test)]
+pub(crate) struct SlotOperatorUnsatisfiedProbeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) slot_want: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) pullers: &'a SlotPullers,
+    pub(crate) masked: &'a HashMap<(String, String), Vec<MaskEntry>>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) excluded: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Backlog #215 (v2 `#24f`): real `_slot_operator_unsatisfied_probe`
 /// (`_emerge/depgraph.py:2817`) as a post-pass trigger. Real fires it
 /// in-walk (`:3447-3458`) when a built slot-operator dep (`dep.atom`
@@ -67,21 +81,31 @@ use crate::*;
 ///   available parent version the two coincide; a newer-version
 ///   replacement alongside the same-version reinstall is a filed cut.
 #[cfg(test)]
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn slot_operator_unsatisfied_probe(
-    root: &Path,
-    repos: &[RepoConfig],
-    entries: &[GraphEntry],
-    slot_want: &HashMap<(String, String), Vec<String>>,
-    pullers: &SlotPullers,
-    masked: &HashMap<(String, String), Vec<MaskEntry>>,
-    with_bdeps: bool,
-    excluded: &[String],
-    config: &portage_profile::Config,
+    args: SlotOperatorUnsatisfiedProbeArgs<'_>,
 ) -> BTreeSet<(String, String)> {
-    slot_operator_unsatisfied_probe_full(
-        root, repos, entries, slot_want, pullers, masked, with_bdeps, excluded, config,
-    )
+    let SlotOperatorUnsatisfiedProbeArgs {
+        root,
+        repos,
+        entries,
+        slot_want,
+        pullers,
+        masked,
+        with_bdeps,
+        excluded,
+        config,
+    } = args;
+    slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
+        root,
+        repos,
+        entries,
+        slot_want,
+        pullers,
+        masked,
+        with_bdeps,
+        excluded,
+        config,
+    })
     .0
 }
 
@@ -93,6 +117,19 @@ pub(crate) type SlotOpUnsatProbe = (
     BTreeSet<(String, String, String)>,
 );
 
+/// Arguments of [`slot_operator_unsatisfied_probe_full`].
+pub(crate) struct SlotOperatorUnsatisfiedProbeFullArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) slot_want: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) pullers: &'a SlotPullers,
+    pub(crate) masked: &'a HashMap<(String, String), Vec<MaskEntry>>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) excluded: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// [`slot_operator_unsatisfied_probe`] plus #257's binary arm: real
 /// `_slot_operator_unsatisfied_backtrack` (`_emerge/depgraph.py:2881-2915`)
 /// masks a *non-installed* built parent (`slot_operator_mask_built`,
@@ -103,18 +140,20 @@ pub(crate) type SlotOpUnsatProbe = (
 /// `[binary]`-marked `SlotOperatorBuilt` negative #212 uses. The firing
 /// gate is real's `dep.parent not in _runtime_pkg_mask` (`:3447-3448`)
 /// for that binary instance.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn slot_operator_unsatisfied_probe_full(
-    root: &Path,
-    repos: &[RepoConfig],
-    entries: &[GraphEntry],
-    slot_want: &HashMap<(String, String), Vec<String>>,
-    pullers: &SlotPullers,
-    masked: &HashMap<(String, String), Vec<MaskEntry>>,
-    with_bdeps: bool,
-    excluded: &[String],
-    config: &portage_profile::Config,
+    args: SlotOperatorUnsatisfiedProbeFullArgs<'_>,
 ) -> SlotOpUnsatProbe {
+    let SlotOperatorUnsatisfiedProbeFullArgs {
+        root,
+        repos,
+        entries,
+        slot_want,
+        pullers,
+        masked,
+        with_bdeps,
+        excluded,
+        config,
+    } = args;
     const RUNTIME_KEYS: [&str; 3] = ["RDEPEND", "IDEPEND", "PDEPEND"];
     const BUILD_KEYS: [&str; 2] = ["DEPEND", "BDEPEND"];
     // Real `_iter_similar_available` (`:3036-3040`) and the firing gate

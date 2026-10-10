@@ -37,15 +37,15 @@ fn direct_solve_removes_the_unforced_merge_and_reports_the_skip() {
         ),
     ]);
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -117,15 +117,15 @@ fn direct_solve_reports_an_argument_parent_with_the_cli_text() {
         ),
     ]);
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -172,15 +172,15 @@ fn direct_solve_keeps_an_unsolvable_conflict_untouched() {
     let top: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "slotconflictunsolvable".to_string())]);
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert!(out.removed.is_empty());
     assert!(out.skipped.is_empty());
     assert_eq!(out.surviving.len(), 1);
@@ -219,9 +219,15 @@ fn direct_solve_skips_slot_operator_rebuild_conflicts() {
     let top: HashSet<(String, String)> = HashSet::new();
     let replace: BTreeSet<(String, String)> =
         BTreeSet::from([("dev-libs".to_string(), "slotconflicttarget".to_string())]);
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts, &entries, &top, &replace, &root, &repos, &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert!(out.removed.is_empty());
     assert!(out.skipped.is_empty());
     assert_eq!(out.surviving.len(), 1);
@@ -278,15 +284,15 @@ fn direct_solve_arg_parents_protect_the_triangle() {
         ("dev-libs".to_string(), "othermod".to_string()),
     ]);
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert!(out.removed.is_empty());
     assert!(out.skipped.is_empty());
     assert_eq!(out.surviving.len(), 1);
@@ -322,15 +328,15 @@ fn direct_solve_orders_merge_instances_before_installed() {
     let entries = s2_entries(vec!["1.0", "2.0"]);
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -369,15 +375,15 @@ fn direct_solve_tuple_order_follows_walk_order() {
     let entries = s2_entries(vec!["1.0", "2.0"]);
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -407,15 +413,15 @@ fn direct_solve_ignores_parents_outside_the_conflict() {
     });
     let conflicts = [conflict];
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     // The S0 verdict stands: the outside parent changes no edge that
     // matters.
     assert_eq!(
@@ -448,17 +454,17 @@ fn direct_solve_solves_past_a_non_built_parent() {
     let conflicts = [conflict];
     let excluded = vec!["dev-libs/paired".to_string()];
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(ds_input_161(
-        &conflicts,
-        &entries,
-        &top,
-        &excluded,
-        false,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(ds_input_161(DsInput161Args {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        excluded: &excluded,
+        selective: false,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     // A slot-only atom is not a built op: the gate stays shut and
     // the S0 verdict stands.
     assert_eq!(
@@ -494,17 +500,17 @@ fn direct_solve_solves_past_an_uninstalled_parent() {
     let conflicts = [conflict];
     let excluded = vec!["dev-libs/paired".to_string()];
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(ds_input_161(
-        &conflicts,
-        &entries,
-        &top,
-        &excluded,
-        false,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(ds_input_161(DsInput161Args {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        excluded: &excluded,
+        selective: false,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -535,17 +541,17 @@ fn direct_solve_exclude_alone_arms_the_rebuild_gate() {
     let conflicts = [conflict];
     let excluded = vec!["dev-libs/paired".to_string()];
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(ds_input_161(
-        &conflicts,
-        &entries,
-        &top,
-        &excluded,
-        false,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(ds_input_161(DsInput161Args {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        excluded: &excluded,
+        selective: false,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     // The installed `paired-1.0` parent with a built `=` atom is
     // `--exclude`d: real's rebuild-path residue, not remove-path
     // material -- the conflict survives.
@@ -566,9 +572,15 @@ fn direct_solve_replace_set_holds_the_conflict() {
     let top: HashSet<(String, String)> = HashSet::new();
     let replace: BTreeSet<(String, String)> =
         BTreeSet::from([("dev-libs".to_string(), "slotconflicttarget".to_string())]);
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts, &entries, &top, &replace, &root, &repos, &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert!(out.removed.is_empty());
     assert_eq!(out.surviving.len(), 1);
 }
@@ -592,15 +604,15 @@ fn direct_solve_lone_bare_parent_solves_through_the_tuple() {
     let entries = s2_entries(vec!["2.0", "1.0"]);
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -682,15 +694,15 @@ fn direct_solve_ambiguous_conflict_prefers_the_walked_instance() {
     }];
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     // 2 wins the tuple; 3.0 drops against the installed keeper.
     // The 1-vs-2 residual survives for the mask trial.
     assert_eq!(
@@ -728,15 +740,15 @@ fn direct_solve_lone_outside_parent_solves_through_the_tuple() {
     let entries = s2_entries(vec!["2.0", "1.0"]);
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -760,15 +772,15 @@ fn direct_solve_argless_forcing_drops_the_unforced_merge() {
     let (conflicts, entries, _) = ds_s0_161();
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -804,15 +816,15 @@ fn direct_solve_unresolvable_parent_falls_back_to_the_sink() {
     let entries = s2_entries(vec!["2.0", "1.0"]);
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -848,15 +860,15 @@ fn direct_solve_mismatched_parent_installedness_falls_back_to_the_sink() {
     let entries = s2_entries(vec!["2.0", "1.0"]);
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     assert_eq!(
         out.removed,
         vec![(
@@ -892,15 +904,15 @@ fn direct_solve_unreached_parent_edge_deletes_quietly() {
     let entries = s2_entries(vec!["2.0", "1.0"]);
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
-    let out = direct_solve_slot_conflicts(s2_input(
-        &conflicts,
-        &entries,
-        &top,
-        &empty_replace,
-        &root,
-        &repos,
-        &config,
-    ));
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
     // Both instances drop with no keeper: the only edge hangs off
     // an instance node the walk never reaches.
     assert_eq!(

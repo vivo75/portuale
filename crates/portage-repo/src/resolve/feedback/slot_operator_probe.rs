@@ -24,17 +24,18 @@ pub(crate) fn step_slot_operator_probe(
     // ever grows the set, so the search terminates; a pass with no
     // replacement stays a dead end below.
     if has_nvc && ctx.backtrack_max > 0 {
-        let (fresh, binary_masks) = slot_operator_unsatisfied_probe_full(
-            ctx.root,
-            &ctx.repos,
-            &pass.entries,
-            &pass.slot_want,
-            &pass.slot_pullers,
-            &grown.runtime_pkg_mask,
-            ctx.with_bdeps,
-            ctx.excluded,
-            config,
-        );
+        let (fresh, binary_masks) =
+            slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
+                root: ctx.root,
+                repos: &ctx.repos,
+                entries: &pass.entries,
+                slot_want: &pass.slot_want,
+                pullers: &pass.slot_pullers,
+                masked: &grown.runtime_pkg_mask,
+                with_bdeps: ctx.with_bdeps,
+                excluded: ctx.excluded,
+                config,
+            });
         // #257: a non-installed built (binary) parent is masked like
         // #212's stale binaries (`[binary]`-marked `SlotOperatorBuilt`
         // negative, `runtime_pkg_mask` bucket), real `:2896-2903`.

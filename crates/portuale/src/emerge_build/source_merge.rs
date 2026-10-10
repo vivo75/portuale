@@ -2,6 +2,32 @@
 
 use crate::emerge_build::*;
 
+/// Arguments of [`run_source_merge`].
+pub struct RunSourceMergeArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub repos: &'a [RepoConfig],
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub options: &'a ebuild_merge::MergeOptions,
+    pub keep_going: bool,
+    pub buildpkg: Option<&'a ebuild_package::PackageOptions>,
+    pub buildpkg_exclude: &'a [String],
+    pub jobs: usize,
+    pub load_average: Option<f64>,
+    /// Real `Scheduler._background_mode`: redirect each package's build
+    /// output to `${T}/build.log` instead of the terminal. Always true for
+    /// `jobs` >1 (a `-j` run must not interleave); otherwise driven by
+    /// `--quiet-build=y` / `-q`. When set, the single-job path runs the
+    /// same captured-build-then-serialized-merge split the scheduler uses.
+    pub capture_log: bool,
+    /// Backlog #197: the scheduler-display mode (background + Jobs
+    /// visibility), computed once by the caller from the CLI flags and
+    /// the mergelist length. A serial captured run (`capture_log`) is
+    /// always background (see `scheduler_status_mode`); the mode only
+    /// carries the display half, never the capture decision itself.
+    pub mode: StatusMode,
+}
+
 /// Real `emerge <atom>` with no `--pretend` and no `--buildpkgonly`/
 /// `--getbinpkgonly`: portuale's first source build-and-merge path for
 /// `emerge` itself. Iterates the resolved entries (already in real
@@ -24,31 +50,21 @@ use crate::emerge_build::*;
 /// mixed path (`emerge_getbinpkg::run_merge_plan`). Failure handling
 /// (stop at the first, or `--keep-going` -> drop the failed package's
 /// dependents and continue) is `run_merge_loop`'s.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn run_source_merge(
-    entries: &[GraphEntry],
-    repos: &[RepoConfig],
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &ebuild_merge::MergeOptions,
-    keep_going: bool,
-    buildpkg: Option<&ebuild_package::PackageOptions>,
-    buildpkg_exclude: &[String],
-    jobs: usize,
-    load_average: Option<f64>,
-    // Real `Scheduler._background_mode`: redirect each package's build
-    // output to `${T}/build.log` instead of the terminal. Always true for
-    // `jobs` >1 (a `-j` run must not interleave); otherwise driven by
-    // `--quiet-build=y` / `-q`. When set, the single-job path runs the
-    // same captured-build-then-serialized-merge split the scheduler uses.
-    capture_log: bool,
-    // Backlog #197: the scheduler-display mode (background + Jobs
-    // visibility), computed once by the caller from the CLI flags and
-    // the mergelist length. A serial captured run (`capture_log`) is
-    // always background (see `scheduler_status_mode`); the mode only
-    // carries the display half, never the capture decision itself.
-    mode: StatusMode,
-) -> Result<(), String> {
+pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
+    let RunSourceMergeArgs {
+        entries,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        keep_going,
+        buildpkg,
+        buildpkg_exclude,
+        jobs,
+        load_average,
+        capture_log,
+        mode,
+    } = args;
     // Backlog #197: real `Scheduler` owns one `JobStatusDisplay` per
     // merge run (`maxval` is the build-bound count here -- see
     // `StatusDisplay`'s own doc comment for the installed-noop
@@ -261,22 +277,34 @@ where
     Err(msg)
 }
 
+/// Arguments of [`merge_one_source_entry`].
+pub(crate) struct MergeOneSourceEntryArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a ebuild_merge::MergeOptions,
+    pub(crate) buildpkg: Option<&'a ebuild_package::PackageOptions>,
+    pub(crate) progress: mrg_director::MergeProgress,
+    pub(crate) display: &'a StatusDisplay,
+}
+
 /// One entry of `run_source_merge`'s own loop -- also the `Source`-entry
 /// arm of `emerge_getbinpkg::run_merge_plan` (`emerge --getbinpkg`'s
 /// mixed source+binary merge). `AlreadyInstalled` is a silent no-op; a
 /// `Binary` entry is a hard error here (the mixed dispatcher routes
 /// those to `merge_binpkg` before ever calling this).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn merge_one_source_entry(
-    entry: &GraphEntry,
-    repos: &[RepoConfig],
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &ebuild_merge::MergeOptions,
-    buildpkg: Option<&ebuild_package::PackageOptions>,
-    progress: mrg_director::MergeProgress,
-    display: &StatusDisplay,
-) -> Result<(), String> {
+pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Result<(), String> {
+    let MergeOneSourceEntryArgs {
+        entry,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        buildpkg,
+        progress,
+        display,
+    } = args;
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
         // #72 B3: a blocker-removal task is not a merge. Executing it is

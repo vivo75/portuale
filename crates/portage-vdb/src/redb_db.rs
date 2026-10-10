@@ -634,6 +634,15 @@ struct Rd {
     chunk: ReadOnlyTable<(u64, &'static str, u32), &'static [u8]>,
 }
 
+/// Arguments of [`Rd::chunks`].
+struct ChunksArgs<'a> {
+    id: u64,
+    name: &'a str,
+    len: u64,
+    first: u32,
+    last: u32,
+}
+
 impl Rd {
     fn new(txn: &ReadTransaction) -> R<Self> {
         Ok(Rd {
@@ -710,8 +719,14 @@ impl Rd {
 
     /// Chunks `first..=last` of a file of `len` bytes, concatenated; every
     /// one must exist and have its exact size.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn chunks(&self, id: u64, name: &str, len: u64, first: u32, last: u32) -> R<Vec<u8>> {
+    fn chunks(&self, args: ChunksArgs<'_>) -> R<Vec<u8>> {
+        let ChunksArgs {
+            id,
+            name,
+            len,
+            first,
+            last,
+        } = args;
         let mut out = Vec::new();
         let mut next = first;
         for item in self.chunk.range((id, name, first)..=(id, name, last))? {
@@ -745,7 +760,14 @@ impl Rd {
             return Ok(Some(Vec::new()));
         }
         let last = chunk_count(rec.len) - 1;
-        self.chunks(id, name, rec.len, 0, last).map(Some)
+        self.chunks(ChunksArgs {
+            id,
+            name,
+            len: rec.len,
+            first: 0,
+            last,
+        })
+        .map(Some)
     }
 
     /// Up to `n` bytes from `off`: only the chunks that range touches.
@@ -759,7 +781,13 @@ impl Rd {
         }
         let first = (off / CHUNK as u64) as u32;
         let last = ((end - 1) / CHUNK as u64) as u32;
-        let data = self.chunks(id, name, rec.len, first, last)?;
+        let data = self.chunks(ChunksArgs {
+            id,
+            name,
+            len: rec.len,
+            first,
+            last,
+        })?;
         let skip = (off - u64::from(first) * CHUNK as u64) as usize;
         Ok(Some(data[skip..skip + (end - off) as usize].to_vec()))
     }

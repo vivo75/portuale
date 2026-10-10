@@ -566,8 +566,8 @@ fn s2_entries(versions: Vec<&str>) -> Vec<GraphEntry> {
         .collect()
 }
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn s2_input<'a>(
+/// Arguments of [`s2_input`].
+struct S2InputArgs<'a> {
     conflicts: &'a [SlotConflict],
     entries: &'a [GraphEntry],
     top_level: &'a HashSet<(String, String)>,
@@ -575,7 +575,18 @@ fn s2_input<'a>(
     root: &'a Path,
     repos: &'a [RepoConfig],
     config: &'a portage_profile::Config,
-) -> DirectSolveInput<'a> {
+}
+
+fn s2_input<'a>(args: S2InputArgs<'a>) -> DirectSolveInput<'a> {
+    let S2InputArgs {
+        conflicts,
+        entries,
+        top_level,
+        replace_cps,
+        root,
+        repos,
+        config,
+    } = args;
     DirectSolveInput {
         conflicts,
         entries,
@@ -777,18 +788,27 @@ fn graph_deep_reinstall_atoms(
     .collect()
 }
 
-/// `resolve_pretend_graph` for one atom with the `--rebuild-if-*`
-/// flags set (and `--update` on, so `rebuildtrigger` upgrades).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-fn graph_rebuild_if(
-    atom_str: &str,
+/// Arguments of [`graph_rebuild_if`].
+struct GraphRebuildIfArgs<'a> {
+    atom_str: &'a str,
     unbuilt: bool,
     new_rev: bool,
     new_ver: bool,
-    rebuild_exclude: &[&str],
-    rebuild_ignore: &[&str],
-) -> Vec<(String, PretendOutcome)> {
+    rebuild_exclude: &'a [&'a str],
+    rebuild_ignore: &'a [&'a str],
+}
+
+/// `resolve_pretend_graph` for one atom with the `--rebuild-if-*`
+/// flags set (and `--update` on, so `rebuildtrigger` upgrades).
+fn graph_rebuild_if(args: GraphRebuildIfArgs<'_>) -> Vec<(String, PretendOutcome)> {
+    let GraphRebuildIfArgs {
+        atom_str,
+        unbuilt,
+        new_rev,
+        new_ver,
+        rebuild_exclude,
+        rebuild_ignore,
+    } = args;
     let root = fixtures_root();
     let ex: Vec<String> = rebuild_exclude.iter().map(|s| s.to_string()).collect();
     let ig: Vec<String> = rebuild_ignore.iter().map(|s| s.to_string()).collect();
@@ -1058,16 +1078,26 @@ fn graph_result_empty(atom_str: &str) -> GraphResult {
     graph_result_with(atom_str, |r| r.empty = true)
 }
 
+/// Arguments of [`assert_one_conflict`].
+struct AssertOneConflictArgs<'a> {
+    result: &'a GraphResult,
+    category: &'a str,
+    package: &'a str,
+    slot: &'a str,
+    resolved_version: &'a str,
+    conflicting_atom: &'a str,
+}
+
 #[track_caller]
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn assert_one_conflict(
-    result: &GraphResult,
-    category: &str,
-    package: &str,
-    slot: &str,
-    resolved_version: &str,
-    conflicting_atom: &str,
-) {
+fn assert_one_conflict(args: AssertOneConflictArgs<'_>) {
+    let AssertOneConflictArgs {
+        result,
+        category,
+        package,
+        slot,
+        resolved_version,
+        conflicting_atom,
+    } = args;
     assert_eq!(
         result.slot_conflicts.len(),
         1,
@@ -1291,7 +1321,6 @@ fn assert_aub0_fails_on_a(result: &GraphResult, order: &str) {
 /// `abiforce-1` (`>=abiprov-2`). `with_consumer` controls whether
 /// the consumer's same-version ebuild (the reinstall real forces)
 /// is visible in the tree.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig>) {
     use md5::Digest as _;
     use std::fmt::Write as _;
@@ -1615,11 +1644,8 @@ fn souprov_conflict_161() -> SlotConflict {
     }
 }
 
-/// Backlog #161 S5: `direct_solve` legs over the
-/// `slotconflict*` fixtures. `s2_input` fixes `excluded` to empty;
-/// legs needing an `--exclude` entry build the input literally.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn ds_input_161<'a>(
+/// Arguments of [`ds_input_161`].
+struct DsInput161Args<'a> {
     conflicts: &'a [SlotConflict],
     entries: &'a [GraphEntry],
     top_level: &'a HashSet<(String, String)>,
@@ -1629,7 +1655,23 @@ fn ds_input_161<'a>(
     root: &'a Path,
     repos: &'a [RepoConfig],
     config: &'a portage_profile::Config,
-) -> DirectSolveInput<'a> {
+}
+
+/// Backlog #161 S5: `direct_solve` legs over the
+/// `slotconflict*` fixtures. `s2_input` fixes `excluded` to empty;
+/// legs needing an `--exclude` entry build the input literally.
+fn ds_input_161<'a>(args: DsInput161Args<'a>) -> DirectSolveInput<'a> {
+    let DsInput161Args {
+        conflicts,
+        entries,
+        top_level,
+        excluded,
+        selective,
+        replace_cps,
+        root,
+        repos,
+        config,
+    } = args;
     DirectSolveInput {
         conflicts,
         entries,
@@ -1679,17 +1721,12 @@ fn ds_s0_161() -> (
     (conflicts, entries, top)
 }
 
-/// Backlog #161 S6: one full BFS walk per leg over the fixture
-/// tree. `run_pass` takes the request atoms from the context; each
-/// leg below resolves a different installed/tree shape and pins the
-/// pass entries it settles.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-fn run_161(
-    dir: &Path,
-    atoms: &[String],
+/// Arguments of [`run_161`].
+struct Run161Args<'a> {
+    dir: &'a Path,
+    atoms: &'a [String],
     update: bool,
-    installed: &[(&str, &str, &str)],
+    installed: &'a [(&'a str, &'a str, &'a str)],
     newuse: bool,
     usepkgonly: bool,
     nodeps: bool,
@@ -1697,7 +1734,26 @@ fn run_161(
     usepkg: bool,
     deep: Deep,
     with_bdeps: bool,
-) -> PassResult {
+}
+
+/// Backlog #161 S6: one full BFS walk per leg over the fixture
+/// tree. `run_pass` takes the request atoms from the context; each
+/// leg below resolves a different installed/tree shape and pins the
+/// pass entries it settles.
+fn run_161(args: Run161Args<'_>) -> PassResult {
+    let Run161Args {
+        dir,
+        atoms,
+        update,
+        installed,
+        newuse,
+        usepkgonly,
+        nodeps,
+        selective,
+        usepkg,
+        deep,
+        with_bdeps,
+    } = args;
     for (name, version, slot) in installed {
         let d = dir
             .join("var/db/pkg/dev-libs")
@@ -1727,29 +1783,65 @@ fn run_161(
     run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
 }
 
+/// Arguments of [`blocker_161_write_pkg`].
+struct Blocker161WritePkgArgs<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    depend: &'a str,
+    rdepend: &'a str,
+}
+
 /// Backlog #161 S6: scratch-repo package writer shared by the
 /// blocker legs. `blockerparent-1.0` merges `victim-1.0` through
 /// `RDEPEND` while its own `RDEPEND` softly blocks it (a runtime
 /// key, always walked; `DEPEND` would need `--with-bdeps`).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn blocker_161_write_pkg(repo: &Path, cp: &str, pv: &str, slot: &str, depend: &str, rdepend: &str) {
-    blocker_161_write_pkg_full(repo, cp, pv, slot, depend, rdepend, "");
+fn blocker_161_write_pkg(args: Blocker161WritePkgArgs<'_>) {
+    let Blocker161WritePkgArgs {
+        repo,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+    } = args;
+    blocker_161_write_pkg_full(Blocker161WritePkgFullArgs {
+        repo,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+        bdepend: "",
+    });
+}
+
+/// Arguments of [`blocker_161_write_pkg_full`].
+struct Blocker161WritePkgFullArgs<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    depend: &'a str,
+    rdepend: &'a str,
+    bdepend: &'a str,
 }
 
 /// Backlog #161 S6p: the `_full` variant also writes `BDEPEND`
 /// (the plain helper can only express `DEPEND`/`RDEPEND`, which
 /// is why the first `with_bdeps` binary leg below walked an
 /// ebuild instead of a binary -- see its doc comment).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn blocker_161_write_pkg_full(
-    repo: &Path,
-    cp: &str,
-    pv: &str,
-    slot: &str,
-    depend: &str,
-    rdepend: &str,
-    bdepend: &str,
-) {
+fn blocker_161_write_pkg_full(args: Blocker161WritePkgFullArgs<'_>) {
+    let Blocker161WritePkgFullArgs {
+        repo,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+        bdepend,
+    } = args;
     use md5::Digest as _;
     use std::fmt::Write as _;
     let (cat, pkg) = cp.split_once('/').expect("category/package");
@@ -1803,31 +1895,55 @@ fn blocker_161_repo_config(repo: PathBuf) -> RepoConfig {
 
 fn blocker_161_repo(base: &Path) -> Vec<RepoConfig> {
     let repo = base.join("repo");
-    blocker_161_write_pkg(&repo, "dev-libs/victim", "1.0", "0", "", "");
-    blocker_161_write_pkg(
-        &repo,
-        "dev-libs/blockerparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/victim !dev-libs/victim",
-    );
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo,
+        cp: "dev-libs/victim",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo,
+        cp: "dev-libs/blockerparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim !dev-libs/victim",
+    });
     vec![blocker_161_repo_config(repo)]
+}
+
+/// Arguments of [`blocker_161_scratch_repo`].
+struct Blocker161ScratchRepoArgs<'a> {
+    base: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    depend: &'a str,
+    rdepend: &'a str,
 }
 
 /// One scratch package in its own repo: for legs needing tree
 /// versions the fixtures do not carry.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn blocker_161_scratch_repo(
-    base: &Path,
-    cp: &str,
-    pv: &str,
-    slot: &str,
-    depend: &str,
-    rdepend: &str,
-) -> RepoConfig {
+fn blocker_161_scratch_repo(args: Blocker161ScratchRepoArgs<'_>) -> RepoConfig {
+    let Blocker161ScratchRepoArgs {
+        base,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+    } = args;
     let repo = base.join("scratchrepo");
-    blocker_161_write_pkg(&repo, cp, pv, slot, depend, rdepend);
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+    });
     blocker_161_repo_config(repo)
 }
 
@@ -1877,16 +1993,26 @@ fn graph_result_abk0_worldb(backtrack_max: u32) -> GraphResult {
     graph_result_abk0_worldb_on(&root, backtrack_max)
 }
 
+/// Arguments of [`slotundo_vdb`].
+struct SlotundoVdbArgs<'a> {
+    dir: &'a Path,
+    name: &'a str,
+    version: &'a str,
+    slot: &'a str,
+    rdepend: &'a str,
+    installed_use: &'a str,
+}
+
 /// recordered `USE`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn slotundo_vdb(
-    dir: &Path,
-    name: &str,
-    version: &str,
-    slot: &str,
-    rdepend: &str,
-    installed_use: &str,
-) {
+fn slotundo_vdb(args: SlotundoVdbArgs<'_>) {
+    let SlotundoVdbArgs {
+        dir,
+        name,
+        version,
+        slot,
+        rdepend,
+        installed_use,
+    } = args;
     let d = dir
         .join("var/db/pkg/dev-libs")
         .join(format!("{name}-{version}"));
@@ -2008,32 +2134,53 @@ fn graph_result_buildpkgonly(atom_str: &str) -> GraphResult {
     graph_result_with(atom_str, |r| r.buildpkgonly = true)
 }
 
+/// Arguments of [`euf_flat`].
+struct EufFlatArgs<'a> {
+    iuse: &'a str,
+    use_tokens: &'a [String],
+    package_use: &'a [(String, Vec<String>)],
+    package_use_force: &'a [(String, Vec<String>)],
+    package_use_mask: &'a [(String, Vec<String>)],
+    use_force: &'a HashSet<String>,
+    use_mask: &'a HashSet<String>,
+    use_stable_force: &'a HashSet<String>,
+    use_stable_mask: &'a HashSet<String>,
+    package_use_stable_force: &'a [(String, Vec<String>)],
+    package_use_stable_mask: &'a [(String, Vec<String>)],
+    keywords: &'a [String],
+    accept_keywords: &'a HashSet<String>,
+    package_accept_keywords: &'a [(String, Vec<String>)],
+    candidate_str: &'a str,
+    category: &'a str,
+    package: &'a str,
+}
+
 /// Test shim for the pre-"Config depth" positional `effective_use_flags`
 /// signature (single flat `package_use` list, no `conf_use_tokens` /
 /// repo / user split). Tests that predate the split and don't care
 /// about per-layer `package.use` ordering keep calling this; the
 /// `package_use` arg lands in the profile (`defaults`) tier. Tests
 /// that exercise the split call `effective_use_flags` directly.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn euf_flat(
-    iuse: &str,
-    use_tokens: &[String],
-    package_use: &[(String, Vec<String>)],
-    package_use_force: &[(String, Vec<String>)],
-    package_use_mask: &[(String, Vec<String>)],
-    use_force: &HashSet<String>,
-    use_mask: &HashSet<String>,
-    use_stable_force: &HashSet<String>,
-    use_stable_mask: &HashSet<String>,
-    package_use_stable_force: &[(String, Vec<String>)],
-    package_use_stable_mask: &[(String, Vec<String>)],
-    keywords: &[String],
-    accept_keywords: &HashSet<String>,
-    package_accept_keywords: &[(String, Vec<String>)],
-    candidate_str: &str,
-    category: &str,
-    package: &str,
-) -> HashSet<String> {
+fn euf_flat(args: EufFlatArgs<'_>) -> HashSet<String> {
+    let EufFlatArgs {
+        iuse,
+        use_tokens,
+        package_use,
+        package_use_force,
+        package_use_mask,
+        use_force,
+        use_mask,
+        use_stable_force,
+        use_stable_mask,
+        package_use_stable_force,
+        package_use_stable_mask,
+        keywords,
+        accept_keywords,
+        package_accept_keywords,
+        candidate_str,
+        category,
+        package,
+    } = args;
     let config = portage_profile::Config {
         use_tokens: use_tokens.to_vec(),
         package_use: package_use.to_vec(),
@@ -2064,9 +2211,16 @@ fn euf_flat(
         ..Default::default()
     };
     // Test helper keeps the owned return; the `Rc` is unwrapped here.
-    effective_use_flags(&config, iuse, keywords, candidate_str, category, package)
-        .as_ref()
-        .clone()
+    effective_use_flags(EffectiveUseFlagsArgs {
+        config: &config,
+        iuse,
+        keywords,
+        candidate_str,
+        category,
+        package,
+    })
+    .as_ref()
+    .clone()
 }
 
 fn candidate(version: &str, keywords: &[&str]) -> Candidate {
@@ -2771,17 +2925,27 @@ mod tests_164 {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Backlog #164 S4: minimal `GraphEntry` for the dep-chain legs
-    /// (merge-bound unless stated otherwise).
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn entry_164(
-        category: &str,
-        package: &str,
+    /// Arguments of [`entry_164`].
+    struct Entry164Args<'a> {
+        category: &'a str,
+        package: &'a str,
         outcome: PretendOutcome,
         required_by: Vec<(String, String)>,
-        repo: Option<&str>,
+        repo: Option<&'a str>,
         source: CandidateSource,
-    ) -> GraphEntry {
+    }
+
+    /// Backlog #164 S4: minimal `GraphEntry` for the dep-chain legs
+    /// (merge-bound unless stated otherwise).
+    fn entry_164(args: Entry164Args<'_>) -> GraphEntry {
+        let Entry164Args {
+            category,
+            package,
+            outcome,
+            required_by,
+            repo,
+            source,
+        } = args;
         GraphEntry {
             discovery: 0,
             category: category.to_string(),
@@ -2815,16 +2979,16 @@ mod tests_164 {
     }
 
     fn new_164(package: &str, version: &str, parent: &str) -> GraphEntry {
-        entry_164(
-            "dev-libs",
+        entry_164(Entry164Args {
+            category: "dev-libs",
             package,
-            PretendOutcome::New {
+            outcome: PretendOutcome::New {
                 version: version.to_string(),
             },
-            vec![("dev-libs".to_string(), parent.to_string())],
-            Some("testrepo"),
-            CandidateSource::Ebuild,
-        )
+            required_by: vec![("dev-libs".to_string(), parent.to_string())],
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })
     }
 
     /// Backlog #164 S4: `masked_dep_chain` walks from a
@@ -2839,44 +3003,44 @@ mod tests_164 {
         let dir = slotundo_temp_dir("164-mdc");
         let entries = vec![
             // Decoy: merge-bound but the wrong package.
-            entry_164(
-                "dev-libs",
-                "decoy",
-                PretendOutcome::New {
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "decoy",
+                outcome: PretendOutcome::New {
                     version: "9.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
             // Decoy: NVC but the wrong package.
-            entry_164(
-                "dev-libs",
-                "sibling",
-                PretendOutcome::NoVisibleCandidate,
-                Vec::new(),
-                None,
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "target",
-                PretendOutcome::NoVisibleCandidate,
-                vec![("dev-libs".to_string(), "parent".to_string())],
-                None,
-                CandidateSource::Ebuild,
-            ),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "sibling",
+                outcome: PretendOutcome::NoVisibleCandidate,
+                required_by: Vec::new(),
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "target",
+                outcome: PretendOutcome::NoVisibleCandidate,
+                required_by: vec![("dev-libs".to_string(), "parent".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
             new_164("parent", "1.0", "grandma"),
-            entry_164(
-                "dev-libs",
-                "grandma",
-                PretendOutcome::New {
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "grandma",
+                outcome: PretendOutcome::New {
                     version: "1.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
         ];
         let atoms = ["dev-libs/grandma".to_string()];
         let got = masked_dep_chain(MaskedDepChainArgs {
@@ -2915,44 +3079,44 @@ mod tests_164 {
         // real parent.
         let dir = slotundo_temp_dir("164-mdc-inst");
         let entries = vec![
-            entry_164(
-                "dev-libs",
-                "aidecoy",
-                PretendOutcome::AlreadyInstalled {
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "aidecoy",
+                outcome: PretendOutcome::AlreadyInstalled {
                     version: "7.0".to_string(),
                 },
-                Vec::new(),
-                None,
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "target",
-                PretendOutcome::NoVisibleCandidate,
-                vec![("dev-libs".to_string(), "parent".to_string())],
-                None,
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "parent",
-                PretendOutcome::AlreadyInstalled {
+                required_by: Vec::new(),
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "target",
+                outcome: PretendOutcome::NoVisibleCandidate,
+                required_by: vec![("dev-libs".to_string(), "parent".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "parent",
+                outcome: PretendOutcome::AlreadyInstalled {
                     version: "1.0".to_string(),
                 },
-                vec![("dev-libs".to_string(), "grandma".to_string())],
-                None,
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "grandma",
-                PretendOutcome::New {
+                required_by: vec![("dev-libs".to_string(), "grandma".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "grandma",
+                outcome: PretendOutcome::New {
                     version: "1.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
         ];
         let atoms = ["dev-libs/grandma".to_string()];
         let got = masked_dep_chain(MaskedDepChainArgs {
@@ -2989,25 +3153,25 @@ mod tests_164 {
         // are not argument lines.
         let dir = slotundo_temp_dir("164-mdc-args");
         let entries = vec![
-            entry_164(
-                "dev-libs",
-                "target",
-                PretendOutcome::NoVisibleCandidate,
-                vec![("dev-libs".to_string(), "parent".to_string())],
-                None,
-                CandidateSource::Ebuild,
-            ),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "target",
+                outcome: PretendOutcome::NoVisibleCandidate,
+                required_by: vec![("dev-libs".to_string(), "parent".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
             new_164("parent", "1.0", "grandma"),
-            entry_164(
-                "dev-libs",
-                "grandma",
-                PretendOutcome::New {
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "grandma",
+                outcome: PretendOutcome::New {
                     version: "1.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
         ];
         let atoms = [
             "dev-libs/grandma".to_string(),
@@ -3052,26 +3216,26 @@ mod tests_164 {
         let entries = vec![
             // Decoy: same category, wrong package -- must not win
             // the parent lookup.
-            entry_164(
-                "dev-libs",
-                "rudecoy",
-                PretendOutcome::New {
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "rudecoy",
+                outcome: PretendOutcome::New {
                     version: "9.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "ruparent",
-                PretendOutcome::New {
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "ruparent",
+                outcome: PretendOutcome::New {
                     version: "1.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
         ];
         let owner = Some(("dev-libs".to_string(), "ruparent".to_string()));
         let top: HashSet<&str> = ["=dev-libs/ruparent-1.0"].into_iter().collect();
@@ -3090,17 +3254,17 @@ mod tests_164 {
 
     #[test]
     fn required_use_dep_chain_164_upgrade_parent_reports_the_to_version() {
-        let entries = vec![entry_164(
-            "dev-libs",
-            "ruup",
-            PretendOutcome::Upgrade {
+        let entries = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "ruup",
+            outcome: PretendOutcome::Upgrade {
                 from: "1.0".to_string(),
                 to: "2.0".to_string(),
             },
-            Vec::new(),
-            Some("testrepo"),
-            CandidateSource::Ebuild,
-        )];
+            required_by: Vec::new(),
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })];
         let owner = Some(("dev-libs".to_string(), "ruup".to_string()));
         let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
         let got = required_use_dep_chain(&owner, &top, &entries);
@@ -3117,16 +3281,16 @@ mod tests_164 {
     fn required_use_dep_chain_164_argument_needs_the_same_package() {
         // A same-category other-package atom is not this parent's
         // argument line.
-        let entries = vec![entry_164(
-            "dev-libs",
-            "rusib",
-            PretendOutcome::New {
+        let entries = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "rusib",
+            outcome: PretendOutcome::New {
                 version: "1.0".to_string(),
             },
-            Vec::new(),
-            Some("testrepo"),
-            CandidateSource::Ebuild,
-        )];
+            required_by: Vec::new(),
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })];
         let owner = Some(("dev-libs".to_string(), "rusib".to_string()));
         let top: HashSet<&str> = ["dev-libs/rusibling"].into_iter().collect();
         let got = required_use_dep_chain(&owner, &top, &entries);
@@ -3143,29 +3307,29 @@ mod tests_164 {
     fn required_use_dep_chain_164_no_owner_and_installed_parent_yield_nothing() {
         // No owner: the failing package IS the top-level atom, and
         // real skips the block.
-        let entries = vec![entry_164(
-            "dev-libs",
-            "rux",
-            PretendOutcome::New {
+        let entries = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "rux",
+            outcome: PretendOutcome::New {
                 version: "1.0".to_string(),
             },
-            Vec::new(),
-            Some("testrepo"),
-            CandidateSource::Ebuild,
-        )];
+            required_by: Vec::new(),
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })];
         let top: HashSet<&str> = ["dev-libs/rux"].into_iter().collect();
         assert_eq!(required_use_dep_chain(&None, &top, &entries), Vec::new());
         // An `AlreadyInstalled` parent has no merge version to name.
-        let installed = vec![entry_164(
-            "dev-libs",
-            "ruinst",
-            PretendOutcome::AlreadyInstalled {
+        let installed = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "ruinst",
+            outcome: PretendOutcome::AlreadyInstalled {
                 version: "1.0".to_string(),
             },
-            Vec::new(),
-            None,
-            CandidateSource::Ebuild,
-        )];
+            required_by: Vec::new(),
+            repo: None,
+            source: CandidateSource::Ebuild,
+        })];
         let owner = Some(("dev-libs".to_string(), "ruinst".to_string()));
         let empty: HashSet<&str> = HashSet::new();
         assert_eq!(
@@ -3216,36 +3380,36 @@ mod tests_164 {
         let entries = vec![
             // Decoy: same category, wrong package -- must not win
             // the parent lookup at any hop.
-            entry_164(
-                "dev-libs",
-                "audecoy",
-                PretendOutcome::New {
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "audecoy",
+                outcome: PretendOutcome::New {
                     version: "9.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "aumid",
-                PretendOutcome::New {
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "aumid",
+                outcome: PretendOutcome::New {
                     version: "1.0".to_string(),
                 },
-                vec![("dev-libs".to_string(), "autop".to_string())],
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "autop",
-                PretendOutcome::New {
+                required_by: vec![("dev-libs".to_string(), "autop".to_string())],
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "autop",
+                outcome: PretendOutcome::New {
                     version: "2.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
         ];
         let owner = Some(("dev-libs".to_string(), "aumid".to_string()));
         // A same-category sibling atom must not attach mid-chain.
@@ -3268,27 +3432,27 @@ mod tests_164 {
     fn autounmask_dep_chain_164_upgrade_parent_reports_the_to_version() {
         let dir = slotundo_temp_dir("164-auc-up");
         let entries = vec![
-            entry_164(
-                "dev-libs",
-                "auup",
-                PretendOutcome::Upgrade {
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "auup",
+                outcome: PretendOutcome::Upgrade {
                     from: "1.0".to_string(),
                     to: "2.0".to_string(),
                 },
-                vec![("dev-libs".to_string(), "auuptop".to_string())],
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "auuptop",
-                PretendOutcome::New {
+                required_by: vec![("dev-libs".to_string(), "auuptop".to_string())],
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "auuptop",
+                outcome: PretendOutcome::New {
                     version: "3.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
         ];
         let owner = Some(("dev-libs".to_string(), "auup".to_string()));
         let top: HashSet<&str> = ["dev-libs/auuptop"].into_iter().collect();
@@ -3310,26 +3474,26 @@ mod tests_164 {
         // entry that repo is `__unknown__` (see `installed_pkg_repo`).
         let dir = slotundo_temp_dir("164-auc-inst");
         let entries = vec![
-            entry_164(
-                "dev-libs",
-                "auinst",
-                PretendOutcome::AlreadyInstalled {
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "auinst",
+                outcome: PretendOutcome::AlreadyInstalled {
                     version: "1.0".to_string(),
                 },
-                vec![("dev-libs".to_string(), "auinsttop".to_string())],
-                None,
-                CandidateSource::Ebuild,
-            ),
-            entry_164(
-                "dev-libs",
-                "auinsttop",
-                PretendOutcome::New {
+                required_by: vec![("dev-libs".to_string(), "auinsttop".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "auinsttop",
+                outcome: PretendOutcome::New {
                     version: "2.0".to_string(),
                 },
-                Vec::new(),
-                Some("testrepo"),
-                CandidateSource::Ebuild,
-            ),
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
         ];
         let owner = Some(("dev-libs".to_string(), "auinst".to_string()));
         let top: HashSet<&str> = ["dev-libs/auinsttop"].into_iter().collect();
@@ -3353,16 +3517,16 @@ mod tests_164 {
         // (see the #164 closeout): advancing onto itself re-breaks on
         // the visited set with the identical chain.
         let dir = slotundo_temp_dir("164-auc-self");
-        let entries = vec![entry_164(
-            "dev-libs",
-            "auself",
-            PretendOutcome::New {
+        let entries = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "auself",
+            outcome: PretendOutcome::New {
                 version: "1.0".to_string(),
             },
-            vec![("dev-libs".to_string(), "auself".to_string())],
-            Some("testrepo"),
-            CandidateSource::Ebuild,
-        )];
+            required_by: vec![("dev-libs".to_string(), "auself".to_string())],
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })];
         let owner = Some(("dev-libs".to_string(), "auself".to_string()));
         let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
         let got = autounmask_dep_chain(&owner, "dev-libs/auselfdep", &top, &entries, &dir);
@@ -3374,20 +3538,30 @@ mod tests_164 {
     }
 }
 
+/// Arguments of [`euf_layers`].
+struct EufLayersArgs<'a> {
+    iuse: &'a str,
+    use_tokens: &'a [String],
+    conf_use_tokens: &'a [String],
+    package_use_repo: &'a [(String, Vec<String>)],
+    package_use: &'a [(String, Vec<String>)],
+    package_use_user: &'a [(String, Vec<String>)],
+}
+
 /// "Config depth" slice: `package.use` from each of the three real
 /// sources lands at its own `USE_ORDER` position. `euf` names the
 /// full split signature; the args after `iuse` are
 /// `use_tokens` (profile make.defaults), `conf_use_tokens` (make.conf),
 /// `package_use_repo`, `package_use` (profile), `package_use_user`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn euf_layers(
-    iuse: &str,
-    use_tokens: &[String],
-    conf_use_tokens: &[String],
-    package_use_repo: &[(String, Vec<String>)],
-    package_use: &[(String, Vec<String>)],
-    package_use_user: &[(String, Vec<String>)],
-) -> HashSet<String> {
+fn euf_layers(args: EufLayersArgs<'_>) -> HashSet<String> {
+    let EufLayersArgs {
+        iuse,
+        use_tokens,
+        conf_use_tokens,
+        package_use_repo,
+        package_use,
+        package_use_user,
+    } = args;
     let cfg = portage_profile::Config {
         use_tokens: use_tokens.to_vec(),
         conf_use_tokens: conf_use_tokens.to_vec(),
@@ -3397,14 +3571,14 @@ fn euf_layers(
         accept_keywords: HashSet::from(["amd64".to_string()]),
         ..Default::default()
     };
-    effective_use_flags(
-        &cfg,
+    effective_use_flags(EffectiveUseFlagsArgs {
+        config: &cfg,
         iuse,
-        &["amd64".to_string()],
-        "dev-libs/pkg-1.0:0/0::testrepo",
-        "dev-libs",
-        "pkg",
-    )
+        keywords: &["amd64".to_string()],
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+    })
     .as_ref()
     .clone()
 }

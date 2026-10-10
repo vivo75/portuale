@@ -313,7 +313,14 @@ fn select_dep_target_eliminates_with_suppressed_sibling_sets() {
         "the qualified branch is the suppressed one"
     );
     assert_eq!(
-        pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &suppressed[2], false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &suppressed[2],
+            merge_bound_only: false
+        }),
         Some(1),
         "the suppressed sibling's set must not enter the elimination"
     );

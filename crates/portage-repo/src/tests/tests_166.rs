@@ -227,9 +227,8 @@ fn conflict_166(versions: Vec<(&str, bool)>) -> SlotConflict {
     }
 }
 
-/// Eight-arg input builder (same shape as #161's `ds_input_161`).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn arg_input_166<'a>(
+/// Arguments of [`arg_input_166`].
+struct ArgInput166Args<'a> {
     conflicts: &'a [SlotConflict],
     top_level: &'a HashSet<(String, String)>,
     excluded: &'a [String],
@@ -238,7 +237,20 @@ fn arg_input_166<'a>(
     root: &'a Path,
     repos: &'a [RepoConfig],
     config: &'a portage_profile::Config,
-) -> DirectSolveInput<'a> {
+}
+
+/// Eight-arg input builder (same shape as #161's `ds_input_161`).
+fn arg_input_166<'a>(args: ArgInput166Args<'a>) -> DirectSolveInput<'a> {
+    let ArgInput166Args {
+        conflicts,
+        top_level,
+        excluded,
+        selective,
+        replace_cps,
+        root,
+        repos,
+        config,
+    } = args;
     DirectSolveInput {
         conflicts,
         entries: &[],
@@ -268,16 +280,16 @@ fn direct_solve_arg_mode_166_argues_the_requested_installed() {
     let top = arg_top_166();
     let replace = BTreeSet::new();
     assert!(direct_solve_arg_mode(
-        &arg_input_166(
-            &conflicts,
-            &top,
-            &[],
-            false,
-            &replace,
-            &root,
-            &repos,
-            &config
-        ),
+        &arg_input_166(ArgInput166Args {
+            conflicts: &conflicts,
+            top_level: &top,
+            excluded: &[],
+            selective: false,
+            replace_cps: &replace,
+            root: &root,
+            repos: &repos,
+            config: &config
+        }),
         &conflicts[0]
     ));
     let _ = std::fs::remove_dir_all(&root);
@@ -301,7 +313,16 @@ fn direct_solve_arg_mode_166_rejects_every_non_arg_shape() {
               excl: &[String],
               sel: bool| {
         direct_solve_arg_mode(
-            &arg_input_166(conflicts, top, excl, sel, &replace, &root, &repos, &config),
+            &arg_input_166(ArgInput166Args {
+                conflicts,
+                top_level: top,
+                excluded: excl,
+                selective: sel,
+                replace_cps: &replace,
+                root: &root,
+                repos: &repos,
+                config: &config,
+            }),
             &conflicts[0],
         )
     };
@@ -573,14 +594,14 @@ fn synthesize_166_files_the_instance_beside_its_siblings() {
         entry_166("dev-libs", "foo", "1.0", Vec::new()),
         entry_166("dev-libs", "decoy", "9.0", Vec::new()),
     ];
-    synthesize_surviving_conflict_entries(
-        &mut entries,
-        &[synth_conflict_166()],
-        &synth_owners_166(),
-        &repos,
-        &root,
-        &config,
-    );
+    synthesize_surviving_conflict_entries(SynthesizeSurvivingConflictEntriesArgs {
+        entries: &mut entries,
+        conflicts: &[synth_conflict_166()],
+        required_by_map: &synth_owners_166(),
+        repos: &repos,
+        root: &root,
+        config: &config,
+    });
     let order: Vec<(&str, &str, &str)> = entries
         .iter()
         .map(|e| {
@@ -622,14 +643,14 @@ fn synthesize_166_new_slot_tracks_the_installed_set() {
     let owners = synth_owners_166();
     let filed_new_slot = |root: &Path| {
         let mut entries = Vec::new();
-        synthesize_surviving_conflict_entries(
-            &mut entries,
-            &[synth_conflict_166()],
-            &owners,
-            &repos,
+        synthesize_surviving_conflict_entries(SynthesizeSurvivingConflictEntriesArgs {
+            entries: &mut entries,
+            conflicts: &[synth_conflict_166()],
+            required_by_map: &owners,
+            repos: &repos,
             root,
-            &config,
-        );
+            config: &config,
+        });
         assert_eq!(entries.len(), 1);
         entries.pop().expect("filed").new_slot
     };

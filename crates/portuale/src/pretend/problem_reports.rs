@@ -421,12 +421,12 @@ pub(crate) fn show_deferred_unsat(args: ShowDeferredUnsatArgs<'_>) {
     if !deferred_abort_unsat.is_empty() {
         let mut thrown_away: Vec<String> = Vec::new();
         for &i in deferred_abort_unsat {
-            print_entry_line(
-                &result.entries,
+            print_entry_line(PrintEntryLineArgs {
+                entries: &result.entries,
                 root,
-                i,
-                "",
-                true,
+                index: i,
+                indent: "",
+                ordered: true,
                 top_level_pkgs,
                 onlydeps,
                 oneshot,
@@ -435,18 +435,18 @@ pub(crate) fn show_deferred_unsat(args: ShowDeferredUnsatArgs<'_>) {
                 alphabetical,
                 columns,
                 columnwidth,
-                root_deps_running_root.as_deref(),
+                running_root: root_deps_running_root.as_deref(),
                 color,
                 system_atoms,
                 world_atoms,
                 force_reinstall_cps,
-                &mut thrown_away,
-                &result.masked_deps,
-                &result.use_unsat_deps,
-                &result.plain_miss_deps,
-                false,
-                &result.circular_dependency,
-            );
+                blocker_lines: &mut thrown_away,
+                masked_deps: &result.masked_deps,
+                use_unsat_deps: &result.use_unsat_deps,
+                plain_miss_deps: &result.plain_miss_deps,
+                force_sizes: false,
+                circular: &result.circular_dependency,
+            });
         }
     }
 }
@@ -934,12 +934,12 @@ pub(crate) fn show_cycle_redisplay(args: ShowCycleRedisplayArgs<'_>) {
             }) else {
                 continue;
             };
-            print_entry_line(
-                display_entries,
+            print_entry_line(PrintEntryLineArgs {
+                entries: display_entries,
                 root,
-                idx,
-                "",
-                true,
+                index: idx,
+                indent: "",
+                ordered: true,
                 top_level_pkgs,
                 onlydeps,
                 oneshot,
@@ -948,22 +948,21 @@ pub(crate) fn show_cycle_redisplay(args: ShowCycleRedisplayArgs<'_>) {
                 alphabetical,
                 columns,
                 columnwidth,
-                root_deps_running_root.as_deref(),
+                running_root: root_deps_running_root.as_deref(),
                 color,
                 system_atoms,
                 world_atoms,
                 force_reinstall_cps,
-                &mut thrown_away,
-                &result.masked_deps,
-                &result.use_unsat_deps,
-                &result.plain_miss_deps,
-                // The legacy (gate-off) re-display keeps the user-flagged
+                blocker_lines: &mut thrown_away,
+                masked_deps: &result.masked_deps,
+                use_unsat_deps: &result.use_unsat_deps,
+                plain_miss_deps: &result.plain_miss_deps, // The legacy (gate-off) re-display keeps the user-flagged
                 // rendering it always had; the forced-verbose display is
                 // the gated path's main list above (whose re-display is
                 // skipped as duplicative).
-                false,
-                &result.circular_dependency,
-            );
+                force_sizes: false,
+                circular: &result.circular_dependency,
+            });
         }
     }
 }

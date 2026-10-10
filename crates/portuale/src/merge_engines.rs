@@ -155,16 +155,16 @@ impl SourceEngine<'_> {
                 opts.buildpkg_live,
             )
         });
-        crate::emerge_build::merge_one_source_entry(
+        crate::emerge_build::merge_one_source_entry(crate::emerge_build::MergeOneSourceEntryArgs {
             entry,
-            self.repos,
-            self.root,
-            self.portage_tmpdir,
-            self.options,
-            bp,
+            repos: self.repos,
+            root: self.root,
+            portage_tmpdir: self.portage_tmpdir,
+            options: self.options,
+            buildpkg: bp,
             progress,
-            self.display,
-        )
+            display: self.display,
+        })
     }
 }
 

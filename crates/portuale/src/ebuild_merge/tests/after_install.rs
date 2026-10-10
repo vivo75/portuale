@@ -43,17 +43,17 @@ fn replace_loop_prune_sees_the_replacing_packages_merging_needed() {
     let portage_tmpdir = tmp.join("tmp");
     std::fs::create_dir_all(&scratch).unwrap();
     std::fs::create_dir_all(&portage_tmpdir).unwrap();
-    let replaced = unmerge_replaced_same_slot(
-        &root,
-        "dev-libs",
-        "oldapp",
-        "newapp-1.0",
-        "0",
-        &scratch,
-        &portage_tmpdir,
-        &MergeOptions::default(),
-        &BTreeMap::new(),
-    )
+    let replaced = unmerge_replaced_same_slot(UnmergeReplacedSameSlotArgs {
+        root: &root,
+        category: "dev-libs",
+        package: "oldapp",
+        new_pf: "newapp-1.0",
+        main_slot: "0",
+        scratch_dir: &scratch,
+        portage_tmpdir: &portage_tmpdir,
+        options: &MergeOptions::default(),
+        replacement_preserved: &BTreeMap::new(),
+    })
     .expect("the replace loop succeeds");
     assert_eq!(
         replaced,

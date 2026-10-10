@@ -513,25 +513,23 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
             category,
             pf
         );
-        if let Err(e) = ebuild_merge::unmerge_one_installed(
+        if let Err(e) = ebuild_merge::unmerge_one_installed(ebuild_merge::UnmergeOneInstalledArgs {
             root,
             category,
             package,
-            &pf,
-            &[],
-            &scratch,
-            &portage_tmpdir,
-            &options,
-            backup.as_ref(),
-            false,
-            &BTreeMap::new(),
-            // Standalone `emerge -C`: no replacing package, so neither
+            pf: &pf,
+            also_keep: &[],
+            scratch_dir: &scratch,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            backup: backup.as_ref(),
+            is_replacement: false,
+            replacement_preserved: &BTreeMap::new(), // Standalone `emerge -C`: no replacing package, so neither
             // feed (backlog #224).
-            &[],
-            // The entry is deleted at once, as before (S4.1 defers only
+            replacement_needed: &[], // The entry is deleted at once, as before (S4.1 defers only
             // the replace loop's deletes).
-            None,
-        ) {
+            deferred_delete: None,
+        }) {
             // Backlog #196 fix round 1: real `post_emerge` prints the
             // notice regardless of retval -- gated on the vdb having
             // changed. `idx > 0` is that gate here (at least one

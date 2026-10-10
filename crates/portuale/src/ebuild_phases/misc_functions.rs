@@ -2,6 +2,19 @@
 
 use crate::ebuild_phases::*;
 
+/// Arguments of [`run_misc_functions`].
+pub(crate) struct RunMiscFunctionsArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) ebuild_phase_value: &'a str,
+    pub(crate) dyn_command: &'a str,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) log_file: Option<&'a Path>,
+}
+
 /// Real `bin/misc-functions.sh`'s own invocation shape -- unlike
 /// `doebuild()` invokes commands like `"package"` as a *separate*
 /// script, `bin/misc-functions.sh __dyn_<mydo>` (real
@@ -18,18 +31,18 @@ use crate::ebuild_phases::*;
 /// with `dyn_command` as a positional arg is enough to invoke it
 /// directly; no separate `invoke_function` call is needed the way
 /// `run_one_phase`'s own explicit `__ebuild_main` call is.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) async fn run_misc_functions(
-    env: &Environment,
-    root: &Path,
-    ebuild_phase_value: &str,
-    dyn_command: &str,
-    extra_env: &[(String, String)],
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    log_file: Option<&Path>,
-) -> Result<i32, String> {
+pub(crate) async fn run_misc_functions(args: RunMiscFunctionsArgs<'_>) -> Result<i32, String> {
+    let RunMiscFunctionsArgs {
+        env,
+        root,
+        ebuild_phase_value,
+        dyn_command,
+        extra_env,
+        debug,
+        config_root,
+        shell,
+        log_file,
+    } = args;
     let bin_dir = bin_dir()?.to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
@@ -51,18 +64,18 @@ pub(crate) async fn run_misc_functions(
 
     match effective_shell {
         ShellBackend::Brush => {
-            run_misc_functions_brush(
+            run_misc_functions_brush(RunMiscFunctionsBrushArgs {
                 env,
                 root,
                 ebuild_phase_value,
                 dyn_command,
                 extra_env,
                 debug,
-                &bin_dir,
-                &helpers_dir,
+                bin_dir: &bin_dir,
+                helpers_dir: &helpers_dir,
                 config_root,
                 log_file,
-            )
+            })
             .await
         }
         ShellBackend::Bash => run_misc_functions_bash(RunMiscFunctionsBashArgs {
@@ -80,20 +93,35 @@ pub(crate) async fn run_misc_functions(
         }),
     }
 }
+/// Arguments of [`run_misc_functions_brush`].
+pub(crate) struct RunMiscFunctionsBrushArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) ebuild_phase_value: &'a str,
+    pub(crate) dyn_command: &'a str,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) debug: bool,
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) log_file: Option<&'a Path>,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) async fn run_misc_functions_brush(
-    env: &Environment,
-    root: &Path,
-    ebuild_phase_value: &str,
-    dyn_command: &str,
-    extra_env: &[(String, String)],
-    debug: bool,
-    bin_dir: &Path,
-    helpers_dir: &Path,
-    config_root: &Path,
-    log_file: Option<&Path>,
+    args: RunMiscFunctionsBrushArgs<'_>,
 ) -> Result<i32, String> {
+    let RunMiscFunctionsBrushArgs {
+        env,
+        root,
+        ebuild_phase_value,
+        dyn_command,
+        extra_env,
+        debug,
+        bin_dir,
+        helpers_dir,
+        config_root,
+        log_file,
+    } = args;
     let _umask = UmaskGuard::save();
     let mut shell = new_brush_phase_shell().await?;
     let (params, pump) = brush_phase_params(&mut shell, log_file)?;
@@ -293,8 +321,8 @@ pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, St
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
         create_directories(&env)?;
-        run_misc_functions(
-            &env,
+        run_misc_functions(RunMiscFunctionsArgs {
+            env: &env,
             root,
             ebuild_phase_value,
             dyn_command,
@@ -302,8 +330,8 @@ pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, St
             debug,
             config_root,
             shell,
-            None,
-        )
+            log_file: None,
+        })
         .await
     })
 }

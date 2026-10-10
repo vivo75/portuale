@@ -36,24 +36,24 @@ pub(crate) fn replay_use_of(
     );
     Some(merge_order::ReplayUse {
         iuse: valid_iuse(&declared, ctx.config),
-        enabled: effective_use_flags(
-            ctx.config,
-            &cand.iuse,
-            &cand.keywords,
-            &cpv,
-            &e.category,
-            &e.package,
-        )
+        enabled: effective_use_flags(EffectiveUseFlagsArgs {
+            config: ctx.config,
+            iuse: &cand.iuse,
+            keywords: &cand.keywords,
+            candidate_str: &cpv,
+            category: &e.category,
+            package: &e.package,
+        })
         .as_ref()
         .clone(),
-        fixed: forced_or_masked_flags(
-            &cand.iuse,
-            &cand.keywords,
-            &cpv,
-            &e.category,
-            &e.package,
-            ctx.config,
-        ),
+        fixed: forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: &cand.iuse,
+            keywords: &cand.keywords,
+            candidate_str: &cpv,
+            category: &e.category,
+            package: &e.package,
+            config: ctx.config,
+        }),
     })
 }
 
@@ -442,8 +442,14 @@ pub(crate) fn apply_replay_flips(
                 "{}/{}-{version}:{}/{}::{}",
                 cp.0, cp.1, cand.slot, cand.sub_slot, cand.repo_name
             );
-            let forced =
-                forced_or_masked_flags(&cand.iuse, &cand.keywords, &cpv, &cp.0, &cp.1, ctx.config);
+            let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+                iuse: &cand.iuse,
+                keywords: &cand.keywords,
+                candidate_str: &cpv,
+                category: &cp.0,
+                package: &cp.1,
+                config: ctx.config,
+            });
             let no_reinst = HashSet::new();
             e.use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
                 use_flags_display: &e.use_flags_display,

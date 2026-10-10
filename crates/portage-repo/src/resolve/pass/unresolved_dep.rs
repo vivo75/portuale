@@ -199,19 +199,19 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             {
                 record_slot_conflict(
                     &mut state.slot_conflicts,
-                    build_slot_conflict(
-                        &ctx.repos,
+                    build_slot_conflict(BuildSlotConflictArgs {
+                        repos: &ctx.repos,
                         config,
-                        ctx.root,
-                        &key.0,
-                        &key.1,
-                        &inst_slot,
-                        &existing_version,
+                        root: ctx.root,
+                        category: &key.0,
+                        package: &key.1,
+                        slot: &inst_slot,
+                        existing_version: &existing_version,
                         current_atom,
-                        version,
-                        &state.slot_pullers,
-                        Some(InstalledSide::Current),
-                    ),
+                        current_version: version,
+                        slot_pullers: &state.slot_pullers,
+                        installed_side: Some(InstalledSide::Current),
+                    }),
                 );
             }
         }

@@ -56,14 +56,14 @@ pub(crate) fn entry_use_flags(args: EntryUseFlagsArgs<'_>) -> HashSet<String> {
         resolved.binary_use.clone().unwrap_or_default()
     } else {
         // Owned: adjusted in place below -- one clone, as before #103.
-        effective_use_flags(
+        effective_use_flags(EffectiveUseFlagsArgs {
             config,
-            metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+            iuse: metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
             keywords,
             candidate_str,
-            &key.0,
-            &key.1,
-        )
+            category: &key.0,
+            package: &key.1,
+        })
         .as_ref()
         .clone()
     };

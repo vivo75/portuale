@@ -287,25 +287,25 @@ pub(crate) fn use_unsat_candidates_for_atom(
         });
         // Owned union of the two shared sets (display path; the union
         // is small).
-        let mut untouchable = resolved_use_mask_or_force(
-            MaskOrForce::Mask,
+        let mut untouchable = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+            which: MaskOrForce::Mask,
             config,
-            &candidate_str,
-            &display.category,
-            &display.package,
+            candidate_str: &candidate_str,
+            category: &display.category,
+            package: &display.package,
             stable,
-        )
+        })
         .as_ref()
         .clone();
         untouchable.extend(
-            resolved_use_mask_or_force(
-                MaskOrForce::Force,
+            resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+                which: MaskOrForce::Force,
                 config,
-                &candidate_str,
-                &display.category,
-                &display.package,
+                candidate_str: &candidate_str,
+                category: &display.category,
+                package: &display.package,
                 stable,
-            )
+            })
             .iter()
             .cloned(),
         );

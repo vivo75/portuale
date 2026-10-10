@@ -123,6 +123,21 @@ pub(crate) enum InstalledSide {
     Current,
 }
 
+/// Arguments of [`build_slot_conflict`].
+pub(crate) struct BuildSlotConflictArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) existing_version: &'a str,
+    pub(crate) current_atom: &'a str,
+    pub(crate) current_version: &'a str,
+    pub(crate) slot_pullers: &'a SlotPullers,
+    pub(crate) installed_side: Option<InstalledSide>,
+}
+
 /// Assembles a `SlotConflict` (real `slot_collision_handler`'s
 /// `(pkg, parent_atoms)` per `slot_atom`): instance A is `existing_version`
 /// (already in the graph), instance B is `current_version` (what the
@@ -137,20 +152,20 @@ pub(crate) enum InstalledSide {
 /// uses) instead of from the repo candidate carrying the same version,
 /// and its instance renders `(… installed in '<root>')`. `None` for the
 /// merge-vs-merge conflicts this function has always built.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn build_slot_conflict(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    category: &str,
-    package: &str,
-    slot: &str,
-    existing_version: &str,
-    current_atom: &str,
-    current_version: &str,
-    slot_pullers: &SlotPullers,
-    installed_side: Option<InstalledSide>,
-) -> SlotConflict {
+pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConflict {
+    let BuildSlotConflictArgs {
+        repos,
+        config,
+        root,
+        category,
+        package,
+        slot,
+        existing_version,
+        current_atom,
+        current_version,
+        slot_pullers,
+        installed_side,
+    } = args;
     let a_installed = installed_side == Some(InstalledSide::Existing);
     let b_installed = installed_side == Some(InstalledSide::Current);
     // An installed instance's own vdb `(sub_slot, repo)`: the repo the
@@ -327,6 +342,16 @@ pub(crate) fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: S
     }
 }
 
+/// Arguments of [`merge_same_slot_conflicts`].
+pub(crate) struct MergeSameSlotConflictsArgs<'a> {
+    pub(crate) conflicts: &'a [SlotConflict],
+    pub(crate) pullers: &'a SlotPullers,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) refile_singletons: bool,
+}
+
 /// #142 S2 F1: merge `SlotConflict` records sharing one
 /// `(category, package, slot)` into a single joint record before the
 /// direct solve. `record_slot_conflict` files one record per
@@ -345,15 +370,15 @@ pub(crate) fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: S
 /// pass through untouched; a merged record inherits the first
 /// record's `resolved_version`/`conflicting_atom` (render fields, only
 /// read when the conflict survives the solve).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn merge_same_slot_conflicts(
-    conflicts: &[SlotConflict],
-    pullers: &SlotPullers,
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    refile_singletons: bool,
-) -> Vec<SlotConflict> {
+pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) -> Vec<SlotConflict> {
+    let MergeSameSlotConflictsArgs {
+        conflicts,
+        pullers,
+        repos,
+        config,
+        root,
+        refile_singletons,
+    } = args;
     let mut order: Vec<(String, String, String)> = Vec::new();
     let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
     for (idx, c) in conflicts.iter().enumerate() {
@@ -465,6 +490,16 @@ pub(crate) fn merge_same_slot_conflicts(
     merged
 }
 
+/// Arguments of [`synthesize_surviving_conflict_entries`].
+pub(crate) struct SynthesizeSurvivingConflictEntriesArgs<'a> {
+    pub(crate) entries: &'a mut Vec<GraphEntry>,
+    pub(crate) conflicts: &'a [SlotConflict],
+    pub(crate) required_by_map: &'a HashMap<(String, String), HashSet<(String, String)>>,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Backlog #148: graph the shadowed second instances of *surviving*
 /// slot conflicts beside their records.
 ///
@@ -498,15 +533,17 @@ pub(crate) fn merge_same_slot_conflicts(
 /// -- all default to the plain-undecorated `New` shape. Each is a
 /// filed-later residue if a bed ever shows a twin that needs it, not
 /// silent scope growth here.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn synthesize_surviving_conflict_entries(
-    entries: &mut Vec<GraphEntry>,
-    conflicts: &[SlotConflict],
-    required_by_map: &HashMap<(String, String), HashSet<(String, String)>>,
-    repos: &[RepoConfig],
-    root: &Path,
-    config: &portage_profile::Config,
+    args: SynthesizeSurvivingConflictEntriesArgs<'_>,
 ) {
+    let SynthesizeSurvivingConflictEntriesArgs {
+        entries,
+        conflicts,
+        required_by_map,
+        repos,
+        root,
+        config,
+    } = args;
     for sc in conflicts {
         for inst in &sc.instances {
             if inst.installed {
@@ -584,6 +621,16 @@ pub(crate) fn synthesize_surviving_conflict_entries(
     }
 }
 
+/// Arguments of [`build_residual_slot_conflicts`].
+pub(crate) struct BuildResidualSlotConflictsArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) slot_pullers: &'a SlotPullers,
+    pub(crate) dropped: &'a [RevDepPin],
+}
+
 /// Residual installed-instance slot conflicts for dropped reverse-dep
 /// pins (see `RevDepPin`): real `_complete_graph`'s end-of-walk
 /// unsatisfied-dep loop (`depgraph.py:8770+`) adds the installed package
@@ -609,15 +656,17 @@ pub(crate) fn synthesize_surviving_conflict_entries(
 /// the merge (slots coexist; nothing breaks) yields no record. One
 /// record per `(package, merge version, installed version)`; parents
 /// unioned across pins. Sorted for determinism.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn build_residual_slot_conflicts(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    entries: &[GraphEntry],
-    slot_pullers: &SlotPullers,
-    dropped: &[RevDepPin],
+    args: BuildResidualSlotConflictsArgs<'_>,
 ) -> Vec<SlotConflict> {
+    let BuildResidualSlotConflictsArgs {
+        repos,
+        config,
+        root,
+        entries,
+        slot_pullers,
+        dropped,
+    } = args;
     // (category, package, slot, merge version, installed version) ->
     // installed-parent index into the record being assembled.
     let mut grouped: HashMap<(String, String, String, String, String), SlotConflict> =

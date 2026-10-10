@@ -51,17 +51,17 @@ pub(crate) fn run_merge_stage(
 ) -> Result<Vec<String>, String> {
     let (vdb, stateless) = client_vdb_placement(ctx);
     let portuale_bin = client_bin_abs(ctx)?.to_string();
-    let script = merge_script(
+    let script = merge_script(MergeScriptArgs {
         unit_dir,
         staged,
-        &ctx.root,
-        &vdb,
+        root: &ctx.root,
+        vdb: &vdb,
         stateless,
-        &ctx.config_protect,
-        &ctx.config_protect_mask,
+        protect_list: &ctx.config_protect,
+        mask_list: &ctx.config_protect_mask,
         ledger,
-        &portuale_bin,
-    )?;
+        portuale_bin: &portuale_bin,
+    })?;
     let output = run_script_stdin(ctx, control, &script).map_err(|message| {
         if ctx.transport == RemoteTransport::Local {
             format!("mrg: local merge command failed: {message}")
@@ -152,16 +152,16 @@ pub(crate) fn run_postinst_regen_stage(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/var/tmp".to_string());
     let portuale_bin = client_bin_abs(ctx)?.to_string();
-    let script = postinst_regen_script(
+    let script = postinst_regen_script(PostinstRegenScriptArgs {
         unit_dir,
         staged,
-        &ctx.root,
-        &workdir_parent,
-        &colormap,
+        root: &ctx.root,
+        workdir_parent: &workdir_parent,
+        colormap: &colormap,
         features,
         locale,
-        &portuale_bin,
-    );
+        portuale_bin: &portuale_bin,
+    });
     let output = run_script_stdin(ctx, control, &script).map_err(|message| {
         if ctx.transport == RemoteTransport::Local {
             format!("mrg: local postinst regen command failed: {message}")
@@ -598,15 +598,15 @@ pub(crate) fn run_phases_stage(
         .unwrap_or_else(|| "/var/tmp".to_string());
     let mut done = Vec::new();
     for phase in &staged.phases {
-        let script = phase_script(
+        let script = phase_script(PhaseScriptArgs {
             unit_dir,
             staged,
             phase,
-            &ctx.root,
-            &workdir_parent,
-            &colormap,
-            &portuale_bin,
-        );
+            root: &ctx.root,
+            workdir_parent: &workdir_parent,
+            colormap: &colormap,
+            portuale_bin: &portuale_bin,
+        });
         let output = run_script_stdin(ctx, control, &script).map_err(|message| {
             if ctx.transport == RemoteTransport::Local {
                 format!("mrg: local phase {phase} command failed: {message}")

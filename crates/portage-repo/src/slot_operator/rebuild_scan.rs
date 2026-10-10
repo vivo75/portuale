@@ -15,23 +15,39 @@ pub(crate) type SlotOpRebuildScan = (
     BTreeSet<(String, String, String)>,
 );
 
-// Ten parameters like its siblings below; the arity is the port, not
-// accident (`#[allow]` matches `slot_operator_rebuild_entries` etc.).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+/// Arguments of [`slot_operator_rebuild_scan`].
+pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) already: &'a BTreeSet<(String, String)>,
+    pub(crate) undone: &'a BTreeSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) update: bool,
+    pub(crate) top_level_cps: &'a HashSet<(String, String)>,
+    pub(crate) top_level_atoms: &'a HashSet<String>,
+    pub(crate) excluded: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 pub(crate) fn slot_operator_rebuild_scan(
-    root: &Path,
-    repos: &[RepoConfig],
-    entries: &[GraphEntry],
-    reachable: &HashSet<(String, String)>,
-    already: &BTreeSet<(String, String)>,
-    undone: &BTreeSet<(String, String)>,
-    with_bdeps: bool,
-    update: bool,
-    top_level_cps: &HashSet<(String, String)>,
-    top_level_atoms: &HashSet<String>,
-    excluded: &[String],
-    config: &portage_profile::Config,
+    args: SlotOperatorRebuildScanArgs<'_>,
 ) -> SlotOpRebuildScan {
+    let SlotOperatorRebuildScanArgs {
+        root,
+        repos,
+        entries,
+        reachable,
+        already,
+        undone,
+        with_bdeps,
+        update,
+        top_level_cps,
+        top_level_atoms,
+        excluded,
+        config,
+    } = args;
     // cp -> (new version, new slot, new sub-slot) for every entry that
     // replaces an installed version in that slot.
     let mut new_slot: HashMap<(String, String), (String, String, String)> = HashMap::new();

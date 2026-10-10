@@ -227,14 +227,14 @@ pub(crate) fn refresh_one_entry_display(
         .clone()
         .unwrap_or_else(|| cand.repo_name.clone());
     let candidate_str = format!("{cat}/{pkg}-{version}:{slot}/{sub_slot}::{repo_name}");
-    let use_flags = effective_use_flags(
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,
-        &cand.iuse,
-        &cand.keywords,
-        &candidate_str,
-        &cat,
-        &pkg,
-    );
+        iuse: &cand.iuse,
+        keywords: &cand.keywords,
+        candidate_str: &candidate_str,
+        category: &cat,
+        package: &pkg,
+    });
     // Real builds the USE display from `sorted(pkg.iuse.all)`, where
     // `iuse.all` is a `frozenset` (`Package.py`) -- so a flag that
     // `IUSE` names more than once (an eclass and the ebuild both
@@ -259,14 +259,14 @@ pub(crate) fn refresh_one_entry_display(
         old_use.retain(|f| old_iuse.contains(f));
         InstalledUseState { old_use, old_iuse }
     });
-    let forced = forced_or_masked_flags(
-        &cand.iuse,
-        &cand.keywords,
-        &candidate_str,
-        &cat,
-        &pkg,
+    let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+        iuse: &cand.iuse,
+        keywords: &cand.keywords,
+        candidate_str: &candidate_str,
+        category: &cat,
+        package: &pkg,
         config,
-    );
+    });
     let reinst_flags: HashSet<String> = match &e.outcome {
         PretendOutcome::Reinstall { changed_flags, .. } => changed_flags.iter().cloned().collect(),
         _ => HashSet::new(),

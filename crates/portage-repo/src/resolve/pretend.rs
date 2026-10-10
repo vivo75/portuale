@@ -2,6 +2,16 @@
 
 use crate::*;
 
+/// Arguments of [`dependency_avoid_update_candidate`].
+pub(crate) struct DependencyAvoidUpdateCandidateArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) atom: &'a portage_dep::Atom,
+    pub(crate) atom_str: &'a str,
+    pub(crate) candidates: &'a [Candidate],
+    pub(crate) installed: &'a [(String, String, String)],
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Real `_select_pkg_highest_available_imp`'s own early `avoid_update`
 /// return for a DEPENDENCY atom (`lib/_emerge/depgraph.py` ~8440: `if
 /// inst_pkg is not None and parent is not None and not self.
@@ -33,15 +43,17 @@ use crate::*;
 /// once more from the ordinary `!update` shortcut further down (the
 /// only place this can still matter once `--exclude` is in play -- see
 /// that call site's own comment).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn dependency_avoid_update_candidate<'a>(
-    root: &Path,
-    atom: &portage_dep::Atom,
-    atom_str: &str,
-    candidates: &'a [Candidate],
-    installed: &[(String, String, String)],
-    config: &portage_profile::Config,
+    args: DependencyAvoidUpdateCandidateArgs<'a>,
 ) -> Option<&'a Candidate> {
+    let DependencyAvoidUpdateCandidateArgs {
+        root,
+        atom,
+        atom_str,
+        candidates,
+        installed,
+        config,
+    } = args;
     let all_candidates_by_str: HashMap<String, &Candidate> = candidates
         .iter()
         .map(|c| {
@@ -691,15 +703,16 @@ pub fn resolve_pretend(
     // dependency that real downgrades to the best visible stable.
     if !update && !empty && !is_top_level && excluded.is_empty() {
         let installed = installed_candidates(root, &atom.category, &atom.package);
-        if let Some(installed_best) = dependency_avoid_update_candidate(
-            root,
-            &atom,
-            atom_str,
-            &candidates,
-            &installed,
-            config,
-        )
-        .filter(|c| satisfies_extra_constraints(c))
+        if let Some(installed_best) =
+            dependency_avoid_update_candidate(DependencyAvoidUpdateCandidateArgs {
+                root,
+                atom: &atom,
+                atom_str,
+                candidates: &candidates,
+                installed: &installed,
+                config,
+            })
+            .filter(|c| satisfies_extra_constraints(c))
         {
             return already_installed_or_reinstall(
                 source,
@@ -1090,14 +1103,14 @@ pub fn resolve_pretend(
             // #57: same `extra_constraints` gate as the early shortcut
             // above (`matched`, which the `is_top_level` arm below reads,
             // is already filtered by them).
-            dependency_avoid_update_candidate(
+            dependency_avoid_update_candidate(DependencyAvoidUpdateCandidateArgs {
                 root,
-                &atom,
+                atom: &atom,
                 atom_str,
-                &candidates,
-                &installed_pairs,
+                candidates: &candidates,
+                installed: &installed_pairs,
                 config,
-            )
+            })
             .filter(|c| satisfies_extra_constraints(c))
         } else {
             matched

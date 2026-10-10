@@ -31,32 +31,40 @@ ALLOW = re.compile(r"(?m)^[ \t]*#\[allow\(clippy::(?:too_many_arguments|fn_param
 
 def split_top(text):
     """Split at commas outside brackets (`->` is not a bracket; a closure's
-    `|a, b|` parameter list is skipped)."""
-    parts, depth, cur, i = [], 0, "", 0
-    while i < len(text):
-        c = text[i]
-        if depth == 0 and c == "|" and re.fullmatch(r"\s*(move\s+)?", cur) and not text.startswith("||", i):
-            j = text.index("|", i + 1)
-            cur += text[i:j + 1]
-            i = j + 1
+    `|a, b|` parameter list is skipped). Commas inside comments and
+    strings do not split; the pieces keep their comments."""
+    code = code_only(text)
+    parts, depth, start, i = [], 0, 0, 0
+    while i < len(code):
+        c = code[i]
+        if depth == 0 and c == "|" and re.fullmatch(r"\s*(move\s+)?", code[start:i]) \
+                and not code.startswith("||", i):
+            i = code.index("|", i + 1) + 1
             continue
-        if text.startswith("->", i):
-            cur += "->"
+        if code.startswith("->", i):
             i += 2
             continue
-        if c in "([{<":
+        # `<`/`>` are brackets only glued to a type (`Vec<u8>`), not
+        # spaced comparisons (`a < b`)
+        glued = i > 0 and not code[i - 1].isspace()
+        if c in "([{" or (c == "<" and glued):
             depth += 1
-        elif c in ")]}>":
+        elif c in ")]}" or (c == ">" and glued and depth > 0):
             depth -= 1
         if c == "," and depth == 0:
-            parts.append(cur)
-            cur = ""
-        else:
-            cur += c
+            parts.append(text[start:i])
+            start = i + 1
         i += 1
-    if cur.strip():
-        parts.append(cur)
-    return [p.strip() for p in parts if p.strip()]
+    parts.append(text[start:])
+    return [p.strip() for p in parts if code_only(p).strip()]
+
+
+def field(name, arg):
+    """`name: arg`, its leading comment lines kept above it."""
+    lead = re.match(r"(?:\s*//[^\n]*\n)*", arg).group(0)
+    val = arg[len(lead):].strip()
+    lead = "\n".join(l.strip() for l in lead.strip().split("\n")) + "\n" if lead.strip() else ""
+    return lead + (name if val == name else f"{name}: {val}")
 
 
 def lifetimed(ty):
@@ -144,45 +152,75 @@ def transform(path, only):
             if body:
                 params.append(body)
                 notes.append(com)
-        if head.group(5):
+        gen_a = head.group(5) and re.fullmatch(r"<\s*'a\s*>", head.group(5))
+        if head.group(5) and not gen_a:
             skipped.append((name, "generic"))
             continue
-        if any(re.match(r"(&\s*(mut\s+)?)?(mut\s+)?self\b", p) for p in params):
-            skipped.append((name, "method"))
+        # a method keeps `self`; an `impl Trait` parameter stays a
+        # parameter after `args` (the struct would need a generic)
+        selfp = params[0] if params and re.match(r"(&\s*('\w+\s+)?(mut\s+)?)?(mut\s+)?self\b", params[0]) else None
+        # neither lint fires (clippy.toml: <= 5 params, self included, <= 2 bools): the allow just goes
+        if len(params) <= 5 and sum(bool(re.search(r":\s*bool\s*$", p)) for p in params) < 3:
+            s = s[:m.start()] + ALLOW.sub("", s[m.start():m.end()]) + s[m.end():]
+            skipped.append((name, "allow dropped: the lint does not fire"))
             continue
-        if "impl " in ptext:
-            skipped.append((name, "impl Trait"))
-            continue
+        rest = list(zip(params, notes))[1 if selfp else 0:]
         parsed = []
-        for p, com in zip(params, notes):
+        for p, com in rest:
             pm = re.match(r"(?s)(mut\s+)?(\w+)\s*:\s*(.+)$", p)
             if not pm:
                 break
-            parsed.append((bool(pm.group(1)), pm.group(2), " ".join(pm.group(3).split()), com))
+            parsed.append((bool(pm.group(1)), pm.group(2), " ".join(pm.group(3).split()), com,
+                           "impl " in pm.group(3)))
         else:
             ind = head.group(2)
             vis = head.group(3).strip()
             sname = pascal(name) + "Args"
-            fields = [(n, lifetimed(t), com) for _, n, t, com in parsed]
-            lt = any("'a" in t for _, t, _ in fields)
+            fields = [(n, lifetimed(t), com) for _, n, t, com, kept in parsed if not kept]
+            lt = gen_a or any("'a" in t for _, t, _ in fields)
             fvis = (vis + " ") if vis else ""
-            struct = (f"{ind}/// Arguments of [`{name}`].\n"
-                      f"{ind}{fvis}struct {sname}{'<' + chr(39) + 'a>' if lt else ''} {{\n"
-                      + "".join("".join(f"{ind}    /// {c}\n" for c in com) + f"{ind}    {fvis}{n}: {t},\n"
+            # a method's struct goes above its `impl` block, at the
+            # impl's own indent
+            sind = ind
+            if selfp:
+                im = list(re.finditer(r"(?m)^([ \t]*)impl\b[^\n]*\{[ \t]*$", s[:m.start()]))
+                if not im:
+                    skipped.append((name, "method outside an impl"))
+                    continue
+                sind = im[-1].group(1)
+                anchor = im[-1].start()
+                ty = re.match(r"[ \t]*impl\b(?:<[^>]*>)?\s*(?:[\w:<>', ]+\s+for\s+)?(?:\w+::)*(\w+)",
+                              s[anchor:]).group(1)
+            link = f"{ty}::{name}" if selfp else name
+            struct = (f"{sind}/// Arguments of [`{link}`].\n"
+                      f"{sind}{fvis}struct {sname}{'<' + chr(39) + 'a>' if lt else ''} {{\n"
+                      + "".join("".join(f"{sind}    /// {c}\n" for c in com) + f"{sind}    {fvis}{n}: {t},\n"
                                 for n, t, com in fields)
-                      + f"{ind}}}\n\n")
+                      + f"{sind}}}\n\n")
             # body prologue
             ob = s.index("{", i)
-            pat = ", ".join(("mut " if mu else "") + n for mu, n, _, _ in parsed)
+            pat = ", ".join(("mut " if mu else "") + n for mu, n, _, _, kept in parsed if not kept)
             prologue = f"\n{ind}    let {sname} {{ {pat} }} = args;"
-            s = (s[:i - 1 - len(ptext)] + f"args: {sname}{'<' + chr(39) + '_>' if lt else ''}"
-                 + s[i - 1:ob + 1] + prologue + s[ob + 1:])
+            sig = ((selfp + ", ") if selfp else "") + \
+                f"args: {sname}{('<' + chr(39) + 'a>' if gen_a else '<' + chr(39) + '_>') if lt else ''}" + \
+                "".join(f", {'mut ' if mu else ''}{n}: {t}" for mu, n, t, _, kept in parsed if kept)
+            s = s[:i - 1 - len(ptext)] + sig + s[i - 1:ob + 1] + prologue + s[ob + 1:]
             # struct above the fn's doc comment and attributes; every
             # worklist allow on the fn removed
-            docs = re.search(r"(?:[ \t]*(?:///|#\[)[^\n]*\n)*$", s[:m.start()])
+            docs = re.search(r"(?m)(?:^[ \t]*(?:///|#\[)[^\n]*\n)*\Z", s[:m.start()])
             attrs_after = s[m.end():m.end() + head.start(2)]
+            # the fn's `#[cfg(..)]` applies to its struct too
+            cfgs = "".join(re.findall(r"(?m)^[ \t]*#\[cfg(?:_attr)?\([^\n]*\]\n",
+                                      s[docs.start():m.start()] + attrs_after))
+            cfgs = "".join(l.strip() and f"{sind}{l.strip()}\n" for l in cfgs.split("\n"))
+            struct = struct.replace(f"{sind}{fvis}struct ", f"{cfgs}{sind}{fvis}struct ", 1)
             tail = ALLOW.sub("", s[docs.start():m.start()]) + ALLOW.sub("", attrs_after)
-            s = s[:docs.start()] + struct + tail + s[m.end() + head.start(2):]
+            s = s[:docs.start()] + tail + s[m.end() + head.start(2):]
+            if selfp:
+                idocs = re.search(r"(?m)(?:^[ \t]*(?:///|#\[)[^\n]*\n)*\Z", s[:anchor])
+                s = s[:idocs.start()] + struct + s[idocs.start():]
+            else:
+                s = s[:docs.start()] + struct + s[docs.start():]
             done.append(Fn(name, vis, parsed, ind))
             continue
         skipped.append((name, "pattern parameter"))
@@ -275,8 +313,9 @@ def fix_calls(fns, errs, touched):
             continue
         targets = [m["spans"][0]["file_name"]]
         if " in crate " in m["message"]:
-            targets = subprocess.run(["grep", "-rlE", rf"pub(\([\w:]+\))? use .*\b{fn.name}\b", "crates"],
-                                     capture_output=True, text=True).stdout.split()
+            reexp = re.compile(rf"(?m)^\s*pub(\([\w:]+\))? use [\w:]+(::\{{[^}}]*)?\b{fn.name}\b")
+            targets = [os.path.join(d, n) for d, _, ns in os.walk("crates") for n in ns
+                       if n.endswith(".rs") and reexp.search(open(os.path.join(d, n)).read())]
         for f in targets:
             text = open(f).read()
             new = re.sub(rf"(?m)^(\s*(?:pub(?:\([\w:]+\))? )?use [\w:]+::){fn.name};",
@@ -298,15 +337,19 @@ def fix_calls(fns, errs, touched):
             pos = offs[ln - 1] + col - 1
             mm = re.match(r"((?:[\w]+::)*)(\w+)", text[pos:])
             if not mm or mm.group(2) not in by:
+                print(f"site? {f}:{ln}:{col} {text[pos:pos+40]!r}")
                 continue
             fn = by[mm.group(2)]
             o, c = call_args(text, pos + mm.end() - 1)
             args = split_top(text[o + 1:c])
             if len(args) != len(fn.params):
+                print(f"arity? {f}:{ln} {fn.name} {len(args)}!={len(fn.params)}: {args}")
                 continue
             prefix = mm.group(1)
-            fields = ", ".join(n if a == n else f"{n}: {a}" for (_, n, _, _), a in zip(fn.params, args))
-            text = text[:o + 1] + f"{prefix}{fn.sname} {{ {fields} }}" + text[c:]
+            pairs = list(zip(fn.params, args))
+            fields = ", ".join(field(p[1], a) for p, a in pairs if not p[4])
+            kept = "".join(f", {a}" for p, a in pairs if p[4])
+            text = text[:o + 1] + f"{prefix}{fn.sname} {{ {fields} }}{kept}" + text[c:]
             changed = True
         open(f, "w").write(text)
     for f, uses in imports.items():

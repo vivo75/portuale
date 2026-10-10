@@ -320,22 +320,22 @@ pub(crate) fn atom_all_use_unmasked(
         accept_keywords: &config.accept_keywords,
         package_accept_keywords: &config.package_accept_keywords,
     });
-    let mask = resolved_use_mask_or_force(
-        MaskOrForce::Mask,
+    let mask = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
         config,
-        &candidate_str,
-        &atom.category,
-        &atom.package,
+        candidate_str: &candidate_str,
+        category: &atom.category,
+        package: &atom.package,
         stable,
-    );
-    let force = resolved_use_mask_or_force(
-        MaskOrForce::Force,
+    });
+    let force = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Force,
         config,
-        &candidate_str,
-        &atom.category,
-        &atom.package,
+        candidate_str: &candidate_str,
+        category: &atom.category,
+        package: &atom.package,
         stable,
-    );
+    });
     let mut violated_enabled = Vec::new();
     let mut violated_disabled = Vec::new();
     for ud in use_deps {

@@ -182,14 +182,14 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
         }
         let failure = match clean_failure("pre") {
             Some(failure) => Some(failure),
-            None => match ebuild_package::run_package(
-                &path,
+            None => match ebuild_package::run_package(ebuild_package::RunPackageArgs {
+                ebuild_path: &path,
                 root,
                 portage_tmpdir,
-                &per_entry_options,
-                &build_env,
+                options: &per_entry_options,
+                build_env: &build_env,
                 use_flags,
-            ) {
+            }) {
                 Ok(0) => clean_failure("post"),
                 Ok(_) => Some(format!(
                     "{}/{}-{version}: build failed",

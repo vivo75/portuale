@@ -407,20 +407,21 @@ pub(crate) fn run_one_remote_unit(args: RunOneRemoteUnitArgs<'_>) -> Result<(), 
         regen_bzip2,
     } = args;
     let binpkg_path = if entry.remote_binary {
-        let (binrepo, record) = portage_repo::find_remote_binpkg_instance(
-            &config.binrepos,
-            root,
-            &entry.category,
-            &entry.package,
-            version,
-            entry.build_id.as_deref(),
-        )
-        .ok_or_else(|| {
-            format!(
-                "{}/{}-{version}: not found in any binhost `Packages` index",
-                entry.category, entry.package
-            )
-        })?;
+        let (binrepo, record) =
+            portage_repo::find_remote_binpkg_instance(portage_repo::FindRemoteBinpkgInstanceArgs {
+                binrepos: &config.binrepos,
+                root,
+                category: &entry.category,
+                package: &entry.package,
+                version,
+                build_id: entry.build_id.as_deref(),
+            })
+            .ok_or_else(|| {
+                format!(
+                    "{}/{}-{version}: not found in any binhost `Packages` index",
+                    entry.category, entry.package
+                )
+            })?;
         crate::emerge_getbinpkg::download_and_verify(
             crate::emerge_getbinpkg::DownloadAndVerifyArgs {
                 sync_uri: &binrepo.sync_uri,

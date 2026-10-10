@@ -2,6 +2,18 @@
 
 use crate::ebuild_merge::*;
 
+/// Arguments of [`preserve_libs_on_unmerge`].
+#[cfg(test)]
+pub(crate) struct PreserveLibsOnUnmergeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) contents_text: &'a str,
+    pub(crate) is_replacement: bool,
+}
+
 /// Real `dblink._prune_plib_registry`, called from real `unmerge()`
 /// with `unmerge=True` right before real `_unmerge_pkgfiles()` runs.
 /// Real `preserve_paths` (a `_prune_plib_registry` parameter, not to be
@@ -49,17 +61,10 @@ use crate::ebuild_merge::*;
 /// wholesale moments later regardless, so there's no separate real
 /// `CONTENTS`-file rewrite to also perform here).
 #[cfg(test)]
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn preserve_libs_on_unmerge(
-    root: &Path,
-    category: &str,
-    pn: &str,
-    pf: &str,
-    slot: &str,
-    contents_text: &str,
-    is_replacement: bool,
+    args: PreserveLibsOnUnmergeArgs<'_>,
 ) -> Result<BTreeSet<String>, String> {
-    preserve_libs_on_unmerge_into(
+    let PreserveLibsOnUnmergeArgs {
         root,
         category,
         pn,
@@ -67,23 +72,46 @@ pub(crate) fn preserve_libs_on_unmerge(
         slot,
         contents_text,
         is_replacement,
-        None,
-    )
+    } = args;
+    preserve_libs_on_unmerge_into(PreserveLibsOnUnmergeIntoArgs {
+        root,
+        category,
+        pn,
+        pf,
+        slot,
+        contents_text,
+        is_replacement,
+        retire: None,
+    })
+}
+
+/// Arguments of [`preserve_libs_on_unmerge_into`].
+pub(crate) struct PreserveLibsOnUnmergeIntoArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) contents_text: &'a str,
+    pub(crate) is_replacement: bool,
+    pub(crate) retire: Option<&'a mut RetireWrites>,
 }
 
 /// [`preserve_libs_on_unmerge`], optionally keeping the registry in
 /// `retire` instead of writing it (feat#157 S4.2).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn preserve_libs_on_unmerge_into(
-    root: &Path,
-    category: &str,
-    pn: &str,
-    pf: &str,
-    slot: &str,
-    contents_text: &str,
-    is_replacement: bool,
-    retire: Option<&mut RetireWrites>,
+    args: PreserveLibsOnUnmergeIntoArgs<'_>,
 ) -> Result<BTreeSet<String>, String> {
+    let PreserveLibsOnUnmergeIntoArgs {
+        root,
+        category,
+        pn,
+        pf,
+        slot,
+        contents_text,
+        is_replacement,
+        retire,
+    } = args;
     // Real `_prune_plib_registry` still runs `unregister()` for an
     // instance that owns no files (`instance_owns_files` gates only the
     // linkmap rebuild and the preserve/prune scans below); only the
@@ -168,6 +196,17 @@ pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> 
     read_plib_registry(root).preserved_libs()
 }
 
+/// Arguments of [`find_unused_preserved_libs`].
+#[cfg(test)]
+pub(crate) struct FindUnusedPreservedLibsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) unmerge_no_replacement: bool,
+    pub(crate) being_unmerged: &'a dyn Fn(&str) -> bool,
+    pub(crate) exclude_cpvs: &'a [String],
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+}
+
 /// Real `dblink._find_unused_preserved_libs`: the registered
 /// preserved libraries that no installed package links against any
 /// more, keyed by the cpv that owns them (so the caller can prune each
@@ -215,38 +254,53 @@ pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> 
 /// directory-move path, and the collision-protect takeover
 /// (`unregister_preserved_libs`) already covers the same-path case.
 #[cfg(test)]
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn find_unused_preserved_libs(
-    root: &Path,
-    unmerge_no_replacement: bool,
-    being_unmerged: &dyn Fn(&str) -> bool,
-    exclude_cpvs: &[String],
-    replacement_preserved: &BTreeMap<String, Vec<String>>,
-    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    args: FindUnusedPreservedLibsArgs<'_>,
 ) -> BTreeMap<String, BTreeSet<String>> {
-    find_unused_preserved_libs_in(
+    let FindUnusedPreservedLibsArgs {
         root,
-        read_plib_registry(root),
         unmerge_no_replacement,
         being_unmerged,
         exclude_cpvs,
         replacement_preserved,
         replacement_needed,
-    )
+    } = args;
+    find_unused_preserved_libs_in(FindUnusedPreservedLibsInArgs {
+        root,
+        registry: read_plib_registry(root),
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    })
+}
+
+/// Arguments of [`find_unused_preserved_libs_in`].
+pub(crate) struct FindUnusedPreservedLibsInArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) registry: PlibRegistry,
+    pub(crate) unmerge_no_replacement: bool,
+    pub(crate) being_unmerged: &'a dyn Fn(&str) -> bool,
+    pub(crate) exclude_cpvs: &'a [String],
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
 
 /// [`find_unused_preserved_libs`] over an explicit registry (the one an
 /// unmerge in progress holds in memory, feat#157 S4.2).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn find_unused_preserved_libs_in(
-    root: &Path,
-    registry: PlibRegistry,
-    unmerge_no_replacement: bool,
-    being_unmerged: &dyn Fn(&str) -> bool,
-    exclude_cpvs: &[String],
-    replacement_preserved: &BTreeMap<String, Vec<String>>,
-    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    args: FindUnusedPreservedLibsInArgs<'_>,
 ) -> BTreeMap<String, BTreeSet<String>> {
+    let FindUnusedPreservedLibsInArgs {
+        root,
+        registry,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    } = args;
     let plib_dict = registry.preserved_libs();
     if plib_dict.is_empty() {
         return BTreeMap::new();
@@ -313,6 +367,16 @@ pub(crate) fn find_unused_preserved_libs_in(
     cpv_lib_map
 }
 
+/// Arguments of [`prune_unused_preserved_libs`].
+pub(crate) struct PruneUnusedPreservedLibsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) unmerge_no_replacement: bool,
+    pub(crate) being_unmerged: &'a dyn Fn(&str) -> bool,
+    pub(crate) exclude_cpvs: &'a [String],
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+}
+
 /// Real `dblink._prune_plib_registry`'s own tail
 /// (`_remove_preserved_libs` + the `removeFromContents` loop +
 /// `pruneNonExisting`), which real portage runs at the end of **both** a
@@ -333,49 +397,64 @@ pub(crate) fn find_unused_preserved_libs_in(
 /// through to `find_unused_preserved_libs` (see its own doc comment
 /// for the real grounding); every caller except the replace-loop
 /// unmerge passes `exclude_cpvs=&[]` and empty feeds.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn prune_unused_preserved_libs(
-    root: &Path,
-    unmerge_no_replacement: bool,
-    being_unmerged: &dyn Fn(&str) -> bool,
-    exclude_cpvs: &[String],
-    replacement_preserved: &BTreeMap<String, Vec<String>>,
-    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
+    args: PruneUnusedPreservedLibsArgs<'_>,
 ) -> Result<Vec<String>, String> {
-    prune_unused_preserved_libs_into(
+    let PruneUnusedPreservedLibsArgs {
         root,
         unmerge_no_replacement,
         being_unmerged,
         exclude_cpvs,
         replacement_preserved,
         replacement_needed,
-        None,
-    )
+    } = args;
+    prune_unused_preserved_libs_into(PruneUnusedPreservedLibsIntoArgs {
+        root,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+        retire: None,
+    })
+}
+
+/// Arguments of [`prune_unused_preserved_libs_into`].
+pub(crate) struct PruneUnusedPreservedLibsIntoArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) unmerge_no_replacement: bool,
+    pub(crate) being_unmerged: &'a dyn Fn(&str) -> bool,
+    pub(crate) exclude_cpvs: &'a [String],
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+    pub(crate) retire: Option<&'a mut RetireWrites>,
 }
 
 /// [`prune_unused_preserved_libs`], optionally reading the registry from
 /// `retire` and leaving its writes (the registry, the W4 rewrites) there
 /// instead of committing them (feat#157 S4.2). The files it removes are
 /// removed at once either way.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn prune_unused_preserved_libs_into(
-    root: &Path,
-    unmerge_no_replacement: bool,
-    being_unmerged: &dyn Fn(&str) -> bool,
-    exclude_cpvs: &[String],
-    replacement_preserved: &BTreeMap<String, Vec<String>>,
-    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
-    mut retire: Option<&mut RetireWrites>,
+    args: PruneUnusedPreservedLibsIntoArgs<'_>,
 ) -> Result<Vec<String>, String> {
-    let cpv_lib_map = find_unused_preserved_libs_in(
+    let PruneUnusedPreservedLibsIntoArgs {
         root,
-        plib_registry_for(root, retire.as_deref()),
         unmerge_no_replacement,
         being_unmerged,
         exclude_cpvs,
         replacement_preserved,
         replacement_needed,
-    );
+        mut retire,
+    } = args;
+    let cpv_lib_map = find_unused_preserved_libs_in(FindUnusedPreservedLibsInArgs {
+        root,
+        registry: plib_registry_for(root, retire.as_deref()),
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    });
 
     let mut removed: Vec<String> = Vec::new();
     let mut parent_dirs: BTreeSet<PathBuf> = BTreeSet::new();

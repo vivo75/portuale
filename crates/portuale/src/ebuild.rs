@@ -498,14 +498,14 @@ pub fn run(args: &[String]) -> ExitCode {
             } else if ebuild_unmerge::is_unmerge_command(cmd) {
                 ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
             } else if ebuild_package::is_package_command(cmd) {
-                ebuild_package::run_package(
+                ebuild_package::run_package(ebuild_package::RunPackageArgs {
                     ebuild_path,
-                    &root,
-                    &portage_tmpdir,
-                    &package_options,
-                    &[],
-                    "",
-                )
+                    root: &root,
+                    portage_tmpdir: &portage_tmpdir,
+                    options: &package_options,
+                    build_env: &[],
+                    use_flags: "",
+                })
             } else if ebuild_phases::is_standalone_phase_command(cmd) {
                 ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
                     ebuild_path,

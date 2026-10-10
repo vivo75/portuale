@@ -237,6 +237,46 @@ pub(crate) fn dep_running_tags(
         .collect()
 }
 
+/// Arguments of [`enqueue_flat_deps`].
+pub(crate) struct EnqueueFlatDepsArgs<'a> {
+    pub(crate) flat_deps: Vec<String>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) version: &'a str,
+    pub(crate) depth: u32,
+    pub(crate) parent_use: &'a HashSet<String>,
+    pub(crate) queue: &'a mut VecDeque<QueueItem>,
+    pub(crate) pending_blockers: &'a mut Vec<PendingBlocker>,
+    /// The same dependency string re-flattened over just the build-time
+    /// keys (`DEPEND`/`BDEPEND`) and just the run-time keys
+    /// (`RDEPEND`/`PDEPEND`/`IDEPEND`) -- an atom present in the first and
+    /// absent from the second is a `QueueItem::buildtime_hard` edge. `&[]`
+    /// (all edges soft) at the `--with-test-deps` call site: a `test?`
+    /// dep is `DepPriority.optional`, never a hard cycle contributor.
+    pub(crate) buildtime_atoms: &'a HashSet<String>,
+    pub(crate) runtime_atoms: &'a HashSet<String>,
+    /// Track X Slice B fix (#242): `BDEPEND` alone (subset of
+    /// `buildtime_atoms` above) -- a running-root `BDEPEND` edge is
+    /// `DepPriority` soft (its own bootstrap cycle scope, terminating
+    /// like the old sidecar `seen` guard instead of reporting), while a
+    /// running `DEPEND` edge stays hard (the cross-root `DEPEND` cycle
+    /// around `cyc0z-3` still reports, the #207 flip). Empty at the
+    /// `--with-test-deps` call sites and in the unit-test pin below.
+    pub(crate) bdepend_atoms: &'a HashSet<String>,
+    pub(crate) or_universe: &'a HashSet<String>,
+    /// Track X Slice B (#242): `dep_running_tags` over the same dependency
+    /// string -- an atom in this set resolves against the running root
+    /// (its `QueueItem::targets_running_root`). Empty at the
+    /// `--with-test-deps` call sites (a `test?` dep stays target-rooted)
+    /// and everywhere the roots coincide (strict no-op).
+    pub(crate) running_atoms: &'a HashSet<String>,
+    /// Track X Slice C (#242): the expanding entry's own root flag (its
+    /// `GraphEntry::targets_running_root`) -- the owner half of the
+    /// root-qualified edge each queued atom records. `false` for the
+    /// `--with-test-deps` call sites (a `test?` dep stays target-rooted)
+    /// and everywhere else the owner is target-rooted.
+    pub(crate) owner_targets_running_root: bool,
+}
+
 /// Queues every atom in `flat_deps` (a `use_reduce_flat`/
 /// `use_reduce_flat_subset` result) onto `queue` at `depth + 1`, owned by
 /// `key`/`version`, splitting off a blocker atom into `pending_blockers`
@@ -258,45 +298,22 @@ pub(crate) fn dep_running_tags(
 /// treated the same "can't tell, so pass it through as-is" way an
 /// unparseable-at-all token already silently falls through the
 /// `parse_atom` check below) is queued unevaluated rather than dropped.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn enqueue_flat_deps(
-    flat_deps: Vec<String>,
-    key: &(String, String),
-    version: &str,
-    depth: u32,
-    parent_use: &HashSet<String>,
-    queue: &mut VecDeque<QueueItem>,
-    pending_blockers: &mut Vec<PendingBlocker>,
-    // The same dependency string re-flattened over just the build-time
-    // keys (`DEPEND`/`BDEPEND`) and just the run-time keys
-    // (`RDEPEND`/`PDEPEND`/`IDEPEND`) -- an atom present in the first and
-    // absent from the second is a `QueueItem::buildtime_hard` edge. `&[]`
-    // (all edges soft) at the `--with-test-deps` call site: a `test?`
-    // dep is `DepPriority.optional`, never a hard cycle contributor.
-    buildtime_atoms: &HashSet<String>,
-    runtime_atoms: &HashSet<String>,
-    // Track X Slice B fix (#242): `BDEPEND` alone (subset of
-    // `buildtime_atoms` above) -- a running-root `BDEPEND` edge is
-    // `DepPriority` soft (its own bootstrap cycle scope, terminating
-    // like the old sidecar `seen` guard instead of reporting), while a
-    // running `DEPEND` edge stays hard (the cross-root `DEPEND` cycle
-    // around `cyc0z-3` still reports, the #207 flip). Empty at the
-    // `--with-test-deps` call sites and in the unit-test pin below.
-    bdepend_atoms: &HashSet<String>,
-    or_universe: &HashSet<String>,
-    // Track X Slice B (#242): `dep_running_tags` over the same dependency
-    // string -- an atom in this set resolves against the running root
-    // (its `QueueItem::targets_running_root`). Empty at the
-    // `--with-test-deps` call sites (a `test?` dep stays target-rooted)
-    // and everywhere the roots coincide (strict no-op).
-    running_atoms: &HashSet<String>,
-    // Track X Slice C (#242): the expanding entry's own root flag (its
-    // `GraphEntry::targets_running_root`) -- the owner half of the
-    // root-qualified edge each queued atom records. `false` for the
-    // `--with-test-deps` call sites (a `test?` dep stays target-rooted)
-    // and everywhere else the owner is target-rooted.
-    owner_targets_running_root: bool,
-) {
+pub(crate) fn enqueue_flat_deps(args: EnqueueFlatDepsArgs<'_>) {
+    let EnqueueFlatDepsArgs {
+        flat_deps,
+        key,
+        version,
+        depth,
+        parent_use,
+        queue,
+        pending_blockers,
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+        or_universe,
+        running_atoms,
+        owner_targets_running_root,
+    } = args;
     // Backlog #90 (S1): real pops each deplist last-declared-first
     // (stack discipline), BUT drains every plain dep before touching a
     // `||` group (`_dep_disjunctive_stack` only pops on an empty

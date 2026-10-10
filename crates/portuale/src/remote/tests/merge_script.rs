@@ -9,19 +9,36 @@ use super::*;
 fn generated_scripts_use_absolute_portuale_bin() {
     const ABS: &str = "/opt/bin/portuale-0123456789abcdef";
     let staged = render_test_staged();
-    let phase = phase_script("/work/probe-1.0", &staged, "setup", "/", "/work", "", ABS);
-    let regen = postinst_regen_script("/work/probe-1.0", &staged, "/", "/work", "", None, &[], ABS);
-    let merge = merge_script(
-        "/work/probe-1.0",
-        &staged,
-        "/",
-        "/var/db/pkg",
-        false,
-        "/etc",
-        "/etc/env.d",
-        None,
-        ABS,
-    )
+    let phase = phase_script(PhaseScriptArgs {
+        unit_dir: "/work/probe-1.0",
+        staged: &staged,
+        phase: "setup",
+        root: "/",
+        workdir_parent: "/work",
+        colormap: "",
+        portuale_bin: ABS,
+    });
+    let regen = postinst_regen_script(PostinstRegenScriptArgs {
+        unit_dir: "/work/probe-1.0",
+        staged: &staged,
+        root: "/",
+        workdir_parent: "/work",
+        colormap: "",
+        features: None,
+        locale: &[],
+        portuale_bin: ABS,
+    });
+    let merge = merge_script(MergeScriptArgs {
+        unit_dir: "/work/probe-1.0",
+        staged: &staged,
+        root: "/",
+        vdb: "/var/db/pkg",
+        stateless: false,
+        protect_list: "/etc",
+        mask_list: "/etc/env.d",
+        ledger: None,
+        portuale_bin: ABS,
+    })
     .expect("merge script renders");
     let helpers_flow = format!("{MERGE_HELPERS}\n{MERGE_FLOW}");
     let unpack = unpack_script("/work", "probe-1.0", 1234);
@@ -118,22 +135,22 @@ fn phase_exports_gates_merge_type_on_eapi() {
             phases: Vec::new(),
             postinst_defined: false,
         };
-        phase_exports(
-            "/tmp/work/build-info/probe-1.0.ebuild",
-            "/tmp/work",
-            "/",
-            "/tmp/work/image",
-            "/tmp/work/temp",
-            "/tmp/work/work",
-            "/tmp/work/homedir",
-            "/tmp/work/files",
-            "/tmp/work/bin",
-            "/tmp",
-            "",
-            &staged,
-            "setup",
-            "/opt/bin/portuale-0123456789abcdef",
-        )
+        phase_exports(PhaseExportsArgs {
+            ebuild: "/tmp/work/build-info/probe-1.0.ebuild",
+            build_dir: "/tmp/work",
+            root: "/",
+            image_dir: "/tmp/work/image",
+            temp_dir: "/tmp/work/temp",
+            work_subdir: "/tmp/work/work",
+            home_dir: "/tmp/work/homedir",
+            files_dir: "/tmp/work/files",
+            bin_dir: "/tmp/work/bin",
+            tmpdir: "/tmp",
+            colormap: "",
+            staged: &staged,
+            phase: "setup",
+            portuale_bin: "/opt/bin/portuale-0123456789abcdef",
+        })
     }
     assert!(eapi_exports_merge_type("4"));
     assert!(eapi_exports_merge_type("8"));
@@ -213,18 +230,17 @@ fn phase_script_runs_pkg_pretend_from_saved_env() {
         phases: vec!["pretend".to_string()],
         postinst_defined: false,
     };
-    let script = phase_script(
-        unit.to_str().unwrap(),
-        &staged,
-        "pretend",
-        root.to_str().unwrap(),
-        tmp.to_str().unwrap(),
-        "",
-        // The phase may invoke the shipped `portuale-python` shim,
+    let script = phase_script(PhaseScriptArgs {
+        unit_dir: unit.to_str().unwrap(),
+        staged: &staged,
+        phase: "pretend",
+        root: root.to_str().unwrap(),
+        workdir_parent: tmp.to_str().unwrap(),
+        colormap: "", // The phase may invoke the shipped `portuale-python` shim,
         // which execs `$PORTUALE_BIN`: a real binary, never the
         // libtest harness (#326 D8).
-        s8_portuale_bin().to_str().unwrap(),
-    );
+        portuale_bin: s8_portuale_bin().to_str().unwrap(),
+    });
     let output = std::process::Command::new("bash")
         .args(["-s"])
         .stdin(std::process::Stdio::piped())
@@ -278,16 +294,16 @@ fn postinst_regen_script_matches_portage_shell_shape() {
         ("LANG".to_string(), "C.UTF-8".to_string()),
         ("LC_NUMERIC".to_string(), "a b".to_string()),
     ];
-    let script = postinst_regen_script(
-        "/work/regen-1.0",
-        &staged,
-        "/",
-        "/work",
-        "never",
-        Some("sandbox merge-time"),
-        &locale,
-        "/opt/bin/portuale-0123456789abcdef",
-    );
+    let script = postinst_regen_script(PostinstRegenScriptArgs {
+        unit_dir: "/work/regen-1.0",
+        staged: &staged,
+        root: "/",
+        workdir_parent: "/work",
+        colormap: "never",
+        features: Some("sandbox merge-time"),
+        locale: &locale,
+        portuale_bin: "/opt/bin/portuale-0123456789abcdef",
+    });
     assert!(
         script.contains("unset O\n"),
         "O must go (real environ_filter):\n{script}"

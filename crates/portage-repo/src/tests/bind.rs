@@ -137,7 +137,14 @@ fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
 #[test]
 fn bind_slot_operator_deps_binds_against_entries_then_installed() {
     let dir = slotundo_temp_dir("bind");
-    slotundo_vdb(&dir, "souprov", "1.0", "0/1", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souprov",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
     let provider = slotundo_provider_entry();
 
     // Merge-bound entry wins over the installed instance (real

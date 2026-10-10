@@ -204,16 +204,16 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                 // retlist, so the partial goes in reversed.
                 (0..display_entries.len()).rev().collect()
             } else {
-                portage_repo::tree_display_order(
-                    display_entries,
-                    expanded_atoms,
+                portage_repo::tree_display_order(portage_repo::TreeDisplayOrderArgs {
+                    entries: display_entries,
+                    top_level_atoms: expanded_atoms,
                     config,
                     root,
                     implicit_system_deps,
                     repos,
                     dynamic_deps,
-                    &result.circular_dependency,
-                )
+                    circular: &result.circular_dependency,
+                })
             };
             *rendered_rows = print_tree(PrintTreeArgs {
                 entries: display_entries,
@@ -252,32 +252,32 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                 circular: &result.circular_dependency,
             });
             for i in 0..display_entries.len() {
-                print_entry_line(
-                    display_entries,
+                print_entry_line(PrintEntryLineArgs {
+                    entries: display_entries,
                     root,
-                    i,
-                    "",
-                    true,
+                    index: i,
+                    indent: "",
+                    ordered: true,
                     top_level_pkgs,
                     onlydeps,
                     oneshot,
-                    disp_verbose,
-                    disp_quiet,
+                    verbose: disp_verbose,
+                    quiet: disp_quiet,
                     alphabetical,
                     columns,
                     columnwidth,
-                    root_deps_running_root.as_deref(),
+                    running_root: root_deps_running_root.as_deref(),
                     color,
                     system_atoms,
                     world_atoms,
                     force_reinstall_cps,
-                    &mut *blocker_lines,
-                    &result.masked_deps,
-                    &result.use_unsat_deps,
-                    &result.plain_miss_deps,
-                    circular_forced_display,
-                    &result.circular_dependency,
-                );
+                    blocker_lines: &mut *blocker_lines,
+                    masked_deps: &result.masked_deps,
+                    use_unsat_deps: &result.use_unsat_deps,
+                    plain_miss_deps: &result.plain_miss_deps,
+                    force_sizes: circular_forced_display,
+                    circular: &result.circular_dependency,
+                });
                 for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
                     println!("{line}");
                 }
@@ -366,12 +366,12 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                         deferred_abort_unsat.push(i);
                         continue;
                     }
-                    print_entry_line(
-                        &result.entries,
+                    print_entry_line(PrintEntryLineArgs {
+                        entries: &result.entries,
                         root,
-                        i,
-                        "",
-                        true,
+                        index: i,
+                        indent: "",
+                        ordered: true,
                         top_level_pkgs,
                         onlydeps,
                         oneshot,
@@ -380,18 +380,18 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                         alphabetical,
                         columns,
                         columnwidth,
-                        root_deps_running_root.as_deref(),
+                        running_root: root_deps_running_root.as_deref(),
                         color,
                         system_atoms,
                         world_atoms,
                         force_reinstall_cps,
-                        &mut thrown_away,
-                        &result.masked_deps,
-                        &result.use_unsat_deps,
-                        &result.plain_miss_deps,
-                        false,
-                        &result.circular_dependency,
-                    );
+                        blocker_lines: &mut thrown_away,
+                        masked_deps: &result.masked_deps,
+                        use_unsat_deps: &result.use_unsat_deps,
+                        plain_miss_deps: &result.plain_miss_deps,
+                        force_sizes: false,
+                        circular: &result.circular_dependency,
+                    });
                 }
             }
         }

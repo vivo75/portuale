@@ -546,21 +546,21 @@ fn a_source_merge_on_sqlite_matches_the_files_merge() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 fn unmerge_standalone(root: &Path, ptmp: &Path, pf: &str, pn: &str) {
-    unmerge_one_installed(
+    unmerge_one_installed(UnmergeOneInstalledArgs {
         root,
-        "dev-libs",
-        pn,
+        category: "dev-libs",
+        package: pn,
         pf,
-        &[],
-        &ptmp.join("scratch"),
-        ptmp,
-        &MergeOptions::default(),
-        None,
-        false,
-        &BTreeMap::new(),
-        &[],
-        None,
-    )
+        also_keep: &[],
+        scratch_dir: &ptmp.join("scratch"),
+        portage_tmpdir: ptmp,
+        options: &MergeOptions::default(),
+        backup: None,
+        is_replacement: false,
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+        deferred_delete: None,
+    })
     .expect("unmerge succeeds");
 }
 
@@ -1088,17 +1088,17 @@ fn a_later_replaced_instance_does_not_see_the_earlier_ones_needed_on_a_database(
         let portage_tmpdir = tmp.join("tmp");
         std::fs::create_dir_all(&scratch).unwrap();
         std::fs::create_dir_all(&portage_tmpdir).unwrap();
-        let replaced = unmerge_replaced_same_slot(
-            &root,
-            "dev-libs",
-            "oldapp",
-            "newapp-1.0",
-            "0",
-            &scratch,
-            &portage_tmpdir,
-            &MergeOptions::default(),
-            &BTreeMap::new(),
-        )
+        let replaced = unmerge_replaced_same_slot(UnmergeReplacedSameSlotArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "oldapp",
+            new_pf: "newapp-1.0",
+            main_slot: "0",
+            scratch_dir: &scratch,
+            portage_tmpdir: &portage_tmpdir,
+            options: &MergeOptions::default(),
+            replacement_preserved: &BTreeMap::new(),
+        })
         .expect("the replace loop succeeds");
         assert_eq!(replaced.len(), 2, "both instances are replaced");
         (

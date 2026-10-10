@@ -61,14 +61,14 @@ pub(crate) fn use_flags_if_conditional(args: UseFlagsIfConditionalArgs<'_>) -> H
     }
     // Owned (not the shared `Rc`): cold path, one clone per call -- the
     // same cost as before #103.
-    effective_use_flags(
+    effective_use_flags(EffectiveUseFlagsArgs {
         config,
-        &candidate.iuse,
-        &candidate.keywords,
+        iuse: &candidate.iuse,
+        keywords: &candidate.keywords,
         candidate_str,
         category,
         package,
-    )
+    })
     .as_ref()
     .clone()
 }

@@ -869,6 +869,16 @@ fn require_signing_config(options: &PackageOptions) -> Result<(), String> {
     Ok(())
 }
 
+/// Arguments of [`run_package`].
+pub struct RunPackageArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub options: &'a PackageOptions,
+    pub build_env: &'a [(String, String)],
+    pub use_flags: &'a str,
+}
+
 ///
 /// `build_env`: the resolved phase environment the caller wants the
 /// `install` chain to run with. `--buildpkgonly` passes the full
@@ -877,15 +887,15 @@ fn require_signing_config(options: &PackageOptions) -> Result<(), String> {
 /// resolved config -- `phase_env_vars`' own curated base stands).
 /// `use_flags`: real `Package.use.enabled`, written to the `Packages`
 /// index `USE` field; `""` for standalone.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn run_package(
-    ebuild_path: &Path,
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &PackageOptions,
-    build_env: &[(String, String)],
-    use_flags: &str,
-) -> Result<i32, String> {
+pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
+    let RunPackageArgs {
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        options,
+        build_env,
+        use_flags,
+    } = args;
     require_signing_config(options)?;
     let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
         ebuild_path,
@@ -919,14 +929,24 @@ pub fn run_package(
         .find(|(k, _)| k == "FEATURES")
         .map(|(_, v)| v.split_whitespace().any(|t| t == "binpkg-multi-instance"))
         .unwrap_or(options.binpkg_multi_instance);
-    package_after_install(
+    package_after_install(PackageAfterInstallArgs {
         ebuild_path,
         root,
         portage_tmpdir,
         options,
         use_flags,
         per_entry_binpkg_multi_instance,
-    )
+    })
+}
+
+/// Arguments of [`package_after_install`].
+pub(crate) struct PackageAfterInstallArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a PackageOptions,
+    pub(crate) use_flags: &'a str,
+    pub(crate) per_entry_binpkg_multi_instance: bool,
 }
 
 /// The packaging tail of `run_package`, split out so it can also run as a
@@ -950,15 +970,15 @@ pub fn run_package(
 /// logic. Run-wide single + per-entry token writes no `BUILD_ID`
 /// anywhere here, where real writes index `None` and vdb `-1` (S1
 /// D1): a documented `str(None)`-wart divergence, not mirrored.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn package_after_install(
-    ebuild_path: &Path,
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &PackageOptions,
-    use_flags: &str,
-    per_entry_binpkg_multi_instance: bool,
-) -> Result<i32, String> {
+pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result<i32, String> {
+    let PackageAfterInstallArgs {
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        options,
+        use_flags,
+        per_entry_binpkg_multi_instance,
+    } = args;
     // Same real gate as `run_package`'s (which already ran for the
     // `ebuild package` / `--buildpkgonly` paths) -- repeated here so
     // the `FEATURES=buildpkg` side-effect path through
@@ -1033,13 +1053,12 @@ pub(crate) fn package_after_install(
             .unwrap_or_default(),
         std::process::id()
     ));
-    let package_status = invoke_dyn_package(
+    let package_status = invoke_dyn_package(InvokeDynPackageArgs {
         ebuild_path,
         portage_tmpdir,
         root,
         options,
-        &tmp_path,
-        // Real `EbuildBinpkg._start`'s per-package gate
+        binpkg_path: &tmp_path, // Real `EbuildBinpkg._start`'s per-package gate
         // (`EbuildBinpkg.py:47-48`, backlog #147 S1 ruling (i)): the
         // `BUILD_ID` export follows the entry's own token, while the
         // allocation above stays run-wide. A negated entry in a
@@ -1048,8 +1067,8 @@ pub(crate) fn package_after_install(
         // run-wide-single run takes the single path with none either
         // (real writes `None`/`-1` there -- documented divergence,
         // see the function docs).
-        build_id.filter(|_| per_entry_binpkg_multi_instance),
-    )?;
+        build_id: build_id.filter(|_| per_entry_binpkg_multi_instance),
+    })?;
     if package_status != 0 {
         let _ = std::fs::remove_file(&tmp_path);
         return Ok(package_status);
@@ -1311,6 +1330,16 @@ fn package_makeopts(ebuild_path: &Path, config_root: &Path, root: &Path) -> Opti
         })
 }
 
+/// Arguments of [`invoke_dyn_package`].
+struct InvokeDynPackageArgs<'a> {
+    ebuild_path: &'a Path,
+    portage_tmpdir: &'a Path,
+    root: &'a Path,
+    options: &'a PackageOptions,
+    binpkg_path: &'a Path,
+    build_id: Option<u64>,
+}
+
 /// Runs the real, unmodified `bin/misc-functions.sh __dyn_package`
 /// against `ebuild_path` (tars `${D}` + appends `${PORTAGE_BUILDDIR}/
 /// build-info` as the xpak segment / hands both to `gpkg-helper.py`),
@@ -1332,15 +1361,15 @@ fn package_makeopts(ebuild_path: &Path, config_root: &Path, root: &Path) -> Opti
 /// fallback was silently doing the archive's job), and, if
 /// `FEATURES=packdebug` is also set, real `__generate_packdebug`
 /// (needs `BUILD_ID` for the debug tarball's own filename).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn invoke_dyn_package(
-    ebuild_path: &Path,
-    portage_tmpdir: &Path,
-    root: &Path,
-    options: &PackageOptions,
-    binpkg_path: &Path,
-    build_id: Option<u64>,
-) -> Result<i32, String> {
+fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
+    let InvokeDynPackageArgs {
+        ebuild_path,
+        portage_tmpdir,
+        root,
+        options,
+        binpkg_path,
+        build_id,
+    } = args;
     let binpkg_format = options.binpkg_format.as_str();
     let mut extra_env = vec![
         ("PKGDIR".to_string(), options.pkgdir.display().to_string()),
@@ -1480,6 +1509,19 @@ fn invoke_dyn_package(
     })
 }
 
+/// Arguments of [`quickpkg_from_vdb`].
+pub(crate) struct QuickpkgFromVdbArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) scratch_ebuild_dir: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a PackageOptions,
+    pub(crate) config_protect: &'a str,
+    pub(crate) config_protect_mask: &'a str,
+}
+
 /// Real `dblink.quickpkg` + `_quickpkg_dblink` (`vartree.py:2307` /
 /// `:6296`) -- `FEATURES=unmerge-backup`'s pre-unmerge binpkg of the
 /// **installed** package, built from its files under `${ROOT}` per
@@ -1508,18 +1550,18 @@ fn invoke_dyn_package(
 /// `_allocate_filename_multi`'s `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.
 /// <suffix>` (real `bin/quickpkg` -> `bintree.inject` -> `getname(...,
 /// allocate_new=True)`); otherwise the bare `<cat>/<pf>.<ext>`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn quickpkg_from_vdb(
-    root: &Path,
-    category: &str,
-    package: &str,
-    pf: &str,
-    scratch_ebuild_dir: &Path,
-    portage_tmpdir: &Path,
-    options: &PackageOptions,
-    config_protect: &str,
-    config_protect_mask: &str,
-) -> Result<Option<PathBuf>, String> {
+pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<PathBuf>, String> {
+    let QuickpkgFromVdbArgs {
+        root,
+        category,
+        package,
+        pf,
+        scratch_ebuild_dir,
+        portage_tmpdir,
+        options,
+        config_protect,
+        config_protect_mask,
+    } = args;
     let ext = binpkg_extension(&options.binpkg_format)?;
     // The entry's files are read through the root's installed-database
     // backend (feat#157 S1.6; `files`: one `open` each, as before). The
@@ -1681,14 +1723,14 @@ pub(crate) fn quickpkg_from_vdb(
             .unwrap_or_default(),
         std::process::id()
     ));
-    let status = invoke_dyn_package(
-        &scratch_ebuild,
+    let status = invoke_dyn_package(InvokeDynPackageArgs {
+        ebuild_path: &scratch_ebuild,
         portage_tmpdir,
         root,
         options,
-        &tmp_path,
+        binpkg_path: &tmp_path,
         build_id,
-    )?;
+    })?;
     if status != 0 {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(format!("{category}/{pf}: __dyn_package failed ({status})"));
@@ -2520,17 +2562,17 @@ mod tests {
             std::fs::write(vdb_dir.join(name), content).unwrap();
         }
 
-        let built = quickpkg_from_vdb(
-            &root,
-            "dev-libs",
-            "probe",
-            "probe-1.0",
-            &scratch,
-            &portage_tmpdir,
-            &options,
-            "",
-            "",
-        )
+        let built = quickpkg_from_vdb(QuickpkgFromVdbArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "probe",
+            pf: "probe-1.0",
+            scratch_ebuild_dir: &scratch,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            config_protect: "",
+            config_protect_mask: "",
+        })
         .expect("quickpkg_from_vdb succeeds")
         .expect("archive built");
         assert_eq!(built, options.pkgdir.join("dev-libs/probe-1.0.tbz2"));
@@ -2623,8 +2665,15 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
-            .expect("run_package succeeds");
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
         assert_eq!(status, 0);
 
         // A real file, real bzip2+tar+XPAK content -- not portuale's
@@ -2728,14 +2777,14 @@ mod tests {
         .expect("install succeeds");
         assert_eq!(status, 0);
 
-        let status = package_after_install(
-            &ebuild,
-            &root,
-            &portage_tmpdir,
-            &options,
-            "foo bar",
-            options.binpkg_multi_instance,
-        )
+        let status = package_after_install(PackageAfterInstallArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            use_flags: "foo bar",
+            per_entry_binpkg_multi_instance: options.binpkg_multi_instance,
+        })
         .expect("package_after_install succeeds");
         assert_eq!(status, 0);
 
@@ -2786,14 +2835,14 @@ mod tests {
         .expect("install succeeds");
         assert_eq!(status, 0);
 
-        let status = package_after_install(
-            &ebuild,
-            &root,
-            &portage_tmpdir,
-            &options,
-            "",
-            options.binpkg_multi_instance,
-        )
+        let status = package_after_install(PackageAfterInstallArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            use_flags: "",
+            per_entry_binpkg_multi_instance: options.binpkg_multi_instance,
+        })
         .expect("package_after_install succeeds");
         assert_eq!(status, 0);
 
@@ -2869,17 +2918,17 @@ mod tests {
             std::fs::write(vdb_dir.join(name), content).unwrap();
         }
 
-        let built = quickpkg_from_vdb(
-            &root,
-            "dev-libs",
-            "probe",
-            "probe-1.0",
-            &scratch,
-            &portage_tmpdir,
-            &options,
-            "",
-            "",
-        )
+        let built = quickpkg_from_vdb(QuickpkgFromVdbArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "probe",
+            pf: "probe-1.0",
+            scratch_ebuild_dir: &scratch,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            config_protect: "",
+            config_protect_mask: "",
+        })
         .expect("quickpkg_from_vdb succeeds")
         .expect("archive built");
         assert_eq!(built, options.pkgdir.join("dev-libs/probe-1.0.gpkg.tar"));
@@ -2912,8 +2961,15 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
-            .expect("run_package succeeds");
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
         assert_eq!(status, 0);
 
         // A real `.gpkg.tar` -- real, unmodified `bin/gpkg-helper.py
@@ -2995,11 +3051,25 @@ mod tests {
         // Build it twice -- real `FEATURES=binpkg-multi-instance` keeps
         // both builds around under distinct `BUILD_ID`s, rather than the
         // single-instance default of overwriting the same bare filename.
-        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
-            .expect("run_package succeeds");
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
         assert_eq!(status, 0);
-        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
-            .expect("run_package succeeds");
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
         assert_eq!(status, 0);
 
         // Real `bintree._allocate_filename_multi`: `<pkgdir>/<cat>/<pn>/
@@ -3109,8 +3179,15 @@ mod tests {
                 binpkg_multi_instance: multi,
                 ..PackageOptions::default()
             };
-            let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
-                .expect("run_package succeeds");
+            let status = run_package(RunPackageArgs {
+                ebuild_path: &ebuild,
+                root: &root,
+                portage_tmpdir: &portage_tmpdir,
+                options: &options,
+                build_env: &[],
+                use_flags: "",
+            })
+            .expect("run_package succeeds");
             assert_eq!(status, 0);
             let archive = options.pkgdir.join(archive);
             let md5 = crate::ebuild_merge::md5_hex(&archive).unwrap();
@@ -3158,8 +3235,15 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
-            .expect("run_package succeeds");
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
         assert_eq!(status, 0);
 
         let xpak = options
@@ -3242,8 +3326,15 @@ mod tests {
         std::fs::create_dir_all(binpkg_path.parent().unwrap()).unwrap();
         std::fs::write(&binpkg_path, b"OLD-CONTENT").unwrap();
 
-        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
-            .expect("run_package returns Ok(status)");
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package returns Ok(status)");
         assert_ne!(
             status, 0,
             "packaging should fail with an unresolvable compressor"

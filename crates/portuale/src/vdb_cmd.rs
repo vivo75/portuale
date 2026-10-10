@@ -459,11 +459,13 @@ fn mount_spec(
     drop(open_db()?);
     if foreground {
         crate::vdb_fuse::serve(
-            open_db()?,
-            &mountpoint,
-            &fsname,
-            allow_other,
-            opts.as_ref(),
+            crate::vdb_fuse::ServeArgs {
+                db: open_db()?,
+                mountpoint: &mountpoint,
+                fsname: &fsname,
+                allow_other,
+                rw: opts.as_ref(),
+            },
             || {},
         )
         .map_err(|e| format!("{}: {e}", mountpoint.display()))?;

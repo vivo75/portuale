@@ -408,17 +408,17 @@ pub fn merge_binpkg(
             preserve_paths.iter().cloned().collect(),
         )])
     };
-    let replaced_same_slot = unmerge_replaced_same_slot(
+    let replaced_same_slot = unmerge_replaced_same_slot(UnmergeReplacedSameSlotArgs {
         root,
-        &category,
-        &package,
-        &pf,
-        &main_slot,
-        &builddir.join("unmerge-src"),
+        category: &category,
+        package: &package,
+        new_pf: &pf,
+        main_slot: &main_slot,
+        scratch_dir: &builddir.join("unmerge-src"),
         portage_tmpdir,
         options,
-        &replacement_preserved,
-    )?;
+        replacement_preserved: &replacement_preserved,
+    })?;
     // Publish, then real `dblink.treewalk()`'s own post-replace-loop
     // registration (`vartree.py:5266-5272`) -- identical to
     // `merge_after_install` (one commit on a database backend, see
@@ -468,7 +468,14 @@ pub fn merge_binpkg(
         // (identical to `merge_after_install`). No include feed: the new
         // entry is already renamed into place, so its own lines are
         // enumerated (backlog #224).
-        prune_unused_preserved_libs(root, false, &|_| false, &[], &BTreeMap::new(), &[])?;
+        prune_unused_preserved_libs(PruneUnusedPreservedLibsArgs {
+            root,
+            unmerge_no_replacement: false,
+            being_unmerged: &|_| false,
+            exclude_cpvs: &[],
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+        })?;
     }
 
     // Real `dblink.merge()`'s `_elog_process()`, before the builddir

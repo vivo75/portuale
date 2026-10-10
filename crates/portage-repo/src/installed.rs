@@ -647,14 +647,14 @@ pub fn candidate_use_flags_display(
         "{category}/{package}-{version}:{}/{}::{}",
         candidate.slot, candidate.sub_slot, candidate.repo_name
     );
-    let use_flags = effective_use_flags(
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,
         iuse,
-        &candidate.keywords,
-        &candidate_str,
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-    );
+    });
     let mut seen: HashSet<String> = HashSet::new();
     let mut display: Vec<(String, bool)> = iuse
         .split_whitespace()
@@ -711,14 +711,14 @@ pub fn candidate_effective_use_flags(
         "{category}/{package}-{version}:{}/{}::{}",
         candidate.slot, candidate.sub_slot, candidate.repo_name
     );
-    let use_flags = effective_use_flags(
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,
         iuse,
-        &candidate.keywords,
-        &candidate_str,
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-    );
+    });
     let mut sorted: Vec<String> = use_flags.iter().cloned().collect();
     sorted.sort_by_key(|f| alnum_sort_key(f));
     sorted

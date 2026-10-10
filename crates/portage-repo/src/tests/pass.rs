@@ -13,16 +13,23 @@ use super::*;
 fn multi_instance_walk_reads_the_selected_instances_own_deps() {
     let dir = slotundo_temp_dir("1010-multiinst-deps");
     let repo = dir.join("scratchrepo");
-    blocker_161_write_pkg(
-        &repo,
-        "dev-libs/spectre",
-        "0.2.12",
-        "0",
-        "",
-        "dev-libs/newdep",
-    );
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo,
+        cp: "dev-libs/spectre",
+        pv: "0.2.12",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/newdep",
+    });
     for cp in ["dev-libs/olddep", "dev-libs/newdep"] {
-        blocker_161_write_pkg(&repo, cp, "1.0", "0", "", "");
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repo,
+            cp,
+            pv: "1.0",
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
     }
     let repos = vec![blocker_161_repo_config(repo)];
     let mut config = test_config();
@@ -203,7 +210,14 @@ fn run_pass_nodeps_skips_the_unwalked_blocker_scan() {
     // `Atom('!dev-libs/scanvictim-1.0')` raises too).
     mk("scanowner-1.0", "0", "!dev-libs/scanvictim");
     mk("scanvictim-1.0", "0", "");
-    let scratch = blocker_161_scratch_repo(&dir, "dev-libs/scanvictim", "2.0", "0", "", "");
+    let scratch = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/scanvictim",
+        pv: "2.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
     let config = test_config();
     let mut repos = find_repos(&fixtures_root()).expect("fixture repos");
     repos.push(scratch);
@@ -362,14 +376,14 @@ fn run_pass_with_test_deps_walks_test_conditionals() {
 #[test]
 fn run_pass_arms_the_missing_dep_trigger() {
     let dir = slotundo_temp_dir("161-run-missdep");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/nosuchdep",
-    );
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosuchdep",
+    });
     let config = test_config();
     let atoms = vec!["dev-libs/depparent".to_string()];
     let opts = CtxOpts161 {
@@ -390,15 +404,22 @@ fn run_pass_arms_the_missing_dep_trigger() {
 #[test]
 fn run_pass_flags_nvc_under_masks_suppressed() {
     let dir = slotundo_temp_dir("161-run-suppr");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/victim2 dev-libs/victim2:0",
-    );
-    blocker_161_write_pkg(&repos.location, "dev-libs/victim2", "1.0", "0", "", "");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim2 dev-libs/victim2:0",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repos.location,
+        cp: "dev-libs/victim2",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
     let config = test_config();
     let atoms = vec!["dev-libs/depparent".to_string()];
     let walk = |masks: bool| {
@@ -442,15 +463,22 @@ fn run_pass_flags_nvc_under_masks_suppressed() {
 #[test]
 fn run_pass_reports_a_masked_dependency_once() {
     let dir = slotundo_temp_dir("161-run-depmask");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/victim2 dev-libs/victim2:0",
-    );
-    blocker_161_write_pkg(&repos.location, "dev-libs/victim2", "1.0", "0", "", "");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim2 dev-libs/victim2:0",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repos.location,
+        cp: "dev-libs/victim2",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
     let mut config = test_config();
     config.package_mask = vec!["dev-libs/victim2".to_string()];
     let atoms = vec!["dev-libs/depparent".to_string()];
@@ -579,19 +607,26 @@ fn run_pass_usepkg_selects_the_staged_binary() {
 #[test]
 fn run_pass_binary_hides_buildtime_deps_without_bdeps() {
     let dir = slotundo_temp_dir("161-run-binbdep");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/binparent",
-        "1.0",
-        "0",
-        "dev-libs/buildonlydep",
-        "dev-libs/runtimedep",
-    );
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/binparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "dev-libs/buildonlydep",
+        rdepend: "dev-libs/runtimedep",
+    });
     for (cp, pv) in [
         ("dev-libs/buildonlydep", "1.0"),
         ("dev-libs/runtimedep", "1.0"),
     ] {
-        blocker_161_write_pkg(&repos.location, cp, pv, "0", "", "");
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repos.location,
+            cp,
+            pv,
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
     }
     let mut config = test_config();
     config.scanned_binpkgs = Some(vec![HashMap::from([
@@ -637,14 +672,14 @@ fn run_pass_binary_hides_buildtime_deps_without_bdeps() {
 #[test]
 fn run_pass_dedups_plain_miss_reports() {
     let dir = slotundo_temp_dir("161-run-missdup");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/nosuchdep dev-libs/nosuchdep:0",
-    );
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosuchdep dev-libs/nosuchdep:0",
+    });
     let config = test_config();
     let atoms = vec!["dev-libs/depparent".to_string()];
     let opts = CtxOpts161 {
@@ -692,14 +727,14 @@ fn run_pass_records_skipped_updates_for_solved_conflicts() {
 #[test]
 fn run_pass_arms_the_trigger_for_an_upgrading_parent() {
     let dir = slotundo_temp_dir("161-run-misup");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparentup",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/nosuchdep",
-    );
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparentup",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosuchdep",
+    });
     let d = dir.join("var/db/pkg/dev-libs/depparentup-0.9");
     fs::create_dir_all(&d).unwrap();
     fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -731,7 +766,14 @@ fn run_pass_arms_the_trigger_for_an_upgrading_parent() {
 #[test]
 fn run_pass_drops_an_unresolvable_set_member() {
     let dir = slotundo_temp_dir("286-run-missing-arg");
-    let repos = blocker_161_scratch_repo(&dir, "dev-libs/someother", "1.0", "0", "", "");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/someother",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
     let config = test_config();
     let atoms = vec!["dev-libs/nosuchpkg".to_string()];
     let walk = |from_set: bool| {
@@ -776,14 +818,14 @@ fn run_pass_reports_each_plain_miss_once() {
     let dir = slotundo_temp_dir("161-run-miss4");
     // Four missing deps: two sharing dev-libs, two sharing the
     // package name across categories.
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/nosucha dev-libs/nosuchb dev-libs/dupmiss sys-libs/dupmiss",
-    );
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosucha dev-libs/nosuchb dev-libs/dupmiss sys-libs/dupmiss",
+    });
     let config = test_config();
     let atoms = vec!["dev-libs/depparent".to_string()];
     let opts = CtxOpts161 {
@@ -818,14 +860,14 @@ fn run_pass_reports_each_plain_miss_once() {
 #[test]
 fn run_pass_repeated_miss_without_masks_is_not_suppressed() {
     let dir = slotundo_temp_dir("161-run-nosuppr");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/nosuchdep dev-libs/nosuchdep:0",
-    );
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosuchdep dev-libs/nosuchdep:0",
+    });
     let config = test_config();
     let atoms = vec!["dev-libs/depparent".to_string()];
     let opts = CtxOpts161 {
@@ -844,21 +886,28 @@ fn run_pass_repeated_miss_without_masks_is_not_suppressed() {
 #[test]
 fn run_pass_reports_each_masked_dep_once() {
     let dir = slotundo_temp_dir("161-run-mask4");
-    let repo = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/masked1 dev-libs/masked2 dev-libs/dupmask sys-libs/dupmask",
-    );
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/masked1 dev-libs/masked2 dev-libs/dupmask sys-libs/dupmask",
+    });
     for (cp, pv) in [
         ("dev-libs/masked1", "1.0"),
         ("dev-libs/masked2", "1.0"),
         ("dev-libs/dupmask", "1.0"),
         ("sys-libs/dupmask", "1.0"),
     ] {
-        blocker_161_write_pkg(&repo.location, cp, pv, "0", "", "");
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repo.location,
+            cp,
+            pv,
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
     }
     let mut config = test_config();
     config.package_mask = vec![
@@ -898,14 +947,14 @@ fn run_pass_reports_each_masked_dep_once() {
 #[test]
 fn run_pass_reports_each_use_unsat_once() {
     let dir = slotundo_temp_dir("161-run-use4");
-    let repo = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/unsat1[soflag] dev-libs/unsat2[soflag] dev-libs/dupuse[soflag] sys-libs/dupuse[soflag]",
-    );
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/unsat1[soflag] dev-libs/unsat2[soflag] dev-libs/dupuse[soflag] sys-libs/dupuse[soflag]",
+    });
     for (cp, pv) in [
         ("dev-libs/unsat1", "1.0"),
         ("dev-libs/unsat2", "1.0"),
@@ -965,23 +1014,30 @@ fn run_pass_reports_each_use_unsat_once() {
 #[test]
 fn run_pass_files_one_row_per_blocker_owner() {
     let dir = slotundo_temp_dir("161-run-blk2");
-    let repo = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/blockerparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/victim !dev-libs/victim",
-    );
-    blocker_161_write_pkg(&repo.location, "dev-libs/victim", "1.0", "0", "", "");
-    blocker_161_write_pkg(
-        &repo.location,
-        "dev-libs/blockerparent2",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/victim !dev-libs/victim",
-    );
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/blockerparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim !dev-libs/victim",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo.location,
+        cp: "dev-libs/victim",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo.location,
+        cp: "dev-libs/blockerparent2",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim !dev-libs/victim",
+    });
     let d = dir.join("var/db/pkg/dev-libs/victim-1.0");
     fs::create_dir_all(&d).unwrap();
     fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -1028,20 +1084,27 @@ fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
     // dep in `BDEPEND` on both sides, so the binary survives
     // selection and the walk genuinely takes the all-keys arm.
     let repo = dir.join("scratchrepo");
-    blocker_161_write_pkg_full(
-        &repo,
-        "dev-libs/binparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/runtimedep",
-        "dev-libs/buildonlydep",
-    );
+    blocker_161_write_pkg_full(Blocker161WritePkgFullArgs {
+        repo: &repo,
+        cp: "dev-libs/binparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/runtimedep",
+        bdepend: "dev-libs/buildonlydep",
+    });
     for (cp, pv) in [
         ("dev-libs/buildonlydep", "1.0"),
         ("dev-libs/runtimedep", "1.0"),
     ] {
-        blocker_161_write_pkg(&repo, cp, pv, "0", "", "");
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repo,
+            cp,
+            pv,
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
     }
     let repos = vec![blocker_161_repo_config(repo)];
     let mut config = test_config();
@@ -1103,16 +1166,23 @@ fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
 #[test]
 fn run_pass_buildpkgonly_walks_buildtime_keys_only() {
     let dir = slotundo_temp_dir("161-run-bpkgonly");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/bpkgparent",
-        "1.0",
-        "0",
-        "dev-libs/builddep",
-        "dev-libs/rundep",
-    );
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/bpkgparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "dev-libs/builddep",
+        rdepend: "dev-libs/rundep",
+    });
     for (cp, pv) in [("dev-libs/builddep", "1.0"), ("dev-libs/rundep", "1.0")] {
-        blocker_161_write_pkg(&repos.location, cp, pv, "0", "", "");
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repos.location,
+            cp,
+            pv,
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
     }
     let config = test_config();
     let atoms = vec!["dev-libs/bpkgparent".to_string()];
@@ -1166,15 +1236,22 @@ fn run_pass_buildpkgonly_walks_buildtime_keys_only() {
 #[test]
 fn run_pass_plain_miss_ignores_other_cps_reports() {
     let dir = slotundo_temp_dir("161-run-misscombo");
-    let repo = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/plainmiss sys-libs/dupmiss dev-libs/dupmiss[soflag] dev-libs/unsatone[soflag] dev-libs/maskedone",
-    );
-    blocker_161_write_pkg(&repo.location, "dev-libs/maskedone", "1.0", "0", "", "");
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/plainmiss sys-libs/dupmiss dev-libs/dupmiss[soflag] dev-libs/unsatone[soflag] dev-libs/maskedone",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo.location,
+        cp: "dev-libs/maskedone",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
     for (cp, pv) in [("dev-libs/unsatone", "1.0"), ("dev-libs/dupmiss", "1.0")] {
         let (cat, pkg) = cp.split_once('/').unwrap();
         let d = repo.location.join(cat).join(pkg);
@@ -1291,18 +1368,38 @@ fn run_pass_newer_ebuild_beats_older_binary() {
 #[test]
 fn run_pass_bare_slotop_pull_reuses_the_resolved_slot() {
     let dir = slotundo_temp_dir("161-run-slotop");
-    let repo =
-        blocker_161_scratch_repo(&dir, "dev-libs/consumerb", "1.0", "0", "", "dev-libs/prov");
-    blocker_161_write_pkg(&repo.location, "dev-libs/prov", "1.0", "0/1", "", "");
-    blocker_161_write_pkg(&repo.location, "dev-libs/prov", "2.0", "0/2", "", "");
-    blocker_161_write_pkg(
-        &repo.location,
-        "dev-libs/consumera",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/prov:=",
-    );
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/consumerb",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/prov",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo.location,
+        cp: "dev-libs/prov",
+        pv: "1.0",
+        slot: "0/1",
+        depend: "",
+        rdepend: "",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo.location,
+        cp: "dev-libs/prov",
+        pv: "2.0",
+        slot: "0/2",
+        depend: "",
+        rdepend: "",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo.location,
+        cp: "dev-libs/consumera",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/prov:=",
+    });
     let config = test_config();
     // consumerb first resolves bare; consumera's `:=` then lands
     // on the taken slot and reuses it.
@@ -1363,14 +1460,14 @@ fn run_pass_replace_seed_files_no_argument_puller() {
 #[test]
 fn run_pass_trigger_matches_the_owner_entry_exactly() {
     let dir = slotundo_temp_dir("161-run-misown");
-    let repos = blocker_161_scratch_repo(
-        &dir,
-        "dev-libs/depparent",
-        "1.0",
-        "0",
-        "",
-        "dev-libs/nosuchdep",
-    );
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosuchdep",
+    });
     let config = test_config();
     // A neighbour resolving elsewhere walks first, so a loosened
     // owner lookup would build the wrong neg.
@@ -1474,7 +1571,14 @@ fn run_pass_masked_ebuild_is_no_twin() {
     let atoms = vec!["dev-libs/kwonlypkg".to_string()];
     // Tree ebuild ~amd64 (masked under the amd64 accept); staged
     // binary amd64 (visible).
-    let repo = blocker_161_scratch_repo(&dir, "dev-libs/kwonlypkg", "1.0", "0", "", "");
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/kwonlypkg",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
     let d = repo.location.join("dev-libs/kwonlypkg");
     let body = "EAPI=8\nDESCRIPTION=\"161 kw\"\nSLOT=\"0\"\nKEYWORDS=\"~amd64\"\n";
     std::fs::write(d.join("kwonlypkg-1.0.ebuild"), body).unwrap();

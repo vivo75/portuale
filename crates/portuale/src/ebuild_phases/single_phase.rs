@@ -87,16 +87,16 @@ pub(crate) fn run_single_phase(args: RunSinglePhaseArgs<'_>) -> Result<i32, Stri
         // `doebuild()`'s own fetch-then-phases sequence at all -- see
         // this function's own doc comment), so there's nothing to
         // re-fetch or re-export here.
-        run_one_phase(
-            &env,
+        run_one_phase(RunOnePhaseArgs {
+            env: &env,
             root,
             phase,
             debug,
-            build_env,
+            extra_env: build_env,
             config_root,
             shell,
             log_file,
-        )
+        })
         .await
     })
 }
@@ -274,17 +274,17 @@ pub(crate) fn run_instprep(args: RunInstprepArgs<'_>) -> Result<i32, String> {
             }
             extra_env.extend(binary_merge_env());
         }
-        run_misc_functions(
-            &env,
+        run_misc_functions(RunMiscFunctionsArgs {
+            env: &env,
             root,
-            "instprep",
-            "__dyn_instprep",
-            &extra_env,
+            ebuild_phase_value: "instprep",
+            dyn_command: "__dyn_instprep",
+            extra_env: &extra_env,
             debug,
             config_root,
             shell,
             log_file,
-        )
+        })
         .await
     })
 }
@@ -410,16 +410,16 @@ pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Re
                 extra_env.push(("PORTAGE_FEATURES".to_string(), features.to_string()));
             }
         }
-        run_one_phase(
-            &env,
+        run_one_phase(RunOnePhaseArgs {
+            env: &env,
             root,
             phase,
             debug,
-            &extra_env,
+            extra_env: &extra_env,
             config_root,
             shell,
             log_file,
-        )
+        })
         .await
     })
 }

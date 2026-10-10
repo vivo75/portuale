@@ -80,12 +80,12 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     let eapi_has_idepend =
         md5_dict::eapi_has_idepend(metadata.get("EAPI").map(String::as_str).unwrap_or("0"));
     let keep_key = |key: &&str| {
-        onlydeps_walk_dep_key(
+        onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
             key,
             eapi_has_idepend,
             onlydeps_blanks_runtime,
             onlydeps_blanks_idepend,
-        )
+        })
     };
     let base_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
         &["RDEPEND", "PDEPEND", "IDEPEND"]
@@ -246,11 +246,11 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     // mirrors `onlydeps_walk_dep_key`, not just the rdeps blank.
     // Without blanking this is the long-standing unconditional
     // three-key set.
-    let runtime_keys: &[&str] = onlydeps_runtime_keys(
+    let runtime_keys: &[&str] = onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
         eapi_has_idepend,
-    );
+    });
     let runtime_atoms = flatten_keys(runtime_keys);
     // Track X Slice B fix (#242): `BDEPEND` alone, for the running-
     // `BDEPEND`-soft rule in `enqueue_flat_deps` (a running `BDEPEND`
@@ -397,12 +397,56 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         .as_ref()
         .unwrap_or(&bp.circular_dependency);
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
-        &tokens,
-        use_flags,
-        portage_use_reduce::MatchMode::Normal,
-        md5_dict::eapi_empty_groups_always_true(
-            metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
-        ),
+        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+            tokens: &tokens,
+            uselist: use_flags,
+            mode: portage_use_reduce::MatchMode::Normal,
+            empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+                metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
+            tie_break: &mut |alts: &[Vec<String>]| {
+                // Same root scoping for the tied-alternative promotion
+                // (its installed/in-graph checks are the group's own).
+                let grp_running = cross_running_root.is_some()
+                    && alts
+                        .iter()
+                        .flat_map(|v| v.iter())
+                        .next()
+                        .is_some_and(|a| running_tags.contains(a));
+                let grp_root: &Path = if grp_running {
+                    cross_running_root.expect("running-root group without a cross root")
+                } else {
+                    ctx.root
+                };
+                let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
+                    state
+                        .entries
+                        .iter()
+                        .filter(|e| e.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let entries_view: &[GraphEntry] =
+                    scoped_entries.as_deref().unwrap_or(&state.entries);
+                let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
+                    queued
+                        .iter()
+                        .filter(|q| q.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
+                promote_tied_alternative(PromoteTiedAlternativeArgs {
+                    repos: &ctx.repos,
+                    config,
+                    root: grp_root,
+                    entries: entries_view,
+                    constraints: union_constraints,
+                    alts,
+                    queued: queued_view,
+                })
+            },
+        },
         &mut |atoms: &[String]| {
             // Track X Slice B (#242): branch selection sees the
             // group's own root -- its installed db, and only the
@@ -432,66 +476,24 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
                     .collect()
             });
             let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
-            disjunction_preference(
-                &ctx.repos,
+            disjunction_preference(DisjunctionPreferenceArgs {
+                repos: &ctx.repos,
                 config,
-                grp_root,
-                entries_view,
-                &self_node,
-                union_constraints,
-                // Backlog #221: this pass's recorded cycle edges --
+                root: grp_root,
+                entries: entries_view,
+                self_cp: &self_node,
+                constraints: union_constraints, // Backlog #221: this pass's recorded cycle edges --
                 // empty on the first attempt, populated on the
                 // restart after a stranded walk (see
                 // `collect_feedback`); #249 adds a virtual's pullers.
-                circular_view,
-                ctx.root_deps_running_root,
+                circular_dependency: circular_view,
+                root_deps_running_root: ctx.root_deps_running_root,
                 atoms,
-                queued_view,
-                ctx.update,
-                &state.entries,
-                &queued,
-            )
-        },
-        &mut |alts: &[Vec<String>]| {
-            // Same root scoping for the tied-alternative promotion
-            // (its installed/in-graph checks are the group's own).
-            let grp_running = cross_running_root.is_some()
-                && alts
-                    .iter()
-                    .flat_map(|v| v.iter())
-                    .next()
-                    .is_some_and(|a| running_tags.contains(a));
-            let grp_root: &Path = if grp_running {
-                cross_running_root.expect("running-root group without a cross root")
-            } else {
-                ctx.root
-            };
-            let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
-                state
-                    .entries
-                    .iter()
-                    .filter(|e| e.targets_running_root == grp_running)
-                    .cloned()
-                    .collect()
-            });
-            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(&state.entries);
-            let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
-                queued
-                    .iter()
-                    .filter(|q| q.targets_running_root == grp_running)
-                    .cloned()
-                    .collect()
-            });
-            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
-            promote_tied_alternative(
-                &ctx.repos,
-                config,
-                grp_root,
-                entries_view,
-                union_constraints,
-                alts,
-                queued_view,
-            )
+                queued: queued_view,
+                update: ctx.update,
+                gate_entries: &state.entries,
+                gate_queued: &queued,
+            })
         },
     ) else {
         return;
@@ -511,17 +513,17 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     // call site/test.
     let root_deps_satisfied: HashSet<String> = root_deps_split
         .map(|root| {
-            root_deps_satisfied_atoms(
+            root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
                 metadata,
                 use_flags,
-                &ctx.repos,
+                repos: &ctx.repos,
                 config,
-                root,
-                &["DEPEND", "BDEPEND", "IDEPEND"],
-                md5_dict::eapi_empty_groups_always_true(
+                running_root: root,
+                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
+                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                     metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
                 ),
-            )
+            })
         })
         .unwrap_or_default();
     // Real "recursively pull in and build new packages against the
@@ -543,17 +545,17 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     // `None`, matching every pre-existing call site/test.
     let root_deps_unsatisfied: Vec<String> = root_deps_split
         .map(|root| {
-            unsatisfied_root_deps_atoms(
+            unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
                 metadata,
                 use_flags,
-                &ctx.repos,
+                repos: &ctx.repos,
                 config,
-                root,
-                &["DEPEND", "BDEPEND", "IDEPEND"],
-                md5_dict::eapi_empty_groups_always_true(
+                running_root: root,
+                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
+                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                     metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
                 ),
-            )
+            })
         })
         .unwrap_or_default();
     // #133: the two sets above are evaluated-keyed (real evaluates at
@@ -579,13 +581,15 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     if let Some(running_root) = root_deps_split {
         for atom_str in &root_deps_unsatisfied {
             state.entries.extend(resolve_root_deps_build_entries(
-                &ctx.repos,
-                running_root,
-                atom_str,
-                config,
-                key.clone(),
-                &mut state.root_deps_build_seen,
-                &ctx.local_binpkg,
+                ResolveRootDepsBuildEntriesArgs {
+                    repos: &ctx.repos,
+                    running_root,
+                    atom_str,
+                    config,
+                    owner: key.clone(),
+                    seen: &mut state.root_deps_build_seen,
+                    local_binpkg: &ctx.local_binpkg,
+                },
             ));
         }
     }
@@ -609,21 +613,21 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
                 ));
         }
     }
-    enqueue_flat_deps(
+    enqueue_flat_deps(EnqueueFlatDepsArgs {
         flat_deps,
         key,
         version,
         depth,
-        use_flags,
-        &mut state.queue,
-        &mut state.pending_blockers,
-        &buildtime_atoms,
-        &runtime_atoms,
-        &bdepend_atoms,
-        &or_group_universe(&tokens),
-        &running_tags,
-        state.entries[entry_idx].targets_running_root,
-    );
+        parent_use: use_flags,
+        queue: &mut state.queue,
+        pending_blockers: &mut state.pending_blockers,
+        buildtime_atoms: &buildtime_atoms,
+        runtime_atoms: &runtime_atoms,
+        bdepend_atoms: &bdepend_atoms,
+        or_universe: &or_group_universe(&tokens),
+        running_atoms: &running_tags,
+        owner_targets_running_root: state.entries[entry_idx].targets_running_root,
+    });
 
     // --with-test-deps: additive on top of the normal deps just
     // queued above, never a replacement for them -- see
@@ -658,30 +662,26 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
                 portage_use_reduce::MatchMode::Normal,
                 &subset,
             ) {
-                enqueue_flat_deps(
-                    test_deps,
+                enqueue_flat_deps(EnqueueFlatDepsArgs {
+                    flat_deps: test_deps,
                     key,
                     version,
                     depth,
-                    &test_uselist,
-                    &mut state.queue,
-                    &mut state.pending_blockers,
-                    // A `test?` dep is `DepPriority.optional` --
+                    parent_use: &test_uselist,
+                    queue: &mut state.queue,
+                    pending_blockers: &mut state.pending_blockers, // A `test?` dep is `DepPriority.optional` --
                     // never a hard cycle contributor.
-                    &HashSet::new(),
-                    &HashSet::new(),
-                    // Track X Slice B fix (#242): no `BDEPEND`
+                    buildtime_atoms: &HashSet::new(),
+                    runtime_atoms: &HashSet::new(), // Track X Slice B fix (#242): no `BDEPEND`
                     // origin for a `test?` dep (never hard anyway).
-                    &HashSet::new(),
-                    // `test?`-gated deps are plain atoms, never a
+                    bdepend_atoms: &HashSet::new(), // `test?`-gated deps are plain atoms, never a
                     // `||` choice (the subset filter drops the
                     // group structure) -- empty universe.
-                    &HashSet::new(),
-                    // Track X Slice B (#242): a `test?` dep stays
+                    or_universe: &HashSet::new(), // Track X Slice B (#242): a `test?` dep stays
                     // target-rooted.
-                    &HashSet::new(),
-                    state.entries[entry_idx].targets_running_root,
-                );
+                    running_atoms: &HashSet::new(),
+                    owner_targets_running_root: state.entries[entry_idx].targets_running_root,
+                });
             }
         }
     }

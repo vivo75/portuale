@@ -198,6 +198,21 @@ fn parse_contents(text: &str) -> Vec<ContentsEntry> {
 /// real `_unmerge_dirs()`'s own `protected_symlinks.pop(inode_key)`.
 type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 
+/// Arguments of [`remove_contents`].
+struct RemoveContentsArgs<'a> {
+    root: &'a Path,
+    category: &'a str,
+    others_in_slot: &'a [String],
+    config_protect: &'a str,
+    config_protect_mask: &'a str,
+    unmerge_orphans: bool,
+    infodirs_inodes: &'a BTreeSet<(u64, u64)>,
+    cfgfiledict: &'a BTreeMap<String, String>,
+    stale_confmem: &'a mut Vec<String>,
+    preserved_paths: &'a BTreeSet<String>,
+    contents_text: &'a str,
+}
+
 /// Deletes every `CONTENTS`-listed entry from `root`, deepest paths
 /// first (see this module's own doc comment for why, and for the v1
 /// failure-tolerance simplification) -- except: an entry another
@@ -231,20 +246,20 @@ type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 /// this mirrors) -- filtered out of `entries` immediately, the same
 /// point real portage itself strips them from the CONTENTS dict, before
 /// the per-file removal loop below ever sees them at all.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn remove_contents(
-    root: &Path,
-    category: &str,
-    others_in_slot: &[String],
-    config_protect: &str,
-    config_protect_mask: &str,
-    unmerge_orphans: bool,
-    infodirs_inodes: &BTreeSet<(u64, u64)>,
-    cfgfiledict: &BTreeMap<String, String>,
-    stale_confmem: &mut Vec<String>,
-    preserved_paths: &BTreeSet<String>,
-    contents_text: &str,
-) -> Result<(), String> {
+fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
+    let RemoveContentsArgs {
+        root,
+        category,
+        others_in_slot,
+        config_protect,
+        config_protect_mask,
+        unmerge_orphans,
+        infodirs_inodes,
+        cfgfiledict,
+        stale_confmem,
+        preserved_paths,
+        contents_text,
+    } = args;
     let mut entries = parse_contents(contents_text);
     entries.retain(|e| !preserved_paths.contains(&e.abs_path));
     entries.sort_by(|a, b| b.abs_path.cmp(&a.abs_path));
@@ -566,6 +581,20 @@ impl Default for UnmergeOptions {
     }
 }
 
+/// Arguments of [`unmerge_pkgfiles`].
+#[cfg(test)]
+pub(crate) struct UnmergePkgfilesArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) also_keep: &'a [String],
+    pub(crate) options: &'a UnmergeOptions,
+    pub(crate) is_replacement: bool,
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+}
+
 /// File-removal core of `dblink.unmerge()` -- everything real
 /// `_unmerge_pkgfiles()` does (delete every `CONTENTS` entry deepest-
 /// path-first, honoring the same-slot "replaced" skip, the `!mtime`
@@ -596,19 +625,8 @@ impl Default for UnmergeOptions {
 /// `ebuild_merge::unmerge_replaced_same_slot`): same threading, same
 /// empty-on-standalone rule.
 #[cfg(test)]
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn unmerge_pkgfiles(
-    root: &Path,
-    category: &str,
-    pn: &str,
-    pf: &str,
-    also_keep: &[String],
-    options: &UnmergeOptions,
-    is_replacement: bool,
-    replacement_preserved: &BTreeMap<String, Vec<String>>,
-    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
-) -> Result<(), String> {
-    unmerge_pkgfiles_into(
+pub(crate) fn unmerge_pkgfiles(args: UnmergePkgfilesArgs<'_>) -> Result<(), String> {
+    let UnmergePkgfilesArgs {
         root,
         category,
         pn,
@@ -618,27 +636,52 @@ pub(crate) fn unmerge_pkgfiles(
         is_replacement,
         replacement_preserved,
         replacement_needed,
-        None,
-    )
+    } = args;
+    unmerge_pkgfiles_into(UnmergePkgfilesIntoArgs {
+        root,
+        category,
+        pn,
+        pf,
+        also_keep,
+        options,
+        is_replacement,
+        replacement_preserved,
+        replacement_needed,
+        retire: None,
+    })
+}
+
+/// Arguments of [`unmerge_pkgfiles_into`].
+pub(crate) struct UnmergePkgfilesIntoArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) also_keep: &'a [String],
+    pub(crate) options: &'a UnmergeOptions,
+    pub(crate) is_replacement: bool,
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+    pub(crate) retire: Option<&'a mut ebuild_merge::RetireWrites>,
 }
 
 /// [`unmerge_pkgfiles`] with the D4 writes (preserved-libs registry,
 /// config memory, W4 rewrites of other entries) collected into `retire`
 /// instead of committed one by one (feat#157 S4.2); the caller commits
 /// them with [`retire_entry`]. `None` is the S1.5 behaviour, call for call.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn unmerge_pkgfiles_into(
-    root: &Path,
-    category: &str,
-    pn: &str,
-    pf: &str,
-    also_keep: &[String],
-    options: &UnmergeOptions,
-    is_replacement: bool,
-    replacement_preserved: &BTreeMap<String, Vec<String>>,
-    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
-    mut retire: Option<&mut ebuild_merge::RetireWrites>,
-) -> Result<(), String> {
+pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result<(), String> {
+    let UnmergePkgfilesIntoArgs {
+        root,
+        category,
+        pn,
+        pf,
+        also_keep,
+        options,
+        is_replacement,
+        replacement_preserved,
+        replacement_needed,
+        mut retire,
+    } = args;
     // Through the root's installed-database backend. The error keeps the
     // text `read_to_string` gave: the io error for a read that failed,
     // `ENOENT` for a missing entry or file, the std UTF-8 text for a
@@ -711,30 +754,31 @@ pub(crate) fn unmerge_pkgfiles_into(
     // `parse_slot`'s own real fallback already does, matching real
     // `_pkg_str`'s own `settings["SLOT"]` fallback for a package with no
     // recorded slot at all.
-    let preserved_paths = ebuild_merge::preserve_libs_on_unmerge_into(
-        root,
-        category,
-        pn,
-        pf,
-        own_slot.as_deref().unwrap_or("0"),
-        &contents_text,
-        is_replacement,
-        retire.as_deref_mut(),
-    )?;
+    let preserved_paths =
+        ebuild_merge::preserve_libs_on_unmerge_into(ebuild_merge::PreserveLibsOnUnmergeIntoArgs {
+            root,
+            category,
+            pn,
+            pf,
+            slot: own_slot.as_deref().unwrap_or("0"),
+            contents_text: &contents_text,
+            is_replacement,
+            retire: retire.as_deref_mut(),
+        })?;
 
-    remove_contents(
+    remove_contents(RemoveContentsArgs {
         root,
         category,
-        &others_in_slot,
-        &options.config_protect,
-        &options.config_protect_mask,
-        options.unmerge_orphans,
-        &infodirs_inodes,
-        &cfgfiledict,
-        &mut stale_confmem,
-        &preserved_paths,
-        &contents_text,
-    )?;
+        others_in_slot: &others_in_slot,
+        config_protect: &options.config_protect,
+        config_protect_mask: &options.config_protect_mask,
+        unmerge_orphans: options.unmerge_orphans,
+        infodirs_inodes: &infodirs_inodes,
+        cfgfiledict: &cfgfiledict,
+        stale_confmem: &mut stale_confmem,
+        preserved_paths: &preserved_paths,
+        contents_text: &contents_text,
+    })?;
     if !stale_confmem.is_empty() {
         let mut updated = cfgfiledict;
         for filename in &stale_confmem {
@@ -779,13 +823,15 @@ pub(crate) fn unmerge_pkgfiles_into(
         Vec::new()
     };
     ebuild_merge::prune_unused_preserved_libs_into(
-        root,
-        !is_replacement,
-        &|p| being_unmerged.contains(p),
-        &exclude_cpvs,
-        replacement_preserved,
-        replacement_needed,
-        retire,
+        ebuild_merge::PruneUnusedPreservedLibsIntoArgs {
+            root,
+            unmerge_no_replacement: !is_replacement,
+            being_unmerged: &|p| being_unmerged.contains(p),
+            exclude_cpvs: &exclude_cpvs,
+            replacement_preserved,
+            replacement_needed,
+            retire,
+        },
     )?;
 
     Ok(())
@@ -873,20 +919,19 @@ pub fn run_unmerge(
     }
 
     let mut retire = ebuild_merge::RetireWrites::for_root(root);
-    unmerge_pkgfiles_into(
+    unmerge_pkgfiles_into(UnmergePkgfilesIntoArgs {
         root,
-        &env.category,
-        &env.split.pn,
-        &env.split.pf,
-        &[],
+        category: &env.category,
+        pn: &env.split.pn,
+        pf: &env.split.pf,
+        also_keep: &[],
         options,
-        false,
-        &BTreeMap::new(),
-        // Standalone `emerge -C`: no replacing package, so no include
+        is_replacement: false,
+        replacement_preserved: &BTreeMap::new(), // Standalone `emerge -C`: no replacing package, so no include
         // feed (backlog #224).
-        &[],
-        retire.as_mut(),
-    )?;
+        replacement_needed: &[],
+        retire: retire.as_mut(),
+    })?;
 
     let postrm_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
         ebuild_path,
@@ -961,19 +1006,19 @@ mod tests {
              sym /usr/share/x/link.txt -> hello.txt {link_mtime}\n"
         );
 
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            &contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(!root.join("usr/share/x/hello.txt").exists());
@@ -1003,19 +1048,19 @@ mod tests {
         // A recorded mtime that can never match the file just written
         // above (created "now").
         let contents = "obj /etc.conf abc123 1\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(
@@ -1036,19 +1081,19 @@ mod tests {
         std::fs::write(root.join("etc.conf"), b"user's own edits").unwrap();
 
         let contents = "obj /etc.conf abc123 1\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            true,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(
@@ -1069,19 +1114,19 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
         let contents = "obj /etc/foo.conf abc123 1\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            true,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(
@@ -1104,19 +1149,19 @@ mod tests {
         std::os::unix::fs::symlink(root.join("real-lib"), root.join("lib")).unwrap();
 
         let contents = "sym /lib -> whatever 1\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            true,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(
@@ -1135,19 +1180,19 @@ mod tests {
         std::fs::write(root.join("usr/share/other.txt"), b"other").unwrap();
 
         let contents = "dir /usr\ndir /usr/share\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         // /usr/share survives (non-empty), and so does its parent.
@@ -1160,19 +1205,19 @@ mod tests {
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let contents = "obj /usr/share/x/hello.txt abc123 100\ndir /usr/share/x\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("missing entries are not an error");
     }
 
@@ -1212,19 +1257,19 @@ mod tests {
             "obj /usr/share/shared.txt abc123 {shared_mtime}\n\
              obj /usr/share/only-mine.txt abc123 {mine_mtime}\n"
         );
-        remove_contents(
-            &root,
-            "dev-libs",
-            &["otherpkg-2.0".to_string()],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            &contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &["otherpkg-2.0".to_string()],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(
@@ -1257,19 +1302,19 @@ mod tests {
 
         let contents = format!("obj /etc.conf abc123 {mtime}\n");
         let mut stale_confmem = Vec::new();
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &cfgfiledict,
-            &mut stale_confmem,
-            &BTreeSet::new(),
-            &contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &cfgfiledict,
+            stale_confmem: &mut stale_confmem,
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
         .expect("remove_contents succeeds");
 
         assert_eq!(stale_confmem, vec!["/etc.conf".to_string()]);
@@ -1304,19 +1349,19 @@ mod tests {
 
         let contents = format!("obj /usr/share/shared.txt abc123 {mtime}\n");
         let mut stale_confmem = Vec::new();
-        remove_contents(
-            &root,
-            "dev-libs",
-            &["otherpkg-2.0".to_string()],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &cfgfiledict,
-            &mut stale_confmem,
-            &BTreeSet::new(),
-            &contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &["otherpkg-2.0".to_string()],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &cfgfiledict,
+            stale_confmem: &mut stale_confmem,
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(stale_confmem.is_empty());
@@ -1344,19 +1389,19 @@ mod tests {
         std::fs::write(other_vdb.join("CONTENTS"), "dir /keep/link\n").unwrap();
 
         let contents = "dir /keep\nsym /keep/link -> whatever 100\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &["orphanpkg-2.0".to_string()],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &["orphanpkg-2.0".to_string()],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(
@@ -1392,19 +1437,19 @@ mod tests {
 
         let contents =
             "dir /zzz-parent\nsym /zzz-parent/compat-link -> whatever 100\ndir /aaa-target\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &["orphanpkg-2.0".to_string()],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &["orphanpkg-2.0".to_string()],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(
@@ -1514,19 +1559,19 @@ mod tests {
         std::fs::write(root.join("usr/share/info/dir"), b"").unwrap();
 
         let contents = "dir /usr/share\ndir /usr/share/info\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            false,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(
@@ -1564,19 +1609,19 @@ mod tests {
         );
 
         let contents = "dir /opt/pkg\ndir /opt/pkg/docs\n";
-        remove_contents(
-            &root,
-            "dev-libs",
-            &[],
-            "/etc",
-            "",
-            false,
-            &infodirs_inodes,
-            &BTreeMap::new(),
-            &mut Vec::new(),
-            &BTreeSet::new(),
-            contents,
-        )
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &infodirs_inodes,
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
         .expect("remove_contents succeeds");
 
         assert!(

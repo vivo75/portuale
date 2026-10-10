@@ -109,7 +109,14 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     // A child whose tree ebuild did *not* move is not scheduled: the
     // `souneedslot` fixture depends on `dev-libs/souprov:=`, and the
     // installed `souprov-1.0` (vdb 0/1) has tree `SLOT="0/1"`.
-    slotundo_vdb(&dir, "souprov", "1.0", "0/1", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souprov",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
     let parent_souprov = GraphEntry {
         discovery: 0,
         outcome: PretendOutcome::Reinstall {

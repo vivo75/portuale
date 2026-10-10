@@ -464,11 +464,11 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         match node {
             TreeNode::Entry(i) => {
                 rendered.push((i, ordered));
-                print_entry_line(
+                print_entry_line(PrintEntryLineArgs {
                     entries,
                     root,
-                    i,
-                    &indent,
+                    index: i,
+                    indent: &indent,
                     ordered,
                     top_level_pkgs,
                     onlydeps,
@@ -476,8 +476,8 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
                     verbose,
                     quiet,
                     alphabetical,
-                    false,
-                    130,
+                    columns: false,
+                    columnwidth: 130,
                     running_root,
                     color,
                     system_atoms,
@@ -489,7 +489,7 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
                     plain_miss_deps,
                     force_sizes,
                     circular,
-                )
+                })
             }
             TreeNode::Blocker { owner, index } => {
                 let owner_entry = &entries[owner];

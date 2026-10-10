@@ -2,6 +2,17 @@
 
 use crate::*;
 
+/// Arguments of [`root_deps_satisfied_atoms`].
+pub(crate) struct RootDepsSatisfiedAtomsArgs<'a> {
+    pub(crate) metadata: &'a HashMap<String, String>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) running_root: &'a Path,
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) empty_groups_always_true: bool,
+}
+
 /// Real `--root-deps`'s own `DEPEND`/`BDEPEND`-vs-`ESYSROOT` distinction
 /// (see `running_root_satisfies_atom`'s own doc comment for the full real
 /// grounding), factored out so both real dep-walk sites in this file
@@ -32,16 +43,16 @@ use crate::*;
 /// graph node needed for an already-satisfied dep"). Degrades to an
 /// empty set on any flatten failure -- never a false negative that
 /// could silently drop a dep portuale actually needed to walk.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn root_deps_satisfied_atoms(
-    metadata: &HashMap<String, String>,
-    use_flags: &HashSet<String>,
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    running_root: &Path,
-    dep_keys: &[&str],
-    empty_groups_always_true: bool,
-) -> HashSet<String> {
+pub(crate) fn root_deps_satisfied_atoms(args: RootDepsSatisfiedAtomsArgs<'_>) -> HashSet<String> {
+    let RootDepsSatisfiedAtomsArgs {
+        metadata,
+        use_flags,
+        repos,
+        config,
+        running_root,
+        dep_keys,
+        empty_groups_always_true,
+    } = args;
     let mut build_depstr = String::new();
     for dep_key in dep_keys {
         if let Some(d) = metadata.get(*dep_key) {
@@ -51,10 +62,16 @@ pub(crate) fn root_deps_satisfied_atoms(
     }
     let build_tokens: Vec<String> = build_depstr.split_whitespace().map(String::from).collect();
     portage_use_reduce::use_reduce_flat_disjunctive(
-        &build_tokens,
-        use_flags,
-        portage_use_reduce::MatchMode::Normal,
-        empty_groups_always_true,
+        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+            tokens: &build_tokens,
+            uselist: use_flags,
+            mode: portage_use_reduce::MatchMode::Normal,
+            empty_groups_always_true, // No "prefer an upgrade" question here either -- Available-vs-
+            // Unsatisfiable never ties on more than one selectable
+            // alternative in a way this call site's own logic distinguishes,
+            // so the trivial "first tied wins" shim is a strict no-op.
+            tie_break: &mut |_: &[Vec<String>]| 0,
+        },
         &mut |atoms: &[String]| {
             // `--root-deps` only needs the satisfiable-or-not split here
             // (there's no "prefer the installed branch" question for a
@@ -68,11 +85,6 @@ pub(crate) fn root_deps_satisfied_atoms(
                 portage_use_reduce::AltPreference::Unsatisfiable
             }
         },
-        // No "prefer an upgrade" question here either -- Available-vs-
-        // Unsatisfiable never ties on more than one selectable
-        // alternative in a way this call site's own logic distinguishes,
-        // so the trivial "first tied wins" shim is a strict no-op.
-        &mut |_: &[Vec<String>]| 0,
     )
     .map(|flat| {
         flat.into_iter()
@@ -94,6 +106,17 @@ pub(crate) fn root_deps_satisfied_atoms(
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// Arguments of [`unsatisfied_root_deps_atoms`].
+pub(crate) struct UnsatisfiedRootDepsAtomsArgs<'a> {
+    pub(crate) metadata: &'a HashMap<String, String>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) running_root: &'a Path,
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) empty_groups_always_true: bool,
 }
 
 /// The complement of `root_deps_satisfied_atoms`: real `DEPEND`/
@@ -119,16 +142,16 @@ pub(crate) fn root_deps_satisfied_atoms(
 /// work) rather than refactoring that already-shipped, already-tested
 /// function to return both halves at once -- deliberately additive/
 /// isolated, minimizing risk to it.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn unsatisfied_root_deps_atoms(
-    metadata: &HashMap<String, String>,
-    use_flags: &HashSet<String>,
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    running_root: &Path,
-    dep_keys: &[&str],
-    empty_groups_always_true: bool,
-) -> Vec<String> {
+pub(crate) fn unsatisfied_root_deps_atoms(args: UnsatisfiedRootDepsAtomsArgs<'_>) -> Vec<String> {
+    let UnsatisfiedRootDepsAtomsArgs {
+        metadata,
+        use_flags,
+        repos,
+        config,
+        running_root,
+        dep_keys,
+        empty_groups_always_true,
+    } = args;
     let mut build_depstr = String::new();
     for dep_key in dep_keys {
         if let Some(d) = metadata.get(*dep_key) {
@@ -138,10 +161,16 @@ pub(crate) fn unsatisfied_root_deps_atoms(
     }
     let build_tokens: Vec<String> = build_depstr.split_whitespace().map(String::from).collect();
     portage_use_reduce::use_reduce_flat_disjunctive(
-        &build_tokens,
-        use_flags,
-        portage_use_reduce::MatchMode::Normal,
-        empty_groups_always_true,
+        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+            tokens: &build_tokens,
+            uselist: use_flags,
+            mode: portage_use_reduce::MatchMode::Normal,
+            empty_groups_always_true, // No "prefer an upgrade" question here either -- Available-vs-
+            // Unsatisfiable never ties on more than one selectable
+            // alternative in a way this call site's own logic distinguishes,
+            // so the trivial "first tied wins" shim is a strict no-op.
+            tie_break: &mut |_: &[Vec<String>]| 0,
+        },
         &mut |atoms: &[String]| {
             // `--root-deps` only needs the satisfiable-or-not split here
             // (there's no "prefer the installed branch" question for a
@@ -155,11 +184,6 @@ pub(crate) fn unsatisfied_root_deps_atoms(
                 portage_use_reduce::AltPreference::Unsatisfiable
             }
         },
-        // No "prefer an upgrade" question here either -- Available-vs-
-        // Unsatisfiable never ties on more than one selectable
-        // alternative in a way this call site's own logic distinguishes,
-        // so the trivial "first tied wins" shim is a strict no-op.
-        &mut |_: &[Vec<String>]| 0,
     )
     .map(|flat| {
         flat.into_iter()
@@ -208,6 +232,19 @@ pub(crate) fn resolved_version_meta_and_use(
     // Cold path (`--root-deps` only); the shared `Rc` isn't worth
     // threading through `unsatisfied_root_deps_atoms`'s `&HashMap`.
     Some(((*metadata).clone(), use_flags.as_ref().clone()))
+}
+
+/// Arguments of [`resolve_root_deps_build_entries`].
+pub(crate) struct ResolveRootDepsBuildEntriesArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) running_root: &'a Path,
+    pub(crate) atom_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) owner: (String, String),
+    pub(crate) seen: &'a mut HashSet<(String, String)>,
+    /// Threaded through to `resolve_pretend` (backlog #123); unconsulted
+    /// here since `usepkg`/`usepkgonly` are both `false` below.
+    pub(crate) local_binpkg: &'a std::sync::Arc<BinaryIndex>,
 }
 
 /// Real "recursively pull in and build new packages against the running
@@ -264,18 +301,18 @@ pub(crate) fn resolved_version_meta_and_use(
 /// real's `[oldver]` bracket is an Upgrade-row concern and S0's capture
 /// shows none on this shape (`findings/l0.md` "## #141/#135/#138/#134/#136
 /// S0").
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn resolve_root_deps_build_entries(
-    repos: &[RepoConfig],
-    running_root: &Path,
-    atom_str: &str,
-    config: &portage_profile::Config,
-    owner: (String, String),
-    seen: &mut HashSet<(String, String)>,
-    // Threaded through to `resolve_pretend` (backlog #123); unconsulted
-    // here since `usepkg`/`usepkgonly` are both `false` below.
-    local_binpkg: &std::sync::Arc<BinaryIndex>,
+    args: ResolveRootDepsBuildEntriesArgs<'_>,
 ) -> Vec<GraphEntry> {
+    let ResolveRootDepsBuildEntriesArgs {
+        repos,
+        running_root,
+        atom_str,
+        config,
+        owner,
+        seen,
+        local_binpkg,
+    } = args;
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return Vec::new();
     };
@@ -383,25 +420,27 @@ pub(crate) fn resolve_root_deps_build_entries(
         && let Some((metadata, use_flags)) =
             resolved_version_meta_and_use(repos, &atom.category, &atom.package, &version, config)
     {
-        for dep_atom in unsatisfied_root_deps_atoms(
-            &metadata,
-            &use_flags,
+        for dep_atom in unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
+            metadata: &metadata,
+            use_flags: &use_flags,
             repos,
             config,
             running_root,
-            &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
-            md5_dict::eapi_empty_groups_always_true(
+            dep_keys: &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
+            empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                 metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
             ),
-        ) {
+        }) {
             result.extend(resolve_root_deps_build_entries(
-                repos,
-                running_root,
-                &dep_atom,
-                config,
-                key.clone(),
-                seen,
-                local_binpkg,
+                ResolveRootDepsBuildEntriesArgs {
+                    repos,
+                    running_root,
+                    atom_str: &dep_atom,
+                    config,
+                    owner: key.clone(),
+                    seen,
+                    local_binpkg,
+                },
             ));
         }
     }

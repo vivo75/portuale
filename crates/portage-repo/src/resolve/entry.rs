@@ -488,6 +488,18 @@ pub(crate) fn skipped_update_roots(
     (missed_running, consumer_running)
 }
 
+/// Arguments of [`topological_merge_order`].
+pub(crate) struct TopologicalMergeOrderArgs<'a> {
+    pub(crate) entries: Vec<GraphEntry>,
+    pub(crate) top_level_atoms: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
 /// Put `entries` in real portage's dependency-first *merge* order.
 ///
 /// Real portage's `mylist` (`Display.__call__`'s input) is a genuine
@@ -523,17 +535,19 @@ pub(crate) fn skipped_update_roots(
 /// iterates -- the cycle reporter threads it to `find_hard_cycles`).
 /// Short-circuited inputs (< 2 entries) never reach the scheduler, so
 /// their rank is plain array position.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn topological_merge_order(
-    entries: Vec<GraphEntry>,
-    top_level_atoms: &[String],
-    config: &portage_profile::Config,
-    root: &Path,
-    implicit_system_deps: bool,
-    repos: &[RepoConfig],
-    dynamic_deps: bool,
-    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+    args: TopologicalMergeOrderArgs<'_>,
 ) -> (Vec<GraphEntry>, Vec<usize>) {
+    let TopologicalMergeOrderArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
     // Backlog #155 S1: stamp BFS discovery order before the merge
     // sort consumes it -- the input vec IS discovery order (a package's
     // entry is pushed before its dependencies are ever queued; see the

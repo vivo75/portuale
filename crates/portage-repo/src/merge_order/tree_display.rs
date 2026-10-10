@@ -212,6 +212,18 @@ pub(crate) fn weave_scheduled_leftovers(
     out
 }
 
+/// Arguments of [`tree_solved_replacements`].
+pub(crate) struct TreeSolvedReplacementsArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) top_level_atoms: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
 /// Backlog #81 S1: which satisfied Replacement rows tree-mode
 /// serialization solves.
 ///
@@ -225,17 +237,19 @@ pub(crate) fn weave_scheduled_leftovers(
 /// [`serialize_merge_order`] are the `not tree_mode` gate and the stuck
 /// branch, exactly like real. Returns empty without running the loop
 /// when no Replacement row is pending (the common case pays nothing).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn tree_solved_replacements(
-    entries: &[GraphEntry],
-    top_level_atoms: &[String],
-    config: &portage_profile::Config,
-    root: &Path,
-    implicit_system_deps: bool,
-    repos: &[RepoConfig],
-    dynamic_deps: bool,
-    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+    args: TreeSolvedReplacementsArgs<'_>,
 ) -> Vec<(usize, usize)> {
+    let TreeSolvedReplacementsArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
     let pending = tree_stuck_pending(entries);
     if pending.is_empty() {
         return Vec::new();
@@ -264,6 +278,18 @@ pub(crate) fn tree_solved_replacements(
     ts.solved
 }
 
+/// Arguments of [`tree_display_order`].
+pub struct TreeDisplayOrderArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub top_level_atoms: &'a [String],
+    pub config: &'a portage_profile::Config,
+    pub root: &'a Path,
+    pub implicit_system_deps: bool,
+    pub repos: &'a [RepoConfig],
+    pub dynamic_deps: bool,
+    pub circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
 /// Backlog #131 S1: the tree-mode serialization order for `--tree`
 /// display. Real's `_ordered_tree_display` walks the reversed tree-mode
 /// retlist (`depgraph.py:10618-10619`, tree serializer with the greedy
@@ -279,17 +305,17 @@ pub(crate) fn tree_solved_replacements(
 /// verdicts stay that function's sole source, so this never changes
 /// which rows solve. Unseen-by-the-scheduler entries rejoin through the
 /// same leftover weave-back as the flat path.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn tree_display_order(
-    entries: &[GraphEntry],
-    top_level_atoms: &[String],
-    config: &portage_profile::Config,
-    root: &Path,
-    implicit_system_deps: bool,
-    repos: &[RepoConfig],
-    dynamic_deps: bool,
-    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
-) -> Vec<usize> {
+pub fn tree_display_order(args: TreeDisplayOrderArgs<'_>) -> Vec<usize> {
+    let TreeDisplayOrderArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
     let pending = tree_stuck_pending(entries);
     let (ext, mut g, real_n, discovery_rank) = schedule_graph(ScheduleGraphArgs {
         entries,

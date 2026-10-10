@@ -46,14 +46,14 @@ fn record_slot_conflict_merges_same_triple_and_appends_new() {
 fn build_residual_forms_a_record_for_a_broken_pin() {
     let dir = slotundo_temp_dir("161-resid");
     let (repos, config, upgrade) = residual_161_setup(&dir);
-    let out = build_residual_slot_conflicts(
-        &repos,
-        &config,
-        &dir,
-        &[upgrade],
-        &HashMap::new(),
-        &[residual_161_pin()],
-    );
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &HashMap::new(),
+        dropped: &[residual_161_pin()],
+    });
     assert_eq!(out.len(), 1);
     let r = &out[0];
     assert_eq!(r.resolved_version, "2.0");
@@ -79,14 +79,14 @@ fn build_residual_reads_the_merge_version_from_a_new_entry() {
     let dir = slotundo_temp_dir("161-resid-new");
     let (repos, config, _) = residual_161_setup(&dir);
     let new_entry = graph_entry("dev-libs", "souprov", "2.0");
-    let out = build_residual_slot_conflicts(
-        &repos,
-        &config,
-        &dir,
-        &[new_entry],
-        &HashMap::new(),
-        &[residual_161_pin()],
-    );
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[new_entry],
+        slot_pullers: &HashMap::new(),
+        dropped: &[residual_161_pin()],
+    });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].resolved_version, "2.0");
     let _ = fs::remove_dir_all(&dir);
@@ -109,14 +109,14 @@ fn build_residual_skips_a_consumer_being_replaced() {
         sub_slot: Some("0".into()),
         ..graph_entry("dev-libs", "conpkg", "1.0")
     };
-    let out = build_residual_slot_conflicts(
-        &repos,
-        &config,
-        &dir,
-        &[upgrade, consumer_merge],
-        &HashMap::new(),
-        &[residual_161_pin()],
-    );
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade, consumer_merge],
+        slot_pullers: &HashMap::new(),
+        dropped: &[residual_161_pin()],
+    });
     assert!(out.is_empty(), "a replaced consumer is not reported");
     let _ = fs::remove_dir_all(&dir);
 }
@@ -129,8 +129,14 @@ fn build_residual_reconciles_a_pin_the_merge_satisfies() {
     let (repos, config, upgrade) = residual_161_setup(&dir);
     let mut pin = residual_161_pin();
     pin.atom = "=dev-libs/souprov-2.0:0/2".to_string();
-    let out =
-        build_residual_slot_conflicts(&repos, &config, &dir, &[upgrade], &HashMap::new(), &[pin]);
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &HashMap::new(),
+        dropped: &[pin],
+    });
     assert!(out.is_empty(), "a satisfied pin reconciles silently");
     let _ = fs::remove_dir_all(&dir);
 }
@@ -144,14 +150,14 @@ fn build_residual_reads_the_merge_version_from_the_target_entry() {
     let dir = slotundo_temp_dir("161-resid-cp");
     let (repos, config, upgrade) = residual_161_setup(&dir);
     let neighbour = graph_entry("dev-libs", "otherpkg", "9.9");
-    let out = build_residual_slot_conflicts(
-        &repos,
-        &config,
-        &dir,
-        &[upgrade, neighbour],
-        &HashMap::new(),
-        &[residual_161_pin()],
-    );
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade, neighbour],
+        slot_pullers: &HashMap::new(),
+        dropped: &[residual_161_pin()],
+    });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].resolved_version, "2.0");
     let _ = fs::remove_dir_all(&dir);
@@ -172,14 +178,14 @@ fn build_residual_keeps_the_highest_matching_installed() {
     fs::write(d2.join("CATEGORY"), "dev-libs\n").unwrap();
     fs::write(d2.join("SLOT"), "0/1\n").unwrap();
     fs::write(d2.join("repository"), "testrepo\n").unwrap();
-    let out = build_residual_slot_conflicts(
-        &repos,
-        &config,
-        &dir,
-        &[upgrade],
-        &HashMap::new(),
-        &[residual_161_pin()],
-    );
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &HashMap::new(),
+        dropped: &[residual_161_pin()],
+    });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].instances[1].version, "1.0");
     let _ = fs::remove_dir_all(&dir);
@@ -199,8 +205,14 @@ fn build_residual_prefers_the_greatest_matching_installed() {
     let mut pin = residual_161_pin();
     pin.atom = ">=dev-libs/souprov-1.0:0/1".to_string();
     pin.raw_atom = pin.atom.clone();
-    let out =
-        build_residual_slot_conflicts(&repos, &config, &dir, &[upgrade], &HashMap::new(), &[pin]);
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &HashMap::new(),
+        dropped: &[pin],
+    });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].instances[1].version, "1.0-r1");
     let _ = fs::remove_dir_all(&dir);
@@ -234,14 +246,14 @@ fn build_residual_files_puller_parents_by_version_and_use() {
             row("<dev-libs/souprov-0.1"),
         ],
     )]);
-    let out = build_residual_slot_conflicts(
-        &repos,
-        &config,
-        &dir,
-        &[upgrade],
-        &pullers,
-        &[residual_161_pin()],
-    );
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &pullers,
+        dropped: &[residual_161_pin()],
+    });
     assert_eq!(out.len(), 1);
     let merge_atoms: Vec<&str> = out[0].instances[0]
         .parents
@@ -301,14 +313,14 @@ fn build_residual_folds_each_pin_into_its_own_record() {
         raw_atom: "=dev-libs/souprov-1.0:0/1".to_string(),
         consumer: ("dev-libs".to_string(), "zzz".to_string(), "9.9".to_string()),
     };
-    let out = build_residual_slot_conflicts(
-        &repos,
-        &config,
-        &dir,
-        &[upgrade, sounneed_merge],
-        &HashMap::new(),
-        &[residual_161_pin(), pin_b, pin_stray],
-    );
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade, sounneed_merge],
+        slot_pullers: &HashMap::new(),
+        dropped: &[residual_161_pin(), pin_b, pin_stray],
+    });
     assert_eq!(out.len(), 2);
     for r in &out {
         let atoms: Vec<&str> = r.instances[1]
@@ -335,14 +347,14 @@ fn build_residual_dedups_identical_pins() {
     let dir = slotundo_temp_dir("161-resid-dup");
     let (repos, config, upgrade) = residual_161_setup(&dir);
     let pin = residual_161_pin();
-    let out = build_residual_slot_conflicts(
-        &repos,
-        &config,
-        &dir,
-        &[upgrade],
-        &HashMap::new(),
-        &[pin.clone(), pin],
-    );
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &HashMap::new(),
+        dropped: &[pin.clone(), pin],
+    });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].instances[1].parents.len(), 1);
     let _ = fs::remove_dir_all(&dir);
@@ -403,7 +415,14 @@ fn merge_same_slot_conflicts_refiles_a_built_puller_under_the_installed_sub_slot
             "dev-libs/foo:0/9=".to_string(),
         )],
     );
-    let out = merge_same_slot_conflicts(&[conflict], &pullers, &repos, &test_config(), &base, true);
+    let out = merge_same_slot_conflicts(MergeSameSlotConflictsArgs {
+        conflicts: &[conflict],
+        pullers: &pullers,
+        repos: &repos,
+        config: &test_config(),
+        root: &base,
+        refile_singletons: true,
+    });
     let installed = out[0].instances.iter().find(|i| i.installed).unwrap();
     assert_eq!(
         installed.parents.len(),

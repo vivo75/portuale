@@ -193,7 +193,14 @@ fn resolve_blockers_buildpkgonly_gate() {
     // `buildpkgonly_deps_unsatisfied`'s); soft and runtime-keyed
     // blockers are satisfied silently.
     let dir = slotundo_temp_dir("blocker-buildpkgonly-gate");
-    slotundo_vdb(&dir, "blocked", "1.0", "0", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
     let owner = graph_entry("dev-libs", "owner", "1.0");
     let entries = vec![owner];
     let call = |atom: &str, strong: bool, buildtime: bool, buildpkgonly: bool| {
@@ -245,7 +252,14 @@ fn resolve_blockers_drops_a_blocker_from_a_superseded_walk_candidate() {
     // files nothing — this is what made the uninstall target follow
     // walk order (Y-2/Y-3) instead of the merged candidate (Y-1).
     let dir = slotundo_temp_dir("blocker-stale-owner");
-    slotundo_vdb(&dir, "blk0y", "3", "3", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blk0y",
+        version: "3",
+        slot: "3",
+        rdepend: "",
+        installed_use: "",
+    });
     let entries = vec![graph_entry("dev-libs", "blk0x", "2")];
     let stale = PendingBlocker {
         atom_str: "!=dev-libs/blk0y-3".to_string(),
@@ -295,7 +309,14 @@ fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied()
     // B1 the row is kept, tagged `Replacement`; the renderer hides it
     // until B2 models real's scheduling predicate.
     let dir = slotundo_temp_dir("blocker-s1-a");
-    slotundo_vdb(&dir, "blocked", "1.0", "0", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
     let owner = graph_entry("dev-libs", "bparent", "1.0");
     let mut upgrade = graph_entry("dev-libs", "blocked", "2.0");
     upgrade.outcome = PretendOutcome::Upgrade {
@@ -419,9 +440,30 @@ fn resolve_blockers_uninstalls_a_settled_block_when_the_cp_moves_slot() {
     // old instance, so the cp-keyed retry closure must not hold it
     // once the run re-resolves the cp elsewhere.
     let dir = slotundo_temp_dir("blocker-284-moves-slot");
-    slotundo_vdb(&dir, "blocked", "1", "0/1", "", "");
-    slotundo_vdb(&dir, "blocked", "2", "1/1", "", "");
-    slotundo_vdb(&dir, "bcons", "1", "0", "dev-libs/blocked:0/1=", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "2",
+        slot: "1/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "bcons",
+        version: "1",
+        slot: "0",
+        rdepend: "dev-libs/blocked:0/1=",
+        installed_use: "",
+    });
     let mut upgrade = graph_entry("dev-libs", "blocked", "3");
     upgrade.outcome = PretendOutcome::Upgrade {
         from: "2".into(),
@@ -580,7 +622,14 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
     // Cell c: installed blocked-1.0 survives, a walked consumer
     // depends on it -> unresolved (digraph node with parents).
     let dir = slotundo_temp_dir("blocker-s2-c");
-    slotundo_vdb(&dir, "blocked", "1.0", "0", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
     let mut walker = installed("bconsumer");
     walker.deps = vec![edge("dev-libs", "blocked", "dev-libs/blocked")];
     let conflicts = resolve_blockers(
@@ -614,7 +663,14 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
     // (L0 `sys-apps/systemd-utils`): the vdb reverse scan is the
     // documented fallback and marks it unresolved again. The
     // consumer must be an installed vdb package for it to be found.
-    slotundo_vdb(&dir, "bconsumer", "1.0", "0", "dev-libs/blocked", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "bconsumer",
+        version: "1.0",
+        slot: "0",
+        rdepend: "dev-libs/blocked",
+        installed_use: "",
+    });
     let closure: HashSet<(String, String)> =
         [("dev-libs".to_string(), "blocked".to_string())].into();
     let conflicts = resolve_blockers(
@@ -660,7 +716,14 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
 
     // Cell b: a same-version Reinstall is merge-bound, too.
     let dir = slotundo_temp_dir("blocker-s2-b");
-    slotundo_vdb(&dir, "blocked", "1.0", "0", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
     let mut reinstall = graph_entry("dev-libs", "blocked", "1.0");
     reinstall.outcome = PretendOutcome::Reinstall {
         version: "1.0".into(),
@@ -685,7 +748,14 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
     // Cell f: an installed (nomerge) parent's installed match is
     // ignored outright.
     let dir = slotundo_temp_dir("blocker-s2-f");
-    slotundo_vdb(&dir, "blocked", "1.0", "0", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
     let conflicts = resolve_blockers(
         &dir,
         &[pb("!<dev-libs/blocked-2.0", "bparent")],
@@ -849,15 +919,22 @@ fn resolve_blockers_tags_a_scanned_nomerge_owner_with_its_own_removal() {
     // merge entry exists -- and real removes the **owner**, ordered
     // after the merge-bound blocked instance (`inst_task`).
     let dir = slotundo_temp_dir("blocker-77-scan");
-    slotundo_vdb(
-        &dir,
-        "bparent",
-        "1.0",
-        "0",
-        "!<dev-libs/blocked-2.0",
-        "flip",
-    );
-    slotundo_vdb(&dir, "blocked", "1.0", "0", "", "flip");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "bparent",
+        version: "1.0",
+        slot: "0",
+        rdepend: "!<dev-libs/blocked-2.0",
+        installed_use: "flip",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "flip",
+    });
     let pb = || PendingBlocker {
         atom_str: "!<dev-libs/blocked-2.0".to_string(),
         strong: false,
@@ -963,8 +1040,22 @@ fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
     // runtime deps carry no `!` token cannot contribute a blocker,
     // so it never reaches the USE reduction.
     let dir = slotundo_temp_dir("blocker-83-scan");
-    slotundo_vdb(&dir, "bparent", "1.0", "0", "!<dev-libs/blocked-2.0", "");
-    slotundo_vdb(&dir, "plain", "1.0", "0", "dev-libs/blocked", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "bparent",
+        version: "1.0",
+        slot: "0",
+        rdepend: "!<dev-libs/blocked-2.0",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "plain",
+        version: "1.0",
+        slot: "0",
+        rdepend: "dev-libs/blocked",
+        installed_use: "",
+    });
     let config = portage_profile::Config::default();
     let constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
     let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();

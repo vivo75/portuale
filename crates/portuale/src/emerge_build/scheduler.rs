@@ -167,14 +167,15 @@ pub(crate) fn build_one_source_entry(args: BuildOneSourceEntryArgs<'_>) -> Resul
                     .any(|t| t == "binpkg-multi-instance")
             })
             .unwrap_or(per_entry_package_options.binpkg_multi_instance);
-        let status = ebuild_package::package_after_install(
-            &path,
-            root,
-            portage_tmpdir,
-            &per_entry_package_options,
-            use_flags,
-            per_entry_binpkg_multi_instance,
-        )?;
+        let status =
+            ebuild_package::package_after_install(ebuild_package::PackageAfterInstallArgs {
+                ebuild_path: &path,
+                root,
+                portage_tmpdir,
+                options: &per_entry_package_options,
+                use_flags,
+                per_entry_binpkg_multi_instance,
+            })?;
         if status != 0 {
             return Err(format!("{cp}-{version}: binpkg build failed ({status})"));
         }

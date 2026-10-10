@@ -390,12 +390,14 @@ pub(crate) fn slot_conflict_abi_probe(
                             c.version, c.slot, c.sub_slot, c.repo_name
                         );
                         Some(effective_use_flags_uncached(
-                            config,
-                            live.get("IUSE").map(String::as_str).unwrap_or_default(),
-                            &c.keywords,
-                            &cand_str,
-                            &pcat,
-                            &ppkg,
+                            EffectiveUseFlagsUncachedArgs {
+                                config,
+                                iuse: live.get("IUSE").map(String::as_str).unwrap_or_default(),
+                                keywords: &c.keywords,
+                                candidate_str: &cand_str,
+                                category: &pcat,
+                                package: &ppkg,
+                            },
                         ))
                     }) else {
                         continue;
@@ -738,14 +740,14 @@ pub(crate) fn greedy_pin_survives_revision(
             "{}/{}-{}:{}/{}::{}",
             provider_cp.0, provider_cp.1, c.version, c.slot, c.sub_slot, c.repo_name
         );
-        let use_flags = effective_use_flags_uncached(
+        let use_flags = effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
             config,
-            meta.get("IUSE").map(String::as_str).unwrap_or_default(),
-            &c.keywords,
-            &cand_str,
-            &provider_cp.0,
-            &provider_cp.1,
-        );
+            iuse: meta.get("IUSE").map(String::as_str).unwrap_or_default(),
+            keywords: &c.keywords,
+            candidate_str: &cand_str,
+            category: &provider_cp.0,
+            package: &provider_cp.1,
+        });
         let mut out = HashSet::new();
         for key in ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"] {
             let atoms =
@@ -839,14 +841,14 @@ pub(crate) fn replacement_parent_accepts(args: ReplacementParentAcceptsArgs<'_>)
             "{cat}/{pkg}-{}:{}/{}::{}",
             c.version, c.slot, c.sub_slot, c.repo_name
         );
-        let use_flags = effective_use_flags_uncached(
+        let use_flags = effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
             config,
-            meta.get("IUSE").map(String::as_str).unwrap_or_default(),
-            &c.keywords,
-            &cand_str,
-            cat,
-            pkg,
-        );
+            iuse: meta.get("IUSE").map(String::as_str).unwrap_or_default(),
+            keywords: &c.keywords,
+            candidate_str: &cand_str,
+            category: cat,
+            package: pkg,
+        });
         for tok in dep_keys
             .iter()
             .filter_map(|k| {

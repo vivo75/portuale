@@ -266,3 +266,21 @@ The owner approved items 1-27 and commented on two of them: item 2
     `LLM/code-notes/`, so the list is measured again after it, by code
     lines. Functions still over 200 code lines then go to #339 with
     their length and the extraction hint from split-map section 10.
+
+36. **Phase 5 worklist: one `<Fname>Args` struct per function.** Every
+    function that carried a worklist `#[allow(clippy::too_many_arguments)]`
+    or `#[allow(clippy::fn_params_excessive_bools)]` now takes
+    `args: <Fname>Args` with one named field per old parameter and
+    destructures it on its first line, so bodies don't change. Call
+    sites name every argument. `LLM/tools/args_struct.py` does it from
+    the compiler's E0061 errors. A method keeps `self` and its struct
+    goes above the `impl`; an `impl Trait` parameter stays a separate
+    parameter after `args`. An allow on a function where neither lint
+    fires (clippy.toml: at most 5 parameters with `self`, at most 2
+    bools) is just removed. Two functions were done by hand with two
+    lifetimes, because their result borrows only one argument
+    (`find_remote_binpkg_instance`) or a `&mut` holds an invariant
+    lifetime (`scan_binpkg_file`); so was `MemoryDb::add_package`
+    (`#![deny(missing_docs)]` wants field docs). Grouping bools into
+    enums is not done here: the struct field names already say what
+    each value means at the call site. The worklist allow count is 0.

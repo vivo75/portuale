@@ -1,5 +1,6 @@
 //! Merge-list row attributes: columns, version decoration, USE suffix, sizes.
 
+use crate::color::PkgprintArgs;
 use crate::pretend::*;
 
 /// Prints one `[blocks]` line per conflict recorded on `entry` (see
@@ -104,8 +105,18 @@ pub(crate) fn columns_line(args: ColumnsLineArgs<'_>) -> String {
     // both go through `pkgprint`; the version column is `green("[ver]")`;
     // `oldbest` arrives already `blue("[from]")` from `convert_myoldbest`.
     // Padding measures visible width (`color::nc_len`), never raw bytes.
-    let cp = color.pkgprint(&format!("{category}/{package}"), binary, system, world);
-    let bword = color.pkgprint(bracket_word, binary, system, world);
+    let cp = color.pkgprint(PkgprintArgs {
+        text: &format!("{category}/{package}"),
+        binary,
+        system,
+        world,
+    });
+    let bword = color.pkgprint(PkgprintArgs {
+        text: bracket_word,
+        binary,
+        system,
+        world,
+    });
     let mut line = format!("[{bword} {field}] {indent}{cp}");
     let pad_to = |line: &mut String, target: usize| {
         let w = color::nc_len(line);

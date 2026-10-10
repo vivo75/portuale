@@ -1600,6 +1600,15 @@ struct Ctx {
     dir: InstallRoute,
 }
 
+/// Arguments of [`Ctx::copy_and_set`].
+struct CopyAndSetArgs<'a> {
+    parsed: &'a InstallParsed,
+    source: &'a [u8],
+    sstat: &'a std::fs::Metadata,
+    dest: &'a [u8],
+    dest_dir: &'a [u8],
+}
+
 impl Ctx {
     fn helper(&self) -> String {
         helper_display(&self.opts.helper)
@@ -1771,15 +1780,14 @@ impl Ctx {
     /// like Python's `open(dst, "wb")`), then attributes, xattrs,
     /// timestamps. Failures log the `Failed to copy file` first line
     /// plus the final line and return False.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn copy_and_set(
-        &self,
-        parsed: &InstallParsed,
-        source: &[u8],
-        sstat: &std::fs::Metadata,
-        dest: &[u8],
-        dest_dir: &[u8],
-    ) -> Result<bool, Fatal> {
+    fn copy_and_set(&self, args: CopyAndSetArgs<'_>) -> Result<bool, Fatal> {
+        let CopyAndSetArgs {
+            parsed,
+            source,
+            sstat,
+            dest,
+            dest_dir,
+        } = args;
         let failed = |line: Vec<u8>| -> Result<bool, Fatal> {
             let mut first = Vec::from(b"Failed to copy file: _parsed_options=".as_slice());
             first.extend_from_slice(&parsed.namespace_repr());
@@ -1857,7 +1865,13 @@ impl Ctx {
             Err(e) if e == libc::ENOENT => {}
             Err(e) => return Err(Fatal::Uncaught(errno_line(e, &dest))),
         }
-        self.copy_and_set(parsed, source, &sstat, &dest, dest_dir)
+        self.copy_and_set(CopyAndSetArgs {
+            parsed,
+            source,
+            sstat: &sstat,
+            dest: &dest,
+            dest_dir,
+        })
     }
 
     /// `_InsSubprocessInstallRunner.run`: `install <opts> <source>

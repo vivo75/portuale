@@ -97,14 +97,14 @@ pub(crate) fn constraint_withheld_updates(
                                 cand.sub_slot,
                                 cand.repo_name
                             );
-                            let enabled = effective_use_flags(
+                            let enabled = effective_use_flags(EffectiveUseFlagsArgs {
                                 config,
-                                &cand.iuse,
-                                &cand.keywords,
-                                &cpv,
-                                &pin.cp.0,
-                                &pin.cp.1,
-                            );
+                                iuse: &cand.iuse,
+                                keywords: &cand.keywords,
+                                candidate_str: &cpv,
+                                category: &pin.cp.0,
+                                package: &pin.cp.1,
+                            });
                             let declared: HashSet<String> = cand
                                 .iuse
                                 .split_whitespace()

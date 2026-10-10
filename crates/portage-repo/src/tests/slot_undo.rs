@@ -21,19 +21,19 @@ fn run_pass_use_mismatched_installed_instance_leaves_the_build_edge_hard() {
         fs::write(d.join(f), format!("{v}\n")).unwrap();
     }
     let atoms = vec!["dev-util/u250make".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let edge = pass.edge_kind_map.get(&(
         (false, "dev-util".to_string(), "u250make".to_string()),
         (false, "dev-libs".to_string(), "u250json".to_string()),
@@ -53,19 +53,19 @@ fn run_pass_use_mismatched_installed_instance_leaves_the_build_edge_hard() {
 fn run_pass_resolves_a_leaf_to_a_new_entry() {
     let dir = slotundo_temp_dir("161-run-new");
     let atoms = vec!["dev-libs/sounneed".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     let e = &pass.entries[0];
     assert_eq!(
@@ -101,19 +101,19 @@ fn run_pass_resolves_a_leaf_to_a_new_entry() {
 fn run_pass_reports_a_missing_atom_as_nvc() {
     let dir = slotundo_temp_dir("161-run-nvc");
     let atoms = vec!["dev-libs/nosuchpkg".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     assert!(matches!(
         pass.entries[0].outcome,
@@ -130,19 +130,19 @@ fn run_pass_reports_a_missing_atom_as_nvc() {
 fn run_pass_reinstalls_the_requested_installed_version() {
     let dir = slotundo_temp_dir("161-run-inst");
     let atoms = vec!["dev-libs/sounneed".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[("sounneed", "1.0", "0/1")],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[("sounneed", "1.0", "0/1")],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     assert!(matches!(
         pass.entries[0].outcome,
@@ -163,19 +163,19 @@ fn run_pass_reinstalls_the_requested_installed_version() {
 fn run_pass_keeps_a_satisfied_dependency_installed() {
     let dir = slotundo_temp_dir("161-run-depinst");
     let atoms = vec!["dev-libs/needer".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[("paired", "2.0", "0")],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[("paired", "2.0", "0")],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let paired = pass
         .entries
         .iter()
@@ -194,19 +194,19 @@ fn run_pass_keeps_a_satisfied_dependency_installed() {
 fn run_pass_upgrades_an_older_installed_version() {
     let dir = slotundo_temp_dir("161-run-up");
     let atoms = vec!["dev-libs/sounneed".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        true,
-        &[("sounneed", "0.9", "0/1"), ("sounneed", "0.8", "0/1")],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: true,
+        installed: &[("sounneed", "0.9", "0/1"), ("sounneed", "0.8", "0/1")],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     assert!(matches!(
         pass.entries[0].outcome,
@@ -240,19 +240,19 @@ fn run_pass_upgrades_an_older_installed_version() {
 fn run_pass_downgrades_a_newer_installed_version() {
     let dir = slotundo_temp_dir("161-run-down");
     let atoms = vec!["dev-libs/sounneed".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        true,
-        &[("sounneed", "2.0", "0/1")],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: true,
+        installed: &[("sounneed", "2.0", "0/1")],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     assert!(matches!(
         pass.entries[0].outcome,
@@ -267,19 +267,19 @@ fn run_pass_downgrades_a_newer_installed_version() {
 fn run_pass_walks_dependencies_and_records_parent_atoms() {
     let dir = slotundo_temp_dir("161-run-deps");
     let atoms = vec!["dev-libs/needer".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let mut names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["needer", "paired"]);
@@ -297,19 +297,19 @@ fn run_pass_newuse_reinstalls_a_flag_change() {
     let dir = slotundo_temp_dir("161-run-newuse");
     let atoms = vec!["dev-libs/deepvdbusepkg".to_string()];
     // The vdb records no `wantdep`; the profile enables it.
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[("deepvdbusepkg", "1.0", "0")],
-        true,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[("deepvdbusepkg", "1.0", "0")],
+        newuse: true,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let pkg = pass
         .entries
         .iter()
@@ -354,19 +354,19 @@ fn run_pass_revisiting_a_reinstall_reuses_the_entry() {
         "dev-libs/deepvdbusepkg".to_string(),
         "dev-libs/deepvdbusepkg:0".to_string(),
     ];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[("deepvdbusepkg", "1.0", "0")],
-        true,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[("deepvdbusepkg", "1.0", "0")],
+        newuse: true,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let rows: Vec<_> = pass
         .entries
         .iter()
@@ -390,19 +390,19 @@ fn run_pass_revisiting_a_reinstall_reuses_the_entry() {
 fn run_pass_without_newuse_keeps_a_use_mismatch_quiet() {
     let dir = slotundo_temp_dir("161-run-nouse");
     let atoms = vec!["dev-libs/deepvdbusepkg".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[("deepvdbusepkg", "1.0", "0")],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[("deepvdbusepkg", "1.0", "0")],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let pkg = pass
         .entries
         .iter()
@@ -427,19 +427,19 @@ fn run_pass_without_newuse_keeps_a_use_mismatch_quiet() {
 fn run_pass_usepkgonly_without_binaries_reports_nvc() {
     let dir = slotundo_temp_dir("161-run-binonly");
     let atoms = vec!["dev-libs/sounneed".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        true,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: true,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     assert!(matches!(
         pass.entries[0].outcome,
@@ -455,19 +455,19 @@ fn run_pass_usepkgonly_without_binaries_reports_nvc() {
 fn run_pass_nodeps_resolves_only_the_requested_atom() {
     let dir = slotundo_temp_dir("161-run-nodeps");
     let atoms = vec!["dev-libs/needer".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        true,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: true,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     assert_eq!(pass.entries[0].package.as_str(), "needer");
     let _ = fs::remove_dir_all(&dir);
@@ -479,19 +479,19 @@ fn run_pass_nodeps_resolves_only_the_requested_atom() {
 fn run_pass_selective_keeps_the_requested_version() {
     let dir = slotundo_temp_dir("161-run-sel");
     let atoms = vec!["dev-libs/sounneed".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[("sounneed", "1.0", "0/1")],
-        false,
-        false,
-        false,
-        true,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[("sounneed", "1.0", "0/1")],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: true,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     assert!(matches!(
         pass.entries[0].outcome,
@@ -509,19 +509,19 @@ fn run_pass_resolves_multiple_atoms_in_order() {
         "dev-libs/paired".to_string(),
         "dev-libs/sounneed".to_string(),
     ];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["sounneed", "paired"]);
     let _ = fs::remove_dir_all(&dir);
@@ -534,19 +534,19 @@ fn run_pass_resolves_multiple_atoms_in_order() {
 fn run_pass_satisfies_a_disabled_use_dep() {
     let dir = slotundo_temp_dir("161-run-usedep");
     let atoms = vec!["dev-libs/deepvdbusepkg[-wantdep]".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.entries.len(), 1);
     assert!(matches!(
         pass.entries[0].outcome,
@@ -561,19 +561,19 @@ fn run_pass_satisfies_a_disabled_use_dep() {
 fn run_pass_reports_an_unenabled_use_dep_unsatisfied() {
     let dir = slotundo_temp_dir("161-run-nouse");
     let atoms = vec!["dev-libs/sounneed[soflag]".to_string()];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert!(
         pass.entries.iter().all(|e| !matches!(
             e.outcome,
@@ -596,19 +596,19 @@ fn run_pass_dedups_use_unsat_reports() {
         "dev-libs/sounneed[soflag]".to_string(),
         "dev-libs/sounneed[soflag]:0".to_string(),
     ];
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     assert_eq!(pass.use_unsat_deps.len(), 1);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -620,19 +620,19 @@ fn run_pass_marks_a_new_slot_row() {
     let dir = slotundo_temp_dir("161-run-newslot");
     let atoms = vec!["dev-libs/dualslotpkg".to_string()];
     // Slot 1 stays installed; the walk news slot 2 alongside it.
-    let pass = run_161(
-        &dir,
-        &atoms,
-        true,
-        &[("dualslotpkg", "1.0", "1")],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: true,
+        installed: &[("dualslotpkg", "1.0", "1")],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let entry = pass
         .entries
         .iter()
@@ -655,19 +655,19 @@ fn run_pass_records_oldbest_for_a_moved_reinstall() {
     let dir = slotundo_temp_dir("161-run-oldbest");
     let atoms = vec!["dev-libs/sounneed".to_string()];
     // Installed sub-slot 9 disagrees with the tree's 1.
-    let pass = run_161(
-        &dir,
-        &atoms,
-        false,
-        &[("sounneed", "1.0", "0/9")],
-        false,
-        false,
-        false,
-        false,
-        false,
-        Deep::NotRequested,
-        false,
-    );
+    let pass = run_161(Run161Args {
+        dir: &dir,
+        atoms: &atoms,
+        update: false,
+        installed: &[("sounneed", "1.0", "0/9")],
+        newuse: false,
+        usepkgonly: false,
+        nodeps: false,
+        selective: false,
+        usepkg: false,
+        deep: Deep::NotRequested,
+        with_bdeps: false,
+    });
     let entry = pass
         .entries
         .iter()

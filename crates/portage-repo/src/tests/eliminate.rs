@@ -112,15 +112,22 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
 #[test]
 fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
     let dir = slotundo_temp_dir("161-elim");
-    slotundo_vdb(
-        &dir,
-        "sounneed",
-        "1.0",
-        "0/1",
-        "soflag? ( dev-libs/souprov:0/1= )",
-        "",
-    );
-    slotundo_vdb(&dir, "souprov", "1.0", "0/1", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "sounneed",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "soflag? ( dev-libs/souprov:0/1= )",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souprov",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
     // Same category, sorts first, different package and version: a
     // loosened lookup (`||`, `!=`) lands here and rule 1 (version)
     // keeps the rebuild, while the exact lookup walks past it to
@@ -276,15 +283,22 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
     // both rule-8 sides use-reduce it away); `souprov` is upgrading
     // 1.0(0/1) -> 2.0(0/2) in the graph.
     let dir = slotundo_temp_dir("undo");
-    slotundo_vdb(
-        &dir,
-        "sounneed",
-        "1.0",
-        "0/1",
-        "soflag? ( dev-libs/souprov:0/1= )",
-        "",
-    );
-    slotundo_vdb(&dir, "souprov", "1.0", "0/1", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "sounneed",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "soflag? ( dev-libs/souprov:0/1= )",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souprov",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let provider = slotundo_provider_entry();
     let sounneed = ("dev-libs".to_string(), "sounneed".to_string());
@@ -348,7 +362,14 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
     // shape: kept with the flag on. Rule 6 keeps it without the flag
     // too -- rule 3 is behaviour-neutral for ebuilds (documented), so
     // both must agree.
-    slotundo_vdb(&dir, "souneedslot", "1.0", "0/1", "", "");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souneedslot",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
     let entry_slotmove = slotundo_rebuild_entry("souneedslot", "1.0", "0", "2", &[]);
     let want_slotmove = HashMap::from([(
         ("dev-libs".to_string(), "souneedslot".to_string()),
@@ -494,20 +515,20 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         false,
     );
     assert_eq!(latched, replace);
-    let (rescheduled, ..) = slot_operator_rebuild_scan(
-        &dir,
-        &[],
-        &[provider, entry],
-        &reach,
-        &BTreeSet::new(),
-        &latched,
-        true,
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &test_config(),
-    );
+    let (rescheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        root: &dir,
+        repos: &[],
+        entries: &[provider, entry],
+        reachable: &reach,
+        already: &BTreeSet::new(),
+        undone: &latched,
+        with_bdeps: true,
+        update: false,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        excluded: &[],
+        config: &test_config(),
+    });
     assert!(
         rescheduled.is_empty(),
         "the undo latch suppresses the re-add"

@@ -798,16 +798,16 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                 InfoPkg::Installed(i) => {
                     let opts = ebuild_merge::MergeOptions::from_env(shell, debug);
                     let scratch = portage_tmpdir.join("portage").join("_info_src");
-                    ebuild_merge::run_vdb_saved_env_phase(
+                    ebuild_merge::run_vdb_saved_env_phase(ebuild_merge::RunVdbSavedEnvPhaseArgs {
                         root,
-                        &i.category,
-                        &i.package,
-                        &format!("{}-{}", i.package, i.version),
-                        "info",
-                        &scratch,
-                        &portage_tmpdir,
-                        &opts,
-                    )
+                        category: &i.category,
+                        package: &i.package,
+                        pf: &format!("{}-{}", i.package, i.version),
+                        phase: "info",
+                        scratch_dir: &scratch,
+                        portage_tmpdir: &portage_tmpdir,
+                        options: &opts,
+                    })
                 }
                 InfoPkg::Binary(b) => {
                     // Real `bindb.bintree.getname(cpv)` + extract the

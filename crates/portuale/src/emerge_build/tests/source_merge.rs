@@ -49,20 +49,20 @@ fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
                 version: "1.0".into(),
             },
         )];
-        run_source_merge(
-            &entries,
-            &repos,
-            &root,
-            &portage_tmpdir,
-            &options,
-            false,
-            None,
-            &[],
-            1,
-            None,
-            false,
-            StatusMode::for_tests(),
-        )
+        run_source_merge(RunSourceMergeArgs {
+            entries: &entries,
+            repos: &repos,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            jobs: 1,
+            load_average: None,
+            capture_log: false,
+            mode: StatusMode::for_tests(),
+        })
         .unwrap_or_else(|e| panic!("{label}: source merge succeeds: {e}"));
 
         let keep = root.join("var/lib/phaseenvtest/.keep_dev-libs_phaseenvpkg-0");
@@ -142,20 +142,20 @@ fn source_merge_second_package_sees_env_d_installed_by_the_first() {
             },
         ),
     ];
-    run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        1,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+    run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("source merge succeeds");
     let seen = portage_tmpdir.join("portage/dev-libs/envdreload-b-1.0/temp/envdreload-seen.txt");
     assert_eq!(fs::read_to_string(seen).unwrap(), "ENVDRELOAD_VAR=1\n");
@@ -212,20 +212,20 @@ fn source_merge_protects_the_config_fold_and_env_d_added_paths() {
             },
         )
     });
-    run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        1,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+    run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("source merge succeeds");
     let read = |p: &str| fs::read_to_string(root.join(p)).unwrap_or_else(|e| format!("<{e}>"));
     assert_eq!(read("usr/share/cfgprotme/x"), "local\n");
@@ -282,20 +282,20 @@ fn source_merge_omits_a_vdb_aux_file_the_ebuild_unset_in_an_earlier_phase() {
             version: "1.0".into(),
         },
     )];
-    run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        1,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+    run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("source merge succeeds");
 
     let observed = fs::read_to_string(root.join("usr/share/unsetcflagspkg/unset-observed.txt"))
@@ -342,20 +342,20 @@ fn reinstall_leaves_a_byte_identical_file_a_preinst_helper_would_remove() {
         ..ebuild_merge::MergeOptions::default()
     };
     let merge = |outcome: PretendOutcome| {
-        run_source_merge(
-            &[source_entry("identicalownerpkg", outcome)],
-            &repos,
-            &root,
-            &portage_tmpdir,
-            &options,
-            false,
-            None,
-            &[],
-            1,
-            None,
-            false,
-            StatusMode::for_tests(),
-        )
+        run_source_merge(RunSourceMergeArgs {
+            entries: &[source_entry("identicalownerpkg", outcome)],
+            repos: &repos,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            jobs: 1,
+            load_average: None,
+            capture_log: false,
+            mode: StatusMode::for_tests(),
+        })
         .expect("merge succeeds");
     };
 
@@ -421,20 +421,20 @@ fn run_source_merge_builds_and_merges_a_new_package_end_to_end() {
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
-    run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        1,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+    run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("source merge succeeds");
 
     assert_eq!(
@@ -480,16 +480,16 @@ fn source_merge_pre_cleans_a_stale_installed_image() {
         features: "noclean".to_string(),
         ..ebuild_merge::MergeOptions::default()
     };
-    merge_one_source_entry(
-        &entry,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        None,
-        mrg_director::MergeProgress::single(),
-        &StatusDisplay::for_tests(),
-    )
+    merge_one_source_entry(MergeOneSourceEntryArgs {
+        entry: &entry,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        buildpkg: None,
+        progress: mrg_director::MergeProgress::single(),
+        display: &StatusDisplay::for_tests(),
+    })
     .expect("first merge succeeds");
     let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
     assert!(
@@ -510,16 +510,16 @@ fn source_merge_pre_cleans_a_stale_installed_image() {
         features: "sandbox".to_string(),
         ..ebuild_merge::MergeOptions::default()
     };
-    merge_one_source_entry(
-        &entry,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        None,
-        mrg_director::MergeProgress::single(),
-        &StatusDisplay::for_tests(),
-    )
+    merge_one_source_entry(MergeOneSourceEntryArgs {
+        entry: &entry,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        buildpkg: None,
+        progress: mrg_director::MergeProgress::single(),
+        display: &StatusDisplay::for_tests(),
+    })
     .expect("second merge succeeds");
     assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
     assert!(
@@ -570,20 +570,20 @@ fn run_build_scheduler_builds_two_leaves_in_parallel_then_the_parent() {
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
-    run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        2,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+    run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 2,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("parallel source merge succeeds");
 
     for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
@@ -633,20 +633,20 @@ fn run_build_scheduler_with_a_high_load_average_never_throttles() {
     };
     // A load average of 1e9 can never be exceeded -> the throttle is
     // a no-op and every package still builds and merges.
-    run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        2,
-        Some(1e9),
-        false,
-        StatusMode::for_tests(),
-    )
+    run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 2,
+        load_average: Some(1e9),
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("high --load-average must not stall the scheduler");
     for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
         assert!(
@@ -693,20 +693,20 @@ fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
-    let err = run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        true,
-        None,
-        &[],
-        2,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+    let err = run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: true,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 2,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect_err("a failed build must make the whole run fail under --keep-going");
     assert!(err.contains("schedbad-1.0"), "{err}");
     assert!(err.contains("schedbaddep"), "{err}");
@@ -761,20 +761,20 @@ fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
         ..ebuild_merge::MergeOptions::default()
     };
     let started = std::time::Instant::now();
-    let err = run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false, // keep_going
-        None,
-        &[],
-        2,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+    let err = run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false, // keep_going
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 2,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect_err("schedbad's own failure must fail the whole run");
     assert!(err.contains("schedbad-1.0"), "{err}");
     // Real generously bounded (loaded machines, #308): well under schedslow's own 120s sleep,
@@ -810,20 +810,20 @@ fn run_source_merge_rejects_a_binary_entry() {
         },
     );
     binary.source = CandidateSource::Binary;
-    let err = run_source_merge(
-        &[binary],
-        &[],
-        &bogus,
-        &bogus,
-        &options,
-        false,
-        None,
-        &[],
-        1,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+    let err = run_source_merge(RunSourceMergeArgs {
+        entries: &[binary],
+        repos: &[],
+        root: &bogus,
+        portage_tmpdir: &bogus,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .unwrap_err();
     assert!(err.contains("binary package"), "{err}");
 }
@@ -925,46 +925,46 @@ fn run_source_merge_upgrade_replaces_the_installed_version() {
         ..ebuild_merge::MergeOptions::default()
     };
 
-    run_source_merge(
-        &[source_entry(
+    run_source_merge(RunSourceMergeArgs {
+        entries: &[source_entry(
             "binpkgrmpkg",
             PretendOutcome::New {
                 version: "1.0".into(),
             },
         )],
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        1,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("1.0 merges");
-    run_source_merge(
-        &[source_entry(
+    run_source_merge(RunSourceMergeArgs {
+        entries: &[source_entry(
             "binpkgrmpkg",
             PretendOutcome::Upgrade {
                 from: "1.0".into(),
                 to: "2.0".into(),
             },
         )],
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        1,
-        None,
-        false,
-        StatusMode::for_tests(),
-    )
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("2.0 upgrade merges");
 
     assert!(

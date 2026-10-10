@@ -58,23 +58,22 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         .collect();
     let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
     let _ = crate::mtimedb::write_resume_list(root, atom_args, &resume_mergelist, &resume_opts);
-    if let Err(e) = emerge_build::run_source_merge(
+    if let Err(e) = emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
         entries,
         repos,
         root,
         portage_tmpdir,
-        merge_options,
+        options: merge_options,
         keep_going,
         buildpkg,
         buildpkg_exclude,
         jobs,
-        load_average,
-        // Real `Scheduler._background_mode`: capture per-package
+        load_average, // Real `Scheduler._background_mode`: capture per-package
         // build output when `--quiet-build=y` or `-q` is set (a
         // `-j` >1 run always captures regardless).
-        quiet_build.unwrap_or(false) || quiet,
-        status_mode,
-    ) {
+        capture_log: quiet_build.unwrap_or(false) || quiet,
+        mode: status_mode,
+    }) {
         // Real `Scheduler._save_resume_list`: on a merge failure,
         // record every still-unmerged package so `emerge --resume`
         // can pick up where this left off. The empty-`unmerged`

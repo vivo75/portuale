@@ -188,15 +188,15 @@ pub fn populate_local_pkgdir(
                     let path_field = format!("{category}/{name}/{mname}");
                     let Some(e) = record(
                         &mfile,
-                        scan_binpkg_file(
-                            &mfile,
-                            mname,
+                        scan_binpkg_file(ScanBinpkgFileArgs {
+                            file: &mfile,
+                            basename: mname,
                             category,
                             path_field,
-                            &mut vouch,
-                            true,
+                            vouch: &mut vouch,
+                            multi_instance: true,
                             trust_index,
-                        ),
+                        }),
                     )?
                     else {
                         continue;
@@ -217,15 +217,15 @@ pub fn populate_local_pkgdir(
             let path_field = format!("{category}/{name}");
             if let Some(e) = record(
                 &entry,
-                scan_binpkg_file(
-                    &entry,
-                    name,
+                scan_binpkg_file(ScanBinpkgFileArgs {
+                    file: &entry,
+                    basename: name,
                     category,
                     path_field,
-                    &mut vouch,
-                    false,
+                    vouch: &mut vouch,
+                    multi_instance: false,
                     trust_index,
-                ),
+                }),
             )? {
                 out.push(e);
             }
@@ -315,6 +315,18 @@ pub(crate) fn stanza_has_minimum_keys(stanza: &HashMap<String, String>) -> bool 
         .all(|key| stanza.contains_key(*key))
 }
 
+/// Arguments of [`scan_binpkg_file`]; `vouch`'s pool lifetime (`'v`)
+/// stays apart from the borrow (`'a`).
+pub(crate) struct ScanBinpkgFileArgs<'a, 'v> {
+    pub(crate) file: &'a Path,
+    pub(crate) basename: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) path_field: String,
+    pub(crate) vouch: &'a mut IndexVouch<'v>,
+    pub(crate) multi_instance: bool,
+    pub(crate) trust_index: bool,
+}
+
 /// One `$PKGDIR` binpkg file -> its synthesized `Packages`-style entry,
 /// or `None` if it isn't a binpkg or is a misnamed multi-instance file
 /// (real's own `invalid_name`/`name_split` `continue`). Reuses an
@@ -337,16 +349,18 @@ pub(crate) fn stanza_has_minimum_keys(stanza: &HashMap<String, String>) -> bool 
 /// file is `<pf>-<build_id>.{xpak,gpkg.tar}` with `PF` taken from the
 /// archive and `BUILD_ID` from the filename; when clear, it is
 /// `<pf>.{tbz2,gpkg.tar}`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn scan_binpkg_file(
-    file: &Path,
-    basename: &str,
-    category: &str,
-    path_field: String,
-    vouch: &mut IndexVouch<'_>,
-    multi_instance: bool,
-    trust_index: bool,
+    args: ScanBinpkgFileArgs<'_, '_>,
 ) -> Result<Option<HashMap<String, String>>, BinpkgError> {
+    let ScanBinpkgFileArgs {
+        file,
+        basename,
+        category,
+        path_field,
+        vouch,
+        multi_instance,
+        trust_index,
+    } = args;
     let is_gpkg = basename.ends_with(".gpkg.tar");
     let ext = if is_gpkg {
         ".gpkg.tar"

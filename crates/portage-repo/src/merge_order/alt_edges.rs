@@ -236,7 +236,14 @@ pub fn resolved_dep_targets(
                     if suppressed[i].contains(&ei) {
                         return None;
                     }
-                    pre.select_dep_target(entries, i, &e.deps, ei, &suppressed[i], true)
+                    pre.select_dep_target(SelectDepTargetArgs {
+                        entries,
+                        from: i,
+                        from_deps: &e.deps,
+                        ei,
+                        suppressed: &suppressed[i],
+                        merge_bound_only: true,
+                    })
                 })
                 .collect()
         })

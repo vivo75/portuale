@@ -12,6 +12,16 @@ pub(crate) struct DigraphPrelude<'a> {
     pub(crate) entry_candidate: Vec<Option<String>>,
 }
 
+/// Arguments of [`DigraphPrelude::select_dep_target`].
+pub(crate) struct SelectDepTargetArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) from: usize,
+    pub(crate) from_deps: &'a [DepEdge],
+    pub(crate) ei: usize,
+    pub(crate) suppressed: &'a HashSet<usize>,
+    pub(crate) merge_bound_only: bool,
+}
+
 impl DigraphPrelude<'_> {
     /// Real `_create_graph` resolves every dep atom to a single package
     /// (`_select_pkg_highest_available`) before `_add_pkg` records the
@@ -76,16 +86,15 @@ impl DigraphPrelude<'_> {
     /// count and the bias flips the pair. Fully-redundant atom sets
     /// collapse to the highest version, exactly today's ranking, so only
     /// partially-overlapping shapes like this one move.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    pub(crate) fn select_dep_target(
-        &self,
-        entries: &[GraphEntry],
-        from: usize,
-        from_deps: &[DepEdge],
-        ei: usize,
-        suppressed: &HashSet<usize>,
-        merge_bound_only: bool,
-    ) -> Option<usize> {
+    pub(crate) fn select_dep_target(&self, args: SelectDepTargetArgs<'_>) -> Option<usize> {
+        let SelectDepTargetArgs {
+            entries,
+            from,
+            from_deps,
+            ei,
+            suppressed,
+            merge_bound_only,
+        } = args;
         let edge = &from_deps[ei];
         // Sibling edges selecting the same cp: the minimize universe.
         // Suppressed `||` branches never become edges, so they don't

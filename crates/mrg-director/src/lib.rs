@@ -768,6 +768,20 @@ pub struct MemoryDb {
     dependents: std::collections::HashMap<(String, String, String), Vec<String>>,
 }
 
+/// Arguments of [`MemoryDb::add_package`].
+pub struct AddPackageArgs<'a> {
+    /// The package's category.
+    pub category: &'a str,
+    /// The package name.
+    pub package: &'a str,
+    /// The installed version.
+    pub version: &'a str,
+    /// Its CONTENTS-files list.
+    pub contents_files: Vec<String>,
+    /// The CPVs that directly depend on it.
+    pub depended_on_by: Vec<String>,
+}
+
 impl MemoryDb {
     /// An empty snapshot standing in for `root`.
     pub fn new(root: &Path) -> Self {
@@ -783,15 +797,14 @@ impl MemoryDb {
     /// CPVs that directly depend on it. Repeat calls for one
     /// `category/package` accumulate versions in call order — provide
     /// highest-first, real `dbapi.cp_list` order.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    pub fn add_package(
-        &mut self,
-        category: &str,
-        package: &str,
-        version: &str,
-        contents_files: Vec<String>,
-        depended_on_by: Vec<String>,
-    ) {
+    pub fn add_package(&mut self, args: AddPackageArgs<'_>) {
+        let AddPackageArgs {
+            category,
+            package,
+            version,
+            contents_files,
+            depended_on_by,
+        } = args;
         self.versions
             .entry((category.to_string(), package.to_string()))
             .or_default()
@@ -1173,14 +1186,14 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
         version: &str,
         build_id: Option<&str>,
     ) -> Option<(String, std::collections::HashMap<String, String>)> {
-        portage_repo::find_remote_binpkg_instance(
-            &self.config.binrepos,
-            self.root,
+        portage_repo::find_remote_binpkg_instance(portage_repo::FindRemoteBinpkgInstanceArgs {
+            binrepos: &self.config.binrepos,
+            root: self.root,
             category,
             package,
             version,
             build_id,
-        )
+        })
         .map(|(binrepo, m)| (binrepo.name.clone(), m))
     }
     fn source_name(&self) -> String {
@@ -1589,20 +1602,20 @@ mod tests {
         let mut db = MemoryDb::new(Path::new("/root"));
         assert_eq!(db.root().to_str(), Some("/root"));
         assert!(db.installed_versions("dev-libs", "example").is_empty());
-        db.add_package(
-            "dev-libs",
-            "example",
-            "2.0",
-            vec!["usr/lib/libx.so.2".to_string()],
-            vec!["app/other-1.0".to_string()],
-        );
-        db.add_package(
-            "dev-libs",
-            "example",
-            "1.0",
-            vec!["usr/lib/libx.a".to_string()],
-            Vec::new(),
-        );
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "example",
+            version: "2.0",
+            contents_files: vec!["usr/lib/libx.so.2".to_string()],
+            depended_on_by: vec!["app/other-1.0".to_string()],
+        });
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "example",
+            version: "1.0",
+            contents_files: vec!["usr/lib/libx.a".to_string()],
+            depended_on_by: Vec::new(),
+        });
         assert_eq!(
             db.installed_versions("dev-libs", "example"),
             vec!["2.0", "1.0"]
@@ -2087,13 +2100,13 @@ mod tests {
         ])];
         let idx = portage_repo::BinaryIndex::from_entries(entries);
         let mut db = MemoryDb::new(Path::new("/root"));
-        db.add_package(
-            "dev-libs",
-            "wired",
-            "1.0",
-            vec!["usr/lib/libw.a".to_string()],
-            vec!["app/dep-1.0".to_string()],
-        );
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "wired",
+            version: "1.0",
+            contents_files: vec!["usr/lib/libw.a".to_string()],
+            depended_on_by: vec!["app/dep-1.0".to_string()],
+        });
         type Wiring = Director<
             FakeSolver,
             MemoryDb,

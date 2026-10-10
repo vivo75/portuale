@@ -85,14 +85,14 @@ pub(crate) fn blocked_installed_packages(
             "{}/{}-{}:{slot}/{slot}::{repository}",
             env.category, env.split.pn, env.split.pvr
         );
-        let use_flags = portage_repo::effective_use_flags(
-            &config,
+        let use_flags = portage_repo::effective_use_flags(portage_repo::EffectiveUseFlagsArgs {
+            config: &config,
             iuse,
-            &keywords,
-            &candidate_str,
-            &env.category,
-            &env.split.pn,
-        );
+            keywords: &keywords,
+            candidate_str: &candidate_str,
+            category: &env.category,
+            package: &env.split.pn,
+        });
 
         let dep_keys = ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"];
         let mut depstr = String::new();

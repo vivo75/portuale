@@ -144,16 +144,16 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let options = ebuild_merge::MergeOptions::from_env(shell, debug);
     let scratch = portage_tmpdir.join("portage").join("_config_src");
-    let rc = match ebuild_merge::run_vdb_saved_env_phase(
+    let rc = match ebuild_merge::run_vdb_saved_env_phase(ebuild_merge::RunVdbSavedEnvPhaseArgs {
         root,
         category,
         package,
-        &pf,
-        "config",
-        &scratch,
-        &portage_tmpdir,
-        &options,
-    ) {
+        pf: &pf,
+        phase: "config",
+        scratch_dir: &scratch,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+    }) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("emerge: {e}");

@@ -847,10 +847,16 @@ pub fn circular_dep_solutions(
         // the autounmask-USE overlay applied on top of the configured
         // USE. The changed flags themselves stay untouchable below (real
         // `_get_autounmask_changes`, `circular_dependency.py:104`).
-        let mut parent_use: HashSet<String> =
-            effective_use_flags(config, &pc.iuse, &pc.keywords, &parent_str, &pcat, &ppkg)
-                .as_ref()
-                .clone();
+        let mut parent_use: HashSet<String> = effective_use_flags(EffectiveUseFlagsArgs {
+            config,
+            iuse: &pc.iuse,
+            keywords: &pc.keywords,
+            candidate_str: &parent_str,
+            category: &pcat,
+            package: &ppkg,
+        })
+        .as_ref()
+        .clone();
         for ch in autounmask_use_changes {
             if matches_config_entry(&ch.atom, &parent_str, &pcat, &ppkg) {
                 for tok in ch.token.split_whitespace() {
@@ -880,8 +886,14 @@ pub fn circular_dep_solutions(
         };
 
         // untouchable = use.mask ∪ use.force ∪ autounmask-changed
-        let mut untouchable =
-            forced_or_masked_flags(&pc.iuse, &pc.keywords, &parent_str, &pcat, &ppkg, config);
+        let mut untouchable = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: &pc.iuse,
+            keywords: &pc.keywords,
+            candidate_str: &parent_str,
+            category: &pcat,
+            package: &ppkg,
+            config,
+        });
         for ch in autounmask_use_changes {
             if matches_config_entry(&ch.atom, &parent_str, &pcat, &ppkg) {
                 for tok in ch.token.split_whitespace() {

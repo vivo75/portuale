@@ -271,17 +271,17 @@ pub(crate) fn merge_after_install(
             preserve_paths.iter().cloned().collect(),
         )])
     };
-    let replaced = unmerge_replaced_same_slot(
+    let replaced = unmerge_replaced_same_slot(UnmergeReplacedSameSlotArgs {
         root,
-        &env.category,
-        &env.split.pn,
-        &env.split.pf,
+        category: &env.category,
+        package: &env.split.pn,
+        new_pf: &env.split.pf,
         main_slot,
-        &env.portage_builddir().join("unmerge-src"),
+        scratch_dir: &env.portage_builddir().join("unmerge-src"),
         portage_tmpdir,
         options,
-        &replacement_preserved,
-    )?;
+        replacement_preserved: &replacement_preserved,
+    })?;
 
     // Real `dblink.treewalk()`'s own post-replace-loop registration
     // (`vartree.py:5266-5272`) -- backlog #178: the one `cp:slot`
@@ -365,7 +365,14 @@ pub(crate) fn merge_after_install(
         // and gets deleted + unregistered (real `_prune_plib_registry()`).
         // No include feed: the new entry is already renamed into place,
         // so its own lines are enumerated (backlog #224).
-        prune_unused_preserved_libs(root, false, &|_| false, &[], &BTreeMap::new(), &[])?;
+        prune_unused_preserved_libs(PruneUnusedPreservedLibsArgs {
+            root,
+            unmerge_no_replacement: false,
+            being_unmerged: &|_| false,
+            exclude_cpvs: &[],
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+        })?;
     }
 
     // Real `dblink.merge()`: `self._elog_process()` runs here, after the
@@ -376,6 +383,19 @@ pub(crate) fn merge_after_install(
     process_merge_elog(env, root, options);
 
     Ok(postinst_status)
+}
+
+/// Arguments of [`unmerge_replaced_same_slot`].
+pub(crate) struct UnmergeReplacedSameSlotArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) scratch_dir: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a MergeOptions,
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
 }
 
 /// Real `dblink.treewalk()`'s replace loop (`vartree.py:5187-5219`):
@@ -403,18 +423,20 @@ pub(crate) fn merge_after_install(
 /// replace) so the caller can fold it into its own `env_update` gate.
 /// Shared by `merge_after_install` (source `emerge <atom>` / `ebuild
 /// <file> merge`) and `merge_binpkg`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn unmerge_replaced_same_slot(
-    root: &Path,
-    category: &str,
-    package: &str,
-    new_pf: &str,
-    main_slot: &str,
-    scratch_dir: &Path,
-    portage_tmpdir: &Path,
-    options: &MergeOptions,
-    replacement_preserved: &BTreeMap<String, Vec<String>>,
+    args: UnmergeReplacedSameSlotArgs<'_>,
 ) -> Result<Vec<String>, String> {
+    let UnmergeReplacedSameSlotArgs {
+        root,
+        category,
+        package,
+        new_pf,
+        main_slot,
+        scratch_dir,
+        portage_tmpdir,
+        options,
+        replacement_preserved,
+    } = args;
     // Real merge-then-unmerge: `<package>-<digit...>` vdb-dir names, the
     // same shape `blocked_installed_packages` and `installed_instance_pf`
     // match; exclude the just-merged new entry. A `-MERGING-<pf>`
@@ -456,21 +478,21 @@ pub(crate) fn unmerge_replaced_same_slot(
     // are removed in this loop.
     let defer_delete = portage_vdb::for_root(root).replace_in_publish();
     for (i, old_pf) in replaced.iter().enumerate() {
-        unmerge_one_installed(
+        unmerge_one_installed(UnmergeOneInstalledArgs {
             root,
             category,
             package,
-            old_pf,
-            &keep,
+            pf: old_pf,
+            also_keep: &keep,
             scratch_dir,
             portage_tmpdir,
             options,
-            None,
-            true,
+            backup: None,
+            is_replacement: true,
             replacement_preserved,
-            &replacement_needed,
-            defer_delete.then(|| &replaced[..i]),
-        )?;
+            replacement_needed: &replacement_needed,
+            deferred_delete: defer_delete.then(|| &replaced[..i]),
+        })?;
     }
 
     // Real `dblink.unmerge()` -> `self._elog_process(phasefilter=("prerm",
@@ -505,6 +527,23 @@ pub(crate) fn unmerge_replaced_same_slot(
     );
 
     Ok(replaced)
+}
+
+/// Arguments of [`unmerge_one_installed`].
+pub(crate) struct UnmergeOneInstalledArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) also_keep: &'a [String],
+    pub(crate) scratch_dir: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a MergeOptions,
+    pub(crate) backup: Option<&'a crate::ebuild_package::PackageOptions>,
+    pub(crate) is_replacement: bool,
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+    pub(crate) deferred_delete: Option<&'a [String]>,
 }
 
 /// Remove ONE already-installed version from the vdb -- real
@@ -557,22 +596,22 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// already unmerged, which are still installed in the database but must
 /// not count as `others_in_slot` (on `files` their directories are gone
 /// by now).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn unmerge_one_installed(
-    root: &Path,
-    category: &str,
-    package: &str,
-    pf: &str,
-    also_keep: &[String],
-    scratch_dir: &Path,
-    portage_tmpdir: &Path,
-    options: &MergeOptions,
-    backup: Option<&crate::ebuild_package::PackageOptions>,
-    is_replacement: bool,
-    replacement_preserved: &BTreeMap<String, Vec<String>>,
-    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
-    deferred_delete: Option<&[String]>,
-) -> Result<(), String> {
+pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result<(), String> {
+    let UnmergeOneInstalledArgs {
+        root,
+        category,
+        package,
+        pf,
+        also_keep,
+        scratch_dir,
+        portage_tmpdir,
+        options,
+        backup,
+        is_replacement,
+        replacement_preserved,
+        replacement_needed,
+        deferred_delete,
+    } = args;
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
         debug: options.debug,
         shell: options.shell,
@@ -584,17 +623,17 @@ pub(crate) fn unmerge_one_installed(
     };
 
     if let Some(pkg_options) = backup {
-        match crate::ebuild_package::quickpkg_from_vdb(
+        match crate::ebuild_package::quickpkg_from_vdb(crate::ebuild_package::QuickpkgFromVdbArgs {
             root,
             category,
             package,
             pf,
-            scratch_dir,
+            scratch_ebuild_dir: scratch_dir,
             portage_tmpdir,
-            pkg_options,
-            &options.config_protect,
-            &options.config_protect_mask,
-        ) {
+            options: pkg_options,
+            config_protect: &options.config_protect,
+            config_protect_mask: &options.config_protect_mask,
+        }) {
             Ok(Some(path)) => {
                 println!(">>> Building backup package for {category}/{pf}");
                 println!(">>> Wrote {}", path.display());
@@ -612,7 +651,7 @@ pub(crate) fn unmerge_one_installed(
         {
             return Ok(0);
         }
-        run_vdb_saved_env_phase(
+        run_vdb_saved_env_phase(RunVdbSavedEnvPhaseArgs {
             root,
             category,
             package,
@@ -621,7 +660,7 @@ pub(crate) fn unmerge_one_installed(
             scratch_dir,
             portage_tmpdir,
             options,
-        )
+        })
     };
 
     let prerm_status = run_hook("prerm")?;
@@ -633,18 +672,18 @@ pub(crate) fn unmerge_one_installed(
     let mut retire = (deferred_delete.is_none() && !is_replacement)
         .then(|| RetireWrites::for_root(root))
         .flatten();
-    crate::ebuild_unmerge::unmerge_pkgfiles_into(
+    crate::ebuild_unmerge::unmerge_pkgfiles_into(crate::ebuild_unmerge::UnmergePkgfilesIntoArgs {
         root,
         category,
-        package,
+        pn: package,
         pf,
         also_keep,
-        &unmerge_options,
+        options: &unmerge_options,
         is_replacement,
         replacement_preserved,
         replacement_needed,
-        retire.as_mut(),
-    )?;
+        retire: retire.as_mut(),
+    })?;
     let postrm_status = run_hook("postrm")?;
     if postrm_status != 0 {
         eprintln!("{category}/{pf}: FAILED postrm ({postrm_status}) -- unmerge continues");
@@ -653,6 +692,18 @@ pub(crate) fn unmerge_one_installed(
         crate::ebuild_unmerge::retire_entry(root, category, pf, retire)?;
     }
     Ok(())
+}
+
+/// Arguments of [`run_vdb_saved_env_phase`].
+pub(crate) struct RunVdbSavedEnvPhaseArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) phase: &'a str,
+    pub(crate) scratch_dir: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a MergeOptions,
 }
 
 /// Run one phase for an already-installed `<category>/<pf>` straight from
@@ -667,17 +718,17 @@ pub(crate) fn unmerge_one_installed(
 /// real `doebuild(ebuildpath, "config", ...)`). Shared by
 /// `unmerge_one_installed`'s `pkg_prerm`/`pkg_postrm` and
 /// `pretend.rs::run_config_action`'s `pkg_config`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_vdb_saved_env_phase(
-    root: &Path,
-    category: &str,
-    package: &str,
-    pf: &str,
-    phase: &str,
-    scratch_dir: &Path,
-    portage_tmpdir: &Path,
-    options: &MergeOptions,
-) -> Result<i32, String> {
+pub(crate) fn run_vdb_saved_env_phase(args: RunVdbSavedEnvPhaseArgs<'_>) -> Result<i32, String> {
+    let RunVdbSavedEnvPhaseArgs {
+        root,
+        category,
+        package,
+        pf,
+        phase,
+        scratch_dir,
+        portage_tmpdir,
+        options,
+    } = args;
     // Both files go to bash / a copier by path (N9): the entry's own
     // directory on `files`; on a database backend a scratch copy of the
     // two files under `scratch_dir` (feat#157 S4.1; nothing is stored

@@ -20,6 +20,14 @@ pub(crate) fn overlay_use_want(
         .or_else(|| committed.get(key).and_then(|b| b.get(flag)).copied())
 }
 
+/// Arguments of [`onlydeps_walk_dep_key`].
+pub(crate) struct OnlydepsWalkDepKeyArgs<'a> {
+    pub(crate) key: &'a str,
+    pub(crate) eapi_has_idepend: bool,
+    pub(crate) onlydeps_blanks_runtime: bool,
+    pub(crate) onlydeps_blanks_idepend: bool,
+}
+
 /// Backlog #194: whether one dep key is walked for this package.
 /// Real `bin/ebuild.sh`'s own `depend` phase unsets `IDEPEND` below
 /// EAPI 8 (`portage/eapi.py:135`), so a stale or hand-written cache
@@ -31,13 +39,13 @@ pub(crate) fn overlay_use_want(
 /// Extracted (rather than left as `run_pass`'s inline closure) so the
 /// adversarial-cache path stays pinned after the fixtures stopped
 /// carrying one.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn onlydeps_walk_dep_key(
-    key: &str,
-    eapi_has_idepend: bool,
-    onlydeps_blanks_runtime: bool,
-    onlydeps_blanks_idepend: bool,
-) -> bool {
+pub(crate) fn onlydeps_walk_dep_key(args: OnlydepsWalkDepKeyArgs<'_>) -> bool {
+    let OnlydepsWalkDepKeyArgs {
+        key,
+        eapi_has_idepend,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+    } = args;
     if key == "IDEPEND" && (!eapi_has_idepend || onlydeps_blanks_idepend) {
         return false;
     }
@@ -47,18 +55,25 @@ pub(crate) fn onlydeps_walk_dep_key(
     true
 }
 
+/// Arguments of [`onlydeps_runtime_keys`].
+pub(crate) struct OnlydepsRuntimeKeysArgs {
+    pub(crate) onlydeps_blanks_runtime: bool,
+    pub(crate) onlydeps_blanks_idepend: bool,
+    pub(crate) eapi_has_idepend: bool,
+}
+
 /// Backlog #194: which run-time keys classify atoms as runtime edges
 /// for this package (real `DepPriority`: an atom in a build-time key
 /// but no walked run-time key is `buildtime_hard`, an unbreakable
 /// merge-order edge). Mirrors `onlydeps_walk_dep_key` above: under
 /// `--onlydeps --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on
 /// EAPI 8, `IDEPEND` is still walked, so it still classifies.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn onlydeps_runtime_keys(
-    onlydeps_blanks_runtime: bool,
-    onlydeps_blanks_idepend: bool,
-    eapi_has_idepend: bool,
-) -> &'static [&'static str] {
+pub(crate) fn onlydeps_runtime_keys(args: OnlydepsRuntimeKeysArgs) -> &'static [&'static str] {
+    let OnlydepsRuntimeKeysArgs {
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    } = args;
     if onlydeps_blanks_runtime {
         if onlydeps_blanks_idepend || !eapi_has_idepend {
             &[]
@@ -246,6 +261,20 @@ pub(crate) fn minimize_children(
         .collect()
 }
 
+/// Arguments of [`arg_pinned_installed_reuse`].
+pub(crate) struct ArgPinnedInstalledReuseArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) cache: &'a mut HashMap<(String, String), Vec<(String, String)>>,
+    pub(crate) atom_root: &'a Path,
+    pub(crate) key: &'a (String, String),
+    pub(crate) current_atom: &'a str,
+    pub(crate) atom: &'a portage_dep::Atom,
+    pub(crate) fresh_version: &'a str,
+}
+
 /// Backlog #285: real `_wrapped_select_pkg_highest_available_imp`'s
 /// `find_existing_node` pass (`lib/_emerge/depgraph.py:7854`, the `for
 /// find_existing_node in True, False` loop) as a pop-site reuse check.
@@ -303,19 +332,19 @@ pub(crate) fn minimize_children(
 /// their own in-graph preference; `@world`/`@selected` members are not
 /// `ctx.atoms` and pin nothing here; cross-root atoms resolve against
 /// the dep's own root.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn arg_pinned_installed_reuse(
-    ctx: &ResolveCtx,
-    config: &portage_profile::Config,
-    bp: &BacktrackParams,
-    union_constraints: &HashMap<(String, String), Vec<String>>,
-    cache: &mut HashMap<(String, String), Vec<(String, String)>>,
-    atom_root: &Path,
-    key: &(String, String),
-    current_atom: &str,
-    atom: &portage_dep::Atom,
-    fresh_version: &str,
-) -> Option<String> {
+pub(crate) fn arg_pinned_installed_reuse(args: ArgPinnedInstalledReuseArgs<'_>) -> Option<String> {
+    let ArgPinnedInstalledReuseArgs {
+        ctx,
+        config,
+        bp,
+        union_constraints,
+        cache,
+        atom_root,
+        key,
+        current_atom,
+        atom,
+        fresh_version,
+    } = args;
     // The fresh pick's own main slot -- the reuse target must sit in it.
     // Same winner rule as the pop site's own `resolved` pick ("ebuild
     // type is the last resort", then repo priority).

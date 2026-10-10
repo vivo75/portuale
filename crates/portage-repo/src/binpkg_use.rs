@@ -304,14 +304,14 @@ pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArg
                 package,
                 config,
             );
-            let cur_use = effective_use_flags(
+            let cur_use = effective_use_flags(EffectiveUseFlagsArgs {
                 config,
-                &candidate.iuse,
-                &candidate.keywords,
-                &candidate_str,
+                iuse: &candidate.iuse,
+                keywords: &candidate.keywords,
+                candidate_str: &candidate_str,
                 category,
                 package,
-            );
+            });
             (old_iuse.clone(), cur_use, forced)
         }
     };

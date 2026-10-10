@@ -62,9 +62,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig, ResolveRequest,
-    Resolver as PortualeResolver, all_installed_packages, effective_use_flags, find_repos,
-    installed_pkg_iuse_and_use, is_visible, list_candidates, repo_aux_metadata,
+    EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig,
+    ResolveRequest, Resolver as PortualeResolver, all_installed_packages, effective_use_flags,
+    find_repos, installed_pkg_iuse_and_use, is_visible, list_candidates, repo_aux_metadata,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
@@ -277,14 +277,14 @@ impl LazyRepo {
             return cached.clone();
         }
         let candidate_str = format!("{cpv}::{}", version.repo_name);
-        let use_set = effective_use_flags(
-            &self.config,
-            &version.iuse,
-            &version.keywords,
-            &candidate_str,
-            &version.category,
-            &version.package,
-        );
+        let use_set = effective_use_flags(EffectiveUseFlagsArgs {
+            config: &self.config,
+            iuse: &version.iuse,
+            keywords: &version.keywords,
+            candidate_str: &candidate_str,
+            category: &version.category,
+            package: &version.package,
+        });
         // Owned: the parked-bridge memo keeps its own copy (cold path;
         // one clone per miss, as before #103).
         self.uses.borrow_mut().insert(cpv, use_set.as_ref().clone());
@@ -505,14 +505,14 @@ fn graph_result_from_order(
             sub = record.sub_slot,
             repo = record.repo_name,
         );
-        let forced = super::forced_or_masked_flags(
-            &record.iuse,
-            &record.keywords,
-            &candidate_str,
-            &record.category,
-            &record.package,
-            &req.config,
-        );
+        let forced = super::forced_or_masked_flags(super::ForcedOrMaskedFlagsArgs {
+            iuse: &record.iuse,
+            keywords: &record.keywords,
+            candidate_str: &candidate_str,
+            category: &record.category,
+            package: &record.package,
+            config: &req.config,
+        });
         // Same `all_flags` split `pretend.rs` uses: enabled-first full
         // form for `-pv`, changed-only form for plain `-p`.
         let use_expand_display =
@@ -727,21 +727,21 @@ fn graph_result_from_order(
     // `deps` edges above plus the `required_by` fallback, with the same
     // top-level atoms, profile config, root, and `--implicit-system-deps`
     // bias the walk resolves under.
-    let (entries, insertion_rank) = super::topological_merge_order(
-        entries,
-        &req.atoms,
-        &req.config,
-        &req.root,
-        req.implicit_system_deps,
-        repos,
-        req.dynamic_deps,
-        // The bridge engines pick `||` branches natively (PubGrub /
-        // resolvo unit propagation, not `dep_zapdeps` bins) and run no
-        // backtrack restart, so there is no recorded cycle map to
-        // demote by -- an empty map keeps the suppression's
-        // re-derivation exactly as before (backlog #221).
-        &HashMap::new(),
-    );
+    let (entries, insertion_rank) =
+        super::topological_merge_order(super::TopologicalMergeOrderArgs {
+            entries,
+            top_level_atoms: &req.atoms,
+            config: &req.config,
+            root: &req.root,
+            implicit_system_deps: req.implicit_system_deps,
+            repos,
+            dynamic_deps: req.dynamic_deps, // The bridge engines pick `||` branches natively (PubGrub /
+            // resolvo unit propagation, not `dep_zapdeps` bins) and run no
+            // backtrack restart, so there is no recorded cycle map to
+            // demote by -- an empty map keeps the suppression's
+            // re-derivation exactly as before (backlog #221).
+            circular: &HashMap::new(),
+        });
     // Circular-dep notice (J): the walk records every dependency edge's
     // hard/soft kind while draining its queue and reports the shortest
     // unbreakable build-time cycle via `find_hard_cycles`, which

@@ -423,12 +423,14 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
             .split_whitespace()
             .any(|t| t == "binpkg-multi-instance");
         let status = crate::ebuild_package::package_after_install(
-            ebuild_path,
-            root,
-            portage_tmpdir,
-            &per_entry_package_options,
-            use_flags,
-            per_entry_binpkg_multi_instance,
+            crate::ebuild_package::PackageAfterInstallArgs {
+                ebuild_path,
+                root,
+                portage_tmpdir,
+                options: &per_entry_package_options,
+                use_flags,
+                per_entry_binpkg_multi_instance,
+            },
         )?;
         if status != 0 {
             return Ok(status);

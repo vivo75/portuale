@@ -6,28 +6,28 @@ fn use_expand_star_wildcard_strips_the_pseudo_flag_from_the_effective_set() {
     // config.py strips them from PORTAGE_USE). Exercised directly
     // with the fixture's own `linguas_*` package.use entry against
     // wildexpandpkg's declared IUSE.
-    let use_flags = euf_flat(
-        "linguas_en linguas_de",
-        &[],
-        &[(
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "linguas_en linguas_de",
+        use_tokens: &[],
+        package_use: &[(
             "dev-libs/wildexpandpkg".to_string(),
             vec!["linguas_*".to_string()],
         )],
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &["amd64".to_string()],
-        &HashSet::from(["amd64".to_string()]),
-        &[],
-        "dev-libs/wildexpandpkg-1.0:0/0::testrepo",
-        "dev-libs",
-        "wildexpandpkg",
-    );
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &["amd64".to_string()],
+        accept_keywords: &HashSet::from(["amd64".to_string()]),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/wildexpandpkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "wildexpandpkg",
+    });
     assert!(use_flags.contains("linguas_en"));
     assert!(use_flags.contains("linguas_de"));
     assert!(!use_flags.iter().any(|f| f.ends_with("_*")));
@@ -35,25 +35,25 @@ fn use_expand_star_wildcard_strips_the_pseudo_flag_from_the_effective_set() {
 
 #[test]
 fn effective_use_flags_applies_a_plus_iuse_default_when_nothing_else_says_otherwise() {
-    let use_flags = euf_flat(
-        "+foo -bar baz",
-        &[],
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/pkg-1.0:0",
-        "dev-libs",
-        "pkg",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "+foo -bar baz",
+        use_tokens: &[],
+        package_use: &[],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/pkg-1.0:0",
+        category: "dev-libs",
+        package: "pkg",
+    });
     // "+foo" defaults on; "-bar" stays off (same as omission, but a
     // real, explicit marker); "baz" (no marker at all) is genuinely
     // undecided by IUSE itself and stays off too.
@@ -65,25 +65,25 @@ fn effective_use_flags_lets_use_tokens_add_alongside_a_plus_iuse_default() {
     // `use_tokens` mentioning an entirely different flag doesn't
     // suppress "+foo"'s own default -- the additive half.
     let base = ["other".to_string()].to_vec();
-    let use_flags = euf_flat(
-        "+foo",
-        &base,
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/pkg-1.0:0",
-        "dev-libs",
-        "pkg",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "+foo",
+        use_tokens: &base,
+        package_use: &[],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/pkg-1.0:0",
+        category: "dev-libs",
+        package: "pkg",
+    });
     assert_eq!(
         use_flags,
         HashSet::from(["foo".to_string(), "other".to_string()])
@@ -103,25 +103,25 @@ fn effective_use_flags_lets_use_tokens_explicitly_cancel_a_plus_iuse_default() {
     // apply_incremental, not unioned as a pre-flattened set, so the
     // "-foo" genuinely reaches back and cancels IUSE's own "+foo".
     let use_tokens = vec!["foo".to_string(), "-foo bar".to_string()];
-    let use_flags = euf_flat(
-        "+foo",
-        &use_tokens,
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/pkg-1.0:0",
-        "dev-libs",
-        "pkg",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "+foo",
+        use_tokens: &use_tokens,
+        package_use: &[],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/pkg-1.0:0",
+        category: "dev-libs",
+        package: "pkg",
+    });
     assert_eq!(use_flags, HashSet::from(["bar".to_string()]));
 }
 
@@ -134,39 +134,39 @@ fn effective_use_flags_applies_a_use_prefix_wildcard() {
     // still lands.
     let mut config = test_config();
     config.conf_use_tokens = vec!["-video_cards_* video_cards_intel".to_string()];
-    let flags = effective_use_flags(
-        &config,
-        "+video_cards_dummy video_cards_intel",
-        &["amd64".to_string()],
-        "dev-libs/pkg-1.0::testrepo",
-        "dev-libs",
-        "pkg",
-    );
+    let flags = effective_use_flags(EffectiveUseFlagsArgs {
+        config: &config,
+        iuse: "+video_cards_dummy video_cards_intel",
+        keywords: &["amd64".to_string()],
+        candidate_str: "dev-libs/pkg-1.0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+    });
     assert_eq!(*flags, HashSet::from(["video_cards_intel".to_string()]));
 }
 
 #[test]
 fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
     let package_use = vec![("dev-libs/pkg".to_string(), vec!["-foo".to_string()])];
-    let use_flags = euf_flat(
-        "+foo",
-        &[],
-        &package_use,
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/pkg-1.0:0",
-        "dev-libs",
-        "pkg",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "+foo",
+        use_tokens: &[],
+        package_use: &package_use,
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/pkg-1.0:0",
+        category: "dev-libs",
+        package: "pkg",
+    });
     assert!(use_flags.is_empty());
 }
 
@@ -193,14 +193,14 @@ fn effective_use_flags_defaults_walk_is_per_profile_level() {
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
-            "foo",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     assert!(
         !flags.contains("foo"),
@@ -215,14 +215,14 @@ fn effective_use_flags_defaults_walk_is_per_profile_level() {
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
-            "foo",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     assert!(flags.contains("foo"));
 }
@@ -236,14 +236,14 @@ fn effective_use_flags_repo_make_defaults_use_is_the_weakest_repo_layer() {
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
             iuse,
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     let md = |t: &str| vec![(String::new(), vec![t.to_string()])];
     // repo make.defaults USE decides an unmarked IUSE flag...
@@ -280,14 +280,14 @@ fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() 
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
             iuse,
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     let test_on = vec!["test".to_string()];
     // `FEATURES=test` enables `test` for a package that declares it...
@@ -309,14 +309,14 @@ fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() 
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
-            "test",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "test",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     assert!(!masked.contains("test"));
 }
@@ -327,19 +327,40 @@ fn effective_use_flags_repo_package_use_is_weaker_than_an_iuse_default() {
     // an ebuild's own explicit IUSE default overrides a repo-level
     // `package.use` -- the divergence the old flat model had (it
     // applied every `package.use` source last, strongest).
-    let a = euf_layers("-foo", &[], &[], &pu("foo"), &[], &[]);
+    let a = euf_layers(EufLayersArgs {
+        iuse: "-foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("foo"),
+        package_use: &[],
+        package_use_user: &[],
+    });
     assert!(
         !a.contains("foo"),
         "IUSE `-foo` cancels repo package.use `foo`"
     );
-    let b = euf_layers("+foo", &[], &[], &pu("-foo"), &[], &[]);
+    let b = euf_layers(EufLayersArgs {
+        iuse: "+foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("-foo"),
+        package_use: &[],
+        package_use_user: &[],
+    });
     assert!(
         b.contains("foo"),
         "IUSE `+foo` overrides repo package.use `-foo`"
     );
     // ...but a repo `package.use` still takes effect on a flag the
     // ebuild's IUSE leaves undecided (no `+`/`-` marker).
-    let c = euf_layers("foo", &[], &[], &pu("foo"), &[], &[]);
+    let c = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("foo"),
+        package_use: &[],
+        package_use_user: &[],
+    });
     assert!(
         c.contains("foo"),
         "repo package.use decides an unmarked IUSE flag"
@@ -352,7 +373,14 @@ fn effective_use_flags_profile_package_use_loses_to_make_conf() {
     // applied BEFORE `conf`. So `make.conf USE="-foo"` wins over a
     // profile `package.use` line enabling `foo` (the old flat model
     // applied profile `package.use` after make.conf, so `foo` won).
-    let flags = euf_layers("foo", &[], &["-foo".to_string()], &[], &pu("foo"), &[]);
+    let flags = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &["-foo".to_string()],
+        package_use_repo: &[],
+        package_use: &pu("foo"),
+        package_use_user: &[],
+    });
     assert!(
         !flags.contains("foo"),
         "make.conf -foo beats profile package.use"
@@ -372,14 +400,14 @@ fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_us
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
-            "foo",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     assert!(
         with_env.contains("foo"),
@@ -394,14 +422,14 @@ fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_us
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
-            "foo",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     assert!(
         !user_wins.contains("foo"),
@@ -420,14 +448,14 @@ fn effective_use_flags_env_use_is_the_highest_tier_and_beats_user_package_use() 
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
-            "foo",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     // user package.use enables `foo`, env `USE="-foo"` cancels it.
     assert!(!with_env_use(&["-foo".to_string()], &pu("foo")).contains("foo"));
@@ -449,14 +477,14 @@ fn effective_use_flags_envd_is_the_lowest_tier() {
             envd_use_tokens: envd.to_vec(),
             ..Default::default()
         };
-        effective_use_flags(
-            &cfg,
-            "foo bar",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo bar",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     // env.d `USE="foo bar"` with nothing else -> both on.
     let both = euf(&["foo bar".to_string()], &[]);
@@ -471,7 +499,14 @@ fn effective_use_flags_envd_is_the_lowest_tier() {
 fn effective_use_flags_user_package_use_wins_over_make_conf() {
     // user `/etc/portage/package.use` is real `configdict["pkg"]` --
     // applied AFTER `conf`, the strongest layer before force/mask.
-    let flags = euf_layers("foo", &[], &["foo".to_string()], &[], &[], &pu("-foo"));
+    let flags = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &["foo".to_string()],
+        package_use_repo: &[],
+        package_use: &[],
+        package_use_user: &pu("-foo"),
+    });
     assert!(
         !flags.contains("foo"),
         "user package.use -foo beats make.conf foo"
@@ -482,11 +517,25 @@ fn effective_use_flags_user_package_use_wins_over_make_conf() {
 fn effective_use_flags_layer_precedence_is_repo_then_profile_then_user() {
     // All three sources touch `foo`; the walk order repo -> profile
     // -> user means the user entry is the last word.
-    let flags = euf_layers("foo", &[], &[], &pu("-foo"), &pu("-foo"), &pu("foo"));
+    let flags = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("-foo"),
+        package_use: &pu("-foo"),
+        package_use_user: &pu("foo"),
+    });
     assert!(flags.contains("foo"));
     // ...and with the user entry disabling, it stays off regardless
     // of repo/profile enabling it.
-    let flags = euf_layers("foo", &[], &[], &pu("foo"), &pu("foo"), &pu("-foo"));
+    let flags = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("foo"),
+        package_use: &pu("foo"),
+        package_use_user: &pu("-foo"),
+    });
     assert!(!flags.contains("foo"));
 }
 
@@ -497,25 +546,25 @@ fn effective_use_flags_layers_a_matching_package_use_entry_on_top_of_base() {
         "dev-libs/bar".to_string(),
         vec!["baz".to_string(), "-foo".to_string()],
     )];
-    let use_flags = euf_flat(
-        "",
-        &base,
-        &package_use,
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/bar-1.0:0",
-        "dev-libs",
-        "bar",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &base,
+        package_use: &package_use,
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
     assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
 }
 
@@ -523,25 +572,25 @@ fn effective_use_flags_layers_a_matching_package_use_entry_on_top_of_base() {
 fn effective_use_flags_does_not_affect_a_non_matching_package() {
     let base = ["foo".to_string()].to_vec();
     let package_use = vec![("dev-libs/bar".to_string(), vec!["baz".to_string()])];
-    let use_flags = euf_flat(
-        "",
-        &base,
-        &package_use,
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/unrelated-1.0:0",
-        "dev-libs",
-        "unrelated",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &base,
+        package_use: &package_use,
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/unrelated-1.0:0",
+        category: "dev-libs",
+        package: "unrelated",
+    });
     assert_eq!(use_flags, HashSet::from(["foo".to_string()]));
 }
 
@@ -549,25 +598,25 @@ fn effective_use_flags_does_not_affect_a_non_matching_package() {
 fn effective_use_flags_matches_a_wildcard_package_use_entry() {
     let base: Vec<String> = Vec::new();
     let package_use = vec![("*/bar".to_string(), vec!["baz".to_string()])];
-    let use_flags = euf_flat(
-        "",
-        &base,
-        &package_use,
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/bar-1.0:0",
-        "dev-libs",
-        "bar",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &base,
+        package_use: &package_use,
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
     assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
 }
 
@@ -576,32 +625,32 @@ fn effective_use_flags_matches_a_wildcard_package_use_entry() {
 #[test]
 fn resolved_use_mask_or_force_memo_shares_the_allocation() {
     let config = portage_profile::Config::default();
-    let a = resolved_use_mask_or_force(
-        MaskOrForce::Mask,
-        &config,
-        "dev-libs/pkg-1.0:0/0::testrepo",
-        "dev-libs",
-        "pkg",
-        true,
-    );
-    let b = resolved_use_mask_or_force(
-        MaskOrForce::Mask,
-        &config,
-        "dev-libs/pkg-1.0:0/0::testrepo",
-        "dev-libs",
-        "pkg",
-        true,
-    );
+    let a = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config: &config,
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+        stable: true,
+    });
+    let b = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config: &config,
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+        stable: true,
+    });
     assert!(Rc::ptr_eq(&a, &b));
     // A different `which` is a different entry.
-    let c = resolved_use_mask_or_force(
-        MaskOrForce::Force,
-        &config,
-        "dev-libs/pkg-1.0:0/0::testrepo",
-        "dev-libs",
-        "pkg",
-        true,
-    );
+    let c = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Force,
+        config: &config,
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+        stable: true,
+    });
     assert!(!Rc::ptr_eq(&a, &c));
     // Backlog #122: `category`/`package` are key components, not
     // merely implied by `candidate_str` -- the same string with a
@@ -614,11 +663,23 @@ fn resolved_use_mask_or_force_memo_shares_the_allocation() {
         ..Default::default()
     };
     let s = "dev-libs/pkg-1.0:0/0::testrepo";
-    let for_pkg =
-        resolved_use_mask_or_force(MaskOrForce::Mask, &config, s, "dev-libs", "pkg", false);
+    let for_pkg = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config: &config,
+        candidate_str: s,
+        category: "dev-libs",
+        package: "pkg",
+        stable: false,
+    });
     assert!(for_pkg.contains("special"));
-    let for_other =
-        resolved_use_mask_or_force(MaskOrForce::Mask, &config, s, "dev-libs", "other", false);
+    let for_other = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config: &config,
+        candidate_str: s,
+        category: "dev-libs",
+        package: "other",
+        stable: false,
+    });
     assert!(!for_other.contains("special"));
     assert!(!Rc::ptr_eq(&for_pkg, &for_other));
 }
@@ -628,25 +689,25 @@ fn effective_use_flags_applies_package_use_force_and_mask() {
     let base: Vec<String> = Vec::new();
     let package_use_force = vec![("dev-libs/bar".to_string(), vec!["forceflag".to_string()])];
     let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["maskflag".to_string()])];
-    let use_flags = euf_flat(
-        "",
-        &base,
-        &[],
-        &package_use_force,
-        &package_use_mask,
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/bar-1.0:0",
-        "dev-libs",
-        "bar",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &base,
+        package_use: &[],
+        package_use_force: &package_use_force,
+        package_use_mask: &package_use_mask,
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
     assert_eq!(use_flags, HashSet::from(["forceflag".to_string()]));
 }
 
@@ -659,25 +720,25 @@ fn effective_use_flags_package_use_mask_wins_over_force_on_conflict() {
     let base: Vec<String> = Vec::new();
     let package_use_force = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
     let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
-    let use_flags = euf_flat(
-        "",
-        &base,
-        &[],
-        &package_use_force,
-        &package_use_mask,
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/bar-1.0:0",
-        "dev-libs",
-        "bar",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &base,
+        package_use: &[],
+        package_use_force: &package_use_force,
+        package_use_mask: &package_use_mask,
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
     assert!(!use_flags.contains("bothflag"));
 }
 
@@ -692,25 +753,25 @@ fn effective_use_flags_global_use_force_wins_over_a_package_use_disable() {
     // early, letting package.use incorrectly win.
     let use_force = HashSet::from(["forceflag".to_string()]);
     let package_use = vec![("dev-libs/bar".to_string(), vec!["-forceflag".to_string()])];
-    let use_flags = euf_flat(
-        "",
-        &[],
-        &package_use,
-        &[],
-        &[],
-        &use_force,
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/bar-1.0:0",
-        "dev-libs",
-        "bar",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &[],
+        package_use: &package_use,
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &use_force,
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
     assert!(use_flags.contains("forceflag"));
 }
 
@@ -722,25 +783,25 @@ fn effective_use_flags_global_use_mask_wins_over_a_package_use_enable() {
     // entry trying to turn it on.
     let use_mask = HashSet::from(["maskflag".to_string()]);
     let package_use = vec![("dev-libs/bar".to_string(), vec!["maskflag".to_string()])];
-    let use_flags = euf_flat(
-        "",
-        &[],
-        &package_use,
-        &[],
-        &[],
-        &HashSet::new(),
-        &use_mask,
-        &HashSet::new(),
-        &HashSet::new(),
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &[],
-        "dev-libs/bar-1.0:0",
-        "dev-libs",
-        "bar",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &[],
+        package_use: &package_use,
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &use_mask,
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
     assert!(!use_flags.contains("maskflag"));
 }
 
@@ -763,25 +824,25 @@ fn effective_use_flags_applies_stable_force_and_mask_only_when_stable() {
         vec!["pkgstablemask".to_string()],
     )];
     let accept_keywords = HashSet::from(["amd64".to_string()]);
-    let use_flags = euf_flat(
-        "",
-        &base,
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &use_stable_force,
-        &use_stable_mask,
-        &package_use_stable_force,
-        &package_use_stable_mask,
-        &["amd64".to_string()],
-        &accept_keywords,
-        &[],
-        "dev-libs/bar-1.0:0",
-        "dev-libs",
-        "bar",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &base,
+        package_use: &[],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &use_stable_force,
+        use_stable_mask: &use_stable_mask,
+        package_use_stable_force: &package_use_stable_force,
+        package_use_stable_mask: &package_use_stable_mask,
+        keywords: &["amd64".to_string()],
+        accept_keywords: &accept_keywords,
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
     assert_eq!(
         use_flags,
         HashSet::from([
@@ -800,25 +861,25 @@ fn effective_use_flags_skips_stable_force_and_mask_when_not_stable() {
     let base: Vec<String> = Vec::new();
     let use_stable_force = HashSet::from(["globalstableforce".to_string()]);
     let accept_keywords = HashSet::from(["~amd64".to_string()]);
-    let use_flags = euf_flat(
-        "",
-        &base,
-        &[],
-        &[],
-        &[],
-        &HashSet::new(),
-        &HashSet::new(),
-        &use_stable_force,
-        &HashSet::new(),
-        &[],
-        &[],
-        &["~amd64".to_string()],
-        &accept_keywords,
-        &[],
-        "dev-libs/bar-1.0:0",
-        "dev-libs",
-        "bar",
-    );
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &base,
+        package_use: &[],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &use_stable_force,
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &["~amd64".to_string()],
+        accept_keywords: &accept_keywords,
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
     assert!(use_flags.is_empty());
 }
 
@@ -886,26 +947,26 @@ fn resolved_use_mask_interleaves_per_level_across_sources() {
         ..Default::default()
     };
     assert!(
-        !resolved_use_mask_or_force(
-            MaskOrForce::Mask,
-            &config,
-            "dev-libs/bar-1.0:0/0::testrepo",
-            "dev-libs",
-            "bar",
-            true,
-        )
+        !resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+            which: MaskOrForce::Mask,
+            config: &config,
+            candidate_str: "dev-libs/bar-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "bar",
+            stable: true
+        })
         .contains("xmc"),
         "a later level's global -xmc must cancel an earlier level's package.use.mask xmc"
     );
     assert!(
-        !forced_or_masked_flags(
-            "xmc",
-            &["amd64".to_string()],
-            "dev-libs/bar-1.0:0/0::testrepo",
-            "dev-libs",
-            "bar",
-            &config,
-        )
+        !forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: "xmc",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/bar-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "bar",
+            config: &config
+        })
         .contains("xmc")
     );
     // Reverse level order keeps it masked (last level wins).
@@ -924,14 +985,14 @@ fn resolved_use_mask_interleaves_per_level_across_sources() {
         ..Default::default()
     };
     assert!(
-        resolved_use_mask_or_force(
-            MaskOrForce::Mask,
-            &config_rev,
-            "dev-libs/bar-1.0:0/0::testrepo",
-            "dev-libs",
-            "bar",
-            true,
-        )
+        resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+            which: MaskOrForce::Mask,
+            config: &config_rev,
+            candidate_str: "dev-libs/bar-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "bar",
+            stable: true
+        })
         .contains("xmc")
     );
 }
@@ -960,14 +1021,14 @@ fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
         ..Default::default()
     };
     let call = |cfg: &portage_profile::Config| {
-        effective_use_flags(
-            cfg,
-            "foo bar",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: cfg,
+            iuse: "foo bar",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
     };
     let with_foo = call(&base("foo"));
     let with_bar = call(&base("bar"));
@@ -976,14 +1037,14 @@ fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
     // And the memo is transparent: a second call matches the uncached body.
     assert_eq!(
         call(&base("foo")).as_ref(),
-        &effective_use_flags_uncached(
-            &base("foo"),
-            "foo bar",
-            &["amd64".to_string()],
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        )
+        &effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
+            config: &base("foo"),
+            iuse: "foo bar",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg"
+        })
     );
 }
 

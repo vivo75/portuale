@@ -120,17 +120,17 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     let (base, repos) = unsat_base("base", &[("unsatpar", built)], &[("unsatpar", "1", "0")]);
     let (entries, slot_want, pullers) = unsat_inputs(&[("unsatpar", built)]);
     assert_eq!(
-        slot_operator_unsatisfied_probe(
-            &base,
-            &repos,
-            &entries,
-            &slot_want,
-            &pullers,
-            &masked,
-            false,
-            &[],
-            &config,
-        ),
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base,
+            repos: &repos,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        }),
         BTreeSet::from([par.clone()]),
         "installed owner with an unsatisfiable built dep and a live replacement seeds"
     );
@@ -145,17 +145,17 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     let (entries_x, slot_want_x, pullers_x) =
         unsat_inputs(&[("unsatcona", plain), ("unsatpar", built)]);
     assert_eq!(
-        slot_operator_unsatisfied_probe(
-            &base_x,
-            &repos_x,
-            &entries_x,
-            &slot_want_x,
-            &pullers_x,
-            &masked,
-            false,
-            &[],
-            &config,
-        ),
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base_x,
+            repos: &repos_x,
+            entries: &entries_x,
+            slot_want: &slot_want_x,
+            pullers: &pullers_x,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        }),
         BTreeSet::from([par.clone()]),
         "only the owner whose own want is the built atom seeds"
     );
@@ -167,17 +167,17 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         vec![plain.to_string()],
     );
     assert!(
-        slot_operator_unsatisfied_probe(
-            &base,
-            &repos,
-            &entries,
-            &plain_want,
-            &pullers_plain,
-            &masked,
-            false,
-            &[],
-            &config,
-        )
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base,
+            repos: &repos,
+            entries: &entries,
+            slot_want: &plain_want,
+            pullers: &pullers_plain,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        })
         .is_empty(),
         "unbuilt atoms are not probe fuel"
     );
@@ -192,17 +192,17 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         }],
     );
     assert!(
-        slot_operator_unsatisfied_probe(
-            &base,
-            &repos,
-            &entries,
-            &slot_want,
-            &pullers,
-            &masked_owner,
-            false,
-            &[],
-            &config,
-        )
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base,
+            repos: &repos,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked: &masked_owner,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        })
         .is_empty(),
         "masked owners never re-seed"
     );
@@ -224,17 +224,17 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         }],
     );
     assert_eq!(
-        slot_operator_unsatisfied_probe(
-            &base_m,
-            &repos_m,
-            &entries,
-            &slot_want,
-            &pullers,
-            &masked_cand,
-            false,
-            &[],
-            &config,
-        ),
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base_m,
+            repos: &repos_m,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked: &masked_cand,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        }),
         BTreeSet::from([par.clone()]),
         "masking one candidate version still seeds through the other"
     );
@@ -246,50 +246,50 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         &[("unsatpar", "2", "0")],
     );
     assert!(
-        slot_operator_unsatisfied_probe(
-            &base_m2,
-            &repos_m2,
-            &entries,
-            &slot_want,
-            &pullers,
-            &masked_cand,
-            false,
-            &[],
-            &config,
-        )
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base_m2,
+            repos: &repos_m2,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked: &masked_cand,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        })
         .is_empty(),
         "a masked replacement yields no seed"
     );
     // An `--exclude`d owner refuses, like real `:2818-2824`.
     assert!(
-        slot_operator_unsatisfied_probe(
-            &base,
-            &repos,
-            &entries,
-            &slot_want,
-            &pullers,
-            &masked,
-            false,
-            &["app-misc/unsatpar".to_string()],
-            &config,
-        )
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base,
+            repos: &repos,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &["app-misc/unsatpar".to_string()],
+            config: &config
+        })
         .is_empty(),
         "excluded owners refuse the probe"
     );
     // With no replacement ebuild the pass stays a dead end.
     let (base_n, repos_n) = unsat_base("norepl", &[("unsatpar", built)], &[]);
     assert!(
-        slot_operator_unsatisfied_probe(
-            &base_n,
-            &repos_n,
-            &entries,
-            &slot_want,
-            &pullers,
-            &masked,
-            false,
-            &[],
-            &config,
-        )
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base_n,
+            repos: &repos_n,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        })
         .is_empty(),
         "no replacement stays a dead end"
     );
@@ -300,34 +300,34 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         &[("unsatpar", "2", "1")],
     );
     assert!(
-        slot_operator_unsatisfied_probe(
-            &base_s,
-            &repos_s,
-            &entries,
-            &slot_want,
-            &pullers,
-            &masked,
-            false,
-            &[],
-            &config,
-        )
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base_s,
+            repos: &repos_s,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        })
         .is_empty(),
         "a different-slot replacement stays a dead end"
     );
     // An owner with no installed instance is not a parent at all.
     let (base_u, repos_u) = unsat_base("uninstalled", &[], &[("unsatpar", "1", "0")]);
     assert!(
-        slot_operator_unsatisfied_probe(
-            &base_u,
-            &repos_u,
-            &entries,
-            &slot_want,
-            &pullers,
-            &masked,
-            false,
-            &[],
-            &config,
-        )
+        slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
+            root: &base_u,
+            repos: &repos_u,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        })
         .is_empty(),
         "uninstalled owners never seed"
     );
@@ -342,17 +342,18 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     bin_par.source = CandidateSource::Binary;
     bin_par.slot = Some("0".to_string());
     entries_b.push(bin_par);
-    let (seeds_b, masks_b) = slot_operator_unsatisfied_probe_full(
-        &base_b,
-        &repos_b,
-        &entries_b,
-        &slot_want_b,
-        &pullers_b,
-        &masked,
-        false,
-        &[],
-        &config,
-    );
+    let (seeds_b, masks_b) =
+        slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
+            root: &base_b,
+            repos: &repos_b,
+            entries: &entries_b,
+            slot_want: &slot_want_b,
+            pullers: &pullers_b,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config,
+        });
     assert!(
         seeds_b.is_empty(),
         "a binary parent is never a reinstall seed"
@@ -377,17 +378,17 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         }],
     );
     assert_eq!(
-        slot_operator_unsatisfied_probe_full(
-            &base_b,
-            &repos_b,
-            &entries_b,
-            &slot_want_b,
-            &pullers_b,
-            &masked_b,
-            false,
-            &[],
-            &config,
-        ),
+        slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
+            root: &base_b,
+            repos: &repos_b,
+            entries: &entries_b,
+            slot_want: &slot_want_b,
+            pullers: &pullers_b,
+            masked: &masked_b,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config
+        }),
         (BTreeSet::new(), BTreeSet::new())
     );
     for dir in [

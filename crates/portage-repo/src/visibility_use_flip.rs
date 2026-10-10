@@ -63,14 +63,14 @@ pub(crate) fn flag_is_settable(args: FlagIsSettableArgs<'_>) -> bool {
     probe
         .autounmask_use
         .push((synthetic_atom, vec![synthetic_token]));
-    let use_flags = effective_use_flags(
-        &probe,
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
+        config: &probe,
         iuse,
-        &candidate.keywords,
-        &candidate_str,
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-    );
+    });
     use_flags.contains(flag) == desired
 }
 
@@ -625,25 +625,25 @@ pub(crate) fn viable_parent_flip_targets(
             accept_keywords: &config.accept_keywords,
             package_accept_keywords: &config.package_accept_keywords,
         });
-        let mut untouchable = resolved_use_mask_or_force(
-            MaskOrForce::Mask,
+        let mut untouchable = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+            which: MaskOrForce::Mask,
             config,
-            &candidate_str,
-            &category,
-            &package,
+            candidate_str: &candidate_str,
+            category: &category,
+            package: &package,
             stable,
-        )
+        })
         .as_ref()
         .clone();
         untouchable.extend(
-            resolved_use_mask_or_force(
-                MaskOrForce::Force,
+            resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+                which: MaskOrForce::Force,
                 config,
-                &candidate_str,
-                &category,
-                &package,
+                candidate_str: &candidate_str,
+                category: &category,
+                package: &package,
                 stable,
-            )
+            })
             .iter()
             .cloned(),
         );

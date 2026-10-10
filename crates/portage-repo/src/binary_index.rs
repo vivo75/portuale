@@ -613,7 +613,25 @@ pub fn find_remote_binpkg<'a>(
     package: &str,
     version: &str,
 ) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
-    find_remote_binpkg_instance(binrepos, root, category, package, version, None)
+    find_remote_binpkg_instance(FindRemoteBinpkgInstanceArgs {
+        binrepos,
+        root,
+        category,
+        package,
+        version,
+        build_id: None,
+    })
+}
+
+/// Arguments of [`find_remote_binpkg_instance`]; the result borrows
+/// only `binrepos` (`'a`).
+pub struct FindRemoteBinpkgInstanceArgs<'a, 'b> {
+    pub binrepos: &'a [portage_profile::BinRepo],
+    pub root: &'b Path,
+    pub category: &'b str,
+    pub package: &'b str,
+    pub version: &'b str,
+    pub build_id: Option<&'b str>,
 }
 
 /// [`find_remote_binpkg`] for one specific build (backlog #301): with
@@ -621,15 +639,17 @@ pub fn find_remote_binpkg<'a>(
 /// carrying exactly that `BUILD_ID`; if no binrepo has it (or `None` was
 /// given) the newest build of the version from the first binrepo that
 /// lists the version is returned.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn find_remote_binpkg_instance<'a>(
-    binrepos: &'a [portage_profile::BinRepo],
-    root: &Path,
-    category: &str,
-    package: &str,
-    version: &str,
-    build_id: Option<&str>,
+    args: FindRemoteBinpkgInstanceArgs<'a, '_>,
 ) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
+    let FindRemoteBinpkgInstanceArgs {
+        binrepos,
+        root,
+        category,
+        package,
+        version,
+        build_id,
+    } = args;
     let want_cpv = format!("{category}/{package}-{version}");
     if build_id.is_some() {
         for binrepo in binrepos {

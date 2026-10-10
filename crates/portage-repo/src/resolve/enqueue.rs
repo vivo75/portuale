@@ -285,14 +285,53 @@ pub(crate) fn enqueue_dependencies(
     // `queue` here is `enqueue_dependencies`' own `&mut VecDeque`.
     let queued: Vec<QueueItem> = queue.iter().cloned().collect();
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
-        &tokens,
-        &use_flags,
-        portage_use_reduce::MatchMode::Normal,
-        // Installed `--deep` recursion: real `dep_check` passes
-        // `eapi=None` for installed packages (`dep_check.py:865-877`),
-        // whose defaults struct reads `empty_groups_always_true =
-        // false`.
-        false,
+        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+            tokens: &tokens,
+            uselist: &use_flags,
+            mode: portage_use_reduce::MatchMode::Normal, // Installed `--deep` recursion: real `dep_check` passes
+            // `eapi=None` for installed packages (`dep_check.py:865-877`),
+            // whose defaults struct reads `empty_groups_always_true =
+            // false`.
+            empty_groups_always_true: false,
+            tie_break: &mut |alts: &[Vec<String>]| {
+                let grp_running = cross_active
+                    && alts
+                        .iter()
+                        .flat_map(|v| v.iter())
+                        .next()
+                        .is_some_and(|a| running_tags.contains(a));
+                let grp_root: &Path = if grp_running {
+                    root_deps_running_root.expect("running-root group without a running root")
+                } else {
+                    root
+                };
+                let scoped_entries: Option<Vec<GraphEntry>> = cross_active.then(|| {
+                    entries
+                        .iter()
+                        .filter(|e| e.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
+                let scoped_queued: Option<Vec<QueueItem>> = cross_active.then(|| {
+                    queued
+                        .iter()
+                        .filter(|q| q.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
+                promote_tied_alternative(PromoteTiedAlternativeArgs {
+                    repos,
+                    config,
+                    root: grp_root,
+                    entries: entries_view,
+                    constraints: disj_constraints,
+                    alts,
+                    queued: queued_view,
+                })
+            },
+        },
         &mut |atoms: &[String]| {
             // Track X Slice B (#242): same root scoping as the main
             // walk's closures -- the group's own installed db and
@@ -320,66 +359,27 @@ pub(crate) fn enqueue_dependencies(
                     .collect()
             });
             let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
-            disjunction_preference(
+            disjunction_preference(DisjunctionPreferenceArgs {
                 repos,
                 config,
-                grp_root,
-                entries_view,
-                &self_node,
-                disj_constraints,
-                // Site decision (backlogs #216/#221 reconciliation): the
+                root: grp_root,
+                entries: entries_view,
+                self_cp: &self_node,
+                constraints: disj_constraints, // Site decision (backlogs #216/#221 reconciliation): the
                 // empty map. See the parameter doc: this deep-walk's
                 // parents are `AlreadyInstalled` entries only, which
                 // real's node-identity-keyed lookup always misses, so
                 // threading the live map would over-demote on
                 // installed-v1/merging-v2 cp collisions real never
                 // exhibits.
-                &HashMap::new(),
+                circular_dependency: &HashMap::new(),
                 root_deps_running_root,
                 atoms,
-                queued_view,
+                queued: queued_view,
                 update,
-                entries,
-                &queued,
-            )
-        },
-        &mut |alts: &[Vec<String>]| {
-            let grp_running = cross_active
-                && alts
-                    .iter()
-                    .flat_map(|v| v.iter())
-                    .next()
-                    .is_some_and(|a| running_tags.contains(a));
-            let grp_root: &Path = if grp_running {
-                root_deps_running_root.expect("running-root group without a running root")
-            } else {
-                root
-            };
-            let scoped_entries: Option<Vec<GraphEntry>> = cross_active.then(|| {
-                entries
-                    .iter()
-                    .filter(|e| e.targets_running_root == grp_running)
-                    .cloned()
-                    .collect()
-            });
-            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
-            let scoped_queued: Option<Vec<QueueItem>> = cross_active.then(|| {
-                queued
-                    .iter()
-                    .filter(|q| q.targets_running_root == grp_running)
-                    .cloned()
-                    .collect()
-            });
-            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
-            promote_tied_alternative(
-                repos,
-                config,
-                grp_root,
-                entries_view,
-                disj_constraints,
-                alts,
-                queued_view,
-            )
+                gate_entries: entries,
+                gate_queued: &queued,
+            })
         },
     ) else {
         return;
@@ -388,19 +388,18 @@ pub(crate) fn enqueue_dependencies(
     let root_deps_satisfied: HashSet<String> = if with_bdeps {
         root_deps_running_root
             .map(|root| {
-                root_deps_satisfied_atoms(
-                    &metadata,
-                    &use_flags,
+                root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
+                    metadata: &metadata,
+                    use_flags: &use_flags,
                     repos,
                     config,
-                    root,
-                    &["DEPEND", "BDEPEND", "IDEPEND"],
-                    // Installed walk: real `dep_check` passes
+                    running_root: root,
+                    dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"], // Installed walk: real `dep_check` passes
                     // `eapi=None` for installed packages
                     // (`dep_check.py:865-877`), whose defaults struct
                     // reads `empty_groups_always_true = false`.
-                    false,
-                )
+                    empty_groups_always_true: false,
+                })
             })
             .unwrap_or_default()
     } else {
@@ -422,17 +421,16 @@ pub(crate) fn enqueue_dependencies(
     let root_deps_unsatisfied: Vec<String> = if with_bdeps {
         root_deps_running_root
             .map(|root| {
-                unsatisfied_root_deps_atoms(
-                    &metadata,
-                    &use_flags,
+                unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
+                    metadata: &metadata,
+                    use_flags: &use_flags,
                     repos,
                     config,
-                    root,
-                    &["DEPEND", "BDEPEND", "IDEPEND"],
-                    // Installed walk, same real `eapi=None` default as
+                    running_root: root,
+                    dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"], // Installed walk, same real `eapi=None` default as
                     // `root_deps_satisfied` just above.
-                    false,
-                )
+                    empty_groups_always_true: false,
+                })
             })
             .unwrap_or_default()
     } else {
@@ -441,13 +439,15 @@ pub(crate) fn enqueue_dependencies(
     if let Some(running_root) = root_deps_split {
         for atom_str in &root_deps_unsatisfied {
             entries.extend(resolve_root_deps_build_entries(
-                repos,
-                running_root,
-                atom_str,
-                config,
-                owner_key.clone(),
-                root_deps_build_seen,
-                local_binpkg,
+                ResolveRootDepsBuildEntriesArgs {
+                    repos,
+                    running_root,
+                    atom_str,
+                    config,
+                    owner: owner_key.clone(),
+                    seen: root_deps_build_seen,
+                    local_binpkg,
+                },
             ));
         }
     }

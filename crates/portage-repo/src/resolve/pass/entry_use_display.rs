@@ -200,7 +200,14 @@ pub(crate) fn record_entry_use_display(
         });
         // Real `_display_use`'s `self.forced_flags` (`pkg.use.force |
         // pkg.use.mask`): the flags `-pv` wraps in `( … )`.
-        let forced = forced_or_masked_flags(iuse, keywords, candidate_str, &key.0, &key.1, config);
+        let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse,
+            keywords,
+            candidate_str,
+            category: &key.0,
+            package: &key.1,
+            config,
+        });
         // Real `reinst_flags_map`: the `_reinstall_for_flags` trigger
         // set (`Reinstall::changed_flags`), force-shown in the USE
         // line even at plain `-p`. Only a USE-triggered `Reinstall`

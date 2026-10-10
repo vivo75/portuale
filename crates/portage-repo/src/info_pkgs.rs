@@ -241,14 +241,14 @@ pub fn resolve_info_candidate(
         "{}/{}-{}:{}/{}::{}",
         atom.category, atom.package, best.version, best.slot, best.sub_slot, best.repo_name
     );
-    let forced = forced_or_masked_flags(
-        &best.iuse,
-        &best.keywords,
-        &candidate_str,
-        &atom.category,
-        &atom.package,
+    let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+        iuse: &best.iuse,
+        keywords: &best.keywords,
+        candidate_str: &candidate_str,
+        category: &atom.category,
+        package: &atom.package,
         config,
-    );
+    });
     // `all_flags = true` (real `pkg_use_display` for a non-installed
     // package renders every flag), no installed diff, no reinstall flags.
     let use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
@@ -435,14 +435,14 @@ pub fn resolve_info_binary_candidate(
             "{}/{}-{}:{}/{}::{}",
             atom.category, atom.package, best.version, best.slot, best.sub_slot, best.repo_name
         );
-        let forced = forced_or_masked_flags(
-            &best.iuse,
-            &best.keywords,
-            &candidate_str,
-            &atom.category,
-            &atom.package,
+        let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: &best.iuse,
+            keywords: &best.keywords,
+            candidate_str: &candidate_str,
+            category: &atom.category,
+            package: &atom.package,
             config,
-        );
+        });
         let use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &disp,
             config,
@@ -683,14 +683,14 @@ pub fn resolve_installed_info(
                 .split_whitespace()
                 .map(String::from)
                 .collect();
-        let forced = forced_or_masked_flags(
-            &vdb_iuse_raw,
-            &vdb_keywords,
-            m,
-            &atom.category,
-            &atom.package,
+        let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: &vdb_iuse_raw,
+            keywords: &vdb_keywords,
+            candidate_str: m,
+            category: &atom.category,
+            package: &atom.package,
             config,
-        );
+        });
         let use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &disp,
             config,

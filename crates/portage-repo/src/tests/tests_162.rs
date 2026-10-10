@@ -707,18 +707,19 @@ fn self_162(cat: &str, pkg: &str) -> RootCp {
 // `UnsatUseInstalled` < `UnsatUseInGraph` < `Available` <
 // `Installed`). `self_cp` is a non-tree consumer everywhere except
 // the circular legs. ----
+/// Arguments of [`disj_162`].
+struct Disj162Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    self_cp: &'a RootCp,
+    atoms: &'a [&'a str],
+    queued: &'a [QueueItem],
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn disj_162(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    entries: &[GraphEntry],
-    self_cp: &RootCp,
-    atoms: &[&str],
-    queued: &[QueueItem],
-) -> portage_use_reduce::AltPreference {
-    disj_162_circ(
+fn disj_162(args: Disj162Args<'_>) -> portage_use_reduce::AltPreference {
+    let Disj162Args {
         repos,
         config,
         root,
@@ -726,39 +727,60 @@ fn disj_162(
         self_cp,
         atoms,
         queued,
-        &HashMap::new(),
-    )
-}
-
-/// `disj_162` with an explicit `circular_dependency` map (backlogs
-/// #216/#221) -- owner cp → circular-child records, like the
-/// `'backtrack` loop carries.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn disj_162_circ(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    entries: &[GraphEntry],
-    self_cp: &RootCp,
-    atoms: &[&str],
-    queued: &[QueueItem],
-    circular_dependency: &HashMap<RootCp, Vec<CircularDepChild>>,
-) -> portage_use_reduce::AltPreference {
-    disjunction_preference(
+    } = args;
+    disj_162_circ(Disj162CircArgs {
         repos,
         config,
         root,
         entries,
         self_cp,
-        &HashMap::new(),
-        circular_dependency,
-        None,
-        &atoms_162(atoms),
+        atoms,
         queued,
-        false,
+        circular_dependency: &HashMap::new(),
+    })
+}
+
+/// Arguments of [`disj_162_circ`].
+struct Disj162CircArgs<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    self_cp: &'a RootCp,
+    atoms: &'a [&'a str],
+    queued: &'a [QueueItem],
+    circular_dependency: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
+/// `disj_162` with an explicit `circular_dependency` map (backlogs
+/// #216/#221) -- owner cp → circular-child records, like the
+/// `'backtrack` loop carries.
+fn disj_162_circ(args: Disj162CircArgs<'_>) -> portage_use_reduce::AltPreference {
+    let Disj162CircArgs {
+        repos,
+        config,
+        root,
         entries,
+        self_cp,
+        atoms,
         queued,
-    )
+        circular_dependency,
+    } = args;
+    disjunction_preference(DisjunctionPreferenceArgs {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        constraints: &HashMap::new(),
+        circular_dependency,
+        root_deps_running_root: None,
+        atoms: &atoms_162(atoms),
+        queued,
+        update: false,
+        gate_entries: entries,
+        gate_queued: queued,
+    })
 }
 
 /// A resolvable but uninstalled alternative ranks `Available` --
@@ -771,15 +793,15 @@ fn disjunction_preference_ranks_a_fresh_alternative_available() {
     let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["test/pkgA"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgA"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Available
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -794,15 +816,15 @@ fn disjunction_preference_ranks_an_installed_alternative_installed() {
     install_162(&dir, "test", "pkgA-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["test/pkgA"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgA"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -819,15 +841,15 @@ fn disjunction_preference_rejects_a_circular_self_alternative() {
     let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "pkgA"),
-            &["test/pkgA"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &["test/pkgA"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Unsatisfiable
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -843,15 +865,15 @@ fn disjunction_preference_keeps_an_installed_self_alternative() {
     install_162(&dir, "test", "pkgA-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "pkgA"),
-            &["test/pkgA"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &["test/pkgA"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -877,15 +899,15 @@ fn disjunction_preference_keeps_an_in_graph_self_alternative() {
         false,
     )];
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &self_162("test", "pkgA"),
-            &[">=test/pkgA-1.0"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &[">=test/pkgA-1.0"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -917,15 +939,15 @@ fn disjunction_preference_cross_slot_atom_is_not_in_graph() {
         false,
     )];
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &self_162("test", "consumer"),
-            &["test/pkgB:0"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgB:0"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Available
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -951,15 +973,15 @@ fn disjunction_preference_same_slot_atom_stays_in_graph() {
         false,
     )];
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &self_162("test", "consumer"),
-            &["test/pkgB:1"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgB:1"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -989,15 +1011,15 @@ fn disjunction_preference_cross_slot_self_atom_still_proceeds() {
         false,
     )];
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &self_162("test", "pkgB"),
-            &["test/pkgB:0"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "pkgB"),
+            atoms: &["test/pkgB:0"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Available
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1034,16 +1056,16 @@ fn disjunction_preference_demotes_a_recorded_circular_self_alternative() {
         }],
     );
     assert_eq!(
-        disj_162_circ(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &self_162("test", "pkgA"),
-            &[">=test/pkgA-1.0"],
-            &[],
-            &circular,
-        ),
+        disj_162_circ(Disj162CircArgs {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &[">=test/pkgA-1.0"],
+            queued: &[],
+            circular_dependency: &circular
+        }),
         portage_use_reduce::AltPreference::Other
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1080,16 +1102,16 @@ fn disjunction_preference_circular_demotion_spares_an_installed_atom() {
         }],
     );
     assert_eq!(
-        disj_162_circ(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &self_162("test", "pkgA"),
-            &["test/pkgA"],
-            &[],
-            &circular,
-        ),
+        disj_162_circ(Disj162CircArgs {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &["test/pkgA"],
+            queued: &[],
+            circular_dependency: &circular
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1104,15 +1126,15 @@ fn disjunction_preference_keeps_an_uninstalled_other_alternative() {
     let repos = repo_pkgs_162(&dir, &[("test/pkgB", "1.0", "0", "")]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "pkgA"),
-            &["test/pkgB"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &["test/pkgB"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Available
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1127,15 +1149,15 @@ fn disjunction_preference_counts_a_queued_atom_as_in_graph() {
     let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["test/pkgA"],
-            &[qatom_162("test/pkgA")]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgA"],
+            queued: &[qatom_162("test/pkgA")]
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1151,15 +1173,15 @@ fn disjunction_preference_ranks_a_use_unsatisfiable_alternative() {
     let repos = repo_pkgs_162(&dir, &[("test/useflag", "1.0", "0", "flip")]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["test/useflag[flip]"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/useflag[flip]"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::UnsatUseNonInstalled
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1180,15 +1202,15 @@ fn disjunction_preference_demotes_a_masked_use_violation_to_other() {
         ..Default::default()
     }];
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["test/useflag[flip]"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/useflag[flip]"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Other
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1212,15 +1234,15 @@ fn disjunction_preference_matches_an_installed_alternatives_vdb_use_direct() {
     );
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["test/vdbuse[flip]"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/vdbuse[flip]"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1243,15 +1265,15 @@ fn disjunction_preference_needs_the_target_slot_installed() {
     install_162(&dir, "test", "slotpkg-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["test/slotpkg:1[flip]"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/slotpkg:1[flip]"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::UnsatUseNonInstalled
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1269,15 +1291,15 @@ fn disjunction_preference_ranks_an_unavailable_group_other() {
     install_162(&dir, "test", "victim-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["!test/victim", "test/nonexistent"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["!test/victim", "test/nonexistent"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::Other
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1293,15 +1315,15 @@ fn disjunction_preference_ranks_a_fully_installed_group_other_installed() {
     install_162(&dir, "test", "victim-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        disj_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &self_162("test", "consumer"),
-            &["test/victim"],
-            &[]
-        ),
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/victim"],
+            queued: &[]
+        }),
         portage_use_reduce::AltPreference::OtherInstalled
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1311,33 +1333,44 @@ fn disjunction_preference_ranks_a_fully_installed_group_other_installed() {
 // demotion (real `dep_zapdeps`, `dep_check.py:673-691`, bugs 703440,
 // 705986): on the restart after a stranded walk, an alternative with
 // an atom matching a recorded in-cycle child of the resolving parent
-// ranks `Other`, so the re-walk takes the cycle-breaking branch. ----
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn disj_circ_162(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    entries: &[GraphEntry],
-    self_cp: &RootCp,
-    atoms: &[&str],
-    queued: &[QueueItem],
-    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
-) -> portage_use_reduce::AltPreference {
-    disjunction_preference(
+// ranks `Other`, so the re-walk takes the cycle-breaking branch. ----/// Arguments of [`disj_circ_162`].
+struct DisjCirc162Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    self_cp: &'a RootCp,
+    atoms: &'a [&'a str],
+    queued: &'a [QueueItem],
+    circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
+fn disj_circ_162(args: DisjCirc162Args<'_>) -> portage_use_reduce::AltPreference {
+    let DisjCirc162Args {
         repos,
         config,
         root,
         entries,
         self_cp,
-        &HashMap::new(),
+        atoms,
+        queued,
         circular,
-        None,
-        &atoms_162(atoms),
-        queued,
-        false,
+    } = args;
+    disjunction_preference(DisjunctionPreferenceArgs {
+        repos,
+        config,
+        root,
         entries,
+        self_cp,
+        constraints: &HashMap::new(),
+        circular_dependency: circular,
+        root_deps_running_root: None,
+        atoms: &atoms_162(atoms),
         queued,
-    )
+        update: false,
+        gate_entries: entries,
+        gate_queued: queued,
+    })
 }
 
 fn circ_child_162(cat: &str, pkg: &str, ver: &str, slot: &str) -> CircularDepChild {
@@ -1379,30 +1412,30 @@ fn disjunction_preference_demotes_a_recorded_circular_child_to_other() {
     )];
     let parent = self_162("test", "consumer");
     assert_eq!(
-        disj_circ_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &parent,
-            &["test/pkgB"],
-            &[],
-            &HashMap::new(),
-        ),
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &parent,
+            atoms: &["test/pkgB"],
+            queued: &[],
+            circular: &HashMap::new()
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let recorded = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "1.0", "0")]);
     assert_eq!(
-        disj_circ_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &parent,
-            &["test/pkgB"],
-            &[],
-            &recorded,
-        ),
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &parent,
+            atoms: &["test/pkgB"],
+            queued: &[],
+            circular: &recorded
+        }),
         portage_use_reduce::AltPreference::Other
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1426,30 +1459,30 @@ fn disjunction_preference_ignores_a_non_matching_circular_record() {
         vec![circ_child_162("test", "pkgB", "1.0", "0")],
     );
     assert_eq!(
-        disj_circ_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &parent,
-            &["test/pkgB:0"],
-            &[],
-            &wrong_parent,
-        ),
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &parent,
+            atoms: &["test/pkgB:0"],
+            queued: &[],
+            circular: &wrong_parent
+        }),
         portage_use_reduce::AltPreference::Available
     );
     let wrong_slot = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "2.0", "1")]);
     assert_eq!(
-        disj_circ_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &parent,
-            &["test/pkgB:0"],
-            &[],
-            &wrong_slot,
-        ),
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &parent,
+            atoms: &["test/pkgB:0"],
+            queued: &[],
+            circular: &wrong_slot
+        }),
         portage_use_reduce::AltPreference::Available
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1468,16 +1501,16 @@ fn disjunction_preference_exempts_an_installed_satisfying_circular_atom() {
     let parent = self_162("test", "consumer");
     let recorded = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "1.0", "0")]);
     assert_eq!(
-        disj_circ_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &parent,
-            &["test/pkgB"],
-            &[],
-            &recorded,
-        ),
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &parent,
+            atoms: &["test/pkgB"],
+            queued: &[],
+            circular: &recorded
+        }),
         portage_use_reduce::AltPreference::Installed
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1505,29 +1538,38 @@ fn promote_repo_162(dir: &Path) -> Vec<RepoConfig> {
         ],
     )
 }
+/// Arguments of [`promote_162`].
+struct Promote162Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    alts: &'a [&'a [&'a str]],
+    queued: &'a [QueueItem],
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn promote_162(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    entries: &[GraphEntry],
-    alts: &[&[&str]],
-    queued: &[QueueItem],
-) -> usize {
-    let owned: Vec<Vec<String>> = alts
-        .iter()
-        .map(|a| a.iter().map(|s| s.to_string()).collect())
-        .collect();
-    promote_tied_alternative(
+fn promote_162(args: Promote162Args<'_>) -> usize {
+    let Promote162Args {
         repos,
         config,
         root,
         entries,
-        &HashMap::new(),
-        &owned,
+        alts,
         queued,
-    )
+    } = args;
+    let owned: Vec<Vec<String>> = alts
+        .iter()
+        .map(|a| a.iter().map(|s| s.to_string()).collect())
+        .collect();
+    promote_tied_alternative(PromoteTiedAlternativeArgs {
+        repos,
+        config,
+        root,
+        entries,
+        constraints: &HashMap::new(),
+        alts: &owned,
+        queued,
+    })
 }
 
 /// A strict upgrade on the shared cp promotes the newer
@@ -1540,14 +1582,14 @@ fn promote_tied_alternative_prefers_the_strict_upgrade() {
     let repos = promote_repo_162(&dir);
     let config = cfg_162();
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &[&["=test/up-1.0"], &["test/up"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[&["=test/up-1.0"], &["test/up"]],
+            queued: &[]
+        }),
         1
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1561,14 +1603,14 @@ fn promote_tied_alternative_keeps_disjoint_order() {
     let repos = promote_repo_162(&dir);
     let config = cfg_162();
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &[&["test/up"], &["test/plain"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[&["test/up"], &["test/plain"]],
+            queued: &[]
+        }),
         0
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1583,14 +1625,14 @@ fn promote_tied_alternative_promotes_through_a_longer_list() {
     let repos = promote_repo_162(&dir);
     let config = cfg_162();
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &[&["=test/up-1.0"], &["test/plain"], &["test/up"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[&["=test/up-1.0"], &["test/plain"], &["test/up"]],
+            queued: &[]
+        }),
         2
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1604,17 +1646,17 @@ fn promote_tied_alternative_rejects_a_mixed_upgrade_and_downgrade() {
     let repos = promote_repo_162(&dir);
     let config = cfg_162();
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &[
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[
                 &["=test/plain-1.0", "test/up"],
                 &["test/plain", "=test/up-1.0"]
             ],
-            &[]
-        ),
+            queued: &[]
+        }),
         0
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1638,14 +1680,14 @@ fn promote_tied_alternative_prefers_the_in_graph_alternative() {
         false,
     )];
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &[&["test/plain"], &["test/plainb"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            alts: &[&["test/plain"], &["test/plainb"]],
+            queued: &[]
+        }),
         1
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1680,14 +1722,14 @@ fn promote_tied_alternative_keeps_order_when_both_are_in_graph() {
         ),
     ];
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &[&["test/plain"], &["test/plainb"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            alts: &[&["test/plain"], &["test/plainb"]],
+            queued: &[]
+        }),
         0
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1711,14 +1753,14 @@ fn promote_tied_alternative_rejects_an_in_graph_downgrade() {
         false,
     )];
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &entries,
-            &[&["test/up", "test/plain"], &["=test/up-1.0"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            alts: &[&["test/up", "test/plain"], &["=test/up-1.0"]],
+            queued: &[]
+        }),
         0
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1734,14 +1776,14 @@ fn promote_tied_alternative_prefers_the_installed_slots_alternative() {
     install_162(&dir, "test", "slota-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &[&["test/plain"], &["=test/slota-1.0"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[&["test/plain"], &["=test/slota-1.0"]],
+            queued: &[]
+        }),
         1
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1758,14 +1800,14 @@ fn promote_tied_alternative_rejects_an_uninstalled_alternative() {
     install_162(&dir, "test", "slota-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &[&["=test/slota-1.0"], &["test/plain"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[&["=test/slota-1.0"], &["test/plain"]],
+            queued: &[]
+        }),
         0
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1781,14 +1823,14 @@ fn promote_tied_alternative_needs_the_candidate_slot_installed() {
     install_162(&dir, "test", "slota-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &[&["test/plain"], &["test/slota"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[&["test/plain"], &["test/slota"]],
+            queued: &[]
+        }),
         0
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1803,14 +1845,14 @@ fn promote_tied_alternative_ignores_blockers_in_cp_maps() {
     install_162(&dir, "test", "up-1.0", "0", &[]);
     let config = cfg_162();
     assert_eq!(
-        promote_162(
-            &repos,
-            &config,
-            &dir,
-            &[],
-            &[&["=test/up-1.0"], &["!test/up"]],
-            &[]
-        ),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[&["=test/up-1.0"], &["!test/up"]],
+            queued: &[]
+        }),
         0
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1824,7 +1866,14 @@ fn promote_tied_alternative_returns_zero_for_a_single_alternative() {
     let repos = promote_repo_162(&dir);
     let config = cfg_162();
     assert_eq!(
-        promote_162(&repos, &config, &dir, &[], &[&["test/up"]], &[]),
+        promote_162(Promote162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            alts: &[&["test/up"]],
+            queued: &[]
+        }),
         0
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1844,29 +1893,40 @@ fn demote_repo_162(dir: &Path) -> Vec<RepoConfig> {
         &[("test/pkg", "1.0", "0", ""), ("test/pkg", "2.0", "0", "")],
     )
 }
-
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn demote_162(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    entries: &[GraphEntry],
-    self_cp: &RootCp,
-    atoms: &[&str],
-    queued: &[QueueItem],
+/// Arguments of [`demote_162`].
+struct Demote162Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    self_cp: &'a RootCp,
+    atoms: &'a [&'a str],
+    queued: &'a [QueueItem],
     update: bool,
-) -> bool {
-    alternative_downgrade_demoted(
+}
+
+fn demote_162(args: Demote162Args<'_>) -> bool {
+    let Demote162Args {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        atoms,
+        queued,
+        update,
+    } = args;
+    alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
         repos,
         root,
         config,
         entries,
         self_cp,
-        &HashMap::new(),
-        &atoms_162(atoms),
+        constraints: &HashMap::new(),
+        atoms: &atoms_162(atoms),
         queued,
         update,
-    )
+    })
 }
 
 fn demote_entries_162() -> Vec<GraphEntry> {
@@ -1890,16 +1950,16 @@ fn alternative_downgrade_demoted_flags_an_older_alternative() {
     let dir = dir_162("demote-older");
     let repos = demote_repo_162(&dir);
     let config = cfg_162();
-    assert!(demote_162(
-        &repos,
-        &config,
-        &dir,
-        &demote_entries_162(),
-        &self_162("test", "consumer"),
-        &["=test/pkg-1.0"],
-        &[],
-        false
-    ));
+    assert!(demote_162(Demote162Args {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &demote_entries_162(),
+        self_cp: &self_162("test", "consumer"),
+        atoms: &["=test/pkg-1.0"],
+        queued: &[],
+        update: false
+    }));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1922,16 +1982,16 @@ fn alternative_downgrade_demoted_keeps_the_graphed_version() {
         Some("9"),
         false,
     ));
-    assert!(!demote_162(
-        &repos,
-        &config,
-        &dir,
-        &entries,
-        &self_162("test", "consumer"),
-        &["test/pkg"],
-        &[],
-        false
-    ));
+    assert!(!demote_162(Demote162Args {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &entries,
+        self_cp: &self_162("test", "consumer"),
+        atoms: &["test/pkg"],
+        queued: &[],
+        update: false
+    }));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1942,16 +2002,16 @@ fn alternative_downgrade_demoted_skips_the_resolving_package() {
     let dir = dir_162("demote-self");
     let repos = demote_repo_162(&dir);
     let config = cfg_162();
-    assert!(!demote_162(
-        &repos,
-        &config,
-        &dir,
-        &demote_entries_162(),
-        &self_162("test", "pkg"),
-        &["=test/pkg-1.0"],
-        &[],
-        false
-    ));
+    assert!(!demote_162(Demote162Args {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &demote_entries_162(),
+        self_cp: &self_162("test", "pkg"),
+        atoms: &["=test/pkg-1.0"],
+        queued: &[],
+        update: false
+    }));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1963,16 +2023,16 @@ fn alternative_downgrade_demoted_skips_blockers() {
     let dir = dir_162("demote-blocker");
     let repos = demote_repo_162(&dir);
     let config = cfg_162();
-    assert!(!demote_162(
-        &repos,
-        &config,
-        &dir,
-        &demote_entries_162(),
-        &self_162("test", "consumer"),
-        &["!<=test/pkg-1.0"],
-        &[],
-        false
-    ));
+    assert!(!demote_162(Demote162Args {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &demote_entries_162(),
+        self_cp: &self_162("test", "consumer"),
+        atoms: &["!<=test/pkg-1.0"],
+        queued: &[],
+        update: false
+    }));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1987,16 +2047,16 @@ fn alternative_downgrade_demoted_uses_the_queued_hypothetical() {
     let repos = demote_repo_162(&dir);
     install_162(&dir, "test", "pkg-2.0", "0", &[]);
     let config = cfg_162();
-    assert!(demote_162(
-        &repos,
-        &config,
-        &dir,
-        &[],
-        &self_162("test", "consumer"),
-        &["=test/pkg-1.0"],
-        &[qatom_162("test/pkg")],
-        false
-    ));
+    assert!(demote_162(Demote162Args {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[],
+        self_cp: &self_162("test", "consumer"),
+        atoms: &["=test/pkg-1.0"],
+        queued: &[qatom_162("test/pkg")],
+        update: false
+    }));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2009,16 +2069,16 @@ fn alternative_downgrade_demoted_ignores_other_cp_queue() {
     let repos = demote_repo_162(&dir);
     install_162(&dir, "test", "other-3.0", "0", &[]);
     let config = cfg_162();
-    assert!(!demote_162(
-        &repos,
-        &config,
-        &dir,
-        &[],
-        &self_162("test", "consumer"),
-        &["=test/pkg-1.0"],
-        &[qatom_162("test/other")],
-        false
-    ));
+    assert!(!demote_162(Demote162Args {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[],
+        self_cp: &self_162("test", "consumer"),
+        atoms: &["=test/pkg-1.0"],
+        queued: &[qatom_162("test/other")],
+        update: false
+    }));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2030,15 +2090,15 @@ fn alternative_downgrade_demoted_uses_the_tree_hypothetical_under_update() {
     let dir = dir_162("demote-update");
     let repos = demote_repo_162(&dir);
     let config = cfg_162();
-    assert!(demote_162(
-        &repos,
-        &config,
-        &dir,
-        &[],
-        &self_162("test", "consumer"),
-        &["=test/pkg-1.0"],
-        &[qatom_162("test/pkg")],
-        true
-    ));
+    assert!(demote_162(Demote162Args {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[],
+        self_cp: &self_162("test", "consumer"),
+        atoms: &["=test/pkg-1.0"],
+        queued: &[qatom_162("test/pkg")],
+        update: true
+    }));
     let _ = std::fs::remove_dir_all(&dir);
 }

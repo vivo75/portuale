@@ -13,9 +13,30 @@ use super::*;
 fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
     // rdeps blanked, ideps kept, EAPI 8: IDEPEND still classifies;
     // with ideps blanked (or below EAPI 8) nothing does.
-    assert_eq!(onlydeps_runtime_keys(true, false, true), &["IDEPEND"][..]);
-    assert!(onlydeps_runtime_keys(true, true, true).is_empty());
-    assert!(onlydeps_runtime_keys(true, false, false).is_empty());
+    assert_eq!(
+        onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
+            onlydeps_blanks_runtime: true,
+            onlydeps_blanks_idepend: false,
+            eapi_has_idepend: true
+        }),
+        &["IDEPEND"][..]
+    );
+    assert!(
+        onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
+            onlydeps_blanks_runtime: true,
+            onlydeps_blanks_idepend: true,
+            eapi_has_idepend: true
+        })
+        .is_empty()
+    );
+    assert!(
+        onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
+            onlydeps_blanks_runtime: true,
+            onlydeps_blanks_idepend: false,
+            eapi_has_idepend: false
+        })
+        .is_empty()
+    );
     let flatten = |text: &str| -> HashSet<String> {
         let toks: Vec<String> = text.split_whitespace().map(String::from).collect();
         let use_flags: HashSet<String> = HashSet::new();
@@ -34,21 +55,21 @@ fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
     assert!(runtime_atoms.contains("dev-libs/odw0e"));
     let mut queue = VecDeque::new();
     let mut blockers = Vec::new();
-    enqueue_flat_deps(
-        vec!["dev-libs/odw0e".to_string()],
-        &("dev-libs".to_string(), "odw0a".to_string()),
-        "1",
-        1,
-        &HashSet::new(),
-        &mut queue,
-        &mut blockers,
-        &buildtime_atoms,
-        &runtime_atoms,
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        false,
-    );
+    enqueue_flat_deps(EnqueueFlatDepsArgs {
+        flat_deps: vec!["dev-libs/odw0e".to_string()],
+        key: &("dev-libs".to_string(), "odw0a".to_string()),
+        version: "1",
+        depth: 1,
+        parent_use: &HashSet::new(),
+        queue: &mut queue,
+        pending_blockers: &mut blockers,
+        buildtime_atoms: &buildtime_atoms,
+        runtime_atoms: &runtime_atoms,
+        bdepend_atoms: &HashSet::new(),
+        or_universe: &HashSet::new(),
+        running_atoms: &HashSet::new(),
+        owner_targets_running_root: false,
+    });
     assert_eq!(queue.len(), 1);
     assert!(
         !queue[0].buildtime_hard,
@@ -66,17 +87,52 @@ fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
 fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
     // EAPI 7 + IDEPEND present: dropped even with no onlydeps
     // blanking.
-    assert!(!onlydeps_walk_dep_key("IDEPEND", false, false, false));
+    assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "IDEPEND",
+        eapi_has_idepend: false,
+        onlydeps_blanks_runtime: false,
+        onlydeps_blanks_idepend: false
+    }));
     // EAPI 8 keeps it under the default flags ...
-    assert!(onlydeps_walk_dep_key("IDEPEND", true, false, false));
+    assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "IDEPEND",
+        eapi_has_idepend: true,
+        onlydeps_blanks_runtime: false,
+        onlydeps_blanks_idepend: false
+    }));
     // ... but rdeps=n + ideps=n drops it there too.
-    assert!(!onlydeps_walk_dep_key("IDEPEND", true, true, true));
+    assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "IDEPEND",
+        eapi_has_idepend: true,
+        onlydeps_blanks_runtime: true,
+        onlydeps_blanks_idepend: true
+    }));
     // Build-time keys are never gated; RDEPEND/PDEPEND fall to the
     // rdeps blank only.
-    assert!(onlydeps_walk_dep_key("DEPEND", false, true, true));
-    assert!(onlydeps_walk_dep_key("BDEPEND", false, true, true));
-    assert!(!onlydeps_walk_dep_key("RDEPEND", false, true, true));
-    assert!(onlydeps_walk_dep_key("RDEPEND", true, false, false));
+    assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "DEPEND",
+        eapi_has_idepend: false,
+        onlydeps_blanks_runtime: true,
+        onlydeps_blanks_idepend: true
+    }));
+    assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "BDEPEND",
+        eapi_has_idepend: false,
+        onlydeps_blanks_runtime: true,
+        onlydeps_blanks_idepend: true
+    }));
+    assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "RDEPEND",
+        eapi_has_idepend: false,
+        onlydeps_blanks_runtime: true,
+        onlydeps_blanks_idepend: true
+    }));
+    assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "RDEPEND",
+        eapi_has_idepend: true,
+        onlydeps_blanks_runtime: false,
+        onlydeps_blanks_idepend: false
+    }));
 }
 
 /// #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`)

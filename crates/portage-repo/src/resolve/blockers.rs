@@ -609,40 +609,48 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
         // target-root half, matching the pre-slice cp-keyed lookups).
         let self_node: RootCp = (false, pkg.category.clone(), pkg.package.clone());
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
-            &tokens,
-            &use_flags,
-            portage_use_reduce::MatchMode::Normal,
-            // Installed blocker scan: real `dep_check` passes
-            // `eapi=None` for installed packages
-            // (`dep_check.py:865-877`), whose defaults struct reads
-            // `empty_groups_always_true = false`.
-            false,
+            portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+                tokens: &tokens,
+                uselist: &use_flags,
+                mode: portage_use_reduce::MatchMode::Normal, // Installed blocker scan: real `dep_check` passes
+                // `eapi=None` for installed packages
+                // (`dep_check.py:865-877`), whose defaults struct reads
+                // `empty_groups_always_true = false`.
+                empty_groups_always_true: false,
+                tie_break: &mut |alts: &[Vec<String>]| {
+                    promote_tied_alternative(PromoteTiedAlternativeArgs {
+                        repos,
+                        config,
+                        root,
+                        entries,
+                        constraints: disj_constraints,
+                        alts,
+                        queued: &[],
+                    })
+                },
+            },
             &mut |atoms: &[String]| {
-                disjunction_preference(
+                disjunction_preference(DisjunctionPreferenceArgs {
                     repos,
                     config,
                     root,
                     entries,
-                    &self_node,
-                    disj_constraints,
-                    // Site decision (backlogs #216/#221 reconciliation):
+                    self_cp: &self_node,
+                    constraints: disj_constraints, // Site decision (backlogs #216/#221 reconciliation):
                     // real keys `circular_dependency` by exact package
                     // node, and this scan only processes installed
                     // packages whose cp was never walked -- while the map
                     // is keyed by merge-bound cycle-node cps only -- so
                     // the demotion lookup always misses and the empty map
                     // is exactly faithful here. See the parameter doc.
-                    &HashMap::new(),
+                    circular_dependency: &HashMap::new(),
                     root_deps_running_root,
                     atoms,
-                    &[],
-                    false,
-                    entries,
-                    &[],
-                )
-            },
-            &mut |alts: &[Vec<String>]| {
-                promote_tied_alternative(repos, config, root, entries, disj_constraints, alts, &[])
+                    queued: &[],
+                    update: false,
+                    gate_entries: entries,
+                    gate_queued: &[],
+                })
             },
         ) else {
             continue;

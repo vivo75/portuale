@@ -2,6 +2,18 @@
 
 use crate::ebuild_phases::*;
 
+/// Arguments of [`run_one_phase`].
+pub(crate) struct RunOnePhaseArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) phase: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) log_file: Option<&'a Path>,
+}
+
 /// Builds one fresh embedded brush shell for a single phase: real
 /// `doebuild()` spawns a brand new `bin/ebuild.sh` *process* per phase
 /// (`spawnebuild()`), which matters for more than just isolation --
@@ -19,17 +31,17 @@ use crate::ebuild_phases::*;
 /// run cheap to "re-run" from a fresh shell, exactly the way real
 /// `doebuild()` itself relies on across its own separate `spawnebuild()`
 /// calls -- this isn't a new mechanism invented for portuale.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) async fn run_one_phase(
-    env: &Environment,
-    root: &Path,
-    phase: &str,
-    debug: bool,
-    extra_env: &[(String, String)],
-    config_root: &Path,
-    shell: ShellBackend,
-    log_file: Option<&Path>,
-) -> Result<i32, String> {
+pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, String> {
+    let RunOnePhaseArgs {
+        env,
+        root,
+        phase,
+        debug,
+        extra_env,
+        config_root,
+        shell,
+        log_file,
+    } = args;
     let bin_dir = bin_dir()?.to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
@@ -45,17 +57,17 @@ pub(crate) async fn run_one_phase(
 
     match effective_shell {
         ShellBackend::Brush => {
-            run_one_phase_brush(
+            run_one_phase_brush(RunOnePhaseBrushArgs {
                 env,
                 root,
                 phase,
                 debug,
                 extra_env,
-                &bin_dir,
-                &helpers_dir,
+                bin_dir: &bin_dir,
+                helpers_dir: &helpers_dir,
                 config_root,
                 log_file,
-            )
+            })
             .await
         }
         ShellBackend::Bash => run_one_phase_bash(RunOnePhaseBashArgs {
@@ -153,19 +165,31 @@ impl Drop for UmaskGuard {
         unsafe { libc::umask(self.0) };
     }
 }
+/// Arguments of [`run_one_phase_brush`].
+pub(crate) struct RunOnePhaseBrushArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) phase: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) log_file: Option<&'a Path>,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) async fn run_one_phase_brush(
-    env: &Environment,
-    root: &Path,
-    phase: &str,
-    debug: bool,
-    extra_env: &[(String, String)],
-    bin_dir: &Path,
-    helpers_dir: &Path,
-    config_root: &Path,
-    log_file: Option<&Path>,
-) -> Result<i32, String> {
+pub(crate) async fn run_one_phase_brush(args: RunOnePhaseBrushArgs<'_>) -> Result<i32, String> {
+    let RunOnePhaseBrushArgs {
+        env,
+        root,
+        phase,
+        debug,
+        extra_env,
+        bin_dir,
+        helpers_dir,
+        config_root,
+        log_file,
+    } = args;
     let _umask = UmaskGuard::save();
     let mut shell = new_brush_phase_shell().await?;
     let (params, pump) = brush_phase_params(&mut shell, log_file)?;

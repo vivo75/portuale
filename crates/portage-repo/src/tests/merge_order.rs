@@ -1,4 +1,5 @@
 use super::*;
+use crate::merge_order::TreeDisplayOrderArgs;
 
 /// #131 S1: `tree_display_order` sequences the p2b tree like real's
 /// tree-mode retlist (bed `l0-fx-20260924T090502Z`: real's display
@@ -53,16 +54,16 @@ fn tree_display_order_sequences_the_p2b_tree_like_portage() {
         (c, p) => panic!("unexpected entry in p2b graph: {c}/{p}"),
     };
     entries.sort_by_key(rank);
-    let order = merge_order::tree_display_order(
-        &entries,
-        &atoms,
-        &order_config,
-        &root,
-        true,
-        &repos,
-        true,
-        &HashMap::new(),
-    );
+    let order = merge_order::tree_display_order(merge_order::TreeDisplayOrderArgs {
+        entries: &entries,
+        top_level_atoms: &atoms,
+        config: &order_config,
+        root: &root,
+        implicit_system_deps: true,
+        repos: &repos,
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     let names: Vec<String> = order
         .iter()
         .map(|&i| format!("{}/{}", entries[i].category, entries[i].package))
@@ -87,16 +88,16 @@ fn tree_display_order_schedules_an_admitted_removal_after_its_owner() {
     let entries = graph_update_entries(&["dev-libs/blockerpkg"], &test_config());
     let root = fixtures_root();
     let repos = find_repos(&root).expect("repos");
-    let order = merge_order::tree_display_order(
-        &entries,
-        &atoms,
-        &test_config(),
-        &root,
-        true,
-        &repos,
-        true,
-        &HashMap::new(),
-    );
+    let order = merge_order::tree_display_order(merge_order::TreeDisplayOrderArgs {
+        entries: &entries,
+        top_level_atoms: &atoms,
+        config: &test_config(),
+        root: &root,
+        implicit_system_deps: true,
+        repos: &repos,
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     let names: Vec<String> = order
         .iter()
         .map(|&i| format!("{}/{}", entries[i].category, entries[i].package))

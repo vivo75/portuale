@@ -112,19 +112,19 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
             {
                 record_slot_conflict(
                     &mut state.slot_conflicts,
-                    build_slot_conflict(
-                        &ctx.repos,
+                    build_slot_conflict(BuildSlotConflictArgs {
+                        repos: &ctx.repos,
                         config,
-                        ctx.root,
-                        &key.0,
-                        &key.1,
+                        root: ctx.root,
+                        category: &key.0,
+                        package: &key.1,
                         slot,
-                        &existing_version,
+                        existing_version: &existing_version,
                         current_atom,
-                        version,
-                        &state.slot_pullers,
-                        None,
-                    ),
+                        current_version: version,
+                        slot_pullers: &state.slot_pullers,
+                        installed_side: None,
+                    }),
                 );
             }
             return ControlFlow::Break(());
@@ -160,19 +160,19 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
         {
             record_slot_conflict(
                 &mut state.slot_conflicts,
-                build_slot_conflict(
-                    &ctx.repos,
+                build_slot_conflict(BuildSlotConflictArgs {
+                    repos: &ctx.repos,
                     config,
-                    ctx.root,
-                    &key.0,
-                    &key.1,
+                    root: ctx.root,
+                    category: &key.0,
+                    package: &key.1,
                     slot,
-                    &existing_version,
+                    existing_version: &existing_version,
                     current_atom,
-                    &inst_ver,
-                    &state.slot_pullers,
-                    Some(InstalledSide::Current),
-                ),
+                    current_version: &inst_ver,
+                    slot_pullers: &state.slot_pullers,
+                    installed_side: Some(InstalledSide::Current),
+                }),
             );
         }
 
@@ -217,30 +217,30 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                     existing_cand.sub_slot,
                     existing_cand.repo_name
                 );
-                let existing_use = effective_use_flags(
+                let existing_use = effective_use_flags(EffectiveUseFlagsArgs {
                     config,
-                    &existing_cand.iuse,
-                    &existing_cand.keywords,
-                    &existing_cand_str,
-                    &key.0,
-                    &key.1,
-                );
+                    iuse: &existing_cand.iuse,
+                    keywords: &existing_cand.keywords,
+                    candidate_str: &existing_cand_str,
+                    category: &key.0,
+                    package: &key.1,
+                });
                 if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use) {
                     record_slot_conflict(
                         &mut state.slot_conflicts,
-                        build_slot_conflict(
-                            &ctx.repos,
+                        build_slot_conflict(BuildSlotConflictArgs {
+                            repos: &ctx.repos,
                             config,
-                            ctx.root,
-                            &key.0,
-                            &key.1,
+                            root: ctx.root,
+                            category: &key.0,
+                            package: &key.1,
                             slot,
-                            &existing_version,
+                            existing_version: &existing_version,
                             current_atom,
-                            version,
-                            &state.slot_pullers,
-                            None,
-                        ),
+                            current_version: version,
+                            slot_pullers: &state.slot_pullers,
+                            installed_side: None,
+                        }),
                     );
                 }
             }
@@ -267,14 +267,14 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                     existing_cand.sub_slot,
                     existing_cand.repo_name
                 );
-                let existing_use = effective_use_flags(
+                let existing_use = effective_use_flags(EffectiveUseFlagsArgs {
                     config,
-                    &existing_cand.iuse,
-                    &existing_cand.keywords,
-                    &existing_cand_str,
-                    &key.0,
-                    &key.1,
-                );
+                    iuse: &existing_cand.iuse,
+                    keywords: &existing_cand.keywords,
+                    candidate_str: &existing_cand_str,
+                    category: &key.0,
+                    package: &key.1,
+                });
                 if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use)
                     && let Some(flip) =
                         suggested_use_flip(existing_cand, &key.0, &key.1, use_deps, config)
@@ -387,16 +387,18 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                             }
                         }
                         expand_resolved_slot_with_flipped_use(
-                            ctx,
-                            config,
-                            union_constraints,
-                            &mut *state,
-                            bp,
-                            key,
-                            existing_idx,
-                            existing_cand,
-                            &existing_version,
-                            &delta_use,
+                            ExpandResolvedSlotWithFlippedUseArgs {
+                                ctx,
+                                config,
+                                union_constraints,
+                                state: &mut *state,
+                                bp,
+                                key,
+                                existing_idx,
+                                existing_cand,
+                                existing_version: &existing_version,
+                                new_use: &delta_use,
+                            },
                         );
                     }
                 }

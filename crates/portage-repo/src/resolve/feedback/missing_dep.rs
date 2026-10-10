@@ -38,17 +38,18 @@ pub(crate) fn step_missing_dep(
             && !ctx.usepkgonly
             && portage_dep::parse_atom(&dep_atom).is_some_and(|a| is_built_slot_op(&a))
         {
-            let (fresh, binary_masks) = slot_operator_unsatisfied_probe_full(
-                ctx.root,
-                &ctx.repos,
-                &pass.entries,
-                &pass.slot_want,
-                &pass.slot_pullers,
-                &grown.runtime_pkg_mask,
-                ctx.with_bdeps,
-                ctx.excluded,
-                config,
-            );
+            let (fresh, binary_masks) =
+                slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
+                    root: ctx.root,
+                    repos: &ctx.repos,
+                    entries: &pass.entries,
+                    slot_want: &pass.slot_want,
+                    pullers: &pass.slot_pullers,
+                    masked: &grown.runtime_pkg_mask,
+                    with_bdeps: ctx.with_bdeps,
+                    excluded: ctx.excluded,
+                    config,
+                });
             if file_unsat_probe_results(&mut *grown, fresh, binary_masks, ctx.usepkgonly) {
                 return Some(PassDecision::Feedback(BacktrackFeedback::Config {
                     params: Box::new(std::mem::take(grown)),

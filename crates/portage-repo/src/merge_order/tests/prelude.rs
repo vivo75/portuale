@@ -27,12 +27,26 @@ fn select_dep_target_keeps_the_flag_carrier_a_later_flip_broke() {
     let none = HashSet::new();
     let pre = digraph_prelude(&entries, root);
     assert_eq!(
-        pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
         Some(0),
         "B stays on the flipped d-0"
     );
     assert_eq!(
-        pre.select_dep_target(&entries, 3, &entries[3].deps, 0, &none, false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 3,
+            from_deps: &entries[3].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
         Some(0),
         "A's own atom is satisfied by d-0 as displayed"
     );
@@ -74,7 +88,14 @@ fn select_dep_target_narrows_and_ranks_like_portage() {
     ];
     let pre = digraph_prelude(&entries, root);
     assert_eq!(
-        pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
         Some(1)
     );
     // A bare atom matches both, but `merge_bound_only` drops the
@@ -96,7 +117,14 @@ fn select_dep_target_narrows_and_ranks_like_portage() {
     ];
     let pre = digraph_prelude(&entries, root);
     assert_eq!(
-        pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, true),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: true
+        }),
         Some(1),
         "both candidates match; merge_bound_only still prefers the merged one"
     );
@@ -117,7 +145,14 @@ fn select_dep_target_narrows_and_ranks_like_portage() {
     ];
     let pre = digraph_prelude(&entries, root);
     assert_eq!(
-        pre.select_dep_target(&entries, 1, &entries[1].deps, 0, &none, true),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 1,
+            from_deps: &entries[1].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: true
+        }),
         None,
         "the only match is installed and merge_bound_only drops it"
     );
@@ -149,7 +184,14 @@ fn select_dep_target_elimination_keeps_the_last_on_a_version_tie() {
     let pre = digraph_prelude(&entries, root);
     let none = HashSet::new();
     assert_eq!(
-        pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
         Some(1),
         "two candidates take the elimination path, which keeps the last"
     );
@@ -179,7 +221,14 @@ fn select_dep_target_elimination_orders_installed_before_merge_bound() {
     let pre = digraph_prelude(&entries, root);
     let none = HashSet::new();
     assert_eq!(
-        pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
         Some(1),
         "the installed candidate is eliminated first"
     );
@@ -194,7 +243,14 @@ fn select_dep_target_elimination_orders_installed_before_merge_bound() {
     let entries = vec![merged, installed, user];
     let pre = digraph_prelude(&entries, root);
     assert_eq!(
-        pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
         Some(0),
         "the merge-bound candidate survives elimination"
     );
@@ -231,7 +287,14 @@ fn select_dep_target_keeps_nvc_out_of_the_elimination() {
     let pre = digraph_prelude(&entries, root);
     let none = HashSet::new();
     assert_eq!(
-        pre.select_dep_target(&entries, 3, &entries[3].deps, 0, &none, false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 3,
+            from_deps: &entries[3].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
         Some(0),
         "the NVC candidate stays in the ranking"
     );
@@ -285,7 +348,14 @@ fn select_dep_target_runs_elimination_for_three_candidates() {
     let pre = digraph_prelude(&entries, root);
     let none = HashSet::new();
     assert_eq!(
-        pre.select_dep_target(&entries, 3, &entries[3].deps, 0, &none, false),
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 3,
+            from_deps: &entries[3].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
         Some(0),
         "the elimination leaves only the candidate no sibling set fully shares"
     );

@@ -2,6 +2,16 @@
 
 use crate::*;
 
+/// Arguments of [`effective_use_flags`].
+pub struct EffectiveUseFlagsArgs<'a> {
+    pub config: &'a portage_profile::Config,
+    pub iuse: &'a str,
+    pub keywords: &'a [String],
+    pub candidate_str: &'a str,
+    pub category: &'a str,
+    pub package: &'a str,
+}
+
 /// The USE flags in effect for one specific package -- one continuous
 /// incremental walk over the real `USE_ORDER` layers portuale models,
 /// low priority to high (real `config.py::regenerate()` over the
@@ -113,15 +123,15 @@ use crate::*;
 /// (after `env`, before `use.force`/`use.mask`) so the `'backtrack`
 /// loop's in-progress `--autounmask-use` changes flow through -- see
 /// that field's doc comment.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn effective_use_flags(
-    config: &portage_profile::Config,
-    iuse: &str,
-    keywords: &[String],
-    candidate_str: &str,
-    category: &str,
-    package: &str,
-) -> Rc<HashSet<String>> {
+pub fn effective_use_flags(args: EffectiveUseFlagsArgs<'_>) -> Rc<HashSet<String>> {
+    let EffectiveUseFlagsArgs {
+        config,
+        iuse,
+        keywords,
+        candidate_str,
+        category,
+        package,
+    } = args;
     // Memoise per (config USE context, candidate). A deep `emerge -pu`
     // calls this ~20k times for a few hundred distinct candidates -- once
     // in `is_visible`, then again for `keywords_accepted`, `is_stable`,
@@ -159,12 +169,14 @@ pub fn effective_use_flags(
         return hit;
     }
     let result = Rc::new(effective_use_flags_uncached(
-        config,
-        iuse,
-        keywords,
-        candidate_str,
-        category,
-        package,
+        EffectiveUseFlagsUncachedArgs {
+            config,
+            iuse,
+            keywords,
+            candidate_str,
+            category,
+            package,
+        },
     ));
     EUF_CACHE.with(|c| {
         c.borrow_mut().insert(key, Rc::clone(&result));
@@ -207,16 +219,27 @@ pub(crate) fn use_context_fingerprint(config: &portage_profile::Config) -> u64 {
     config.autounmask_use.hash(&mut h);
     h.finish()
 }
+/// Arguments of [`effective_use_flags_uncached`].
+pub(crate) struct EffectiveUseFlagsUncachedArgs<'a> {
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) iuse: &'a str,
+    pub(crate) keywords: &'a [String],
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn effective_use_flags_uncached(
-    config: &portage_profile::Config,
-    iuse: &str,
-    keywords: &[String],
-    candidate_str: &str,
-    category: &str,
-    package: &str,
+    args: EffectiveUseFlagsUncachedArgs<'_>,
 ) -> HashSet<String> {
+    let EffectiveUseFlagsUncachedArgs {
+        config,
+        iuse,
+        keywords,
+        candidate_str,
+        category,
+        package,
+    } = args;
     // The per-package `USE_ORDER` walk, low priority -> high (real
     // `regenerate()` over the reversed `uvlist`; see this function's own
     // doc comment for the full grounding). Portuale models, in order:
@@ -389,26 +412,26 @@ pub(crate) fn effective_use_flags_uncached(
     // `config.use_mask` ∪ `package_use_mask` application could not.
     // Uncached-build path only (EUF misses): the shared sets are read,
     // the few forced/masked flags cloned in.
-    for flag in resolved_use_mask_or_force(
-        MaskOrForce::Force,
+    for flag in resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Force,
         config,
         candidate_str,
         category,
         package,
         stable,
-    )
+    })
     .iter()
     {
         use_flags.insert(flag.clone());
     }
-    for flag in resolved_use_mask_or_force(
-        MaskOrForce::Mask,
+    for flag in resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
         config,
         candidate_str,
         category,
         package,
         stable,
-    )
+    })
     .iter()
     {
         use_flags.remove(flag);
@@ -465,6 +488,16 @@ pub(crate) enum MaskOrForce {
     Force,
 }
 
+/// Arguments of [`resolved_use_mask_or_force`].
+pub(crate) struct ResolvedUseMaskOrForceArgs<'a> {
+    pub(crate) which: MaskOrForce,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) stable: bool,
+}
+
 /// Real `UseManager.getUseMask(pkg)` / `getUseForce(pkg)`: the four
 /// (or, for a non-stable candidate, two) sources stacked **interleaved
 /// per profile level** and then collapsed with one incremental
@@ -476,15 +509,17 @@ pub(crate) enum MaskOrForce {
 /// `use.stable.mask` (stable only), `package.use.mask` (atom-specificity
 /// ordered within the level via `specificity_ordered_flags`),
 /// `package.use.stable.mask` (stable only).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn resolved_use_mask_or_force(
-    which: MaskOrForce,
-    config: &portage_profile::Config,
-    candidate_str: &str,
-    category: &str,
-    package: &str,
-    stable: bool,
+    args: ResolvedUseMaskOrForceArgs<'_>,
 ) -> Rc<HashSet<String>> {
+    let ResolvedUseMaskOrForceArgs {
+        which,
+        config,
+        candidate_str,
+        category,
+        package,
+        stable,
+    } = args;
     // Memoise per (which, stable, config USE context, candidate): the
     // per-level walk below rebuilds the same small set tens of thousands
     // of times per resolve (29,774 calls on the reference workload, each
@@ -514,28 +549,41 @@ pub(crate) fn resolved_use_mask_or_force(
         return hit;
     }
     let result = Rc::new(resolved_use_mask_or_force_uncached(
-        which,
-        config,
-        candidate_str,
-        category,
-        package,
-        stable,
+        ResolvedUseMaskOrForceUncachedArgs {
+            which,
+            config,
+            candidate_str,
+            category,
+            package,
+            stable,
+        },
     ));
     RUMF_CACHE.with(|c| {
         c.borrow_mut().insert(key, Rc::clone(&result));
     });
     result
 }
+/// Arguments of [`resolved_use_mask_or_force_uncached`].
+pub(crate) struct ResolvedUseMaskOrForceUncachedArgs<'a> {
+    pub(crate) which: MaskOrForce,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) stable: bool,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn resolved_use_mask_or_force_uncached(
-    which: MaskOrForce,
-    config: &portage_profile::Config,
-    candidate_str: &str,
-    category: &str,
-    package: &str,
-    stable: bool,
+    args: ResolvedUseMaskOrForceUncachedArgs<'_>,
 ) -> HashSet<String> {
+    let ResolvedUseMaskOrForceUncachedArgs {
+        which,
+        config,
+        candidate_str,
+        category,
+        package,
+        stable,
+    } = args;
     let mut acc: HashSet<String> = HashSet::new();
     for level in &config.use_mask_force_levels {
         let (global, global_stable, pkg, pkg_stable) = match which {
@@ -564,6 +612,16 @@ pub(crate) fn resolved_use_mask_or_force_uncached(
     acc
 }
 
+/// Arguments of [`forced_or_masked_flags`].
+pub struct ForcedOrMaskedFlagsArgs<'a> {
+    pub iuse: &'a str,
+    pub keywords: &'a [String],
+    pub candidate_str: &'a str,
+    pub category: &'a str,
+    pub package: &'a str,
+    pub config: &'a portage_profile::Config,
+}
+
 /// Real `_display_use`'s own `self.forced_flags = pkg.use.force |
 /// pkg.use.mask` (fed to `map_to_use_expand(..., forced_flags=True)`),
 /// restricted to `iuse`'s own declared flags: the set of this candidate's
@@ -574,15 +632,15 @@ pub(crate) fn resolved_use_mask_or_force_uncached(
 /// is stable) layering `effective_use_flags` already applies -- reusing
 /// `specificity_ordered_flags` so a more-specific `-flag` cancels a
 /// less-specific force/mask identically.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn forced_or_masked_flags(
-    iuse: &str,
-    keywords: &[String],
-    candidate_str: &str,
-    category: &str,
-    package: &str,
-    config: &portage_profile::Config,
-) -> HashSet<String> {
+pub fn forced_or_masked_flags(args: ForcedOrMaskedFlagsArgs<'_>) -> HashSet<String> {
+    let ForcedOrMaskedFlagsArgs {
+        iuse,
+        keywords,
+        candidate_str,
+        category,
+        package,
+        config,
+    } = args;
     let iuse_names: HashSet<String> = iuse
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
@@ -621,25 +679,25 @@ pub(crate) fn forced_or_masked_flags_unfiltered(
     });
     // Owned union of the two shared sets (both usually cache hits now);
     // the union itself is small (a handful of forced/masked flags).
-    let mut result = resolved_use_mask_or_force(
-        MaskOrForce::Force,
+    let mut result = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Force,
         config,
         candidate_str,
         category,
         package,
         stable,
-    )
+    })
     .as_ref()
     .clone();
     result.extend(
-        resolved_use_mask_or_force(
-            MaskOrForce::Mask,
+        resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+            which: MaskOrForce::Mask,
             config,
             candidate_str,
             category,
             package,
             stable,
-        )
+        })
         .iter()
         .cloned(),
     );

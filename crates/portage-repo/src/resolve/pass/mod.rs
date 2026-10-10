@@ -521,18 +521,18 @@ pub(crate) fn run_pass(
                 PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
                 _ => None,
             }
-            && let Some(kept) = arg_pinned_installed_reuse(
+            && let Some(kept) = arg_pinned_installed_reuse(ArgPinnedInstalledReuseArgs {
                 ctx,
                 config,
                 bp,
-                &union_constraints,
-                &mut state.top_pinned_installed,
+                union_constraints: &union_constraints,
+                cache: &mut state.top_pinned_installed,
                 atom_root,
-                &key,
-                &current_atom,
-                &atom,
-                &fresh,
-            )
+                key: &key,
+                current_atom: &current_atom,
+                atom: &atom,
+                fresh_version: &fresh,
+            })
         {
             outcome = PretendOutcome::AlreadyInstalled { version: kept };
         }
@@ -953,19 +953,19 @@ pub(crate) fn run_pass(
             {
                 record_slot_conflict(
                     &mut state.slot_conflicts,
-                    build_slot_conflict(
-                        &ctx.repos,
+                    build_slot_conflict(BuildSlotConflictArgs {
+                        repos: &ctx.repos,
                         config,
-                        ctx.root,
-                        &key.0,
-                        &key.1,
-                        &slot,
-                        &installed_version,
-                        &current_atom,
-                        &version,
-                        &state.slot_pullers,
-                        Some(InstalledSide::Existing),
-                    ),
+                        root: ctx.root,
+                        category: &key.0,
+                        package: &key.1,
+                        slot: &slot,
+                        existing_version: &installed_version,
+                        current_atom: &current_atom,
+                        current_version: &version,
+                        slot_pullers: &state.slot_pullers,
+                        installed_side: Some(InstalledSide::Existing),
+                    }),
                 );
             }
         }
@@ -1166,13 +1166,12 @@ pub(crate) fn run_pass(
     // single-survivor conflicts; the skip rows ride `skipped_updates`
     // to the renderer (rc stays 0: no `SlotConflict` survives a
     // removal, and untouched conflicts keep their #62 rc 1).
-    state.slot_conflicts = merge_same_slot_conflicts(
-        &state.slot_conflicts,
-        &state.slot_pullers,
-        &ctx.repos,
+    state.slot_conflicts = merge_same_slot_conflicts(MergeSameSlotConflictsArgs {
+        conflicts: &state.slot_conflicts,
+        pullers: &state.slot_pullers,
+        repos: &ctx.repos,
         config,
-        ctx.root,
-        // #270: a record is built when its first mismatching atom is
+        root: ctx.root, // #270: a record is built when its first mismatching atom is
         // seen, so a parent walked later (a sibling that pulls the same
         // cp after the detection) is missing from a lone record's
         // parents, and the direct solve would remove an instance real's
@@ -1182,8 +1181,8 @@ pub(crate) fn run_pass(
         // exemption for built slot-operator triggers no longer hides
         // such records (see the walk's conflict arm), re-file the lone
         // records from the live pullers like the merged ones.
-        ctx.backtrack_max == 0,
-    );
+        refile_singletons: ctx.backtrack_max == 0,
+    });
     solve_pass_slot_conflicts(&mut state, ctx, bp, config);
 
     // Backlog #148: rows for the shadowed second instances of
@@ -1191,14 +1190,14 @@ pub(crate) fn run_pass(
     // walk-light). After the solve/removal above, so solved cells are
     // untouched; before the installed-blocker collection below, so the
     // new merge nodes participate in it as merge-side nodes.
-    synthesize_surviving_conflict_entries(
-        &mut state.entries,
-        &state.slot_conflicts,
-        &state.required_by_map,
-        &ctx.repos,
-        ctx.root,
+    synthesize_surviving_conflict_entries(SynthesizeSurvivingConflictEntriesArgs {
+        entries: &mut state.entries,
+        conflicts: &state.slot_conflicts,
+        required_by_map: &state.required_by_map,
+        repos: &ctx.repos,
+        root: ctx.root,
         config,
-    );
+    });
 
     // #77 A1: real's all-installed-packages blocker collection runs after
     // the graph is complete and before `_validate_blockers` classifies
@@ -1249,16 +1248,18 @@ pub(crate) fn run_pass(
         })
     });
     if needs_tree_sim {
-        for (owner, blocker) in merge_order::tree_solved_replacements(
-            &state.entries,
-            ctx.atoms,
-            ctx.config,
-            ctx.root,
-            ctx.implicit_system_deps,
-            &ctx.repos,
-            ctx.dynamic_deps,
-            &bp.circular_dependency,
-        ) {
+        for (owner, blocker) in
+            merge_order::tree_solved_replacements(merge_order::TreeSolvedReplacementsArgs {
+                entries: &state.entries,
+                top_level_atoms: ctx.atoms,
+                config: ctx.config,
+                root: ctx.root,
+                implicit_system_deps: ctx.implicit_system_deps,
+                repos: &ctx.repos,
+                dynamic_deps: ctx.dynamic_deps,
+                circular: &bp.circular_dependency,
+            })
+        {
             if let Some(b) = state
                 .entries
                 .get_mut(owner)

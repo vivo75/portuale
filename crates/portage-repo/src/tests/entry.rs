@@ -34,16 +34,16 @@ fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
     b.deps = vec![dep("cyc-a", runtime)];
     a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
     b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
-    let (ordered, _) = topological_merge_order(
-        vec![a, b],
-        &["dev-libs/cyc-a".to_string()],
-        &test_config(),
-        Path::new("/nonexistent-root"),
-        true,
-        &[],
-        true,
-        &HashMap::new(),
-    );
+    let (ordered, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![a, b],
+        top_level_atoms: &["dev-libs/cyc-a".to_string()],
+        config: &test_config(),
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["cyc-b", "cyc-a"]);
 
@@ -57,16 +57,16 @@ fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
     b.deps = vec![dep("cyc-a", buildtime)];
     a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
     b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
-    let (ordered, _) = topological_merge_order(
-        vec![a, b],
-        &["dev-libs/cyc-a".to_string()],
-        &test_config(),
-        Path::new("/nonexistent-root"),
-        true,
-        &[],
-        true,
-        &HashMap::new(),
-    );
+    let (ordered, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![a, b],
+        top_level_atoms: &["dev-libs/cyc-a".to_string()],
+        config: &test_config(),
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["cyc-a", "cyc-b"]);
 }
@@ -95,16 +95,16 @@ fn topological_merge_order_stamps_discovery_before_sorting() {
     let mut a = graph_entry("dev-libs", "a", "1.0");
     let b = graph_entry("dev-libs", "b", "1.0");
     a.deps = vec![dep("b", runtime)];
-    let (ordered, _) = topological_merge_order(
-        vec![a, b],
-        &["dev-libs/a".to_string()],
-        &test_config(),
-        Path::new("/nonexistent-root"),
-        true,
-        &[],
-        true,
-        &HashMap::new(),
-    );
+    let (ordered, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![a, b],
+        top_level_atoms: &["dev-libs/a".to_string()],
+        config: &test_config(),
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     let ranks: Vec<(&str, usize)> = ordered
         .iter()
         .map(|e| (e.package.as_str(), e.discovery))
@@ -125,36 +125,36 @@ fn implicit_system_deps_n_skips_the_merge_order_bias() {
         "dev-libs/b".to_string(),
         "dev-libs/c".to_string(),
     ];
-    let (biased, _) = topological_merge_order(
-        vec![
+    let (biased, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![
             graph_entry("dev-libs", "a", "1.0"),
             graph_entry("dev-libs", "b", "1.0"),
             graph_entry("dev-libs", "c", "1.0"),
         ],
-        &atoms,
-        &config,
-        Path::new("/nonexistent-root"),
-        true,
-        &[],
-        true,
-        &HashMap::new(),
-    );
+        top_level_atoms: &atoms,
+        config: &config,
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     let names: Vec<&str> = biased.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["c", "a", "b"]);
-    let (unbiased, _) = topological_merge_order(
-        vec![
+    let (unbiased, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![
             graph_entry("dev-libs", "a", "1.0"),
             graph_entry("dev-libs", "b", "1.0"),
             graph_entry("dev-libs", "c", "1.0"),
         ],
-        &atoms,
-        &config,
-        Path::new("/nonexistent-root"),
-        false,
-        &[],
-        true,
-        &HashMap::new(),
-    );
+        top_level_atoms: &atoms,
+        config: &config,
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: false,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     let names: Vec<&str> = unbiased.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["a", "b", "c"]);
 }

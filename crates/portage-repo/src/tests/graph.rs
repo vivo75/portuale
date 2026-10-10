@@ -685,14 +685,14 @@ fn fixture_masking_trial_is_reverted_when_it_makes_a_dependency_unsatisfiable() 
     // (Backlog #90 S1: instances now file oldpin's 1.0 first --
     // real's own notice order on the staged oracle).
     let result = graph_result_real("dev-libs/slotconflictunsolvable");
-    assert_one_conflict(
-        &result,
-        "dev-libs",
-        "slotconflicttarget",
-        "0",
-        "1.0",
-        ">=dev-libs/slotconflicttarget-2.0",
-    );
+    assert_one_conflict(AssertOneConflictArgs {
+        result: &result,
+        category: "dev-libs",
+        package: "slotconflicttarget",
+        slot: "0",
+        resolved_version: "1.0",
+        conflicting_atom: ">=dev-libs/slotconflicttarget-2.0",
+    });
     assert!(
         !result
             .entries
@@ -809,14 +809,14 @@ fn fixture_unsolvable_slot_conflict_survives_backtracking_and_is_reported() {
     // (Backlog #90 S1: oldpin's instance files first -- real's
     // notice order -- since the walk resolves it first).
     let result = graph_result_real("dev-libs/slotconflictunsolvable");
-    assert_one_conflict(
-        &result,
-        "dev-libs",
-        "slotconflicttarget",
-        "0",
-        "1.0",
-        ">=dev-libs/slotconflicttarget-2.0",
-    );
+    assert_one_conflict(AssertOneConflictArgs {
+        result: &result,
+        category: "dev-libs",
+        package: "slotconflicttarget",
+        slot: "0",
+        resolved_version: "1.0",
+        conflicting_atom: ">=dev-libs/slotconflicttarget-2.0",
+    });
 }
 
 #[test]
@@ -1390,7 +1390,14 @@ fn rebuild_if_unbuilt_reinstalls_a_consumer_of_a_merged_build_dep() {
     // dev-libs/rebuildtrigger; `emerge -u rebuildtrigger` upgrades it
     // 1.0 -> 2.0. --rebuild-if-unbuilt then schedules rebuildconsumer
     // for a rebuild (it isn't otherwise in the graph at all).
-    let g = graph_rebuild_if("dev-libs/rebuildtrigger", true, false, false, &[], &[]);
+    let g = graph_rebuild_if(GraphRebuildIfArgs {
+        atom_str: "dev-libs/rebuildtrigger",
+        unbuilt: true,
+        new_rev: false,
+        new_ver: false,
+        rebuild_exclude: &[],
+        rebuild_ignore: &[],
+    });
     assert!(
         g.iter().any(|(n, o)| n == "dev-libs/rebuildconsumer"
             && matches!(
@@ -1446,23 +1453,23 @@ fn rebuild_if_new_ver_ignores_a_same_version_dep() {
 fn rebuild_exclude_and_ignore_suppress_the_rebuild() {
     // --rebuild-exclude matches the parent; --rebuild-ignore matches
     // the merged dep. Either one keeps rebuildconsumer out.
-    let ex = graph_rebuild_if(
-        "dev-libs/rebuildtrigger",
-        true,
-        false,
-        false,
-        &["dev-libs/rebuildconsumer"],
-        &[],
-    );
+    let ex = graph_rebuild_if(GraphRebuildIfArgs {
+        atom_str: "dev-libs/rebuildtrigger",
+        unbuilt: true,
+        new_rev: false,
+        new_ver: false,
+        rebuild_exclude: &["dev-libs/rebuildconsumer"],
+        rebuild_ignore: &[],
+    });
     assert!(!ex.iter().any(|(n, _)| n == "dev-libs/rebuildconsumer"));
-    let ig = graph_rebuild_if(
-        "dev-libs/rebuildtrigger",
-        true,
-        false,
-        false,
-        &[],
-        &["dev-libs/rebuildtrigger"],
-    );
+    let ig = graph_rebuild_if(GraphRebuildIfArgs {
+        atom_str: "dev-libs/rebuildtrigger",
+        unbuilt: true,
+        new_rev: false,
+        new_ver: false,
+        rebuild_exclude: &[],
+        rebuild_ignore: &["dev-libs/rebuildtrigger"],
+    });
     assert!(!ig.iter().any(|(n, _)| n == "dev-libs/rebuildconsumer"));
 }
 

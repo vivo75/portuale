@@ -203,38 +203,36 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     if pretend {
         let mut blocker_lines: Vec<String> = Vec::new();
         for (i, _entry) in entries.iter().enumerate() {
-            print_entry_line(
-                &entries,
+            print_entry_line(PrintEntryLineArgs {
+                entries: &entries,
                 root,
-                i,
-                "",
-                true,
-                &HashSet::new(),
-                false,
-                opts.oneshot,
-                false,
-                false,
-                false,
-                false,
-                0,
-                None,
-                &color,
-                &[],
-                &[],
-                // `--resume --pretend` never re-resolves, so it can't
+                index: i,
+                indent: "",
+                ordered: true,
+                top_level_pkgs: &HashSet::new(),
+                onlydeps: false,
+                oneshot: opts.oneshot,
+                verbose: false,
+                quiet: false,
+                alphabetical: false,
+                columns: false,
+                columnwidth: 0,
+                running_root: None,
+                color: &color,
+                system_atoms: &[],
+                world_atoms: &[], // `--resume --pretend` never re-resolves, so it can't
                 // know about slot-operator rebuilds -- see the marker
                 // caveat above.
-                &HashSet::new(),
-                &mut blocker_lines,
-                // No resolve ran, so no masked-dependency,
+                force_reinstall_cps: &HashSet::new(),
+                blocker_lines: &mut blocker_lines, // No resolve ran, so no masked-dependency,
                 // USE-unsatisfied or plain-miss disclosure either (any
                 // NVC entry here renders the bare line).
-                &[],
-                &[],
-                &[],
-                false,
-                &HashMap::new(),
-            );
+                masked_deps: &[],
+                use_unsat_deps: &[],
+                plain_miss_deps: &[],
+                force_sizes: false,
+                circular: &HashMap::new(),
+            });
         }
         // Backlog #231 (a): real reaches `post_emerge` after the
         // `--resume --pretend` display too (`actions.py:4289-4297`),
@@ -294,22 +292,21 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         .iter()
         .all(|e| e.source == portage_repo::CandidateSource::Ebuild)
     {
-        emerge_build::run_source_merge(
-            &entries,
-            &repos,
+        emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
+            entries: &entries,
+            repos: &repos,
             root,
             portage_tmpdir,
-            &merge_options,
-            false,
-            None,
-            &[],
+            options: &merge_options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
             jobs,
-            load_average,
-            // `--resume` carries no `--quiet-build` in `mtimedb["resume"]`
+            load_average, // `--resume` carries no `--quiet-build` in `mtimedb["resume"]`
             // (a documented `myopts` cut) -- stream, unless `-j` >1.
-            false,
-            resume_mode,
-        )
+            capture_log: false,
+            mode: resume_mode,
+        })
     } else {
         let package_options = package_options_from_env(
             shell,

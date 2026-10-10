@@ -2744,12 +2744,8 @@ fn pass_163() -> PassResult {
     }
 }
 
-/// Literal `ResolveCtx` in the #161 `ctx_161` shape (same field
-/// list, so it tracks production), with the knobs each leg needs
-/// as parameters.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-fn ctx_163<'a>(
+/// Arguments of [`ctx_163`].
+struct Ctx163Args<'a> {
     root: &'a Path,
     config: &'a portage_profile::Config,
     repos: Vec<RepoConfig>,
@@ -2760,7 +2756,24 @@ fn ctx_163<'a>(
     ignore_slot_op: bool,
     rebuild_new_slot: bool,
     reachable: HashSet<(String, String)>,
-) -> ResolveCtx<'a> {
+}
+
+/// Literal `ResolveCtx` in the #161 `ctx_161` shape (same field
+/// list, so it tracks production), with the knobs each leg needs
+/// as parameters.
+fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
+    let Ctx163Args {
+        root,
+        config,
+        repos,
+        atoms,
+        no_strings,
+        buildpkgonly,
+        backtrack_enabled,
+        ignore_slot_op,
+        rebuild_new_slot,
+        reachable,
+    } = args;
     ResolveCtx {
         root,
         atoms,
@@ -2860,18 +2873,18 @@ fn assemble_result_no_buildpkgonly_flag_means_no_buildpkgonly_refusal() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163("dev-libs", "a", new_163("1.0"), &[("dev-libs", "b")]),
@@ -2904,18 +2917,18 @@ fn assemble_result_lone_entries_are_no_buildpkgonly_edge() {
         let config = cfg_163();
         let no_strings: Vec<String> = Vec::new();
         let atoms: Vec<String> = Vec::new();
-        let ctx = ctx_163(
-            &dir,
-            &config,
+        let ctx = ctx_163(Ctx163Args {
+            root: &dir,
+            config: &config,
             repos,
-            &atoms,
-            &no_strings,
-            true,
-            false,
-            false,
-            true,
-            HashSet::new(),
-        );
+            atoms: &atoms,
+            no_strings: &no_strings,
+            buildpkgonly: true,
+            backtrack_enabled: false,
+            ignore_slot_op: false,
+            rebuild_new_slot: true,
+            reachable: HashSet::new(),
+        });
         let mut pass = pass_163();
         pass.entries = vec![entry_163("dev-libs", "solo", outcome, &[])];
         let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
@@ -2933,18 +2946,18 @@ fn assemble_result_merge_requiring_a_merge_is_a_buildpkgonly_edge() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        true,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: true,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163("dev-libs", "a", new_163("1.0"), &[("dev-libs", "b")]),
@@ -2965,18 +2978,18 @@ fn assemble_result_chained_uninstalls_are_no_buildpkgonly_edge() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        true,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: true,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163(
@@ -3014,18 +3027,18 @@ fn assemble_result_recorded_autounmask_change_is_not_duplicated() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.autounmask_use_changes = vec![change_163(">=dev-libs/a-1.0", "x", &[])];
     let params = BacktrackParams {
@@ -3060,18 +3073,18 @@ fn assemble_result_new_token_for_a_known_atom_is_coalesced() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.autounmask_use_changes = vec![change_163(">=dev-libs/a-1.0", "x", &[])];
     let params = BacktrackParams {
@@ -3102,18 +3115,18 @@ fn assemble_result_coalescing_keeps_atoms_apart_and_flags_singular() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.autounmask_use_changes = vec![
         change_163(">=dev-libs/a-1.0", "x", &[]),
@@ -3145,18 +3158,18 @@ fn assemble_result_uncovered_nvc_gains_a_plain_miss_disclosure() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![entry_163(
         "dev-libs",
@@ -3193,18 +3206,18 @@ fn assemble_result_claimed_nvc_gains_no_plain_miss_row() {
         let config = cfg_163();
         let no_strings: Vec<String> = Vec::new();
         let atoms: Vec<String> = Vec::new();
-        let ctx = ctx_163(
-            &dir,
-            &config,
+        let ctx = ctx_163(Ctx163Args {
+            root: &dir,
+            config: &config,
             repos,
-            &atoms,
-            &no_strings,
-            false,
-            false,
-            false,
-            true,
-            HashSet::new(),
-        );
+            atoms: &atoms,
+            no_strings: &no_strings,
+            buildpkgonly: false,
+            backtrack_enabled: false,
+            ignore_slot_op: false,
+            rebuild_new_slot: true,
+            reachable: HashSet::new(),
+        });
         let mut pass = pass_163();
         pass.entries = vec![entry_163(
             "dev-libs",
@@ -3249,18 +3262,18 @@ fn assemble_result_neighbour_claim_does_not_cover_the_entry() {
         let config = cfg_163();
         let no_strings: Vec<String> = Vec::new();
         let atoms: Vec<String> = Vec::new();
-        let ctx = ctx_163(
-            &dir,
-            &config,
+        let ctx = ctx_163(Ctx163Args {
+            root: &dir,
+            config: &config,
             repos,
-            &atoms,
-            &no_strings,
-            false,
-            false,
-            false,
-            true,
-            HashSet::new(),
-        );
+            atoms: &atoms,
+            no_strings: &no_strings,
+            buildpkgonly: false,
+            backtrack_enabled: false,
+            ignore_slot_op: false,
+            rebuild_new_slot: true,
+            reachable: HashSet::new(),
+        });
         let mut pass = pass_163();
         pass.entries = vec![entry_163(
             "dev-libs",
@@ -3303,18 +3316,18 @@ fn assemble_result_extra_list_covers_only_its_own_cp() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163("dev-libs", "other", PretendOutcome::NoVisibleCandidate, &[]),
@@ -3336,18 +3349,18 @@ fn assemble_result_extra_list_does_not_cover_across_categories() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163("sys-libs", "pm", PretendOutcome::NoVisibleCandidate, &[]),
@@ -3372,18 +3385,18 @@ fn assemble_result_use_config_change_refreshes_the_package_line() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![entry_163("dev-libs", "rdisp", new_163("1.0"), &[])];
     let mut params = BacktrackParams::default();
@@ -3414,18 +3427,18 @@ fn assemble_result_backtrack_on_leaves_the_walked_line_alone() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        true,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: true,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![entry_163("dev-libs", "rdisp", new_163("1.0"), &[])];
     let mut params = BacktrackParams::default();
@@ -3456,18 +3469,18 @@ fn assemble_result_change_gains_its_required_by_chain() {
     let atoms = vec!["dev-libs/top".to_string()];
     let mut top_level = HashSet::new();
     top_level.insert("dev-libs/top");
-    let mut ctx = ctx_163(
-        &dir,
-        &config,
+    let mut ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     ctx.top_level = top_level;
     let mut pass = pass_163();
     pass.entries = vec![
@@ -3497,18 +3510,18 @@ fn assemble_result_preset_chain_is_kept() {
     let atoms = vec!["dev-libs/top".to_string()];
     let mut top_level = HashSet::new();
     top_level.insert("dev-libs/top");
-    let mut ctx = ctx_163(
-        &dir,
-        &config,
+    let mut ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     ctx.top_level = top_level;
     let mut pass = pass_163();
     pass.entries = vec![
@@ -3538,18 +3551,18 @@ fn assemble_result_change_owner_is_the_matching_entry() {
     let atoms = vec!["dev-libs/top".to_string()];
     let mut top_level = HashSet::new();
     top_level.insert("dev-libs/top");
-    let mut ctx = ctx_163(
-        &dir,
-        &config,
+    let mut ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     ctx.top_level = top_level;
     let mut pass = pass_163();
     pass.entries = vec![
@@ -3579,18 +3592,18 @@ fn assemble_result_small_cycle_reports_no_large_count() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms = vec!["dev-libs/ca".to_string()];
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163("dev-libs", "ca", new_163("1.0"), &[]),
@@ -3633,18 +3646,18 @@ fn assemble_result_triangle_reports_three_cycles_without_large_count() {
         "dev-libs/tb".to_string(),
         "dev-libs/tc".to_string(),
     ];
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::new(),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
     let edge = |next: &str| DepEdge {
         atom: format!("dev-libs/{next}"),
         evaluated: format!("dev-libs/{next}"),
@@ -3704,18 +3717,18 @@ fn assemble_result_slot_operator_scan_reports_the_rebuilt_consumer() {
     let config = cfg_163();
     let no_strings: Vec<String> = Vec::new();
     let atoms: Vec<String> = Vec::new();
-    let ctx = ctx_163(
-        &dir,
-        &config,
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
         repos,
-        &atoms,
-        &no_strings,
-        false,
-        false,
-        false,
-        true,
-        HashSet::from([("dev-libs".to_string(), "cons".to_string())]),
-    );
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::from([("dev-libs".to_string(), "cons".to_string())]),
+    });
     let mut pass = pass_163();
     let mut prov = entry_163(
         "dev-libs",
@@ -3765,18 +3778,18 @@ fn assemble_result_slot_operator_scan_gates_suppress_the_pairs() {
         let config = cfg_163();
         let no_strings: Vec<String> = Vec::new();
         let atoms: Vec<String> = Vec::new();
-        let ctx = ctx_163(
-            &dir,
-            &config,
+        let ctx = ctx_163(Ctx163Args {
+            root: &dir,
+            config: &config,
             repos,
-            &atoms,
-            &no_strings,
-            false,
-            false,
-            ignore,
-            rebuild,
-            HashSet::from([("dev-libs".to_string(), "cons".to_string())]),
-        );
+            atoms: &atoms,
+            no_strings: &no_strings,
+            buildpkgonly: false,
+            backtrack_enabled: false,
+            ignore_slot_op: ignore,
+            rebuild_new_slot: rebuild,
+            reachable: HashSet::from([("dev-libs".to_string(), "cons".to_string())]),
+        });
         let mut pass = pass_163();
         let mut prov = entry_163(
             "dev-libs",

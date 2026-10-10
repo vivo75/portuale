@@ -2,6 +2,19 @@
 
 use crate::*;
 
+/// Arguments of [`alternative_downgrade_demoted`].
+pub(crate) struct AlternativeDowngradeDemotedArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) self_cp: &'a RootCp,
+    pub(crate) constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) atoms: &'a [String],
+    pub(crate) queued: &'a [QueueItem],
+    pub(crate) update: bool,
+}
+
 /// Real `dep_zapdeps`'s two bug-531656 guards (`dep_check.py` soft 476-490
 /// `conflict_downgrade`, 531-541 `installed_downgrade`): an otherwise
 /// available `||` alternative is demoted to the `other` bin when one of its
@@ -30,18 +43,18 @@ use crate::*;
 ///     needs the update mode threaded to this depth and is left out.
 ///   - `replacing` (`will_replace_child`): an atom of the entry's own
 ///     `cat/pkg` (`self_cp`) is never demoted.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn alternative_downgrade_demoted(
-    repos: &[RepoConfig],
-    root: &Path,
-    config: &portage_profile::Config,
-    entries: &[GraphEntry],
-    self_cp: &RootCp,
-    constraints: &HashMap<(String, String), Vec<String>>,
-    atoms: &[String],
-    queued: &[QueueItem],
-    update: bool,
-) -> bool {
+pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArgs<'_>) -> bool {
+    let AlternativeDowngradeDemotedArgs {
+        repos,
+        root,
+        config,
+        entries,
+        self_cp,
+        constraints,
+        atoms,
+        queued,
+        update,
+    } = args;
     atoms.iter().any(|a| {
         let Some(at) = portage_dep::parse_atom(a) else {
             return false;
@@ -142,6 +155,31 @@ pub(crate) fn alternative_downgrade_demoted(
     })
 }
 
+/// Arguments of [`disjunction_preference`].
+pub(crate) struct DisjunctionPreferenceArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) self_cp: &'a RootCp,
+    pub(crate) constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) circular_dependency: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+    pub(crate) root_deps_running_root: Option<&'a Path>,
+    pub(crate) atoms: &'a [String],
+    pub(crate) queued: &'a [QueueItem],
+    pub(crate) update: bool,
+    /// Track X Slice C (#242): the whole-graph views for the
+    /// circular-self-dep gate below. `entries`/`queued` above are the
+    /// group's own root scope (real's group-rooted `graph_db` match);
+    /// the gate asks whether the owner's cp is in play *at all* (real
+    /// has no self-exclusion -- the package is already graphed when its
+    /// own `||` group pops, whichever root it sits in), so it reads
+    /// these unscoped views instead. Same slices as `entries`/`queued`
+    /// on every same-root call -- a strict no-op there.
+    pub(crate) gate_entries: &'a [GraphEntry],
+    pub(crate) gate_queued: &'a [QueueItem],
+}
+
 /// The single probe closure `use_reduce_flat_disjunctive` calls for every
 /// `||` alternative -- real `dep_zapdeps`'s whole choice-bin
 /// classification (`dep_check.py` soft 449-523, 599-618) collapsed into
@@ -200,30 +238,24 @@ pub(crate) fn alternative_downgrade_demoted(
 /// byte-identical candidate-listing work twice. This loop computes each
 /// atom's availability once and reuses it for both facts when there is no
 /// `[use]` block to strip.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn disjunction_preference(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    entries: &[GraphEntry],
-    self_cp: &RootCp,
-    constraints: &HashMap<(String, String), Vec<String>>,
-    circular_dependency: &HashMap<RootCp, Vec<CircularDepChild>>,
-    root_deps_running_root: Option<&Path>,
-    atoms: &[String],
-    queued: &[QueueItem],
-    update: bool,
-    // Track X Slice C (#242): the whole-graph views for the
-    // circular-self-dep gate below. `entries`/`queued` above are the
-    // group's own root scope (real's group-rooted `graph_db` match);
-    // the gate asks whether the owner's cp is in play *at all* (real
-    // has no self-exclusion -- the package is already graphed when its
-    // own `||` group pops, whichever root it sits in), so it reads
-    // these unscoped views instead. Same slices as `entries`/`queued`
-    // on every same-root call -- a strict no-op there.
-    gate_entries: &[GraphEntry],
-    gate_queued: &[QueueItem],
+    args: DisjunctionPreferenceArgs<'_>,
 ) -> portage_use_reduce::AltPreference {
+    let DisjunctionPreferenceArgs {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        constraints,
+        circular_dependency,
+        root_deps_running_root,
+        atoms,
+        queued,
+        update,
+        gate_entries,
+        gate_queued,
+    } = args;
     let constraints_for = |a: &str| -> &[String] {
         portage_dep::parse_atom(a)
             .and_then(|at| constraints.get(&(at.category, at.package)))
@@ -379,7 +411,7 @@ pub(crate) fn disjunction_preference(
     // `installed_downgrade` fires (dep_check.py soft 634, bug 531656) --
     // backlog #35, see `alternative_downgrade_demoted`. `entries` is the
     // resolver's live in-progress set at both call sites.
-    if alternative_downgrade_demoted(
+    if alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
         repos,
         root,
         config,
@@ -389,7 +421,7 @@ pub(crate) fn disjunction_preference(
         atoms,
         queued,
         update,
-    ) {
+    }) {
         return portage_use_reduce::AltPreference::Other;
     }
     // Backlog #221: real's `circular_atom` demotion
@@ -492,6 +524,17 @@ pub(crate) fn candidate_version(
     rest.split(':').next().map(str::to_string)
 }
 
+/// Arguments of [`promote_tied_alternative`].
+pub(crate) struct PromoteTiedAlternativeArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) alts: &'a [Vec<String>],
+    pub(crate) queued: &'a [QueueItem],
+}
+
 /// Real `dep_zapdeps`'s in-bin upgrade-preference ordering pass
 /// (`dep_check.py` soft 738-802), plugged in as `use_reduce_flat_disjunctive`'s
 /// `tie_break` -- called only when 2+ alternatives tie at the best
@@ -533,16 +576,16 @@ pub(crate) fn candidate_version(
 /// contains two atoms on the identical package where the higher version
 /// satisfies one atom but not the other, which the brief's own slice-2
 /// fixtures don't exercise -- documented in `scope-backlog.md`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn promote_tied_alternative(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    entries: &[GraphEntry],
-    constraints: &HashMap<(String, String), Vec<String>>,
-    alts: &[Vec<String>],
-    queued: &[QueueItem],
-) -> usize {
+pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> usize {
+    let PromoteTiedAlternativeArgs {
+        repos,
+        config,
+        root,
+        entries,
+        constraints,
+        alts,
+        queued,
+    } = args;
     struct Choice {
         id: usize,
         all_installed_slots: bool,

@@ -62,20 +62,21 @@ pub(crate) fn step_unsatisfied_dead_end(
         // greedy-eligibility half of the `#252` gate (explicit
         // slot/version atoms pin nothing).
         let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
-        let (scheduled, abi_rebuilds, masked_binaries) = slot_operator_rebuild_scan(
-            ctx.root,
-            &ctx.repos,
-            &pass.entries,
-            &ctx.slot_op_reachable,
-            &grown.slot_operator_replace_installed,
-            &grown.slot_operator_undone,
-            ctx.with_bdeps,
-            ctx.update,
-            &ctx.top_level_cps,
-            &top_atoms,
-            ctx.excluded,
-            config,
-        );
+        let (scheduled, abi_rebuilds, masked_binaries) =
+            slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+                root: ctx.root,
+                repos: &ctx.repos,
+                entries: &pass.entries,
+                reachable: &ctx.slot_op_reachable,
+                already: &grown.slot_operator_replace_installed,
+                undone: &grown.slot_operator_undone,
+                with_bdeps: ctx.with_bdeps,
+                update: ctx.update,
+                top_level_cps: &ctx.top_level_cps,
+                top_level_atoms: &top_atoms,
+                excluded: ctx.excluded,
+                config,
+            });
         pass.abi_rebuilds = Some(abi_rebuilds);
         // #236 A: the update probe's forcing half, for a child the walk
         // left installed (see the function's doc comment).

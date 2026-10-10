@@ -7,16 +7,16 @@ fn ensure_portage_logdir_symlink_is_a_noop_without_a_logdir() {
     fs::create_dir_all(&t_dir).unwrap();
     let log_path = t_dir.join("build.log");
     fs::write(&log_path, "already here").unwrap();
-    ensure_portage_logdir_symlink(
-        &log_path,
-        &tmp.join("builddir"),
-        "dev-libs",
-        "foo-1.0",
-        None,
-        ":",
-        false,
-        false,
-    );
+    ensure_portage_logdir_symlink(EnsurePortageLogdirSymlinkArgs {
+        tmpdir_log_path: &log_path,
+        builddir: &tmp.join("builddir"),
+        category: "dev-libs",
+        pf: "foo-1.0",
+        logdir: None,
+        sep: ":",
+        split_log: false,
+        compress: false,
+    });
     // Real file untouched -- no PORTAGE_LOGDIR means no symlink.
     assert_eq!(fs::read_to_string(&log_path).unwrap(), "already here");
     assert!(
@@ -36,16 +36,16 @@ fn ensure_portage_logdir_symlink_points_t_build_log_at_the_real_logdir() {
     let log_path = t_dir.join("build.log");
     let logdir = tmp.join("logdir");
 
-    ensure_portage_logdir_symlink(
-        &log_path,
-        &builddir,
-        "dev-libs",
-        "foo-1.0",
-        Some(&logdir),
-        ":",
-        false,
-        false,
-    );
+    ensure_portage_logdir_symlink(EnsurePortageLogdirSymlinkArgs {
+        tmpdir_log_path: &log_path,
+        builddir: &builddir,
+        category: "dev-libs",
+        pf: "foo-1.0",
+        logdir: Some(&logdir),
+        sep: ":",
+        split_log: false,
+        compress: false,
+    });
 
     let target = fs::read_link(&log_path).expect("build.log must be a symlink");
     assert!(
@@ -64,16 +64,16 @@ fn ensure_portage_logdir_symlink_points_t_build_log_at_the_real_logdir() {
     // Idempotent: calling again doesn't churn the symlink or drop
     // the timestamp (the .logid marker file makes it stable).
     let before = fs::read_link(&log_path).unwrap();
-    ensure_portage_logdir_symlink(
-        &log_path,
-        &builddir,
-        "dev-libs",
-        "foo-1.0",
-        Some(&logdir),
-        ":",
-        false,
-        false,
-    );
+    ensure_portage_logdir_symlink(EnsurePortageLogdirSymlinkArgs {
+        tmpdir_log_path: &log_path,
+        builddir: &builddir,
+        category: "dev-libs",
+        pf: "foo-1.0",
+        logdir: Some(&logdir),
+        sep: ":",
+        split_log: false,
+        compress: false,
+    });
     assert_eq!(fs::read_link(&log_path).unwrap(), before);
 }
 
@@ -86,16 +86,16 @@ fn ensure_portage_logdir_symlink_honors_split_log_and_the_separator() {
     let log_path = t_dir.join("build.log");
     let logdir = tmp.join("logdir");
 
-    ensure_portage_logdir_symlink(
-        &log_path,
-        &builddir,
-        "dev-libs",
-        "foo-1.0",
-        Some(&logdir),
-        "-",
-        true, // split_log
-        false,
-    );
+    ensure_portage_logdir_symlink(EnsurePortageLogdirSymlinkArgs {
+        tmpdir_log_path: &log_path,
+        builddir: &builddir,
+        category: "dev-libs",
+        pf: "foo-1.0",
+        logdir: Some(&logdir),
+        sep: "-",
+        split_log: true, // split_log
+        compress: false,
+    });
 
     let target = fs::read_link(&log_path).expect("build.log must be a symlink");
     // Real "<logdir>/build/<CATEGORY>/<PF><sep><logid_time>.log".
@@ -121,16 +121,16 @@ fn ensure_portage_logdir_symlink_gains_the_gz_suffix_when_compressed() {
         let log_path = t_dir.join("build.log.gz");
         let logdir = tmp.join("logdir");
 
-        ensure_portage_logdir_symlink(
-            &log_path,
-            &builddir,
-            "dev-libs",
-            "foo-1.0",
-            Some(&logdir),
-            ":",
+        ensure_portage_logdir_symlink(EnsurePortageLogdirSymlinkArgs {
+            tmpdir_log_path: &log_path,
+            builddir: &builddir,
+            category: "dev-libs",
+            pf: "foo-1.0",
+            logdir: Some(&logdir),
+            sep: ":",
             split_log,
-            true, // compress
-        );
+            compress: true,
+        });
 
         let target = fs::read_link(&log_path).expect("build.log.gz must be a symlink");
         let name = target.file_name().unwrap().to_str().unwrap();
@@ -204,20 +204,20 @@ fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
         features: "noclean".to_string(),
         ..ebuild_merge::MergeOptions::default()
     };
-    run_source_merge(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        1,
-        None,
-        true, // capture_log
-        StatusMode::for_tests(),
-    )
+    run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: true, // capture_log
+        mode: StatusMode::for_tests(),
+    })
     .expect("source merge succeeds");
 
     let log = build_log_path(&portage_tmpdir, "dev-libs", "hookoutputpkg", "1.0", "");

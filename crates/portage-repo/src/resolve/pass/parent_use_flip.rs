@@ -161,14 +161,14 @@ pub(crate) fn parent_use_flip(
             })
             .collect();
         disp.sort_by_key(|p| alnum_sort_key(&p.0));
-        let forced = forced_or_masked_flags(
-            &parent_cand.iuse,
-            &parent_cand.keywords,
-            &parent_cpv,
-            &pc,
-            &pp,
+        let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: &parent_cand.iuse,
+            keywords: &parent_cand.keywords,
+            candidate_str: &parent_cpv,
+            category: &pc,
+            package: &pp,
             config,
-        );
+        });
         let no_reinst = HashSet::new();
         let pv_disp = build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &disp,

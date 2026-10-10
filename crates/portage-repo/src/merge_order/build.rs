@@ -174,9 +174,14 @@ pub(crate) fn build_digraph(
             // (#82), so the ranking cannot drift between the scheduling
             // graph and the tree display. `merge_bound_only = false`:
             // real's scheduler digraph edges to nomerge nodes too.
-            if let Some(j) =
-                pre.select_dep_target(entries, i, &entry.deps, ei, &alt_suppressed[i], false)
-            {
+            if let Some(j) = pre.select_dep_target(SelectDepTargetArgs {
+                entries,
+                from: i,
+                from_deps: &entry.deps,
+                ei,
+                suppressed: &alt_suppressed[i],
+                merge_bound_only: false,
+            }) {
                 // Real `_add_pkg`: a direct self-edge is dropped unless
                 // it is an unsatisfied build-time dependency, "since
                 // otherwise it can skew the merge order calculation in

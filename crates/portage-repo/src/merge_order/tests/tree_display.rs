@@ -57,16 +57,16 @@ fn tree_simulation_solves_a_stalled_replacement_row() {
     let entries = vec![owner, replacement, other];
     let root = Path::new("/nonexistent-root-for-unit-test");
     let config = portage_profile::Config::default();
-    let solved = tree_solved_replacements(
-        &entries,
-        &["dev-libs/blocked".to_string()],
-        &config,
+    let solved = tree_solved_replacements(TreeSolvedReplacementsArgs {
+        entries: &entries,
+        top_level_atoms: &["dev-libs/blocked".to_string()],
+        config: &config,
         root,
-        true,
-        &[],
-        true,
-        &HashMap::new(),
-    );
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     assert_eq!(
         solved,
         vec![(0, 0)],
@@ -232,16 +232,16 @@ fn tree_solved_replacements_skips_a_same_version_row() {
     let entries = vec![owner, replacement, other];
     let root = Path::new("/nonexistent-root-for-unit-test");
     let config = portage_profile::Config::default();
-    let solved = tree_solved_replacements(
-        &entries,
-        &["dev-libs/blocked".to_string()],
-        &config,
+    let solved = tree_solved_replacements(TreeSolvedReplacementsArgs {
+        entries: &entries,
+        top_level_atoms: &["dev-libs/blocked".to_string()],
+        config: &config,
         root,
-        true,
-        &[],
-        true,
-        &HashMap::new(),
-    );
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     assert!(
         solved.is_empty(),
         "the same-version entry is not a replacement row: {solved:?}"

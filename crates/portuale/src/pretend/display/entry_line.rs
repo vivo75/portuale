@@ -1,6 +1,63 @@
 //! One merge-list row.
 
+use crate::color::PkgprintArgs;
 use crate::pretend::*;
+
+/// Arguments of [`print_entry_line`].
+pub(crate) struct PrintEntryLineArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) index: usize,
+    pub(crate) indent: &'a str,
+    /// #75 C1: real `set_pkg_info` (`output.py:612-614`): a merge node
+    /// reached as a tree **ancestor** (`_ordered_tree_display`'s
+    /// `add_parents` passes `ordered=False`) is re-labelled `nomerge` and
+    /// rendered through `_set_no_columns`' non-merge arm, with no attr
+    /// columns -- but WITH the USE display (`_display_use` has no
+    /// ordered/merge gate; #154). Flat callers (and every occurrence the
+    /// reversed display list reaches directly) pass `true`.
+    pub(crate) ordered: bool,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) onlydeps: bool,
+    pub(crate) oneshot: bool,
+    pub(crate) verbose: bool,
+    pub(crate) quiet: bool,
+    pub(crate) alphabetical: bool,
+    pub(crate) columns: bool,
+    pub(crate) columnwidth: i64,
+    pub(crate) running_root: Option<&'a Path>,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) system_atoms: &'a [String],
+    pub(crate) world_atoms: &'a [String],
+    pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
+    pub(crate) blocker_lines: &'a mut Vec<String>,
+    /// Masked-dependency disclosures for this resolve (real
+    /// `_show_unsatisfied_dep`'s dependency block): the `NoVisibleCandidate`
+    /// arm renders the recorded block in place of the bare
+    /// `!!! no visible ebuild for dependency` line. Empty when nothing was
+    /// masked-only (e.g. `--resume --pretend`, which never re-resolves).
+    pub(crate) masked_deps: &'a [portage_repo::MaskedDepReport],
+    /// `[use]`-unsatisfied dependency disclosures (backlog #20): real's
+    /// precedence puts this block ahead of the masked one, and the
+    /// `NoVisibleCandidate` arm below does the same.
+    pub(crate) use_unsat_deps: &'a [portage_repo::UseUnsatDepReport],
+    /// Plain-miss disclosures (#135 (d)): real's `emerge: there are no
+    /// ebuilds to satisfy "<atom>"` + chain block, rendered last in the
+    /// `NoVisibleCandidate` arm (after the two sibling blocks).
+    pub(crate) plain_miss_deps: &'a [portage_repo::PlainMissDepReport],
+    /// Backlog #206 S2: real `_show_circular_deps` forces `--verbose` for
+    /// the stuck-remainder display, so every row carries its fetch size
+    /// (`verbose_size`, `0 KiB` for an ebuild whose distfiles are already
+    /// present) — while plain `-pv` rows keep portuale's established cut
+    /// of omitting that bare `0 KiB` (see the `size_suffix` note below).
+    /// True only for the circular re-display; every other caller passes
+    /// false.
+    pub(crate) force_sizes: bool,
+    /// Backlog #221 (I5): the settling pass's recorded cycle edges,
+    /// threaded into the trailing blocker disposition below (a wait chain
+    /// through a demoted branch dispositions like the walk took it).
+    pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+}
 
 /// One `GraphEntry`'s own display line, `indent` prepended right before
 /// the category/package text (empty for flat mode, `print_tree`'s own
@@ -23,62 +80,33 @@ use crate::pretend::*;
 /// needs (see `blocker_row_disposition`): the entry's own trailing
 /// blocker rows are filtered here, the inline ones are printed by the
 /// caller right after this line.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn print_entry_line(
-    entries: &[GraphEntry],
-    root: &Path,
-    index: usize,
-    indent: &str,
-    // #75 C1: real `set_pkg_info` (`output.py:612-614`): a merge node
-    // reached as a tree **ancestor** (`_ordered_tree_display`'s
-    // `add_parents` passes `ordered=False`) is re-labelled `nomerge` and
-    // rendered through `_set_no_columns`' non-merge arm, with no attr
-    // columns -- but WITH the USE display (`_display_use` has no
-    // ordered/merge gate; #154). Flat callers (and every occurrence the
-    // reversed display list reaches directly) pass `true`.
-    ordered: bool,
-    top_level_pkgs: &HashSet<(String, String)>,
-    onlydeps: bool,
-    oneshot: bool,
-    verbose: bool,
-    quiet: bool,
-    alphabetical: bool,
-    columns: bool,
-    columnwidth: i64,
-    running_root: Option<&Path>,
-    color: &Colorizer,
-    system_atoms: &[String],
-    world_atoms: &[String],
-    force_reinstall_cps: &HashSet<(String, String)>,
-    blocker_lines: &mut Vec<String>,
-    // Masked-dependency disclosures for this resolve (real
-    // `_show_unsatisfied_dep`'s dependency block): the `NoVisibleCandidate`
-    // arm renders the recorded block in place of the bare
-    // `!!! no visible ebuild for dependency` line. Empty when nothing was
-    // masked-only (e.g. `--resume --pretend`, which never re-resolves).
-    masked_deps: &[portage_repo::MaskedDepReport],
-    // `[use]`-unsatisfied dependency disclosures (backlog #20): real's
-    // precedence puts this block ahead of the masked one, and the
-    // `NoVisibleCandidate` arm below does the same.
-    use_unsat_deps: &[portage_repo::UseUnsatDepReport],
-    // Plain-miss disclosures (#135 (d)): real's `emerge: there are no
-    // ebuilds to satisfy "<atom>"` + chain block, rendered last in the
-    // `NoVisibleCandidate` arm (after the two sibling blocks).
-    plain_miss_deps: &[portage_repo::PlainMissDepReport],
-    // Backlog #206 S2: real `_show_circular_deps` forces `--verbose` for
-    // the stuck-remainder display, so every row carries its fetch size
-    // (`verbose_size`, `0 KiB` for an ebuild whose distfiles are already
-    // present) — while plain `-pv` rows keep portuale's established cut
-    // of omitting that bare `0 KiB` (see the `size_suffix` note below).
-    // True only for the circular re-display; every other caller passes
-    // false.
-    force_sizes: bool,
-    // Backlog #221 (I5): the settling pass's recorded cycle edges,
-    // threaded into the trailing blocker disposition below (a wait chain
-    // through a demoted branch dispositions like the walk took it).
-    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
-) {
+pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
+    let PrintEntryLineArgs {
+        entries,
+        root,
+        index,
+        indent,
+        ordered,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        verbose,
+        quiet,
+        alphabetical,
+        columns,
+        columnwidth,
+        running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        blocker_lines,
+        masked_deps,
+        use_unsat_deps,
+        plain_miss_deps,
+        force_sizes,
+        circular,
+    } = args;
     let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
     // or 2`. `--quiet` wins over `-v`. `v3` is "verbosity == 3" -- the
@@ -325,13 +353,18 @@ pub(crate) fn print_entry_line(
         }
         // Real `_set_no_columns`: `f"[{pkgprint(type)} {attr}]
         // {indent}{pkgprint(pkg_str)} {oldbest}"`.
-        let bword = color.pkgprint(bracket, binary, system, world);
-        let pkg_str = color.pkgprint(
-            &format!("{}/{}-{disp_ver}", entry.category, entry.package),
+        let bword = color.pkgprint(PkgprintArgs {
+            text: bracket,
             binary,
             system,
             world,
-        );
+        });
+        let pkg_str = color.pkgprint(PkgprintArgs {
+            text: &format!("{}/{}-{disp_ver}", entry.category, entry.package),
+            binary,
+            system,
+            world,
+        });
         let mut tail = String::from(" ");
         if !oldbest.is_empty() {
             tail.push_str(&color.c("blue", &oldbest));

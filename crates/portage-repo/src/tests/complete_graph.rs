@@ -11,7 +11,6 @@ fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
     // accounted-for but unmerged. The low-level `complete=true` with
     // no locked set is the pre-2-pass fallback: a plain deep walk.
     let root = fixtures_root();
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     let resolve_cfg =
         |atom: &str, update: bool, deep: Deep, complete: bool, locked: &[&str]| -> GraphResult {
             let mut cfg = test_config();

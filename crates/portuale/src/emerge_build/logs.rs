@@ -39,17 +39,29 @@ pub(crate) fn build_log_path(
     } else {
         "build.log"
     });
-    ensure_portage_logdir_symlink(
-        &path,
-        &builddir,
+    ensure_portage_logdir_symlink(EnsurePortageLogdirSymlinkArgs {
+        tmpdir_log_path: &path,
+        builddir: &builddir,
         category,
-        &format!("{package}-{version}"),
-        logdir.as_deref(),
-        &sep,
+        pf: &format!("{package}-{version}"),
+        logdir: logdir.as_deref(),
+        sep: &sep,
         split_log,
         compress,
-    );
+    });
     path
+}
+
+/// Arguments of [`ensure_portage_logdir_symlink`].
+pub(crate) struct EnsurePortageLogdirSymlinkArgs<'a> {
+    pub(crate) tmpdir_log_path: &'a Path,
+    pub(crate) builddir: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) logdir: Option<&'a Path>,
+    pub(crate) sep: &'a str,
+    pub(crate) split_log: bool,
+    pub(crate) compress: bool,
 }
 
 /// Real `prepare_build_dirs()`'s own `PORTAGE_LOGDIR`/`FEATURES=
@@ -79,17 +91,17 @@ pub(crate) fn build_log_path(
 /// afterward -- so every phase of the same build (each its own fresh
 /// shell, `ebuild_phases::run_one_phase`'s own doc comment) and a
 /// resumed one all share one timestamp, matching real exactly.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn ensure_portage_logdir_symlink(
-    tmpdir_log_path: &Path,
-    builddir: &Path,
-    category: &str,
-    pf: &str,
-    logdir: Option<&Path>,
-    sep: &str,
-    split_log: bool,
-    compress: bool,
-) {
+pub(crate) fn ensure_portage_logdir_symlink(args: EnsurePortageLogdirSymlinkArgs<'_>) {
+    let EnsurePortageLogdirSymlinkArgs {
+        tmpdir_log_path,
+        builddir,
+        category,
+        pf,
+        logdir,
+        sep,
+        split_log,
+        compress,
+    } = args;
     let Some(logdir) = logdir else {
         return;
     };

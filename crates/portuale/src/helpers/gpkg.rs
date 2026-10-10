@@ -746,23 +746,36 @@ struct Streamed {
     signature: Option<Vec<u8>>,
 }
 
+/// Arguments of [`stream_member`].
+struct StreamMemberArgs<'a> {
+    container: &'a mut Container,
+    settings: &'a Settings,
+    name: &'a [u8],
+    mtime: i64,
+    header_fmt: Fmt,
+    cmd: Option<&'a [String]>,
+    sign: bool,
+}
+
 /// `tar_stream_writer` as used by `_add_metadata` (header format USTAR)
 /// and `compress` (header format `image_tar_format`: the *container*
 /// format only governs `gpkg-1`, the `.sig` members and `Manifest`,
 /// which go through `container.addfile`): write the member header, stream `produce`'s tar through the compressor into
 /// the container (hashing and signing as it goes), then pad and rewrite
 /// the header with the final size.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn stream_member(
-    container: &mut Container,
-    settings: &Settings,
-    name: &[u8],
-    mtime: i64,
-    header_fmt: Fmt,
-    cmd: Option<&[String]>,
-    sign: bool,
+    args: StreamMemberArgs<'_>,
     produce: impl FnOnce(&mut dyn Write) -> Result<(), Failure>,
 ) -> Result<Streamed, Failure> {
+    let StreamMemberArgs {
+        container,
+        settings,
+        name,
+        mtime,
+        header_fmt,
+        cmd,
+        sign,
+    } = args;
     let mut info = Info::new(name.to_vec(), mtime);
     let begin = container
         .file
@@ -1400,13 +1413,15 @@ fn compress(
     // metadata
     let metadata_name = member(&format!("metadata.tar{ext}"));
     let streamed = stream_member(
-        &mut container,
-        settings,
-        &metadata_name,
-        now(),
-        Fmt::Ustar,
-        cmd.as_deref(),
-        create_signature,
+        StreamMemberArgs {
+            container: &mut container,
+            settings,
+            name: &metadata_name,
+            mtime: now(),
+            header_fmt: Fmt::Ustar,
+            cmd: cmd.as_deref(),
+            sign: create_signature,
+        },
         |w| {
             let mut out = Counted { w, offset: 0 };
             for (name, data) in &metadata {
@@ -1430,13 +1445,15 @@ fn compress(
     // image
     let image_name = member(&format!("image.tar{ext}"));
     let streamed = stream_member(
-        &mut container,
-        settings,
-        &image_name,
-        now(),
-        image_fmt,
-        cmd.as_deref(),
-        create_signature,
+        StreamMemberArgs {
+            container: &mut container,
+            settings,
+            name: &image_name,
+            mtime: now(),
+            header_fmt: image_fmt,
+            cmd: cmd.as_deref(),
+            sign: create_signature,
+        },
         |w| {
             let mut tar = ImageTar::new(w, image_fmt);
             tar.add(image_dir, b"image")?;

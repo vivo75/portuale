@@ -100,7 +100,6 @@ use crate::*;
 /// `BROOT` (builds always run on the host), and reading the host's
 /// own `/etc/profile.env` would leak host state into
 /// fixture-deterministic resolution.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 /// An exact content fingerprint of every USE-context `Config` field the
 /// `portage-repo` memo keys read (see `use_context_fingerprint` there).
 /// `autounmask_use` is deliberately **excluded**: it is the one field the

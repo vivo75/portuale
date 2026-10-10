@@ -183,18 +183,31 @@ pub(crate) fn package_a(env: &Environment, use_flags: &str) -> Result<Vec<String
         flags.contains(flag) != negated
     })
 }
+/// Arguments of [`fetch_sources()`].
+pub(crate) struct FetchSourcesArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) distdir: &'a Path,
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) features: &'a str,
+    pub(crate) use_flags: &'a str,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) async fn fetch_sources(
-    env: &Environment,
-    root: &Path,
-    distdir: &Path,
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    features: &str,
-    use_flags: &str,
+    args: FetchSourcesArgs<'_>,
 ) -> Result<(Vec<String>, Vec<String>), String> {
+    let FetchSourcesArgs {
+        env,
+        root,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        features,
+        use_flags,
+    } = args;
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok((Vec::new(), Vec::new()));
     };
@@ -277,8 +290,17 @@ pub(crate) async fn fetch_sources(
             // failure) never masks the real fetch error.
             let ebuild = env.pkg_dir.join(format!("{}.ebuild", env.split.pf));
             if ebuild.is_file() {
-                let _ =
-                    run_one_phase(env, root, "nofetch", debug, &[], config_root, shell, None).await;
+                let _ = run_one_phase(RunOnePhaseArgs {
+                    env,
+                    root,
+                    phase: "nofetch",
+                    debug,
+                    extra_env: &[],
+                    config_root,
+                    shell,
+                    log_file: None,
+                })
+                .await;
             }
             return Err(e);
         }

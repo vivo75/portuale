@@ -331,6 +331,14 @@ pub struct Colorizer {
     pub enabled: bool,
 }
 
+/// Arguments of [`Colorizer::pkgprint`].
+pub struct PkgprintArgs<'a> {
+    pub text: &'a str,
+    pub binary: bool,
+    pub system: bool,
+    pub world: bool,
+}
+
 impl Colorizer {
     pub fn new(enabled: bool) -> Self {
         Self { enabled }
@@ -371,8 +379,13 @@ impl Colorizer {
     /// only (`pkg_info.merge` is always true for every bracket entry this
     /// portuale prints): pick the palette entry from `built` (binary) +
     /// `system` + `world`. `system` wins over `world`, exactly as real.
-    #[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-    pub fn pkgprint(&self, text: &str, binary: bool, system: bool, world: bool) -> String {
+    pub fn pkgprint(&self, args: PkgprintArgs<'_>) -> String {
+        let PkgprintArgs {
+            text,
+            binary,
+            system,
+            world,
+        } = args;
         let key = match (binary, system, world) {
             (true, true, _) => "PKG_BINARY_MERGE_SYSTEM",
             (true, false, true) => "PKG_BINARY_MERGE_WORLD",
@@ -405,30 +418,63 @@ mod tests {
     fn disabled_colorizer_is_identity() {
         let c = Colorizer::new(false);
         assert_eq!(c.c("green", "N"), "N");
-        assert_eq!(c.pkgprint("ebuild", false, false, true), "ebuild");
+        assert_eq!(
+            c.pkgprint(PkgprintArgs {
+                text: "ebuild",
+                binary: false,
+                system: false,
+                world: true
+            }),
+            "ebuild"
+        );
     }
 
     #[test]
     fn pkgprint_palette_system_wins_over_world() {
         let c = Colorizer::new(true);
         assert_eq!(
-            c.pkgprint("p", false, true, true),
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: false,
+                system: true,
+                world: true
+            }),
             "\x1b[32mp\x1b[39;49;00m"
         ); // SYSTEM
         assert_eq!(
-            c.pkgprint("p", false, false, true),
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: false,
+                system: false,
+                world: true
+            }),
             "\x1b[32;01mp\x1b[39;49;00m"
         ); // WORLD
         assert_eq!(
-            c.pkgprint("p", false, false, false),
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: false,
+                system: false,
+                world: false
+            }),
             "\x1b[32mp\x1b[39;49;00m"
         ); // plain
         assert_eq!(
-            c.pkgprint("p", true, false, false),
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: true,
+                system: false,
+                world: false
+            }),
             "\x1b[35mp\x1b[39;49;00m"
         ); // BINARY
         assert_eq!(
-            c.pkgprint("p", true, false, true),
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: true,
+                system: false,
+                world: true
+            }),
             "\x1b[35;01mp\x1b[39;49;00m"
         ); // BINARY_WORLD
     }

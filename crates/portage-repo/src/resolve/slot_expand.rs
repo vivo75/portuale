@@ -2,6 +2,21 @@
 
 use crate::*;
 
+/// Arguments of [`delta_atom_cleanly_reuses_resolved_slot`].
+pub(crate) struct DeltaAtomCleanlyReusesResolvedSlotArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) state: &'a PassState,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) evaluated: &'a str,
+    /// Track X Slice B (#242): this delta atom's own resolving root (its
+    /// queue tag) -- the speculative selection and the slot lookup both
+    /// run against it, so a running-root atom never reuses a target-root
+    /// slot (and vice versa).
+    pub(crate) atom_running: bool,
+}
+
 /// Backlog #218 (L0 20260928T063310Z): eager clean-reuse classification
 /// for delta atoms.
 ///
@@ -37,20 +52,18 @@ use crate::*;
 /// inside it), so the speculative resolution is side-effect free; and its
 /// inputs are all pass-fixed (`ctx`, `config`, `union_constraints`), so
 /// the verdict cannot drift between here and the pop.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
-    ctx: &ResolveCtx,
-    config: &portage_profile::Config,
-    union_constraints: &HashMap<(String, String), Vec<String>>,
-    state: &PassState,
-    bp: &BacktrackParams,
-    evaluated: &str,
-    // Track X Slice B (#242): this delta atom's own resolving root (its
-    // queue tag) -- the speculative selection and the slot lookup both
-    // run against it, so a running-root atom never reuses a target-root
-    // slot (and vice versa).
-    atom_running: bool,
+    args: DeltaAtomCleanlyReusesResolvedSlotArgs<'_>,
 ) -> bool {
+    let DeltaAtomCleanlyReusesResolvedSlotArgs {
+        ctx,
+        config,
+        union_constraints,
+        state,
+        bp,
+        evaluated,
+        atom_running,
+    } = args;
     let Some(atom) = portage_dep::parse_atom(evaluated) else {
         return false;
     };
@@ -208,19 +221,33 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
             "{}/{}-{existing_version2}:{}/{}::{}",
             key2.0, key2.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
         );
-        let existing_use = effective_use_flags(
+        let existing_use = effective_use_flags(EffectiveUseFlagsArgs {
             config,
-            &existing_cand.iuse,
-            &existing_cand.keywords,
-            &existing_cand_str,
-            &key2.0,
-            &key2.1,
-        );
+            iuse: &existing_cand.iuse,
+            keywords: &existing_cand.keywords,
+            candidate_str: &existing_cand_str,
+            category: &key2.0,
+            package: &key2.1,
+        });
         if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use) {
             return false;
         }
     }
     true
+}
+
+/// Arguments of [`expand_resolved_slot_with_flipped_use`].
+pub(crate) struct ExpandResolvedSlotWithFlippedUseArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) key: &'a (String, String),
+    pub(crate) existing_idx: usize,
+    pub(crate) existing_cand: &'a Candidate,
+    pub(crate) existing_version: &'a str,
+    pub(crate) new_use: &'a HashSet<String>,
 }
 
 /// Backlog #218: in-pass delta re-expansion for an already-resolved
@@ -261,19 +288,21 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
 /// (a whole-flatten union over-constrained Kahn's walk and reordered
 /// unrelated packages on L0). A no-op unless the flip actually reveals
 /// new atoms, so every non-autounmask walk is untouched.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn expand_resolved_slot_with_flipped_use(
-    ctx: &ResolveCtx,
-    config: &portage_profile::Config,
-    union_constraints: &HashMap<(String, String), Vec<String>>,
-    state: &mut PassState,
-    bp: &BacktrackParams,
-    key: &(String, String),
-    existing_idx: usize,
-    existing_cand: &Candidate,
-    existing_version: &str,
-    new_use: &HashSet<String>,
+    args: ExpandResolvedSlotWithFlippedUseArgs<'_>,
 ) {
+    let ExpandResolvedSlotWithFlippedUseArgs {
+        ctx,
+        config,
+        union_constraints,
+        state,
+        bp,
+        key,
+        existing_idx,
+        existing_cand,
+        existing_version,
+        new_use,
+    } = args;
     // Real never flips a built package (`_pkg_use_enabled` returns the
     // baked USE for `pkg.built`, `depgraph.py:7676`; `can_adjust_use =
     // not pkg.built`, `:8131`): the delta only ever applies to a fresh
@@ -359,12 +388,54 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     };
     let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
-        &tokens,
-        new_use,
-        portage_use_reduce::MatchMode::Normal,
-        md5_dict::eapi_empty_groups_always_true(
-            delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
-        ),
+        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+            tokens: &tokens,
+            uselist: new_use,
+            mode: portage_use_reduce::MatchMode::Normal,
+            empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+                delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
+            tie_break: &mut |alts: &[Vec<String>]| {
+                let grp_running = cross_running_root.is_some()
+                    && alts
+                        .iter()
+                        .flat_map(|v| v.iter())
+                        .next()
+                        .is_some_and(|a| running_tags.contains(a));
+                let grp_root: &Path = if grp_running {
+                    cross_running_root.expect("running-root group without a cross root")
+                } else {
+                    ctx.root
+                };
+                let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
+                    state
+                        .entries
+                        .iter()
+                        .filter(|e| e.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let entries_view: &[GraphEntry] =
+                    scoped_entries.as_deref().unwrap_or(&state.entries);
+                let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
+                    queued
+                        .iter()
+                        .filter(|q| q.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
+                promote_tied_alternative(PromoteTiedAlternativeArgs {
+                    repos: &ctx.repos,
+                    config,
+                    root: grp_root,
+                    entries: entries_view,
+                    constraints: union_constraints,
+                    alts,
+                    queued: queued_view,
+                })
+            },
+        },
         &mut |atoms: &[String]| {
             let grp_running = group_running(atoms);
             let grp_root: &Path = if grp_running {
@@ -398,60 +469,21 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
                 key.0.clone(),
                 key.1.clone(),
             );
-            disjunction_preference(
-                &ctx.repos,
+            disjunction_preference(DisjunctionPreferenceArgs {
+                repos: &ctx.repos,
                 config,
-                grp_root,
-                entries_view,
-                &self_node,
-                union_constraints,
-                &bp.circular_dependency,
-                ctx.root_deps_running_root,
+                root: grp_root,
+                entries: entries_view,
+                self_cp: &self_node,
+                constraints: union_constraints,
+                circular_dependency: &bp.circular_dependency,
+                root_deps_running_root: ctx.root_deps_running_root,
                 atoms,
-                queued_view,
-                ctx.update,
-                &state.entries,
-                &queued,
-            )
-        },
-        &mut |alts: &[Vec<String>]| {
-            let grp_running = cross_running_root.is_some()
-                && alts
-                    .iter()
-                    .flat_map(|v| v.iter())
-                    .next()
-                    .is_some_and(|a| running_tags.contains(a));
-            let grp_root: &Path = if grp_running {
-                cross_running_root.expect("running-root group without a cross root")
-            } else {
-                ctx.root
-            };
-            let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
-                state
-                    .entries
-                    .iter()
-                    .filter(|e| e.targets_running_root == grp_running)
-                    .cloned()
-                    .collect()
-            });
-            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(&state.entries);
-            let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
-                queued
-                    .iter()
-                    .filter(|q| q.targets_running_root == grp_running)
-                    .cloned()
-                    .collect()
-            });
-            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
-            promote_tied_alternative(
-                &ctx.repos,
-                config,
-                grp_root,
-                entries_view,
-                union_constraints,
-                alts,
-                queued_view,
-            )
+                queued: queued_view,
+                update: ctx.update,
+                gate_entries: &state.entries,
+                gate_queued: &queued,
+            })
         },
     ) else {
         return;
@@ -465,32 +497,32 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     // above (both no-ops unless `root_deps_split` is set).
     let root_deps_satisfied: HashSet<String> = root_deps_split
         .map(|root| {
-            root_deps_satisfied_atoms(
-                &delta_meta,
-                new_use,
-                &ctx.repos,
+            root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
+                metadata: &delta_meta,
+                use_flags: new_use,
+                repos: &ctx.repos,
                 config,
-                root,
-                &["DEPEND", "BDEPEND", "IDEPEND"],
-                md5_dict::eapi_empty_groups_always_true(
+                running_root: root,
+                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
+                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                     delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
                 ),
-            )
+            })
         })
         .unwrap_or_default();
     let root_deps_unsatisfied: Vec<String> = root_deps_split
         .map(|root| {
-            unsatisfied_root_deps_atoms(
-                &delta_meta,
-                new_use,
-                &ctx.repos,
+            unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
+                metadata: &delta_meta,
+                use_flags: new_use,
+                repos: &ctx.repos,
                 config,
-                root,
-                &["DEPEND", "BDEPEND", "IDEPEND"],
-                md5_dict::eapi_empty_groups_always_true(
+                running_root: root,
+                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
+                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                     delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
                 ),
-            )
+            })
         })
         .unwrap_or_default();
     let flat_deps: Vec<String> = flat_deps
@@ -509,13 +541,15 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     if let Some(running_root) = ctx.root_deps_running_root {
         for atom_str in &root_deps_unsatisfied {
             state.entries.extend(resolve_root_deps_build_entries(
-                &ctx.repos,
-                running_root,
-                atom_str,
-                config,
-                key.clone(),
-                &mut state.root_deps_build_seen,
-                &ctx.local_binpkg,
+                ResolveRootDepsBuildEntriesArgs {
+                    repos: &ctx.repos,
+                    running_root,
+                    atom_str,
+                    config,
+                    owner: key.clone(),
+                    seen: &mut state.root_deps_build_seen,
+                    local_binpkg: &ctx.local_binpkg,
+                },
             ));
         }
     }
@@ -548,15 +582,15 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
             portage_dep::evaluate_atom_conditionals(tok, new_use).unwrap_or_else(|| tok.clone());
         // Track X Slice B (#242): the tag is raw-keyed -- `tok` here is
         // still the raw survivor (evaluated only for the lookup below).
-        if delta_atom_cleanly_reuses_resolved_slot(
+        if delta_atom_cleanly_reuses_resolved_slot(DeltaAtomCleanlyReusesResolvedSlotArgs {
             ctx,
             config,
             union_constraints,
             state,
             bp,
-            &evaluated,
-            running_tags.contains(tok),
-        ) {
+            evaluated: &evaluated,
+            atom_running: running_tags.contains(tok),
+        }) {
             continue;
         }
         kept_toks.push(tok.clone());
@@ -581,21 +615,21 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
                 ));
         }
     }
-    enqueue_flat_deps(
-        new_toks.clone(),
+    enqueue_flat_deps(EnqueueFlatDepsArgs {
+        flat_deps: new_toks.clone(),
         key,
-        existing_version,
-        existing_depth,
-        new_use,
-        &mut state.queue,
-        &mut state.pending_blockers,
-        &buildtime_atoms,
-        &runtime_atoms,
-        &bdepend_atoms,
-        &or_group_universe(&tokens),
-        &running_tags,
-        state.entries[existing_idx].targets_running_root,
-    );
+        version: existing_version,
+        depth: existing_depth,
+        parent_use: new_use,
+        queue: &mut state.queue,
+        pending_blockers: &mut state.pending_blockers,
+        buildtime_atoms: &buildtime_atoms,
+        runtime_atoms: &runtime_atoms,
+        bdepend_atoms: &bdepend_atoms,
+        or_universe: &or_group_universe(&tokens),
+        running_atoms: &running_tags,
+        owner_targets_running_root: state.entries[existing_idx].targets_running_root,
+    });
     // Narrowing (L0 20260928T054625Z): merge-order edges are added ONLY
     // for newly-queued targets. Unioning the whole flipped flatten here
     // also re-added edges for already-graphed targets (a `||` re-choice
@@ -674,23 +708,22 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
                             && !queued_now.contains(evaluated.as_str())
                     })
                     .collect();
-                enqueue_flat_deps(
-                    new_test_deps,
+                enqueue_flat_deps(EnqueueFlatDepsArgs {
+                    flat_deps: new_test_deps,
                     key,
-                    existing_version,
-                    existing_depth,
-                    &test_uselist,
-                    &mut state.queue,
-                    &mut state.pending_blockers,
-                    &HashSet::new(),
-                    &HashSet::new(),
-                    &HashSet::new(),
-                    &HashSet::new(),
-                    // Track X Slice B (#242): a `test?` dep stays
+                    version: existing_version,
+                    depth: existing_depth,
+                    parent_use: &test_uselist,
+                    queue: &mut state.queue,
+                    pending_blockers: &mut state.pending_blockers,
+                    buildtime_atoms: &HashSet::new(),
+                    runtime_atoms: &HashSet::new(),
+                    bdepend_atoms: &HashSet::new(),
+                    or_universe: &HashSet::new(), // Track X Slice B (#242): a `test?` dep stays
                     // target-rooted (same gate as the fresh expansion).
-                    &HashSet::new(),
-                    state.entries[existing_idx].targets_running_root,
-                );
+                    running_atoms: &HashSet::new(),
+                    owner_targets_running_root: state.entries[existing_idx].targets_running_root,
+                });
             }
         }
     }

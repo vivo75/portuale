@@ -253,15 +253,14 @@ pub(crate) fn slot_operator_rebuild_entries(
     loop {
         let mut combined: Vec<GraphEntry> = entries.to_vec();
         combined.extend(out.iter().cloned());
-        let (next, pairs, ..) = slot_operator_rebuild_scan(
+        let (next, pairs, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
             root,
             repos,
-            &combined,
+            entries: &combined,
             reachable,
-            &scheduled,
-            &BTreeSet::new(),
-            with_bdeps,
-            // #211 I1: the `--solver=` bridge threads the same
+            already: &scheduled,
+            undone: &BTreeSet::new(),
+            with_bdeps, // #211 I1: the `--solver=` bridge threads the same
             // `update`/`top_level` context the default path passes, so
             // both solvers agree on the new-slot arm (the request
             // carries both -- the "no context at this layer" cut that
@@ -271,7 +270,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             top_level_atoms,
             excluded,
             config,
-        );
+        });
         abi_rebuilds = pairs;
         if next == scheduled {
             break;
