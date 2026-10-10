@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""Move a statement range of a big function into a new function
+(#336 Phase 6.3: `pretend::run` phases D-S and the other function cuts).
+
+Usage: extract_block.py SRC START END FNAME TARGET_RS [--doc TEXT] [--crate PKG]
+
+SRC lines START..END (1-based, inclusive) must be whole statements of the
+host function's top-level block (4-space indent). They move verbatim into
+`pub(crate) fn FNAME`, appended to TARGET_RS. A new TARGET_RS next to a
+`mod.rs` host is created with `use crate::<module>::*;` and declared in the
+host (`mod x;` + `pub(crate) use x::*;`). Everything about the signature
+comes from the compiler:
+
+1. inputs: with no parameters, E0425/E0423 inside the new function name
+   the host locals it reads;
+2. input types: with each parameter typed `()`, the call site's E0308
+   labels give each type (rustc caps them per call, so known ones are
+   typed and the check repeats); a body label is the fallback;
+3. modes: Copy-looking types go by value, others by `&` (`&[T]`, `&str`,
+   `&Path` for `Vec<T>`, `String`, `PathBuf`); E0594/E0596/E0384 make a
+   parameter `&mut` (a Copy value is copied into a local of the same name
+   and written back on fall-through; a non-Copy one gets `*x = ...` for
+   plain assignments); E0382 in the host makes a by-value one `&`;
+4. outputs: `let` locals the range declares at its top level and the host
+   uses after it are returned (a tuple when several) and re-bound at the
+   call site under the same names (`mut`; drop the unused ones after);
+   their types come from probing `let _: () = x;`;
+5. more than 5 parameters (clippy too-many-arguments-threshold) become a
+   `<Fname>Args` struct that the function destructures under the same
+   names, so the moved body stays as it was;
+6. bare type names rustc prints are imported from its own `use`
+   suggestion, else from the one workspace crate that defines them.
+
+A `return X` in the range ends the host: the function returns
+`Option<ExitCode>` (no outputs) or `Result<outputs, ExitCode>`, and the call
+site returns the code. On success `cargo clippy --fix` and `cargo fmt` run;
+leftover errors are printed and nothing is reverted.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(__file__))
+from rust_items import code_mask  # noqa: E402
+
+COPY = re.compile(
+    r"^(bool|char|u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64"
+    r"|Option<(bool|u32|u64|usize|i64|f64|char)>|&.*|Option<&.*>"
+    r"|portage_repo::Deep|Deep|portage_repo::SolverKind|SolverKind"
+    r"|ebuild_phases::ShellBackend|ShellBackend)$")
+
+
+def closure_spans(text, mask):
+    """[start, end) of every closure body `{...}` in text (code only)."""
+    code = "".join(c if m else " " for c, m in zip(text, mask))
+    spans = []
+    for m in re.finditer(r"(?:^|[(,=\s])(?:move\s+)?\|[^|\n]*\|\s*(?:->\s*[^{\n]+?)?\s*\{", code):
+        # skip `a | b {` bit-or and `x || {`: the char before the first `|`
+        # must open an expression position
+        k = m.start()
+        while k < len(code) and code[k] != "|":
+            k += 1
+        prev = code[:k].rstrip()[-1:] if code[:k].rstrip() else "("
+        if prev not in "(,=>" and not code[:k].rstrip().endswith(("move", "=>")):
+            continue
+        b = m.end() - 1
+        depth, e = 0, b
+        while e < len(code):
+            if code[e] == "{":
+                depth += 1
+            elif code[e] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            e += 1
+        spans.append((b, e))
+    return spans
+
+
+def wrap_returns(text, ctor):
+    """`return X;` / `=> return X,` -> `return ctor(X)`; token-based. A
+    `return` inside a closure body belongs to the closure and is kept."""
+    mask = code_mask(text)
+    inside = closure_spans(text, mask)
+    out, i, n = [], 0, len(text)
+    pat = re.compile(r"\breturn\b")
+    while i < n:
+        m = pat.search(text, i)
+        if not m:
+            out.append(text[i:])
+            break
+        k = m.start()
+        if not mask[k] or any(a < k < b for a, b in inside):
+            out.append(text[i:m.end()])
+            i = m.end()
+            continue
+        j = m.end()
+        while j < n and text[j] in " \n":
+            j += 1
+        if text[j] == ";":
+            # a bare `return;` is a closure's or loop helper's, not the host's
+            out.append(text[i:j])
+            i = j
+            continue
+        depth, e = 0, j
+        while e < n:
+            c = text[e]
+            if mask[e]:
+                if c in "([{":
+                    depth += 1
+                elif c in ")]}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif c in ";," and depth == 0:
+                    break
+            e += 1
+        out.append(text[i:j] + ctor + "(" + text[j:e].rstrip() + ")")
+        i = e
+    return "".join(out)
+
+
+def find_type(name):
+    """`use <crate>::Name;` for a pub type defined in exactly one library
+    crate of the workspace (the crates re-export their types at the root)."""
+    hits = set()
+    for d in os.listdir("crates"):
+        if d == "portuale":
+            continue
+        for dirpath, _, files in os.walk(os.path.join("crates", d, "src")):
+            for f in files:
+                if f.endswith(".rs") and re.search(
+                        rf"(?m)^pub (struct|enum|type|trait) {name}\b",
+                        open(os.path.join(dirpath, f)).read()):
+                    hits.add(d.replace("-", "_"))
+    return f"use {hits.pop()}::{name};" if len(hits) == 1 else None
+
+
+def pascal(name):
+    return "".join(p.capitalize() for p in name.split("_"))
+
+
+def lifetimed(ty):
+    return re.sub(r"&(?!')", "&'a ", ty)
+
+
+def code_only(text):
+    return "".join(c if m else " " for c, m in zip(text, code_mask(text)))
+
+
+class Cut:
+    def __init__(self, src, start, end, fname, target, doc, pkg):
+        self.src, self.start, self.end = src, start, end
+        self.fname, self.target, self.doc, self.pkg = fname, target, doc, pkg
+        self.orig_src = open(src).read()
+        self.orig_target = open(target).read() if os.path.exists(target) else None
+        self.pristine = (self.orig_src, self.orig_target)
+        if self.orig_target is None and os.path.dirname(target) == os.path.dirname(src) \
+                and os.path.basename(src) == "mod.rs":
+            self.declare(os.path.basename(target)[:-3])
+        lines = self.orig_src.split("\n")
+        self.region = lines[self.start - 1:self.end]
+        body = "\n".join(self.region)
+        self.returns = wrap_returns(body, "Some") != body
+        self.raw_body = body
+        # outputs: top-level `let` names of the range read after it
+        host_end = next(i for i in range(self.end, len(lines)) if lines[i] == "}")
+        after = code_only("\n".join(lines[self.end:host_end]))
+        names = []
+        for l in self.region:
+            m = re.match(r"^    let (?:mut )?(\w+)\b", l)
+            if m and m.group(1) not in names and re.search(rf"(?<![\w.]){m.group(1)}\b", after):
+                names.append(m.group(1))
+        self.outs = [[n, None] for n in names]
+        self.params = []          # [name, type, mode] mode: val|ref|mut
+        self.imports = []         # `use` lines for bare type names
+
+    def declare(self, stem):
+        """Add `mod stem;` + `pub(crate) use stem::*;` to the host mod.rs,
+        shifting START/END by the lines added above them."""
+        lines = self.orig_src.split("\n")
+
+        def place(pattern, text):
+            idx = [i for i, l in enumerate(lines) if re.match(pattern, l)
+                   and not lines[i - 1].startswith("#[")]
+            after = [i for i in idx if lines[i] < text]
+            lines.insert((after[-1] if after else idx[0] - 1) + 1, text)
+            return idx
+
+        uses = place(r"^pub(\(crate\))? use \w+::\*;$", f"pub(crate) use {stem}::*;")
+        place(r"^mod \w+;$", f"mod {stem};")
+        assert uses[-1] + 1 < self.start - 1
+        self.start += 2
+        self.end += 2
+        self.orig_src = "\n".join(lines)
+
+    def module_path(self):
+        d = os.path.dirname(self.src)
+        return d[d.index("/src") + 5:].replace("/", "::")
+
+    def ret_type(self, typed):
+        if self.outs:
+            ts = [t if typed and t else "()" for _, t in self.outs]
+            o = ts[0] if len(ts) == 1 else pascal(self.fname) + "Out"
+            return f"Result<{o}, ExitCode>" if self.returns else o
+        return "Option<ExitCode>" if self.returns else None
+
+    def render(self, typed, probe=False):
+        lines = self.orig_src.split("\n")
+        ps = self.params
+        copy_mut = {n for n, t, m in ps if typed and m == "mut" and COPY.match(t)}
+        use_struct = len(ps) > 5 and typed
+        sname = pascal(self.fname) + "Args"
+        if use_struct:
+            call_args = sname + " {\n" + "".join(
+                f"            {n}{'' if m == 'val' else ': &mut ' + n if m == 'mut' else ': &' + n},\n"
+                for n, _, m in ps) + "        }"
+        else:
+            call_args = ", ".join(
+                n if m == "val" or not typed else ("&mut " + n if m == "mut" else "&" + n)
+                for n, _, m in ps)
+        call = f"{self.fname}({call_args})"
+        onames = [n for n, _ in self.outs]
+        oname = pascal(self.fname) + "Out"
+        pat = (onames[0] if len(onames) == 1 else oname + " { " + ", ".join(onames) + " }") if onames else None
+        mpat = (("mut " + onames[0]) if len(onames) == 1
+                else oname + " { " + ", ".join("mut " + n for n in onames) + " }") if onames else None
+        if onames and self.returns:
+            site = [f"    let {mpat} = match {call} {{", "        Ok(out) => out,",
+                    "        Err(code) => return code,", "    };"]
+        elif onames:
+            site = [f"    let {mpat} = {call};"]
+        elif self.returns:
+            site = [f"    if let Some(code) = {call} {{", "        return code;", "    }"]
+        else:
+            site = [f"    {call};"]
+        new_src = lines[:self.start - 1] + site + lines[self.end:]
+        rt = self.ret_type(typed)
+        ret = f" -> {rt}" if rt else ""
+        writeback = "".join(f"    *{n}_out = {n};\n" for n, _, _ in ps if n in copy_mut)
+        if probe:
+            tail = "\n" + "".join(f"    let _: () = {n};\n" for n in onames) + "    todo!()\n"
+        elif onames:
+            tail = "\n" + writeback + ("    Ok(" + pat + ")\n" if self.returns else "    " + pat + "\n")
+        elif self.returns:
+            tail = "\n" + writeback + "    None\n"
+        else:
+            tail = "\n" + writeback
+        body = wrap_returns(self.raw_body, "Err" if onames else "Some") if self.returns else self.raw_body
+
+        def ptype(t, m):
+            if not typed:
+                return "()"
+            if m == "ref":
+                t = re.sub(r"^Vec<(.*)>$", r"[\1]", t)
+                t = {"String": "str", "PathBuf": "Path",
+                     "std::path::PathBuf": "std::path::Path"}.get(t, t)
+            return t if m == "val" else ("&mut " + t if m == "mut" else "&" + t)
+        struct = ""
+        if len(onames) > 1:
+            struct += (f"/// What [`{self.fname}`] hands back to its caller.\n"
+                       f"pub(crate) struct {oname} {{\n" + "".join(
+                           f"    pub(crate) {n}: {t if typed and t else '()'},\n" for n, t in self.outs)
+                       + "}\n\n")
+        if use_struct:
+            struct += (f"/// The values [`{self.fname}`] reads from its caller.\n"
+                      f"pub(crate) struct {sname}<'a> {{\n" + "".join(
+                          f"    pub(crate) {n}: {lifetimed(ptype(t, m))},\n" for n, t, m in ps)
+                      + "}\n\n")
+            sig = f"pub(crate) fn {self.fname}(args: {sname}<'_>){ret}"
+            fields = ", ".join(n if n not in copy_mut else f"{n}: {n}_out" for n, _, _ in ps)
+            prologue = f"    let {sname} {{ {fields} }} = args;\n"
+        else:
+            sig = f"pub(crate) fn {self.fname}(" + ", ".join(
+                f"{n + '_out' if n in copy_mut else n}: {ptype(t, m)}" for n, t, m in ps) + f"){ret}"
+            prologue = ""
+        prologue += "".join(f"    let mut {n} = *{n}_out;\n" for n, _, _ in ps if n in copy_mut)
+        if typed:
+            for n, t, m in ps:
+                conv = ("to_vec" if t.startswith("Vec<") else "to_path_buf" if t.endswith("PathBuf")
+                        else "to_string" if t == "String" else None)
+                if m == "ref" and conv:
+                    body = re.sub(rf"(?<![\w.]){n}\.clone\(\)", f"{n}.{conv}()", body)
+                    view = {"to_vec": "as_slice", "to_path_buf": "as_path", "to_string": "as_str"}[conv]
+                    body = re.sub(rf"(?<![\w.]){n}\.{view}\(\)", n, body)
+            for n, _, m in ps:
+                if m == "mut" and n not in copy_mut:
+                    body = re.sub(rf"(?m)^(\s*){n}(\s*[+\-]?=[^=])", rf"\1*{n}\2", body)
+                    body = re.sub(rf"&mut\s+{n}\b", f"&mut *{n}", body)
+        doc = f"/// {self.doc}\n" if self.doc else ""
+        fn = f"{struct}{doc}{sig} {{\n{prologue}{body}{tail}}}\n"
+        glob = f"use crate::{self.module_path()}::*;\n"
+        base = self.orig_target
+        if base is None:
+            base = (f"//! {self.doc}\n\n" if self.doc else "") + glob
+        missing = [u for u in self.imports if u not in base]
+        if missing:
+            base = base.replace(glob, glob + "".join(u + "\n" for u in missing), 1)
+        open(self.src, "w").write("\n".join(new_src))
+        open(self.target, "w").write(base.rstrip("\n") + "\n\n" + fn)
+
+    def check(self):
+        p = subprocess.run(["cargo", "check", "--release", "--all-targets", "-p", self.pkg,
+                            "--message-format=json"], capture_output=True, text=True)
+        msgs = []
+        for l in p.stdout.splitlines():
+            try:
+                m = json.loads(l)
+            except ValueError:
+                continue
+            if m.get("reason") == "compiler-message" and m["message"]["level"] == "error":
+                msgs.append(m["message"])
+        return msgs
+
+    def fn_start(self):
+        t = open(self.target).read().split("\n")
+        return next(i for i, l in enumerate(t)
+                    if re.match(rf"pub\(crate\) fn {self.fname}\(", l)) + 1
+
+    @staticmethod
+    def labels(m):
+        """(span, expression text, label) for the labelled spans of an error
+        and of its child notes (rustc moves per-argument labels there when
+        several arguments of one call mismatch)."""
+        for s in m["spans"]:
+            if s.get("label") and s.get("text"):
+                t0 = s["text"][0]
+                expr = t0["text"][t0["highlight_start"] - 1:t0["highlight_end"] - 1]
+                yield s, expr, s["label"]
+        for c in m.get("children", []):
+            for s in c.get("spans", []):
+                if s.get("text"):
+                    t0 = s["text"][0]
+                    expr = t0["text"][t0["highlight_start"] - 1:t0["highlight_end"] - 1]
+                    yield s, expr, c["message"]
+
+    def add_imports(self, errs):
+        added = False
+        for m in errs:
+            mt = re.search(r"cannot find type `(\w+)`", m["message"])
+            if mt:
+                mm = re.search(r"^\s*\d*\s*\+ (use [\w:]+;)$", m["rendered"], re.M)
+                u = mm.group(1) if mm else find_type(mt.group(1))
+                if u and u not in self.imports:
+                    self.imports.append(u)
+                    added = True
+        return added
+
+    def apply_suggestions(self, errs):
+        """Apply the remove-`&` / add-`*` suggestions rustc attaches to errors
+        in TARGET_RS; the body text changes, so the edit goes to raw_body."""
+        tgt = os.path.abspath(self.target)
+        text = open(self.target).read().split("\n")
+        edits = []
+        for m in errs:
+            for c in m.get("children", []):
+                if not re.search(r"consider (removing the leading `&`-reference|dereferencing the borrow"
+                                 r"|removing the borrow)", c["message"]):
+                    continue
+                for s in c["spans"]:
+                    if os.path.abspath(s["file_name"]) != tgt or s.get("suggested_replacement") is None:
+                        continue
+                    if s["line_start"] != s["line_end"]:
+                        continue
+                    edits.append((s["line_start"], s["column_start"], s["column_end"],
+                                  s["suggested_replacement"]))
+        if not edits:
+            return False
+        for ln, a, b, rep in sorted(set(edits), key=lambda e: (e[0], -e[1])):
+            line = text[ln - 1]
+            text[ln - 1] = line[:a - 1] + rep + line[b - 1:]
+        open(self.target, "w").write("\n".join(text))
+        # keep raw_body in sync: re-read the fn body from the file
+        t = "\n".join(text)
+        start = t.index(f"fn {self.fname}(")
+        open_brace = t.index("{\n", t.index(")", start))
+        self.patched_target = t
+        return True
+
+    def run(self):
+        tgt = os.path.abspath(self.target)
+        # 1. inputs
+        self.render(typed=False)
+        fstart = self.fn_start()
+        names = []
+        for m in self.check():
+            code = (m.get("code") or {}).get("code")
+            for s in m["spans"]:
+                if not (s["is_primary"] and os.path.abspath(s["file_name"]) == tgt
+                        and s["line_start"] >= fstart):
+                    continue
+                mm = None
+                if code == "E0425":
+                    mm = re.search(r"cannot find (value|function) `(\w+)`", m["message"])
+                    if mm and mm.group(1) == "function":
+                        sys.exit(f"needs a host-local fn: {mm.group(2)}")
+                    mm = mm and mm.group(2)
+                elif code == "E0423":
+                    mm = re.search(r"expected value, found (?:module|crate) `(\w+)`", m["message"])
+                    mm = mm and mm.group(1)
+                if mm and mm not in names:
+                    names.append(mm)
+        self.params = [[n, "()", "val"] for n in names]
+        # 2. input types
+        types, fallback = {}, {}
+        for _ in range(12):
+            for p in self.params:
+                p[1], p[2] = types.get(p[0], "()"), "val"
+            self.render(typed=True)
+            before = len(types)
+            errs = self.check()
+            added = self.add_imports(errs)
+            for m in errs:
+                if (m.get("code") or {}).get("code") != "E0308":
+                    continue
+                for s, expr, label in self.labels(m):
+                    mm = re.search(r"expected `\(\)`, found (?:[a-z]+ )?`(.+)`$", label)
+                    if mm and os.path.abspath(s["file_name"]) == os.path.abspath(self.src):
+                        types.setdefault(expr, mm.group(1))
+                    mm = re.search(r"expected (?:[a-z]+ )?`(.+)`, found `\(\)`$", label)
+                    if mm:
+                        fallback.setdefault(expr, mm.group(1))
+            if all(p[0] in types for p in self.params) or (len(types) == before and not added):
+                break
+        for p in self.params:
+            t = types.get(p[0]) or fallback.get(p[0])
+            if t is None:
+                sys.exit(f"no type for {p[0]}: types={types} fallback={fallback}")
+            p[1], p[2] = t, ("val" if COPY.match(t) else "ref")
+            # mutated in the body: a mutating method, `&mut x`, or an assignment
+            code = code_only(self.raw_body)
+            n = re.escape(p[0])
+            if re.search(rf"(?<![\w.]){n}\s*\.\s*(push|push_str|extend|insert|clear|retain|sort|sort_by"
+                         rf"|sort_by_key|sort_unstable|dedup|truncate|remove|append|drain|pop|entry"
+                         rf"|get_mut|iter_mut|swap|reverse)\b", code) \
+                    or re.search(rf"&mut\s+{n}\b", code) \
+                    or re.search(rf"(?m)^\s*{n}\s*([+\-*/|&]?=)(?!=)", code):
+                p[2] = "mut"
+        # 3. output types
+        if self.outs:
+            self.render(typed=True, probe=True)
+            for m in self.check():
+                for s, expr, label in self.labels(m):
+                    mm = re.search(r"expected `\(\)`, found (?:[a-z]+ )?`(.+)`$", label)
+                    for o in self.outs:
+                        if mm and expr == o[0] and o[1] is None:
+                            o[1] = mm.group(1)
+            for o in self.outs:
+                if o[1] is None:
+                    sys.exit(f"no type for output {o[0]}")
+        # 4. modes and imports
+        for _ in range(8):
+            self.render(typed=True)
+            errs = self.check()
+            changed = self.add_imports(errs)
+            for m in errs:
+                code = (m.get("code") or {}).get("code")
+                mm = re.search(r"`(\w+)", m["message"])
+                p = next((p for p in self.params if mm and p[0] == mm.group(1)), None)
+                if p and code in ("E0594", "E0596", "E0384") and p[2] != "mut":
+                    p[2] = "mut"
+                    changed = True
+                elif p and code == "E0382" and p[2] == "val":
+                    p[2] = "ref"
+                    changed = True
+            if not changed:
+                break
+        # 5. rustc's own fixes inside the new fn: `&x` -> `x` where `x` is
+        # already a reference, `x` -> `*x` where a value is expected
+        for _ in range(6):
+            errs = self.check()
+            if not self.apply_suggestions(errs):
+                break
+        left = [m["rendered"] for m in self.check()]
+        print(f"{self.fname}: {len(self.params)} params "
+              + ", ".join(f"{n}:{m}" for n, _, m in self.params)
+              + (f"; returns {', '.join(f'{n}: {t}' for n, t in self.outs)}" if self.outs else ""))
+        if left:
+            print(f"{len(left)} compile errors left:")
+            for r in left[:15]:
+                print(r)
+            sys.exit(1)
+        subprocess.run(["cargo", "clippy", "--fix", "--allow-dirty", "--allow-staged", "--release",
+                        "--all-targets", "-p", self.pkg], capture_output=True)
+        subprocess.run(["cargo", "fmt"], capture_output=True)
+
+
+def main():
+    a = sys.argv[1:]
+    doc = a[a.index("--doc") + 1] if "--doc" in a else ""
+    pkg = a[a.index("--crate") + 1] if "--crate" in a else "portuale"
+    cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg)
+    try:
+        cut.run()
+    except SystemExit as e:
+        if e.code not in (None, 0) and "--keep" not in a:
+            src, tgt = cut.pristine
+            open(cut.src, "w").write(src)
+            if tgt is None:
+                if os.path.exists(cut.target):
+                    os.remove(cut.target)
+            else:
+                open(cut.target, "w").write(tgt)
+            print("restored the original files (pass --keep to inspect the failed state)")
+        raise
+
+
+if __name__ == "__main__":
+    main()

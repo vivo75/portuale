@@ -228,3 +228,22 @@ The owner approved items 1-27 and commented on two of them: item 2
     Phase 7's comments and code-notes must describe the final layout.
     Branch `refactor/readability-2` in both repos. Commits stay local
     until the owner asks for a push.
+
+## 2026-10-10, Phase 6 execution notes
+
+32. **`ebuild_merge.rs` is split but parked.** The mechanical split was
+    run and verified (gate, L1, L2, glibc+bash gate) before I noticed it
+    broke answer 30.4's order (phase S and `ebuild_merge.rs` last). The
+    commit is parked on the local branch `park/ebuild-merge-split`
+    (`de2fc0be`, portuale only, not pushed) and gets cherry-picked after
+    phase S, with its verification run again.
+33. **`pretend::run` cuts take typed per-call arguments for now.**
+    `LLM/tools/extract_block.py` moves a statement range verbatim and
+    gets the signature from the compiler. More than five values become
+    a `<Fname>Args` struct; several returned locals become a
+    `<Fname>Out` struct (`ResolvePlan` for phase H). The structs repeat
+    many option fields, because `run` destructures `EmergeOpts` into
+    locals. Once phase S is cut and `run` is only calls, a consolidation
+    step keeps `EmergeOpts`/`ResolvePlan` whole, and each function takes
+    `&EmergeOpts` (destructured with `let &EmergeOpts { .. } = opts;`, so
+    bodies don't change) instead of repeating the fields.
