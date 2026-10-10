@@ -2,10 +2,8 @@ use super::*;
 
 use portage_util::TempDir;
 
-/// Directly `libc::lchown`/`libc::chown`s a test-source path to an
-/// arbitrary uid/gid, independent of `lchown_or_chown` itself (the
-/// function under test) -- test setup, not a call into production
-/// code.
+/// `chown()`s a test-source path directly, without going through the
+/// function under test.
 fn raw_chown(path: &Path, uid: u32, gid: u32, is_symlink: bool) {
     use std::os::unix::ffi::OsStrExt;
     let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
@@ -45,12 +43,9 @@ fn versioned_fixture(name: &str, version: &str) -> PathBuf {
         .join(format!("{name}-{version}.ebuild"))
 }
 
-/// Seeds a synthetic root where preserved lib `/usr/lib/keepA.so`
-/// (soname `libkeep.so.1`, indexed by `provider-1.0`'s hand-written
-/// `NEEDED.ELF.2`, registered under `dev-libs/provider:0`) has
-/// exactly one consumer, `/usr/bin/cprog`, owned by `oldapp-1.0`'s
-/// `CONTENTS`. Returns the root and the `being_unmerged` set an
-/// unmerge of the old instance would pass.
+/// Seeds a root where preserved `/usr/lib/keepA.so` has exactly one
+/// consumer, `/usr/bin/cprog`, owned by `oldapp-1.0`; returns the root
+/// and the `being_unmerged` set an unmerge of the old instance takes.
 fn seed_old_owned_consumer_root(tmp: &std::path::Path) -> (PathBuf, BTreeSet<String>) {
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("usr/lib")).unwrap();
@@ -96,12 +91,8 @@ fn seed_old_owned_consumer_root(tmp: &std::path::Path) -> (PathBuf, BTreeSet<Str
     (root, being)
 }
 
-/// Compiles a real `libA` (soname `libA.so.1`) and a real `libB`
-/// (`DT_NEEDED libA.so.1`, soname `libB.so.1`) with the host `cc`
-/// and installs both under the synthetic root's `/usr/lib` --
-/// the same `gcc -shared -fPIC -Wl,-soname` shape the
-/// `sonamebumplib` fixtures use, so `scanelf` (hence the orphan
-/// branch under test) sees genuine ELF headers.
+/// Compiles a linked `libA`/`libB` pair with the host `cc` under the
+/// synthetic root, so `scanelf` sees genuine ELF headers.
 fn compile_linked_pair(tmp: &std::path::Path, root: &std::path::Path) {
     let build = tmp.join("build");
     std::fs::create_dir_all(&build).unwrap();
@@ -162,10 +153,8 @@ fn fixtures_root() -> PathBuf {
 type PublishHook = Box<dyn Fn(&Path)>;
 
 thread_local! {
-    /// Test hook (feat#157 S4.1, S4.2): run inside `publish_merged_entry`
-    /// and `RetireWrites::commit` on a database backend, after every call
-    /// of the publishing / retiring transaction and right before its
-    /// `commit`, on this thread.
+    /// Test hook run inside `publish_merged_entry` and
+    /// `RetireWrites::commit` before the commit, on this thread.
     static PUBLISH_HOOK: std::cell::RefCell<Option<PublishHook>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -178,7 +167,7 @@ pub(super) fn publish_hook(root: &Path) {
     });
 }
 
-/// feat#157 S4.1: the merge on a database backend (sqlite).
+/// The merge on a database backend.
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 mod db_merge;
 

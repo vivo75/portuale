@@ -1,12 +1,8 @@
 use super::*;
 
-/// Fix round 1 for review item 3 (backlog #178): real
-/// `unmerge_no_replacement = unmerge and not
-/// unmerge_with_replacement` (`dblink._prune_plib_registry`) -- in
-/// replacement mode a consumer owned by the old instance still
-/// keeps a preserved lib alive (it survives through the replacing
-/// package). Pre-fix, portuale always passed `true`, eliminating
-/// those consumers and wrongly pruning the lib.
+/// In replacement mode a consumer owned by the old instance still keeps a
+/// preserved lib alive through the replacing package.
+/// Portage: `dblink.py`, `_prune_plib_registry`.
 #[test]
 fn prune_keeps_a_preserved_lib_whose_only_consumer_is_old_owned_in_replacement_mode() {
     let tmp = tempdir();
@@ -43,12 +39,9 @@ fn prune_keeps_a_preserved_lib_whose_only_consumer_is_old_owned_in_replacement_m
     );
 }
 
-/// Fix round 1 for review item 4, `exclude_pkgs` half (backlog
-/// #178): real `LinkageMap.rebuild(exclude_pkgs=...)` drops the
-/// unmerged instance's `NEEDED.ELF.2` lines, so a consumer only the
-/// old instance knows about cannot keep a preserved lib alive past
-/// the replacement. Without the exclusion the stale consumer data
-/// "would only serve to corrupt the `LinkageMap`".
+/// The replaced instance's `NEEDED.ELF.2` lines are excluded from the prune,
+/// so a consumer only it knows cannot keep a preserved lib alive.
+/// Portage: `dblink.py`, `_prune_plib_registry`.
 #[test]
 fn prune_excludes_the_replaced_instance_linkage_data() {
     let tmp = tempdir();
@@ -57,8 +50,8 @@ fn prune_excludes_the_replaced_instance_linkage_data() {
     std::fs::create_dir_all(root.join("usr/bin")).unwrap();
     std::fs::write(root.join("usr/lib/staleD.so"), b"fake elf").unwrap();
     std::fs::write(root.join("usr/bin/oldtool"), b"fake elf").unwrap();
-    // The library is indexed (its provider is still installed); its
-    // only consumer is known solely to the instance being replaced.
+    // The library is indexed; its only consumer is known solely to the
+    // instance being replaced.
     let vdb_prov = root.join("var/db/pkg/dev-libs/provider-1.0");
     std::fs::create_dir_all(&vdb_prov).unwrap();
     std::fs::write(vdb_prov.join("CONTENTS"), "obj /usr/lib/staleD.so def 1\n").unwrap();
@@ -124,24 +117,16 @@ fn prune_excludes_the_replaced_instance_linkage_data() {
     );
 }
 
-/// Fix round 1 for review item 4, `preserve_paths` half (backlog
-/// #178): real `LinkageMap.rebuild(preserve_paths=...)` scans the
-/// merge-side just-preserved set, so a preserved library whose only
-/// linkmap consumer is a just-preserved file -- indexed in no
-/// `NEEDED.ELF.2` anywhere -- is kept, not deleted as unneeded.
-/// Grounded in real `LinkageMap.rebuild` (the `preserve_paths`
-/// parameter): without the feed the consumer is invisible to the
-/// prune.
+/// Just-preserved files indexed in no `NEEDED.ELF.2` still keep a preserved
+/// lib alive through the merge-side feed.
+/// Portage: `dblink.py`, `_prune_plib_registry`.
 #[test]
 fn prune_sees_just_preserved_files_missing_from_every_needed_elf2() {
     let tmp = tempdir();
     let root = tmp.join("root");
     compile_linked_pair(&tmp, &root);
-    // `libA` is indexed (hand-written provider entry, the way any
-    // still-installed owner's `NEEDED.ELF.2` would); `libB` appears
-    // in no `NEEDED.ELF.2` -- only the `preserve_paths` feed (real
-    // `LinkageMap.rebuild(preserve_paths=...)`) can show it to the
-    // prune.
+    // `libB` is in no `NEEDED.ELF.2`; only the `preserve_paths` feed can
+    // show it to the prune.
     let vdb_prov = root.join("var/db/pkg/dev-libs/provider-1.0");
     std::fs::create_dir_all(&vdb_prov).unwrap();
     std::fs::write(
@@ -211,9 +196,8 @@ fn prune_sees_just_preserved_files_missing_from_every_needed_elf2() {
     );
 }
 
-/// Real `_find_unneeded_preserved_nodes` cycle handling (bug 652382):
-/// two preserved libraries that only consume each other, with nothing
-/// outside the pair consuming either, are both unneeded.
+/// Two preserved libs that only consume each other are both unneeded; one
+/// outside consumer keeps the pair.
 #[test]
 fn find_unneeded_preserved_drops_a_self_contained_cycle() {
     let tmp = tempdir();
@@ -238,8 +222,7 @@ fn find_unneeded_preserved_drops_a_self_contained_cycle() {
     let unneeded = crate::needed_elf::find_unneeded_preserved(&root, &edges, &preserved);
     assert_eq!(unneeded, preserved);
 
-    // But an outside (non-preserved) consumer of one keeps that one --
-    // and, transitively, the other it depends on.
+    // An outside consumer of one keeps that one and, transitively, the other.
     std::fs::create_dir_all(root.join("usr/bin")).unwrap();
     std::fs::write(root.join("usr/bin/app"), b"x").unwrap();
     edges

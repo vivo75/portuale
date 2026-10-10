@@ -14,52 +14,10 @@ pub(crate) struct PreserveLibsOnUnmergeArgs<'a> {
     pub(crate) is_replacement: bool,
 }
 
-/// Real `dblink._prune_plib_registry`, called from real `unmerge()`
-/// with `unmerge=True` right before real `_unmerge_pkgfiles()` runs.
-/// Real `preserve_paths` (a `_prune_plib_registry` parameter, not to be
-/// confused with this function's own *return* value) is only ever
-/// non-`None` when a real depgraph-driven upgrade transaction already
-/// computed it via a companion `merge()` call in the *same* transaction:
-/// `None` on the standalone path (portuale's own `merge`/`unmerge` are
-/// always separate, independent CLI invocations), the merge-side set on
-/// the replace loop. An instance that owns no files still unregisters
-/// (real `instance_owns_files` gates only the rebuild and the scans).
-///
-/// Real order: rebuild the system-wide `LinkageMap` from every real
-/// installed package's own vdb-stored `NEEDED.ELF.2`
-/// (`linkage_owner_entries` + `rebuild` -- real `exclude_pkgs=None` on
-/// the standalone path, since the package being unmerged hasn't left
-/// the vdb yet, so its own data is still really part of the map,
-/// matching real behavior exactly). Compute `needed_elf::find_
-/// libs_to_preserve` with `new_owner_is_owner` always `false` (matching
-/// what real `not unmerge and self.isowner(f)` collapses to when
-/// `unmerge` is `true`) and `old_owner_is_owner` real `self.isowner`
-/// (`owns_path_pf`, this exact package's own real `CONTENTS`).
-/// Unconditionally unregister this package's own prior registry entry
-/// first (real `plib_registry.unregister`); if anything is actually
-/// preserved, register this package -- the one being removed -- as the
-/// new keeper of those paths (real `plib_registry.register`).
-///
-/// `is_replacement` is real `unmerge_with_replacement`
-/// (`preserve_paths is not None`, set exactly when `treewalk()`'s own
-/// replace loop drives this unmerge): real then skips the
-/// `_find_libs_to_preserve(unmerge=True)` re-registration entirely and
-/// only unregisters the old entry -- the preserved set was already
-/// computed merge-side (`find_preserve_paths_for_merge`) and injected
-/// into the replacing package's own `CONTENTS`, so the files survive
-/// removal through same-slot ownership (`remove_contents`' own
-/// `is_owned` skip) and the record lands under the merging package via
-/// `register_merge_preserved_libs`. Returns an empty set in that mode;
-/// the standalone (`emerge -C`) mode returns the preserved paths for
-/// the caller to exclude from its own real file-removal loop.
-///
-/// Returns the set of preserved paths (already `ROOT`-relative absolute
-/// paths, portuale's own `CONTENTS` convention) -- the caller is
-/// responsible for excluding them from its own real file-removal loop
-/// (real "remove the preserved files from our contents so that they
-/// won't be unmerged"; portuale's own vdb entry directory gets deleted
-/// wholesale moments later regardless, so there's no separate real
-/// `CONTENTS`-file rewrite to also perform here).
+/// Unregisters this package's registry entry, then re-registers libraries still needed
+/// under the package being removed. Replacement mode only unregisters and returns empty.
+/// Returns the preserved paths for the caller to exclude from file removal.
+// Portage: vartree.py, dblink._prune_plib_registry
 #[cfg(test)]
 pub(crate) fn preserve_libs_on_unmerge(
     args: PreserveLibsOnUnmergeArgs<'_>,
@@ -97,8 +55,7 @@ pub(crate) struct PreserveLibsOnUnmergeIntoArgs<'a> {
     pub(crate) retire: Option<&'a mut RetireWrites>,
 }
 
-/// [`preserve_libs_on_unmerge`], optionally keeping the registry in
-/// `retire` instead of writing it (feat#157 S4.2).
+/// [`preserve_libs_on_unmerge`], keeping the registry in `retire` instead of writing it.
 pub(crate) fn preserve_libs_on_unmerge_into(
     args: PreserveLibsOnUnmergeIntoArgs<'_>,
 ) -> Result<BTreeSet<String>, String> {
@@ -112,22 +69,13 @@ pub(crate) fn preserve_libs_on_unmerge_into(
         is_replacement,
         retire,
     } = args;
-    // Real `_prune_plib_registry` still runs `unregister()` for an
-    // instance that owns no files (`instance_owns_files` gates only the
-    // linkmap rebuild and the preserve/prune scans below); only the
-    // preserve-set computation is skipped.
     let instance_owns_files = !contents_text.trim().is_empty();
 
     let counter = read_entry_text(root, category, pf, "COUNTER").unwrap_or_else(|| "0".to_string());
     let cpv = format!("{category}/{pf}");
 
     let mut registry = read_plib_registry(root);
-    // The orphan scan below must see the registry *before* this
-    // package's own entry is unregistered: real `_prune_plib_registry`
-    // rebuilds the `LinkageMap` (whose orphan `scanelf` branch reads the
-    // registry) before `unregister()` runs, so a previously-preserved
-    // library this instance no longer ships in its own `NEEDED.ELF.2`
-    // is still indexed for the computation.
+    // The orphan scan must see the registry before this package's entry is unregistered.
     let preserved = if is_replacement || !instance_owns_files {
         BTreeSet::new()
     } else {
@@ -187,11 +135,7 @@ pub(crate) fn preserve_libs_on_unmerge_into(
     })
 }
 
-/// Every currently-registered preserved-library path, keyed by the cpv
-/// that owns it (real `PreservedLibsRegistry.getPreservedLibs()`). A thin
-/// `pub(crate)` reader for the resolver-side `@preserved-rebuild` set and
-/// the `display_preserved_libs` advisory, both of which live outside this
-/// module.
+/// Every registered preserved-library path, keyed by owning cpv.
 pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> {
     read_plib_registry(root).preserved_libs()
 }
@@ -207,52 +151,9 @@ pub(crate) struct FindUnusedPreservedLibsArgs<'a> {
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
 
-/// Real `dblink._find_unused_preserved_libs`: the registered
-/// preserved libraries that no installed package links against any
-/// more, keyed by the cpv that owns them (so the caller can prune each
-/// owner's `CONTENTS`). Rebuilds the system-wide `LinkageMap` from
-/// every installed `NEEDED.ELF.2` **plus** the registry orphans no
-/// `NEEDED.ELF.2` indexes (`linkage_owner_entries`, real
-/// `LinkageMap.rebuild`'s own preserved-libs branch) -- without the
-/// orphans a just-preserved library is invisible here -- and, for each
-/// registered path that still exists on disk, collects its consumers
-/// -- from the linkage map when the path is still an indexed object,
-/// otherwise via a basename==soname reverse lookup
-/// (`needed_elf::soname_consumers`) for a library whose owning package
-/// has already left the vdb. The consumer/preserved graph is then
-/// reduced by `needed_elf::find_unneeded_preserved` (real
-/// `_find_unneeded_preserved_nodes`, cycle-aware).
-///
-/// `unmerge_no_replacement` + `being_unmerged`: real "also eliminate
-/// consumers that are going to be unmerged if unmerge_no_replacement is
-/// True" (real `unmerge_no_replacement = unmerge and not
-/// unmerge_with_replacement`): on a plain unmerge with no replacement,
-/// a consumer that is itself entirely owned by the package now being
-/// removed does not keep a library alive; in replacement mode those
-/// consumers survive through the replacing package, so they still
-/// count. `being_unmerged` returns true for such a path.
-///
-/// `exclude_cpvs` + `replacement_preserved`: real `exclude_pkgs` +
-/// `preserve_paths` (see `linkage_owner_entries`): in replacement mode
-/// the unmerged instance's own linkmap data is excluded while the
-/// merge-side just-preserved set is scanned in, so a preserved library
-/// whose only linkmap consumer is a just-preserved file is kept. Both
-/// are empty/`None` on every other path.
-///
-/// `replacement_needed`: real `include_file` (see
-/// `linkage_owner_entries`): the replacing package's own
-/// `NEEDED.ELF.2` lines, so a preserved library whose only remaining
-/// consumer is the replacing package itself survives the
-/// replace-loop prune. Empty on every other path (standalone
-/// `emerge -C` has no replacing package; the merge-end prune runs
-/// after the rename into place, when the new entry is enumerated).
-///
-/// Deliberate narrowing vs. real: the per-consumer "an alternative,
-/// non-preserved provider of the same soname is installed" edge removal
-/// (real "erroneously preserved due to a move from one directory to
-/// another") is not reproduced -- portuale has never had a preserved-lib
-/// directory-move path, and the collision-protect takeover
-/// (`unregister_preserved_libs`) already covers the same-path case.
+/// Registered preserved libraries no installed package links against any more, keyed by
+/// owner. Paths whose owner left the vdb fall back to a soname reverse lookup.
+// Portage: vartree.py, dblink._find_unused_preserved_libs
 #[cfg(test)]
 pub(crate) fn find_unused_preserved_libs(
     args: FindUnusedPreservedLibsArgs<'_>,
@@ -287,8 +188,7 @@ pub(crate) struct FindUnusedPreservedLibsInArgs<'a> {
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
 
-/// [`find_unused_preserved_libs`] over an explicit registry (the one an
-/// unmerge in progress holds in memory, feat#157 S4.2).
+/// [`find_unused_preserved_libs`] over an explicit in-memory registry.
 pub(crate) fn find_unused_preserved_libs_in(
     args: FindUnusedPreservedLibsInArgs<'_>,
 ) -> BTreeMap<String, BTreeSet<String>> {
@@ -342,8 +242,7 @@ pub(crate) fn find_unused_preserved_libs_in(
         });
         let mut consumers: BTreeSet<String> = match indexed {
             Ok(set) => set,
-            // Not an indexed object (owning package gone) -- fall back to
-            // "does any installed object still need this soname".
+            // Owning package gone from the vdb: match by soname instead.
             Err(_) => {
                 let soname = path.rsplit('/').next().unwrap_or(path);
                 crate::needed_elf::soname_consumers(&map, soname)
@@ -377,26 +276,9 @@ pub(crate) struct PruneUnusedPreservedLibsArgs<'a> {
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
 
-/// Real `dblink._prune_plib_registry`'s own tail
-/// (`_remove_preserved_libs` + the `removeFromContents` loop +
-/// `pruneNonExisting`), which real portage runs at the end of **both** a
-/// merge (`treewalk` -- "For gcc upgrades, preserved libs have to be
-/// removed after the library path has been updated") and an unmerge.
-///
-/// Deletes every preserved-library file `find_unused_preserved_libs`
-/// reports as unneeded (tolerating an already-gone file), removes empty
-/// parent directories, strips the paths from each still-installed
-/// owner's `CONTENTS`/`NEEDED.ELF.2` (`remove_from_contents`), rewrites
-/// the registry with those paths gone (and drops any entry whose paths
-/// no longer exist on disk -- real `pruneNonExisting`). Prints real
-/// `<<< !needed  {obj|sym} <path>` per removed file. Returns the removed
-/// `ROOT`-relative paths.
-///
-/// `unmerge_no_replacement` / `being_unmerged` / `exclude_cpvs` /
-/// `replacement_preserved` / `replacement_needed` are passed straight
-/// through to `find_unused_preserved_libs` (see its own doc comment
-/// for the real grounding); every caller except the replace-loop
-/// unmerge passes `exclude_cpvs=&[]` and empty feeds.
+/// Deletes the libraries `find_unused_preserved_libs` reports as unneeded, strips them
+/// from owners' `CONTENTS`, and reprunes the registry. Returns the removed paths.
+// Portage: vartree.py, dblink._prune_plib_registry
 pub(crate) fn prune_unused_preserved_libs(
     args: PruneUnusedPreservedLibsArgs<'_>,
 ) -> Result<Vec<String>, String> {
@@ -430,10 +312,8 @@ pub(crate) struct PruneUnusedPreservedLibsIntoArgs<'a> {
     pub(crate) retire: Option<&'a mut RetireWrites>,
 }
 
-/// [`prune_unused_preserved_libs`], optionally reading the registry from
-/// `retire` and leaving its writes (the registry, the W4 rewrites) there
-/// instead of committing them (feat#157 S4.2). The files it removes are
-/// removed at once either way.
+/// [`prune_unused_preserved_libs`], leaving registry and rewrites in `retire`.
+/// The files themselves are removed at once either way.
 pub(crate) fn prune_unused_preserved_libs_into(
     args: PruneUnusedPreservedLibsIntoArgs<'_>,
 ) -> Result<Vec<String>, String> {
@@ -477,8 +357,7 @@ pub(crate) fn prune_unused_preserved_libs_into(
         removed.push(path.clone());
     }
 
-    // Real "Remove empty parent directories if possible" -- walk upward
-    // from each, stopping at the first non-empty one.
+    // Remove newly-emptied parent directories, stopping at the first non-empty one.
     for mut dir in parent_dirs {
         while dir.starts_with(root) && dir != root {
             if std::fs::remove_dir(&dir).is_err() {
@@ -491,8 +370,6 @@ pub(crate) fn prune_unused_preserved_libs_into(
         }
     }
 
-    // Strip the removed paths from every still-installed owner's vdb
-    // CONTENTS/NEEDED.ELF.2, then rewrite the registry.
     let mut registry = plib_registry_for(root, retire.as_deref());
     for (cpv, paths) in &cpv_lib_map {
         let cat_pf = cpv.split_once('/');
@@ -513,10 +390,6 @@ pub(crate) fn prune_unused_preserved_libs_into(
         }
     }
 
-    // Real `_remove_preserved_libs`'s own tail (`vartree.py:3995`):
-    // `self.vartree.dbapi._plib_registry.pruneNonExisting()` -- drop a
-    // registry entry once none of its recorded paths exist on disk any
-    // more (rebuilding survivors file-then-symlink, not just retaining).
     prune_non_existing(root, &mut registry);
     match retire {
         Some(retire) => retire.registry = Some(registry),

@@ -205,11 +205,7 @@ fn a_binpkg_merged_on_sqlite_matches_the_files_merge() {
     binpkg_merge_matches_files(portage_vdb::BackendKind::Sqlite);
 }
 
-/// feat#157 S5.4 (c): the same binpkg merge on redb. The fixture
-/// ebuilds (`binpkgrmpkg`) run no phase that calls `has_version` /
-/// `best_version` (grep of the fixture repo finds none), so this
-/// needs no parent pipe (S6.3); a phase that did would reach the
-/// held redb file only through that pipe.
+/// The same binpkg merge on redb.
 #[cfg(feature = "vdb-redb")]
 #[test]
 fn a_binpkg_merged_on_redb_matches_the_files_merge() {
@@ -339,14 +335,8 @@ fn vdb_cli(args: &[&str]) -> (u8, String) {
     )
 }
 
-/// feat#157 S4.5 (design 9.1): the process dies right before the
-/// publishing commit of a same-slot upgrade. After a restart (fresh
-/// handle) the old instance is still installed with its files, the
-/// new one is a pending orphan that `status` reports and `sweep`
-/// removes, the generation was not advanced by the aborted commit and
-/// the counter is not reused. The new payload files landed on disk
-/// before the crash and stay there (as in real Portage); that is only
-/// documented here, not asserted.
+/// A crash before the publishing commit leaves the old instance installed
+/// plus a sweepable pending orphan, without advancing the generation.
 #[cfg(feature = "vdb-sqlite")]
 #[test]
 fn a_crash_before_the_publishing_commit_leaves_the_old_instance_and_a_sweepable_orphan() {
@@ -443,10 +433,8 @@ fn a_crash_before_the_publishing_commit_leaves_the_old_instance_and_a_sweepable_
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// feat#157 S4.5: the process dies right before the retiring commit
-/// of `-C`. With a fresh handle the row is still installed and the
-/// generation is unchanged; a later `-C` succeeds. (The payload files
-/// were already removed before the crash; not asserted.)
+/// A crash before the retiring commit of `-C` leaves the row installed with
+/// the generation unchanged; a later `-C` succeeds.
 #[cfg(feature = "vdb-sqlite")]
 #[test]
 fn a_crash_before_the_retire_commit_leaves_the_entry_installed() {
@@ -564,11 +552,7 @@ fn unmerge_standalone(root: &Path, ptmp: &Path, pf: &str, pn: &str) {
     .expect("unmerge succeeds");
 }
 
-/// feat#157 S4.2 (a): `mrg -C` of an installed package on sqlite.
-/// The payload goes as on `files`, prerm/postrm ran from the
-/// scratch copy of the stored environment, and the row goes in ONE
-/// commit: right before it the entry is still installed (and its
-/// payload already gone); the generation moved by exactly one.
+/// `mrg -C` on sqlite retires the row in one commit, matching the `files` run.
 #[cfg(feature = "vdb-sqlite")]
 #[test]
 fn a_standalone_unmerge_on_sqlite_retires_the_row_in_one_commit() {
@@ -631,13 +615,8 @@ fn a_standalone_unmerge_on_sqlite_retires_the_row_in_one_commit() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// feat#157 S4.2 (b): the soname-bump scenario of S1.5. After
-/// `sonamebumplib` 1.0 -> 2.0 (the old soname is preserved under
-/// 2.0), unmerging the last consumer prunes the preserved library:
-/// it is removed, the registry is cleared, and the W4 rewrites of
-/// `sonamebumplib-2.0`'s `CONTENTS` / `NEEDED.ELF.2` happen. On
-/// sqlite they all land in the commit that deletes the consumer's
-/// row (one generation step); the end state equals the `files` run.
+/// Unmerging the last consumer prunes the preserved library in the same
+/// retire commit; the end state equals the `files` run.
 #[cfg(feature = "vdb-sqlite")]
 #[test]
 fn a_standalone_unmerge_prunes_preserved_libs_in_its_retire_commit() {
@@ -646,8 +625,7 @@ fn a_standalone_unmerge_prunes_preserved_libs_in_its_retire_commit() {
     let run = |name: &str, sqlite: bool| {
         let root = tmp.join(name);
         std::fs::create_dir_all(&root).unwrap();
-        // As the S1.5 soname-bump test: `/usr/lib64` must be in the
-        // linker path for the consumer to be found.
+        // `/usr/lib64` must be in the linker path for the consumer to be found.
         std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
         std::fs::write(
             root.join("etc/env.d/99sonamebump"),
@@ -815,45 +793,9 @@ fn snapshot(db: &dyn InstalledDb) -> Snap {
     }
 }
 
-/// feat#157 S4.4: the same sequence on a `files` ROOT and on a
-/// sqlite ROOT ends in the same installed state. Sequence: (1) merge
-/// binpkgrmpkg-1.0 (binary), (2) merge mergepkg (source), (3)
-/// same-slot upgrade binpkgrmpkg 1.0 -> 2.0, (4) the soname bump
-/// sonamebumplib 1.0 -> consumesonamebump -> sonamebumplib 2.0
-/// (preserves the old soname), (5) unmerge consumesonamebump (prunes
-/// the preserved library, W4), (6) unmerge mergepkg.
-///
-/// Both runs use the same ROOT and PORTAGE_TMPDIR paths one after
-/// the other, so `environment.bz2` (which records paths) is
-/// comparable byte for byte. The sqlite result is also converted to
-/// a temporary `files` root with `copy_all` and compared as well;
-/// `verify` runs on that pair too.
-///
-/// Compared per live entry: the file set, every file's bytes and
-/// permission bits (group/other write masked, see below) and the
-/// `metadata` stamp state; plus the same
-/// live-entry set, `world`, `world_sets`, `preserved_libs`,
-/// `config_memory`, counter, and the payload trees under ROOT
-/// (paths, bytes, symlink targets; no modes, see below).
-///
-/// Ignored, because they are run-dependent by nature (and `verify`
-/// compares them, so its reported differences are only checked to
-/// be among these, the modes only by the umask bits): all file mtimes and the entry directory mtime
-/// (each run builds and writes its files at another instant); the
-/// `#dir_mtime=` stamp line of `metadata` (derived from the entry
-/// directory mtime; its Valid/Stale/Absent state is compared); the
-/// mtime field of `obj` / `sym` lines of `CONTENTS` (the payload
-/// files' mtimes); the `BUILD_TIME` file and the `BUILD_TIME=` line of
-/// `metadata` (a source merge records the time of its build); the entry
-/// directory's mode, down to its umask bits (`files` records the
-/// merge's `mkdir` under the process umask, 0o755, or 0o775 under
-/// another umask; a sqlite merge stores the schema default 0o755;
-/// both are permission bits since #307); the group and other write
-/// bits of entry file modes
-/// (a file written under another umask: 0o664 vs 0o644); the modes
-/// of the payload tree (the same umask race,
-/// as `payload_bytes` notes). Nothing else is dropped: not
-/// `environment.bz2`, not `COUNTER`, not the rest of `metadata`.
+/// The same merge/upgrade/unmerge sequence on a `files` ROOT and on a
+/// database ROOT ends in the same installed state, modulo run-dependent
+/// values (mtimes, `BUILD_TIME`, umask bits).
 fn sequence_equivalence(kind: portage_vdb::BackendKind) {
     let tmp = tempdir();
     let root = tmp.join("root");
@@ -865,8 +807,7 @@ fn sequence_equivalence(kind: portage_vdb::BackendKind) {
             let _ = std::fs::remove_dir_all(dir);
             std::fs::create_dir_all(dir).unwrap();
         }
-        // As the S1.5 soname-bump test: `/usr/lib64` must be in the
-        // linker path for the consumer to be found.
+        // `/usr/lib64` must be in the linker path for the consumer to be found.
         std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
         std::fs::write(
             root.join("etc/env.d/99sonamebump"),
@@ -934,8 +875,6 @@ fn sequence_equivalence(kind: portage_vdb::BackendKind) {
     portage_vdb::copy_all(db.as_ref(), &converted_db, false).unwrap();
     let converted_snap = snapshot(&converted_db);
 
-    // The sequence left something to compare (1 + 2 + upgrade +
-    // soname bump - consumer - mergepkg).
     let live: Vec<String> = files_snap.entries.keys().map(|k| k.to_string()).collect();
     assert_eq!(
         live,
@@ -988,16 +927,13 @@ fn sequence_equivalence(kind: portage_vdb::BackendKind) {
     };
     assert_eq!(bytes(sqlite_payload), bytes(files_payload), "payload tree");
 
-    // `verify` on the converted pair: every difference it reports
-    // must be one of the ignored, run-dependent kinds.
+    // Every difference `verify` reports must be a run-dependent one.
     let rep = portage_vdb::verify(&portage_vdb::FilesDb::new(&files_final), &converted_db).unwrap();
     assert_eq!(rep.entries_compared, 2);
     for line in &rep.differences {
         let (name, what) = line.split_once(": ").unwrap_or((line, ""));
         let file = name.rsplit_once('/').map_or("", |(_, f)| f);
-        // "mode <a> != <b>" / "directory mode <a> != <b>" (octal,
-        // permission bits both since #307): only the umask bits may
-        // differ.
+        // Of a mode difference, only the umask bits may differ.
         let mode_ok = what
             .strip_prefix("mode ")
             .or_else(|| what.strip_prefix("directory mode "))
@@ -1024,8 +960,7 @@ fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_sqlite_and_files() {
     sequence_equivalence(portage_vdb::BackendKind::Sqlite);
 }
 
-/// feat#157 S5.4: the same sequence on redb (see
-/// [`sequence_equivalence`] for what is compared and ignored).
+/// The same sequence on redb (see [`sequence_equivalence`]).
 #[cfg(feature = "vdb-redb")]
 #[test]
 fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_redb_and_files() {
@@ -1042,15 +977,8 @@ fn db_kinds() -> Vec<portage_vdb::BackendKind> {
     ]
 }
 
-/// #310: with two replaced same-slot instances (a broken VDB), the
-/// later one's replace-loop prune must not see the earlier one's
-/// `NEEDED.ELF.2`: on `files` its directory is already gone, on a
-/// database it stays installed until the publishing commit. Both
-/// old instances consume `libkeep.so.1`, so the preserved
-/// `keepA.so` survives the first prune (the second still needs it)
-/// and must be pruned by the second, whose own and whose
-/// predecessor's consumers are both gone; before the fix a
-/// database kept it alive through the first instance's lines.
+/// With two replaced same-slot instances, the later one's replace-loop prune
+/// must not see the earlier one's `NEEDED.ELF.2`.
 #[test]
 fn a_later_replaced_instance_does_not_see_the_earlier_ones_needed_on_a_database() {
     let run = |kind: Option<portage_vdb::BackendKind>| {
@@ -1059,10 +987,8 @@ fn a_later_replaced_instance_does_not_see_the_earlier_ones_needed_on_a_database(
         let twin = root.join("var/db/pkg/dev-libs/oldapp-0.9");
         std::fs::create_dir_all(&twin).unwrap();
         std::fs::write(twin.join("CONTENTS"), "obj /usr/bin/cprog2 abc 1\n").unwrap();
-        // The replacing package ships `cprog2` too (the pending
-        // entry's `CONTENTS` is `also_keep`'s ownership source), so
-        // the file stays on disk through both unmerges and only the
-        // visibility of the instances' `NEEDED.ELF.2` decides.
+        // The replacing package ships `cprog2` too, so only the visibility
+        // of the instances' `NEEDED.ELF.2` decides.
         std::fs::write(
             twin.join("NEEDED.ELF.2"),
             "X86_64;/usr/bin/cprog2;;;libkeep.so.1\n",
@@ -1119,11 +1045,8 @@ fn a_later_replaced_instance_does_not_see_the_earlier_ones_needed_on_a_database(
     }
 }
 
-/// feat#157 S8.2: the collision scenario on a database backend
-/// (`find_owners` answered from the `owner` index): `collisionpkg-c`
-/// would overwrite `collisionpkg-a`'s `shared.txt`, the merge
-/// aborts under `collision-protect` and names `collisionpkg-a` as
-/// the owner, and `find_owners` agrees with the files answer.
+/// The collision scenario on a database backend, with `find_owners`
+/// answered from the `owner` index.
 #[test]
 fn collision_protect_names_the_owner_from_the_index_on_every_backend() {
     for kind in db_kinds() {
@@ -1198,14 +1121,9 @@ fn write_vdb(root: &Path, entries: &[HandEntry]) {
     }
 }
 
-/// feat#157 S8.1 / S8.2: on a hand-built VDB whose dependency
-/// strings carry every kind of token (USE conditional, `||` group,
-/// slot operator, blocker, version bounds, a wildcard and bare
-/// versioned names the index cannot classify), plus `CONTENTS`
-/// lines with odd path spellings, `installed_reverse_dependents`
-/// and `find_owners` give the same answer on `files` (the scan)
-/// and on every database backend (the index), and the answer is
-/// the right one.
+/// On a hand-built VDB carrying every dependency-token kind,
+/// `installed_reverse_dependents` and `find_owners` agree on `files` and on
+/// every database backend, with the right answer.
 #[test]
 fn reverse_dependents_and_owners_from_the_index_equal_the_scan() {
     let tmp = tempdir();
@@ -1331,7 +1249,6 @@ fn reverse_dependents_and_owners_from_the_index_equal_the_scan() {
         }
         let db = use_db(kind, &alias, &tmp.join(format!("vdb{n}.db")));
         assert_eq!(db.kind(), kind);
-        // `use_db` converted `alias`'s files VDB (the same tree).
         for (&c, want) in consumers.iter().zip(&scan) {
             assert_eq!(
                 &installed_reverse_dependents_for(&alias, c.0, c.1, c.2),
@@ -1340,8 +1257,7 @@ fn reverse_dependents_and_owners_from_the_index_equal_the_scan() {
             );
         }
         assert_eq!(find_owners(&alias, &paths), scan_owners, "{kind}");
-        // The index is really in use: the entry without any dep
-        // token is not even read.
+        // The index is really in use: the entry without any dep token is skipped.
         let recs = db
             .reverse_dependents("dev-libs/consumer", &[portage_vdb::DepClass::Rdepend])
             .unwrap();
@@ -1360,9 +1276,8 @@ fn installed_reverse_dependents_for(
     portage_repo::installed_reverse_dependents(root, category, package, version)
 }
 
-/// feat#157 S8.1 on the fixture root: every installed package gets
-/// the same reverse dependents from the scan (`files`) and from
-/// each database backend converted from it.
+/// Every installed fixture package gets the same reverse dependents from
+/// the scan and from each database backend.
 #[test]
 fn fixture_reverse_dependents_are_identical_on_every_backend() {
     let fixtures = fixtures_root();

@@ -32,7 +32,7 @@ fn plib_registry_round_trips_through_json() {
 #[test]
 fn read_plib_registry_degrades_gracefully_when_missing_or_corrupt() {
     let tmp = tempdir();
-    // No file at all -- real load()'s own ENOENT -> {} degrade.
+    // No file at all: Portage's `load` degrades to empty.
     assert!(read_plib_registry(&tmp).entries.is_empty());
 
     std::fs::create_dir_all(plib_registry_path(&tmp).parent().unwrap()).unwrap();
@@ -70,12 +70,9 @@ fn plib_inode_map_skips_paths_that_no_longer_exist_on_disk() {
     );
 }
 
-/// S0 for backlog #167(a): real `PreservedLibsRegistry.store()`
-/// (`3rdparty/portage/lib/portage/util/_dyn_libs/
-/// PreservedLibsRegistry.py:107-108`) returns without writing when the
-/// registry is unchanged (`self._data == self._data_orig`) -- a
-/// merge/unmerge that preserves nothing must leave a packaged 0-byte
-/// registry at 0 bytes (l32 C1/C3/C4 cells), not rewrite it.
+/// A merge/unmerge that preserves nothing leaves the registry file
+/// byte- and mtime-identical.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
 #[test]
 fn plib_registry_is_not_rewritten_when_nothing_is_preserved() {
     let tmp = tempdir();
@@ -126,21 +123,14 @@ fn plib_registry_is_not_rewritten_when_nothing_is_preserved() {
     );
 }
 
-/// Fix round 1 for review item 2 (backlog #178): real `store()`
-/// returns early when the registry equals what was read
-/// (`PreservedLibsRegistry.store`) -- a merge/unmerge with no
-/// preserved-lib activity must leave an unrelated non-empty entry's
-/// bytes **and** mtime untouched, not just the empty-file case
-/// above. Pre-fix, every `preserve_libs_on_unmerge` /
-/// `prune_unused_preserved_libs` call rewrote the file even when
-/// `register()` was a no-op.
+/// With no preserved-lib activity, an unrelated non-empty entry's bytes and
+/// mtime stay untouched too, not just the empty-file case above.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
 #[test]
 fn plib_registry_with_an_unrelated_entry_is_not_rewritten_without_preserve_activity() {
     let tmp = tempdir();
     let root = tmp.join("root");
-    // A live unrelated entry: the file exists (so `pruneNonExisting`
-    // keeps it) and stays needed (an installed consumer links its
-    // soname), so every step below is a genuine registry no-op.
+    // A live, still-needed unrelated entry, so every step below is a no-op.
     std::fs::create_dir_all(root.join("usr/lib")).unwrap();
     std::fs::create_dir_all(root.join("usr/bin")).unwrap();
     std::fs::write(root.join("usr/lib/other.so"), b"fake elf").unwrap();
@@ -161,8 +151,7 @@ fn plib_registry_with_an_unrelated_entry_is_not_rewritten_without_preserve_activ
     let seed = "{\n\t\"dev-libs/other:0\": [\n\t\t\"dev-libs/other-1.0\",\n\t\t\"9\",\n\t\t[\n\t\t\t\"/usr/lib/other.so\"\n\t\t]\n\t]\n}";
     std::fs::create_dir_all(plib_registry_path(&root).parent().unwrap()).unwrap();
     std::fs::write(plib_registry_path(&root), seed).unwrap();
-    // A distinctly old mtime, so any rewrite is observable even at
-    // coarse filesystem timestamp granularity.
+    // A distinctly old mtime, so any rewrite is observable.
     let touch = std::process::Command::new("touch")
         .args([
             "-d",
@@ -178,7 +167,6 @@ fn plib_registry_with_an_unrelated_entry_is_not_rewritten_without_preserve_activ
         .modified()
         .unwrap();
 
-    // A package with no preserved-lib activity at all.
     let vdb = root.join("var/db/pkg/dev-libs/plain-1.0");
     std::fs::create_dir_all(&vdb).unwrap();
     std::fs::write(vdb.join("COUNTER"), "3\n").unwrap();
@@ -223,16 +211,13 @@ fn plib_registry_with_an_unrelated_entry_is_not_rewritten_without_preserve_activ
     );
 }
 
-/// S0 for backlog #167(b): an empty registry real *does* write is
-/// exactly `{}` (2 bytes, no trailing newline -- real
-/// `json.dumps({}, indent="\t", sort_keys=True)`).
+/// An empty registry writes exactly `{}`, no trailing newline.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
 #[test]
 fn plib_registry_empty_serializes_to_exactly_empty_braces() {
     let tmp = tempdir();
-    // A loaded non-empty registry whose entries were all
-    // unregistered: snapshot `orig_entries` the way real `load()`
-    // snapshots `_data_orig`, so the now-empty `entries` compare
-    // changed and real `store()` rewrites.
+    // Snapshot `orig_entries` as `load` does, so the now-empty entries
+    // compare changed and `store` rewrites.
     let mut registry = PlibRegistry {
         entries: BTreeMap::new(),
         orig_entries: BTreeMap::new(),
@@ -265,13 +250,9 @@ fn plib_registry_empty_serializes_to_exactly_empty_braces() {
     );
 }
 
-/// S0 for backlog #167(c): a non-empty registry is serialized
-/// byte-identical to real `json.dumps(data, ensure_ascii=False,
-/// indent="\t", sort_keys=True)` (expected bytes below generated with
-/// `python3 -c 'import json; print(repr(json.dumps({"b:0":
-/// ("x-1.0", "1", []), "a:0": ("y-2.0", "3",
-/// ["/usr/lib/lib\u00e9.so.1", "a\"b\\\\c"])}, ensure_ascii=False,
-/// indent="\t", sort_keys=True)))'`).
+/// A non-empty registry serializes byte-identical to Portage's `json.dumps`
+/// with `ensure_ascii=False`, tab indent and sorted keys.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
 #[test]
 fn plib_registry_serialization_is_byte_identical_to_python_json_dumps() {
     let tmp = tempdir();
@@ -305,13 +286,9 @@ fn plib_registry_serialization_is_byte_identical_to_python_json_dumps() {
     );
 }
 
-/// S0 for backlog #167(e): real `load()` calls `pruneNonExisting()`
-/// (`PreservedLibsRegistry.py:96-97,180-219`), which rebuilds each
-/// entry's paths as regular files first (in stored order), then
-/// symlinks whose target is one of those files -- so after a reload
-/// the hardlink `.so.1.0.0` comes before the soname symlink `.so.1`
-/// even though `register()` stored `sorted()` order, and gone paths
-/// are dropped.
+/// Reload rebuilds each entry's paths as regular files first (in stored
+/// order), then symlinks, dropping gone paths.
+/// Portage: `PreservedLibsRegistry.py`, `load`.
 #[test]
 fn plib_registry_reload_orders_regular_files_before_symlinks() {
     let tmp = tempdir();
@@ -342,26 +319,9 @@ fn plib_registry_reload_orders_regular_files_before_symlinks() {
     );
 }
 
-/// Backlog #178 (S0 oracle + S2): two consecutive soname bumps
-/// (`sonamebumplib` 1.0 -> 2.0 -> 3.0, each dropping the previous
-/// soname while `consumesonamebump` still links `.so.1`).
-/// Real `PreservedLibsRegistry.register(cpv, slot, counter, paths)`
-/// (`3rdparty/portage/lib/portage/util/_dyn_libs/
-/// PreservedLibsRegistry.py:142-169`) keyed `cp:slot` **replaces**
-/// the record with the merging package's `(cpv, counter, paths)` --
-/// real `dblink.treewalk()` calls it as `register(self.mycpv, slot,
-/// counter, sorted(preserve_paths))` (`lib/portage/dbapi/vartree.py:
-/// 5266-5272`), after copying the preserved entries into the new
-/// package's own `CONTENTS` (`_add_preserve_libs_to_contents`,
-/// `:3775-3826`). The S0 oracle (one `podman run ...
-/// localhost/test-portuale:latest` probe over the l32 C2 cell shape
-/// plus a `sonamelib-3.0` ebuild, real portage 3.0.82.2) holds after
-/// each step: `{"l32/sonamelib:0": ["l32/sonamelib-<N>.0",
-/// "<counter>", ["/usr/lib64/libl32soname.so.1.0.0",
-/// "/usr/lib64/libl32soname.so.1"]]}`, the `.so.2` files gone from
-/// disk, and the new package's `CONTENTS` listing the preserved
-/// `.so.1` entries with their original digest/mtime (see
-/// `differential-test-bed/findings/l5.md` "## Group 2").
+/// Two consecutive soname bumps replace the record under the merging cpv
+/// while the still-needed paths survive verbatim.
+/// Portage: `PreservedLibsRegistry.py`, `register`.
 #[test]
 fn plib_registry_two_consecutive_soname_bumps_replace_the_record_under_the_merging_cpv() {
     let tmp = tempdir();
@@ -370,15 +330,8 @@ fn plib_registry_two_consecutive_soname_bumps_replace_the_record_under_the_mergi
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&portage_tmpdir).unwrap();
 
-    // A real Gentoo ROOT's own `/etc/ld.so.conf` lists `/usr/lib64`
-    // (container-verified on the S0 probe image), so real
-    // `getlibpaths()`'s own `defpath` covers the libdir and real
-    // `findConsumers` matches the consumer. Portuale regenerates
-    // `etc/ld.so.conf` from env.d `LDPATH` on every merge
-    // (`env_update::run_env_update`), so seed that input the way a
-    // real toolchain env.d entry does -- otherwise this synthetic
-    // root's `defpath` is just `/usr/lib` + `/lib` and no
-    // `/usr/lib64` consumer is ever found, on either implementation.
+    // Seed the env.d `LDPATH` input the way a toolchain entry does, or no
+    // `/usr/lib64` consumer is ever found on either implementation.
     std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
     std::fs::write(
         root.join("etc/env.d/99sonamebump"),
@@ -402,9 +355,6 @@ fn plib_registry_two_consecutive_soname_bumps_replace_the_record_under_the_mergi
         assert_eq!(status, 0, "{name}-{version} merges cleanly");
     }
 
-    // Bump 1: the record is owned by the merging cpv with its own
-    // vdb COUNTER, paths file-then-symlink (real `pruneNonExisting`
-    // order), byte-exact.
     let counter_2 =
         std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-2.0/COUNTER"))
             .unwrap();
@@ -439,10 +389,6 @@ fn plib_registry_two_consecutive_soname_bumps_replace_the_record_under_the_mergi
     .expect("run_merge succeeds");
     assert_eq!(status, 0, "sonamebumplib-3.0 merges cleanly");
 
-    // Bump 2: the SAME key is replaced -- owner flips to the new
-    // merging cpv/counter while the still-needed `.so.1` path list
-    // survives verbatim (real drops only the unneeded `.so.2` pair,
-    // which nobody links).
     let counter_3 =
         std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-3.0/COUNTER"))
             .unwrap();
@@ -480,13 +426,9 @@ fn plib_registry_two_consecutive_soname_bumps_replace_the_record_under_the_mergi
     );
 }
 
-/// Real `_prune_plib_registry`'s own unregister shape for a package
-/// that owns no files at all (empty `CONTENTS`): real
-/// `instance_owns_files` gates only the linkmap rebuild and the
-/// preserve/prune scans -- `unregister()` still runs. So portuale's
-/// own `preserve_libs_on_unmerge` returns an empty preserved set but
-/// still drops a matching stale entry; with no entry at all nothing
-/// is written (write-only-on-change).
+/// A package owning no files still unregisters its matching stale entry;
+/// with no entry at all, nothing is written.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
 #[test]
 fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
     let tmp = tempdir();
@@ -494,8 +436,7 @@ fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
     let vdb = root.join("var/db/pkg/dev-libs/foo-1.0");
     std::fs::create_dir_all(&vdb).unwrap();
     std::fs::write(vdb.join("COUNTER"), "5\n").unwrap();
-    // The stale path exists, so the load-time `pruneNonExisting`
-    // keeps the entry and only the `unregister()` below removes it.
+    // The stale path exists, so load-time pruning keeps the entry.
     std::fs::create_dir_all(root.join("usr/lib")).unwrap();
     std::fs::write(root.join("usr/lib/stale.so"), b"fake elf").unwrap();
     let mut entries = BTreeMap::new();
@@ -533,7 +474,6 @@ fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
         "the matching stale entry must be unregistered even with empty CONTENTS"
     );
 
-    // No entry at all: nothing to unregister, nothing written.
     let tmp2 = tempdir();
     let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
         root: &tmp2,
@@ -549,14 +489,9 @@ fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
     assert!(!plib_registry_path(&tmp2).exists());
 }
 
-/// Fix round 1 for review item 3, threading half: the replace loop
-/// (`unmerge_pkgfiles` with `is_replacement`) must reach the prune
-/// with `unmerge_no_replacement=false` and the old instance
-/// excluded, so the still-needed lib survives a real replacement
-/// unmerge on disk and in the registry. The replacing instance owns
-/// the consumer too (its `CONTENTS` + `NEEDED.ELF.2` are live --
-/// real `include_file`), which is what keeps the consumer visible
-/// past the old-instance exclusion.
+/// A replacement unmerge excludes the old instance at the prune, so a lib
+/// still needed by the replacing consumer survives on disk and in the registry.
+/// Portage: `dblink.py`, `_prune_plib_registry`.
 #[test]
 fn replacement_unmerge_keeps_a_preserved_lib_needed_by_the_replacing_consumer() {
     let tmp = tempdir();
@@ -603,16 +538,9 @@ fn replacement_unmerge_keeps_a_preserved_lib_needed_by_the_replacing_consumer() 
     );
 }
 
-/// Real `_collision_protect`'s own preserve-libs exclusion: with
-/// `preservepkg-old`'s own already-merged file registered in
-/// `preserved_libs_registry` (hand-seeded here -- portuale has no
-/// registration/detection side yet, see this module's own doc
-/// comment), `preservepkg-new` colliding on that exact path is
-/// excluded from collision-protect's abort entirely (even with
-/// `collision_protect: true`) and takes over the file; afterwards
-/// the registry no longer lists the path (its only entry, so the
-/// whole `cp:slot` key is dropped) and `preservepkg-old`'s own vdb
-/// `CONTENTS` no longer claims it either.
+/// A path in the preserved-libs registry is excluded from collision-protect
+/// and handed over; the emptied record and the old `CONTENTS` claim go with it.
+/// Portage: `vartree.py`, `_collision_protect`.
 #[test]
 fn preserve_libs_registry_entry_excludes_the_collision_and_hands_ownership_over() {
     let tmp = tempdir();
@@ -667,15 +595,11 @@ fn preserve_libs_registry_entry_excludes_the_collision_and_hands_ownership_over(
         "new library content\n"
     );
 
-    // preservepkg-old's own CONTENTS no longer claims the path
-    // preservepkg-new just took over.
     let old_contents =
         std::fs::read_to_string(root.join("var/db/pkg/dev-libs/preservepkg-old-1.0/CONTENTS"))
             .unwrap();
     assert!(!old_contents.contains("/usr/lib/preservedtest/libfoo.so.1"));
 
-    // The registry entry is gone entirely -- it had exactly one
-    // path, and that path is no longer preserved.
     let registry_text = std::fs::read_to_string(plib_registry_path(&root)).unwrap();
     let registry = parse_plib_registry(&registry_text).unwrap();
     assert!(registry.is_empty());

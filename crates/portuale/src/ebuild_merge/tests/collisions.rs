@@ -1,14 +1,8 @@
 use super::*;
 
-/// Backlog #183: a stale `-MERGING-<pf>` entry left by a killed merge
-/// is invisible to every portuale vdb reader, and the next merge of
-/// the same package wipes it and publishes the real entry -- real
-/// `dblink.treewalk()`'s own `self.dbdir = self.dbtmpdir;
-/// self.delete(); ensure_dirs(self.dbtmpdir)` prologue plus the
-/// `vardbapi._excluded_dirs` reader skip (`vartree.py`). Ground truth:
-/// the `l32` C4 control cell (`findings/l5.md` Group 4) leaves exactly
-/// `-MERGING-slow-a-1.0` after the SIGKILL, no `slow-a-1.0`, and the
-/// resumed merge reinstalls from scratch.
+/// A stale `-MERGING-<pf>` entry is invisible to every vdb reader, and the
+/// next merge of the same package wipes it and publishes the live entry.
+/// Portage: `dblink.py`, `treewalk`.
 #[test]
 fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
     let tmp = tempdir();
@@ -17,8 +11,6 @@ fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&portage_tmpdir).unwrap();
 
-    // A killed merge's leftovers: a half-written `-MERGING-` entry
-    // for the package about to be merged, and nothing live.
     let stale = root.join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0");
     std::fs::create_dir_all(&stale).unwrap();
     std::fs::write(stale.join("SLOT"), "0\n").unwrap();
@@ -31,8 +23,6 @@ fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
     std::fs::write(stale.join("NEEDED.ELF.2"), "junk\n").unwrap();
     assert!(!root.join("var/db/pkg/dev-libs/mergepkg-1.0").exists());
 
-    // Every reader skips the stale entry: it is not an installed
-    // package, owns no path, and indexes no sonames.
     assert!(portage_repo::all_installed_packages(&root).is_empty());
     assert!(portage_repo::installed_versions(&root, "dev-libs", "mergepkg").is_empty());
     assert!(
@@ -44,8 +34,6 @@ fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
         "a stale NEEDED.ELF.2 indexes nothing"
     );
 
-    // The next merge behaves as real: it wipes the stale entry and
-    // publishes the real one, leaving no temporary behind.
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
     let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
     assert_eq!(
@@ -74,19 +62,9 @@ fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
     assert_eq!(portage_repo::all_installed_packages(&root).len(), 1);
 }
 
-/// Real `os.walk` puts a symlink pointing to a directory into `dirs`,
-/// never into `filelist`/`linklist` (`vartree.py:4625-4681` comment) --
-/// so it is never collision-checked. `find_collisions` mirrors that:
-/// a directory-target symlink over an installed real directory (the
-/// linux-firmware `nvidia/ad10x` shape: new image symlinks, live
-/// filesystem directories) yields no `symlink_collisions` entry, and
-/// `merge_tree` lands the symlink at the first `dest.backup.NNNN`
-/// (real `mergeme()`'s own symlink-over-directory branch) keeping
-/// the directory, exiting 0 -- even with `protect_owned` on (the
-/// reporter's own `FEATURES`, which has `protect-owned` but not
-/// `collision-protect`) and an additional unclaimed ordinary
-/// collision present (which alone never aborts under `protect-owned`
-/// either).
+/// A symlink pointing at a directory is never collision-checked, and
+/// `merge_tree` lands it at the first `dest.backup.NNNN`, keeping the dir.
+/// Portage: `vartree.py`, `mergeme`.
 #[test]
 fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
     let tmp = tempdir();
@@ -98,8 +76,8 @@ fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
         b"installed",
     )
     .unwrap();
-    // An unclaimed ordinary collision alongside (a stray file the new
-    // image also ships): must not abort under `protect_owned` alone.
+    // An unclaimed ordinary collision alongside: must not abort under
+    // `protect_owned` alone either.
     std::fs::create_dir_all(root.join("lib/firmware/brcm")).unwrap();
     std::fs::write(root.join("lib/firmware/brcm/stray.txt"), b"stray on disk").unwrap();
 
@@ -129,8 +107,6 @@ fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
     );
     // The ordinary stray-file collision is reported...
     assert_eq!(collisions, vec!["/lib/firmware/brcm/stray.txt".to_string()]);
-    // ...but aborts under neither `collision-protect` (off) nor
-    // `protect-owned` alone (no owner claims it).
     assert!(
         find_owners(&root, &collisions).is_empty(),
         "the stray file is unclaimed"
@@ -151,15 +127,11 @@ fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
     })
     .expect("merge_tree succeeds");
 
-    // The installed directory survives; the new symlink lands at the
-    // first backup name, exactly like real `mergeme()`.
     assert!(root.join("lib/firmware/nvidia/ad103").is_dir());
     assert_eq!(
         std::fs::read_link(root.join("lib/firmware/nvidia/ad103.backup.0000")).unwrap(),
         PathBuf::from("real")
     );
-    // The unclaimed ordinary file is merged over, like real's
-    // "merged despite file collisions" path.
     assert_eq!(
         std::fs::read_to_string(root.join("lib/firmware/brcm/stray.txt")).unwrap(),
         "new stray"
@@ -167,18 +139,15 @@ fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// `blockers_from_flat_deps` (the `blockers` term of real
-/// `mypkglist = others_in_slot + blockers`, factored out of
-/// `blocked_installed_packages` for `merge_binpkg`'s own use): every
-/// `!atom`/`!!atom` in an already-flat dep list is matched against
-/// the installed vdb, non-blocker atoms ignored.
+/// Every `!atom`/`!!atom` in an already-flat dep list is matched against
+/// the installed vdb; non-blocker atoms are ignored.
+/// Portage: `vartree.py`, `blocked_installed_packages`.
 #[test]
 fn blockers_from_flat_deps_matches_only_blocker_atoms_against_the_vdb() {
     let tmp = tempdir();
     let root = tmp.join("root");
-    // #116: `normalpkg` carries a sub-slot, so the re-point through
-    // the vdb seam must preserve the `split_once('/')` post-processing
-    // -- the expectations below are the pre-slice ones, unchanged.
+    // `normalpkg` carries a sub-slot, so the re-point through the vdb seam
+    // must preserve the `split_once('/')` post-processing.
     for (pf, slot) in [("blockedpkg-1.0", "0"), ("normalpkg-2.0", "3/3.1")] {
         let vdb = root.join("var/db/pkg/dev-libs").join(pf);
         std::fs::create_dir_all(&vdb).unwrap();
@@ -186,9 +155,9 @@ fn blockers_from_flat_deps_matches_only_blocker_atoms_against_the_vdb() {
     }
 
     let deps = [
-        "!dev-libs/blockedpkg".to_string(), // blocker, installed -> matched
-        "dev-libs/normalpkg".to_string(),   // not a blocker -> ignored
-        "!!dev-libs/notinstalled".to_string(), // blocker, not installed -> no match
+        "!dev-libs/blockedpkg".to_string(),
+        "dev-libs/normalpkg".to_string(),
+        "!!dev-libs/notinstalled".to_string(),
     ];
     let blocked = blockers_from_flat_deps(&root, &deps);
     assert_eq!(
@@ -204,15 +173,9 @@ fn blockers_from_flat_deps_matches_only_blocker_atoms_against_the_vdb() {
     );
 }
 
-/// `find_owners`/`owns_path` read each vdb entry's file list through
-/// the `mrg_director::PackagesDb` seam (`VdbReader::contents_files`),
-/// which keys by a split `(package, version)` and strips the
-/// `CONTENTS` record's one leading `/`. This pins the two conversions
-/// the production path now performs on a hand-built vdb entry: the
-/// directory name's `pf` splits back into that key, and the logical
-/// absolute collision path meets the stripped contents path while the
-/// returned owner key/values keep the old `category/pf` + absolute
-/// path shape exactly.
+/// `find_owners`/`owns_path` read each vdb entry's file list through the
+/// `PackagesDb` seam, splitting the `pf` directory name back into its
+/// `(package, version)` key and stripping the `CONTENTS` leading `/`.
 #[test]
 fn find_owners_reads_contents_through_the_packages_db_seam() {
     let tmp = tempdir();

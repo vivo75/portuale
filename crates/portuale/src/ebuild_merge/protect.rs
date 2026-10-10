@@ -2,14 +2,10 @@
 
 use crate::ebuild_merge::*;
 
-/// Real `ConfigProtect.isprotected()` (`lib/portage/util/__init__.py`):
-/// longest-prefix match against `config_protect` (a whitespace-separated
-/// path list, `root`-joined) minus `config_protect_mask`. A protect/mask
-/// entry that names a real, on-disk directory matches any path under it
-/// (`/etc` matches `/etc/foo` but not `/etcfoo`); one that doesn't (a
-/// literal file, or a path that doesn't exist at all) only ever matches
-/// exactly. `pub(crate)`: `ebuild_unmerge`'s own `FEATURES=unmerge-orphans`
-/// handling reuses this exact real check (real `self.isprotected(obj)`).
+/// Portage's `ConfigProtect.isprotected`: longest-prefix match of `dest`
+/// against `config_protect` minus `config_protect_mask`. A directory entry
+/// matches everything under it; anything else matches exactly.
+/// Portage: lib/portage/util/__init__.py, ConfigProtect.isprotected
 pub(crate) fn is_protected(
     root: &Path,
     config_protect: &str,
@@ -41,26 +37,12 @@ pub(crate) fn is_protected(
     protected_len > longest_match(root, config_protect_mask, dest)
 }
 
-/// Real `new_protect_filename()` (`lib/portage/util/__init__.py:1803`):
-/// the next unused `._cfgNNNN_<basename>` sibling of `dest`, unless the
-/// *highest-numbered existing* `._cfgNNNN_<basename>` sibling already
-/// holds the same content/target as `newmd5` -- in which case that
-/// existing file is reused instead of allocating a new one. `newmd5`
-/// mirrors real `_protect()`'s own `(dest_link or src_md5)` call
-/// argument: the pending update's own content MD5 for a regular file, or
-/// (for a symlink) the *comparison* target-string this call site chose
-/// -- real portage's own naming is misleading here, "newmd5" folds both
-/// "an MD5 hex string" and "a raw symlink target string" into the same
-/// parameter, compared against whichever kind the last `._cfgNNNN_` file
-/// itself turns out to be. `dest` itself is never touched here, the
-/// caller writes to the returned path instead. Narrower than real in one
-/// way: real `new_protect_filename(mydest, newmd5, force)` returns
-/// `mydest` unchanged outright when `mydest` doesn't exist yet and
-/// `force` is false -- moot here since every call site already only
-/// calls this after confirming `dest` exists (see `merge_tree`'s own obj/
-/// sym branches), so `force`'s only real effect (forcing that early
-/// return to still allocate a number) never applies and isn't threaded
-/// through.
+/// Portage's `new_protect_filename`: the next unused `._cfgNNNN_<basename>`
+/// sibling of `dest`, reusing the highest-numbered one when it already
+/// holds `newmd5`. `newmd5` is a content MD5 for files but a raw target
+/// string for symlinks; `dest` itself is never touched. Narrower than
+/// Portage: no `force` parameter (every call site is an existing `dest`).
+/// Portage: lib/portage/util/__init__.py, new_protect_filename
 pub(crate) fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
     let parent = dest
         .parent()
@@ -108,12 +90,10 @@ pub(crate) fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf,
     Ok(parent.join(format!("._cfg{:04}_{basename}", max_num + 1)))
 }
 
-/// Real `dblink._new_backup_path` (`vartree.py:_new_backup_path`): the
-/// first `dest.backup.NNNN` (zero-padded 4 digits from `0000`) whose
-/// `lstat` fails -- i.e. no file, symlink, or directory there yet.
-/// Used by `merge_tree`'s own symlink-over-directory branch below: real
-/// `mergeme()` never overwrites a real directory with a symlink, it
-/// merges the symlink under the backup name and keeps the directory.
+/// Portage's `dblink._new_backup_path`: the first `dest.backup.NNNN` (from
+/// `0000`) with no file, symlink or directory yet. Used where a symlink
+/// would otherwise overwrite a directory.
+/// Portage: lib/portage/dbapi/vartree.py, dblink._new_backup_path
 pub(crate) fn new_backup_path(dest: &Path) -> PathBuf {
     let dest_str = dest.display().to_string();
     let mut n = 0;
@@ -126,13 +106,9 @@ pub(crate) fn new_backup_path(dest: &Path) -> PathBuf {
     }
 }
 
-/// A free temporary sibling of `dest`, in the same directory (so the
-/// final `rename(2)` is always same-filesystem), named like real
-/// `movefile()`'s own merge temporary: `.{basename}._portage_merge_.{pid}`
-/// (`lib/portage/util/movefile.py:322`'s `NamedTemporaryFile` prefix),
-/// with a counter suffix only on the (pid-reuse / parallel-merge)
-/// collision case. Checks with `symlink_metadata`, so an existing
-/// symlink or directory at the candidate counts as taken.
+/// A free temporary sibling of `dest` (same directory, so the final rename
+/// is same-filesystem), named like Portage's `movefile` temporary, with a
+/// counter suffix on collision. Symlinks and directories count as taken.
 pub(crate) fn unique_sibling_path(dest: &Path) -> Result<PathBuf, String> {
     let parent = dest
         .parent()
@@ -157,18 +133,17 @@ pub(crate) fn unique_sibling_path(dest: &Path) -> Result<PathBuf, String> {
     unreachable!("the counter loop always finds a free name")
 }
 
-/// Real `_cmpxattr(src, dest, exclude)` (`movefile.py:111-136`): the
-/// non-excluded attribute names and values are equal on both files, or
-/// the filesystem does not support xattrs at all.
+/// Portage's `_cmpxattr`: the non-excluded attribute names and values match
+/// on both files, or the filesystem has no xattr support.
+/// Portage: lib/portage/util/movefile.py, _cmpxattr
 pub(crate) fn xattrs_equal(src: &Path, dest: &Path, exclude: &str) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let (s, d) = (src.as_os_str().as_bytes(), dest.as_os_str().as_bytes());
     let (Ok(src_attrs), Ok(dest_attrs)) =
         (crate::helpers::xattr_list(s), crate::helpers::xattr_list(d))
     else {
-        // Real re-raises anything but ENOTSUP; `xattr_list` already maps
-        // ENOTSUP to an empty list, so an error here is unreadable --
-        // treat it as "differs" so the file is replaced.
+        // `xattr_list` already maps ENOTSUP to empty, so an error here is
+        // unreadable: treat as "differs" so the file is replaced.
         return false;
     };
     let keep = |attrs: Vec<Vec<u8>>| -> std::collections::BTreeSet<Vec<u8>> {
@@ -184,8 +159,8 @@ pub(crate) fn xattrs_equal(src: &Path, dest: &Path, exclude: &str) -> bool {
             .all(|a| crate::helpers::xattr_get(s, a).ok() == crate::helpers::xattr_get(d, a).ok())
 }
 
-/// Carries `src`'s xattrs onto the not-yet-renamed temporary `tmp`, the
-/// way real's move would have left them on `dest` (see [`XattrPolicy`]).
+/// Carries `src`'s xattrs onto the not-yet-renamed temporary `tmp`, the way
+/// Portage's move would have left them on `dest` (see [`XattrPolicy`]).
 pub(crate) fn carry_xattrs(
     src: &Path,
     tmp: &Path,
@@ -201,8 +176,7 @@ pub(crate) fn carry_xattrs(
         .map(|m| m.dev());
     let (s, t) = (src.as_os_str().as_bytes(), tmp.as_os_str().as_bytes());
     if src_dev.is_some() && src_dev == dest_dev {
-        // Real's same-device `rename` keeps every attribute and cannot
-        // fail on one, so neither does this copy: a failure only warns.
+        // Same-device renames keep every attribute, so this copy only warns.
         if let Err(line) = crate::helpers::copy_xattr(s, t, b"") {
             eprintln!("!!! {}", String::from_utf8_lossy(&line));
         }
@@ -219,25 +193,13 @@ pub(crate) fn carry_xattrs(
     Ok(())
 }
 
-/// Real `movefile()`'s own **atomic replacement** for a regular file:
-/// copy the source's bytes to [`unique_sibling_path`]'s temporary, apply
-/// real `movefile()`'s `_apply_stat` (owner/group, mode) and the
-/// source's own mtime, then `rename(2)` it over `dest`. The existing
-/// `dest` inode is never opened for write -- see this module's own doc
-/// comment ("KNOWN, DOCUMENTED GAPS") and backlog #96 for why that is
-/// load-bearing: an in-place `std::fs::copy` truncates the live inode,
-/// which is `ETXTBSY` for a running executable but succeeds for an
-/// mmap'd shared library, so a `sys-libs/readline` merge rewrote
-/// `libreadline.so.8.3` underneath every running bash and a `glibc`
-/// merge would rewrite `libc.so.6` underneath the entire system. Real is
-/// safe by construction: same-device `os.rename` (`movefile.py:231`),
-/// cross-device copy to `dest + "#new"` then rename (`:346`).
-///
-/// `mtime` is the source's own mtime in seconds (already computed by the
-/// caller for `CONTENTS`), so the temporary gets exactly the value the
-/// caller will record -- never a second stat that could disagree. On any
-/// failure the temporary is removed before returning; the destination is
-/// left untouched.
+/// Portage's `movefile` atomic replacement for a regular file: copy to a
+/// temporary, apply owner/mode/mtime, then rename over `dest`, never
+/// writing through the live inode (an in-place copy would rewrite running
+/// executables and libraries underneath their processes). `mtime` is the
+/// source's own, already computed by the caller; the temporary is removed
+/// on failure, leaving `dest` untouched.
+/// Portage: lib/portage/util/movefile.py, movefile
 pub(crate) fn replace_file_atomic(
     src: &Path,
     dest: &Path,
@@ -250,10 +212,8 @@ pub(crate) fn replace_file_atomic(
     let outcome = (|| -> Result<(), String> {
         std::fs::copy(src, &tmp).map_err(|e| format!("{}: {e}", src.display()))?;
         let src_meta = std::fs::metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
-        // `std::fs::copy` already carries the mode bits over on Unix;
-        // the explicit chmod fixes up a umask-masked temporary. The
-        // chown is not redundant -- `std::fs::copy` never touches
-        // ownership. See `lchown_or_chown`'s own doc comment.
+        // `std::fs::copy` carries the mode but never ownership; the chmod
+        // fixes up a umask-masked temporary. See `lchown_or_chown`.
         lchown_or_chown(&tmp, src_meta.uid(), src_meta.gid(), false)?;
         std::fs::set_permissions(
             &tmp,
@@ -272,16 +232,10 @@ pub(crate) fn replace_file_atomic(
     outcome
 }
 
-/// Real `movefile()`'s atomic replacement for a symlink
-/// (`lib/portage/util/movefile.py:213-265`): create the new link at
-/// [`unique_sibling_path`]'s temporary, apply `lchown` + the source's
-/// own mtime, then `rename(2)` it over `dest`. The remove-then-symlink
-/// pair this replaces could leave the path briefly absent and, more
-/// importantly, was the second in-place mutation `merge_tree` had; one
-/// rule now covers both branches: never write through an existing
-/// inode. `rename(2)` replaces an existing file or symlink atomically
-/// (a real directory cannot appear here: the symlink-over-directory case
-/// is diverted to `new_backup_path` by the caller).
+/// Portage's `movefile` atomic replacement for a symlink: create the link
+/// at a temporary, apply `lchown` and mtime, then rename over `dest`; the
+/// path is never briefly absent. A directory here is the caller's backup case.
+/// Portage: lib/portage/util/movefile.py, movefile
 pub(crate) fn replace_symlink_atomic(
     target: &Path,
     src: &Path,
@@ -319,73 +273,15 @@ pub(crate) struct ProtectDecisionArgs<'a> {
     pub(crate) noconfmem: bool,
 }
 
-/// Real `dblink._protect()`'s own decision, shared by `merge_tree`'s
-/// `obj`/`sym` branches (`vartree.py:5434-5480`/`5831-5901`): `dest_md5`/
-/// `dest_link` are computed from the *live destination's own lstat'd
-/// on-disk type* -- independent of the incoming source's own type, so a
-/// type-changing update (a symlink replacing a previously-installed
-/// regular file at the same path, or vice versa) is real-protected too,
-/// closing the "like-for-like only" v1 cut this module's own doc comment
-/// used to document. `src_md5`/`src_link` mirror real `mymd5`/`myto`:
-/// always an MD5-shaped string either way (a symlink source's own is the
-/// target string's own MD5, real bug #485598), `src_link` only `Some`
-/// for a symlink source. Real `force` (from `dest_link != src_link` on a
-/// type mismatch) is deliberately not threaded through, for the exact
-/// reason `new_protect_filename`'s own doc comment already gives: it
-/// only ever changes behavior when `dest` doesn't exist, and this
-/// function -- like every existing call site before it -- only reaches
-/// `new_protect_filename` after confirming `dest` exists, *except* the
-/// one new case below that deliberately doesn't.
-///
-/// Real `_installed_instance`/`k = self._installed_instance.
-/// _match_contents(dest_real)` (`vartree.py:5849-5866`) is real now too:
-/// `installed_instance_pf` (the *previous* same-slot instance this
-/// merge is upgrading over, if any) is consulted via `owned_node_value_
-/// pf` for whatever it recorded at `abs_path`. Two distinct real
-/// behaviors, both gated on a match (`k is not False`):
-///   - `dest_mode is None` (the live destination doesn't exist at all --
-///     the admin deleted or renamed a path the *previous* package
-///     installed): real `force = True`, which (since `_protect()`'s own
-///     `if protected and dest_mode is not None:` main block is skipped
-///     entirely when `dest_mode is None`, leaving `protected`/`move_me`
-///     at their initial `True` values) always diverts into a fresh
-///     `._cfgNNNN_` sibling -- bug #523684, prompting the admin instead
-///     of silently re-creating a path they deliberately removed.
-///   - `dest_mode is not None` and real `FEATURES=config-protect-if-
-///     modified` (`protect_if_modified`) is on: if the live destination
-///     still matches *exactly* what the previous instance's own real
-///     `CONTENTS` recorded (an `obj`'s content MD5, or a `sym`'s own
-///     target string), the admin never touched it since that install --
-///     so it's not "modified" in the sense this feature cares about,
-///     and `protected` is cleared outright, applying the new version's
-///     content directly even though it differs from `src`. Distinguishes
-///     "this file's own default content changed between package
-///     versions" from "the admin hand-edited this file locally", which
-///     the plain `src_md5 == dest_md5` comparison below can't tell
-///     apart on its own.
-///
-/// Returns `(write_dest, moveme)` -- real `_protect()` returns three
-/// values (`dest, protected, moveme`), but every real call site only
-/// ever needs `protected` to decide *whether* to call `_protect()` at
-/// all (already handled by this function's own caller, `is_protected`)
-/// and `moveme` to decide whether `mergeme()`'s own `if moveme:` gate
-/// (`vartree.py:5547`/`5749`) actually performs the file write, so this
-/// port only threads those two through. Real `moveme` is `False` in
-/// exactly one case here: `already_offered && !noconfmem` (real `move_me
-/// = protected = bool(cfgfiledict["IGNORE"])` with `IGNORE == 0`,
-/// `vartree.py:5877`) -- "confmem rejected this update"
-/// (`mergeme()`'s own `zing = "---"`). Real `cfgfiledict` is deliberately
-/// left untouched in that one branch too: reaching it requires `src_md5
-/// == cfgfiledict.get(dest_real)[0]` in the first place (that's the very
-/// definition of "already offered"), so the trailing real `if move_me:
-/// cfgfiledict[dest_real] = [src_md5] elif dest_md5 == cfgfiledict.get
-/// (dest_real)[0]: del cfgfiledict[dest_real]` (`vartree.py:5888-5895`)
-/// hits neither branch: `move_me` is `False` (skipping the first), and
-/// `dest_md5 != src_md5` is already established by the earlier `if
-/// src_md5 == dest_md5` check having failed (skipping the second, since
-/// it can only match by being equal to `src_md5` too). Every other
-/// return path keeps `moveme` `true`, matching real `_protect()`'s own
-/// `move_me = True` initial default, never cleared on any other branch.
+/// Portage's `dblink._protect` decision, shared by `merge_tree`'s `obj`/`sym`
+/// branches: `dest`'s type comes from its own on-disk lstat, so
+/// type-changing updates are protected too. `src_md5` is always MD5-shaped
+/// (a symlink source's is its target string's MD5); `src_link` is `Some`
+/// only for a symlink source. With `protect_if_modified`, a destination
+/// still matching the previous instance's recorded content applies
+/// directly. Returns `(write_dest, moveme)`: `moveme` is `false` only for
+/// an already-offered update without `noconfmem`.
+/// Portage: lib/portage/dbapi/vartree.py, dblink._protect
 pub(crate) fn protect_decision(args: ProtectDecisionArgs<'_>) -> Result<(PathBuf, bool), String> {
     let ProtectDecisionArgs {
         root,
@@ -402,10 +298,10 @@ pub(crate) fn protect_decision(args: ProtectDecisionArgs<'_>) -> Result<(PathBuf
         installed_instance_pf.and_then(|pf| owned_node_value_pf(root, category, pf, abs_path));
 
     let Ok(dest_meta) = std::fs::symlink_metadata(dest) else {
-        // Real `dest_mode is None`.
+        // Portage's `dest_mode is None` (the live destination is missing).
         if matched.is_some() {
-            // Real bug #523684: force-diverts even though there's
-            // nothing on disk to compare against yet.
+            // A previous instance recorded this path, so divert into a fresh
+            // `._cfgNNNN_` sibling instead of re-creating a removed path.
             cfgfiledict.insert(abs_path.to_string(), src_md5.to_string());
             return Ok((new_protect_filename(dest, src_md5)?, true));
         }
@@ -451,25 +347,10 @@ pub(crate) fn protect_decision(args: ProtectDecisionArgs<'_>) -> Result<(PathBuf
     Ok((write_dest, true))
 }
 
-/// Real `vardbapi._conf_mem_file`: `<root>/var/lib/portage/config`, a
-/// real, persisted "which src MD5 has already been offered for this
-/// path" memory (real `grabdict`/`writedict`'s own `"path value\n"`
-/// format) -- without it, re-merging an already-protected update would
-/// spawn a fresh `._cfgNNNN_` file every single time, even though the
-/// admin has already been shown this exact change once. Portuale's
-/// own `ebuild` CLI has no `--noconfmem` flag, so behavior always
-/// matches real portage's own default (`--noconfmem` off).
-///
-/// Stored by the root's [`portage_vdb::InstalledDb`] (feat#157 S1.4:
-/// `config_memory` / `set_config_memory`; on `files` the same
-/// `<root>/var/lib/portage/config` file, read and written exactly as
-/// before).
-///
-/// `pub(crate)`: also read by `ebuild_unmerge::run_unmerge` (real
-/// `_unmerge_pkgfiles()`'s own `stale_confmem` cleanup,
-/// `vartree.py:2747`/`2931-2932`/`3106-3109` -- a removed file's
-/// `_conf_mem_file` entry is dropped once nothing still owns that path).
-/// A missing or unreadable store is empty.
+/// Portage's `vardbapi._conf_mem_file` (`<root>/var/lib/portage/config`):
+/// which src MD5 was already offered for each path, so re-merges don't
+/// spawn a fresh `._cfgNNNN_` file every time. Also read by
+/// `ebuild_unmerge`'s stale-confmem cleanup; missing/unreadable is empty.
 pub(crate) fn read_cfgfiledict(root: &Path) -> BTreeMap<String, String> {
     portage_vdb::for_root(root)
         .config_memory()

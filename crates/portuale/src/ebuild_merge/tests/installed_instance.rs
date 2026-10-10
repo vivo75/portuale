@@ -27,10 +27,8 @@ fn installed_instance_pf_picks_the_highest_counter_same_slot_version() {
 
 #[test]
 fn replacing_versions_is_the_installed_same_slot_version() {
-    // #158: real's `REPLACING_VERSIONS` is the version of the
-    // installed instance(s) this merge replaces (`vartree.py:4769`),
-    // which is exactly the `{pn}-{version}` PF `installed_instance_pf`
-    // selects.
+    // Portage's `REPLACING_VERSIONS` is the version of the installed
+    // instance(s) this merge replaces (Portage: `vartree.py`).
     assert_eq!(
         replacing_versions("awk", Some("awk-4")),
         Some("4".to_string())
@@ -48,9 +46,7 @@ fn replacing_versions_is_the_installed_same_slot_version() {
 
 #[test]
 fn read_installed_slot_returns_0_for_a_slot_less_vdb_entry() {
-    // #126 (O5 ruling 2026-09-23): real `aux_get` translates a
-    // missing/empty SLOT to "0", so a SLOT-less entry groups with
-    // slot-"0" entries instead of being skipped.
+    // Portage's `aux_get` maps a missing/empty SLOT to "0".
     let tmp = tempdir();
     let root = tmp.join("ROOT");
     let vdb_dir = root.join("var/db/pkg/dev-libs/slotlesspkg-1.0");
@@ -79,13 +75,8 @@ fn read_installed_slot_returns_0_for_an_empty_slot_file() {
 
 #[test]
 fn read_installed_slot_collapses_a_multiline_slot_before_the_main_slot_projection() {
-    // #126: through the seam a multi-line SLOT collapses
-    // (`" ".join(myd.split())`, real `_aux_get`) where the old bare
-    // `.trim()` kept the embedded newline.
-    // #115 S1: the collapsed value (`"0 1"`) is itself invalid, so
-    // the seam translates it on to `"0"` (real `aux_get`'s
-    // `_get_slot_re` rule) -- the pre-S1 expectation is kept in git
-    // history.
+    // Through the seam a multi-line SLOT collapses, and the collapsed
+    // value is itself invalid, so the seam maps it on to `"0"`.
     let tmp = tempdir();
     let root = tmp.join("ROOT");
     let vdb_dir = root.join("var/db/pkg/dev-libs/multilinepkg-1.0");
