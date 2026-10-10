@@ -3,6 +3,7 @@ Direct predicate-result legs for rebuild/circular/instance-use residue.
 
 ## module
 - Backlog #166 (circular/instance-use solution residue). No end-to-end contract reproduction: every in-body operator flip changes the asserted outcome. Self-contained (own scratch repo/vdb/entry helpers) so the other Track U branches' blocks rebase mechanically.
+- Direct predicate-result legs in the #161/#162 scratch style: each test observes the predicate's own return value. Do not edit other items' `mod tests_16x` blocks.
 
 ## section S2 (`filter_usepkg_exclude_include`)
 - Portage `create_depgraph_params.py` `--usepkg-exclude`/`--usepkg-include` handling, applied to the binary pool in `depgraph.py`'s own break-out-of-the-loop rejection (see the call site's doc comment).
@@ -25,6 +26,7 @@ Direct predicate-result legs for rebuild/circular/instance-use residue.
 ## fn strip_revision_166_strips_numeric_revisions_only
 - Kills the whole-body `""`/`"xyzzy"` rows, both guard replacements, the `&&` -> `||` widening (empty rev strips) and the `!` deletion (numeric rev kept).
 - Non-numeric tail: the guard stays shut (guard-`true` would strip to "1.0").
+- Empty rev: `!rev.is_empty()` is false while `all(digits)` is vacuously true, so `&&` -> `||` would strip to "1.0".
 
 ## fn filter_usepkg_166_exclude_drops_only_the_match
 - Kills the either-empty gate widening (`&&` -> `||` keeps everything), the `||` -> `&&` narrowing in `is_included` (drops everything) and the `!` deletion (keeps the excluded row).
@@ -47,6 +49,7 @@ Direct predicate-result legs for rebuild/circular/instance-use residue.
 
 ## fn write_pkg_166
 - The md5-cache validation guard fails otherwise; the `DEPEND`/`REQUIRED_USE` lines are for the circular legs below.
+- One scratch ebuild plus its md5-cache entry, in the #162 `write_pkg_162` shape extended with `DEPEND`/`REQUIRED_USE` lines.
 
 ## fn direct_solve_instance_use_166_installed_reads_vdb_over_tree_iuse
 - Kills the whole-body rows and the `==` -> `!=` version-find flip (which falls back to `enabled.clone()`).
@@ -59,6 +62,7 @@ Direct predicate-result legs for rebuild/circular/instance-use residue.
 
 ## fn circular_166_two_flag_or_requirement_suggests_enabling_y
 - Kills the cur-construction `<<` -> `>>` (bit 1 never sets, no solution), the sol-diff `<<` -> `>>` plus both `&&` flips and both `!` deletions around the diff (all emit `[{}]` or a bloated pair), the REQUIRED_USE `!empty` deletion and the `!ok` deletion (both admit the violating empty assignment), and the `>` -> `<` pair on the MAX_AFFECTING_USE gates (retain/drop to nothing).
+- Two entangled flags under `|| ( x y )` with both off: only "enable y" removes the atom while REQUIRED_USE holds. The sol-diff `<<` -> `>>` plus both `&&` flips and both `!` deletions around the diff all emit `[{}}` or a bloated pair.
 
 ## fn circular_166_ten_flags_yield_nine_minimal_pairs
 - Kills the REQUIRED_USE `!untouchable` deletion (collapses to nothing), the `<=` -> `>` expansion flip (stays unexpanded, nothing holds), and the `>` -> `==`/`>=` pair on both MAX_AFFECTING_USE gates (retain-to-one / give-up, both empty).
@@ -77,3 +81,12 @@ Direct predicate-result legs for rebuild/circular/instance-use residue.
 
 ## fn direct_solve_instance_use_166_merge_reads_its_own_entry
 - Kills the whole-body rows, the category/package `==` -> `!=` flips (which match the first decoy instead) and the first `&&` -> `||` widening (which matches the same-category decoy).
+
+## fn cand_166
+- Hand-built binary candidate in the #162 `cand_162` shape (same fields; `candidate_str` renders `cat/pkg-ver:slot/sub::repo`).
+
+## fn cfg_166
+- Minimal visibility config in the #161 `test_config` shape (amd64-only, no overrides).
+
+## fn arg_input_166
+- Eight-arg input builder (same shape as #161's `ds_input_161`).

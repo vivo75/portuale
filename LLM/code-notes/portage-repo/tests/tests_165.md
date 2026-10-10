@@ -4,12 +4,14 @@ Graph-input unit tests (mutation cluster 5): walk/installed/vdb, merge-order, bl
 ## module
 - Track U #165. Scratch-vdb / scratch-repo legs in the Phase 8 S2 style (own `dir_165` / `install_165` / `write_pkg_165` / `repo_165` / `entry_165` helpers copied from `tests_161`/`tests_162` -- not shared, so the other Track U branches' blocks rebase mechanically). Every test observes the function's own return value (returned vectors, the vdb fingerprint, filed conflicts, queued atoms) -- no end-to-end contract reproduction.
 - Portage grounding: `vartree.dbapi` for the installed-set readers, `lib/_emerge/depgraph.py:8891 _validate_blockers` for the blocker arms, `repository/config.py` for `find_repos_impl`, `lib/_emerge/actions.py`'s unmerge ordering (`UnmergeDepPriority`, `ignore_priority_range` ~:1709) for `topological_removal_order`.
+- Track U #165: `lib.rs` graph-input unit tests (mutation cluster 5) -- walk/installed/vdb, merge-order, blockers, use.
 
 ## section S1 (`installed_reverse_dependents`)
 - Portage `vartree.dbapi`'s reverse-dependency scan: every installed package whose flattened runtime deps match the consumer's own `cat/pkg-ver:slot/sub-slot`, excluding the consumer itself.
 
 ## section S3 (`find_repos_impl` survivors)
 - Portage `repository/config.py::RepoConfigLoader`. S0 already catches everything except the default-priority `==` and the no-`volatile`-key heuristic, which no existing leg observes.
+- The no-`volatile`-key heuristic (Portage `config.py:423`): volatile unless under `/var/db/repos` and owned by root/portage.
 
 ## section S5 (`topological_removal_order`)
 - Portage unmerge ordering: dependers before dependencies, cpv-descending ties, genuine cycles broken by Portage's `ignore_priority_range` scan.
@@ -107,6 +109,7 @@ Graph-input unit tests (mutation cluster 5): walk/installed/vdb, merge-order, bl
 
 ## fn resolve_blockers_requires_slot_and_version_for_an_installed_match
 - The matched instance is not the installed one. The `&&` -> `||` flip (16930:49) self-matches on the version alone and misfiles it as a slot `Replacement` once a second same-slot entry (`target-2.0:1`) satisfies the replaced-in-slot arm -- so this leg kills it.
+- `installed_match` needs slot *and* version: installed `target-1.0:0` beside the merge-bound twin `target-1.0:1` leaves the `:1` row an unsolvable uninstall.
 
 ## fn resolve_blockers_keeps_a_strong_blocker_against_its_own_slot
 - The `!strong` deletion and the slot `&&`/`==` narrowings (which would all skip it) fail here.

@@ -3,7 +3,7 @@
 use crate::*;
 use portage_util::TempDir;
 
-// ---- S1: `bare_cp` (Portage `update.py parse_updates`). ----
+// ---- `bare_cp` (Portage `update.py parse_updates`). ----
 
 /// `bare_cp` keeps the `(category, package)` of a plain `cat/pkg`.
 #[test]
@@ -58,7 +58,7 @@ fn atoms_162(atoms: &[&str]) -> Vec<String> {
     atoms.iter().map(|a| a.to_string()).collect()
 }
 
-// ---- S2: `clean_selection` (Portage `emerge --prune --nodeps` selection). ----
+// ---- `clean_selection` (Portage `emerge --prune --nodeps` selection). ----
 
 /// Scratch vdb for the `clean_selection` legs: `multi` spans two
 /// versions in one slot, `single` has one (skipped), `spread`
@@ -160,7 +160,7 @@ fn entry_162(
     }
 }
 
-// ---- S3: `complete_graph_auto_enable` (the `--complete` re-walk
+// ---- `complete_graph_auto_enable` (the `--complete` re-walk
 // trigger: an `Upgrade`/`Downgrade`, a new-slot `New`, or a
 // `Reinstall` with USE/slot churn enables it). ----
 
@@ -476,7 +476,7 @@ fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
     }
 }
 
-// ---- S4: `check_if_latest_atom_form` (the autounmask atom
+// ---- `check_if_latest_atom_form` (the autounmask atom
 // wording: `>=cpv` when nothing is higher, `>=cpv:slot` when only
 // other slots are, `=cpv` when the same slot has more). ----
 
@@ -592,7 +592,7 @@ fn check_if_latest_atom_form_counts_a_masked_candidate_without_visibility() {
     );
 }
 
-/// Single scratch repo in the #161 `blocker_161` shape (name
+/// Single scratch repo in the `blocker_161` shape (name
 /// `testrepo`, priority 0, main) holding `(cp, version, slot, iuse)`
 /// ebuilds with `KEYWORDS="amd64"`.
 fn repo_pkgs_162(dir: &Path, pkgs: &[(&str, &str, &str, &str)]) -> Vec<RepoConfig> {
@@ -616,7 +616,7 @@ fn repo_pkgs_162(dir: &Path, pkgs: &[(&str, &str, &str, &str)]) -> Vec<RepoConfi
     }]
 }
 
-/// One scratch ebuild plus its md5-cache entry, in the #161
+/// One scratch ebuild plus its md5-cache entry, in the
 /// `blocker_161_write_pkg_full` shape with an `IUSE` line.
 fn write_pkg_162(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str) {
     use md5::Digest as _;
@@ -661,7 +661,7 @@ fn self_162(cat: &str, pkg: &str) -> RootCp {
     (false, cat.to_string(), pkg.to_string())
 }
 
-// ---- S5: `disjunction_preference` (Portage `dep_zapdeps` choice bins). ----
+// ---- `disjunction_preference` (Portage `dep_zapdeps` choice bins). ----
 /// Arguments of [`disj_162`].
 struct Disj162Args<'a> {
     repos: &'a [RepoConfig],
@@ -1429,7 +1429,7 @@ fn disjunction_preference_exempts_an_installed_satisfying_circular_atom() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- S6: `promote_tied_alternative` (Portage `dep_zapdeps` upgrade pass). ----
+// ---- `promote_tied_alternative` (Portage `dep_zapdeps` upgrade pass). ----
 
 /// Shared tree for the promotion legs: `up` spans two versions,
 /// `plain` spans two, `plainb` has one, `slota` spans two slots.
@@ -1772,7 +1772,7 @@ fn promote_tied_alternative_returns_zero_for_a_single_alternative() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- S7: `alternative_downgrade_demoted` (Portage bug-531656 downgrade). ----
+// ---- `alternative_downgrade_demoted` (Portage bug-531656 downgrade). ----
 
 /// Shared tree for the demotion legs: `pkg` spans two versions in
 /// slot 0.

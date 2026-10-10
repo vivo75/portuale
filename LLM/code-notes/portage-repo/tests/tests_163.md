@@ -51,6 +51,7 @@ Result/display-assembly unit tests: abort outcomes, USE rows, pretend decisions,
 
 ## fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag
 - The r135 S0 shape: parent installed -flip, display atom `[flip=]` (`EqualParent`), vdb `USE` empty and vdb `IUSE` declaring flip, so the row proposes `+flip` on the parent's own cpv. Kills the `AlreadyInstalled`-blindness (no row for installed parents).
+- An *installed* requesting parent flips on its own vdb-recorded USE (Portage `_pkg_use_enabled(myparent)` for a built package).
 
 ## fn chain_suffix_qualifies_a_flag_gated_merge_bound_edge
 - The r135 S0 `(b)` shape: `extract_affecting_use` finds qml gating the edge, qml enabled in the node's effective USE. Kills the always-bare-row behaviour.
@@ -69,6 +70,7 @@ Result/display-assembly unit tests: abort outcomes, USE rows, pretend decisions,
 
 ## fn write_pkg_163
 - The md5-cache validation guard fails otherwise.
+- One scratch ebuild plus its md5-cache entry, in the #161/#162 shape: `SLOT`, `KEYWORDS`, `IUSE`, `RDEPEND` lines in both.
 
 ## fn resolve_163
 - The `resolve` helper in the main test module has the same shape.
@@ -255,3 +257,12 @@ Result/display-assembly unit tests: abort outcomes, USE rows, pretend decisions,
 
 ## fn assemble_result_slot_operator_scan_gates_suppress_the_pairs
 - Kills the match-guard `false` mutant, the `||` -> `&&` flip, and the `!rebuild_if_new_slot` deletion (each runs the scan and reports the pair here).
+
+## fn refresh_entry_use_display_renders_upgrade_and_downgrade_against_the_installed_base
+- An `Upgrade` entry renders the target candidate with the installed instance as the diff base; a `Downgrade` the same in the other direction. Kills the combined `Upgrade|Downgrade`-arm deletion (both stay empty).
+
+## fn refresh_entry_use_display_force_shows_a_dropped_reinstall_trigger_flag
+- A `Reinstall` entry whose trigger flag the new ebuild dropped from IUSE still shows the `(-flag%*)` removed row at plain `-p` through the trigger set. Kills the `Reinstall`-arm deletion of the version lookup and the `Reinstall{changed_flags}`-arm deletion of the trigger set (both render an empty line here).
+
+## fn ctx_163
+- Literal `ResolveCtx` in the #161 `ctx_161` shape (same field list, so it tracks production), with the knobs each leg needs as parameters.

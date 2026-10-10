@@ -1,10 +1,10 @@
-/// Direct predicate-result legs in the #161/#162 scratch style: each
+/// Direct predicate-result legs in the scratch style of `tests_161`/`tests_162`: each
 /// test observes the predicate's own return value. Do not edit other
 /// items' `mod tests_16x` blocks.
 use crate::*;
 use portage_util::TempDir;
 
-// ---- S1: `strip_revision` (`--rebuild-if-new-ver` compares the
+// ---- `strip_revision` (`--rebuild-if-new-ver` compares the
 // merged version against installed ones with `-r<n>` stripped on
 // both sides -- see `rebuild_if_entries`). ----
 
@@ -26,9 +26,9 @@ fn strip_revision_166_strips_numeric_revisions_only() {
     assert_eq!(strip_revision("1.0-r1-r2"), "1.0-r1");
 }
 
-// ---- S2: `filter_usepkg_exclude_include` (Portage usepkg-exclude/include). ----
+// ---- `filter_usepkg_exclude_include` (Portage usepkg-exclude/include). ----
 
-/// Hand-built binary candidate in the #162 `cand_162` shape (same
+/// Hand-built binary candidate in the `cand_162` shape (same
 /// fields; `candidate_str` renders `cat/pkg-ver:slot/sub::repo`).
 fn cand_166(version: &str) -> Candidate {
     Candidate {
@@ -89,7 +89,7 @@ fn filter_usepkg_166_include_drops_a_non_match() {
     assert_eq!(out.len(), 1);
 }
 
-// ---- S3: `rebuilt_binary_changed` (Portage's two rebuilt_binary triggers). ----
+// ---- `rebuilt_binary_changed` (Portage's two rebuilt_binary triggers). ----
 
 /// Fresh unique scratch dir per test (vdb lives under it, so the
 /// per-root aux caches never see a reused path).
@@ -166,9 +166,9 @@ fn rebuilt_binary_166_untimestamped_comparison() {
     let _ = std::fs::remove_dir_all(&bare);
 }
 
-// ---- S4: `direct_solve_arg_mode` (Portage `_want_installed_pkg`). ----
+// ---- `direct_solve_arg_mode` (Portage `_want_installed_pkg`). ----
 
-/// Minimal visibility config in the #161 `test_config` shape
+/// Minimal visibility config in the `test_config` shape
 /// (amd64-only, no overrides).
 fn cfg_166() -> portage_profile::Config {
     portage_profile::Config {
@@ -212,7 +212,7 @@ struct ArgInput166Args<'a> {
     config: &'a portage_profile::Config,
 }
 
-/// Eight-arg input builder (same shape as #161's `ds_input_161`).
+/// Eight-arg input builder (same shape as `ds_input_161`).
 fn arg_input_166<'a>(args: ArgInput166Args<'a>) -> DirectSolveInput<'a> {
     let ArgInput166Args {
         conflicts,
@@ -313,7 +313,7 @@ fn direct_solve_arg_mode_166_rejects_every_non_arg_shape() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// ---- S5: `direct_solve_instance_use` (Portage per-instance USE). ----
+// ---- `direct_solve_instance_use` (Portage per-instance USE). ----
 
 /// Arguments of [`write_pkg_166`].
 struct WritePkg166Args<'a> {
@@ -326,7 +326,7 @@ struct WritePkg166Args<'a> {
     required_use: &'a str,
 }
 
-/// One scratch ebuild plus its md5-cache entry, in the #162
+/// One scratch ebuild plus its md5-cache entry, in the
 /// `write_pkg_162` shape extended with `DEPEND`/`REQUIRED_USE` lines.
 fn write_pkg_166(args: WritePkg166Args<'_>) {
     let WritePkg166Args {
@@ -509,7 +509,7 @@ fn direct_solve_instance_use_166_installed_reads_vdb_over_tree_iuse() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- S6: `synthesize_surviving_conflict_entries` (files instances adjacently). ----
+// ---- `synthesize_surviving_conflict_entries` (files instances adjacently). ----
 
 /// One conflict with a single merge-bound (non-installed) instance.
 fn synth_conflict_166() -> SlotConflict {
@@ -617,7 +617,7 @@ fn synthesize_166_new_slot_tracks_the_installed_set() {
     let _ = std::fs::remove_dir_all(&installed);
 }
 
-// ---- S7: `circular_dep_solutions` (Portage `_find_suggestions`). ----
+// ---- `circular_dep_solutions` (Portage `_find_suggestions`). ----
 
 /// The suggestion set rendered order-free (the trailing
 /// sort/dedup carries no mutants; the positions, flags and

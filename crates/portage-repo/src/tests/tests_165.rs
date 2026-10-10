@@ -20,7 +20,7 @@ fn install_165(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &st
     }
 }
 
-// ---- S1: `installed_reverse_dependents` (Portage vartree.dbapi scan). ----
+// ---- `installed_reverse_dependents` (Portage vartree.dbapi scan). ----
 
 /// A plain RDEPEND consumer is reported; a package depending on
 /// something else is not.
@@ -121,7 +121,7 @@ fn installed_reverse_dependents_ignores_blockers_but_keeps_matches() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// ---- S3: `find_repos_impl` survivors (Portage RepoConfigLoader). ----
+// ---- `find_repos_impl` survivors (Portage RepoConfigLoader). ----
 
 /// The main repo defaults to priority -1000, every other repo to 0
 /// (Portage `config.py`'s own default).
@@ -146,7 +146,7 @@ fn find_repos_impl_defaults_the_main_repo_to_priority_minus_1000() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// The no-`volatile`-key heuristic (Portage `config.py:423`):
+/// The no-`volatile`-key heuristic (Portage `repository/config.py`):
 /// volatile unless under `/var/db/repos` and owned by root/portage.
 #[test]
 fn find_repos_impl_computes_volatile_from_location_and_owner() {
@@ -328,7 +328,7 @@ fn new_165(cat: &str, pkg: &str, ver: &str) -> GraphEntry {
     )
 }
 
-// ---- S4: `parent_use_state` (the requesting parent's own resolved
+// ---- `parent_use_state` (the requesting parent's own resolved
 // USE state behind a conditional use-dep: the owner's merge-bound
 // entry version re-looked-up in the tree). ----
 
@@ -454,7 +454,7 @@ fn ipkg_165(cat: &str, pkg: &str, ver: &str, slot: &str) -> InstalledPackage {
     }
 }
 
-// ---- S5: `topological_removal_order` (Portage unmerge ordering). ----
+// ---- `topological_removal_order` (Portage unmerge ordering). ----
 
 /// Installs `<name>-1.0` (slot 0) with the given dep keys.
 fn order_vdb_165(root: &Path, pkgs: &[(&str, &[(&str, &str)])]) {
@@ -647,7 +647,7 @@ fn topological_removal_order_pops_a_three_cycle_cpv_max_first() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// ---- S6: `prune_cleanlist` (Portage `emerge --prune` selection). ----
+// ---- `prune_cleanlist` (Portage `emerge --prune` selection). ----
 
 /// Two versions, no dependents: the older is pruned, the result is
 /// unordered, and nothing is kept or unresolved.
@@ -767,7 +767,7 @@ fn prune_cleanlist_reports_the_keeper_of_a_kept_version() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// ---- S7: `resolve_blockers` (Portage `_validate_blockers`). ----
+// ---- `resolve_blockers` (Portage `_validate_blockers`). ----
 
 fn upgrade_165(cat: &str, pkg: &str, from: &str, to: &str) -> GraphEntry {
     entry_165(
@@ -1207,7 +1207,7 @@ fn resolve_blockers_falls_back_to_a_same_cp_nomerge_owner_only() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// ---- S8: `file_blocker_conflicts` and
+// ---- `file_blocker_conflicts` and
 // `collect_unwalked_installed_blockers` (Portage `_validate_blockers`). ----
 /// Arguments of [`filed_165`].
 struct Filed165Args<'a> {
@@ -1595,7 +1595,7 @@ fn collect_unwalked_installed_blockers_dedups_exact_rows_only() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// ---- S9: `enqueue_dependencies` (`--deep` AlreadyInstalled recursion). ----
+// ---- `enqueue_dependencies` (`--deep` AlreadyInstalled recursion). ----
 /// Arguments of [`enqueue_165`].
 struct Enqueue165Args<'a> {
     repos: &'a [RepoConfig],

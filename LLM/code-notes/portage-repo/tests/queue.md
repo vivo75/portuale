@@ -17,3 +17,6 @@ Queue-walk pins: --exclude, slot-keyed dedup, surviving slot conflicts, deep lev
 - Backlog #148: Portage's `l0-fx-20260922T192350Z` cell `-D dev-libs/slotusegroup` shows `[ebuild N] slotusetarget-1.0` and `-2.0` (rc 1).
 - `dev-libs/slotusegroup` RDEPENDs `slotuseplain slotusex slotusey`; slotusey/slotusex pull `>=slotusetarget-1.0[y]` / `[x]` (2.0 lacks `y` in IUSE and has `x` default-off) while slotuseplain pulls `>=slotusetarget-2.0`.
 - Before the fix the walk's `resolved_slots` conflict arm recorded the `SlotConflict` and continued past `GraphEntry` creation, so the graph held one `slotusetarget` entry (1.0) and the merge list one row.
+
+## fn deep_not_requested_never_walks_an_already_installed_packages_own_dependencies
+- `dev-libs/deeppkg` is already installed and stays `AlreadyInstalled` (no --update); its own RDEPEND chain (-> deeppkg2 -> newpkg) is never read at all without --deep, matching Portage's own default (deep=0, permanently "too deep" at every depth -- see `Deep::NotRequested`'s own doc comment).

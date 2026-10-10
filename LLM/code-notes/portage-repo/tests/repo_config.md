@@ -8,7 +8,7 @@
 - Portage explicit `masters = name1 name2` overrides the default outright, resolved to each named repo's location in declared order; an unknown name is silently dropped (Portage config.py only warns, never a hard error). An explicit key fully replaces the default: the main repo is not implicitly included.
 
 ## fn find_repos_treats_an_explicit_empty_masters_key_as_no_masters_at_all
-- Portage explicit `masters = ` (present but empty) is genuinely different from the key being absent: "no masters", not the main-repo-alone default.
+- Portage explicit `masters = ` (present but empty) is genuinely different from the key being absent: it means "no masters", not "fall back to the default main-repo-alone behavior".
 
 ## fn find_repos_reads_layout_conf_masters_repo_name_and_profile_formats
 - Portage three-tier masters (config.py:237-245/484-490): with no repos.conf `masters` key, the repo's own `metadata/layout.conf` `masters =` is the middle tier before the implicit main-repo default. `repo-name` overrides the section name; `profile-formats` is captured verbatim.
@@ -16,6 +16,7 @@
 
 ## fn find_repos_reads_profiles_repo_name_and_drops_a_mismatched_section
 - Portage `_read_repo_name` plus the config.py:1121 mismatch check. `dropped` mismatches with no alias; `aliased` mismatches but survives via its alias.
+- `profiles/repo_name` is the canonical name source (over the `[section]` name); a section whose name differs from the resolved name -- and isn't one of the repo's aliases -- is dropped entirely.
 
 ## fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_time_pin
 - Backlog #91 S1, on the committed fixtures: `whtarget-1.0` records a runtime-key `~whblocker-1.0` pin (the hermetic host-qemu shape) while `rdctarget-1.0` records the build-time-key `~rdcblocker-1.0` pin (D1, #79). Both consumers reachable, both upgrades otherwise selected.

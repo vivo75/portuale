@@ -16,10 +16,11 @@ Reinstall-trigger pins: binary identity, --newuse/--changed-use/--changed-deps/-
 - Fixture: `dev-libs/slotopdepspkg` ebuild `RDEPEND="dev-libs/slotoptarget:="`; its vdb recorded the built `dev-libs/slotoptarget:2=` (the slot it merged against). Without the normalization every `:=` dep would spuriously trigger a --changed-deps reinstall.
 
 ## fn changed_deps_detects_an_any_of_group_reorder
-- Fixture: `dev-libs/anyofreorderdepspkg` vdb `RDEPEND="|| ( dev-libs/reorderdepa dev-libs/reorderdepb )"`, ebuild swaps the alternatives. Portage `_changed_deps` compares structured `use_reduce(token_class=Atom)` output; the pre-slice flat set comparison missed it.
+- Fixture: `dev-libs/anyofreorderdepspkg` vdb `RDEPEND="|| ( dev-libs/reorderdepa dev-libs/reorderdepb )"`; its current ebuild swaps the two alternatives. Portage `_changed_deps` compares structured `use_reduce(token_class=Atom)` output, so the `||`-alternative order is significant -- the pre-slice flat set comparison missed it.
 
 ## fn changed_deps_detects_a_plain_atom_reorder_but_not_a_redundant_bracket
 - Fixture pair: `orderchangeddepspkg` (vdb `reorderdepa reorderdepb`, ebuild `reorderdepb reorderdepa`) vs `redundantbracketdepspkg` (vdb `reorderdepa reorderdepb`, ebuild `( dev-libs/reorderdepa dev-libs/reorderdepb )`).
+- A redundant-bracket difference is not a change (Portage `use_reduce` collapses `( a b )` to `a b`): `dev-libs/redundantbracketdepspkg` has vdb `reorderdepa reorderdepb` and ebuild `( dev-libs/reorderdepa dev-libs/reorderdepb )`.
 
 ## fn changed_deps_report_is_silent_when_changed_deps_is_also_given
 - Portage: "This is completely silent... if --changed-deps ... is enabled" -- the Vec stays empty even though the underlying change reinstalls (proven by the second assertion).

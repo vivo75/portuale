@@ -3,6 +3,7 @@ Single-pass (`run_161`) walk pins: leaf/NVC/reinstall, update, newuse, use-deps,
 
 ## fn run_pass_use_mismatched_installed_instance_leaves_the_build_edge_hard
 - Backlog #250: the `u250json -> u250make` edge, pmtest fixture; Portage's playground in `LLM/evidence/2026-09-30-250/`.
+- Portage's build-edge satisfaction is `vardb.match_pkgs(atom)`, which honours use-deps: an installed `dev-util/u250make` built `-foo` does not satisfy `dev-util/u250make[foo]`, so the `u250json -> u250make` build edge stays unbreakable.
 
 ## fn run_pass_resolves_a_leaf_to_a_new_entry
 - Backlog #161 S6.
@@ -24,6 +25,7 @@ Single-pass (`run_161`) walk pins: leaf/NVC/reinstall, update, newuse, use-deps,
 
 ## fn run_pass_walks_dependencies_and_records_parent_atoms
 - Backlog #161 S6.
+- `parent_atoms` rows are collected under `--debug` only, like every `resolver_trace` row -- pinned by the contract suite, so there is no unit-observable assertion for them here.
 
 ## fn run_pass_newuse_reinstalls_a_flag_change
 - Backlog #161 S6: the vdb records no `wantdep`; the profile enables it.

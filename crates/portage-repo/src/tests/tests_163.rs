@@ -70,7 +70,7 @@ fn masked_163(cat: &str, pkg: &str, atom: &str) -> MaskedDepReport {
     }
 }
 
-// ---- S1: `abort_outcome` (abandon sites as data). ----
+// ---- `abort_outcome` (abandon sites as data). ----
 
 /// A masked-only dep with a merge-bound requirer aborts as
 /// `MaskedDep` with the report's atom, the first merge-bound
@@ -400,7 +400,7 @@ struct WritePkg163RuArgs<'a> {
 }
 
 /// Same shape with a `REQUIRED_USE` line instead of `RDEPEND`
-/// (the S2 parent-flip legs' writer).
+/// (the parent-flip legs' writer).
 fn write_pkg_163_ru(args: WritePkg163RuArgs<'_>) {
     let WritePkg163RuArgs {
         repo,
@@ -440,7 +440,7 @@ fn write_pkg_163_ru(args: WritePkg163RuArgs<'_>) {
 }
 
 /// Same shape with `(cp, version, slot, iuse, required_use)`
-/// ebuilds (the S2 parent-flip legs' repo).
+/// ebuilds (the parent-flip legs' repo).
 fn repo_pkgs_163_ru(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
     let repo = dir.join("repo");
     for (cp, pv, slot, iuse, required_use) in pkgs {
@@ -473,7 +473,7 @@ fn owner_163(cat: &str, pkg: &str) -> (String, String) {
     (cat.to_string(), pkg.to_string())
 }
 
-// ---- S2: `use_unsat_parent_row` (Portage's parent-flag flip row). ----
+// ---- `use_unsat_parent_row` (Portage's parent-flag flip row). ----
 
 /// An `=`-conditional use-dep on a flag the parent has off (the
 /// child has it on) suggests `+flag` with the parent's cpv.
@@ -833,7 +833,7 @@ struct WritePkg163Args<'a> {
     keywords: &'a str,
 }
 
-/// One scratch ebuild plus its md5-cache entry, in the #161/#162
+/// One scratch ebuild plus its md5-cache entry, in the
 /// shape: `SLOT`, `KEYWORDS`, `IUSE`, `RDEPEND` lines in both.
 fn write_pkg_163(args: WritePkg163Args<'_>) {
     let WritePkg163Args {
@@ -918,7 +918,7 @@ fn install_163(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &st
     }
 }
 
-// ---- S3: `refresh_entry_use_display` (post-walk USE-line re-render). ----
+// ---- `refresh_entry_use_display` (post-walk USE-line re-render). ----
 
 /// A `New` entry's display comes from the resolved candidate's own
 /// IUSE with the profile-effective USE.
@@ -1169,7 +1169,7 @@ fn refresh_entry_use_display_skips_settled_entries() {
     assert!(entries[0].use_expand_display_p.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
-// ---- shared resolve_pretend harness (S4) ----
+// ---- shared resolve_pretend harness ----
 
 /// Option bundle for `resolve_163`, mirroring `resolve_pretend`'s
 /// trailing flags; defaults are the plain top-level selective resolve.
@@ -1278,7 +1278,7 @@ fn binpkg_163(cpv: &str, slot: &str, extra: &[(&str, &str)]) -> HashMap<String, 
     m
 }
 
-// ---- S4: `resolve_pretend` (single-atom pretend decision). ----
+// ---- `resolve_pretend` (single-atom pretend decision). ----
 
 /// A fresh top-level atom resolves `New` at the best visible
 /// version.
@@ -2555,7 +2555,7 @@ fn resolve_pretend_rebuilt_binaries_reinstalls_on_newer_build() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-// ---- shared assemble_result harness (S5) ----
+// ---- shared assemble_result harness ----
 
 fn pass_163() -> PassResult {
     PassResult {
@@ -2603,7 +2603,7 @@ struct Ctx163Args<'a> {
     reachable: HashSet<(String, String)>,
 }
 
-/// Literal `ResolveCtx` in the #161 `ctx_161` shape (same field
+/// Literal `ResolveCtx` in the `ctx_161` shape (same field
 /// list, so it tracks production), with the knobs each leg needs
 /// as parameters.
 fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
@@ -2704,7 +2704,7 @@ fn plain_163(cat: &str, pkg: &str, atom: &str) -> PlainMissDepReport {
     }
 }
 
-// ---- S5: `assemble_result` (the settled-graph assembly: merge
+// ---- `assemble_result` (the settled-graph assembly: merge
 // order, buildpkgonly gate, cycle report, autounmask coalescing,
 // disclosure chains, and the abort classification). ----
 

@@ -32,7 +32,7 @@ Direct unit tests for the eight pure selection predicates (mutation cluster 2).
 - The `#90 (S1)` drain-state legs.
 
 ## fn disj_162_circ
-- Backlogs #216/#221.
+- `disj_162` with an explicit `circular_dependency` map (backlogs #216/#221) -- owner cp -> circular-child records, like the `'backtrack` loop carries.
 
 ## fn clean_selection_reports_every_multi_version_cp
 - Kills the whole-body `vec![]` row, the three `versions.len() < 2` flips and the cross-slot best flip.
@@ -75,6 +75,7 @@ Direct unit tests for the eight pure selection predicates (mutation cluster 2).
 
 ## fn write_pkg_162
 - The md5-cache validation guard fails otherwise.
+- One scratch ebuild plus its md5-cache entry, in the #161 `blocker_161_write_pkg_full` shape with an `IUSE` line.
 
 ## fn disjunction_preference_ranks_a_fresh_alternative_available
 - The `avail || running_root` narrowing, the `!avail` deletion, the `!all_available` deletion and the whole-body `Default` (which is `Unsatisfiable`) fail here.
@@ -93,15 +94,18 @@ Direct unit tests for the eight pure selection predicates (mutation cluster 2).
 
 ## fn disjunction_preference_cross_slot_atom_is_not_in_graph
 - g221c (L0 `dev-lang/rust`): the retry takes `-bin`. The slot-blind candidate used to rank it `Installed`, beating `-bin` and re-closing the cycle through the older slot's own self edge. The `Available` (not `Unsatisfiable`) also pins that the circular-self gate let it through (see the next test).
+- A `:slot` atom naming a different slot than the graphed instance is NOT in-graph -- Portage's `graph_db.match_pkgs(atom)` checks the slot, so the older-slot branch ranks `Available` and the retry takes `-bin`.
 
 ## fn disjunction_preference_cross_slot_self_atom_still_proceeds
 - Ranks `Available` (the bins use the slot-precise rule), never `Unsatisfiable`: slot precision here would wrongly refuse it as circular.
+- The circular-self gate still lets a cross-slot self atom through: the gate asks cp-presence ([`atom_cp_present_in_graph`]), not instance identity -- Portage merges the second instance as an ordinary dependency, so slot precision here would wrongly refuse it as circular.
 
 ## fn disjunction_preference_demotes_a_recorded_circular_self_alternative
 - Backlog #216: Portage `dep_zapdeps`' `circular_atom` (dep_check.py:688-691). The re-resolve takes the bootstrap branch. The demotion `return` fails here.
 
 ## fn disjunction_preference_circular_demotion_spares_an_installed_atom
 - Backlog #216. Still `Installed`; the exemption `continue` fails here.
+- The demotion spares an atom an installed instance satisfies (Portage's own `vardb.match(atom)` exemption -- a "cycle" through an installed package is no deadlock). Still `Installed`; the exemption `continue` fails here.
 
 ## fn disjunction_preference_keeps_an_uninstalled_other_alternative
 - The `cp == self` flip and both circular-`&&` widenings fail here.
@@ -134,7 +138,7 @@ Direct unit tests for the eight pure selection predicates (mutation cluster 2).
 - The lookup-key and the `atom.match(child)` flips fail here.
 
 ## fn disjunction_preference_exempts_an_installed_satisfying_circular_atom
-- The exemption deletion fails here.
+- An atom satisfied by an installed version is not a circular dep (Portage's `if vardb.match(atom): continue`) -- the installed exemption holds `Installed` even with a matching record.
 
 ## fn promote_tied_alternative_prefers_the_strict_upgrade
 - The whole-body `-> 0`, two `< 2` early-return flips, the break-on-self flip, the position flip and the upgrade-arm `||` narrowing fail here.
@@ -192,3 +196,6 @@ Direct unit tests for the eight pure selection predicates (mutation cluster 2).
 
 ## fn alternative_downgrade_demoted_uses_the_tree_hypothetical_under_update
 - Pins the update arm the queued-filter mutants never touch.
+
+## fn repo_pkgs_162
+- Single scratch repo in the #161 `blocker_161` shape (name `testrepo`, priority 0, main) holding `(cp, version, slot, iuse)` ebuilds with `KEYWORDS="amd64"`.

@@ -18,3 +18,4 @@ Classification-level pins for onlydeps IDEPEND handling and `_minimize_children`
 
 ## fn minimize_children_matches_use_deps_against_candidate_use
 - Backlog #266: Portage `findAtomForPackage(pkg, modified_use=self._pkg_use_enabled(pkg))` evaluates a use-dep atom against a not-yet-built package's own candidate effective USE. Grounded on Portage 3.0.82.2's ResolverPlayground (`LLM/evidence/2026-10-01-266/r266_pg.py`).
+- `>=minlib2-1[bar]` alongside `<minlib2-3` collapses onto the lower pick when that pick builds `bar`, and stays split when it does not.

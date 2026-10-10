@@ -9,12 +9,13 @@
 ## fn installed_dep_missing_a_use_flag_reinstalls_not_already_installed
 - L0 finding L: Portage reinstalls `foo` with `bar` (and autounmasks it). Gated on `autounmask_use`.
 - With `--autounmask-use=n` the `matched` filter drops the candidate entirely instead (no flip allowed).
+- `dev-libs/flipinstdep`: installed at 1.0 without `wantflag` (in IUSE, default-off); `dev-libs/flipinstconsumer` RDEPENDs `dev-libs/flipinstdep[wantflag]`.
 
 ## fn emptytree_reinstalls_an_installed_dependency_that_would_otherwise_be_hidden
 - Without `--deep`/`--emptytree` deeppkg2 is `AlreadyInstalled` (and not shown). Under `--emptytree` the dep path runs `dependency_avoid_update_candidate` -> `already_installed_or_reinstall(empty=true)`.
 
 ## fn resolve_pretend_matches_a_sub_slot_restricted_atom_against_the_real_sub_slot
-- Unlike a slot-operator atom (`:=`/`pkg:slot=`), which needs no candidate-side sub-slot data to match, the plain PMS 8.3.3 `cat/pkg:slot/sub-slot` restriction form does -- see `Candidate::sub_slot` for the bug this closes.
+- Unlike a slot-operator atom (`:=`/`pkg:slot=`), which `matches_slot`'s own doc comment already established needs no candidate-side sub-slot data at all to match correctly, the plain PMS 8.3.3 `cat/pkg:slot/sub-slot` restriction form DOES need it -- see `Candidate::sub_slot` for the bug this closes.
 
 ## fn slot_operator_binary_masked_version_reads_only_marked_negatives
 - Backlog #212 (v2 `#24c`): a plain `!=cpv` is Portage's slot-conflict / missing-dependency negatives; only `!=cpv[binary]` reads as a `slot_operator_mask_built` record. `is_binary_only_mask` answers the same question for the string-constraint readers.
@@ -24,3 +25,6 @@
 - Portage `_wrapped_select_pkg_highest_available_imp` (depgraph.py:7799-7840) iterates the installed db for every resolve (no `--usepkg` gate; the old gate here was the L1-a narrowing).
 - Flags mirror that cell (`--changed-slot --update --deep --newuse`, no `--usepkg`). Portage sets selective with `--update`. A top-level atom with the same shape still reports: Portage needs something mergeable for a package named on the command line.
 - The runtime-keyed installed hearing lives one layer up (the queue loop's #233 rewrite); the build-time-keyed pins depend on this level reporting.
+
+## fn resolve_pretend_rejects_a_sub_slot_restricted_atom_that_does_not_match
+- Same candidate (SLOT "0/2"), but the atom itself asks for sub-slot "3" -- a genuine mismatch, proving this is Portage matching and not just "always accept regardless of sub-slot".

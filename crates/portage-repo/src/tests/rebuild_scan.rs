@@ -157,7 +157,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
 
     // Not reachable -> the post-walk vdb scan is suppressed entirely
     // (Portage: no slot-op rebuild for a consumer outside the required
-    // sets). The S5 probe is not complete-mode gated, but `bar`'s
+    // sets). The slot-operator-dep probe is not complete-mode gated, but `bar`'s
     // upgrade carries no unbuilt `:=` dep, so nothing fires here.
     let (none_sched, none_abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &dir,
@@ -989,7 +989,7 @@ fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot
 fn slot_operator_rebuild_scan_honours_with_bdeps() {
     // DEPEND/BDEPEND read only with `with_bdeps` (Portage empties them
     // otherwise); RDEPEND/PDEPEND/IDEPEND stay unconditional.
-    // Portage: _emerge/depgraph.py:4194-4247
+    // Portage: lib/_emerge/depgraph.py
     let dir = TempDir::new("portage-repo-slotop-bdeps").keep();
     let mk = |name: &str, key: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -1061,7 +1061,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
     );
 
     // Reachable-but-unwalked consumers keep build-time keys off.
-    // Portage: depgraph.py:3114,3802-3806,4277/4287
+    // Portage: _emerge/depgraph.py
     let (scheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &dir,
         repos: &[],
@@ -1128,7 +1128,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         ]
     );
 
-    // The S1 gate beats the S2 walk test: even a walked consumer's
+    // The reachability gate beats the walk test: even a walked consumer's
     // build-time keys stay out when bdeps is off.
     let (scheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &dir,
