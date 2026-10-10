@@ -7,4 +7,4 @@
 - The unsure `dep_atom` marker (key `""`) comes from plan step S8.1.
 
 ## fn RedbTxn::seal_entry
-- Value shaping is lossy, like Portage's consolidation (`errors="replace"`).
+- Value shaping is lossy, like Portage's consolidation (`errors="replace"`, #309).

@@ -21,7 +21,7 @@ use crate::binpkg::*;
 // `gpkg._strip_metadata_prefix`, `tarfile.extractfile`.
 pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, BinpkgError> {
     if !gpkg_path.is_file() {
-    // A missing file is `Invalid`, not `Fatal`.
+        // A missing file is `Invalid`, not `Fatal`.
         return Err(BinpkgError::Invalid(format!(
             "{}: not a file",
             gpkg_path.display()

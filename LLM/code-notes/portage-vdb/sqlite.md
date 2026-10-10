@@ -2,6 +2,7 @@
 The SQLite backend: schema, open, reads, and the `data_version`-validated cache.
 
 ## module
+- The SQLite backend (feat#157, backlog #305 S2.3: schema and open; S2.4: the read side; S2.5: writes in `write.rs`, transaction model in the crate doc). Design: `docs/vdb_to_db.md` §4, §7.1.
 - Landed as plan steps S2.3 (schema and open), S2.4 (read side), S2.5 (writes in `write.rs`).
 - `meta.schema_version` is independent of `METADATA_FILE_FORMAT_VERSION` (plan section 1, Q4).
 - WAL needs shared memory (design section 4).

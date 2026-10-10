@@ -2,6 +2,7 @@
 The redb backend: tables, open, reads, and the generation-validated cache.
 
 ## module
+- The redb backend (feat#157, backlog #305 S5.2: tables, open and the read side; S5.3: writes). Design: `docs/vdb_to_db.md` §4, §7.2.
 - Landed as plan steps S5.2 (tables, open, read side) and S5.3 (writes, in `write.rs`).
 - `entry` keyed by `(state, category, pf)`: the interface has no `pn`/`ver` split (lib.rs module doc, item 1); a pending entry beside a live row (item 3, sqlite's `UNIQUE (category, pf, state)`).
 - `entry_by_counter` keeps the first claimant on duplicate counters because a corpus can hold them.

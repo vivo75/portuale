@@ -181,7 +181,7 @@ pub(crate) fn run_gpg_verify(argv: &[String], stdin_data: &[u8]) -> Result<Vec<u
     }
     // Single-cause summaries only; otherwise "(none available)", so a
     // malformed signature gets no confident-sounding diagnosis.
-// Portage: `gpkg.show_gpg_error`.
+    // Portage: `gpkg.show_gpg_error`.
     let mut causes = 0;
     let mut summary = "(none available)";
     if status_lines

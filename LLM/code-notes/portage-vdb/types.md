@@ -24,3 +24,6 @@ Value types of the `InstalledDb` interface: entry keys, file metadata, snapshots
 
 ## struct PreservedLibs
 - `set_preserved_libs` skips the write when `entries == loaded`, mirroring Portage's `store()` `_data == _data_orig` check.
+
+## struct ConfigMemory
+- The config-protect memory (`var/lib/portage/config` on `files`): path → md5 of the last offered source (N7).
