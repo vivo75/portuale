@@ -3,7 +3,7 @@
 (#336 Phase 6.3: `pretend::run` phases D-S and the other function cuts).
 
 Usage: extract_block.py SRC START END FNAME TARGET_RS [--doc TEXT] [--crate PKG]
-                        [--try ERR] [--keep]
+                        [--try ERR] [--ret TYPE] [--keep]
 
 SRC lines START..END (1-based, inclusive) must be whole statements of the
 host function's top-level block (4-space indent). They move verbatim into
@@ -32,8 +32,10 @@ comes from the compiler:
 6. bare type names rustc prints are imported from its own `use`
    suggestion, else from the one workspace crate that defines them.
 
-A `return X` in the range ends the host: the function returns
-`Option<ExitCode>` (no outputs) or `Result<outputs, ExitCode>`, and the call
+A `return X` in the range ends the host (`--ret TYPE` names the host's
+return type, default `ExitCode`): the function returns
+`Option<ExitCode>` (no outputs) or `ControlFlow<ExitCode, outputs>` (needs
+`use std::ops::ControlFlow;` in the host), and the call
 site returns the code. With `--try ERR` (the host returns `Result<_, ERR>`),
 a range using `?` returns `Result<outputs, ERR>` and the call site keeps
 the `?`. On success `cargo clippy --fix` and `cargo fmt` run;
@@ -155,7 +157,7 @@ def code_only(text):
 
 
 class Cut:
-    def __init__(self, src, start, end, fname, target, doc, pkg, err=None):
+    def __init__(self, src, start, end, fname, target, doc, pkg, err=None, ret="ExitCode"):
         self.src, self.start, self.end = src, start, end
         self.fname, self.target, self.doc, self.pkg = fname, target, doc, pkg
         self.orig_src = open(src).read()
@@ -169,6 +171,7 @@ class Cut:
         body = "\n".join(self.region)
         self.returns = wrap_returns(body, "Some") != body
         self.raw_body = body
+        self.ret_ty = ret
         # `?` in the range: the function returns `Result<_, err>` and the
         # call site keeps the `?` (needs --try ERR, the host's error type)
         self.err = err if err and "?" in code_only(body) else None
@@ -224,8 +227,8 @@ class Cut:
         if self.outs:
             ts = [t if typed and t else "()" for _, t in self.outs]
             o = ts[0] if len(ts) == 1 else pascal(self.fname) + "Out"
-            return f"Result<{o}, ExitCode>" if self.returns else o
-        return "Option<ExitCode>" if self.returns else None
+            return f"ControlFlow<{self.ret_ty}, {o}>" if self.returns else o
+        return f"Option<{self.ret_ty}>" if self.returns else None
 
     def render(self, typed, probe=False):
         lines = self.orig_src.split("\n")
@@ -242,6 +245,8 @@ class Cut:
                 n if m == "val" or not typed else ("&mut " + n if m == "mut" else "&" + n)
                 for n, _, m in ps)
         call = f"{self.fname}({call_args})"
+        # the early-return value is named after its type: ExitCode -> code
+        rv = re.findall(r"[A-Z][a-z]*", self.ret_ty)[-1].lower()
         onames = [n for n, _ in self.outs]
         oname = pascal(self.fname) + "Out"
         pat = (onames[0] if len(onames) == 1 else oname + " { " + ", ".join(onames) + " }") if onames else None
@@ -250,12 +255,12 @@ class Cut:
         if self.err:
             site = [f"    let {mpat} = {call}?;"] if onames else [f"    {call}?;"]
         elif onames and self.returns:
-            site = [f"    let {mpat} = match {call} {{", "        Ok(out) => out,",
-                    "        Err(code) => return code,", "    };"]
+            site = [f"    let {mpat} = match {call} {{", "        ControlFlow::Continue(out) => out,",
+                    f"        ControlFlow::Break({rv}) => return {rv},", "    };"]
         elif onames:
             site = [f"    let {mpat} = {call};"]
         elif self.returns:
-            site = [f"    if let Some(code) = {call} {{", "        return code;", "    }"]
+            site = [f"    if let Some({rv}) = {call} {{", f"        return {rv};", "    }"]
         else:
             site = [f"    {call};"]
         new_src = lines[:self.start - 1] + site + lines[self.end:]
@@ -269,12 +274,12 @@ class Cut:
         elif probe:
             tail = "\n" + "".join(f"    let _: () = {n};\n" for n in onames) + "    todo!()\n"
         elif onames:
-            tail = "\n" + writeback + ("    Ok(" + pat + ")\n" if self.returns else "    " + pat + "\n")
+            tail = "\n" + writeback + ("    ControlFlow::Continue(" + pat + ")\n" if self.returns else "    " + pat + "\n")
         elif self.returns:
             tail = "\n" + writeback + "    None\n"
         else:
             tail = "\n" + writeback
-        body = wrap_returns(self.raw_body, "Err" if onames else "Some") if self.returns else self.raw_body
+        body = wrap_returns(self.raw_body, "ControlFlow::Break" if onames else "Some") if self.returns else self.raw_body
 
         def ptype(t, m):
             if not typed:
@@ -376,6 +381,16 @@ class Cut:
             elif p and code == "E0382" and p[2] == "val":
                 p[2] = "ref"
                 changed = True
+            elif code == "E0308":
+                # a `&` parameter moved into a returned value: make it
+                # `&mut` so apply_suggestions can `std::mem::take` it
+                for sp in m["spans"]:
+                    t0 = (sp.get("text") or [{}])[0]
+                    expr = t0.get("text", "")[t0.get("highlight_start", 1) - 1:t0.get("highlight_end", 1) - 1]
+                    q = next((q for q in self.params if q[0] == expr and q[2] == "ref"), None)
+                    if sp.get("is_primary") and q and re.search(r"found `&(?!mut )", sp.get("label") or ""):
+                        q[2] = "mut"
+                        changed = True
         return changed
 
     def add_imports(self, errs):
@@ -408,6 +423,22 @@ class Cut:
                         continue
                     edits.append((s["line_start"], s["column_start"], s["column_end"],
                                   s["suggested_replacement"]))
+        # a `&mut` parameter moved into the value a `return` hands back
+        # (`Box::new(grown)`): the host returns right after, so taking it
+        # leaves nothing the host still reads
+        muts = {n for n, _, m in self.params if m == "mut"}
+        for m in errs:
+            if (m.get("code") or {}).get("code") != "E0308":
+                continue
+            for s in m["spans"]:
+                if not s.get("is_primary") or os.path.abspath(s["file_name"]) != tgt \
+                        or s["line_start"] != s["line_end"]:
+                    continue
+                expr = s["text"][0]["text"][s["text"][0]["highlight_start"] - 1:
+                                            s["text"][0]["highlight_end"] - 1]
+                if expr in muts and re.search(r"found `&mut ", s.get("label") or ""):
+                    edits.append((s["line_start"], s["column_start"], s["column_end"],
+                                  f"std::mem::take({expr})"))
         if not edits:
             return False
         for ln, a, b, rep in sorted(set(edits), key=lambda e: (e[0], -e[1])):
@@ -530,7 +561,8 @@ def main():
     doc = a[a.index("--doc") + 1] if "--doc" in a else ""
     pkg = a[a.index("--crate") + 1] if "--crate" in a else "portuale"
     err = a[a.index("--try") + 1] if "--try" in a else None
-    cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg, err)
+    ret = a[a.index("--ret") + 1] if "--ret" in a else "ExitCode"
+    cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg, err, ret)
     try:
         cut.run()
     except SystemExit as e:

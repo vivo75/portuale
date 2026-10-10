@@ -1,0 +1,241 @@
+//! No feedback fired: a pass still carrying an unsatisfied dep is a dead end.
+
+use crate::resolve::feedback::*;
+use portage_profile::Config;
+
+/// No feedback fired: a pass still carrying an unsatisfied dep is a dead end.
+pub(crate) fn step_unsatisfied_dead_end(
+    pass: &mut PassResult,
+    ctx: &ResolveCtx<'_>,
+    grown: &mut BacktrackParams,
+    config: &Config,
+    reverse_pins: &[RevDepPin],
+) -> ControlFlow<PassDecision, bool> {
+    // C2: no feedback fired. A pass that still carries an unsatisfiable
+    // dependency is a dead end (see `DeadEnd`), not a report -- settling
+    // here would abort on the masked graph instead of the best run.
+    // A conflict-only fall-through still settles (standing informational
+    // convention, exit 0).
+    let has_nvc = pass.suppressed_nvc
+        || pass
+            .entries
+            .iter()
+            .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
+
+    // #24 S3: real `_process_slot_conflicts` -> `_slot_operator_trigger_reinstalls`
+    // (2131-2132, gated on `_allow_backtracking`) -> `_slot_operator_*_backtrack`
+    // (2361-2452) writing `backtrack_infos["config"]
+    // ["slot_operator_replace_installed"]` + `_need_restart`, consumed by
+    // `resolver/backtracking.py::_feedback_config` (237-257). A consumer the
+    // scan finds becomes a *walked node* on the next pass (`run_pass`'s seed
+    // + flip), so its deps, its `:=` binding and its merge-order edges are
+    // real -- that is the whole point of the slice; nothing is synthesised
+    // after the settle any more.
+    //
+    // Placed last in the chain, on the settled graph: real runs the trigger
+    // after the walk, and the old synthesiser ran on `assemble_result`'s
+    // entries, so this sees exactly the same input it always did. A pass
+    // carrying an unsatisfiable dependency is a dead end first (real never
+    // reaches `_process_slot_conflicts`' tail with a failed `_create_graph`).
+    // Config feedback is budget-free, and the set only ever grows -- bounded
+    // by the installed cp count -- so the search terminates.
+    //
+    // `--backtrack=0` turns the whole trigger off, matching real's
+    // `allow_backtracking = max_retries > 0` (`_backtrack_depgraph` 12190)
+    // gating `_slot_operator_trigger_reinstalls` at 2131: with no search
+    // there is no restart to apply the replace set on, so real schedules
+    // nothing and `_forced_rebuilds` stays empty (no "causing rebuilds"
+    // block either). `--nodeps` is the same via `max_retries = 0`.
+    //
+    // `abi_rebuilds` is always recorded (empty when the trigger is off) so
+    // `assemble_result` knows the scan ran for this pass; only the
+    // `get_best_run` re-pass, which never comes through here, leaves it
+    // `None`.
+    if has_nvc
+        || ctx.backtrack_max == 0
+        || ctx.ignore_built_slot_operator_deps
+        || !ctx.rebuild_if_new_slot
+    {
+        pass.abi_rebuilds = Some(Vec::new());
+    } else {
+        // #268: the raw request atoms behind `top_level_cps`, for the
+        // greedy-eligibility half of the `#252` gate (explicit
+        // slot/version atoms pin nothing).
+        let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
+        let (scheduled, abi_rebuilds, masked_binaries) = slot_operator_rebuild_scan(
+            ctx.root,
+            &ctx.repos,
+            &pass.entries,
+            &ctx.slot_op_reachable,
+            &grown.slot_operator_replace_installed,
+            &grown.slot_operator_undone,
+            ctx.with_bdeps,
+            ctx.update,
+            &ctx.top_level_cps,
+            &top_atoms,
+            ctx.excluded,
+            config,
+        );
+        pass.abi_rebuilds = Some(abi_rebuilds);
+        // #236 A: the update probe's forcing half, for a child the walk
+        // left installed (see the function's doc comment).
+        let mut scheduled = scheduled;
+        let (force_consumers, forced) = slot_operator_update_force_scan(
+            ctx.root,
+            &ctx.repos,
+            config,
+            &pass.entries,
+            &ctx.slot_op_reachable,
+            &scheduled,
+            &grown.slot_operator_undone,
+            ctx.with_bdeps,
+            ctx.update,
+            &ctx.top_level_cps,
+            ctx.excluded,
+        );
+        scheduled.extend(force_consumers);
+        let forced_new = !forced.is_subset(&grown.slot_operator_forced_upgrade);
+        grown.slot_operator_forced_upgrade.extend(forced);
+        // #212 (v2 `#24c`): file the scan's stale-binary triples as
+        // `slot_operator_mask_built` negatives (real
+        // `_slot_change_backtrack`, `depgraph.py:2381-2398`, recorded
+        // into `backtrack_infos["config"]["slot_operator_mask_built"]`
+        // and enforced through the backtrack-config restart,
+        // `depgraph.py:5703-5712` /
+        // `resolver/backtracking.py::_feedback_config:237-242`, which
+        // files the mask under *both* `slot_operator_mask_built` *and*
+        // `runtime_pkg_mask`). The `neg` carries a `[binary]` marker
+        // (`!=cat/pkg-ver[binary]`): real keys by package object so
+        // only the binary instance hides, while portuale's string
+        // readers match binary and ebuild alike -- every
+        // string-constraint reader skips marked entries (see
+        // [`is_binary_only_mask`]) and only the binary-candidate pool
+        // filter honours them. A repeated mask replaces nothing (the
+        // set semantics are real's dict assignment); `mask_order`
+        // takes no entry, since a same-version steer never renders a
+        // missed-update row (see `backtrack_missed_updates`).
+        // Mask-only growth still restarts: real sets `_need_restart`
+        // unconditionally, even with an empty reinstall set.
+        let mut masks_new = false;
+        for (cat, pkg, ver) in &masked_binaries {
+            let neg = format!("!={cat}/{pkg}-{ver}[binary]");
+            let bucket = grown
+                .runtime_pkg_mask
+                .entry((cat.clone(), pkg.clone()))
+                .or_default();
+            if !bucket.iter().any(|m| m.neg == neg) {
+                bucket.push(MaskEntry {
+                    neg,
+                    reason: MaskReason::SlotOperatorBuilt,
+                });
+                masks_new = true;
+            }
+        }
+        if scheduled != grown.slot_operator_replace_installed || masks_new || forced_new {
+            grown.slot_operator_replace_installed = scheduled;
+            return ControlFlow::Break(PassDecision::Feedback(BacktrackFeedback::Config {
+                params: Box::new(std::mem::take(grown)),
+            }));
+        }
+
+        // Backlog #213 (v2 `#24d`): real `_resolve`'s `prune_rebuilds`
+        // check (`depgraph.py:5763-5780`) -- between the replace-set
+        // restart above (real `:5703-5712` returns first when the set
+        // grew this pass) and `_eliminate_rebuilds` below (real
+        // `:5777-5780`, skipped on the prune pass by the early return).
+        // On a pass where the replace set is non-empty and missed
+        // updates exist (real `_get_missed_updates`,
+        // `depgraph.py:1529-1565`; here the mask half of
+        // [`backtrack_missed_updates`] -- built-binary steers never
+        // render rows there, the same outcome as real's falsy-`None`
+        // skip at `:1556` -- chained with the conflict half below,
+        // exactly real's `:1533-1536`), real records
+        // `config["prune_rebuilds"]` and restarts, and the re-resolve
+        // drops the unnecessary rebuilds. `_ENABLE_PRUNE_REBUILDS`
+        // (`:628`) is unconditionally true upstream. One deliberate
+        // cut: the `_ignored_binaries_autounmask_backtrack` disjunct
+        // (`:5764`) needs the ignored-binaries/autounmask-USE state
+        // portuale's A3 overlay does not track at this layer (no pin
+        // diverges on it). Fires once (the latch); Config feedback is
+        // budget-free, and the re-walk re-schedules genuine rebuilds
+        // through the probe above, so the search terminates with the
+        // same rows and two extra passes.
+        //
+        // Backlog #253 (half 1): real's second missed-update source,
+        // `_conflict_missed_update` (the slot-conflict handler's
+        // removals, `:2087-2106`), rides `pass.skipped_updates` -- the
+        // direct solve's removal rows, filed during this pass's walk
+        // before this trigger runs (the withhold and residual rows join
+        // only later, at settle) -- so a non-empty row set here IS the
+        // conflict-source read. The per-slot-highest chaining only
+        // shapes the display (`collapse_skipped_updates` at settle);
+        // the trigger is a bare OR over both halves, like real's
+        // truthiness check.
+        //
+        // Gated on no live slot conflict like `_eliminate_rebuilds`
+        // below: real never reaches the check with one (its
+        // `:5685-5690` conflict return precedes it); a conflict-owning
+        // pass belongs to the conflict machinery above.
+        if !grown.prune_rebuilds
+            && !grown.slot_operator_replace_installed.is_empty()
+            && pass.slot_conflicts.is_empty()
+        {
+            let (skipped, missing, full) =
+                backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, grown, &[]);
+            if !skipped.is_empty()
+                || !missing.is_empty()
+                || !full.is_empty()
+                || !pass.skipped_updates.is_empty()
+            {
+                apply_prune_rebuilds(&mut *grown);
+                return ControlFlow::Break(PassDecision::Feedback(BacktrackFeedback::Config {
+                    params: Box::new(std::mem::take(grown)),
+                }));
+            }
+        }
+
+        // #24 S4: real `_resolve`'s `_eliminate_rebuilds` call
+        // (`depgraph.py:5771-5779`), which runs after the
+        // `_process_slot_conflicts` trigger settled and after `altlist()`
+        // succeeded -- i.e. on the pass where the replace set did not
+        // grow. For each walked rebuild whose re-evaluated tree deps
+        // equal its installed deps, real re-adds the installed instance
+        // in place and re-serialises; portuale drops the cp from the set
+        // and latches it (`slot_operator_undone`), so the next pass walks
+        // the consumer as ordinary `AlreadyInstalled` again and the S3
+        // scan cannot re-add it. Config feedback is budget-free, so the
+        // demotion lands in place of the rebuild rather than costing a
+        // backtrack step.
+        //
+        // Rule 0 skip (real 3867-3872, bug 922038): under `--emptytree`
+        // (`ctx.empty`, checked inside) or with any live slot conflict
+        // the merge list is not valid to compare against, so real returns
+        // early. The report-only fall-through (`has_nvc` false, conflicts
+        // present but no feedback fired) is exactly where that guard
+        // matters.
+        if pass.slot_conflicts.is_empty() {
+            let demoted = slot_operator_eliminate_rebuilds(
+                ctx.root,
+                &ctx.repos,
+                &pass.entries,
+                &grown.slot_operator_replace_installed,
+                &pass.slot_want,
+                reverse_pins,
+                ctx.selective,
+                ctx.changed_slot,
+                &ctx.top_level_cps,
+                ctx.empty,
+            );
+            if !demoted.is_empty() {
+                for cp in &demoted {
+                    grown.slot_operator_replace_installed.remove(cp);
+                    grown.slot_operator_undone.insert(cp.clone());
+                }
+                return ControlFlow::Break(PassDecision::Feedback(BacktrackFeedback::Config {
+                    params: Box::new(std::mem::take(grown)),
+                }));
+            }
+        }
+    }
+    ControlFlow::Continue(has_nvc)
+}
