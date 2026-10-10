@@ -2508,6 +2508,152 @@ mod tests {
         assert!(setup_vdb(&m, true).is_ok());
     }
 
+    /// With `PORTUALE_VDB_BACKEND` / `PORTUALE_VDB_PATH` set only in make.conf,
+    /// `emerge`, `ebuild` (its phases' `has_version` too) and a standalone
+    /// `portageq` all read the sqlite database, not the files tree. The
+    /// database is the fixture root's VDB minus `dev-libs/samepkg`, so each
+    /// answer shows which one was read; the same commands under the plain
+    /// fixture config (no variable) read the files tree, where `samepkg` is
+    /// installed. `mrg` applies the same rule (`resolve_vdb_selection`).
+    /// Portage has no such setting, so the expectation is portuale's own
+    /// `mrg` behaviour.
+    #[cfg(feature = "vdb-sqlite")]
+    #[test]
+    fn make_conf_backend_reaches_emerge_ebuild_and_portageq() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures")
+            .canonicalize()
+            .unwrap();
+        let tmp = portage_util::TempDir::new("vdb_make_conf_select").keep();
+        let _ = std::fs::remove_dir_all(&tmp);
+        let sh = |cmd: &str| {
+            let ok = std::process::Command::new("sh")
+                .args(["-c", cmd])
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "{cmd}");
+        };
+        // A config root identical to the fixture one, plus the two
+        // make.conf lines.
+        let cr = tmp.join("cr");
+        std::fs::create_dir_all(cr.join("etc")).unwrap();
+        for entry in std::fs::read_dir(&fixtures).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name() != "etc" {
+                std::os::unix::fs::symlink(entry.path(), cr.join(entry.file_name())).unwrap();
+            }
+        }
+        for entry in std::fs::read_dir(fixtures.join("etc")).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name() != "portage" {
+                std::os::unix::fs::symlink(entry.path(), cr.join("etc").join(entry.file_name()))
+                    .unwrap();
+            }
+        }
+        sh(&format!(
+            "cp -a {} {}",
+            fixtures.join("etc/portage").display(),
+            cr.join("etc/portage").display()
+        ));
+        // The database: the fixture VDB without dev-libs/samepkg.
+        let src = tmp.join("src");
+        std::fs::create_dir_all(src.join("var/db")).unwrap();
+        sh(&format!(
+            "cp -a {} {} && rm -r {}",
+            fixtures.join("var/db/pkg").display(),
+            src.join("var/db/pkg").display(),
+            src.join("var/db/pkg/dev-libs/samepkg-1.0").display()
+        ));
+        let db_path = tmp.join("vdb.sqlite");
+        let db = portage_vdb::SqliteDb::open(&db_path).unwrap();
+        portage_vdb::copy_all(&portage_vdb::FilesDb::new(&src), &db, false).unwrap();
+        drop(db);
+        let make_conf = cr.join("etc/portage/make.conf");
+        let mut text = std::fs::read_to_string(&make_conf).unwrap();
+        text.push_str(&format!(
+            "\nPORTUALE_VDB_BACKEND=\"sqlite\"\nPORTUALE_VDB_PATH=\"{}\"\n",
+            db_path.display()
+        ));
+        std::fs::write(&make_conf, text).unwrap();
+        // An ebuild whose phase asks has_version.
+        let pkg = tmp.join("pkg/dev-libs/hvprobe");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let out = tmp.join("phase.out");
+        let ebuild = pkg.join("hvprobe-1.0.ebuild");
+        // One line: the `no_hand_built_vdb_paths` lint strips strings
+        // line by line, so a multi-line literal's braces would count.
+        let script = "EAPI=8\nSLOT=\"0\"\npkg_pretend() {\n\thas_version -r dev-libs/samepkg && echo yes > OUT || echo no > OUT\n}\n";
+        std::fs::write(&ebuild, script.replace("OUT", &out.display().to_string())).unwrap();
+
+        let bin = crate::self_exe::built_portuale_bin();
+        let run = |config_root: &Path, args: &[&str]| {
+            std::process::Command::new(&bin)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .env("PORTAGE_CONFIGROOT", config_root)
+                .env("ROOT", &fixtures)
+                .env("PORTAGE_TMPDIR", tmp.join("pt"))
+                .env_remove("PORTUALE_VDB_BACKEND")
+                .env_remove("PORTUALE_VDB_PATH")
+                .env_remove("PORTUALE_VDB_ROOT")
+                .env_remove("PORTUALE_VDB_IPC")
+                .output()
+                .expect("portuale spawns")
+        };
+        let root = fixtures.to_str().unwrap();
+        for (config_root, installed) in [(&cr, false), (&fixtures, true)] {
+            let label = if installed {
+                "files"
+            } else {
+                "make.conf sqlite"
+            };
+            // Standalone portageq.
+            let o = run(
+                config_root,
+                &["portageq", "has_version", root, "dev-libs/samepkg"],
+            );
+            assert_eq!(
+                o.status.code(),
+                Some(if installed { 0 } else { 1 }),
+                "{label}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            // emerge: a reinstall on files, a new install from the database.
+            let o = run(
+                config_root,
+                &["emerge", "-p", "--nodeps", "dev-libs/samepkg"],
+            );
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            assert_eq!(o.status.code(), Some(0), "{label}: {stdout}");
+            let mark = if installed {
+                "[ebuild   R"
+            } else {
+                "[ebuild  N"
+            };
+            assert!(stdout.contains(mark), "{label}: want {mark:?} in\n{stdout}");
+            // ebuild: the phase's has_version.
+            let _ = std::fs::remove_dir_all(tmp.join("pt"));
+            std::fs::create_dir_all(tmp.join("pt")).unwrap();
+            let o = run(
+                config_root,
+                &["ebuild", ebuild.to_str().unwrap(), "pretend"],
+            );
+            assert_eq!(
+                o.status.code(),
+                Some(0),
+                "{label}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(&out).unwrap().trim(),
+                if installed { "yes" } else { "no" },
+                "{label}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// End to end: the fixture VDB, converted to sqlite, gives the same
     /// `mrg --pretend` plan as the files tree. The atoms depend on what
     /// is installed (`--update --deep @world`, `--depclean`, a package

@@ -1,5 +1,27 @@
 use super::*;
 
+/// The extractor's tar options as argv: none without `FEATURES=xattr`
+/// or without a tar that knows `--xattrs`.
+// Portage: BinpkgExtractorAsync._xpak_start
+#[test]
+fn xpak_xattr_tar_options_match_portages_extractor() {
+    let on = crate::ebuild_merge::XattrPolicy {
+        enabled: true,
+        exclude: "security.evm user.xdg.*".to_string(),
+    };
+    assert_eq!(
+        xpak_xattr_tar_options(&on, true),
+        [
+            "--xattrs",
+            "--xattrs-include=*",
+            "--xattrs-exclude=security.evm",
+            "--xattrs-exclude=user.xdg.*",
+        ]
+    );
+    assert!(xpak_xattr_tar_options(&on, false).is_empty());
+    assert!(xpak_xattr_tar_options(&crate::ebuild_merge::XattrPolicy::default(), true).is_empty());
+}
+
 #[test]
 fn extract_binpkg_unpacks_an_xpak_image_and_build_info() {
     let tmp = TempDir::new("binpkg-xpak").keep();
