@@ -1,0 +1,11 @@
+# #336 Phase 6: crates/portuale/src/emerge_build/mod.rs split spec (split_module.py).
+pub(crate) fn resume_cpv(	=resume
+pub fn run_buildpkgonly(	buildpkgonly	`--buildpkgonly`: build binary packages without merging.
+pub fn run_source_merge(	source_merge	The source-merge loop: build, then merge, one entry at a time.
+pub(crate) fn entry_matches_any(	lib
+pub(crate) fn run_merge_loop	source_merge
+fn entry_portage_tmpdir(	entry_env	The per-entry build environment.
+fn scheduler_cp_version(	status	Progress and status lines of the build scheduler.
+pub(crate) fn entry_repo(	resume	`--resume` entries and their repositories.
+pub(crate) fn build_log_path(	logs	Build logs.
+fn build_one_source_entry(	scheduler	The parallel build scheduler (`--jobs`).
