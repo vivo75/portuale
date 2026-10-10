@@ -23,4 +23,4 @@ Operator-level pins for `violated_parent_flags` against Portage's `Atom.violated
 - `bar_valid` / `bar_use` mirror the oracle's columns.
 - Controls are oracle-verified `[foo]`, gate PASS.
 - History: the port's valid-only gate used to let the invalid `(-)`/`(+)` rows through.
-- Invalid defaultless unconditionals: Portage skips the arm via `missing_iuse`.
+- Invalid defaultless unconditionals poison via `required` (G7, G8 -- Portage skips the arm via `missing_iuse`).

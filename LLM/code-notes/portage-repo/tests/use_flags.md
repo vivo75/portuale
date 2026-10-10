@@ -2,7 +2,7 @@
 Effective-USE layer-precedence, stable-flag and memo tests.
 
 ## fn use_expand_star_wildcard_strips_the_pseudo_flag_from_the_effective_set
-- Exercised directly with the fixture's own `linguas_*` package.use entry against wildexpandpkg's declared IUSE.
+- `effective_use_flags` never returns a `_*`-suffixed token (Portage's config.py strips them from PORTAGE_USE). Exercised directly with the fixture's own `linguas_*` package.use entry against wildexpandpkg's declared IUSE.
 
 ## fn effective_use_flags_lets_use_tokens_explicitly_cancel_a_plus_iuse_default
 - The gap portuale's own IUSE-defaults slice originally left open, now closed: Portage's `regenerate()` runs one continuous incremental walk (pkginternal -> defaults -> conf -> pkg). `use_tokens` here is two separate raw USE= values ("foo" then "-foo bar"), exactly what `resolve_config` would produce from two profile levels -- replayed via `apply_incremental`, not unioned as a pre-flattened set, so the "-foo" genuinely reaches back and cancels IUSE's own "+foo".
@@ -14,10 +14,13 @@ Effective-USE layer-precedence, stable-flag and memo tests.
 - Two chain levels: the parent's package.use enables `foo` for this package; the child's make.defaults disables it. Portage walks make.defaults-then-package.use one profile at a time, so the child's `-foo` (applied after the parent's package.use) wins.
 
 ## fn effective_use_flags_repo_package_use_is_weaker_than_an_iuse_default
-- The divergence the old flat model had: it applied every `package.use` source last, strongest.
+- Portage's `configdict["repo"]` is applied BEFORE `pkginternal`, so an ebuild's own explicit IUSE default overrides a repo-level `package.use` -- the divergence the old flat model had (it applied every `package.use` source last, strongest).
 
 ## fn effective_use_flags_profile_package_use_loses_to_make_conf
-- Profile `package.use` is Portage's `configdict["defaults"]`, applied before `conf`. The old flat model applied profile `package.use` after make.conf, so `foo` won.
+- Profile `package.use` is Portage's `configdict["defaults"]` -- applied BEFORE `conf`. So `make.conf USE="-foo"` wins over a profile `package.use` line enabling `foo`. The old flat model applied profile `package.use` after make.conf, so `foo` won.
+
+## fn effective_use_flags_user_package_use_wins_over_make_conf
+- User `/etc/portage/package.use` is Portage's `configdict["pkg"]` -- applied AFTER `conf`, the strongest layer before force/mask.
 
 ## fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_use
 - Package.env's own USE= is applied just before user `/etc/portage/package.use` (Portage `_grab_pkg_env` fills `pkg_configdict`, then `self.puse` is appended after).
@@ -51,7 +54,7 @@ Effective-USE layer-precedence, stable-flag and memo tests.
 - This is Portage's `stack_lists(incremental=True)` over `[src0, src1]`, and the `targets/*` un-mask pattern (a broad child `cat/pkg -flag` overriding a narrow parent `>=cat/pkg-N flag`).
 
 ## fn resolved_use_mask_interleaves_per_level_across_sources
-- The flat union (global stack {} union per-package {xmc}) would keep it masked; the interleave must not.
+- Portage's `getUseMask` per-level interleave: level 0's `package.use.mask` masks `xmc` for the candidate, a *later* level's *global* `use.mask` un-masks it with `-xmc`. The flat union (global stack {} union per-package {xmc}) would keep it masked; the interleave must not.
 
 ## fn effective_use_flags_memo_does_not_leak_between_differing_configs
 - Same candidate / iuse / keywords, so only the config content can produce a different answer.

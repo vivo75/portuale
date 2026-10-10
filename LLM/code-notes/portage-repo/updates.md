@@ -12,17 +12,24 @@
 ## enum UpdateCmd
 - `Move`: Portage `parse_updates` rejects a blocker or any `atom != atom.cp`.
 
+## fn parse_updates_content
+- Portage `portage.update.parse_updates`: one directive per non-blank line, `move`/`slotmove` only, wrong arity or a malformed atom/slot skips that line (Portage appends to `errors` -- never fatal).
+
+## fn quarter_sort_key
+- `(year, quarter)` from a `NQ-YYYY` updates-file name, for the quarter sort. A name that doesn't match sorts last (`year = i32::MAX`), by name.
+
 ## fn bare_cp
 - Portage `parse_updates`' `Atom(x)` + `atom.blocker or atom != atom.cp` rejection.
 
 ## fn grab_updates_for_repo
-- Portage `grab_updates` + `parse_updates`, minus the scandir order / `prev_mtimes` logic (see module notes).
+- Every directive from one repo's `profiles/updates/`, quarter files in `(year, quarter)` order. Portage `grab_updates` + `parse_updates`, minus the scandir order / `prev_mtimes` logic (see module notes).
 
 ## fn apply_move_to_token
 - First occurrence only: Portage `token.replace(old, new, 1)`.
 
 ## fn apply_slotmove_to_token
-- Portage `update_dbentry`'s `orig_atom.version is None` branch; the `:slot` match ignores sub-slot / operator.
+- Portage `update_dbentry` for a single `slotmove` (`orig_atom.version is None` branch), applied to one atom token: an atom on `cp` whose `:slot` (ignoring sub-slot / operator) is `old_slot` gets it rewritten to `new_slot`. Versioned atoms are left alone (Portage's own restriction). The `:slot` match ignores sub-slot / operator.
+- Splice the new slot expression in place of the old `:...` run.
 - Micro-cut: Portage `Atom.with_slot` rebuilds every part; portuale leaves a `::repo`/`[usedeps]` target alone rather than risk a corrupt splice (no fixture covers the combination).
 - Portage `with_slot` keeps a differing sub-slot but rewrites one that equalled the old slot.
 
@@ -31,6 +38,7 @@
 
 ## fn apply_updates_to_atom_with
 - Backlog #119.
+- Fast path: if the atom's own `cp` isn't the `old`/`cp` of any command, nothing in the loop can ever rewrite it. Both lookups borrow (`HashMap<String,_>::get(&str)`, `HashSet<String>::contains(&str)`), so this costs no allocation.
 - A command that matched the cp but left the token unchanged (a slotmove on another slot, a versioned atom) is reported as unchanged, exactly like the old `updated != *dep` comparison.
 
 ## fn apply_updates_to_dep_string
@@ -43,10 +51,10 @@
 
 ## fn installed_cp_sources_map_with
 - `installed_cp_sources` used to replay the whole list (one `apply_updates_to_cp` per command) on every call -- 6 M calls on a deep `emerge -pu`; built once, so the lookup is a single `HashMap` get. Same `OnceLock` shape (so `--package-moves=n` -> empty list -> empty map).
-- A `move` cycle replays back to its start; skipping keeps the old per-call loop's `!out.contains(old)` invariant.
+- `installed_cp_sources` pushes `old` exactly when its fully-resolved chain lands on the queried cp; group by that destination up front, in command order, deduped. A `move` cycle replays back to its start (`dest == old`); the target is already `out[0]`, so skipping keeps the old per-call loop's `!out.contains(old)` invariant.
 
 ## fn installed_cp_sources
-- Portage global-updates renames the vdb directory on disk; portuale doesn't.
+- Every `cat/pkg` whose forward-`move` chain lands on `(category, package)` -- including `(category, package)` itself. Lets a vdb query for the *new* name also scan the *old*, not-yet-renamed directory (Portage global-updates renames it on disk; portuale doesn't).
 
 ## fn installed_cp_sources_with
 - Precedent: `apply_updates_to_dep_string_with`. Lets a synthetic `move` cycle be tested without global state.

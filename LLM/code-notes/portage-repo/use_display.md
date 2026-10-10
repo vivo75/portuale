@@ -6,12 +6,12 @@ USE flag display columns for `emerge --pretend -v`.
 
 ## fn build_use_expand_display
 - Portage `output_helpers.py::_create_use_string`, fed by `output.py::_display_use` + `map_to_use_expand`.
-- Input contract: `use_flags_display` is already IUSE-declared, enabled-resolved, and `alnum_sort_key`-ordered -- Portage's own `any_iuse.sort(key=_alnum_sort_key)`, a natural sort so `python3_9` precedes `python3_12`.
+- Input contract: `use_flags_display` is already IUSE-declared, enabled-resolved, and `alnum_sort_key`-ordered -- Portage's own `any_iuse.sort(key=_alnum_sort_key)`, a natural sort so `python3_9` precedes `python3_12` (`9 < 12`), not after (`"9" > "12"`).
 - Grouping: one group per `config.use_expand` variable whose `lowercase(name)_` prefixes the flag; the prefix is stripped (Portage `map_to_use_expand`: `val[len(exp) + 1:]`). `config.use_expand_hidden` groups are dropped (Portage `remove_hidden`). Within each group enabled render first, then disabled, each in natural order -- Portage's `" ".join(enabled + disabled)`.
 - `emerge --alphabetical` collapses the two back into one interleaved list (still `alnum_sort_key`); applied at render time (`pretend.rs::use_suffix`), not here, since it needs no resolver state.
-- Installed diff: `installed` is `Some` for an `Upgrade`/`Downgrade`/`Reinstall` entry -- i.e. Portage `pkg_info.previous_pkg is not None`, `is_new` false. Portage `_DisplayConfig` sets `verbosity = 3` whenever `--verbose` is given (`output_helpers.py:180-187`), so `all_flags = (verbosity == 3)` is always true for `emerge -pv`: the diff shows every flag, not just changed ones. Full marker table: enabled + not in old IUSE -> `flag%*`; enabled + in old IUSE + not in old USE -> `flag*`; enabled + unchanged -> `flag` (plain); disabled + not in old IUSE -> `-flag%`; disabled + was in old USE -> `-flag*`; disabled + unchanged -> `-flag` (plain); in old IUSE but gone from current IUSE -> `(-flag%)`, or `(-flag%*)` if enabled -- Portage's `removed` list.
+- Installed diff: `installed` is `Some` for an `Upgrade`/`Downgrade`/`Reinstall` entry -- i.e. Portage `pkg_info.previous_pkg is not None`, `is_new` false. Portage `_DisplayConfig` sets `verbosity = 3` whenever `--verbose` is given (`output_helpers.py:180-187`), so `all_flags = (verbosity == 3)` is **always true** for `emerge -pv` -- meaning the diff shows every flag, not just changed ones. Full marker table: enabled + not in old IUSE -> `flag%*`; enabled + in old IUSE + not in old USE -> `flag*`; enabled + unchanged -> `flag` (plain); disabled + not in old IUSE -> `-flag%`; disabled + was in old USE -> `-flag*`; disabled + unchanged -> `-flag` (plain); in old IUSE but gone from current IUSE -> `(-flag%)`, or `(-flag%*)` if enabled -- Portage's `removed` list.
 - `reinst_flags` (per-flag "this flag triggered the reinstall" force) is still not modelled -- it only widens what `all_flags` already shows here.
-- `forced` is full flag names -- Portage `_display_use`'s `self.forced_flags` = `pkg.use.force | pkg.use.mask` (see `forced_or_masked_flags`). Portage wraps the rendered token in `( … )`, and skips the trailing `%` on a `-flag%` (Portage: `if flag not in iuse_forced: flag_str += "%"`).
+- `forced` is full flag names -- Portage `_display_use`'s `self.forced_flags` = `pkg.use.force | pkg.use.mask` (see `forced_or_masked_flags`). Portage wraps the rendered token in `( … )`, and skips the trailing `%` on a `-flag%` (Portage: `if flag not in iuse_forced: flag_str += "%"`): a masked flag brand-new to IUSE renders `(-flag)`, not `(-flag%)`.
 - Deliberately not ported (separate cut): Portage ANSI colorization.
 - Returns `[(VAR_NAME, "rendered")]` with `USE` first, then the `USE_EXPAND` vars in sorted order (Portage `sorted(self.use_expand)` with `"USE"` inserted at position 0). An empty group produces no entry (Portage's `if ret:` guard); a package with no displayable flags returns `[]`.
 
@@ -39,7 +39,7 @@ USE flag display columns for `emerge --pretend -v`.
 
 ## fn build_use_expand_display::removed routing
 - Portage `removed_iuse = set(old_iuse).difference(cur_iuse)`, shown inside `_create_use_string`'s `if conf.all_flags or reinst_flag` branch.
-- Portage sorts `cur union old` as one list; portuale keeps its own cur-then-removed routing, a pre-existing structural difference -- only the sort key changed here.
+- Portage sorts `cur ∪ old` as one list; portuale keeps its own cur-then-removed routing, a pre-existing structural difference -- only the sort key changed here.
 
 ## fn build_use_expand_display::render loop
 - Portage `_create_use_string`: `" ".join(enabled + disabled + removed)` in that polarity order, each group already in the incoming bare-name order.
