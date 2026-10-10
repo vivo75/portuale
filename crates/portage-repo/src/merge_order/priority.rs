@@ -304,7 +304,57 @@ pub(crate) fn dep_edges_from_metadata(
 // `ignore_priority` predicates
 // ---------------------------------------------------------------------
 
-pub(crate) type Ignore = fn(&DepPriority) -> bool;
+/// One `ignore_priority` filter: a rung of `NORMAL` (`N*`) or
+/// `SATISFIED` (`S*`). An enum, not a `fn` pointer, so a filter has one
+/// identity whatever the codegen (function addresses are not unique
+/// across codegen units).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ignore {
+    NOptional,
+    NRuntimePost,
+    NRuntime,
+    SOptional,
+    SSatisfiedRuntimePost,
+    SRuntimePost,
+    SSatisfiedRuntime,
+    SSatisfiedBuildtime,
+    SSatisfiedBuildtimeSlotOp,
+    SRuntime,
+}
+
+impl Ignore {
+    /// Whether the filter drops an edge with priority `p`.
+    pub(crate) fn ignores(self, p: &DepPriority) -> bool {
+        match self {
+            Self::NOptional => n_ignore_optional(p),
+            Self::NRuntimePost => n_ignore_runtime_post(p),
+            Self::NRuntime => n_ignore_runtime(p),
+            Self::SOptional => s_ignore_optional(p),
+            Self::SSatisfiedRuntimePost => s_ignore_satisfied_runtime_post(p),
+            Self::SRuntimePost => s_ignore_runtime_post(p),
+            Self::SSatisfiedRuntime => s_ignore_satisfied_runtime(p),
+            Self::SSatisfiedBuildtime => s_ignore_satisfied_buildtime(p),
+            Self::SSatisfiedBuildtimeSlotOp => s_ignore_satisfied_buildtime_slot_op(p),
+            Self::SRuntime => s_ignore_runtime(p),
+        }
+    }
+
+    /// Portage's `ignore_priority.__name__`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::NOptional => "ignore_optional",
+            Self::NRuntimePost => "ignore_runtime_post",
+            Self::NRuntime => "ignore_runtime",
+            Self::SOptional => "ignore_optional",
+            Self::SSatisfiedRuntimePost => "ignore_satisfied_runtime_post",
+            Self::SRuntimePost => "ignore_runtime_post",
+            Self::SSatisfiedRuntime => "ignore_satisfied_runtime",
+            Self::SSatisfiedBuildtime => "ignore_satisfied_buildtime",
+            Self::SSatisfiedBuildtimeSlotOp => "ignore_satisfied_buildtime_slot_op",
+            Self::SRuntime => "ignore_runtime",
+        }
+    }
+}
 
 // `_emerge/DepPriorityNormalRange.py`.
 pub(crate) fn n_ignore_optional(p: &DepPriority) -> bool {
@@ -389,39 +439,7 @@ pub(crate) fn s_ignore_runtime(p: &DepPriority) -> bool {
 /// field with the `RT_SEL` line `TEST/scripts/mo-trace/real-trace.py`
 /// injects into real's loop. `None` is real's `ignore_priority = None`.
 pub(crate) fn ignore_name(ig: Option<Ignore>) -> &'static str {
-    let Some(f) = ig else {
-        return "none";
-    };
-    let addr = f as usize;
-    for (pred, name) in [
-        (n_ignore_optional as Ignore, "ignore_optional"),
-        (n_ignore_runtime_post as Ignore, "ignore_runtime_post"),
-        (n_ignore_runtime as Ignore, "ignore_runtime"),
-        (s_ignore_optional as Ignore, "ignore_optional"),
-        (
-            s_ignore_satisfied_runtime_post as Ignore,
-            "ignore_satisfied_runtime_post",
-        ),
-        (s_ignore_runtime_post as Ignore, "ignore_runtime_post"),
-        (
-            s_ignore_satisfied_runtime as Ignore,
-            "ignore_satisfied_runtime",
-        ),
-        (
-            s_ignore_satisfied_buildtime as Ignore,
-            "ignore_satisfied_buildtime",
-        ),
-        (
-            s_ignore_satisfied_buildtime_slot_op as Ignore,
-            "ignore_satisfied_buildtime_slot_op",
-        ),
-        (s_ignore_runtime as Ignore, "ignore_runtime"),
-    ] {
-        if addr == pred as usize {
-            return name;
-        }
-    }
-    "unknown"
+    ig.map_or("none", Ignore::name)
 }
 
 /// Real's two `DepPriority*Range` classes: an `ignore_priority` ladder
@@ -437,9 +455,9 @@ pub(crate) struct PriorityRange {
 pub(crate) static NORMAL: PriorityRange = PriorityRange {
     ignore: &[
         None,
-        Some(n_ignore_optional),
-        Some(n_ignore_runtime_post),
-        Some(n_ignore_runtime),
+        Some(Ignore::NOptional),
+        Some(Ignore::NRuntimePost),
+        Some(Ignore::NRuntime),
     ],
     medium: 3,
     medium_soft: 2,
@@ -449,13 +467,13 @@ pub(crate) static NORMAL: PriorityRange = PriorityRange {
 pub(crate) static SATISFIED: PriorityRange = PriorityRange {
     ignore: &[
         None,
-        Some(s_ignore_optional),
-        Some(s_ignore_satisfied_runtime_post),
-        Some(s_ignore_runtime_post),
-        Some(s_ignore_satisfied_runtime),
-        Some(s_ignore_satisfied_buildtime),
-        Some(s_ignore_satisfied_buildtime_slot_op),
-        Some(s_ignore_runtime),
+        Some(Ignore::SOptional),
+        Some(Ignore::SSatisfiedRuntimePost),
+        Some(Ignore::SRuntimePost),
+        Some(Ignore::SSatisfiedRuntime),
+        Some(Ignore::SSatisfiedBuildtime),
+        Some(Ignore::SSatisfiedBuildtimeSlotOp),
+        Some(Ignore::SRuntime),
     ],
     medium: 7,
     medium_soft: 6,

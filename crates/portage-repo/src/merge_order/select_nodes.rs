@@ -245,7 +245,7 @@ pub(crate) fn select_nodes(
                                         *c == node
                                             && range
                                                 .ig_medium_soft()
-                                                .is_none_or(|f| prios.iter().any(|q| !f(q)))
+                                                .is_none_or(|f| prios.iter().any(|q| !f.ignores(q)))
                                     })
                             })
                         });

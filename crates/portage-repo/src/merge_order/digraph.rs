@@ -29,15 +29,17 @@ impl Digraph {
     pub(crate) fn child_nodes(&self, i: usize, ig: Option<Ignore>) -> Vec<usize> {
         self.children[i]
             .iter()
-            .filter(|(c, prios)| self.alive[*c] && ig.is_none_or(|f| prios.iter().any(|p| !f(p))))
+            .filter(|(c, prios)| {
+                self.alive[*c] && ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p)))
+            })
             .map(|(c, _)| *c)
             .collect()
     }
 
     pub(crate) fn is_leaf(&self, i: usize, ig: Option<Ignore>) -> bool {
-        !self.children[i]
-            .iter()
-            .any(|(c, prios)| self.alive[*c] && ig.is_none_or(|f| prios.iter().any(|p| !f(p))))
+        !self.children[i].iter().any(|(c, prios)| {
+            self.alive[*c] && ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p)))
+        })
     }
 
     pub(crate) fn has_parents(&self, i: usize) -> bool {
@@ -88,21 +90,8 @@ pub(crate) struct SerializeFrontier {
 
 impl SerializeFrontier {
     /// The filter union both ladders query: `None` first, then every
-    /// rung of `NORMAL` and `SATISFIED` in ladder order, deduplicated by
-    /// function identity (real deduplicates by object identity too).
-    /// Textually identical rungs share a level when the toolchain folds
-    /// them to one address (observed: the two `p.optional` rungs) --
-    /// behavior-preserving, since identical bodies filter identically
-    /// and every consumer only ever asks "leaves under filter F".
-    ///
-    /// On the `unpredictable_function_pointer_comparisons` lint this
-    /// relies on below: a conflated level still computes the exact same
-    /// leaf sets for the reason above, and every consumer only ever asks
-    /// "leaves under filter F", never "which level index". The only
-    /// observable would be fewer internal levels, which no output
-    /// depends on (and the equivalence tests pin the leaf sets, not the
-    /// level count).
-    #[allow(unpredictable_function_pointer_comparisons)]
+    /// rung of `NORMAL` and `SATISFIED` in ladder order, deduplicated
+    /// (Portage deduplicates by object identity too).
     pub(crate) fn build_levels() -> Vec<Option<Ignore>> {
         let mut levels: Vec<Option<Ignore>> = vec![None];
         for f in NORMAL
@@ -174,7 +163,7 @@ impl SerializeFrontier {
         let mut mask = 1u64;
         for (l, f) in levels.iter().enumerate().skip(1) {
             let f = f.expect("levels past 0 always hold a filter");
-            if prios.iter().any(|p| !f(p)) {
+            if prios.iter().any(|p| !f.ignores(p)) {
                 mask |= 1 << l;
             }
         }
@@ -183,9 +172,7 @@ impl SerializeFrontier {
 
     /// Level index for a filter, or `None` if untracked (every filter
     /// the loop uses is tracked; the fallback is defensive, mirroring
-    /// real's `level_of` returning `None`). See `build_levels` on why
-    /// pointer comparison is sound here.
-    #[allow(unpredictable_function_pointer_comparisons)]
+    /// real's `level_of` returning `None`).
     pub(crate) fn level_of(&self, ig: Option<Ignore>) -> Option<usize> {
         self.levels.iter().position(|&f| f == ig)
     }

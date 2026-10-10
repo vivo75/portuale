@@ -151,7 +151,7 @@ fn find_smallest_cycle_pins_the_ladder_and_smallest_pick() {
     assert_eq!(sub, HashSet::from([3usize, 4]));
     assert!(ig.is_some());
     assert_eq!(
-        ig.unwrap()(&prio(4)),
+        ig.unwrap().ignores(&prio(4)),
         n_ignore_runtime_post(&prio(4)),
         "the lowest relaxed rung that produces a leaf"
     );

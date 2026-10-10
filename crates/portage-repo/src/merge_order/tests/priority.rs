@@ -403,110 +403,109 @@ fn ignore_predicates_pin_every_ladder_rung() {
 #[test]
 fn ignore_name_pins_every_traced_filter() {
     assert_eq!(ignore_name(None), "none");
-    assert_eq!(ignore_name(Some(n_ignore_optional)), "ignore_optional");
+    assert_eq!(ignore_name(Some(Ignore::NOptional)), "ignore_optional");
     assert_eq!(
-        ignore_name(Some(n_ignore_runtime_post)),
+        ignore_name(Some(Ignore::NRuntimePost)),
         "ignore_runtime_post"
     );
-    assert_eq!(ignore_name(Some(n_ignore_runtime)), "ignore_runtime");
-    assert_eq!(ignore_name(Some(s_ignore_optional)), "ignore_optional");
+    assert_eq!(ignore_name(Some(Ignore::NRuntime)), "ignore_runtime");
+    assert_eq!(ignore_name(Some(Ignore::SOptional)), "ignore_optional");
     assert_eq!(
-        ignore_name(Some(s_ignore_satisfied_runtime_post)),
+        ignore_name(Some(Ignore::SSatisfiedRuntimePost)),
         "ignore_satisfied_runtime_post"
     );
     assert_eq!(
-        ignore_name(Some(s_ignore_runtime_post)),
+        ignore_name(Some(Ignore::SRuntimePost)),
         "ignore_runtime_post"
     );
     assert_eq!(
-        ignore_name(Some(s_ignore_satisfied_runtime)),
+        ignore_name(Some(Ignore::SSatisfiedRuntime)),
         "ignore_satisfied_runtime"
     );
     assert_eq!(
-        ignore_name(Some(s_ignore_satisfied_buildtime)),
+        ignore_name(Some(Ignore::SSatisfiedBuildtime)),
         "ignore_satisfied_buildtime"
     );
     assert_eq!(
-        ignore_name(Some(s_ignore_satisfied_buildtime_slot_op)),
+        ignore_name(Some(Ignore::SSatisfiedBuildtimeSlotOp)),
         "ignore_satisfied_buildtime_slot_op"
     );
-    assert_eq!(ignore_name(Some(s_ignore_runtime)), "ignore_runtime");
+    assert_eq!(ignore_name(Some(Ignore::SRuntime)), "ignore_runtime");
 }
 
 #[test]
 fn priority_ranges_pin_their_named_rungs() {
     // Every ladder index resolves to the predicate of its documented
-    // name (behavioral comparison, so a textually-identical pair
-    // folding to one address still agrees).
+    // name.
     for word in 0..128u64 {
         let p = prio(word);
         assert_eq!(
-            NORMAL.ig(1).unwrap()(&p),
+            NORMAL.ig(1).unwrap().ignores(&p),
             n_ignore_optional(&p),
             "NORMAL.ig(1) {word}"
         );
         assert_eq!(
-            NORMAL.ig(2).unwrap()(&p),
+            NORMAL.ig(2).unwrap().ignores(&p),
             n_ignore_runtime_post(&p),
             "NORMAL.ig(2) {word}"
         );
         assert_eq!(
-            NORMAL.ig(3).unwrap()(&p),
+            NORMAL.ig(3).unwrap().ignores(&p),
             n_ignore_runtime(&p),
             "NORMAL.ig(3) {word}"
         );
         assert_eq!(
-            SATISFIED.ig(1).unwrap()(&p),
+            SATISFIED.ig(1).unwrap().ignores(&p),
             s_ignore_optional(&p),
             "SATISFIED.ig(1)"
         );
         assert_eq!(
-            SATISFIED.ig(2).unwrap()(&p),
+            SATISFIED.ig(2).unwrap().ignores(&p),
             s_ignore_satisfied_runtime_post(&p),
             "SATISFIED.ig(2) {word}"
         );
         assert_eq!(
-            SATISFIED.ig(3).unwrap()(&p),
+            SATISFIED.ig(3).unwrap().ignores(&p),
             s_ignore_runtime_post(&p),
             "SATISFIED.ig(3) {word}"
         );
         assert_eq!(
-            SATISFIED.ig(4).unwrap()(&p),
+            SATISFIED.ig(4).unwrap().ignores(&p),
             s_ignore_satisfied_runtime(&p),
             "SATISFIED.ig(4) {word}"
         );
         assert_eq!(
-            SATISFIED.ig(5).unwrap()(&p),
+            SATISFIED.ig(5).unwrap().ignores(&p),
             s_ignore_satisfied_buildtime(&p),
             "SATISFIED.ig(5) {word}"
         );
         assert_eq!(
-            SATISFIED.ig(6).unwrap()(&p),
+            SATISFIED.ig(6).unwrap().ignores(&p),
             s_ignore_satisfied_buildtime_slot_op(&p),
             "SATISFIED.ig(6) {word}"
         );
         assert_eq!(
-            SATISFIED.ig(7).unwrap()(&p),
+            SATISFIED.ig(7).unwrap().ignores(&p),
             s_ignore_runtime(&p),
             "SATISFIED.ig(7)"
         );
         assert_eq!(
-            NORMAL.ig_medium().unwrap()(&p),
+            NORMAL.ig_medium().unwrap().ignores(&p),
             n_ignore_runtime(&p),
             "medium"
         );
         assert_eq!(
-            NORMAL.ig_medium_soft().unwrap()(&p),
+            NORMAL.ig_medium_soft().unwrap().ignores(&p),
             n_ignore_runtime_post(&p),
             "medium_soft"
         );
         assert_eq!(
-            SATISFIED.ig_medium().unwrap()(&p),
+            SATISFIED.ig_medium().unwrap().ignores(&p),
             s_ignore_runtime(&p),
             "s-medium"
         );
         assert_eq!(
-            SATISFIED.ig_medium_soft().unwrap()(&p),
+            SATISFIED.ig_medium_soft().unwrap().ignores(&p),
             s_ignore_satisfied_buildtime_slot_op(&p),
             "s-medium_soft"
         );

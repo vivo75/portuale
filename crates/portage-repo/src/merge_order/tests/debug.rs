@@ -14,7 +14,7 @@ fn mo_sel_trace_line_pins_the_harness_format() {
         asap: &["m:llvm-runtimes/clang-runtime-22".to_string()],
         prefer_asap: false,
         drop_satisfied: true,
-        ig: Some(n_ignore_runtime),
+        ig: Some(Ignore::NRuntime),
         pick: &["m:dev-libs/a-1".to_string(), "n:dev-libs/b-2".to_string()],
     });
     assert_eq!(

@@ -111,7 +111,8 @@ pub(crate) fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
                 .filter(|i| {
                     remaining.contains(i)
                         && !g.children[*i].iter().any(|(c, prios)| {
-                            remaining.contains(c) && ig.is_none_or(|f| prios.iter().any(|p| !f(p)))
+                            remaining.contains(c)
+                                && ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p)))
                         })
                 })
                 .collect();
@@ -198,7 +199,7 @@ pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usiz
             let mut fresh: Vec<usize> = g.children[n]
                 .iter()
                 .filter(|(c, prios)| {
-                    !enqueued.contains(c) && ig.is_none_or(|f| prios.iter().any(|p| !f(p)))
+                    !enqueued.contains(c) && ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p)))
                 })
                 .map(|(c, _)| *c)
                 .collect();
@@ -220,7 +221,7 @@ pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usiz
         let mut min_len: Option<usize> = None;
         let mut cands: Vec<Vec<usize>> = Vec::new();
         for (child, prios) in &g.children[node] {
-            if !ig.is_none_or(|f| prios.iter().any(|p| !f(p))) {
+            if !ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p))) {
                 continue;
             }
             let Some(path) = shortest_path(g, *child, node, ig) else {

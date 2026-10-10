@@ -25,13 +25,10 @@ fn disabled_path_matches_direct_scans() {
 fn frontier_levels_cover_every_ladder_rung() {
     let g = test_graph(2, &[(0, 1, prio(0))]);
     let fr = SerializeFrontier::build(&g);
-    // Level 0 is the None filter; every rung of both ladders
-    // resolves to some level. The exact count is NOT pinned: the
-    // toolchain may fold textually identical filters (the two
-    // `p.optional` rungs) to one address, sharing a level -- which
-    // is behavior-preserving, since identical bodies filter
-    // identically (see build_levels).
+    // Level 0 is the None filter, then one level per rung of both
+    // ladders (3 + 7).
     assert!(fr.levels[0].is_none(), "level 0 is the None filter");
+    assert_eq!(fr.levels.len(), 11);
     assert_eq!(fr.level_of(None), Some(0));
     for ig in all_filters() {
         assert!(fr.level_of(ig).is_some(), "no level for {ig:?}");
@@ -161,7 +158,7 @@ fn digraph_child_nodes_and_has_parents_pin_the_alive_filter() {
     assert!(g.has_parents(1));
     assert!(!g.has_parents(0));
     // The optional edge drops under `n_ignore_optional`.
-    assert_eq!(g.child_nodes(0, Some(n_ignore_optional)), vec![1]);
+    assert_eq!(g.child_nodes(0, Some(Ignore::NOptional)), vec![1]);
     // A dead child disappears.
     g.alive[1] = false;
     assert_eq!(g.child_nodes(0, None), vec![2]);

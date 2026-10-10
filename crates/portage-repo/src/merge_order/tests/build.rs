@@ -596,7 +596,7 @@ fn gather_deps_collects_the_filtered_closure_and_rejects_escapes() {
     assert_eq!(gather_deps(&g, 0, None, &mergeable), None);
     // The filter drops the escaping optional edge.
     assert_eq!(
-        gather_deps(&g, 0, Some(n_ignore_optional), &mergeable),
+        gather_deps(&g, 0, Some(Ignore::NOptional), &mergeable),
         Some([0, 1, 2].into_iter().collect())
     );
     // A deeper escape is rejected too.
