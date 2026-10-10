@@ -7,7 +7,7 @@ Single-walk (`run_pass`) unit tests: binary instances, blockers, masks, and repo
 
 ## fn run_pass_reinstall_with_only_repo_drift_carries_oldbest
 - Backlog #247: a same-version/slot/sub-slot `Reinstall` whose installed instance's repo differs from the merged candidate's carries that instance as `oldbest` -- Portage `_get_installed_best`'s third disjunct (`not quiet_repo_display and repo differs`, `output.py:721-731`; owner B5 reopened the cut).
-- The staged vdb omits the `repository` file (like the hand-staged abk0/samepkg fixture vdbs), so the installed repo is Portage's `__unknown__` sentinel while the candidate merges from `testrepo`.
+- No `repository` file: `installed_pkg_repo` falls back to `__unknown__`, which never equals the `testrepo` candidate. The staged vdb omits the `repository` file (like the hand-staged abk0/samepkg fixture vdbs), so the installed repo is Portage's `__unknown__` sentinel while the candidate merges from `testrepo`.
 
 ## fn run_pass_records_the_needer_othermod_slot_conflict
 - Backlog #161 S6.
@@ -20,6 +20,7 @@ Single-walk (`run_pass`) unit tests: binary instances, blockers, masks, and repo
 - Backlog #161 S6: an installed owner's blocker stays invisible even when its target upgrades right beside it.
 - Unwalked installed owner blocking `scanvictim`, which this run upgrades 1.0 -> 2.0 (so a scan would find a merge-bound match and file rows).
 - The owner rides the required-set closure so a found blocker has a display home (the #73 set-parent arm).
+- Unversioned blocker: an op-less versioned blocker is ambiguous and rejected on both sides (Portage `Atom('!dev-libs/scanvictim-1.0')` raises too).
 
 ## fn run_pass_sorts_provided_atoms_in_argument_order
 - Backlog #161 S6.

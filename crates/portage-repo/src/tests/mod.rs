@@ -1633,7 +1633,7 @@ fn ds_input_161<'a>(args: DsInput161Args<'a>) -> DirectSolveInput<'a> {
     }
 }
 
-/// The S0 old/new shape with top-level args: `oldconsumer`'s
+/// The old/new shape with top-level args: `oldconsumer`'s
 /// `<2.0` forces 1.0 to stay, so the bare `newconsumer` tuple drops
 /// 2.0 with a skip row -- the baseline every leg below varies.
 fn ds_s0_161() -> (
@@ -1888,7 +1888,7 @@ fn blocker_161_scratch_repo(args: Blocker161ScratchRepoArgs<'_>) -> RepoConfig {
     blocker_161_repo_config(repo)
 }
 
-/// World=B shape shared by the R3/R4 unit tests: `dev-libs/abk0d` with
+/// World=B shape shared by the unit tests that seed a world consumer: `dev-libs/abk0d` with
 /// `--autounmask-backtrack=y` while installed `abk0b-1` is reachable through
 /// the required sets. The fixture world file stays pristine, so the seed is
 /// set directly (the `FX_WORLD_EXTRA=dev-libs/abk0b` equivalent the bed cell
@@ -1965,7 +1965,7 @@ fn slotundo_vdb(args: SlotundoVdbArgs<'_>) {
     }
 }
 
-/// A walked S3 rebuild entry: `Reinstall { slot_operator_rebuild: true }`
+/// A walked rebuild entry: `Reinstall { slot_operator_rebuild: true }`
 /// at the installed version, with the given resolved USE display.
 fn slotundo_rebuild_entry(
     name: &str,

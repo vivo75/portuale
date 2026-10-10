@@ -10,6 +10,7 @@ Live-metadata overlay for installed packages (`FakeVartree` port) tests.
 
 ## fn installed_dep_string_effective_is_the_live_ebuild_value
 - Backlog #25 S1b: the built-`:=` append is EAPI-gated exactly like Portage (`FakeVartree._apply_dynamic_deps`). These two fixtures' vdbs carry no `EAPI` file, so Portage reads the installed EAPI as `"0"` (`vartree.py:1054-1055`) -- no `slot_operator` support -- and the live value stands even though the vdb carries a built binding. (Without the gate this append broke both #24 pins, Phase 5 S1 S0.)
+- Missing live metadata: the raw record stands (global moves are identity without `profiles/updates` commands).
 - --dynamic-deps=n and Raw collapse to the vdb record; the no-live-metadata arm is Portage's `_DynamicDepsNotApplicable` fallback (raw + global moves, identity in fixtures).
 - Every live map below carries `EAPI`, like Portage's `portdb` `aux_get` always does -- a missing live `EAPI` is unsupported and takes the raw fallback (unreachable in Portage).
 - slotopdepspkg's vdb RDEPEND is `dev-libs/slotoptarget:2=` -- the live value stands.

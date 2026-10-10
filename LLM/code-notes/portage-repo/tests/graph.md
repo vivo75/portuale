@@ -21,7 +21,7 @@ Graph-level resolution tests over the shared fixture tree.
 - Same fixture as the reinstall test above, but selective=true (via the pre-existing `resolve` helper); matching every test written before this slice.
 
 ## fn without_update_an_installed_version_that_still_satisfies_the_atom_is_kept
-- Portage depgraph.py's own `avoid_update` (lines 7814/8448); see resolve_pretend's own doc comment. This was, before this slice, portuale's own (inaccurate) default behavior for `upgrade` below.
+- dev-libs/upgradepkg is installed at 1.0; a newer 2.0 is visible in the tree too. Portage depgraph.py's own `avoid_update` (lines 7814/8448) means plain `emerge dev-libs/upgradepkg`, with no --update, never even looks for a better version -- see resolve_pretend's own doc comment. This was, before this slice, portuale's own (inaccurate) default behavior for `upgrade` below.
 
 ## fn upgrade
 - Portage depgraph.py's own `dont_miss_updates` branch.
@@ -31,8 +31,7 @@ Graph-level resolution tests over the shared fixture tree.
 - avoid_update's shortcut doesn't apply here even without --update -- see resolve_pretend's own doc comment on requiring a *visible* candidate.
 
 ## fn keyword_masked_but_installed_dependency_is_kept_not_downgraded
-- dev-libs/keywordmaskedpkg is installed at 2.0, whose own KEYWORDS ("~amd64") are no longer accepted under the fixture profile's own default ACCEPT_KEYWORDS ("amd64") -- only 1.0 (KEYWORDS="amd64") is currently visible. Reached as a DEPENDENCY atom (is_top_level=false).
-- Portage depgraph.py's own early `avoid_update` return (`_select_pkg_highest_available_imp`, ~8440: `if inst_pkg is not None and parent is not None and not self._want_update_pkg(...)`).
+- dev-libs/keywordmaskedpkg is installed at 2.0, whose own KEYWORDS ("~amd64") are no longer accepted under the fixture profile's own default ACCEPT_KEYWORDS ("amd64") -- only 1.0 (KEYWORDS="amd64") is currently visible. Reached as a DEPENDENCY atom (is_top_level=false, via `resolve_as_dependency`), Portage depgraph.py's own early `avoid_update` return (`_select_pkg_highest_available_imp`, ~8440: `if inst_pkg is not None and parent is not None and not self._want_update_pkg(...)`) requires NO visibility check at all.
 - Confirmed live against a Portage system (`sys-libs/liburing`, installed ~amd64-only, Portage's `emerge --pretend` never even considers downgrading it).
 - Before this slice's own fix, portuale incorrectly required the installed version to also be in the visible-filtered candidate set, so this fixture would have (wrongly) resolved to `Downgrade { from: "2.0", to: "1.0" }` instead.
 
@@ -104,6 +103,7 @@ Graph-level resolution tests over the shared fixture tree.
 ## fn fixture_interactive_bracket_column_tracks_evaluated_properties
 - Portage output.py:833's `attr_display.interactive`; the conditional gate is `_PackageMetadataWrapper`'s `"?" in v` check.
 - The merge-bound `Reinstall` case -- an already-installed interactive package under non-selective resolution rendering `[ebuild Ir]` -- is covered end to end by the contract suite.
+- dev-libs/interactivecondpkg's `interactive` token sits behind a `gtk? ( ... )` conditional with `gtk` disabled -> the Portage USE-conditional evaluation (`_PackageMetadataWrapper`, `"?" in v`) gates it out.
 
 ## fn fixture_fetch_restrict_column_tracks_distdir_state
 - The test helpers pass `fixtures_root().join("distfiles")` as `distdir`. Portage `output.py:633-641`'s `fetch_restrict` / `not getfetchsizes(only_restricted=True)`.
@@ -216,6 +216,7 @@ Graph-level resolution tests over the shared fixture tree.
 
 ## fn root_deps_recursion_terminates_on_a_mutual_bdepend_cycle
 - `rdrcyca` BDEPENDs `rdrcycb` BDEPENDs `rdrcyca`.
+- The shared `root_deps_build_seen` set (inserted *before* a package's own deps are walked) must cut the recursion so each cycle node appears exactly once, not overflow the stack.
 
 ## fn root_deps_recursion_surfaces_an_unbuildable_build_dep
 - Per the confirmed judgment call for this slice: `rdrmisstool` BDEPENDs `rdrnothere`, which has no ebuild anywhere -- previously `--root-deps` silently swallowed it.
@@ -270,7 +271,7 @@ Graph-level resolution tests over the shared fixture tree.
 - Backlog #153: the fucyclea/fucycleb USE-gated cycle is still in the tree, but the top-level target dev-libs/fucyclec constrains the solution flag conditionally (`dev-libs/fucyclea[x?]`) with `x` in no IUSE of its own -- Portage masks the whole candidate `invalid` at construction (`Package._validate_deps`), so the resolve fails with the all-masked report before any cycle is ever walked: there is no circular-dep suggestion to keep. (This test previously pinned the followup suggestion; that output described a merge Portage never makes.)
 
 ## fn large_cycle_count_and_display_fire_on_a_four_ring
-- dev-libs/cyc4a through dev-libs/cyc4d form a four-ring of build-time deps (the cyc4a edge gated behind USE=x, on by default). The stuck remainder re-displays all four members in leaf-drain order.
+- dev-libs/cyc4a through dev-libs/cyc4d form a four-ring of build-time deps (the cyc4a edge gated behind USE=x, on by default): Portage `get_cycles` records one ring per node, so four records trip `large_cycle_count`, and the stuck remainder re-displays all four members in leaf-drain order.
 
 ## fn small_cycles_report_without_large_count_or_display
 - Control: the two-ring reports its error block but neither the trailer (two records) nor ... -- well, the re-display still shows (two members); only `large_cycle_count` stays false.
@@ -289,7 +290,7 @@ Graph-level resolution tests over the shared fixture tree.
 - Before the #54 fix this asserted the opposite: a residual conflict pairing the merge against installed 1.0 with keeper as parent -- portuale's unconditional (unreachable-consumers included) vdb reverse scan applying a pin Portage never sees.
 
 ## fn build_time_cycle_between_two_installed_packages_is_not_a_hard_cycle
-- instcyclea BDEPENDs instcycleb BDEPENDs instcyclea. Under --emptytree both are `[ebuild R]`; `circular_deps` must stay empty (contrast `hardcyclea`/`hardcycleb`, neither installed -> reported).
+- instcyclea BDEPENDs instcycleb BDEPENDs instcyclea, both already installed. Portage `DepPriority.satisfied` demotes a build-time edge whose dep an installed package provides, so `_serialize_tasks` can break the cycle. Under --emptytree both are `[ebuild R]`; `circular_deps` must stay empty (contrast `hardcyclea`/`hardcycleb`, neither installed -> reported).
 
 ## fn or_dep_prefers_a_branch_already_merge_bound_in_the_graph
 - ingraphsvc RDEPENDs `|| ( dev-libs/ingraphkeyring dev-libs/ingraphwallet[keyring] )`. Neither branch is installed. ingraphany pulls ingraphwallet[keyring] directly *and* ingraphsvc.
@@ -309,7 +310,7 @@ Graph-level resolution tests over the shared fixture tree.
 - fixtures/etc/portage/package.use has "dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12" -- expands into "python_targets_python3_12".
 
 ## fn use_expand_star_wildcard_enables_every_matching_iuse_flag
-- fixtures/etc/portage/package.use has "dev-libs/wildexpandpkg linguas_*". profiles/base/package.use.mask keeps linguas_en off, so only linguas_de is enabled -> RDEPEND's "linguas_de? ( wildexpanddep )" fires and "linguas_en? ( wildexpandmasked )" does not. This package's OWN IUSE is "linguas_en linguas_de".
+- fixtures/etc/portage/package.use has "dev-libs/wildexpandpkg linguas_*" -- Portage config.py setcpv's own _* wildcard: enable every linguas_<x> in this package's OWN IUSE that isn't masked. profiles/base/package.use.mask keeps linguas_en off, so only linguas_de is enabled -> RDEPEND's "linguas_de? ( wildexpanddep )" fires and "linguas_en? ( wildexpandmasked )" does not. This package's OWN IUSE is "linguas_en linguas_de".
 
 ## fn use_expand_implicit_flag_is_valid_iuse_even_when_unlisted
 - profiles/base/make.defaults: USE_EXPAND_IMPLICIT="ELIBC", USE_EXPAND_VALUES_ELIBC="glibc musl", ELIBC="glibc". dev-libs/implicitiusepkg RDEPENDs implicitiuseprov[elibc_glibc], and implicitiuseprov never lists elibc_glibc in its own IUSE. Exactly what it would be without this slice (elibc_glibc absent from declared IUSE -> `.required` fails -> no matching candidate).

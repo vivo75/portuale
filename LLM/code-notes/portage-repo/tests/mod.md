@@ -12,7 +12,7 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 - The `Packages` index lives only in the in-memory override table (`set_remote_binary_index_override`).
 
 ## fn write_snapshot
-- Stamp order mirrors Portage's `_write_metadata_file` + `_stamp_metadata_file` order.
+- Write a consolidated `metadata` snapshot body into `root`'s entry for `<cat>/<pf>` and, when `stamp`, append `#dir_mtime=<dir's st_mtime_ns>` **after** the body write -- Portage `_write_metadata_file` + `_stamp_metadata_file` order.
 - A committed fixture can never carry a valid stamp (`git checkout` sets the package dir's mtime), so every positive-path test stamps at runtime.
 - Returns the `metadata` path for tests that append a custom (stale/garbage) stamp themselves.
 
@@ -28,6 +28,9 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 
 ## fn resolve_update_excluded
 - Exercises `--exclude`'s own "leave an installed package alone regardless of --update" precedence directly.
+
+## type S2Row
+- Backlog #90 (S2) shared builders: a synthetic `SlotConflict` over `dev-libs/slotconflicttarget:0` from `(version, installed, [(parent_cpv, atom, parent_installed)])` rows, plus merge `New` entries in walk order for the `or_tuple` first-pulled rule.
 
 ## fn graph_onlydeps
 - Backlog #194: a full `ResolveRequest` (like production's own `run_resolve` builds it), since the legacy marshaller answers with onlydeps off.
@@ -58,7 +61,7 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 - Backlog #244: the six `aub0` argument orders (upstream `test_autounmask_use_breakage`; `aub0a` needs `aub0d[-foo]`, `aub0b` `aub0d[foo]`, `aub0c` `>=aub0d-1`; the fixture profile enables `foo`). Expected values from Portage 3.0.82.2 (`LLM/evidence/2026-09-28-244/fixture-oracle/real/`).
 
 ## fn abi_probe_harness
-- Backlog #214 (v2 `#24e`) S0 harness. `with_consumer` controls whether the consumer's same-version ebuild (the reinstall Portage forces) is visible in the tree.
+- Backlog #214 (v2 `#24e`) S0 harness: installed `abicons-1` recording `app-misc/abiprov:0/1=`, tree `abiprov-1` (`0/1`) + `abiprov-2` (`0/2`) + consumer `abicons-1` (live `:=`) + forcer `abiforce-1` (`>=abiprov-2`). `with_consumer` controls whether the consumer's same-version ebuild (the reinstall Portage forces) is visible in the tree.
 
 ## fn residual_161_setup
 - Backlog #161 S3.
@@ -71,6 +74,9 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 ## fn ds_input_161
 - Backlog #161 S5: `s2_input` fixes `excluded` to empty; legs needing an `--exclude` entry build the input literally.
 
+## fn ds_s0_161
+- The S0 old/new shape with top-level args: `oldconsumer`'s `<2.0` forces 1.0 to stay, so the bare `newconsumer` tuple drops 2.0 with a skip row -- the baseline every leg below varies.
+
 ## fn run_161
 - Backlog #161 S6: `run_pass` takes the request atoms from the context; each leg below resolves a different installed/tree shape and pins the pass entries it settles.
 
@@ -82,6 +88,9 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 
 ## fn graph_result_abk0_worldb_on
 - Backlog #205, world=B shape shared by the R3/R4 unit tests: installed `abk0b-1` records `RDEPEND=<dev-libs/abk0a-3`. An `abk0b` line in the fixture world file would perturb every other fixture-ROOT test; the seed is the `FX_WORLD_EXTRA=dev-libs/abk0b` equivalent the bed cell stages, and the same trick the #209 `backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass` test uses for its world consumer.
+
+## fn slotundo_rebuild_entry
+- A walked S3 rebuild entry: `Reinstall { slot_operator_rebuild: true }` at the installed version, with the given resolved USE display.
 
 ## fn assert_triangle_conflict
 - Backlog #57 S1.
@@ -119,6 +128,9 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 ## fn visible_tree_matches_164_lists_only_visible_matches
 - Backlog #164 S3: Portage `_pkg_visibility_check` (`lib/_emerge/depgraph.py:7562`) -- here 1.0 is stable-visible and 2.0 is `~amd64`-masked under an `amd64` profile, so only 1.0 shows.
 
+## fn visible_tree_matches_164_negated_constraint_excludes
+- NOTE: the version half of the negated constraint needs its `=` operator -- portage-dep rejects an operator-less versioned atom as PMS-ambiguous (mirroring Portage `Atom.__init__`), which would make the constraint vacuously pass.
+
 ## fn visible_tree_matches_212_ignores_binary_only_masks
 - Backlog #212 (v2 `#24c`): a binary-only `slot_operator_mask_built` negative (`!=cpv[binary]`). Portage keys the mask by package object; `match_from_list` ignores USE-deps, so the marker would otherwise match the ebuild too -- see `is_binary_only_mask`.
 
@@ -138,6 +150,7 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 - Backlog #164 S6: Portage `_get_dep_chain_as_comment` (`lib/_emerge/depgraph.py:6457`): one `required by <cpv>::<repo>` row per merge-bound parent, then the argument line.
 
 ## fn autounmask_dep_chain_164_self_requiring_parent_stops_after_its_row
+- A parent whose `required_by` names itself cannot ascend (the `*next != cur` guard): the chain is just its own row.
 - This pins the shape that makes `guard -> true` equivalent (see the #164 closeout): advancing onto itself re-breaks on the visited set with the identical chain.
 
 ## fn euf_layers

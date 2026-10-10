@@ -5,7 +5,7 @@ Cross-root DEPEND, missing-dep backtrack, missed-update notices, and blocker mer
 - Track X Slice B (backlog #242, ex-#207): with a non-`/` target ROOT, EAPI >= 7 `DEPEND` resolves against the running root (Portage `_add_pkg_deps`'s `depend_root`), so graph nodes carry their root and candidates select against that root's tree/installed db.
 - `=dev-libs/cyc0z-1`'s `DEPEND` pulls `cyc0y` into the (here empty) running root, whose unversioned `DEPEND` then selects `cyc0z-3` -- the target-root argument is not reused across the root boundary -- forming the running-root `cyc0z-3 <-> cyc0y-1` cycle live Portage reports under default staging (backtrack `1/20`, blame `cyc0z-3`; `LLM/evidence/2026-09-29-242-inventory/probes/default-cyc0z-1.txt`).
 - Hermetic running root: nothing installed there, so every build dep selects from the tree -- the empty-`/` half of the S0 repro (a parent in <ROOT> whose DEPEND resolves against the running root, where the running-root choice forms a cycle).
-- Portage starts the printed cycle at `cyc0z-3`, reached from `cyc0y-1` -- the argument version is not a cycle member.
+- Portage starts the printed cycle at `cyc0z-3`, reached from `cyc0y-1` -- the argument version is not a cycle member. (`cat/pkg-version` CPVs: `cyc0z-3` is version 3 of `cyc0z`.)
 - The blame node is a running-root merge: it carries its root.
 - Portage spends its single backtrack retry on the serialize abort.
 
