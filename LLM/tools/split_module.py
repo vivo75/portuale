@@ -6,7 +6,8 @@ Usage: split_module.py SRC_FILE SPEC.tsv [--dry-run]
 SRC_FILE is the crate root (lib.rs/main.rs) or a `foo.rs`/`foo/mod.rs`
 module file. SPEC rows are `anchor<TAB>module[<TAB>doc]` (see the spec
 files under LLM/plans/). Each top-level item (rust_items.py) goes to the
-module of the last anchor at or before it; `=module` rows move one item.
+module of the last anchor at or before it; `=module` rows move one item;
+`@<TAB>dir<TAB>doc` rows only give a directory module its `//!` line.
 
 What the move does to an item, and nothing else:
 - a private top-level item becomes `pub(crate)`, and so do the private
@@ -122,6 +123,7 @@ def main(src_path, spec_path, dry):
         return hits[0]
 
     assign = ["lib"] * len(its)
+    spec = [r for r in spec if r[0] != "@"]  # "@<TAB>dir<TAB>doc" rows only document a directory
     ranges = sorted((find(a), m) for a, m, _ in spec if not m.startswith("="))
     for (k, m), nxt in zip(ranges, ranges[1:] + [(len(its), None)]):
         for j in range(k, nxt[0]):
@@ -139,6 +141,13 @@ def main(src_path, spec_path, dry):
             assign[k] = "TEST:" + name.split()[1]
     base = os.path.dirname(src_path)
     is_root = os.path.basename(src_path) in ("lib.rs", "main.rs", "mod.rs")
+    # crate path of the module being split ("" for the crate root)
+    crate_src = base
+    while not any(os.path.exists(os.path.join(crate_src, f)) for f in ("lib.rs", "main.rs")):
+        crate_src = os.path.dirname(crate_src)
+    rel = os.path.relpath(src_path, crate_src)[:-3]
+    rel = "" if rel in ("lib", "main") else rel.removesuffix("/mod")
+    glob_import = f"use crate::{rel.replace('/', '::')}::*;" if rel else "use crate::*;"
     moddir = base if is_root else os.path.join(base, os.path.basename(src_path)[:-3])
 
     def text_of(k):
@@ -163,7 +172,7 @@ def main(src_path, spec_path, dry):
     for m, texts in files.items():
         is_dir = m in tree
         path = os.path.join(moddir, m, "mod.rs") if is_dir else os.path.join(moddir, m + ".rs")
-        head = f"//! {docs.get(m, '')}\n\nuse crate::*;\n" if docs.get(m) else "use crate::*;\n"
+        head = f"//! {docs.get(m, '')}\n\n{glob_import}\n" if docs.get(m) else f"{glob_import}\n"
         out[path] = head + "\n" + "\n\n".join(texts) + "\n"
     def has_pub(m):
         """Whether module m (or a submodule) defines any `pub` item."""
@@ -180,7 +189,7 @@ def main(src_path, spec_path, dry):
         path = os.path.join(moddir, parent, "mod.rs")
         decl = "".join(f"mod {c};\n" for c in children) + "\n" + "".join(reexport(parent, c) for c in children)
         if path in out:
-            out[path] = out[path].replace("use crate::*;\n", "use crate::*;\n\n" + decl, 1)
+            out[path] = out[path].replace(glob_import + "\n", glob_import + "\n\n" + decl, 1)
         else:
             doc = docs.get(parent, "")
             out[path] = (f"//! {doc}\n\n" if doc else "") + decl
@@ -202,7 +211,7 @@ def main(src_path, spec_path, dry):
             if name == "tests":
                 out[os.path.join(tdir, "mod.rs")] = text
             else:
-                text = text.replace("use super::*;", "use crate::*;", 1)
+                text = text.replace("use super::*;", glob_import, 1)
                 out[os.path.join(tdir, f"{name}.rs")] = text
         mp = os.path.join(tdir, "mod.rs")
         children = [n for n in test_names if n != "tests"]
