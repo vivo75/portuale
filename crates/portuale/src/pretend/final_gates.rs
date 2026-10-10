@@ -32,18 +32,14 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         pretend,
         ..
     } = opts;
-    // Real `_show_abi_rebuild_info` (`depgraph.py:1210`), gated on
-    // `--verbose-slot-rebuilds != "n"` (default on, NOT `--verbose`) and
-    // rendered right after the merge list / autounmask blocks, before the
-    // changed-deps report -- `_forced_rebuilds[root][child] = {parents}`,
-    // grouped by the provider whose new sub-slot broke each consumer's
-    // built `:=` link. `writemsg_stdout`, so stdout. Real prints each
-    // package as `str(Package)` (`Package.__str__`):
-    // `(cpv:slot/sub_slot::repo, ebuild scheduled for merge[ to '<root>'])`.
+    // The ABI-rebuild report: grouped by the provider whose new sub-slot broke
+    // each consumer's built `:=` link; each package renders as
+    // `(cpv:slot/sub_slot::repo, type scheduled for merge[ to '<root>'])`.
+    // Gated on `--verbose-slot-rebuilds != "n"` (default on, not `--verbose`).
+    // Portage: depgraph.py, _show_abi_rebuild_info
     if verbose_slot_rebuilds && !result.abi_rebuilds.is_empty() {
-        // cpv -> (slot, sub_slot, repo, type_name) for every merge-bound
-        // entry, so both sides of each edge render at their *resolved*
-        // slot (the rebuild's new sub-slot, not the vdb's).
+        // cpv -> resolved (slot, sub_slot, repo, type) for every merge-bound
+        // entry, so both ends render at their resolved slot.
         let mut by_cpv: HashMap<String, (String, String, String, &str)> = HashMap::new();
         for e in entries {
             let version = match &e.outcome {
@@ -93,13 +89,10 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         }
     }
 
-    // `--changed-deps-report`: real `_changed_deps_report`'s own WARN
-    // block, ported verbatim (real portage colorizes it when the
-    // terminal supports it; portuale, like every other message it
-    // prints, stays plain text). Already empty unless `changed_deps_report`
-    // was given AND `changed_deps` was NOT (see `resolve_pretend_graph`'s
-    // own doc comment for that gating), so no extra condition needed
-    // here beyond "is there anything to report at all".
+    // The `--changed-deps-report` WARN block, ported verbatim (plain text like
+    // every other portuale message). Non-empty only when the flag was given
+    // without `--changed-deps`, so no extra condition is needed here.
+    // Portage: depgraph.py, _changed_deps_report
     if !result.changed_deps_report.is_empty() {
         eprintln!();
         eprintln!("!!! Detected ebuild dependency change(s) without revision bump:");
@@ -137,10 +130,9 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         eprintln!("      information about this option.");
     }
 
-    // Real depgraph.py's own display_problems(): shown *after* the merge
-    // list above (real `_show_merge_list()` runs first), then the whole
-    // action fails -- see GraphResult::buildpkgonly_deps_unsatisfied's
-    // own doc comment for the exact real check this mirrors.
+    // `--buildpkgonly` with unmerged dependencies fails after the merge list.
+    // See `GraphResult::buildpkgonly_deps_unsatisfied`.
+    // Portage: depgraph.py, display_problems
     if result.buildpkgonly_deps_unsatisfied {
         eprintln!("\n!!! --buildpkgonly requires all dependencies to be merged.");
         eprintln!("!!! Cannot merge requested packages. Merge deps and try again.\n");
@@ -148,37 +140,15 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         return Some(ExitCode::from(1));
     }
 
-    // Real `_serialize_tasks` -> `_show_circular_deps` (`depgraph.py:
-    // 10425`): an unbreakable dependency cycle among the merge-bound
-    // packages -- every edge in it one real portage's `_ignore_runtime`
-    // scan can't linearize (an unsatisfied `DEPEND`/`BDEPEND` with no
-    // run-time alternative, or since backlog #228 an unsatisfied
-    // slot-operator edge). Printed to stderr after the merge list, then
-    // the whole action fails (exit 1), pretend or not -- real portage
-    // never proceeds to build a cycle.
+    // An unbreakable dependency cycle among merge-bound packages: printed to
+    // stderr after the merge list, then the whole action fails (exit 1),
+    // pretend or not -- Portage never proceeds to build a cycle. Aborts under
+    // the abort-path gate never reach here with work left, so this serves
+    // gate-off and Complete resolves only.
+    // Portage: _emerge/depgraph.py, _show_circular_deps
     //
-    // Faithful transcription of `_show_circular_deps`'s `writemsg`
-    // sequence: the reduced cycle-only re-display
-    // (`self.display(handler.merge_list)`, printed above between the
-    // merge list and this block -- flat portuale lines, since portuale's
-    // tree model dedups shared nodes and never abandons the list) and
-    // the `large_cycle_count` "a lot of cycles" trailer below (shown
-    // only with a concrete suggestion, like real). The `Change USE:`
-    // suggestion branch itself is shipped
-    // (`portage_repo::circular_dep_solutions`, real
-    // `circular_dependency_handler._find_suggestions`): fixtures
-    // `usecyclea` (bare suggestion), `gpcyclec` (hard grandparent clash
-    // disqualifies it), and `fucyclec` (conditional grandparent clash
-    // keeps it with `followup_change`) pin all three outcomes.
-    // The shortest cycle drives `_prepare_circular_dep_message`; every
-    // line after `depends on` carries its own edge's `priorities[-1]`
-    // label (backlog #228 -- `(buildtime)` on every line for the
-    // all-buildtime cycles, `slopcyca` pins the mixed shape).
-    // Slice 5 routing for the legacy site: gate-on aborts never reach
-    // here with work left (a cycle abort printed above, before the
-    // autounmask section; a masked/unsat abort prints no circular block
-    // at all), so this serves gate-off and Complete resolves only — the
-    // pre-Slice-5 print-and-exit-1 shape, byte-identical.
+    // The `Change USE:` suggestion branch is shipped; fixtures `usecyclea`,
+    // `gpcyclec` and `fucyclec` pin its outcomes.
     let gated_abort = portage_repo::abort_path_enabled()
         && matches!(
             &result.outcome,
@@ -201,22 +171,11 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         return Some(ExitCode::from(1));
     }
 
-    // Backlog #19 abort-path outcome mapping (real `_emerge/actions.py:
-    // 460-462`: `not success` -> `display_problems()`, `return 1` — the
-    // merge list `display()` is never reached, so an aborted resolve
-    // shows at most the partial list and always exits 1). Gated on
-    // `portage_repo::abort_path_enabled` (`PORTUALE_ABORT_PATH=0` keeps
-    // the legacy "report, don't enforce" list + exit 0 — Gate G0.4).
-    // Since Slice 3 the resolver produces `Aborted` (see
-    // `portage_repo::abort_outcome`), so this fires for a masked-only or
-    // otherwise unsatisfiable dependency of a merge-bound package and for
-    // an unserializable cycle; it sits *after* the circular block above
-    // because real's `display_problems()` prints `_show_circular_deps`
-    // first (`depgraph.py:11113`) and only then returns 1. Slice 4 moves
-    // the partial-list rendering here. `mrg` needs no separate wiring:
-    // `to_emerge_argv` hands its argv to this same `pretend::run`
-    // (`mrg.rs`), so resolution output and exit codes are literally
-    // `emerge`'s by construction.
+    // An aborted resolve exits 1 without ever reaching the merge list. This
+    // sits after the circular block because Portage's `display_problems()`
+    // prints circular deps first. `mrg` needs no separate wiring: it hands its
+    // argv to this same `pretend::run`, so output and exit codes are `emerge`'s.
+    // Portage: _emerge/actions.py, action_build
     if portage_repo::abort_path_enabled()
         && let portage_repo::ResolveOutcome::Aborted { .. } = &result.outcome
     {
@@ -233,22 +192,13 @@ pub(crate) fn print_resolver_debug(
     reinstall_atoms: &[String],
     result: &GraphResult,
 ) {
-    // `emerge --pretend --debug` Stage 5: real
-    // `_compute_abi_rebuild_info`'s own DEBUG-level dump (real
-    // `depgraph.py:1011-1206`), on stdout, right before the
-    // `_show_abi_rebuild_info` "causing rebuilds" block. Real's
-    // `_slot_operator_deps` / `_forced_rebuilds` are richer dicts than
-    // portuale's flat `abi_rebuilds` `(provider-cpv, consumer-cpv)`
-    // list -- portuale emits the same shapes from what it has (a
-    // documented fidelity gap: real's `slot operator dependencies:`
-    // lists *every* installed `:=` edge, portuale only the ones that
-    // actually forced a rebuild this run).
+    // Stage 5: the slot-operator/`forced rebuilds` DEBUG dump on stdout, right
+    // before the "causing rebuilds" block. Only the edges that actually forced
+    // a rebuild this run are listed (a documented fidelity gap: Portage lists
+    // every installed `:=` edge).
+    // Portage: depgraph.py, _compute_abi_rebuild_info
     if portage_repo::resolver_debug() {
         let root_str = root.display().to_string();
-        // cpv -> (cp, slot, sub_slot, repo, type_name) for every
-        // merge-bound entry (both ends of each abi-rebuild edge are
-        // Reinstall/Upgrade). Same shape the "causing rebuilds" block
-        // below builds.
         let mut by_cpv: HashMap<String, (String, String, String, String, &str)> = HashMap::new();
         for e in entries {
             let version = match &e.outcome {
@@ -294,7 +244,6 @@ pub(crate) fn print_resolver_debug(
         print!("\n\n");
 
         println!("slot operator dependencies:");
-        // Group abi-rebuild pairs by the provider's `cp:slot` slot-atom.
         let mut by_slot_atom: std::collections::BTreeMap<String, Vec<&(String, String)>> =
             std::collections::BTreeMap::new();
         for pair in &result.abi_rebuilds {
@@ -361,23 +310,16 @@ pub(crate) fn failure_gates(args: FailureGatesArgs<'_>) -> Option<ExitCode> {
         nodeps,
         ..
     } = opts;
-    // Real `_serialize_tasks` -> `_show_unsatisfied_blockers` +
-    // `show_blocker_docs_link` (`depgraph.py:10496`): a blocked installed
-    // package the resolver could neither replace nor unmerge is an
-    // unresolved conflict -- real prints the `* Error: The above package
-    // list …` block and `actions.py` returns 1. Portuale's per-parent
-    // `pulled in by` detail is a documented cut (it needs real's
-    // `_parent_atoms` / complete graph); the sentence, the docs link and
-    // the exit code are what a `$?` check and the `Conflict: N blocks
-    // (M unsatisfied)` line depend on.
+    // A blocked installed package the resolver could neither replace nor
+    // unmerge fails the run (exit 1). The per-parent detail is a documented
+    // cut; the sentence, the docs link and the exit code are what matters.
+    // Portage: _emerge/depgraph.py, _show_unsatisfied_blockers
     let unsolvable_blockers = result
         .entries
         .iter()
         .any(|e| e.blockers.iter().any(|b| b.unsolvable))
-        // Backlog #80: an orphan row is unsolvable by construction
-        // (`file_blocker_conflicts` only orphans `unsolvable` rows), so
-        // it fails the run exactly like an entry-owned one -- real
-        // prints the same `* Error` block for the n1b shape.
+        // An orphan row is unsolvable by construction, so it fails the run
+        // exactly like an entry-owned one.
         || !result.orphan_blockers.is_empty();
     if unsolvable_blockers && show_merge_list {
         eprintln!();
@@ -397,57 +339,19 @@ pub(crate) fn failure_gates(args: FailureGatesArgs<'_>) -> Option<ExitCode> {
         return Some(ExitCode::from(1));
     }
 
-    // Backlog #62: a recorded slot conflict fails the whole action with
-    // rc 1, matching real Portage 3.0.82.2. Real's rule, verified against
-    // the source and host-side oracles before coding (the obvious "notice
-    // printed => rc 1" formulation is wrong in the escape cases, and the
-    // first draft of the plan had it wrong too):
-    //
-    // - The notice itself is unconditional on the conflict existing
-    //   (`display_problems` prints it whenever
-    //   `any(_package_tracker.slot_conflicts())`, `depgraph.py:
-    //   11117-11120`); it says nothing about the exit code.
-    // - The exit code comes from `action_build`'s `if not success:
-    //   display_problems(); return 1` (`actions.py:460-462`), and
-    //   `success` is False exactly when a conflict is recorded and not
-    //   tolerated (`_resolve` tail, `depgraph.py:5685-5691`).
-    // - Escape 1 -- `--autounmask-only` returns 0 first (`actions.py:
-    //   456-458`), notice printed and all. Preserved for free: this gate
-    //   sits after that early return above. Host oracle: the
-    //   needer/othermod triangle with `--autounmask-only` prints the
-    //   notice and exits 0.
-    // - Escape 2 -- `_accept_blocker_conflicts()` (`depgraph.py:
-    //   9259-9271`): backtracking disabled plus one of `--buildpkgonly`,
-    //   `--fetchonly`, `--fetch-all-uri`, `--nodeps` tolerates the
-    //   conflict. Host oracles: `--backtrack=0 --nodeps` and
-    //   `--backtrack=0 --buildpkgonly` on the triangle exit 0 (in fact
-    //   real records no conflict at all there -- `--nodeps` never walks
-    //   the deps that would pull it in, `--buildpkgonly` resolves the
-    //   shape without the upgrade -- so no "notice with rc 0" shape was
-    //   reproducible; the gate still matters because portuale's resolver
-    //   *does* record the conflict there). `--fetchonly`/
-    //   `--fetch-all-uri` are still portuale-unimplemented options (rc 2
-    //   before reaching here), so they need no parsed flag yet -- extend
-    //   this condition when that surface lands. `--fetchonly` shapes
-    //   could not be oracled hermetically anyway: real attempts the fetch
-    //   phase past resolution and fails on the fixture's unexpanded
-    //   `file://${PORTAGE_CONFIGROOT}` binhost URL (rc 1 even with no
-    //   conflict anywhere).
-    //
-    // Gated on the data (`!result.slot_conflicts.is_empty()`), never on
-    // "the notice was printed", so `-q`/`--json`/`--columns` cannot change
-    // the rc -- `--json` has no real counterpart (real rejects it, rc 2)
-    // and follows the same rule for consistency. The blocker path is
-    // untouched: its `all satisfied` -> rc 0 / `unsolvable` -> rc 1 split
-    // already matches real.
+    // A recorded slot conflict fails the whole action (rc 1), gated on the data
+    // -- never on "the notice was printed", so `-q`/`--json`/`--columns` cannot
+    // change the rc. Escapes: `--autounmask-only` (returns 0 earlier), and
+    // backtracking disabled plus `--buildpkgonly`/`--nodeps`.
+    // Portage: _emerge/actions.py, action_build; depgraph.py, _accept_blocker_conflicts
     let backtracking_disabled = backtrack_max == 0;
     let slot_conflict_tolerated = backtracking_disabled && (buildpkgonly || nodeps);
     if !result.slot_conflicts.is_empty() && !slot_conflict_tolerated {
         pretend_end_news_notice(pretend, repos, root, config, color);
         return Some(ExitCode::from(1));
     }
-    // Backlog #295: the best-run re-pass could not take the `prune_rebuilds`
-    // restart real wants (`depgraph.py:5763-5775`) -- display, then fail.
+    // An unresolved `--prune`: display, then fail (no `prune_rebuilds` restart).
+    // Portage: _emerge/depgraph.py, _resolve
     if result.prune_unresolved {
         pretend_end_news_notice(pretend, repos, root, config, color);
         return Some(ExitCode::from(1));

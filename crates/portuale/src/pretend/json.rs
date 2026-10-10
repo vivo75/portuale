@@ -2,14 +2,9 @@
 
 use crate::pretend::*;
 
-/// Escapes `s` for embedding in a JSON string literal (quote, backslash,
-/// and control characters -- category/package/version/atom text from
-/// portuale's own inputs never needs anything fancier). Hand-rolled
-/// rather than pulling in a JSON crate: `--json`'s own output is a
-/// small, flat shape, and portuale has no other dependency beyond
-/// `regex` anywhere in the workspace -- see the module doc comment for
-/// why `--json` exists at all (it's NOT a port of any real emerge
-/// behavior).
+/// Escapes `s` for a JSON string literal (quote, backslash, control
+/// characters). Hand-rolled: `--json` is a small flat shape with no other
+/// JSON need anywhere in the workspace.
 pub(crate) fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
@@ -30,37 +25,11 @@ pub(crate) fn json_string(s: &str) -> String {
     format!("\"{}\"", json_escape(s))
 }
 
-/// One JSON object per `GraphEntry` -- a structured mirror of the plain-
-/// text `[ebuild ...]`/`[binary ...]`/"already installed"/blocker lines
-/// above, plus two fields no plain-text line carries at all: `requested`
-/// (was this exact category/package one of `atoms` directly, as opposed
-/// to reached only via a dependency string) and `required_by` (which
-/// package(s), if any, pulled it in that way -- see
-/// `GraphEntry::required_by`'s own doc comment, portage-repo). `source`
-/// mirrors `entry.source`/the plain-text loop's own `bracket` variable
-/// below (`"binary"`/`"ebuild"`, real `RootConfig.py`'s own
-/// `pkg_tree_map`-driven `type_name`) -- until the binary-package slice
-/// (`--usepkg`/`--usepkgonly`, `portage-repo`) this was always
-/// `"ebuild"` unconditionally; it no longer is.
-/// Deliberately NOT affected by `--onlydeps`'s own suppression (a
-/// display-only concern for the plain-text loop below): `--json` always
-/// dumps the whole resolved graph, letting a consumer filter on
-/// `requested` itself if they want the `--onlydeps` view. `provenance`
-/// (alongside `source`, so also absent for `NoVisibleCandidate`) mirrors
-/// `entry.provenance`/`VisibilityProvenance` (portage-repo) directly --
-/// portuale's own state-change trace: which `package.mask`/`.unmask`/
-/// `package.accept_keywords` entries, if any, were actually load-bearing
-/// for this candidate to be visible at all. Each of its three fields is
-/// `null` rather than omitted when not applicable, unlike `use_flags`
-/// above -- there's no `verbose` gate here (this is exactly the kind of
-/// detail `--json` exists to expose unconditionally, see this module's
-/// own doc comment) and a consumer scripting against this output
-/// shouldn't have to branch on whether the key is even present.
-/// `keyword_suggestion` is `provenance`'s own mirror image -- present
-/// (as `{"version", "keyword"}` or `null`) only for `NoVisibleCandidate`
-/// entries, since that's the one outcome with nothing visible to trace
-/// provenance for and something to suggest instead. Mirrors
-/// `entry.keyword_suggestion` (portage-repo) -- see its own doc comment.
+/// One JSON object per `GraphEntry`: a structured mirror of the plain-text
+/// merge-list lines, plus `requested`/`required_by` (which no text line
+/// carries) and the unconditional `--json`-only detail fields below.
+/// Deliberately not affected by `--onlydeps` suppression: a consumer can
+/// filter on `requested` itself.
 pub(crate) fn entry_to_json(
     entry: &GraphEntry,
     merge_order: usize,
@@ -72,11 +41,8 @@ pub(crate) fn entry_to_json(
     let mut fields: Vec<String> = vec![
         format!("\"category\":{}", json_string(&entry.category)),
         format!("\"package\":{}", json_string(&entry.package)),
-        // The entry's 0-based position in real portage's dependency-first
-        // merge order (`portage_repo::topological_merge_order`). The
-        // `entries` array is already emitted in this order -- the field
-        // is here so a consumer that re-sorts or filters the array keeps
-        // the schedule.
+        // 0-based position in the dependency-first merge order; the array is
+        // already in this order, so a consumer that re-sorts keeps the schedule.
         format!("\"merge_order\":{merge_order}"),
     ];
     let outcome_tag = match &entry.outcome {
@@ -86,8 +52,7 @@ pub(crate) fn entry_to_json(
         PretendOutcome::Reinstall { .. } => "reinstall",
         PretendOutcome::AlreadyInstalled { .. } => "already_installed",
         PretendOutcome::NoVisibleCandidate => "no_visible_candidate",
-        // #72 B3: `--json` filters these entries out (see `print_json`);
-        // the tag exists for B4's real outcome string.
+        // `Uninstall` entries are filtered out of `--json` (see `print_json`).
         PretendOutcome::Uninstall { .. } => "uninstall",
     };
     fields.push(format!("\"outcome\":{}", json_string(outcome_tag)));
@@ -121,16 +86,14 @@ pub(crate) fn entry_to_json(
         }
         PretendOutcome::NoVisibleCandidate => {}
     }
-    // Real `output.py`'s own `S` bracket column, exposed unconditionally
-    // (like every other `--json` field, see this module's own doc
-    // comment): `true` for a `New` into a slot the package isn't
-    // installed in while another slot of it is (`GraphEntry::new_slot`).
+    // The `S` bracket column (`GraphEntry::new_slot`): a `New` into a slot the
+    // package is not installed in while another slot is.
+    // Portage: output.py
     if let PretendOutcome::New { .. } = &entry.outcome {
         fields.push(format!("\"new_slot\":{}", entry.new_slot));
     }
-    // Real `output.py:833`'s own `I` bracket column, exposed
-    // unconditionally: `true` for a merge-bound entry whose evaluated
-    // `PROPERTIES` contains `interactive` (`GraphEntry::interactive`).
+    // The `I` bracket column (`GraphEntry::interactive`) and the `f`/`F`
+    // fetch-restrict column, for merge-bound entries. Portage: output.py
     if matches!(
         entry.outcome,
         PretendOutcome::New { .. }
@@ -139,8 +102,6 @@ pub(crate) fn entry_to_json(
             | PretendOutcome::Reinstall { .. }
     ) {
         fields.push(format!("\"interactive\":{}", entry.interactive));
-        // Real `output.py:633`'s own `f`/`F` fetch-restrict column
-        // (`GraphEntry::fetch_restrict` / `fetch_restrict_satisfied`).
         fields.push(format!("\"fetch_restrict\":{}", entry.fetch_restrict));
         fields.push(format!(
             "\"fetch_restrict_satisfied\":{}",
@@ -244,12 +205,8 @@ pub(crate) fn entry_to_json(
         })
         .collect();
     fields.push(format!("\"required_by\":[{}]", required_by.join(",")));
-    // `--root-deps`'s own running-root build entries (see `root_suffix`'s
-    // own doc comment and `GraphEntry::targets_running_root`): the same
-    // `to <root>` distinction the plain-text output carries, as an
-    // explicit field -- the running-root path string for such an entry,
-    // `null` for every ordinary `ROOT`-targeted one. `null` (rather than
-    // absent) universally, same shape as `slot` above.
+    // The `to <root>` distinction the plain-text output carries, as an explicit
+    // field: the running-root path for `--root-deps` build entries, else `null`.
     fields.push(format!(
         "\"builds_against_running_root\":{}",
         if entry.targets_running_root {
@@ -337,9 +294,7 @@ pub(crate) fn changed_deps_report_entry_to_json(c: &ChangedDepsReportEntry) -> S
     )
 }
 
-/// The whole `--json` output: `{"entries": [...], "slot_conflicts": [...]}`,
-/// one line, no pretty-printing (a portuale-specific convenience format, not
-/// a stable schema -- see the module doc comment).
+/// One JSON object per autounmask change: atom, token, and dependency chain.
 pub(crate) fn autounmask_change_to_json(change: &portage_repo::AutounmaskChange) -> String {
     let chain: Vec<String> = change.dep_chain.iter().map(|l| json_string(l)).collect();
     format!(
@@ -350,11 +305,8 @@ pub(crate) fn autounmask_change_to_json(change: &portage_repo::AutounmaskChange)
     )
 }
 
-/// Backlog #19 Slice 4: the `--json` `aborted` field for a resolve
-/// outcome — `null` on the complete path, `{"reason":…}` on an abort.
-/// Reason spellings (`masked-dep`, `unsatisfied-atom`,
-/// `unserializable-cycle`) are pinned by the contract suite's abort
-/// fixtures.
+/// The `--json` `aborted` field: `null` on the complete path,
+/// `{"reason":…}` on an abort (reason spellings pinned by the abort fixtures).
 pub(crate) fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
     match outcome {
         portage_repo::ResolveOutcome::Complete => "null".to_string(),
@@ -389,9 +341,8 @@ pub(crate) fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> S
 /// Arguments of [`print_json`].
 pub(crate) struct PrintJsonArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],
-    /// #59 S2 (K1 option (a)): the deterministic `(backtrack: N/M)` count
-    /// real's `_show_resolution_report` prints on every run -- `--json`
-    /// only, no stdout line (the timing half is a deliberate cut).
+    /// The deterministic `(backtrack: N/M)` count as data (`--json` only, no
+    /// stdout line; the wall-clock half is cut for determinism).
     pub(crate) backtrack_restarts: u64,
     pub(crate) backtrack_max: u32,
     pub(crate) slot_conflicts: &'a [SlotConflict],
@@ -407,6 +358,8 @@ pub(crate) struct PrintJsonArgs<'a> {
     pub(crate) running_root: Option<&'a Path>,
 }
 
+/// The whole `--json` output as one line, no pretty-printing (a
+/// portuale-specific convenience format, not a stable schema).
 pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
     let PrintJsonArgs {
         entries,
@@ -460,11 +413,7 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
             )
         })
         .collect();
-    // Backlog #19 Slice 4: the abort outcome as provenance — `null` on
-    // the complete path every consumer already parses, `{"reason":…}`
-    // on an abort (reason spellings pinned by the abort contract tests).
-    // The `entries` array above is already the partial list on
-    // an abort (the caller passes the display list), so a `--json`
+    // On an abort the caller passes the partial display list, so a `--json`
     // consumer sees the same rows the text list shows.
     let aborted_json = abort_outcome_to_json(outcome);
     println!(

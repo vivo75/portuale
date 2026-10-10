@@ -2,78 +2,16 @@
 
 use crate::pretend::*;
 
-/// Real `emerge --info` (`_emerge/actions.py::action_info`), **narrowed
-/// to its deterministic config/repository block**: the `Repositories:`
-/// list (real `repo.info_string()`), `Binary Repositories:`, `Installed
-/// sets:`, then the sorted `VAR="value"` dump (real `myvars`) and the
-/// `Unset:` line.
+/// `emerge --info`: the deterministic config/repository block plus the per-atom
+/// `Package Settings` section. Host-state output (version probes, timestamps)
+/// is deliberately cut; see the notes. With `pkg_info()` defined, the phase
+/// actually runs.
+/// Portage: _emerge/actions.py, action_info
 ///
-/// With one or more `atom_args`, also the per-atom handling real
-/// `action_info` does in its `myfiles` loop: an atom whose `cat/pkg`
-/// has no ebuild anywhere aborts with `emerge: there are no ebuilds to
-/// satisfy "<atom>".` + `--misspell-suggestions` (exit 1, before the
-/// config block); otherwise, after the config block, a `Package
-/// Settings` section (real `mypkgs`): per atom, every installed vdb
-/// match wins (`<cpv>::<repo> was built with the following:` + its vdb
-/// `USE="…"` line + the `CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS`
-/// that differ from the current config + an `Unset: …` line); otherwise
-/// the best visible ebuild candidate, but only if its ebuild defines
-/// `pkg_info()` (`<cpv>::<repo> would be built with the following:` +
-/// `USE="…"`); otherwise, under `--usepkg`/`--usepkgonly`, the highest
-/// local `$PKGDIR` binary build whose EAPI is 4+ and whose
-/// `DEFINED_PHASES` names `info` (`<cpv>::<repo> (non-installed binary)
-/// was built with the following:` + the binary's own baked `USE="…"`).
-///
-/// For each selected package that defines `pkg_info()` -- the ebuild and
-/// binary halves always, an installed match only when its vdb's own
-/// `DEFINED_PHASES` names `info` -- portuale then prints `>>> Attempting
-/// to run pkg_info() for '<cpv>'` and actually runs the phase
-/// (`ebuild_phases::run_single_phase` for an ebuild or an extracted
-/// binary, `ebuild_merge::run_vdb_saved_env_phase` for an installed
-/// match), exactly the real `writemsg_stdout(...)` + `doebuild(...,
-/// "info", ...)` step. The phase's own output is whatever the ebuild
-/// `einfo`s; the contract suite pins the deterministic message and the
-/// real phase run is covered in `test_portuale.py`.
-///
-/// **Large, deliberate cut:** real `action_info`'s output is dominated by
-/// *host state* a fixture-driven test can't verify -- the
-/// `Portage <ver> (python …, <profile>, <chost>, <gcc>, <libc>,
-/// <kernel>)` header, `System uname`, `KiB Mem`, the
-/// `sh:`/`gcc:`/`ld:`/`binutils`/`ccache`/`distcc` version probes, the
-/// `info_pkgs` version table, repository timestamps / head commits. None
-/// of that is reproduced. Narrower than real for the installed block:
-/// the `CHOST`/`CFLAGS`/… values come only from the individual vdb
-/// `build-info` files (real `_aux_env_search` falls back to the
-/// package's `environment.bz2`). The `USE` line's `( )` force/mask wrap
-/// and per-flag ANSI colour (real `pkg_use_display`'s own
-/// `UseFlagDisplay`) are shipped -- see `resolve_installed_info`/
-/// `resolve_info_candidate`'s own doc comments and `colorize_use_token`.
-///
-/// An installed match's `>>> Attempting` step follows real's own
-/// `if metadata["DEFINED_PHASES"]: if "info" not in ...: continue`
-/// (`actions.py:2350`): it fires when the vdb `DEFINED_PHASES` names
-/// `info`, and also when `DEFINED_PHASES` is entirely empty (real's
-/// falsy-check quirk -- an old / hand-written vdb entry with no
-/// `DEFINED_PHASES` file). `"-"` (the modern "no phases" marker) is
-/// truthy and does not fire. The
-/// binary's ebuild is extracted from the archive and laid out as
-/// `<cat>/<pn>/<pf>.ebuild` so the phase driver derives `CATEGORY`/`PN`
-/// from the path (real `doebuild(tree="bintree")` gets them from the
-/// binpkg metadata). `--info` runs its own `$PKGDIR` scan before
-/// dispatching (the ordinary `--usepkg` resolve path's scan runs later
-/// in the CLI flow).
-///
-/// `_hide_url_passwd` is also cut.
-///
-/// One `USE_EXPAND` variable's `emerge --info` display value, real
-/// `config.regenerate()`'s "Generate global USE_EXPAND variables
-/// settings that are consistent with USE" tail (`config.py`, guarded on
-/// `self.mycpv is None`): the flags actually enabled for that prefix in
-/// the final USE set, in the raw value's own order, followed by any
-/// extra enabled flags sorted. This resolves `-*` / `-flag` /
-/// `VIDEO_CARDS="-* intel …"`. `None` when nothing is enabled (real
-/// appends the `VAR="…"` token to the `USE=` line only `if myval`, so an
-/// empty value is simply omitted).
+/// One `USE_EXPAND` variable's `emerge --info` display value: the flags actually
+/// enabled for that prefix in the final USE set, in the raw value's own order
+/// followed by any extra enabled flags sorted. `None` when nothing is enabled.
+/// Portage: config.py, regenerate
 pub(crate) fn use_expand_display_value(
     var: &str,
     resolved_use: &std::collections::BTreeSet<String>,
@@ -102,15 +40,10 @@ pub(crate) fn use_expand_display_value(
     Some(out.join(" "))
 }
 
-/// The resolved global USE set real `emerge --info` prints -- real
-/// `config.regenerate()`'s last two lines before the USE_EXPAND display
-/// pass: `myflags.update(self.useforce)` then
-/// `myflags.difference_update(self.usemask)` (the `mycpv is None` /
-/// global `getUseForce()` / `getUseMask()` case). `ARCH` is already in
-/// `use_flags` via `USE_EXPAND_UNPREFIXED`. Portuale keeps
-/// `use_force`/`use_mask` *out* of `Config::use_flags` on purpose (they
-/// are applied per-candidate in `effective_use_flags`); this reunites
-/// them for the one global display that needs it.
+/// The resolved global USE set printed by `emerge --info`: `use_flags` with
+/// `use_force` folded in and `use_mask` removed (`use_force`/`use_mask` stay
+/// out of `Config::use_flags` on purpose; they apply per-candidate instead).
+/// Portage: config.py, regenerate
 pub(crate) fn resolved_global_use(
     config: &portage_profile::Config,
 ) -> std::collections::BTreeSet<String> {
@@ -122,23 +55,15 @@ pub(crate) fn resolved_global_use(
     set
 }
 
-/// One `--info` variable-dump value for a plain scalar key: real
-/// `action_info`'s `settings.get(k)` (`_emerge/actions.py:2240`) walks
-/// `lookuplist` env-first (real `config.py:3178-3182`; `USE_ORDER`
-/// `"env:pkg:conf:defaults:…"` at `:1031-1035`), so this is #180's
-/// `env_over_config_scalar` chain (backlog #219), not `other_vars`
-/// with an env fallback. For keys `resolve_config` already env-folds
-/// (`ENV_SCALAR_VARS`, e.g. `PKGDIR`) the two reads agree; for the rest
-/// (`PORTAGE_BZIP2_COMMAND`, `PORTAGE_BUNZIP2_COMMAND`, any profile
-/// `info_vars` extra outside the allowlists) the env now wins, as real
-/// prints it.
+/// One `--info` variable-dump value for a plain scalar key: the
+/// calling-env-over-files chain, so the environment wins as Portage prints it.
+/// Portage: _emerge/actions.py, action_info
 pub(crate) fn info_scalar_value(config: &portage_profile::Config, key: &str) -> Option<String> {
     portage_profile::env_over_config_scalar(config, key)
 }
 
-/// First line of `<cmd> --version` output, trimmed -- `None` if the
-/// command isn't found or exits non-zero (real `subprocess.Popen` +
-/// `os.EX_OK` guard). `args` is usually `["--version"]`.
+/// First line of `<cmd> --version` output, trimmed -- `None` if the command
+/// is missing or fails.
 pub(crate) fn tool_first_line(cmd: &str, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new(cmd).args(args).output().ok()?;
     if !out.status.success() {
@@ -149,9 +74,7 @@ pub(crate) fn tool_first_line(cmd: &str, args: &[&str]) -> Option<String> {
     (!first.is_empty()).then(|| first.to_string())
 }
 
-/// The highest installed version of `cat/pkg`, `catpkgsplit`-style
-/// `<pv>-<pr>` with a `-r0` revision dropped (real `get_libc_version` /
-/// the `info_pkgs` join) -- or `None` when nothing is installed.
+/// The highest installed version of `cat/pkg` (`-r0` dropped), if any.
 pub(crate) fn highest_installed_pvr(root: &Path, category: &str, package: &str) -> Option<String> {
     portage_repo::installed_versions(root, category, package)
         .into_iter()
@@ -159,13 +82,10 @@ pub(crate) fn highest_installed_pvr(root: &Path, category: &str, package: &str) 
         .map(|v| v.strip_suffix("-r0").unwrap_or(&v).to_string())
 }
 
-/// Real `action_info`'s host-state header, printed before `Repositories:`
-/// (`actions.py:1946-2165`): the `Portage <ver> (…)` line, the 65-char
-/// rule, `System uname:`, `KiB Mem:`/`KiB Swap:`, per-repo
-/// `Timestamp`/`Head commit of repository`, the `sh:`/`coreutils:`/`ld:`
-/// probes and the `info_pkgs` version table. Everything here is
-/// host-state a fixture cannot reproduce -- the contract normalizes the
-/// volatile values to `XXX` and checks the structure.
+/// The host-state header printed before `Repositories:`. Everything here is
+/// host state a fixture cannot reproduce; the contract normalizes volatile
+/// values to `XXX` and checks the structure.
+/// Portage: _emerge/actions.py, action_info
 pub(crate) fn print_info_header(
     config: &portage_profile::Config,
     repos: &[portage_repo::RepoConfig],
@@ -179,7 +99,7 @@ pub(crate) fn print_info_header(
         .map(|r| r.location.clone())
         .unwrap_or_default();
 
-    // --- `Portage <ver> (python …, <profile>, <gcc>, <libc>, <kernel>)` ---
+    // --- `Portage <ver> (...)` ---
     let portage_ver =
         highest_installed_pvr(root, "sys-apps", "portage").unwrap_or_else(|| "unavailable".into());
     let pyver = std::process::Command::new("python3")
@@ -209,8 +129,7 @@ pub(crate) fn print_info_header(
         "Portage {portage_ver} (python {pyver}, {profile_ver}, {gccver}, {libcver}, {kernel})"
     );
     if has_atoms {
-        // Real `if myfiles:` -- a centred `System Settings` title
-        // between the version line and the always-printed rule.
+        // With atoms, a centred `System Settings` title precedes the rule.
         let title = "System Settings";
         let pad = 65 / 2 + title.len() / 2;
         println!("{}", "=".repeat(65));
@@ -218,7 +137,7 @@ pub(crate) fn print_info_header(
     }
     println!("{}", "=".repeat(65));
 
-    // --- `System uname:` -- real `platform.platform(aliased=1)` ---
+    // --- `System uname:` ---
     let sys = tool_first_line("uname", &["-s"]).unwrap_or_else(|| "Linux".into());
     let rel = tool_first_line("uname", &["-r"]).unwrap_or_default();
     let mach = tool_first_line("uname", &["-m"]).unwrap_or_default();
@@ -239,7 +158,7 @@ pub(crate) fn print_info_header(
     let uname_str = format!("{sys}-{rel}-{mach}-{processor}-with-{libc_short}").replace(' ', "_");
     println!("System uname: {uname_str}");
 
-    // --- `KiB Mem:` / `KiB Swap:` -- real `get_vm_info` (`free`) ---
+    // --- `KiB Mem:` / `KiB Swap:` ---
     if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
         let kb = |key: &str| -> Option<i64> {
             meminfo.lines().find_map(|l| {
@@ -282,7 +201,6 @@ pub(crate) fn print_info_header(
                 .filter(|s| !s.is_empty())
         {
             println!("Head commit of repository {}: {head}", repo.name);
-            // Real bakes `retrieve_head`'s trailing newline into the line.
             println!();
         }
     }
@@ -343,12 +261,9 @@ pub(crate) fn print_info_header(
     }
 }
 
-/// Real `get_profile_version` (`_emerge/actions.py`): the active profile
-/// path relative to the main repo's `profiles/` dir. If
-/// `<config_root>/etc/portage/make.profile` points straight into the
-/// main repo, that relative path; else its first `parent` entry (a bare
-/// relative path or a `reponame:path`) resolved that way; else
+/// The active profile path relative to the main repo's `profiles/` dir; else
 /// `"!" + <symlink target>`; else `"unavailable"`.
+/// Portage: _emerge/actions.py, get_profile_version
 pub(crate) fn info_profile_version(config_root: &Path, main_repo_loc: &Path) -> String {
     let base = main_repo_loc.join("profiles");
     let base = std::fs::canonicalize(&base).unwrap_or(base);
@@ -370,9 +285,7 @@ pub(crate) fn info_profile_version(config_root: &Path, main_repo_loc: &Path) -> 
                     continue;
                 }
                 if let Some((_repo, path)) = line.split_once(':') {
-                    // `reponame:path` -> `<main_repo>/profiles/<path>`
-                    // (portuale's `info_pkgs` list only ever needs the
-                    // main repo here).
+                    // `reponame:path` resolves under the main repo's `profiles/`.
                     if let Some(v) = rel(&base.join(path)) {
                         return v;
                     }
@@ -414,16 +327,13 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
         debug,
         color,
     } = args;
-    // The local binary index, built once for the whole `--info` run and
-    // shared by the existence probe below and the binary half further
-    // down (backlog #123: threaded as an `Arc`, never re-derived from
-    // `&Config` per atom). Built lazily: without `--usepkg` neither
-    // consumer runs.
+    // The local binary index, built once for the whole `--info` run and shared
+    // by the existence probe and the binary half below. Built lazily: without
+    // `--usepkg` neither consumer runs.
     let local_binpkg = usepkg.then(|| portage_repo::build_local_binpkg_index(config));
-    // Real `action_info`'s `myfiles` loop: a target with no ebuild
-    // anywhere **and** nothing installed is fatal (exit 1) and printed
-    // *before* the config block. `list_candidates` (all versions, masked
-    // included) + the vdb is portuale's `cp_exists` proxy.
+    // A target with no ebuild anywhere and nothing installed is fatal (exit 1),
+    // printed before the config block.
+    // Portage: _emerge/actions.py, action_info
     for atom_str in atom_args {
         let Some(atom) = parse_atom(atom_str) else {
             continue;
@@ -432,9 +342,9 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
             .map(|c| !c.is_empty())
             .unwrap_or(false)
             || !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty()
-            // Real `action_info` also checks `bindb.match(x.cp)` when
-            // `--usepkg` is on (`actions.py:1877-1885`): a package only
-            // ever available as a binary isn't a "no ebuilds" error.
+            // Under `--usepkg`, a package only ever available as a binary is
+            // not a "no ebuilds" error either.
+            // Portage: _emerge/actions.py, action_info
             || local_binpkg.as_ref().is_some_and(|idx| {
                 portage_repo::has_local_binary_candidate(idx, atom_str)
             });
@@ -455,8 +365,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
         }
     }
 
-    // Real `action_info`'s host-state header (`actions.py:1946-2165`),
-    // printed before `Repositories:`.
+    // The host-state header, printed before `Repositories:`.
     print_info_header(config, repos, root, config_root, !atom_args.is_empty());
 
     // Repositories.
@@ -466,9 +375,9 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
         .map(|r| (r.location.as_path(), r.name.as_str()))
         .collect();
     for repo in repos {
-        // Real `RepoConfig.info_string()` field order (the subset
-        // portuale models): name, location, sync-type, sync-uri, masters,
-        // priority, aliases, volatile, then any set module-specific opts.
+        // Field order: name, location, sync-type, sync-uri, masters,
+        // priority, aliases, volatile, then module-specific opts.
+        // Portage: repositories.py, RepoConfig.info_string
         println!("{}", repo.name);
         println!("    location: {}", repo.location.display());
         if let Some(t) = &repo.sync_type {
@@ -508,8 +417,8 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
             if br.name.is_empty() {
                 continue;
             }
-            // Real `BinRepoConfig.info_string()` field order: name,
-            // location (if set), priority, sync-uri, verify-signature.
+            // Field order: name, location (if set), priority, sync-uri,
+            // verify-signature. Portage: repositories.py, BinRepoConfig.info_string
             println!("{}", br.name);
             if let Some(loc) = &br.location {
                 println!("    location: {loc}");
@@ -524,8 +433,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
         }
     }
 
-    // Installed sets (real `root_config.sets["selected"].getNonAtoms()`
-    // -> the `@name` entries of `world_sets`).
+    // Installed sets: the `@name` entries of `world_sets`.
     let mut sets: Vec<String> = read_world_sets(root)
         .unwrap_or_default()
         .into_iter()
@@ -536,15 +444,11 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
         println!("Installed sets: {}", sets.join(", "));
     }
 
-    // The variable dump: real `action_info`'s hardcoded `myvars` list
-    // plus `<PORTDIR>/profiles/info_vars` (real `actions.py:2221`), minus
-    // the deprecated/skipped ones (`PORTAGE_REPOSITORIES`, `PORTDIR`,
-    // `PORTDIR_OVERLAY`, `SYNC`), de-duplicated and sorted. Each is
-    // `VAR="value"`, or listed on the trailing `Unset:` line when the
-    // config carries no value. The `const.INCREMENTALS` members
-    // (`CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`/`ENV_UNSET`/`FEATURES`, plus
-    // `ACCEPT_KEYWORDS`) are shown as real stores them: `-*`/`-tok`
-    // resolved, then `" ".join(sorted(...))`.
+    // The variable dump: the hardcoded `myvars` list plus the main repo's
+    // `profiles/info_vars`, minus deprecated/skipped ones, de-duplicated and
+    // sorted. Each prints as `VAR="value"`, or joins the trailing `Unset:` line.
+    // The incremental members print resolved, then space-joined and sorted.
+    // Portage: _emerge/actions.py, action_info
     let use_expand: Vec<String> = {
         let mut v: Vec<String> = config.use_expand.iter().cloned().collect();
         v.sort();
@@ -606,10 +510,8 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                 .map(|v| v.join(" "))
                 .or_else(|| config.other_vars.get(k).cloned()),
             "USE" => {
-                // Real `config.regenerate()`'s global USE = `use_flags`
-                // with `useforce` folded in and `usemask` removed, minus
-                // the `USE_EXPAND`-prefixed pseudo-flags (shown as their
-                // own `VAR="…"` tokens).
+                // Global USE minus the `USE_EXPAND`-prefixed pseudo-flags
+                // (shown as their own `VAR="…"` tokens).
                 let flags: Vec<&str> = resolved_use
                     .iter()
                     .map(String::as_str)
@@ -621,17 +523,8 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                     .collect();
                 Some(flags.join(" "))
             }
-            // Real `settings.get(k)` walks `lookuplist` env-first
-            // (`actions.py:2240`; `config.py:3178-3182`, `USE_ORDER`
-            // `"env:pkg:conf:…"` at `:1031-1035`), so the calling
-            // environment wins over `make.conf`/profile/`make.globals`
-            // -- including for keys `resolve_config` never env-folds
-            // itself (backlog #219: `PORTAGE_BZIP2_COMMAND`,
-            // `PORTAGE_BUNZIP2_COMMAND`). A curated `info_vars` entry
-            // that is only ever an environment variable (`SHELL`,
-            // `LC_ALL`, …) still shows via the same chain. (Backlog
-            // #180's `env_over_config_scalar`, not a second reader,
-            // and no raw `std::env` read.)
+            // Every other key reads through the env-first chain (see
+            // `info_scalar_value`), so the calling environment wins.
             _ => info_scalar_value(config, k),
         };
         match value {
@@ -652,30 +545,22 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
     if !unset.is_empty() {
         println!("Unset:  {}", unset.join(", "));
     }
-    // Real ends the buffer with two `append("")` -> `"\n".join` yields a
-    // single trailing blank line (`…\n\n`); the `Package Settings` block
-    // below, when present, starts with its own leading `\n`.
+    // A single trailing blank line; the `Package Settings` block below, when
+    // present, starts with its own leading `\n`.
     println!();
 
-    // Real `action_info`'s `Package Settings` section (real `mypkgs`):
-    // per atom, every installed vdb match short-circuits the ebuild
-    // lookup (`actions.py:1869-1875`); otherwise the best visible ebuild
-    // candidate, but only if its ebuild defines `pkg_info()`. The header
-    // (`header_width = 65`, `actions.py:1956`) is printed once, only if
-    // at least one atom yielded something.
+    // The `Package Settings` section: per atom, every installed vdb match wins;
+    // otherwise the best visible ebuild candidate defining `pkg_info()`. The
+    // header prints once, only if at least one atom yielded something.
+    // Portage: _emerge/actions.py, action_info
     enum InfoPkg {
         Installed(portage_repo::InstalledInfo),
         Ebuild(portage_repo::InfoCandidate),
-        // Real `(bindb, "binary")` half of the search loop, reached only
-        // under `--usepkg`/`--usepkgonly` when nothing is installed and
-        // no visible ebuild defines `pkg_info()` -- see
-        // `resolve_info_binary_candidate`.
+        // The `(bindb, "binary")` half: only under `--usepkg`/`--usepkgonly`
+        // when nothing is installed and no visible ebuild defines `pkg_info()`.
         Binary(portage_repo::InfoBinaryCandidate),
     }
-    // Real `pkg_use_display`'s own `UseFlagDisplay.__str__`: each flag
-    // token is coloured (the same `colorize_use_token` scheme the
-    // merge-list `USE="…"` column already uses), independent of
-    // `--quiet`/`--verbose` -- `--info`'s block always shows every flag.
+    // Each flag token is coloured; `--info` always shows every flag.
     let use_line = |disp: &[(String, String)]| -> String {
         disp.iter()
             .map(|(name, body)| {
@@ -707,8 +592,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
             pkgs.push(InfoPkg::Ebuild(c));
             continue;
         }
-        // Real `(bindb, "binary")`: only when `--usepkg` and the ebuild
-        // half yielded nothing (`actions.py:1876`).
+        // Only when `--usepkg` and the ebuild half yielded nothing.
         if let Some(idx) = local_binpkg.as_ref()
             && let Some(b) = portage_repo::resolve_info_binary_candidate(config, a, idx)
                 .ok()
@@ -729,14 +613,12 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(config));
         for pkg in &pkgs {
-            // Real `action_info`: header + `pkg_use_display` line (+ the
-            // installed-only `mydesiredvars` diff), then two blank lines,
-            // then `>>> Attempting to run pkg_info() for '<cpv>'` and the
-            // phase itself (`actions.py:2314-2410`). `run_phase` is real's
-            // `if metadata["DEFINED_PHASES"]: if "info" not in ...:
-            // continue` -- always true for the ebuild/binary halves (they
-            // were only selected *because* they define it), gated on the
-            // vdb's own `DEFINED_PHASES` for an installed match.
+            // Header + USE line (+ the installed-only var diff), then two blank
+            // lines, then `>>> Attempting to run pkg_info() ...` and the phase.
+            // The ebuild/binary halves always run (selected for defining it);
+            // an installed match runs only when its vdb `DEFINED_PHASES` names
+            // `info` -- or is entirely empty (an old/hand-written entry quirk).
+            // Portage: _emerge/actions.py, action_info
             let (cpv, run_phase): (&str, bool) = match pkg {
                 InfoPkg::Ebuild(c) => {
                     println!(
@@ -774,11 +656,6 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
             if !run_phase {
                 continue;
             }
-            // Real `writemsg_stdout(f">>> Attempting to run pkg_info() for
-            // '{pkg.cpv}'\n")` then `portage.doebuild(ebuildpath, "info",
-            // ...)`. The Python contract reference stops here (no phase
-            // machinery, like `--config`/`--regen`); the phase's own
-            // output is covered Rust-only in `test_portuale.py`.
             println!(">>> Attempting to run pkg_info() for '{cpv}'");
             let _ = std::io::Write::flush(&mut std::io::stdout());
             let phase = match pkg {
@@ -810,13 +687,8 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                     })
                 }
                 InfoPkg::Binary(b) => {
-                    // Real `bindb.bintree.getname(cpv)` + extract the
-                    // `<pf>.ebuild` member to a tmpdir, `doebuild(...,
-                    // "info", tree="bintree")` -- portuale reuses the full
-                    // binpkg extractor, then lays the extracted ebuild out
-                    // as `<cat>/<pn>/<pf>.ebuild` so the phase driver
-                    // derives `CATEGORY`/`PN` from the path (real
-                    // `doebuild` gets them from the binpkg metadata).
+                    // The extracted ebuild is laid out as `<cat>/<pn>/<pf>.ebuild`
+                    // so the phase driver derives `CATEGORY`/`PN` from the path.
                     let dest = portage_tmpdir.join("portage").join("_info_binpkg");
                     let _ = std::fs::remove_dir_all(&dest);
                     let image = dest.join("image");

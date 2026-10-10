@@ -1,209 +1,21 @@
-// `emerge --pretend <category/package>`: the v1 slice (see
-// crates/portage-repo/src/lib.rs for the full scope writeup --
-// candidates come from every repos.conf repo, main + overlays). USE/
-// ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use come from
-// the real profile chain + make.conf + package.* (see portage-profile's
-// doc comment for what that does and doesn't implement), not a
-// hardcoded stand-in. Recursively resolves DEPEND+RDEPEND (see
-// resolve_pretend_graph's doc comment for the recursion's own scope
-// cuts: DEPEND+RDEPEND only, || resolves every alternative, cycle/
-// dup-safe, multiple slots of the same package correctly coexist as
-// separate entries) and reports (not enforces) both blocker conflicts
-// against installed packages/the rest of the graph, and slot conflicts
-// (two atoms needing the identical slot at incompatible versions) --
-// see print_blockers/the slot_conflicts loop below and
-// resolve_pretend_graph's doc comment. Output format is a documented,
-// simplified subset of real emerge's --pretend output, not
-// byte-identical to it.
+//! `emerge --pretend`: resolve against every repos.conf repo and display, never
+//! build. USE/ACCEPT_KEYWORDS/mask data come from the profile chain + make.conf
+//! (see portage-profile), not a stand-in. DEPEND+RDEPEND recurse (diamond-safe;
+//! multiple slots coexist); blockers and slot conflicts are reported, not enforced.
+//! Output is a simplified subset of Portage's `--pretend` output, not byte-identical.
+//! Every Portage emerge option/action is recognized by name; unimplemented ones fail
+//! with an accurate message, unknown ones with "unrecognized option".
+//!
+//! Flag notes below; full Portage groundings live in the code-notes file.
 //
-// --update/-u is real and implemented too (see resolve_pretend's own doc
-// comment, portage-repo, for the real `avoid_update` behavior it ports):
-// without it, an already-installed version that still satisfies the
-// requested atom is kept as-is rather than upgraded to a newer visible
-// one -- this is real emerge's own default, not something portuale
-// invented, and correcting to it was this flag's whole point.
-//
-// --deep/-D is real and implemented too (see portage-repo's `Deep` and
-// `resolve_pretend_graph`'s own doc comment for the real depth-cutoff
-// semantics it ports): without it, an already-installed package's own
-// further dependencies are never walked, no matter how deep the graph
-// goes -- only New/Upgrade/Reinstall packages (things that actually need
-// work) recurse unconditionally either way. Like `--verbose`/`-v`, it's
-// real `argument_options` with an *optional* value, not a plain boolean:
-// a standalone `--deep`/`-D` peeks at the next token, consuming it only
-// if it parses as a non-negative integer (matching real
-// `insert_optional_args`'s own `valid_integers` check) -- anything else,
-// including nothing at all, leaves depth unlimited without consuming.
-// `--deep=N` (argparse's own native `=`-form) is a separate mechanism: a
-// non-numeric or negative value there is a real, immediate parse error
-// (exit 2), matching real `parser.error("Invalid --deep parameter")`. A
-// *bundled* -D (e.g. `-pvD`) never consumes anything, always defaulting
-// to unlimited depth -- the same "no ambiguity with another bundled
-// flag character" reasoning already established for a bundled -v. `N==0`
-// (either form) is indistinguishable from `--deep` never being given at
-// all, matching real `create_depgraph_params.py`'s own `!= 0` check.
-//
-// --exclude/-X is real and implemented too (see portage-repo's
-// `resolve_pretend`'s own doc comment for the real `excluded_pkgs`/
-// `WildcardPackageSet` behavior it ports, and the documented scope cut
-// relative to real depgraph.py's own ~18 call sites): an installed
-// package matching an exclude atom is left exactly as-is, regardless of
-// `--update`/`--newuse`/`--changed-use`, and a not-yet-installed package
-// matching one is never offered as a New/Upgrade candidate either. Real
-// `main.py` declares it `"action": "append"` -- repeatable, each
-// occurrence's own value itself a *space-separated* atom list (real
-// help text: "A space separated list of package names or slot atoms"),
-// so both accumulate here too: `--exclude foo --exclude "bar baz"`
-// excludes all three. Unlike `--deep`/`-D`'s own optional value, this
-// one is required: a missing value (nothing left in `args`) is a real,
-// immediate usage error (exit 2), not "fall back to a default." A
-// *bundled* -X (e.g. `-pX`) is deliberately NOT supported at all --
-// there's no sensible default the way a bundled -v/-D has, so it gets
-// its own specific "requires an argument, can't be bundled" message
-// instead of being silently misparsed or falling through to a
-// misleading generic error.
-//
-// --deselect/-W is real and implemented too, but unlike every flag
-// above, it isn't a modifier on ordinary --pretend resolution at all --
-// real `main.py` turns a bare `--deselect`/`-W` into its own standalone
-// ACTION (`if myaction is None and myoptions.deselect is True: myaction
-// = "deselect"`, the same shape as `--depclean`/`--sync`), dispatched
-// here to `run_deselect` before any of the ordinary target-atom/resolve
-// machinery even runs. It previews under `--pretend`, and without it
-// really rewrites the `world` / `world_sets` files (same "never merges"
-// invariant, but the world files themselves are user config portuale
-// does edit -- like `-C`/`--depclean`/`--prune`). It reports which
-// world-file atoms each given target would cause real `action_deselect`
-// (lib/_emerge/actions.py) to discard: every target is expanded against
-// the vdb (a bare package name -- no `/` -- via real portage's own
-// "null category" mechanism, scanning the world file for a same-named
-// atom to borrow its category from, then `vardb.match`-equivalent
-// lookup either way -- see `portage_repo::installed_candidates`), and
-// each expanded, actually-installed `category/package:slot` is matched
-// against every world-file atom. A documented scope cut versus real
-// `Atom.intersects()`: only a narrower category/package(+slot) equality
-// check is done, not the full version-range/USE-dep algebra -- sufficient
-// for the dominant plain-atom case. A `@set`-prefixed world entry is
-// never matched, consistent with the pre-existing `read_world_atoms` cut
-// for `@world` itself (not a new one). Real `--deselect` is
-// `true_y_or_n` choices (`_emerge/main.py:446-449`, `in true_y` at
-// `:869-870`), the same optional-value shape `--verbose`/`-v` already
-// has: a bare `--deselect`/`-W` or `--deselect y`/`--deselect True`
-// enables it, `--deselect n` explicitly disables it (falling through
-// to ordinary resolution instead); a bundled `-W` (e.g. `-pW`) never
-// consumes a value, always enabling, the same "no ambiguity with another
-// bundled flag character" reasoning as bundled `-v`/`-D`. `--ask`
-// interactive confirmation and `--json` output are both out of scope for
-// deselect mode -- the former needs no special-casing (it already falls
-// through to the CLI's existing "not yet implemented" rejection), the
-// latter simply isn't offered.
-//
-// --json is NOT a real emerge option at all -- real portage has no
-// structured-output mode for --pretend, so unlike every other flag in
-// this file, there's no real behavior to port. Built as a portuale-specific
-// convenience, requested directly by name (not routed through
-// emerge_options.rs's real-CLI-surface tables the way every other
-// unimplemented-but-real flag is, since it isn't one). Dumps the whole
-// resolved graph as one line of JSON, `{"entries": [...],
-// "slot_conflicts": [...]}`, instead of the plain-text lines below --
-// see `print_json`'s own doc comment for the exact shape, including two
-// fields no plain-text line carries at all: `requested` and
-// `required_by` (see `GraphEntry::required_by`'s own doc comment,
-// portage-repo, for how the latter is tracked through the BFS). Hand-
-// rolled JSON (`json_escape`/`json_string`), not a crate dependency --
-// see `json_escape`'s own doc comment for why. The contract suite and
-// `tests/output_invariants.py` read this output; the byte shape is pinned
-// by the harvested corpus (`tests/corpus/`).
-//
-// A top-level atom may carry an operator/version/slot (e.g.
-// `>=cat/pkg-1.2`, `cat/pkg:0`) -- resolve_pretend's own atom-vs-candidate
-// matching (see portage-repo/src/lib.rs) already handles this correctly
-// with zero extra code, since it's the exact same match_from_list path
-// every dependency atom extracted from DEPEND/RDEPEND already uses. Only
-// a blocker (`!`/`!!`) top-level atom is rejected -- real portage doesn't
-// accept a bare blocker as an emerge target either, and prior to this
-// slice the CLI's own bare-atom check didn't test for it at all, so
-// `emerge --pretend '!!cat/pkg'` used to silently no-op (accepted by the
-// CLI, then dropped by resolve_pretend_graph's own blocker skip) instead
-// of being rejected -- fixed as part of tightening this same check.
-// Dependency atoms extracted from DEPEND/RDEPEND are never restricted
-// this way -- real dependency strings need the full atom grammar.
-//
-// Multiple top-level atoms (`emerge --pretend foo bar`) ARE supported --
-// they seed the same BFS/dedup/slot-conflict machinery together (see
-// resolve_pretend_graph's doc comment), so a dependency shared between
-// two requested atoms dedupes like a diamond dependency, and a slot
-// conflict between two *targets* is detected too. A top-level atom with
-// no visible candidate aborts the whole run immediately (matching real
-// portage's own depgraph.py "there are no ebuilds to satisfy" behavior),
-// in argv order -- confirmed with the user before implementing, over the
-// alternative of reporting it and still resolving the rest.
-//
-// CLI surface: every real emerge option/action from lib/_emerge/main.py
-// (see emerge_options.rs) is recognized by name -- using one that isn't
-// --pretend/-p produces a specific "real emerge option/action, not
-// implemented in portuale" message, distinct from a genuinely unknown
-// flag ("unrecognized option"). This lets real-world invocations that
-// happen to include options portuale doesn't implement (e.g. from
-// EMERGE_DEFAULT_OPTS or a script) fail with an accurate, actionable
-// message instead of a generic one. See emerge_options.rs's doc comment
-// for the (deliberately unfaithful) value-consumption scope cut for
-// every option other than --verbose/-v.
-//
-// --verbose/-v is NOT a plain boolean in real emerge -- it's registered
-// in main.py's `argument_options` with `choices=("True", "y", "n")`, and
-// `insert_optional_args` (main.py) inserts "True" when it's given with
-// no explicit value. So a standalone `--verbose`/`-v` peeks at the next
-// argv token: exactly "y" or "n" is consumed as an explicit value,
-// anything else (including nothing at all) leaves verbose enabled
-// without consuming it -- matching real emerge exactly (verified by
-// tracing insert_optional_args by hand). `--verbose=y`/`--verbose=n`
-// (argparse's own native `=`-form, a separate mechanism) are handled the
-// same way. A *bundled* -v (e.g. `-pv`) never consumes anything at all,
-// always defaulting to enabled -- real emerge's own
-// `short_arg_opts_n`/"Don't make things like '-kn' expand to '-k n'"
-// comment explains why: allowing an inline or next-token value for a
-// bundled single-letter flag would be ambiguous with "another bundled
-// flag character". See the `--verbose`/`-v` handling and the
-// bundle-handling comment, both in `run` below.
-//
-// Short-flag bundling (`-pv`, `-pd`, ...): a single-dash token longer
-// than one character decomposes into its individual short options, one
-// per character, left to right -- unlike real emerge's own
-// insert_optional_args (which scans for a value-taking short option
-// *anywhere* in the bundle and extracts it first via an internal
-// recycling stack, regardless of position), portuale processes
-// strictly left to right and reports on the first character that's
-// either unimplemented-but-recognized or genuinely unrecognized, exiting
-// immediately -- exactly the same two outcomes (and same messages) a
-// standalone occurrence of that character would produce. This is an
-// intentional simplification of the *processing order*, not the
-// *outcome*: since portuale exits at the first out-of-scope input
-// either way, which internal algorithm finds it first is unobservable
-// except in the rare case of two DIFFERENT unimplemented flags bundled
-// together, where portuale always reports the leftmost one.
-//
-// --help/-h is real and implemented, checked unconditionally before
-// anything else in `args` -- matching real emerge's own behavior
-// (`main.py`'s `parse_opts` maps `-h`/`--help` to the "help" action,
-// which `main()` special-cases: `if myaction == "help": emerge_help();
-// return os.EX_OK` -- checked once, after the *whole* line has already
-// parsed successfully, so it wins regardless of where in argv it
-// appears or what other real-but-unimplemented flags accompany it).
-// Portuale's own scan is a documented simplification of that: it
-// checks every token (including each character of a short-flag bundle)
-// for a literal `--help`/`-h`/`h` match unconditionally, rather than
-// first confirming the rest of the line would even parse -- so
-// `emerge --help --this-is-not-a-real-flag-at-all` prints help here,
-// where real emerge would report a parse error instead, since
-// `--this-is-not-a-real-flag-at-all` would never successfully reach
-// argparse's post-parse action dispatch at all. The help text itself is
-// NOT a port of real emerge's own `_emerge/help.py` (157 lines of
-// colorized usage syntax for its full ~130-flag surface, most of which
-// portuale doesn't implement -- reproducing it here would be actively
-// misleading) -- it's a short, honest, portuale-specific summary of what
-// portuale actually supports, ending with a pointer to
-// README.md and LLM/agent-context.md for the rest.
+//! `--update` keeps an installed version that still satisfies the atom;
+//! `--deep` (`-D`, optional value) cuts recursion into installed packages'
+//! dependencies; `--exclude` (`-X`, repeatable, space-separated lists) pins
+//! matching packages as-is. `--deselect` (`-W`, optional value) is its own
+//! standalone action, previewed under `--pretend`.
+//! `--json` is portuale-only (Portage has no such mode): the whole graph as one
+//! JSON line. `--verbose` (`-v`, optional value) and short-flag bundling (`-pv`)
+//! follow Portage's value-taking rules; `--help` wins wherever it appears.
 
 use crate::color::{self, Colorizer};
 
@@ -304,19 +116,13 @@ use std::path::Path;
 
 use std::process::ExitCode;
 
-/// Reports and returns the exit code for a single option/action token
-/// ("-x" or "--long", never a positional atom) that isn't --pretend/-p,
-/// --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, or
-/// --onlydeps/-o -- shared between a standalone token and one character
-/// of a decomposed short-flag bundle, so both produce identical
-/// messages for the same underlying flag.
+/// Reports and returns the exit code for one option/action token that is not
+/// otherwise handled -- shared by standalone tokens and short-flag bundle
+/// characters, so both produce identical messages.
 fn report_option(token: &str) -> ExitCode {
     if let Some(found) = emerge_options::lookup(token) {
-        // Reports and exits immediately, matching every other
-        // out-of-scope-input case in portuale -- so there's no need to
-        // correctly skip over this option's own value token (see
-        // emerge_options.rs's doc comment): nothing after this point is
-        // ever looked at.
+        // Reports and exits immediately, so this option's own value token needs
+        // no skipping: nothing after this point is ever looked at.
         let kind = if found.category == emerge_options::Category::Action {
             "action"
         } else {
@@ -334,14 +140,9 @@ fn report_option(token: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
-/// The `--backtrack` budget when the flag is absent: real Portage's own
-/// default (backlog #263). Grounded in real 3.0.82.2 (`/usr/sbin/emerge`):
-/// `_emerge/depgraph.py:12188` (`_backtrack_depgraph`) reads
-/// `max_retries = 0 if nodeps else myopts.get("--backtrack", 20)` --
-/// `--backtrack` itself is `action: store` with no default
-/// (`lib/_emerge/main.py:385-389`), so the 20 lives only in that reader
-/// (`0` only under `--nodeps`). Single source for the `run()` flag-absent
-/// initializer below and the `--help` line's advertised default.
+/// The `--backtrack` budget when the flag is absent: Portage's own default
+/// (`0` only under `--nodeps`). Single source for the initializer and `--help`.
+// Portage: _emerge/depgraph.py, _backtrack_depgraph
 const DEFAULT_BACKTRACK_MAX: u32 = 20;
 
 pub fn run(args: &[String]) -> ExitCode {
@@ -350,42 +151,20 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // `--ask-enter-invalid` is process-wide state for the prompt
-    // helpers; reset per invocation so an in-process caller can't leak it
-    // (the CLI parse below sets it again from argv or the defaults).
+    // Per-invocation process-wide state resets, so an in-process caller cannot
+    // leak them across runs.
     ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
-
-    // The live binhost-index overrides are process-wide state too
-    // (review M4): a second in-process run must resolve from its own
-    // refresh, not inherit the first run's in-memory indexes.
     portage_repo::clear_remote_binary_index_overrides();
 
-    // Config resolution comes before argv parsing, matching real
-    // `emerge`'s own order: its first pass only finds `--config-root`,
-    // then it loads the config and re-parses with
-    // `EMERGE_DEFAULT_OPTS` prepended (`_emerge/main.py:1221-1232`,
-    // `:1352-1360`). Portuale has no `--config-root` CLI
-    // (`PORTAGE_CONFIGROOT` is the only config-root source), so the two
-    // passes collapse into this one: resolve, then prepend the
-    // variable's tokens to argv. `--help` above still short-circuits
-    // before any config load, exactly like real's early
-    // `myaction == "help"` return (`main.py:1254`).
-
-    // resolve_config needs the main repo's own location for
-    // package.mask/.unmask's repo-level source (see its doc comment) --
-    // found via the same find_repos repos.conf parsing
-    // resolve_pretend_graph uses internally a few lines down; called
-    // again here since portage-profile can't depend back on portage-repo
-    // (portage-repo already depends on portage-profile). Resolved before
-    // @world/@system expansion below: @system's own atom list lives in
-    // `config` (see portage-profile's `system_packages`), so the config
-    // must already exist by the time a "@system" token is seen.
+    // Config resolution comes before argv parsing, matching Portage's own order
+    // (find `--config-root`, load the config, re-parse with `EMERGE_DEFAULT_OPTS`
+    // prepended). Portuale has no `--config-root` CLI, so the passes collapse
+    // into one. `--help` still short-circuits before any config load.
+    // Portage: _emerge/main.py
     let root = root_from_env();
     let config_root = config_root_from_env();
 
-    // The repos + resolved config (see `load_repos_and_config`): the
-    // resolve already runs under `ConfigRootOverride` for the placed
-    // root on the remote path.
+    // The repos + resolved config for the resolve below (and `@system` expansion).
     let (repos, mut config) = match load_repos_and_config(&config_root, &root) {
         Ok(loaded) => loaded,
         Err(message) => {
@@ -394,8 +173,8 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    // Real `main.py:1352-1360`: `EMERGE_DEFAULT_OPTS` is prepended to
-    // argv before the real parse, so argv wins for last-wins options.
+    // `EMERGE_DEFAULT_OPTS` prepends to argv so argv wins for last-wins options.
+    // Portage: _emerge/main.py
     let effective_args = args_with_emerge_defaults(&config, args);
     let args: &[String] = &effective_args;
 
@@ -410,14 +189,12 @@ pub fn run(args: &[String]) -> ExitCode {
         return code;
     }
 
-    // Real `actions.py::adjust_configs` colour gate -- resolved once here
-    // so every action path (the standalone cleanup actions below and the
-    // ordinary resolve-graph path) shares one `Colorizer`.
+    // Colour gate, resolved once so every action path shares one `Colorizer`.
+    // Portage: _emerge/actions.py, adjust_configs
     let color = Colorizer::new(color::resolve_havecolor(opts.color_opt));
 
-    // Real `_emerge/actions.py::apply_priorities` (called from
-    // `run_action`, before any action): renice / ionice this process so
-    // every build subprocess it spawns inherits the policy.
+    // Renice / ionice this process so every build subprocess inherits the policy.
+    // Portage: _emerge/actions.py, apply_priorities
     apply_portage_scheduling_policy();
 
     if let Some(code) = dispatch_standalone_actions(DispatchStandaloneActionsArgs {
@@ -472,15 +249,11 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
     let entries = &result.entries;
-    // Backlog #19 Slice 4: with the gate on, an aborted resolve renders
-    // the outcome's partial list *instead of* the full entries — real
-    // never calls `display()` on the abort path (`actions.py:460-462`),
-    // so masked/unsat shapes (empty partial) show no list at all and the
-    // cycle shape shows the stuck remainder only (`docs/history/abort-path-spec.md`
-    // §4). Everything else (resolver trace, abi-rebuild maps, the
-    // complete-graph decisions above, the unsolvable-blocker scan below)
-    // keeps the full graph. With the gate off
-    // (`PORTUALE_ABORT_PATH=0`) the legacy full list renders.
+    // An aborted resolve renders the outcome's partial list instead of the full
+    // entries (masked/unsat shapes show no list; the cycle shape shows the stuck
+    // remainder). Everything else keeps the full graph; with the gate off the
+    // legacy full list renders.
+    // Portage: _emerge/actions.py, action_build
     let gated_abort_partial: Option<&Vec<portage_repo::GraphEntry>> =
         if portage_repo::abort_path_enabled() {
             match &result.outcome {
@@ -492,30 +265,15 @@ pub fn run(args: &[String]) -> ExitCode {
         };
     let display_entries: &[portage_repo::GraphEntry] =
         gated_abort_partial.map_or(entries.as_slice(), Vec::as_slice);
-    // Real `Display.__call__` runs (and prints `Total:`) only when the
-    // merge list is displayed at all: the masked/unsat abort shows
-    // neither list nor counters, while the cycle abort counts over the
-    // partial rows only.
+    // `Total:` prints only when the merge list is displayed at all.
     let display_list_suppressed = gated_abort_partial.is_some() && display_entries.is_empty();
 
-    // `--autounmask-only` (real `actions.py:456`): the normal merge
-    // list is skipped and the run exits 0 right after the
-    // `display_problems()` equivalent (slot-conflict notice + autounmask
-    // blocks). But real `_display_autounmask` re-shows the list itself
-    // via `_show_merge_list` (`depgraph.py:10625`, `:10488`) whenever it
-    // has changes to report -- so under `--pretend --autounmask
-    // --autounmask-only` the list IS printed (backlog #271; grounded on
-    // the fresh host 3.0.82.2 staged-fixture probe,
-    // `LLM/evidence/2026-09-30-271/`). Also forces the dry-run path:
-    // nothing is ever built.
-    //
-    // Backlog #185: real `_emerge/actions.py:464-469` (`mergelist_shown`
-    // branch) shows the merge list before a non-`--pretend` merge only
-    // when `--ask`, `--tree` or `--verbose` is given, and never when
-    // `--quiet` is given without `--ask`. A `--pretend` run always
-    // shows it (the long-standing, corpus-pinned behavior above). An
-    // aborted resolve shows no list on a real non-`--pretend` run
-    // either (real `actions.py:460-462` fails before any `display()`).
+    // `--autounmask-only` skips the normal merge list and exits 0 after the
+    // problem blocks -- but re-shows the list when it has changes to report
+    // (see `autounmask_only_reshows_merge_list`). Also forces the dry-run path.
+    // A non-`--pretend` merge shows the list only with `--ask`/`--tree`/`--verbose`
+    // (see `merge_list_shown`); an aborted non-`--pretend` resolve shows no list.
+    // Portage: _emerge/actions.py, action_build; depgraph.py, _display_autounmask
     let has_autounmask_changes = !result.autounmask_keyword_changes.is_empty()
         || !result.autounmask_mask_changes.is_empty()
         || !result.autounmask_use_changes.is_empty()
@@ -538,12 +296,8 @@ pub fn run(args: &[String]) -> ExitCode {
 
     show_pprovided_notice(&result, &color);
 
-    // Which (category, package) pairs were directly requested (as opposed
-    // to reached only as a dependency) -- a top-level atom that's
-    // AlreadyInstalled gets its own "nothing to do" line, unlike a
-    // dependency-level one, which stays silent below. A top-level atom's
-    // own NoVisibleCandidate never reaches here at all: resolve_pretend_graph
-    // already aborted the whole call for that case (see its doc comment).
+    // Directly-requested (category, package) pairs: a top-level AlreadyInstalled
+    // gets its own "nothing to do" line, unlike a dependency-level one.
     let top_level_pkgs: HashSet<(String, String)> = expanded_atoms
         .iter()
         .filter_map(|a| parse_atom(a))
@@ -562,37 +316,21 @@ pub fn run(args: &[String]) -> ExitCode {
         return code;
     }
 
-    // Real portage resolves COLUMNWIDTH (and warns on an unparsable
-    // value) as part of general display setup, unconditionally --
-    // never gated on --columns itself actually being given. Mirrored
-    // here the same way, even though the value only ever affects
-    // anything below when `columns` is true.
+    // COLUMNWIDTH resolves unconditionally, even without `--columns`.
     let columnwidth = columnwidth_from_env();
-    // `Display.pkgprint`'s `@system`/world inputs (`color` already
-    // resolved above): `@system` = the profile's own package set
-    // (`config.system_packages`); world = `var/lib/portage/world` (a
-    // missing file is a valid empty world, same as everywhere else).
+    // `Display.pkgprint`'s `@system`/world inputs: `@system` is the profile set;
+    // world is `var/lib/portage/world` (missing file is a valid empty world).
     let world_atoms: Vec<String> = read_world_atoms(&root)
         .unwrap_or_default()
         .iter()
         .map(|a| portage_repo::apply_updates_to_atom(a))
         .collect();
     let system_atoms = &config.system_packages;
-    // Real `PkgAttrDisplay.force_reinstall` (the red `r` bracket column):
-    // every `(cat, pkg)` on either side of a slot-operator ABI-rebuild
-    // edge -- the triggering provider upgrade AND every forced consumer
-    // rebuild in the cascade. Real yields the
-    // `@__auto_slot_operator_replace_installed__` set with
-    // `force_reinstall=True` and tags the provider via `_forced_rebuilds`.
-    // Backlog #214: real only tags a merge that is not new
-    // (`resolver/output.py:812-816`, `not pkg_info.attr_display.new`) --
-    // a provider with nothing installed anywhere (a pure `New` install
-    // that still caused a rebuild, like `abiprov-2`) stays `N`.
-    // #255: real's `new` comes from `_get_installed_best`
-    // (`output.py:708-768`), which is slot-keyed: a provider installed
-    // only in *another* slot is `new_slot` and therefore still `new`
-    // (`NS`, no `r`). So the gate is "nothing installed in the
-    // provider's own slot".
+    // The red `r` bracket column: every `(cat, pkg)` on either side of an
+    // ABI-rebuild edge. A provider with nothing installed in its own slot stays
+    // `N` (a pure install that still caused a rebuild); other-slot installs do
+    // not count (`NS`, no `r`).
+    // Portage: resolver/output.py, PkgAttrDisplay
     let force_reinstall_cps: HashSet<(String, String)> = result
         .abi_rebuilds
         .iter()
@@ -627,23 +365,15 @@ pub fn run(args: &[String]) -> ExitCode {
             Some((c, p))
         })
         .collect();
-    // Real `Display.blockers`: blocker lines are collected while walking
-    // the entries and printed as one group after every package line (see
-    // `format_blocker_lines`).
+    // Blocker lines collect while walking and print as one group afterwards.
     let mut blocker_lines: Vec<String> = Vec::new();
-    // Backlog #244: abort-path unsatisfied-dependency lines held back
-    // until after the slot-conflict block (real `display_problems`
-    // order).
+    // Abort-path unsatisfied lines held back until after the slot-conflict block.
+    // Portage: _emerge/depgraph.py, display_problems
     let mut deferred_abort_unsat: Vec<usize> = Vec::new();
-    // Backlog #206 S2: real `_show_circular_deps` (`depgraph.py:10425`)
-    // pops `--quiet` and forces `--verbose` + `--tree` before
-    // `display(handler.merge_list)` — the stuck remainder renders as a
-    // verbose tree no matter what display flags the user passed. When
-    // this resolve ends in the circular block, the merge list above IS
-    // that display, so it renders with the forced flags (and forced
-    // sizes — real `verbose_size` runs at verbosity 3). The legacy
-    // (gate-off) circular path keeps the user-flagged list plus its own
-    // re-display below, exactly as before.
+    // A circular abort renders the merge list with forced `--verbose --tree`
+    // (quiet popped); the legacy path keeps the user-flagged list plus its own
+    // re-display below.
+    // Portage: _emerge/depgraph.py, _show_circular_deps
     let circular_forced_display = gated_abort_partial.is_some()
         && matches!(
             &result.outcome,
@@ -657,10 +387,7 @@ pub fn run(args: &[String]) -> ExitCode {
     } else {
         (opts.tree, opts.verbose, opts.quiet)
     };
-    // Backlog #206 S2: the rendered entry rows of the tree walk, for the
-    // circular `Total:` recount only (real counts displayed merge rows —
-    // repeats included, `nomerge` excluded — not entries). Empty unless
-    // the tree branch below runs.
+    // The rendered tree rows, for the circular `Total:` recount only.
     let mut rendered_rows: Vec<(usize, bool)> = Vec::new();
     render_merge_list(RenderMergeListArgs {
         plan: &plan,
@@ -704,26 +431,11 @@ pub fn run(args: &[String]) -> ExitCode {
         disp_tree,
     });
 
-    // Real `_show_circular_deps`' cycle-only re-display
-    // (`self.display(handler.merge_list)` with `--verbose --tree`
-    // forced): the stuck remainder isolated as its own list between the
-    // merge list and the error block. Portuale re-displays
-    // `result.cycle_display` (cycle members plus their transitive
-    // requirers, leaf-drain order) as flat merge lines -- no tree
-    // nesting or `[nomerge]` marking (portuale's tree model dedups
-    // shared nodes by design and never abandons the merge list, so
-    // there is no partial scheduler state to show); isolating *which*
-    // packages is what's ported. A throwaway blocker sink keeps
-    // re-displayed blocker owners from doubling the collected lines.
-    // Non-empty exactly when a hard cycle was reported (the driver only
-    // builds the display then), so no extra gating is needed.
-    //
-    // Backlog #19 Slice 4: with the gate on, an aborted cycle renders
-    // the remainder as the merge list itself (see `display_entries`
-    // above), so the re-display would duplicate it line for line and is
-    // skipped — real shows the reduced list exactly once too
-    // (`_show_circular_deps`' single `display(handler.merge_list)`).
-    // Gate off keeps the legacy list-plus-redisplay.
+    // The cycle-only re-display between the merge list and the error block:
+    // `result.cycle_display` as flat merge lines (no tree nesting or `[nomerge]`
+    // marking -- portuale's tree model never abandons the list). Skipped when the
+    // abort path already rendered the remainder as the merge list itself.
+    // Portage: _emerge/depgraph.py, _show_circular_deps
     let skip_redisplay = gated_abort_partial.is_some()
         && matches!(
             &result.outcome,
@@ -816,47 +528,21 @@ pub fn run(args: &[String]) -> ExitCode {
         return code;
     }
 
-    // Real execution: only reachable when `!pretend`, which the gate at
-    // the top of this function only ever lets through when `buildpkgonly`
-    // is also `true` -- see `emerge_build.rs`'s own module doc comment
-    // for what this actually does (and doesn't) build.
+    // Execution below is non-`--pretend` only; see `emerge_build` for what builds.
     if !opts.pretend {
-        // Backlog #225 (real `_emerge/actions.py:496-521`): the merge
-        // list has just been displayed (see `show_merge_list` above),
-        // and when nothing in it is merge-bound real prints `Nothing to
-        // merge; quitting.` on stdout and returns `EX_OK` before the
-        // `resume_backup` rotation below and before `Scheduler` -- so a
-        // stale resume list (and its backup) come back untouched. This
-        // sits after every failure gate above (real's own `if not
-        // success: display_problems(); return 1` precedes its display
-        // branch), and `--resume` never reaches here (it dispatches to
-        // `run_resume` far above, with its own `nothing to resume`
-        // message).
-        //
-        // Residue (deliberate scope boundary): the deferral arm above
-        // restores real's rotation plus `saveNomergeFavorites`'s record
-        // (`actions.py:514-516` + `:664-675` + `depgraph.py:11305-11402`)
-        // within portuale's existing world-file cuts -- the
-        // `world_file_additions`/`update_world_file` v1 cuts
-        // (version-pinned slot args, the vdb-only multislot fallback,
-        // system-virtual exclusion). A `world-candidate = false` user
-        // set is filtered at the gate and the record alike (see
-        // `usersets_world_candidate`); per-set single sections and repo
-        // `sets.conf` files stay unconsulted cuts (see its doc comment).
+        // An empty displayed plan quits here (before the rotation and the
+        // scheduler), after every failure gate above. `--resume` never reaches
+        // here. The selective deferral still rotates and records world favorites.
+        // Portage: _emerge/actions.py, action_build
         let mergecount = display_entries
             .iter()
             .filter_map(emerge_build::resume_cpv)
             .count();
-        // Backlog #232: real's selective-without-`--oneshot` world
-        // candidates -- a plain (non-`@`) favorite, which real's own
-        // `world_candidates` filter always keeps (`actions.py:498-513`),
-        // or a user `@set` (`selected_set_args`; real defaults
-        // `usersets` to `world-candidate = true`, honoring a `sets.conf`
-        // override -- see `usersets_world_candidate`). Built-in
-        // `@world`/`@system`/`@profile` never count on either side.
+        // Selective-without-`--oneshot` world candidates: plain favorites and
+        // user `@set`s (built-ins never count). `--onlydeps` counts like
+        // `--oneshot` here. See `selective_noop_deferred`.
         let deferred = selective_noop_deferred(
-            SelectiveNoopDeferredArgs { selective: plan.selective, oneshot_or_onlydeps: // Real's folded gate variable (`actions.py:257`): `--onlydeps`
-            // keeps the deferral at bay exactly like `--oneshot`.
+            SelectiveNoopDeferredArgs { selective: plan.selective, oneshot_or_onlydeps:
             opts.oneshot || opts.onlydeps, has_world_candidates: opts.atom_args.iter().any(|a| !a.starts_with('@'))
                 || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()) },
         );
@@ -875,8 +561,8 @@ pub fn run(args: &[String]) -> ExitCode {
         }) {
             return code;
         }
-        // Real `_emerge/actions.py:525-536`: `--ask` prompts once, after
-        // the whole merge list is displayed, before anything is built.
+        // `--ask` prompts once, after the whole merge list, before anything builds.
+        // Portage: _emerge/actions.py, action_build
         if opts.ask && !ask_confirm(&color, "Would you like to merge these packages?") {
             return ExitCode::from(130);
         }
@@ -887,21 +573,14 @@ pub fn run(args: &[String]) -> ExitCode {
             merge_options,
         } = merge_setup(&opts, entries, &config, &root);
 
-        // Real `FEATURES=buildpkg` / `--buildpkg`/`-b` (real
-        // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
-        // written into `$PKGDIR` as a side effect of the merge.
-        // `--buildpkg=n` wins over the FEATURE.
+        // With `FEATURES=buildpkg` / `--buildpkg`, a binpkg of each source entry
+        // is written into `$PKGDIR` as a side effect of the merge.
         let buildpkg_on = buildpkg_from_config(opts.buildpkg_opt, &config);
         let buildpkg = buildpkg_on.then_some(&package_options);
-        // `emerge -k <atom>` (`--usepkg`, no `--getbinpkg`): the resolver
-        // put a local-`$PKGDIR` binary on the plan. Real portage merges a
-        // local `$PKGDIR` binary on `-k`/`-K` alone -- `--getbinpkg` is
-        // only about *also* consulting a remote binhost -- so the
-        // per-entry binary-vs-source executor (`run_merge_plan`) must run
-        // here too, not just under `getbinpkg`. `merge_one_binary_entry`
-        // prefers the on-disk `$PKGDIR` file and only touches a binhost
-        // when it is missing, so this stays offline for a pure local
-        // merge. (L1-b.)
+        // `emerge -k`: the resolver may have put a local-`$PKGDIR` binary on the
+        // plan, so the per-entry binary-vs-source executor runs here too, not just
+        // under `getbinpkg`. A pure local merge stays offline (binhost touched
+        // only when the file is missing).
         let has_binary_entry = entries
             .iter()
             .any(|e| e.source == portage_repo::CandidateSource::Binary);
@@ -974,10 +653,8 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
-    // Backlog #196 fix round 1: real `post_emerge.py:112-117` -- a
-    // `--pretend` run prints the GLEP 42 notice at the end (the vdb
-    // never changes under `--pretend`, so this arm is pretend-only;
-    // the non-pretend path printed its post-merge notice above).
+    // A `--pretend` run prints the GLEP 42 notice at the end (the vdb never
+    // changes under `--pretend`). Portage: post_emerge.py
     pretend_end_news_notice(opts.pretend, &repos, &root, &config, &color);
 
     ExitCode::SUCCESS

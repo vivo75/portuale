@@ -39,12 +39,9 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         ..
     } = opts;
 
-    // Real `actions.py:3772`: `--autounmask-continue` + `--autounmask=n`
-    // -> a WARNING that the former "has been disabled by" the latter,
-    // printed on the merge/build path before the depgraph. Portuale's
-    // only observable effect for `--autounmask-continue` -- its
-    // write-and-continue path is real-portage-gated on `"--pretend" not
-    // in myopts` (`depgraph.py:5796`), inert here.
+    // `--autounmask-continue` + `--autounmask=n`: warn that the former is
+    // disabled. Portuale's only observable effect for the flag.
+    // Portage: actions.py, depgraph.py
     if autounmask_continue.is_some() && autounmask == Some(false) {
         eprintln!(
             " {} --autounmask-continue has been disabled by --autounmask=n",
@@ -52,44 +49,26 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         );
     }
 
-    // The built-in set tokens each expand to their own real atom list,
-    // in place, at whatever position they appear: `@world`/`@selected`
-    // (`expand_selected` -- the world file's atoms + `world_sets`' nested
-    // sets), `@system` (the profile chain's `packages` files), and
-    // `@installed` (`installed_set_atoms` -- a `cat/pkg:slot` atom per
-    // vdb package). Any other `@name` token is a user-defined (file-based)
-    // package set
-    // -- expanded recursively via `resolve_custom_set` (real
-    // `StaticFileSet` / `SetConfig.getSetAtoms`), the same machinery the
-    // `--unmerge`/`--depclean`/`--deselect` paths already use; a `@name`
-    // with no matching set file is a fatal "set 'name' not found".
+    // Built-in sets expand in place: `@world`/`@selected` (world file plus
+    // nested sets), `@system` (profile `packages`), `@installed` (one
+    // `cat/pkg:slot` atom per vdb package). Any other `@name` is a
+    // file-based user set; unknown names are fatal.
+    // Portage: _sets/__init__.py, depgraph.py
     let mut expanded_atoms: Vec<String> = Vec::new();
-    // Backlog #286: which expanded atoms rode a `@world`/`@selected` set
-    // argument (real `SetArg` named `"world"`/`"selected"`,
-    // `depgraph.py:5577-5605` -- a member that selects no package drops
-    // into `_missing_args` instead of failing the run). Parallel to
-    // `expanded_atoms` through the moves rewrite and dedup below (both
-    // index-preserving); `dep_expand_token` mutates atoms in place, so
-    // the flag rides renames too.
+    // Which expanded atoms rode a `@world`/`@selected` argument (a member that
+    // selects no package drops into `_missing_args` instead of failing the run).
+    // Parallel to `expanded_atoms` below, index-preserving.
     let mut expanded_from_set: Vec<bool> = Vec::new();
-    // The user-given `@name` set args (leading `@` stripped) that are
-    // world candidates -- i.e. resolved via a set FILE, not `@world`/
-    // `@system`. Recorded in `world_sets` after a successful
-    // non-`--pretend` merge (real `depgraph.saveNomergeFavorites`).
+    // The `@name` set args (leading `@` stripped) resolved via a set file,
+    // recorded in `world_sets` after a successful non-`--pretend` merge.
+    // Portage: depgraph.py, saveNomergeFavorites
     let mut selected_set_args: Vec<String> = Vec::new();
     for atom_str in atom_args {
         if *atom_str == "@world" || *atom_str == "@selected" {
-            // Real `@world` (`_sets/__init__.py:97-98`) is
-            // `@profile ∪ @selected ∪ @system` -- not just the world
-            // file. `emerge @world` / `-uD @world` re-emerges / updates
-            // every `@profile` and `@system` member too; on an empty
-            // world it is still non-empty. `@selected` alone stays the
-            // world file.
+            // `@world` is `@profile` + `@selected` + `@system`, not just the
+            // world file. Portage sorts each nested set's atoms.
+            // Portage: _sets/__init__.py, depgraph.py
             if *atom_str == "@world" {
-                // Real `_resolve` (`depgraph.py:5500`) processes each
-                // `SetArg`'s atom list `sorted(arg.pset.getAtoms(),
-                // key=str)`, and the world set lists its nested sets as
-                // `@profile @selected @system`.
                 let mut atoms = config.profile_packages.clone();
                 atoms.sort();
                 expanded_from_set.extend(std::iter::repeat_n(true, atoms.len()));
@@ -106,33 +85,19 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
                 }
             }
             if *atom_str == "@world" {
-                // Real `_resolve` (`depgraph.py:5500`) processes each
-                // `SetArg`'s atom list `sorted(arg.pset.getAtoms(),
-                // key=str)`; the nested `@system` set is one such arg.
                 let mut atoms = config.system_packages.clone();
                 atoms.sort();
                 expanded_from_set.extend(std::iter::repeat_n(true, atoms.len()));
                 expanded_atoms.extend(atoms);
             }
         } else if *atom_str == "@profile" {
-            // The `@profile` set on its own (real
-            // `ProfilePackageSet.load`); same sorted-arg shape as
-            // `@system` above.
             let mut atoms = config.profile_packages.clone();
             atoms.sort();
             expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
             expanded_atoms.extend(atoms);
         } else if *atom_str == "@system" {
-            // Real `_resolve` (`depgraph.py:5500`): `for atom in
-            // sorted(arg.pset.getAtoms(), key=str)`. A `>=`-prefixed
-            // atom sorts before every plain one (`>` is 0x3E), which is
-            // exactly why real's `-pe @system` pre-bias order starts
-            // `>=sys-apps/baselayout-2`, `>=sys-apps/findutils-4.4`,
-            // `>=sys-devel/patch-2.7`, `app-admin/eselect`,
-            // `app-alternatives/awk`, … (F-B3's probe). Portuale used
-            // the profile's raw `packages` order, so the resolver walk
-            // -- and therefore the pre-bias order the scheduler's stable
-            // `_merge_order_bias` preserves -- diverged from index 1.
+            // Sorted: a `>=`-prefixed atom sorts before every plain one, which
+            // is what makes the pre-bias order match Portage's from index 1.
             let mut atoms = config.system_packages.clone();
             atoms.sort();
             expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
@@ -164,26 +129,18 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         }
     }
 
-    // Real `profiles/updates/` package moves (SCOPE_BACKLOG Part 2 Section
-    // H item 2): a `move sys-libs/foo sys-libs/bar` / `slotmove` directive
-    // rewrites a command-line, `@world`/`@system` or `@<set>`-expanded
-    // atom before it's resolved *or* used as a display "requested" key
-    // (real global-updates rewrites the world file and the vdb; portuale
-    // applies the moves in memory on read -- see
-    // `portage_repo::apply_updates_to_atom`).
+    // `profiles/updates` package moves rewrite each expanded atom before it is
+    // resolved or used as a display key (applied in memory on read).
+    // Portage: profiles/updates, global-updates
     for atom in &mut expanded_atoms {
         *atom = portage_repo::apply_updates_to_atom(atom);
     }
 
-    // A real package set is an unordered *set* -- and `@world` now folds
-    // `@system` in, which overlaps the world file for anyone who ran
-    // `emerge --noreplace @system`. Drop later duplicates, keeping first
-    // position (portuale's merge order is position-sensitive).
+    // A package set is an unordered set, and `@world` now folds `@system` in:
+    // drop later duplicates, keeping first position (merge order is
+    // position-sensitive). An atom given both explicitly and through a set
+    // keeps its explicit nature.
     {
-        // Explicit-wins: an atom given both explicitly and through a
-        // set keeps its explicit nature (real holds both a `SetArg`
-        // and an `AtomArg` for it: the set member drops but the
-        // explicit argument still fails the run).
         let explicit: HashSet<String> = expanded_atoms
             .iter()
             .zip(expanded_from_set.iter())
@@ -203,16 +160,9 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         expanded_from_set = kept_flags;
     }
 
-    // Real `dep_expand()` / `cpv_expand()` (`lib/portage/dbapi/`): a
-    // command-line target with no category (`emerge eix`, `emerge
-    // eix-1.2`, `emerge eix:0`) is qualified against the repo tree --
-    // scan every `<repo>/<cat>/<pkg>/` for a package matching the bare
-    // name. Exactly one -> use it silently; more than one -> the real
-    // `ambiguous_package_name` block (its `--quiet` form -- real's
-    // default form runs a full `search`, a documented cut), exit 1;
-    // none -> `there are no ebuilds to satisfy`, exit 1. A
-    // `@set`-expanded atom is already `cat/pkg`, so only a genuine
-    // command-line bare name reaches this.
+    // A bare name (`emerge eix`) is qualified against the repo tree: exactly
+    // one match is used silently; zero or several are fatal (exit 1).
+    // Portage: lib/portage/dbapi, dep_expand
     {
         let mut all_cp: Option<Vec<String>> = None;
         for atom in &mut expanded_atoms {
@@ -251,9 +201,8 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         );
         return Err(ExitCode::from(2));
     }
-    // Backlog #286: the droppable set members (see `expanded_from_set`).
-    // Built after `dep_expand_token` so renames (bare `pkg` -> `cat/pkg`)
-    // match the resolver's own atom texts.
+    // The droppable set members, built after expansion so renames match the
+    // resolver's own atom texts.
     let set_args: HashSet<String> = expanded_atoms
         .iter()
         .zip(expanded_from_set.iter())

@@ -45,24 +45,11 @@ pub(crate) fn show_merge_list_summary(args: ShowMergeListSummaryArgs<'_>) {
         ask,
         ..
     } = opts;
-    // Real `output.py::display`: `if self.conf.verbosity == 3:
-    // self.print_verbose(...)` -- the `Total: …` counters line, printed
-    // after every entry (and blocker) line, only under `-v`, for the
-    // tree/columns/flat layouts alike. Real emits `f"\n{self.counters}\n"`
-    // (a leading blank line). `--quiet` forces verbosity to 1, so `-pvq`
-    // suppresses the line that `-pv` would show. Suppressed together with
-    // an empty aborted list (real never calls `display()` there, so no
-    // counters exist); the cycle partial counts over its own rows only.
-    //
-    // Backlog #206 S2: the circular display runs forced-verbose (see
-    // `circular_forced_display` above), so the gate reads the effective
-    // flags and the counters count the rendered rows, not the entries:
-    // real's `_PackageCounters` accumulate per displayed merge row, so a
-    // repeat-merge row (the cycle closure) counts again while a
-    // `[nomerge]` row never counts. The recount input is exactly the
-    // rendered merge/uninstall rows (`rendered_rows` from the tree walk
-    // above); `nomerge`, already-installed and disclosure rows contribute
-    // nothing, matching real's `set_pkg_info` gating.
+    // The `Total: …` counters line: only under `-v` (never with `-q`), after
+    // every entry line. The circular display runs forced-verbose, so the gate
+    // reads the effective flags and counts rendered rows, not entries: repeats
+    // count again, `[nomerge]` rows never count.
+    // Portage: output.py, display
     let disp_count_entries: Option<Vec<GraphEntry>> = if circular_forced_display {
         let mut counted: Vec<GraphEntry> = Vec::new();
         for (i, ordered) in rendered_rows {
@@ -103,14 +90,9 @@ pub(crate) fn show_merge_list_summary(args: ShowMergeListSummaryArgs<'_>) {
         );
     }
 
-    // Backlog #185: real `_emerge/actions.py:526` prints one blank line
-    // after the merge list, before the `--ask` prompt (or the scheduler,
-    // when nothing prompts). `show_merge_list` (not the bare gate) is
-    // the condition: real's `print()` only runs when the list branch ran
-    // (an aborted resolve returns before it). `--ask` needs none here:
-    // `ask_confirm` already opens with that same single blank line
-    // (real's `print()` before `UserQuery.query`), so printing another
-    // would double it.
+    // One blank line after the merge list when it printed on a non-`--pretend`
+    // run without `--ask` (`ask_confirm` already opens with that blank line).
+    // Portage: _emerge/actions.py, action_build
     if !pretend && show_merge_list && !ask {
         println!();
     }
@@ -189,19 +171,13 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
     } = opts;
     if show_merge_list {
         if disp_tree {
-            // #131 S1: the tree-mode serialization order for the display
-            // walk (real's reversed tree-mode retlist). Computed on the
-            // displayed slice, so abort-partial lists stay
-            // self-consistent. One extra schedule+select pass per `--tree`
-            // run; the flat list (and everything else) never sees it.
+            // The tree-mode serialization order, computed on the displayed
+            // slice so abort-partial lists stay self-consistent.
             let tree_order = if circular_forced_display
                 && display_entries.iter().any(|e| e.targets_running_root)
             {
-                // Backlog #245 (cross-root partial only; the single-root
-                // cycle keeps the re-serialization below): real hands `handler.merge_list` (the stuck remainder
-                // drained in digraph insertion order) straight to `display`; it is
-                // not re-serialized, and `print_tree` walks the reverse of its
-                // retlist, so the partial goes in reversed.
+                // A cross-root cycle partial goes in reversed, like Portage's
+                // stuck remainder (never re-serialized).
                 (0..display_entries.len()).rev().collect()
             } else {
                 portage_repo::tree_display_order(portage_repo::TreeDisplayOrderArgs {
@@ -239,10 +215,8 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                 circular: &result.circular_dependency,
             });
         } else {
-            // #68/#72 B2: rows whose replacement waits on its owner print
-            // right after that replacement's package line (real appends
-            // them to `print_msg` at the solved blocker's merge-list
-            // position, `output.py:119-121`).
+            // Blocker rows print right after their replacement's package line.
+            // Portage: output.py
             let inline_blockers = collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
                 entries: display_entries,
                 root,
@@ -284,25 +258,11 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
             }
         }
 
-        // Backlog #19 Slice 4: the aborted partial list carries no
-        // `NoVisibleCandidate` entries (masked/unsat partials are empty;
-        // the cycle remainder is merge-bound), so the disclosure / bare-
-        // unsat lines `print_entry_line` emits for them would go silent
-        // with the list switch. Re-emit them here, in full-entries order
-        // — the same stderr sequence the full-list walk produced, since
-        // these lines already go to stderr while the list goes to stdout.
-        // Slice 5 reshapes this into the `AbortReason` error block that
-        // follows the partial list; until then the content is unchanged.
-        // Non-abort resolves (including `Complete` graphs that still
-        // carry NVC entries, e.g. build-root-only misses) render those
-        // lines in the loop above exactly as before.
-        // Backlog #185: pretend-only since the unconditional
-        // resolution-phase block above took over the non-`--pretend`
-        // preamble. Real's resolution-phase prints (header, notice,
-        // timing) run before success/failure is known, so a failed
-        // non-`--pretend` resolve already printed them above; re-printing
-        // here would double them, and real never shows the partial list
-        // itself on a non-`--pretend` abort (`actions.py:460-462`).
+        // The aborted partial list carries no `NoVisibleCandidate` entries, so
+        // re-emit their disclosure lines here in full-entries order (stderr,
+        // like the loop above). Pretend-only: on a non-`--pretend` abort Portage
+        // never shows the partial list itself.
+        // Portage: _emerge/depgraph.py, display_problems
         if pretend
             && gated_abort_partial.is_some()
             && matches!(
@@ -315,27 +275,16 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                 }
             )
         {
-            // #135 (c) (O7: un-suppress): real prints the merge-list
-            // preamble and the timing line and *then* aborts
-            // (`These are the packages ...` + `Calculating dependencies
-            // ... done!` + `Dependency resolution took N s
-            // (backtrack: N/M).` + blank, all on stdout, before the
-            // abort block on stderr). The partial list itself is empty
-            // for these arms, so this is the preamble only.
-            // Determinism cut (lessons-of-backlog-ops: nondeterministic
-            // values ride `--json` only, never stdout; the
-            // byte-identical repeated-run invariant is a jointly-owned
-            // gate): the wall-clock seconds real prints are omitted --
-            // the line carries real's `backtrack: N/M` signal only.
-            // O7's "timing line" is therefore the signal half, not the
-            // seconds; re-open with the owner to print real seconds.
+            // The merge-list preamble and timing line print before the abort
+            // block on stderr; the partial list itself is empty for these arms.
+            // The wall-clock seconds are cut (determinism); only `backtrack:
+            // N/M` is kept. Portage: _emerge/depgraph.py, _show_merge_list
             println!(
                 "These are the packages that would be merged, in order:
 "
             );
             println!("Calculating dependencies ... done!");
-            // Real prints the timing line on every non-quiet run
-            // (backlog #59(b)); under `--quiet` it is suppressed.
+            // The timing line is suppressed under `--quiet`.
             if !quiet {
                 println!(
                     "Dependency resolution took (backtrack: {}/{}).
@@ -345,23 +294,15 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
             }
             let mut thrown_away: Vec<String> = Vec::new();
             for (i, entry) in result.entries.iter().enumerate() {
-                // Backlog #195 (round 2): a dependency the resolver
-                // collected into a parent USE flip (record-and-fail, real
-                // `_apply_parent_use_changes` dropping the item from
-                // `_unsatisfied_deps_for_display`) renders no row at all
-                // -- the USE-changes block below is its whole output, and
-                // the `!!! note:` fallback in `print_entry_line` would
-                // duplicate it.
+                // A dependency collected into a parent USE flip renders no row
+                // (the USE-changes block below is its whole output).
                 if matches!(
                     entry.outcome,
                     portage_repo::PretendOutcome::NoVisibleCandidate
                 ) && entry.parent_use_suggestion.is_none()
                 {
-                    // Backlog #244: real's `display_problems` prints the
-                    // slot-conflict block before the leftover
-                    // `_unsatisfied_deps_for_display` item
-                    // (`depgraph.py:11113-11280`); with a conflict
-                    // recorded, this line waits until after that block.
+                    // With a slot conflict recorded, this line waits until after
+                    // the slot-conflict block (Portage's `display_problems` order).
                     if !result.slot_conflicts.is_empty() {
                         deferred_abort_unsat.push(i);
                         continue;
@@ -396,12 +337,9 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
             }
         }
 
-        // Real `Display.print_blockers()`: the collected `[blocks B ...]`
-        // lines, printed as one group after every package line and before
-        // the counters. Backlog #80: unresolved rows with no owner entry
-        // join the same group (flat and tree alike -- real's
-        // `Display.blockers` is mode-independent). Unresolved rows are
-        // never column-suppressed, so no `columns` gate here.
+        // The collected `[blocks B ...]` lines print as one group after every
+        // package line and before the counters; owner-less rows join the group.
+        // Portage: output.py, Display.print_blockers
         for orphan in &result.orphan_blockers {
             blocker_lines.push(format_blocker_row(
                 &format!(
@@ -474,21 +412,18 @@ pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCod
             verbose,
             running_root: root_deps_running_root.as_deref(),
         });
-        // Same non-zero-on-autounmask-changes contract as the text path
-        // below (a `--json` consumer's exit-code check must see the
-        // "config still needs editing" signal too). `--autounmask-only`
-        // stays exit 0 (its whole point is "just show the changes").
-        // (`has_autounmask_changes` is bound once, above, next to the
-        // `--autounmask-only` re-show gate -- backlog #271.)
+        // Same non-zero-on-autounmask-changes contract as the text path: a
+        // `--json` consumer's exit-code check must see the "config still needs
+        // editing" signal too. `--autounmask-only` stays exit 0.
         if has_autounmask_changes
             && !autounmask_only
             && !(!pretend && autounmask_continue == Some(true))
         {
             return Some(ExitCode::from(1));
         }
-        // An unsolvable blocker fails the run for a `--json` consumer's
-        // `$?` check too (real `actions.py` returns 1 regardless of
-        // output format) -- entry-owned rows and #80 orphans alike.
+        // An unsolvable blocker fails the run for a `--json` consumer's `$?`
+        // check too -- entry-owned rows and orphans alike.
+        // Portage: _emerge/actions.py, action_build
         if result
             .entries
             .iter()
@@ -497,26 +432,17 @@ pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCod
         {
             return Some(ExitCode::from(1));
         }
-        // Backlog #62: same slot-conflict rule as the text path below
-        // (real `actions.py:460-462` runs before any format split, and
-        // `--json` has no real counterpart -- it follows the same rule
-        // for consistency): a recorded conflict fails the run unless an
-        // escape holds. `--autounmask-only` is escape 1 (its whole point
-        // is "just show the changes", exit 0); backtracking disabled
-        // plus `--buildpkgonly`/`--nodeps` is escape 2
-        // (`_accept_blocker_conflicts`). See the text-path gate for the
-        // full grounding and the `--fetchonly`/`--fetch-all-uri`
-        // carve-out.
+        // Same slot-conflict rule as the text path (see `failure_gates` for the
+        // full grounding): a recorded conflict fails the run unless an escape
+        // holds (`--autounmask-only`, or backtracking disabled plus
+        // `--buildpkgonly`/`--nodeps`).
         if !autounmask_only
             && !result.slot_conflicts.is_empty()
             && !(backtrack_max == 0 && (buildpkgonly || nodeps))
         {
             return Some(ExitCode::from(1));
         }
-        // Backlog #19 Slice 4: an aborted resolve exits 1 in every output
-        // format (real `actions.py:460-462` runs before any format
-        // split). Gated like the text path below; the `Aborted` arm there
-        // fires first, so this only matters for `--json`.
+        // An aborted resolve exits 1 in every output format.
         if gated_abort_partial.is_some() {
             return Some(ExitCode::from(1));
         }
@@ -527,13 +453,10 @@ pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCod
 
 /// The notice for targets satisfied by package.provided.
 pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
-    // Real `depgraph.py:11192-11235`'s `display_problems()` block for a
-    // directly-requested atom that matched `package.provided` -- printed
-    // to stderr, before the merge list (matching real portage's own
-    // `display_problems()` -> `display()` order). Portuale tracks no
-    // `SetArg`, so the "pulled in by" ref is always `'args'` and the real
-    // `@world`/`@selected` "A) B) C)" solution text is never reached (a
-    // documented divergence -- see `GraphResult::pprovided_atoms`).
+    // Printed to stderr, before the merge list. The "pulled in by" ref is
+    // always `'args'` (no `SetArg` tracking); the `@world`/`@selected`
+    // solution text is never reached (see `GraphEntry::pprovided_atoms`).
+    // Portage: _emerge/depgraph.py, display_problems
     if !result.pprovided_atoms.is_empty() {
         eprint!("{}", color.c("BAD", "\nWARNING: "));
         if result.pprovided_atoms.len() > 1 {
@@ -549,7 +472,7 @@ pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
     }
 }
 
-/// The header printed before the merge list of a real (non-pretend) run.
+/// The header printed before the merge list of a non-pretend run.
 pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult) {
     let &EmergeOpts {
         pretend,
@@ -562,22 +485,10 @@ pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult
         nodeps,
         ..
     } = opts;
-    // Backlog #185 (fix round 1): real's resolution-phase display for
-    // a non-`--pretend` run, printed whether or not the list itself is
-    // shown -- and whether or not resolution succeeds. Real `depgraph.py::
-    // _start_resolution_display` prints the header (when `--ask`,
-    // `--tree` or `--verbose` is given and `--quiet` is absent --
-    // `--nodeps` is NOT consulted, the `spinner.mode = QUIET`
-    // assignment at `depgraph.py:12129-12130` comes after the header
-    // block) and starts the spinner notice before resolving, and
-    // `backtrack_depgraph`'s `finally:` completes the notice plus the
-    // timing line after (success or failure alike). `--quiet` suppresses
-    // everything; `--nodeps` suppresses only the notice and the timing
-    // line (QUIET mode: `end_notice()` reports nothing to complete).
-    // Provenance: container probe m185 (real 3.0.81.3,
-    // `localhost/test-portuale:latest`, `emerge --oneshot --usepkgonly
-    // probe/probe-a` in six shapes; the gating is identical in 3.0.82.2
-    // by source read) plus the 3.0.82.2 source for exact text.
+    // The resolution-phase display for a non-`--pretend` run, printed whether
+    // or not the list itself is shown and whether or not resolution succeeds.
+    // See `resolution_header_shown`/`resolution_notice_shown` for the gates.
+    // Portage: _emerge/depgraph.py, _start_resolution_display
     if !pretend && !quiet {
         if resolution_header_shown(ResolutionHeaderShownArgs {
             ask,
@@ -585,14 +496,9 @@ pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult
             verbose,
             quiet,
         }) {
-            // Real `_start_resolution_display`
-            // (`depgraph.py:12087-12127`): a leading blank line, then
-            // `These are the packages that would be ...` -- `in reverse
-            // order` for `--tree` (a plain `:` under
-            // `--unordered-display`), `fetched` under `--fetchonly` and
-            // `built` under `--buildpkgonly` (`--fetchonly` is
-            // unimplemented here, rc 2, so only the `built` arm below is
-            // reachable), else `merged, in order:` -- then a blank line.
+            // `These are the packages that would be ...`: `in reverse order` for
+            // `--tree` (a plain `:` under `--unordered-display`), `built` under
+            // `--buildpkgonly`, else `merged, in order:`.
             println!();
             let action = if buildpkgonly { "built" } else { "merged" };
             if tree {
@@ -607,21 +513,10 @@ pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult
             println!();
         }
         if resolution_notice_shown(quiet, nodeps) {
-            // Real `stdout_spinner` STATIC mode (piped stdout, real
-            // `stdout_spinner.py:105-145`): `begin_notice("Calculating
-            // dependencies")` writes the notice plus ` ...`, and
-            // `end_notice()` completes it with ` done!`. NOTE: the m185
-            // probe (3.0.81.3) shows two spaces before `...`; the 3.0.82.2
-            // source (`f"{notice} ..."` + `" done!\n"`) shows one -- ported
-            // from the pinned source, pending the coordinator's 3.0.82.2
-            // bed confirmation (see the m185 report).
+            // Ported from the pinned source (one space before `...`).
             println!("Calculating dependencies ... done!");
-            // Real `_show_resolution_report` (`depgraph.py:12134-12146`):
-            // `Dependency resolution took N.NN s (backtrack: B/M).` plus a
-            // trailing blank line. The wall-clock seconds are cut exactly
-            // like the #135 abort-path timing line just below (repeated-run
-            // determinism is a jointly-owned gate; nondeterministic values
-            // ride `--json` only) -- the `backtrack: B/M` signal is kept.
+            // The wall-clock seconds are cut (determinism); only the
+            // `backtrack: B/M` signal is kept, plus a trailing blank line.
             println!(
                 "Dependency resolution took (backtrack: {}/{}).\n",
                 result.backtrack_restarts, result.backtrack_max,
