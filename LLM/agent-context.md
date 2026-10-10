@@ -357,15 +357,16 @@ Part 3 = non-goals). Keep that file current when a slice closes an entry.
 When scoping the next slice, re-ground candidates in current code
 (`what-this-proves.md` / `git log` / the source), never in a stale list.
 
-### `helpers/` reference material
+### Reference material
 
-- `helpers/devmanual/` — a full local checkout of the Gentoo
-  devmanual (`function-reference/`, `tools-reference/`, per-phase
-  `ebuild-writing/functions/*/text.xml`). Ground real ebuild-helper
-  (`doins`, `dodir`, `insinto`, …) or phase-ordering semantics against it.
-- `helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log` — a real
-  `emerge --getbinpkgonly` debug trace; still useful for the remaining
-  2.E fetch-ordering tail (`scope-backlog.md`).
+- `3rdparty/devmanual/` — a local checkout of the Gentoo devmanual
+  (`function-reference/`, `tools-reference/`, per-phase
+  `ebuild-writing/functions/*/text.xml`; pinned in `3rdparty/repos.toml`).
+  Ground ebuild-helper (`doins`, `dodir`, `insinto`, …) or phase-ordering
+  semantics against it.
+- `LLM/reference/` — host setup and background notes (the local distfile
+  mirror, related Rust Portage projects, the prompts behind
+  `docs/cleanroom/`).
 
 ## Real ebuild phase execution + filesystem merge
 
@@ -454,7 +455,7 @@ useful orientation even though both are now shipped):
    `pkg_preinst`/`pkg_postinst` (if defined) → `pkg_prerm`/`pkg_postrm`
    (already-installed only) → `pkg_config` (user-requested only) →
    `pkg_info` (always). This calling-order table is documented per-
-   function in `helpers/devmanual/ebuild-writing/functions/`.
+   function in `3rdparty/devmanual/ebuild-writing/functions/`.
    The devmanual also has `function-reference/` and `tools-reference/`
    covering the ebuild-helper commands (`doins`, `dodir`, `insinto`,
    etc.) used inside those phases.

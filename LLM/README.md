@@ -25,5 +25,8 @@ to its current one.
 | [`Paragone_solver_portage.md`](Paragone_solver_portage.md) | Solver comparison notes (Italian). |
 | [`evidence/`](evidence/) | Probe captures, inventories and bed reports cited by backlog entries. |
 | [`superpowers/`](superpowers/) | Design specs written with the superpowers workflow. |
-| [`tools/`](tools/) | Agent tooling: `gate.sh` (full verification pass), link checker/relinker, bed comparison helpers. |
+| [`tools/`](tools/) | Agent tooling: `gate.sh` (full verification pass), link checker/relinker, bed comparison helpers, refactor scripts. |
+| [`tools/scope/`](tools/scope/README.md) | Run agents and long jobs in systemd user scopes and stop them without `pkill` (`oc.sh`, `scoperun.sh`, `scopewait.sh`, `ocstatus.sh`, `ocgrep.sh`, `ocstop.sh`). |
+| [`reference/`](reference/) | Background: the local distfile mirror (`distfile-mirror.md`), related Rust Portage projects, the prompts behind `docs/cleanroom/`. |
+| [`ideas.md`](ideas.md) | The owner's idea list (Italian/English). |
 | [`renames.tsv`](renames.tsv) | Old → new paths and identifiers since 2026-10-10. |

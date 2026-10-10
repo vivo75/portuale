@@ -8,7 +8,7 @@ Every entry can be overridden by a follow-up commit. Newest last.
 
 1. **The plan is rewritten as v2** to absorb the review: D1-D12, G1-G11, P1-P7.
    The review stays next to it as the record.
-2. **`helpers/` stays where it is, untracked** (G1). It is gitignored local
+2. **`helpers/` stays where it is, untracked** (G1). *Owner review 2026-10-10: right, `helpers/` is temporary and will be removed; anything agents need moves to `LLM/`. Done: see item 28.* It is gitignored local
    scratch (`.gitignore:24`), not part of the repo, so "move LLM-only files to
    `LLM/`" does not apply to it. Moving it into tracked `LLM/` would start
    publishing private notes. `oc.sh`/`scoperun.sh` paths and memories stay valid.
@@ -57,7 +57,7 @@ Every entry can be overridden by a follow-up commit. Newest last.
 12. **`docs/Paragone_solver_portage.md`** (P6): an Italian LLM chat transcript, so
     it is an LLM artefact under the plan's rule and moves to `LLM/`.
 13. **`.claude/skills/rust-refactor-pro/SKIL.md`** (typo; the owner's untracked
-    file): not touched. Read as guidance anyway. The owner may want to rename
+    file): not touched. *Owner review 2026-10-10: the owner renamed and committed it (`037bb3f5`).* Read as guidance anyway. The owner may want to rename
     it to `SKILL.md`.
 
 ## 2026-10-10, Phase 0/1 findings
@@ -171,3 +171,33 @@ Every entry can be overridden by a follow-up commit. Newest last.
     (`split-map.md`, the `Session` / `EmergeOpts` / `ResolvePlan`
     contexts). Doing it now would add four repeated 18-field literals
     that Phase 6 would rewrite.
+
+## 2026-10-10, owner review of items 1-27
+
+The owner approved items 1-27 and commented on two of them: item 2
+(helpers/) and item 13 (SKIL.md).
+
+28. **What agents need from `helpers/` now lives under git.** Moved:
+    - the scope tooling (`oc*.sh`, `scope*.sh`) → `LLM/tools/scope/`,
+      with `no-pkill.md` as its README;
+    - `distfile-mirror.md`, `lu_zero.md` (→ `related-rust-portage-projects.md`)
+      and `cleanroom.md` (→ `cleanroom-prompts.md`, the prompts behind
+      `docs/cleanroom/`) → `LLM/reference/`;
+    - `IDEE.md` → `LLM/ideas.md`;
+    - `portuale_remote.md` → `LLM/evidence/2026-09-25-remote-vdb-location.md`;
+    - the portage-cli probe plan and the readability guide (now
+      `2026-10-10-readability-strategy.it.md`) → `LLM/plans/`;
+    - the `devmanual/` checkout → `3rdparty/devmanual`, pinned in
+      `repos.toml` like the other reference checkouts.
+
+    Left in `helpers/`, all obsolete or kept elsewhere:
+    - `oc.sh.orig-dir-flag` (pre-2026-10-02 `oc.sh`);
+    - `migrate-to-new-server.sh` (done 2026-09-27);
+    - `vdb_to_db.md` (the current version is `docs/vdb_to_db.md`) and
+      `vdb_to_db.commit_message` (in git history);
+    - `real_emerge/` (2026-09-25 captures from a `rust/target` binary);
+    - `gentoo/` (2.4 GB, the old test bed; its content now lives in
+      pmtest's `differential-test-bed/`).
+
+    `agent-context.md` cited a `helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
+    that no longer exists. Its pointer is dropped.

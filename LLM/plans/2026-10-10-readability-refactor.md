@@ -29,7 +29,7 @@ counterpart" in the body.
   symbol;
 - explicit arguments are typed (enums, params structs, lints);
 - the `cargo dupes` fold;
-- follow the rust skills and the `strategie-…` guide;
+- follow the rust skills and the readability guide (`2026-10-10-readability-strategy.it.md`);
 - the history squash comes after.
 
 ## Global constraints
@@ -64,7 +64,7 @@ counterpart" in the body.
 - **Bed:** `differential-test-bed/run/l0-resolver.sh` from pmtest, compared
   with Phase 0 on the UNEXPLAINED set. No `cargo build` anywhere while it runs.
 - **No new runtime dependencies.** Never `pkill`; agent processes run through
-  `helpers/oc.sh` scopes.
+  `LLM/tools/scope/oc.sh` scopes.
 - **Serial work only** (decision 3). Helpers get file-scoped edit jobs; I build,
   run the gate and review every diff.
 
@@ -158,7 +158,7 @@ These all go to `LLM/` with the same relative names. `docs/` keeps:
 - `on-disk-caches.md`, `performances-tuning.md`;
 - `remote-merge.md`, `remote_emerge_examples.md`, `vdb_to_db.md`.
 
-`helpers/` is untouched. `graft/` stays.
+`helpers/` stays untracked scratch; what agents need from it moved to `LLM/` afterwards (decisions.md 2). `graft/` stays.
 
 - [ ] `git mv` each file, and append a `path` row per file to `renames.tsv`.
 - [ ] Inbound links, using a grep derived **from the move list**. Search

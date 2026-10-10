@@ -178,3 +178,19 @@ ident	is_real_unmerge_command	is_unmerge_command	3
 ident	is_real_unmerge_command_covers_exactly_unmerge	is_unmerge_command_covers_exactly_unmerge	3
 path	.claude/agents/real-portage-oracle.md	.claude/agents/portage-oracle.md	3
 name	agent real-portage-oracle	agent portage-oracle	3
+path	helpers/oc.sh	LLM/tools/scope/oc.sh	helpers
+path	helpers/ocgrep.sh	LLM/tools/scope/ocgrep.sh	helpers
+path	helpers/ocstatus.sh	LLM/tools/scope/ocstatus.sh	helpers
+path	helpers/ocstop.sh	LLM/tools/scope/ocstop.sh	helpers
+path	helpers/scoperun.sh	LLM/tools/scope/scoperun.sh	helpers
+path	helpers/scopewait.sh	LLM/tools/scope/scopewait.sh	helpers
+path	helpers/no-pkill.md	LLM/tools/scope/README.md	helpers
+path	helpers/distfile-mirror.md	LLM/reference/distfile-mirror.md	helpers
+path	helpers/lu_zero.md	LLM/reference/related-rust-portage-projects.md	helpers
+path	helpers/cleanroom.md	LLM/reference/cleanroom-prompts.md	helpers
+path	helpers/IDEE.md	LLM/ideas.md	helpers
+path	helpers/portuale_remote.md	LLM/evidence/2026-09-25-remote-vdb-location.md	helpers
+path	helpers/portage-cli-pmtest-probe.plan.md	LLM/plans/2026-10-09-portage-cli-pmtest-probe.plan.md	helpers
+path	helpers/strategie-di-leggibilità-struttura-e-refactoring-applicazione-rust-cli.md	LLM/plans/2026-10-10-readability-strategy.it.md	helpers
+path	helpers/devmanual/	3rdparty/devmanual/	helpers
+path	helpers/vdb_to_db.md	docs/vdb_to_db.md	helpers

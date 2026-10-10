@@ -76,3 +76,12 @@ ref = "master"
 commit = "a0465cd9c34ee9ce6490f1ff09ac39597abc90ac"
 pinned_at = "2026-09-07"
 tracking_doc = "docs/history/solver-backends-analysis.md"
+
+[devmanual]
+description = "The Gentoo developer manual (ebuild helpers, tools, per-phase function references): the reference agents ground ebuild-helper and phase-ordering semantics against. Moved here from the untracked helpers/ on 2026-10-10 (#336)."
+url = "https://codeberg.org/gentoo/devmanual.git"
+kind = "reference-checkout"
+checkout_path = "3rdparty/devmanual"
+ref = "master"
+commit = "d4be354314033c0910c18f1792f49043d396ba0a"
+pinned_at = "2026-10-10"
