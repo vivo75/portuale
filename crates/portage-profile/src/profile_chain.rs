@@ -52,22 +52,13 @@ pub(crate) fn read_parent_lines(profile_dir: &Path) -> Result<Vec<String>, Error
 }
 
 /// Finds which of `repos` (each `(name, location)`) `dir` lives inside,
-/// via the longest matching location prefix -- mirrors real
-/// `LocationsManager._addProfile`'s own `intersecting_repos`/
-/// `max(key=len)` logic, needed to resolve a same-repo `:path` profile
-/// parent shorthand. Repo locations are canonicalized before comparing
-/// (falling back to the raw path if that fails, e.g. a repo location
-/// that doesn't exist on disk in a test fixture -- it simply won't match
-/// any real profile dir either way), since `dir` itself is always
-/// already canonicalized by `visit_profile`.
-/// The `profile-formats` token list from a repo's own
-/// `metadata/layout.conf` (real `parse_layout_conf`), or an empty list
-/// when the file/key is absent. A tiny dedicated reader: `portage-profile`
-/// can't depend on `portage-repo` (where the fuller `parse_layout_conf`
-/// lives), and this is the only `layout.conf` key this crate needs --
-/// the same "duplicate a small, stable chunk rather than share across a
-/// dependency edge that only runs one way" precedent `keyword_masked_
-/// only`/`is_visible` already set in `portage-repo`.
+/// via the longest matching location prefix. Repo locations are
+/// canonicalized before comparing (falling back to the raw path), since
+/// `dir` is always already canonicalized by `visit_profile`.
+/// The `profile-formats` token list from a repo's `metadata/layout.conf`,
+/// or empty when the file/key is absent. A tiny dedicated reader: this
+/// crate cannot depend on `portage-repo`, where the fuller parser lives.
+// Portage: parse_layout_conf
 pub(crate) fn repo_profile_formats(repo_location: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(repo_location.join("metadata/layout.conf")) else {
         return Vec::new();
@@ -86,6 +77,9 @@ pub(crate) fn repo_profile_formats(repo_location: &Path) -> Vec<String> {
     Vec::new()
 }
 
+/// Finds which of `repos` (each `(name, location)`) `dir` lives inside,
+/// via the longest matching location prefix.
+// Portage: LocationsManager._addProfile (intersecting_repos, max by len)
 pub(crate) fn repo_containing(
     dir: &Path,
     repos: &[(String, PathBuf)],
@@ -110,22 +104,13 @@ pub(crate) struct ExpandParentColonArgs<'a> {
     pub(crate) parent_colon_repos: &'a HashSet<String>,
 }
 
-/// Expands a profile `parent` file line's real cross-repo `:path`/
-/// `reponame:path` syntax (`LocationsManager._expand_parent_colon`):
-/// a `:` with nothing before it means "this same repo" (`current_repo`),
-/// anything else before the `:` is another repo's own name, looked up in
-/// `repos`. Both forms expand to `<repo_location>/profiles/<rest>`. A
-/// line with no `:` at all (the plain relative-path form) is returned
-/// unchanged. Real portage only allows this syntax when the *current*
-/// profile node's own repo declares `profile-formats = portage-2` in
-/// `layout.conf` (real `_config/LocationsManager.py:47`/`259`'s own
-/// `_allow_parent_colon = frozenset(["portage-2"])` gate) --
-/// `parent_colon_repos` is the set of repo names that do (built from
-/// `portage_repo::RepoConfig::profile_formats` at the CLI boundary). A
-/// `parent` line containing a `:` whose current repo isn't in that set
-/// is returned *unchanged*, matching real portage: the `:` then becomes
-/// a literal path component that fails to resolve downstream exactly as
-/// it would there.
+/// Expands a profile `parent` line's cross-repo `:path`/`reponame:path`
+/// syntax to `<repo_location>/profiles/<rest>`. A line with no `:` (the
+/// plain relative-path form) is returned unchanged. A `:` line whose
+/// current repo does not declare `portage-2` is returned unchanged too:
+/// the `:` becomes a literal path component failing downstream, as in
+/// Portage.
+// Portage: LocationsManager._expand_parent_colon
 pub(crate) fn expand_parent_colon(args: ExpandParentColonArgs<'_>) -> Result<String, Error> {
     let ExpandParentColonArgs {
         parent,
@@ -138,12 +123,9 @@ pub(crate) fn expand_parent_colon(args: ExpandParentColonArgs<'_>) -> Result<Str
     let Some(colon) = parent.find(':') else {
         return Ok(parent.to_string());
     };
-    // Real `if not abs_parent and allow_parent_colon:` gate
-    // (`_config/LocationsManager.py:207`/`259`): `allow_parent_colon`
-    // defaults `True` and is only *overridden* when the current profile
-    // node intersects a known repo -- so a node outside any repo keeps
-    // the permissive default, and a node inside a repo is gated on that
-    // repo declaring `portage-2` in `layout.conf`.
+    // `allow_parent_colon` defaults true and is only overridden when the
+    // current node intersects a known repo; a node outside any repo keeps
+    // the permissive default.
     let allowed = match current_repo {
         None => true,
         Some((name, _)) => parent_colon_repos.contains(name),
@@ -160,11 +142,8 @@ pub(crate) fn expand_parent_colon(args: ExpandParentColonArgs<'_>) -> Result<Str
             .1
     } else {
         let repo_name = &parent[..colon];
-        // Real `repositories.get_location_for_name`: canonical names and
-        // aliases share one namespace (an alias never shadows a
-        // canonical name -- real `config.py`'s own alias-registration
-        // loop skips an already-taken name), so check `repos` first,
-        // then `repo_aliases`.
+        // Canonical names and aliases share one namespace (an alias never
+        // shadows a canonical name), so check `repos` first, then aliases.
         repos
             .iter()
             .chain(repo_aliases.iter())
@@ -184,12 +163,10 @@ pub(crate) fn expand_parent_colon(args: ExpandParentColonArgs<'_>) -> Result<Str
 }
 
 /// Recursively resolves the profile inheritance chain starting at `leaf`,
-/// ancestors before descendants (parents listed in a level's `parent`
-/// file are visited in the order given), cycle/diamond-safe via a visited
-/// set keyed on the canonicalized directory. `repos` (main + every
-/// overlay, name + location) is only needed to resolve a cross-repo
-/// `parent` entry (see `expand_parent_colon`); a chain with none never
-/// consults it.
+/// ancestors before descendants (parents in the order given),
+/// cycle/diamond-safe via a visited set on the canonicalized directory.
+/// `repos` is only needed for cross-repo `parent` entries (see
+/// `expand_parent_colon`); a chain with none never consults it.
 pub(crate) fn resolve_profile_chain(
     leaf: &Path,
     repos: &[(String, PathBuf)],
@@ -258,13 +235,9 @@ pub(crate) fn visit_profile(args: VisitProfileArgs<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Every `USE=` value from a repo's top-level `profiles/make.defaults`
-/// (real `config.py`'s `_repo_make_defaults`), in file order, each
-/// `${VAR}`-substituted against `scalars`. A missing file yields an
-/// empty list. `source` is not handled (a repo `make.defaults` never
-/// uses it); `${USE}` self-reference resolves to whatever `make.conf`'s
-/// `USE=` last set (a documented approximation -- real portage's own
-/// `_repo_make_defaults` expand context differs).
+/// Every `USE=` value from a repo's top-level `profiles/make.defaults`,
+/// in file order, each `${VAR}`-substituted against `scalars`. A missing
+/// file yields an empty list. `source` is not handled.
 pub(crate) fn read_repo_make_defaults_use(
     path: &Path,
     scalars: &HashMap<String, String>,

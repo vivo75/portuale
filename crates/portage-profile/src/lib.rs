@@ -1,288 +1,39 @@
 // Profile-chain + make.conf + package.mask/.unmask/.accept_keywords
-// resolution for real USE/ACCEPT_KEYWORDS/visibility (see
-// LLM/agent-context.md's depgraph/config-resolution follow-up work, and
-// LLM/what-this-proves.md for the full scope writeup). Replaces the base
+// resolution for USE/ACCEPT_KEYWORDS/visibility. Replaces the base
 // `emerge --pretend` slice's hardcoded `ACCEPT_KEYWORDS="amd64"`/`USE=""`
-// with the real mechanism: a profile inheritance chain (`make.profile` ->
-// `parent` files) plus `/etc/portage/make.conf`, each level's
-// `make.defaults` contributing incremental USE/ACCEPT_KEYWORDS tokens,
-// plus per-package overrides from `/etc/portage/package.mask`,
-// `package.unmask`, and `package.accept_keywords`.
+// with the inherited-chain + `make.conf` + per-package-override mechanism.
 //
-// KNOWN, DOCUMENTED SCOPE CUTS (confirmed with the user before
-// implementing):
-//   - Cross-repo profile parent references (`reponame:path` syntax, a
-//     bare `:path` too) ARE resolved -- see `expand_parent_colon`/
-//     `repo_containing` -- and now correctly gated on the current
-//     profile node's own repo declaring `profile-formats = portage-2`
-//     in `metadata/layout.conf` (real `_config/LocationsManager.py:47`/
-//     `259`'s own `_allow_parent_colon` frozenset). `resolve_config`
-//     reads each repo's `layout.conf` directly (`repo_profile_formats`)
-//     rather than threading a param through every call site. Real
-//     portage's EAPI-conditional `profile-formats` *default* when the
-//     key is absent (`portage-1`/`portage-1-compat`) isn't modeled --
-//     absent just means "no `portage-2`".
-//   - ARCH-based KEYWORDS-format validation is out of scope. Wildcard
-//     `_*` IUSE-aware expansion (e.g. `linguas_*`) IS now done, but in
-//     `portage_repo::effective_use_flags` (it needs a specific
-//     candidate's own IUSE, which this global config layer doesn't
-//     have) -- see that function's own `_*` block. **Now stale**:
-//     `USE_EXPAND` itself
-//     and `package.use`'s own `USE_EXPAND`-prefix shorthand (`VIDEO_CARDS:
-//     nvidia` lines) used to be listed here too -- see the dedicated
-//     `USE_EXPAND` bullet further below for the follow-up that closed
-//     both.
-//   - Real config.py's `USE_ORDER` is
-//     `env:pkg:conf:defaults:pkginternal:features:repo:env.d`. Portuale
-//     now models the whole chain: `env.d` (`/etc/profile.env`'s `USE=`,
-//     the lowest tier), `repo` (each repo's `make.defaults` USE then
-//     repo-level `package.use`), `features` (`FEATURES=test` -> `test`),
-//     `pkginternal` (the ebuild's own IUSE `+`/`-` defaults), `defaults`
-//     (profile `make.defaults` + profile `package.use`), `conf`
-//     (make.conf), `pkg` (`package.env`'s own `USE=`, then user
-//     `package.use` on top), and `env` (the `$USE` env var, the highest
-//     tier) -- see `Config::package_use{,_repo,_user}` /
-//     `Config::{envd_use_tokens,repo_make_defaults_use,package_env_use,features_use,env_use_tokens}`
-//     and `portage-repo::effective_use_flags`.
-//   - No line continuation / multi-line quoted values, and no trailing
-//     `# comment` after a real assignment (a `#` is only recognized as a
-//     comment when it starts the (trimmed) line). Real make.defaults/
-//     make.conf files in practice don't rely on either.
-//   - Any variable other than USE/ACCEPT_KEYWORDS is tracked only as a
-//     plain scalar for `${VAR}` substitution purposes (last-value-wins,
-//     no incremental merge), matching how it's actually used in real
-//     profiles (e.g. ARCH feeding `ACCEPT_KEYWORDS="${ARCH}"`).
-//   - `package.mask`/`.unmask` are stacked from all three real sources --
-//     the main repo's own repo-level `profiles/package.mask`/`.unmask`,
-//     every profile level's own pair (in chain order), and the
-//     user-level `/etc/portage` files -- with `-atom` removal applying
-//     across the whole combined stream, exactly matching real
-//     `MaskManager.py`'s `stack_lists(incremental=1)` (see
-//     `stack_mask_lines`). An *overlay* repo's own repo-level
-//     `package.mask`/`.unmask` is now read too (every configured repo,
-//     unconditionally, each auto-scoped to its own `::reponame` -- see
-//     `scope_repo_mask_lines`/`resolve_config`'s own doc comment). An
-//     overlay's own `package.mask` (only `package.mask` -- real portage
-//     never consults masters for `package.unmask`) also now stacks with
-//     its implicit `masters` default (the main repo alone, since this
-//     portuale doesn't parse an explicit `masters =` repos.conf key). Still
-//     out of scope: eclass inheritance via `masters`, and an explicit
-//     `masters =` override/multi-master chain.
-//   - `package.accept_keywords` is stacked from profile-chain (in chain
-//     order) + user-level sources, mirroring real `KeywordsManager.
-//     getPKeywords` exactly -- confirmed by reading it, there's no
-//     repo-level source for this file in real portage at all (unlike
-//     `package.mask`'s repo-level `profiles/package.mask`). Purely
-//     additive, like portuale's own pre-existing user-level-only
-//     handling always was: no `-atom` removal exists for this file in
-//     real portage either, so every matching source's keyword tokens are
-//     just unioned together (see `is_visible`). A bare atom with no
-//     keyword tokens now gets real `accept_keywords_defaults`'s own
-//     implicit `~arch` meaning at *both* levels (see
-//     `parse_package_accept_keywords_lines`'s own doc comment) --
-//     confirmed by reading `KeywordsManager.__init__` itself: contrary
-//     to portuale's own earlier assumption, the *user*-level source
-//     gets the identical substitution too (baked in at load time,
-//     `self.pkeywordsdict`), not just the profile-level one
-//     (`getPKeywords`'s own read-time substitution).
-//   - `package.use` is stacked from all three real sources, and -- as of
-//     the "Config depth" slice (SCOPE_BACKLOG Part 2.C) -- each source
-//     now lands in its own `Config` field at its own real `USE_ORDER`
-//     position, instead of the earlier flat "one incremental list
-//     regardless of source" model:
-//       * repo-level (`<repo>/profiles/package.use`, every configured
-//         repo, overlays `::repo`-scoped via
-//         `scope_repo_package_use_lines`) -> `Config::package_use_repo`,
-//         real `configdict["repo"]` -- applied *before* the ebuild's own
-//         IUSE `+`/`-` defaults, the weakest USE layer portuale models.
-//       * every profile level's own `package.use` (chain order) ->
-//         `Config::profile_use_layers`, real `configdict["defaults"]` --
-//         the `defaults` tier is walked one profile at a time, each
-//         level's `make.defaults` USE then that level's own
-//         `package.use`, before the next level (real
-//         `regenerate()`), so a child profile's `make.defaults` can
-//         cancel a parent's `package.use`. Applied after the `repo` tier,
-//         *before* `make.conf`. (`Config::package_use` still holds the
-//         flat all-levels-as-one-group list, kept only as the fallback
-//         for a hand-built `Config`.)
-//       * `package.env`'s own `USE=` (`Config::package_env_use`, from
-//         `/etc/portage/package.env` -> `/etc/portage/env/<name>` files)
-//         -> real `configdict["pkg"]` via `_grab_pkg_env`, applied first
-//         in the `pkg` layer.
-//       * user-level (`/etc/portage/package.use`) ->
-//         `Config::package_use_user`, real `configdict["pkg"]` -- applied
-//         after `make.conf` and after `package.env` (real portage
-//         appends `self.puse` on top of the `_grab_pkg_env` result), the
-//         strongest USE layer before the final `use.force`/`use.mask`
-//         step.
-//     Each repo's top-level `profiles/make.defaults` USE (real
-//     `_repo_make_defaults`) is folded into the `repo` layer too, ahead
-//     of repo `package.use` (`Config::repo_make_defaults_use`) -- the
-//     main repo's applies to every package, an overlay's only to a
-//     candidate from that overlay. The `env.d` layer
-//     (`Config::envd_use_tokens`, from `/etc/profile.env`) is folded in
-//     below everything, as the lowest tier.
-//     Each source is still purely additive within itself (no `-atom`
-//     removal exists for this file -- see `parse_package_use_lines`), and
-//     still applied per package (not globally): a matching entry's tokens
-//     are layered on with the same incremental semantics as `USE` itself
-//     (see `apply_incremental`), scoped to the one package being
-//     resolved -- see `portage-repo::effective_use_flags` for the full
-//     per-package `USE_ORDER` walk and `resolve_pretend_graph` for where
-//     it is driven (it needs the candidate's SLOT to match slotted
-//     entries, which only exists at that later, repo-aware layer).
-//   - `packages` (`@system`'s real source -- `PackagesSystemSet` in
-//     `lib/portage/_sets/profiles.py`) IS now read: every profile level's
-//     own `<level>/packages` file, in chain order, stacked with the
-//     identical `stack_lists(incremental=1)` semantics `package.mask`
-//     already ports (see `stack_mask_lines`) -- confirmed by reading
-//     `PackagesSystemSet.load`, which calls the exact same real
-//     `stack_lists` function `MaskManager` does, on the *raw* lines
-//     (`*foo` and plain `foo` alike -- `-foo` only ever removes an
-//     earlier exact-text `foo`, never a `*foo`, same plain string
-//     equality `stack_mask_lines` already uses). Only *after* stacking
-//     does real portage keep the subset starting with `*` (stripping the
-//     `*`) as the actual `@system` atom list -- every other stacked line
-//     is a "this package is known to the profile but not part of the
-//     base system" hint with no `@system`-set meaning of its own, so
-//     `system_packages` applies that same post-stack filter. No
-//     repo-level or user-level source exists for this file in real
-//     portage at all -- confirmed by reading (only
-//     `PackagesSystemSet.__init__`'s `profiles` list, never
-//     `config_root`), unlike `package.mask`'s repo-level
-//     `profiles/package.mask`.
-//   - `use.mask`/`use.force` (global USE forcing) ARE now read: every
-//     profile level's own `<level>/use.mask`/`use.force` file, in chain
-//     order, stacked with the identical `stack_lists(incremental=True)`
-//     semantics `package.mask`/`packages` already port (see
-//     `stack_mask_lines`) -- confirmed by reading `UseManager.
-//     getUseMask`/`getUseForce`'s own `pkg=None` case, the one real
-//     `config.py`'s `regenerate()` actually calls to build the *global*
-//     `USE` value portuale's flat model corresponds to: it returns
-//     `stack_lists(self._usemask_list/self._useforce_list,
-//     incremental=True)` directly, never touching a repo-level or
-//     per-package source at all here -- those only exist on the
-//     *per-package* path (`pkg` not `None`), see the
-//     `package.use.mask`/`.force` bullet further below for that follow-up.
-//     Deliberately NOT folded into `use_flags` here at all (an earlier
-//     version of portuale did, which was wrong): real `regenerate()`
-//     applies `self.useforce`/`self.usemask` (which `setcpv()` sets to
-//     the *per-package* `getUseForce(pkg)`/`getUseMask(pkg)` -- global
-//     `use.force`/`use.mask` combined with the atom-scoped
-//     `package.use.force`/`.force`) as the literal *last* step of its
-//     own incremental USE walk (`myflags.update(useforce)` followed by
-//     `myflags.difference_update(usemask)`), strictly *after* the `pkg`
-//     (`package.use`) tier -- so `portage-repo`'s own
-//     `effective_use_flags` applies `use_force`/`use_mask` at that same
-//     relative position instead, alongside the atom-scoped
-//     `package_use_force`/`package_use_mask` it already positions
-//     correctly (force-add first, THEN force-remove, so a flag listed in
-//     both ends up masked, not forced). Exposed on `Config` directly
-//     either way, since real portage's own `forced_flags` (consumed by
-//     `--newuse`'s `reinstall_flags_for_newuse` in `portage-repo`,
-//     previously always empty -- see that function's own doc comment)
-//     is `use.force ∪ use.mask`, not either alone.
-//   - `package.use.mask`/`package.use.force` (per-package USE forcing) ARE
-//     now read too: repo-level (every repo, `::repo`-scoped the same way
-//     `package.mask` scopes an overlay's own entries -- but with no
-//     `masters`-merge step, unlike `package.mask`: real `UseManager.py`
-//     never combines an overlay's own file with its master's own at load
-//     time, only later, per-package, in `getUseMask`/`getUseForce`)
-//     plus every profile level's own file, in chain order --
-//     confirmed by reading
-//     `UseManager.__init__`'s own file/variable table that there's no
-//     user-level source for either file at all (unlike `package.use`
-//     itself), so portuale doesn't invent one. Stored flat, same as
-//     `package_use`; `portage-repo`'s own `effective_use_flags` decides
-//     which entries actually apply to a given candidate and in what
-//     order -- see that crate's doc comment for the atom-specificity
-//     algorithm this needed (real `ordered_by_atom_specificity`, ported)
-//     and a deliberate simplification made along the way: comparison-
-//     operator atoms lose real `best_match_to_list`'s "closest version
-//     wins a tie" refinement, since real-world `package.use.mask`/
-//     `.force` files essentially never use `>`/`<`/`>=`/`<=` atoms in
-//     practice. The stable-vs-`~arch` KEYWORDS distinction named as a
-//     cut here at the time this comment was written -- real portage's
-//     own *separate* `use.stable.mask`/`.force`/`package.use.stable.
-//     mask`/`.force` files and `_isStable` check -- is **now stale**:
-//     see the `use.stable.mask`/`.force` bullet further below for the
-//     follow-up that closed it.
-//   - `USE_EXPAND` itself (PMS 7.3.4) IS now read too: the variable-NAME
-//     list (e.g. `VIDEO_CARDS PYTHON_TARGETS`) accumulates incrementally
-//     across the profile chain and `make.conf`, the same mechanism
-//     `USE`/`ACCEPT_KEYWORDS` already use; each named variable's own
-//     VALUE is read via portuale's own pre-existing "last-level-wins,
-//     no incremental merge" scalar mechanism (the same one `ARCH`
-//     already uses -- real portage is genuinely per-variable-incremental
-//     here, but portuale's own blanket "no incremental merge outside
-//     USE/ACCEPT_KEYWORDS" cut, confirmed above, already covers every
-//     other such variable, so this just extends it rather than inventing
-//     a new one) and expanded into lowercase-`varname_`-prefixed
-//     pseudo-USE-flags folded directly into `use_flags`. `package.use`'s
-//     own `USE_EXPAND`-prefix shorthand (`VIDEO_CARDS: nvidia` lines,
-//     confirmed real-portage-user-level-only by reading
-//     `UseManager.__init__` -- the repo-level/profile-level parsers go
-//     through a different real function that never applies it) IS now
-//     read too, which is why `package.use`'s own bullet above parses
-//     repo-level/profile-level lines separately from user-level ones.
-//     `USE_EXPAND_UNPREFIXED` (real `config.py`'s own companion to
-//     `USE_EXPAND` -- a separate mode where the variable's own value
-//     folds into `use_flags` with *no* prefix at all, not
-//     `lowercase(name)_`) IS now read too, via the exact same
-//     variable-NAME accumulation + last-level-wins scalar VALUE read:
-//     real Gentoo's own `profiles/arch/amd64/make.defaults` sets
-//     `USE_EXPAND_UNPREFIXED="ARCH"`, which is literally how `amd64`/
-//     `x86`/`arm64` exist as plain USE flags at all -- there is no other
-//     mechanism that defines them. See `Config::use_expand_unprefixed`'s
-//     own field doc. `USE_EXPAND_IMPLICIT` + `IUSE_IMPLICIT` +
-//     `USE_EXPAND_VALUES_<v>` are now read too, feeding the real EAPI
-//     5+ `IUSE_EFFECTIVE` computation (`Config::iuse_effective`) -- a
-//     candidate's `is_valid_flag` domain, not just an `emerge --info`
-//     display concern. IUSE-aware `_*` wildcard expansion (`linguas_*`)
-//     is done too, in `portage_repo::effective_use_flags` (see the `_*`
-//     bullet near the top of this comment). `USE_EXPAND_HIDDEN` is read
-//     too now (`Config::use_expand_hidden`) -- genuinely display-only
-//     for EAPI 5+, honoured only by `emerge --pretend -v`'s own
-//     `USE_EXPAND` grouping (`portage_repo`), never by resolution.
-//   - `use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
-//     (PMS 5+, always recognized here per portuale's own "no EAPI
-//     parametrization" precedent) ARE now read too, closing the
-//     stable-vs-`~arch` cut named above: ported as `portage-repo`'s own
-//     `is_stable`, grounded against real `KeywordsManager.isStable` --
-//     genuinely more subtle than a raw "no `~` prefix" check (a
-//     candidate counts as stable if replacing *every* one of its own
-//     KEYWORDS with its `~`-prefixed unstable form would make it
-//     invisible under the current `ACCEPT_KEYWORDS`/
-//     `package.accept_keywords`). `use_stable_force`/`use_stable_mask`
-//     stay separate `Config` fields rather than folding into
-//     `use_flags` like `use_force`/`use_mask` do, since real
-//     `getUseMask`/`getUseForce`'s own global (`pkg=None`) branch never
-//     even looks at the stable variant at all -- "stable" is inherently
-//     a per-candidate property with no meaningful global value, so
-//     `portage-repo`'s own `effective_use_flags` applies these
-//     conditionally instead, once it knows a specific candidate's own
-//     stability. `use.stable.mask`/`.force` read from the profile chain
-//     only (matching portuale's own already-established profile-only
-//     sourcing for the non-stable global files, not real per-package
-//     `getUseMask`/`getUseForce`'s own additional repo-level source for
-//     them, which portuale's global mechanism never had either);
-//     `package.use.stable.mask`/`.force` read repo-level (every repo,
-//     `::repo`-scoped) plus profile-chain, mirroring
-//     `package.use.mask`/`.force`'s own sourcing exactly, no user-level
-//     source (same `UseManager.__init__` file/variable table
-//     confirmation).
-//
-// One real, deliberately-preserved quirk from lib/portage/package/ebuild/
-// config.py (see the comment above its `expand_map.pop("USE", None)`):
-// `${VAR}` substitution persists across profile levels for every variable
-// *except* USE, which is reset before each level's make.defaults is
-// parsed. This stops a parent profile's accumulated USE from leaking into
-// a child's own `USE="${USE} flag"` self-append. In the flat, single-set
-// consumption model portuale uses (no package.use interaction, unlike
-// the real bug this quirk guards against), that particular scenario
-// usually doesn't change the final *set* of enabled flags -- it's ported
-// anyway for fidelity with the real algorithm, since it's cheap to do and
-// it's what real portage actually does.
+// Scope cuts a caller must know (details in LLM/code-notes/portage-profile/lib.md):
+// - Cross-repo `parent` references (`reponame:path`, `:path`) resolve, gated
+//   on the node's repo declaring `profile-formats = portage-2`; an absent key
+//   means "no `portage-2`" (no EAPI-conditional default).
+// - ARCH-based KEYWORDS validation is out; `_*` IUSE-aware expansion lives in
+//   `portage-repo::effective_use_flags`; `USE_EXPAND` (+`_UNPREFIXED`,
+//   `_IMPLICIT`, `_HIDDEN`, `IUSE_IMPLICIT`, `USE_EXPAND_VALUES_<v>`) is read.
+// - Full `USE_ORDER` chain modeled (`env.d` … `env`); see `Config` fields.
+// - No line continuation / multi-line quoted values; `#` is a comment only at
+//   line start. Non-USE/ACCEPT_KEYWORDS vars are last-wins scalars.
+// - `package.mask`/`.unmask`: main repo + every profile level + user files,
+//   plus every overlay's repo-level entries (`::repo`-scoped, implicit
+//   `masters` = main repo only). No eclass inheritance, no explicit `masters =`.
+// - `package.accept_keywords`: profile-chain + user-level, purely additive; a
+//   bare atom gains the implicit `~arch` default at both levels.
+// - `package.use`: repo-level, per-profile-level, and user-level sources at
+//   their own `USE_ORDER` positions; repo `make.defaults` USE leads the `repo`
+//   layer; only user-level lines get the `USE_EXPAND`-prefix shorthand.
+// - `packages` (`@system`), `@profile` (`profile-set` levels), and
+//   `package.provided` files are read; no repo/user source for the first two.
+// - `use.mask`/`use.force` (+`.stable.` variants) and `package.use.mask`/
+//   `.force` (+`.stable.` variants) are read but never folded into `use_flags`;
+//   `portage-repo` applies them last (force-add, then force-remove).
+//   Stability for the `.stable.` variants comes from `portage-repo::is_stable`.
+// - `license_groups` (+`ACCEPT_LICENSE`/`package.license`), `ACCEPT_PROPERTIES`
+//   (`*` default), `ACCEPT_RESTRICT`, `PKGDIR` (`/var/cache/binpkgs` default),
+//   `arch.list`, and `binrepos.conf`/`PORTAGE_BINHOST` are read.
+// - `${VAR}` substitution persists across profile levels for every variable
+//   except USE, which resets before each level's `make.defaults`.
+// Portage: ebuild/config.py, MaskManager.py, KeywordsManager, UseManager,
+//   LicenseManager, _sets/profiles.py, _config/LocationsManager.py
 
 use std::collections::{HashMap, HashSet};
 
@@ -323,7 +74,7 @@ pub use phase_environ::{
 };
 
 /// Error resolving profile/config files. Distinct variants mirror the
-/// real message shapes so `Display` reproduces them byte-for-byte.
+/// Portage message shapes so `Display` reproduces them byte-for-byte.
 #[derive(Debug)]
 pub enum Error {
     /// `reading {path}: {source}`

@@ -4,19 +4,8 @@ use crate::*;
 
 /// One `<eroot>/etc/profile.env` read: the scalar layer, the tracked
 /// incremental layers, and whether `PATH` was assigned. Shared by the
-/// first load in `resolve_config` and by `Config::reload_env_d`, so the
-/// two can never drift apart in what "reading env.d" means.
-///
-/// Parsing mirrors the first load's long-standing semantics (real
-/// `_get_env_d`'s `getconfig(..., expand=False)` plus portuale's eager
-/// within-file `${VAR}` chaining): each line's optional leading
-/// `export ` is stripped, the value is [`shlex_token`]-processed by
-/// [`parse_kv_line`] and `${VAR}`-substituted against the earlier lines
-/// of this same file (plus the process env fallback [`substitute`]
-/// already has), seeding every later line -- real's `expand_map =
-/// env_d.copy()` seeding. A real sourced `profile.env` re-assigning a
-/// key keeps the last assignment (bash semantics), as does each tracked
-/// incremental's recorded layer. The caller applies `_env_d_blacklist`.
+/// first load and `Config::reload_env_d` so the two cannot drift apart.
+// Portage: config.py, _get_env_d (getconfig with expand=False)
 pub(crate) struct EnvdParse {
     pub(crate) vars: HashMap<String, String>,
     pub(crate) incremental_layers: HashMap<String, Vec<String>>,
@@ -50,12 +39,9 @@ pub(crate) fn parse_envd_text(text: &str) -> EnvdParse {
     }
 }
 
-/// Real `config.py`'s `configdict["env.d"]["USE"]` -- every `USE=` value
-/// in `<eroot>/etc/profile.env` (real `_get_env_d`'s
-/// `getconfig(..., expand=False)`: an optional leading `export ` keyword,
-/// then `KEY=value` with quote removal, no `${VAR}` expansion). Returned
-/// in file order for `effective_use_flags` to fold in via
-/// `apply_incremental`. A missing file yields an empty list.
+/// Every `USE=` value in `<eroot>/etc/profile.env`, in file order, for
+/// `effective_use_flags` to fold in. A missing file yields an empty list.
+// Portage: config.py, configdict["env.d"]["USE"]
 pub(crate) fn read_envd_use_tokens(eroot: &Path) -> Vec<String> {
     let Ok(text) = fs::read_to_string(eroot.join("etc/profile.env")) else {
         return Vec::new();

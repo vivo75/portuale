@@ -2,21 +2,17 @@
 
 use crate::*;
 
-/// Splits `text` into logical assignment lines, joining physical lines
-/// continued either by a trailing unescaped `\` or by an unclosed
-/// `'`/`"` quote -- real `getconfig`'s `shlex` reads across newlines
-/// inside quotes, which `cnf/make.globals` relies on for its multi-line
-/// `FEATURES=`. Quote characters are kept; `parse_kv_line` strips the
-/// outer pair. Joined physical lines are separated by a single space.
+/// Split `text` into logical lines, joining continuations (trailing `\`)
+/// and lines inside an unclosed quote. Quote characters are kept for
+/// `parse_kv_line` to strip.
 pub(crate) fn logical_lines(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
     for raw in text.lines() {
-        // A full-line comment outside any continuation is skipped whole
-        // (real `getconfig`'s `shlex` sets `commenters = "#"`) -- without
-        // this a `#` inside comment prose, e.g. `Don't`, would open a
-        // bogus quote that swallows the rest of the file.
+        // A full-line `#` comment outside any continuation is skipped whole;
+        // without this a `#` in prose (e.g. `Don't`) would open a bogus
+        // quote swallowing the rest of the file.
         if quote.is_none() && cur.is_empty() && raw.trim_start().starts_with('#') {
             continue;
         }
@@ -72,25 +68,10 @@ pub(crate) fn logical_lines(text: &str) -> Vec<String> {
     out
 }
 
-/// Real `portage.util.getconfig` tokenizes a `KEY=VALUE` line with a
-/// POSIX `shlex` lexer (`shlex.py:read_token`, `posix=True`,
-/// `wordchars` extended by getconfig to `~!@#$%*_\:;?,./-+{}`,
-/// `quotes = "'"`, `escape = \`); the value token is quote-removed and
-/// backslash-processed *before* `varexpand`
-/// (`portage/util/__init__.py:885`) ever sees it. Portuale used to strip
-/// only the outer quote pair, so an escaped `\"` kept its backslash and
-/// `\$` reached the `${VAR}` regex, which expanded it. On this host that
-/// corrupted every `make.globals` fetch command: real resolves
-/// `wget ... -O "${DISTDIR}/${FILE}" "${URI}"`, portuale's value was
-/// `wget ... -O \"\/var/cache/distfiles/\\" \"\\"` (backlog #70).
-///
-/// Mirrors shlex's states:
-///   - the token ends at unquoted whitespace (or `#`, shlex's commenter);
-///   - inside `"` only `\"` -> `"` and `\\` -> `\` lose the backslash;
-///     every other `\x` (notably `\$`) survives to [`substitute`];
-///   - inside `'` every character is literal until the closing `'`;
-///   - outside quotes `\x` -> `x`, and a quote adjacent to a token opens
-///     its quoted state and continues the same token.
+/// Tokenize a `KEY=VALUE` right-hand side with POSIX-shlex semantics
+/// (quote removal, backslash handling); the value token is processed
+/// *before* [`substitute`] ever sees it.
+// Portage: portage.util.getconfig (shlex lexer)
 pub(crate) fn shlex_token(raw: &str) -> String {
     const WHITESPACE: [char; 4] = [' ', '\t', '\r', '\n'];
     let chars: Vec<char> = raw.chars().collect();
@@ -108,8 +89,8 @@ pub(crate) fn shlex_token(raw: &str) -> String {
                     quote = None;
                     pos += 1;
                 } else if q == '"' && current == '\\' && pos + 1 < chars.len() {
-                    // shlex's escape state inside `"`: only the quote
-                    // itself and the escape character are consumed.
+                    // Inside `"`, only the quote and the escape character
+                    // itself consume the backslash.
                     let next = chars[pos + 1];
                     if next == '\\' || next == '"' {
                         out.push(next);
@@ -148,19 +129,10 @@ pub(crate) fn shlex_token(raw: &str) -> String {
     out
 }
 
-/// Real `varexpand` (`portage/util/__init__.py:885-1015`) over the
-/// [`shlex_token`]-processed value: while not inside a surviving single
-/// quote (e.g. the `'`s of a `"'${VAR}'"` value), an escaped `\$` is a
-/// literal `$`, `\\` is a literal `\` (plus real's bug-compatible extra
-/// character when the next one is a quote or `$`), an escaped newline
-/// disappears, any other `\x` keeps both characters, and
-/// `${VARNAME}`/`$VARNAME` expand (a name already set earlier in the
-/// config wins, else the process environment -- as bash sees it when it
-/// sources `make.conf` -- else empty; real warns and returns an empty
-/// value for a malformed reference, which this mirrors without the
-/// warning). The environment fallback is what lets a fixture write a
-/// relocatable `PKGDIR="${PORTAGE_CONFIGROOT}/pkgdir"` instead of an
-/// absolute path.
+/// Expand `${VAR}`/`$VAR` in a [`shlex_token`]-processed value: config
+/// names set earlier win, else the process environment, else empty.
+/// Malformed references expand to empty without warning.
+// Portage: portage/util/__init__.py, varexpand
 pub(crate) fn substitute(value: &str, scalars: &HashMap<String, String>) -> String {
     portage_util::varexpand(value, |name| {
         scalars
@@ -170,12 +142,9 @@ pub(crate) fn substitute(value: &str, scalars: &HashMap<String, String>) -> Stri
     })
 }
 
-/// Parses one `KEY="value"` / `KEY='value'` / `KEY=value` line, returning
-/// the value as the `shlex`-tokenized text ([`shlex_token`]; real
-/// `getconfig` runs this even with `expand=False`). `None` for comments,
-/// blank lines, or anything that isn't a simple assignment (conditionals,
-/// function defs, etc. -- out of scope; real make.defaults/make.conf
-/// files don't use them).
+/// Parse one `KEY=value` line, returning the shlex-tokenized value.
+/// `None` for comments, blanks, or non-assignments (conditionals,
+/// function defs, …).
 pub(crate) fn parse_kv_line(line: &str) -> Option<(&str, String)> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -192,12 +161,9 @@ pub(crate) fn parse_kv_line(line: &str) -> Option<(&str, String)> {
     Some((key, shlex_token(&line[eq + 1..])))
 }
 
-/// Resolves `source <path>` directives against `config_root` as if it
-/// were `/` (chroot-style), matching PORTAGE_CONFIGROOT/ROOT semantics
-/// elsewhere in portuale -- an absolute `source /etc/make.local` reads
-/// `<config_root>/etc/make.local`, not the real host path. A missing
-/// sourced file is silently skipped (lenient default; real bash would
-/// error, but no fixture or real usage in portuale relies on that).
+/// Process one make.conf-style file, following `source <path>` directives
+/// (absolute paths resolve against `config_root` chroot-style). A missing
+/// sourced file is silently skipped; cycles are visited once.
 pub(crate) fn process_make_conf_file(
     path: &Path,
     config_root: &Path,
@@ -207,7 +173,7 @@ pub(crate) fn process_make_conf_file(
 ) -> Result<(), Error> {
     let canon = match path.canonicalize() {
         Ok(c) => c,
-        Err(_) => return Ok(()), // missing file: lenient no-op, see doc comment
+        Err(_) => return Ok(()), // missing file: lenient no-op
     };
     if !visited_sources.insert(canon.clone()) {
         return Ok(());
@@ -256,17 +222,9 @@ pub(crate) fn process_make_conf_file(
     Ok(())
 }
 
-/// Reads one `/etc/portage/env/<name>` file as an ordered list of
-/// `(KEY, value)` assignments -- real `getconfig(penvfile,
-/// allow_sourcing=True)`. `source <path>` lines are expanded in place
-/// (absolute against `config_root` chroot-style, relative against the
-/// file's own directory), the same resolution `process_make_conf_file`
-/// uses; a `${VAR}` in a value is left literal here and substituted by
-/// the caller (`expand_package_env_files`) against the per-entry
-/// expand map. A missing file yields an empty
-/// list (real portage warns from `setcpv`; portuale follows its
-/// standing "no warnings from deep in config resolution" precedent).
-/// `visited` guards a `source` cycle.
+/// Read one `/etc/portage/env/<name>` file as ordered `(KEY, value)`
+/// pairs, expanding `source` lines in place. `${VAR}` stays literal for
+/// the caller to substitute. A missing file yields an empty list.
 pub(crate) fn read_env_file_kv(
     path: &Path,
     config_root: &Path,
@@ -304,18 +262,9 @@ pub(crate) fn read_env_file_kv(
     out
 }
 
-/// One `package.env` entry's env files expanded in order: real
-/// `_grab_pkg_env` copies the global expand map once per package
-/// (`env.d` + `make.globals` + `make.defaults` + `make.conf` values --
-/// portuale's own `scalars` at the `package.env` read site) and reads
-/// each file with `getconfig(..., expand=that map)`, which also feeds
-/// every assignment back into the map -- so a later line (or a later
-/// file of the same entry) sees earlier ones, exactly like
-/// `make.conf`'s own within-file chaining. Returns every pair in file
-/// order, `${VAR}`-substituted; callers split the `USE=` half (tokens
-/// split *after* substitution) from the scalar half. Per-package
-/// values never flow back into `scalars` (real: "don't want
-/// per-package settings to pollute the global expand_map").
+/// Expand one `package.env` entry's env files in order, threading each
+/// assignment into the expand map for later lines. Per-package values
+/// never flow back into the global map.
 pub(crate) fn expand_package_env_files(
     env_dir: &Path,
     files: &[String],

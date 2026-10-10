@@ -1,50 +1,32 @@
-//! binrepos.conf entries.
+//! binrepos.conf entries for `--getbinpkg` resolution.
 
 use crate::*;
 
-/// One `--getbinpkg` binary-package repository (real
-/// `portage.binrepo.config.BinRepoConfig`, narrowed to what a
-/// `--pretend` resolution needs: no fetch/resume commands, no
-/// signature-verification config, no `getbinpkg-exclude`/`-include` --
-/// those gate an actual download, which `--pretend` never does).
+/// One `--getbinpkg` binary-package repository (only what `--pretend`
+/// resolution needs; no fetch or download-gating config).
+// Portage: binrepo/config.py, BinRepoConfig
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinRepo {
-    /// The `[section]` name, or -- for an implicit `PORTAGE_BINHOST`
-    /// entry -- the real `md5(uri)` hex-digest fallback.
+    /// The `[section]` name, or the `md5(uri)` hex-digest fallback for an
+    /// implicit `PORTAGE_BINHOST` entry.
     pub name: String,
-    /// `sync-uri`, real `_normalize_uri` (trailing `/` stripped).
+    /// `sync-uri` with any trailing `/` stripped.
     pub sync_uri: String,
-    /// `priority` (real `int(priority)`, or `0` on parse failure /
-    /// absence -- real sorts a `None` priority as `0`).
+    /// `priority` (`int(priority)`, `0` on parse failure or absence).
     pub priority: i32,
-    /// `location` (real `BinRepoConfig.location`): the explicit
-    /// `binrepos.conf` value, or `None`. Real fills a
-    /// `<EPREFIX>/var/cache/binhost/<name>` fallback only when
-    /// `PORTAGE_BINHOST` is unset; portuale mirrors that. Display-only
-    /// (surfaced by `emerge --info`'s `Binary Repositories:` block).
+    /// `location`: explicit value or `None`. Display-only (`emerge --info`).
     pub location: Option<String>,
-    /// `verify-signature` (real `BinRepoConfig.verify_signature`, a
-    /// `_bool_opts` member). Real's shipped `cnf/binrepos.conf` sets
-    /// `[DEFAULT] verify-signature = true`, so portuale defaults to
-    /// `true` (it does not parse that global `[DEFAULT]` itself) and lets
-    /// a section's own `verify-signature = false` override.
+    /// `verify-signature` (default `true`).
     pub verify_signature: bool,
-    /// `frozen` (real `BinRepoConfig.frozen`, a `_bool_opts` member,
-    /// default `"false"`): a frozen binrepo's cached `Packages` index is
-    /// used as-is, never refreshed (real `bintree._populate_remote_repo`
-    /// raises `UseCachedCopyOfRemoteIndex("frozen")`, backlog #192).
+    /// `frozen` (default `false`): cached `Packages` used as-is, never
+    /// refreshed.
     pub frozen: bool,
 }
 
 impl BinRepo {
-    /// The directory holding this binrepo's own `Packages` index on disk
-    /// under `root` (real `bintree._populate_remote`'s own
-    /// `pkgindex_file`, `bintree.py:1496-1504`):
-    /// `<EROOT>/var/cache/edb/binhost/<host>/<url-path>/` for an
-    /// `http(s)://`/`ssh://` `sync-uri`; the URI's own path for a
-    /// `file://` URI or a bare filesystem path. `--pretend` never
-    /// fetches, so a missing index just means "this binrepo contributes
-    /// no candidates".
+    /// This binrepo's on-disk `Packages` index dir under `root`. A
+    /// missing index means "no candidates" (`--pretend` never fetches).
+    // Portage: bintree.py, _populate_remote
     pub fn packages_dir(&self, root: &std::path::Path) -> std::path::PathBuf {
         let uri = &self.sync_uri;
         if let Some(rest) = uri.strip_prefix("file://") {
@@ -64,25 +46,9 @@ impl BinRepo {
     }
 }
 
-/// Real `BinRepoConfigLoader` (`lib/portage/binrepo/config.py:97-172`),
-/// narrowed. Parses `binrepos.conf`'s own `[section]` / `key = value`
-/// INI (`sync-uri`, `priority`, `location`, `verify-signature` and
-/// `frozen` are read), then appends one
-/// implicit `BinRepo` per whitespace-separated `PORTAGE_BINHOST` URI
-/// that isn't already a section's `sync-uri` (real "Convert
-/// PORTAGE_BINHOST entries into implicit binrepos.conf ones", iterated in
-/// reverse with an incrementing `priority`). Each URI is
-/// `_normalize_uri`'d (trailing `/` stripped). Returns the repos sorted
-/// by `(priority, name)` -- real `sorted(repos, key=lambda repo:
-/// (repo.priority or 0, repo.name or repo.name_fallback))`.
-///
-/// **Documented narrowings**: the implicit-entry name is `md5(uri)` in
-/// real portage; portuale has no md5, so it uses the URI's own
-/// `host/path` (still stable and unique per URI, only ever surfaced as a
-/// sort key here). `[DEFAULT]` interpolation, `getbinpkg-exclude`/
-/// `-include`, `fetchcommand`/`resumecommand`, signature-verification
-/// settings, and the `location =` fallback for a section without
-/// `PORTAGE_BINHOST` are all out (none affect a `--pretend` resolution).
+/// Parses `binrepos.conf`, appends implicit `PORTAGE_BINHOST` entries,
+/// and returns the repos sorted by `(priority, name)`.
+// Portage: binrepo/config.py, BinRepoConfigLoader
 pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
     let normalize = |u: &str| u.trim_end_matches('/').to_string();
     let mut repos: Vec<BinRepo> = Vec::new();
@@ -142,10 +108,7 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
         }
         if let Some((k, v)) = line.split_once('=') {
             match k.trim() {
-                // `${VAR}` in `sync-uri` expands from the environment
-                // (portuale convenience -- real configparser doesn't -- so a
-                // fixture can use `file://${PORTAGE_CONFIGROOT}/binhost`
-                // instead of an absolute, non-relocatable path).
+                // `${VAR}` expands from the environment (relocatable fixtures).
                 "sync-uri" => sync_uri = Some(substitute(v.trim(), &HashMap::new())),
                 "priority" => priority = v.trim().parse().unwrap_or(0),
                 "location" => location = Some(substitute(v.trim(), &HashMap::new())),
@@ -155,8 +118,6 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
                         "true" | "yes" | "1" | "on"
                     )
                 }
-                // Real `binrepo/config.py` `_bool_opts` (`"frozen":
-                // "false"` default): a frozen binrepo is never refreshed.
                 "frozen" => {
                     frozen = matches!(
                         v.trim().to_ascii_lowercase().as_str(),
@@ -179,7 +140,7 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
     );
     repos.retain(|r| r.name != "DEFAULT");
 
-    // Implicit PORTAGE_BINHOST entries (real: reversed, incrementing priority).
+    // Implicit PORTAGE_BINHOST entries, reversed with incrementing priority.
     let mut current_priority = 0;
     for uri in portage_binhost.split_whitespace().rev() {
         let uri = normalize(uri);
@@ -193,9 +154,7 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
                 name,
                 sync_uri: uri,
                 priority: current_priority,
-                // Real: with `PORTAGE_BINHOST` set, the
-                // `<EPREFIX>/var/cache/binhost/<name>` location fallback
-                // is skipped -- an implicit entry keeps `location = None`.
+                // No `<EPREFIX>/var/cache/binhost/<name>` fallback with `PORTAGE_BINHOST`.
                 location: None,
                 verify_signature: true,
                 frozen: false,
