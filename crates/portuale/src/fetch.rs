@@ -2353,7 +2353,7 @@ mod tests {
     /// and the third-party expansions again (tried once) -- or that
     /// primary-uri group first under `RESTRICT=primaryuri`.
     #[test]
-    fn assemble_candidates_groups_a_files_uris_like_real_listonly() {
+    fn assemble_candidates_groups_a_files_uris_like_portage_listonly() {
         use std::collections::HashMap;
         let mut third: HashMap<String, Vec<String>> = HashMap::new();
         third.insert(
@@ -2477,7 +2477,7 @@ mod tests {
     }
 
     #[test]
-    fn checksum_failure_max_tries_parses_like_real() {
+    fn checksum_failure_max_tries_parses_like_portage() {
         assert_eq!(checksum_failure_max_tries(None), (5, vec![]));
         assert_eq!(checksum_failure_max_tries(Some("3")), (3, vec![]));
         assert_eq!(

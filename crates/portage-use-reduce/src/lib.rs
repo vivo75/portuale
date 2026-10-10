@@ -1430,7 +1430,7 @@ mod tests {
     /// `flat=False`/`opconvert=False` default), serialized the same way
     /// `serialize_dep_tree` does (`(`/`)` around every sublist).
     #[test]
-    fn structured_matches_real_use_reduce_normalization() {
+    fn structured_matches_portage_use_reduce_normalization() {
         let cases: &[(&str, &[&str], &[&str])] = &[
             ("c/a c/b", &[], &["c/a", "c/b"]),
             ("( c/a c/b )", &[], &["c/a", "c/b"]),

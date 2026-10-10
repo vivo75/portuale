@@ -2152,7 +2152,7 @@ mod tests {
     /// `python3 3rdparty/portage/bin/doins.py --bogus` with
     /// `PYTHONPATH=3rdparty/portage/lib`, Portage 3.0.82.2).
     #[test]
-    fn argparse_error_exits_2_with_reals_usage_text() {
+    fn argparse_error_exits_2_with_portages_usage_text() {
         let out = helper(&["--bogus"]);
         assert_eq!(out.status.code(), Some(2), "{out:?}");
         assert_eq!(
@@ -2169,7 +2169,7 @@ mod tests {
 
     /// `--help` prints real's help text byte for byte (same probe).
     #[test]
-    fn outer_help_matches_real_byte_for_byte() {
+    fn outer_help_matches_portage_byte_for_byte() {
         let out = helper(&["--help"]);
         assert_eq!(out.status.code(), Some(0), "{out:?}");
         assert_eq!(
@@ -2214,7 +2214,7 @@ mod tests {
     /// `--insoptions=-h` prints the install-option parser's help (same
     /// probe setup; real exits 0 from `_parse_install_options`).
     #[test]
-    fn install_option_help_matches_real_byte_for_byte() {
+    fn install_option_help_matches_portage_byte_for_byte() {
         let out = helper(&[
             "--helper=doins",
             "--dest=/tmp/doins-probe-dest",
@@ -2239,7 +2239,7 @@ mod tests {
     /// A bad owner/group name is an argparse type error: exit 2 with
     /// real's text (same probe setup).
     #[test]
-    fn install_option_type_error_exits_2_with_reals_text() {
+    fn install_option_type_error_exits_2_with_portages_text() {
         let out = helper(&[
             "--helper=doins",
             "--dest=/tmp/doins-probe-dest",
@@ -2289,7 +2289,7 @@ mod tests {
     /// Every argparse form real accepts (probed with a harness
     /// importing real's parser logic).
     #[test]
-    fn install_option_forms_match_real() {
+    fn install_option_forms_match_portage() {
         let full = |owner, group, mode, p| InstallParsed {
             owner,
             group,
@@ -2420,7 +2420,7 @@ mod tests {
     /// The xattr excluder: whitespace-split globs, fnmatch semantics
     /// (probed against `fnmatch.fnmatch` via real's cases).
     #[test]
-    fn xattr_excluder_matches_real() {
+    fn xattr_excluder_matches_portage() {
         assert!(!xattr_excluded("", b"user.keep"));
         assert!(!xattr_excluded("   ", b"user.keep"));
         assert!(xattr_excluded("user.drop", b"user.drop"));
@@ -2489,7 +2489,7 @@ mod tests {
     /// before `--dest` exists (probed live: rc 1, last traceback line
     /// `ValueError: No closing quotation`, no dest dir).
     #[test]
-    fn unterminated_insoptions_quote_is_reals_value_error() {
+    fn unterminated_insoptions_quote_is_portages_value_error() {
         let tmp = TempDir::new("doins-shlex");
         let src = tmp.path().join("f");
         std::fs::write(&src, "x\n").unwrap();
@@ -3428,7 +3428,7 @@ mod tests {
     /// `FileNotFoundError: [Errno 2] No such file or directory:
     /// b'/nonexistent/abs' -> b'/proc/x/p/abs-link'`, rc 1.
     #[test]
-    fn symlink_failure_names_target_and_dest_like_real() {
+    fn symlink_failure_names_target_and_dest_like_portage() {
         let tmp = TempDir::new("doins-symlink-fail");
         std::fs::create_dir_all(tmp.join("src/p")).unwrap();
         std::os::unix::fs::symlink("/nonexistent/abs", tmp.join("src/p/abs-link")).unwrap();

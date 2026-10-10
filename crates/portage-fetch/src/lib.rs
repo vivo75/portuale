@@ -1235,7 +1235,7 @@ mod tests {
     /// set to `-o ServerAliveInterval=5 -o User=portage`: same argv with
     /// that string as the last element.
     #[test]
-    fn expand_and_split_matches_real_varexpand_on_fetchcommand_ssh() {
+    fn expand_and_split_matches_portage_varexpand_on_fetchcommand_ssh() {
         let command = r#"bash -c "x=\${2#ssh://} ; host=\${x%%/*} ; port=\${host##*:} ; host=\${host%:*} ; [[ \${host} = \${port} ]] && port= ; exec rsync --rsh=\"ssh \${port:+-p\${port}} \${3}\" -avP \"\${host}:/\${x#*/}\" \"\$1\"" rsync "${DISTDIR}/${FILE}" "${URI}" "${PORTAGE_SSH_OPTS}""#;
         let base = vars(&[
             ("DISTDIR", "/var/cache/distfiles"),
@@ -1280,7 +1280,7 @@ mod tests {
     /// single-quote suspension (captured with the same python command;
     /// `['cp', 'x']` for the unknown-vars line).
     #[test]
-    fn expand_and_split_varexpand_unknown_vars_and_escapes_match_real() {
+    fn expand_and_split_varexpand_unknown_vars_and_escapes_match_portage() {
         assert_eq!(
             expand_and_split("cp $NOSUCH ${ALSO_MISSING} x", &vars(&[("FILE", "f")])),
             vec!["cp", "x"]
@@ -1299,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn digests_variable_formats_like_real_and_skips_size() {
+    fn digests_variable_formats_like_portage_and_skips_size() {
         let mut hashes = HashMap::new();
         hashes.insert("SHA512".to_string(), "bb".to_string());
         hashes.insert("BLAKE2B".to_string(), "aa".to_string());

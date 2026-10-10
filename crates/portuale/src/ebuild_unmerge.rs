@@ -156,9 +156,9 @@ use std::path::{Path, PathBuf};
 
 /// Whether `command` is the one real unmerge command this module
 /// implements -- `ebuild.rs` checks this alongside `ebuild_phases::
-/// is_real_phase_command`/`ebuild_merge::is_real_merge_command` before
+/// is_phase_command`/`ebuild_merge::is_merge_command` before
 /// routing to real execution.
-pub fn is_real_unmerge_command(command: &str) -> bool {
+pub fn is_unmerge_command(command: &str) -> bool {
     command == "unmerge"
 }
 
@@ -917,11 +917,11 @@ mod tests {
     }
 
     #[test]
-    fn is_real_unmerge_command_covers_exactly_unmerge() {
-        assert!(is_real_unmerge_command("unmerge"));
-        assert!(!is_real_unmerge_command("merge"));
-        assert!(!is_real_unmerge_command("qmerge"));
-        assert!(!is_real_unmerge_command("install"));
+    fn is_unmerge_command_covers_exactly_unmerge() {
+        assert!(is_unmerge_command("unmerge"));
+        assert!(!is_unmerge_command("merge"));
+        assert!(!is_unmerge_command("qmerge"));
+        assert!(!is_unmerge_command("install"));
     }
 
     #[test]
@@ -1596,7 +1596,7 @@ mod tests {
     /// than relying on the real default through the full `run_merge`/
     /// `run_unmerge` chain.
     #[test]
-    fn real_unmerge_deletes_a_locally_modified_file_by_real_default() {
+    fn real_unmerge_deletes_a_locally_modified_file_by_portage_default() {
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");

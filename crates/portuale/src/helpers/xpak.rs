@@ -516,7 +516,7 @@ mod tests {
     /// this input (probed live 2026-10-08, tmpfs; /var/tmp is utf8only
     /// zfs here and refuses the name).
     #[test]
-    fn non_utf8_names_are_packed_like_real_surrogateescape() {
+    fn non_utf8_names_are_packed_like_portage_surrogateescape() {
         let tmp = if Path::new("/dev/shm").is_dir() {
             TempDir::new_in(Path::new("/dev/shm"), "xpak-nonutf8")
         } else {
@@ -548,7 +548,7 @@ mod tests {
     /// its `apply_stat_permissions` hits the original path before the
     /// rename (probed live: 0600 in, 0644 out under umask 022).
     #[test]
-    fn broken_hardlink_gets_the_creation_mode_like_real() {
+    fn broken_hardlink_gets_the_creation_mode_like_portage() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = TempDir::new("xpak-mode");
         let bi = tmp.path().join("bi");

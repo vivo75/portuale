@@ -1625,7 +1625,7 @@ mod tests {
     }
 
     #[test]
-    fn stamp_state_follows_the_real_rule() {
+    fn stamp_state_follows_the_portage_rule() {
         assert_eq!(stamp_state(None, 5), MetadataStamp::Absent);
         assert_eq!(
             stamp_state(Some(b"#format=1\nSLOT=0\n#dir_mtime=5\n"), 5),

@@ -225,16 +225,16 @@ use std::path::{Path, PathBuf};
 
 /// Whether `command` is the one real merge command this module implements
 /// -- `ebuild.rs` checks this alongside `ebuild_phases::
-/// is_real_phase_command` before routing to real execution.
-pub fn is_real_merge_command(command: &str) -> bool {
+/// is_phase_command` before routing to real execution.
+pub fn is_merge_command(command: &str) -> bool {
     command == "merge"
 }
 
 /// Whether `command` is real `qmerge` -- checked separately from
-/// `is_real_merge_command` since `ebuild.rs` routes it to `run_qmerge`,
+/// `is_merge_command` since `ebuild.rs` routes it to `run_qmerge`,
 /// not `run_merge` (real `qmerge` skips the `install` phase entirely,
 /// see `run_qmerge`'s own doc comment).
-pub fn is_real_qmerge_command(command: &str) -> bool {
+pub fn is_qmerge_command(command: &str) -> bool {
     command == "qmerge"
 }
 
@@ -5265,19 +5265,19 @@ mod tests {
     use portage_util::TempDir;
 
     #[test]
-    fn is_real_merge_command_covers_exactly_merge() {
-        assert!(is_real_merge_command("merge"));
-        assert!(!is_real_merge_command("qmerge"));
-        assert!(!is_real_merge_command("unmerge"));
-        assert!(!is_real_merge_command("install"));
+    fn is_merge_command_covers_exactly_merge() {
+        assert!(is_merge_command("merge"));
+        assert!(!is_merge_command("qmerge"));
+        assert!(!is_merge_command("unmerge"));
+        assert!(!is_merge_command("install"));
     }
 
     #[test]
-    fn is_real_qmerge_command_covers_exactly_qmerge() {
-        assert!(is_real_qmerge_command("qmerge"));
-        assert!(!is_real_qmerge_command("merge"));
-        assert!(!is_real_qmerge_command("unmerge"));
-        assert!(!is_real_qmerge_command("install"));
+    fn is_qmerge_command_covers_exactly_qmerge() {
+        assert!(is_qmerge_command("qmerge"));
+        assert!(!is_qmerge_command("merge"));
+        assert!(!is_qmerge_command("unmerge"));
+        assert!(!is_qmerge_command("install"));
     }
 
     #[test]
@@ -5410,7 +5410,7 @@ mod tests {
     }
 
     #[test]
-    fn format_contents_line_matches_real_dblink_format() {
+    fn format_contents_line_matches_portage_dblink_format() {
         assert_eq!(
             format_contents_line("dir", "/usr/share/x", None, None, None),
             "dir /usr/share/x\n"
@@ -5452,7 +5452,7 @@ mod tests {
     /// (`vartree.py:6376-6379`) re-merges a byte-identical file whose
     /// xattrs differ, but only under `FEATURES=xattr`.
     #[test]
-    fn merge_tree_carries_xattrs_like_real_movefile() {
+    fn merge_tree_carries_xattrs_like_portage_movefile() {
         use std::os::unix::ffi::OsStrExt;
         use std::os::unix::fs::MetadataExt;
         let b = |p: &Path| p.as_os_str().as_bytes().to_vec();
@@ -7533,7 +7533,7 @@ mod tests {
     /// which proves the same real logic via an explicit `protect_owned:
     /// true` rather than relying on the real default.
     #[test]
-    fn ordinary_collision_aborts_by_real_default_via_protect_owned() {
+    fn ordinary_collision_aborts_by_portage_default_via_protect_owned() {
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");

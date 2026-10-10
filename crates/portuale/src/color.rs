@@ -389,7 +389,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn colorize_matches_real_portage_escape_codes() {
+    fn colorize_matches_portage_escape_codes() {
         let c = Colorizer::new(true);
         // Real `colorize("green", "N")` = codes["green"] + "N" + reset.
         assert_eq!(c.c("green", "N"), "\x1b[32;01mN\x1b[39;49;00m");

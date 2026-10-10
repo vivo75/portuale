@@ -397,7 +397,7 @@ mod fixture_tests {
     /// with `out.manifest` (or `out.root.manifest` as root), plus rc and
     /// stderr. Includes the non-UTF-8 case (byte paths throughout).
     #[test]
-    fn chmod_lite_matches_the_real_helper_on_every_fixture_case() {
+    fn chmod_lite_matches_the_portage_helper_on_every_fixture_case() {
         let cases = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/chmod-lite");
         let as_root = unsafe { libc::geteuid() } == 0;
         let mut names: Vec<_> = std::fs::read_dir(&cases)

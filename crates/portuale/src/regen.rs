@@ -775,7 +775,7 @@ mod tests {
     /// (real iterates a set -- nondeterministic; the retried set is the
     /// same).
     #[test]
-    fn retry_decision_matches_real_task_exit() {
+    fn retry_decision_matches_portage_task_exit() {
         // Returncode 1 is the "expected" failure: invalid metadata,
         // pre-spawn `doebuild` retval -- never retried. (0/SUCCESS
         // never reaches the retry decision at all.)

@@ -738,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_output_matches_real_three_way_split() {
+    fn classify_output_matches_portage_three_way_split() {
         assert_eq!(classify_output(""), None);
         assert_eq!(
             classify_output("install-info: warning: no info dir entry in `/x'"),

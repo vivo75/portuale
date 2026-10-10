@@ -79,7 +79,7 @@
 //     `ebuild_package`, each routed to directly by `ebuild.rs`, not
 //     through this module's own `run_commands`). `config`/`info`/
 //     `prerm`/`postrm` *are* real too, through this module's own
-//     `run_single_phase` (see `is_real_standalone_phase_command`'s own
+//     `run_single_phase` (see `is_standalone_phase_command`'s own
 //     doc comment) -- routed to directly by `ebuild.rs`, the same way
 //     `merge`/`qmerge`/`unmerge`/`package` are. Every other real
 //     `ebuild` command (`preinst`/`postinst`/`nofetch`/`depend`/`fetch`/
@@ -87,7 +87,7 @@
 //     `cleanrm`) still falls through to `ebuild.rs`'s own pre-existing
 //     dry-run stub message unchanged (`preinst`/`postinst` *are* run
 //     for real, but only internally, as part of `merge` -- see
-//     `is_real_standalone_phase_command`'s own doc comment for why they,
+//     `is_standalone_phase_command`'s own doc comment for why they,
 //     unlike `prerm`/`postrm`, stay internal-only).
 //   - The `FEATURES` build-isolation set **is** modelled (SCOPE_BACKLOG
 //     Part 2.D): `sandbox`/`usersandbox`, `network-sandbox`,
@@ -337,7 +337,7 @@ fn phase_prerequisites(mydo: &str) -> Vec<&'static str> {
 /// (the `actionmap_deps`-chained phase subset) -- `ebuild.rs` checks this
 /// before routing to `run_commands`, falling back to its own pre-existing
 /// dry-run stub for everything else.
-pub fn is_real_phase_command(command: &str) -> bool {
+pub fn is_phase_command(command: &str) -> bool {
     phase_prerequisites(command).last() == Some(&command)
 }
 
@@ -370,7 +370,7 @@ pub fn is_real_phase_command(command: &str) -> bool {
 /// them as literal phase arguments (`run_single_phase`'s own doc
 /// comment), so no new phase-execution machinery is needed at all --
 /// this is purely a CLI-routing addition.
-pub fn is_real_standalone_phase_command(command: &str) -> bool {
+pub fn is_standalone_phase_command(command: &str) -> bool {
     matches!(command, "config" | "info" | "prerm" | "postrm")
 }
 
@@ -6371,7 +6371,7 @@ mod tests {
     }
 
     #[test]
-    fn network_sandbox_exempt_matches_real_doebuild_spawns_own_formula() {
+    fn network_sandbox_exempt_matches_portage_doebuild_spawns_own_formula() {
         // PROPERTIES=live only exempts the unpack phase.
         assert!(network_sandbox_exempt("unpack", "", "live"));
         assert!(!network_sandbox_exempt("compile", "", "live"));
@@ -6466,7 +6466,7 @@ mod tests {
     }
 
     #[test]
-    fn flat_field_on_dedups_and_sorts_like_real_flatten() {
+    fn flat_field_on_dedups_and_sorts_like_portage_flatten() {
         // Real `config.py::_flatten` (`:1681-1688`):
         // `" ".join(sorted(set(use_reduce(..., flat=True))))` -- the
         // #45 ncurses case: `RESTRICT="!test? ( test ) test"` reduces
@@ -6638,7 +6638,7 @@ mod tests {
     }
 
     #[test]
-    fn is_real_phase_command_covers_exactly_the_actionmap_deps_chain() {
+    fn is_phase_command_covers_exactly_the_actionmap_deps_chain() {
         for cmd in [
             "pretend",
             "setup",
@@ -6650,7 +6650,7 @@ mod tests {
             "install",
         ] {
             assert!(
-                is_real_phase_command(cmd),
+                is_phase_command(cmd),
                 "{cmd} should be a real phase command"
             );
         }
@@ -6658,17 +6658,17 @@ mod tests {
             "merge", "qmerge", "unmerge", "package", "clean", "digest", "info",
         ] {
             assert!(
-                !is_real_phase_command(cmd),
+                !is_phase_command(cmd),
                 "{cmd} should NOT be a real phase command"
             );
         }
     }
 
     #[test]
-    fn is_real_standalone_phase_command_covers_exactly_config_info_prerm_postrm() {
+    fn is_standalone_phase_command_covers_exactly_config_info_prerm_postrm() {
         for cmd in ["config", "info", "prerm", "postrm"] {
             assert!(
-                is_real_standalone_phase_command(cmd),
+                is_standalone_phase_command(cmd),
                 "{cmd} should be a real standalone phase command"
             );
         }
@@ -6677,7 +6677,7 @@ mod tests {
             "help",
         ] {
             assert!(
-                !is_real_standalone_phase_command(cmd),
+                !is_standalone_phase_command(cmd),
                 "{cmd} should NOT be a real standalone phase command"
             );
         }
@@ -6814,11 +6814,11 @@ mod tests {
     /// fallback fires and the phase dies. A source-less ebuild with no
     /// `S` must therefore fail the `install` run with real's message.
     #[test]
-    fn install_dies_like_real_when_s_is_missing() {
+    fn install_dies_like_portage_when_s_is_missing() {
         let tmp = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
-            "install_dies_like_real_when_s_is_missing"
+            "install_dies_like_portage_when_s_is_missing"
         ));
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("pkg/dev-libs/nosrcpkg");
@@ -7150,9 +7150,9 @@ mod tests {
     /// (the real ebuild-author idiom this QA check's own message
     /// recommends) survives untouched.
     #[test]
-    fn install_runs_the_real_post_install_qa_check_and_strips_a_genuinely_empty_dir() {
-        let tmp =
-            TempDir::new("ebuild-phases-test-install_runs_the_real_post_install_qa_check").keep();
+    fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_dir() {
+        let tmp = TempDir::new("ebuild-phases-test-install_runs_the_portage_post_install_qa_check")
+            .keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let repo_root = tmp.join("repo");
         let pkg_dir = repo_root.join("dev-libs/qacheckpkg");
@@ -7205,7 +7205,7 @@ mod tests {
 
     /// Real, end-to-end proof that standalone `config`/`info` (real
     /// `ebuild.rs`'s own routing to `run_single_phase`, see
-    /// `is_real_standalone_phase_command`'s own doc comment) actually
+    /// `is_standalone_phase_command`'s own doc comment) actually
     /// runs the real `pkg_config`/`pkg_info` phase functions -- not just
     /// that `run_single_phase` returns successfully. No `install` chain
     /// involved at all, matching real standalone usage (a real admin
@@ -7267,7 +7267,7 @@ mod tests {
     /// shape as `run_single_phase_actually_runs_pkg_config_and_pkg_info`
     /// above, but for the two standalone commands that also have a real,
     /// separate internal use (`ebuild_unmerge::run_unmerge`, see
-    /// `is_real_standalone_phase_command`'s own doc comment for why
+    /// `is_standalone_phase_command`'s own doc comment for why
     /// that internal use and this new standalone path are simply two
     /// independent ways to reach the same real phase function). No
     /// `unmerge`/vdb step involved at all here, matching real standalone
@@ -8330,7 +8330,7 @@ mod tests {
     /// that guard itself is real, unmodified bash portuale doesn't
     /// reimplement, so proving the export is correct is sufficient here.
     #[test]
-    fn debug_flag_exports_real_portage_debug() {
+    fn debug_flag_exports_portage_debug() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/debugpkg/debugpkg-1.0.ebuild");
 
@@ -8338,7 +8338,7 @@ mod tests {
             let portage_tmpdir = TempDir::new(&format!(
                 "ebuild-phases-test-{}-{}-{debug}",
                 std::process::id(),
-                "debug_flag_exports_real_portage_debug"
+                "debug_flag_exports_portage_debug"
             ));
             let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
@@ -8474,7 +8474,7 @@ mod tests {
     /// stray directory, a plain file) are removed, a symlink with the wrong
     /// target is recreated, a correct one is kept.
     #[test]
-    fn prepare_fake_distdir_prunes_and_relinks_like_real() {
+    fn prepare_fake_distdir_prunes_and_relinks_like_portage() {
         use std::os::unix::fs::symlink;
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
@@ -8520,7 +8520,7 @@ mod tests {
     /// `setup`-only chain, or any chain under `noauto` that has no
     /// `install`/`unpack`, creates none.
     #[test]
-    fn fake_distdir_is_prepared_only_when_real_prepares_it() {
+    fn fake_distdir_is_prepared_only_when_portage_prepares_it() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
         let noauto = vec![("FEATURES".to_string(), "noauto".to_string())];

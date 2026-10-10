@@ -208,7 +208,7 @@ mod tests {
     // oracle tree (nested fragments, backups, dotfiles, VCS dirs at every
     // level, interleaved file/dir sort, symlinked file and directory).
     #[test]
-    fn recursive_config_files_matches_reals_traversal_and_filters() {
+    fn recursive_config_files_matches_portages_traversal_and_filters() {
         let root = TempDir::new("portage-util-recursive").keep();
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("aa")).unwrap();

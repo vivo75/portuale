@@ -1386,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn echo_summary_renders_the_real_message_block_shape() {
+    fn echo_summary_renders_the_portage_message_block_shape() {
         let color = Colorizer::new(false);
         let pkg = ElogPackage {
             cpv: "dev-libs/foo-1.0".to_string(),
@@ -1431,7 +1431,7 @@ mod tests {
     }
 
     #[test]
-    fn combine_logentries_matches_real_combine_shape() {
+    fn combine_logentries_matches_portage_combine_shape() {
         let msgs = [
             ElogMessage {
                 phase: "install".to_string(),
@@ -1562,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    fn syslog_priority_matches_real_mod_syslogs_own_pri_map() {
+    fn syslog_priority_matches_portage_mod_syslogs_own_pri_map() {
         assert_eq!(syslog_priority("INFO"), libc::LOG_INFO);
         assert_eq!(syslog_priority("ERROR"), libc::LOG_ERR);
         assert_eq!(syslog_priority("LOG"), libc::LOG_NOTICE);
@@ -1571,7 +1571,7 @@ mod tests {
     }
 
     #[test]
-    fn syslog_line_matches_real_key_phase_line_shape() {
+    fn syslog_line_matches_portage_key_phase_line_shape() {
         let msg = ElogMessage {
             phase: "install".to_string(),
             level: "WARN".to_string(),

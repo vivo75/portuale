@@ -4650,7 +4650,7 @@ mod tests {
     }
 
     #[test]
-    fn elementary_cycles_counts_rotations_like_real() {
+    fn elementary_cycles_counts_rotations_like_portage() {
         // Square 0->1->2->3->0: one ring per node (rotations), four
         // records -- the shape that trips real's `> 3` large-cycle
         // advisory.
@@ -6012,7 +6012,7 @@ mod tests {
     }
 
     #[test]
-    fn select_dep_target_narrows_and_ranks_like_real() {
+    fn select_dep_target_narrows_and_ranks_like_portage() {
         let runtime = DepPriority {
             runtime: true,
             ..DepPriority::default()

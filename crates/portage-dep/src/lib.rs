@@ -1644,7 +1644,7 @@ mod use_dep_satisfaction_tests {
     }
 
     #[test]
-    fn real_test_suite_vector_foo_and_bar_both_required_neither_declares_bar() {
+    fn portage_test_suite_vector_foo_and_bar_both_required_neither_declares_bar() {
         let ud = use_deps("dev-libs/A[foo,bar]");
         // Package("=dev-libs/A-1[foo]") and Package("=dev-libs/A-2[-foo]")
         assert!(!use_deps_satisfied(
@@ -1660,7 +1660,7 @@ mod use_dep_satisfaction_tests {
     }
 
     #[test]
-    fn real_test_suite_vector_foo_and_bar_both_required_one_satisfies() {
+    fn portage_test_suite_vector_foo_and_bar_both_required_one_satisfies() {
         let ud = use_deps("dev-libs/A[foo,bar]");
         // Package("=dev-libs/A-1[foo]") -> foo declared+enabled, but bar
         // never declared at all -> still rejected.
@@ -1678,7 +1678,7 @@ mod use_dep_satisfaction_tests {
     }
 
     #[test]
-    fn real_test_suite_vector_plus_default_rescues_an_undeclared_flag_only() {
+    fn portage_test_suite_vector_plus_default_rescues_an_undeclared_flag_only() {
         let ud = use_deps("dev-libs/A[foo,bar(+)]");
         // Package("=dev-libs/A-1[-foo]"): bar undeclared -> (+) rescues
         // it, but foo is declared and disabled -> still rejected.
@@ -1697,7 +1697,7 @@ mod use_dep_satisfaction_tests {
     }
 
     #[test]
-    fn real_test_suite_vector_minus_default_on_a_required_enabled_flag_is_a_contradiction() {
+    fn portage_test_suite_vector_minus_default_on_a_required_enabled_flag_is_a_contradiction() {
         // "bar(-)" (no "-" prefix, so op=Enabled) defaults an UNDECLARED
         // "bar" to disabled -- directly contradicting "bar" being
         // required enabled, so a candidate missing "bar" entirely is
@@ -1716,7 +1716,7 @@ mod use_dep_satisfaction_tests {
     }
 
     #[test]
-    fn real_test_suite_vector_minus_bar_default_combines_with_a_plain_required_flag() {
+    fn portage_test_suite_vector_minus_bar_default_combines_with_a_plain_required_flag() {
         let ud = use_deps("dev-libs/A[foo,-bar(-)]");
         // Package("=dev-libs/A-1[-foo,bar]"): bar IS declared here (no
         // default in ITS OWN construction atom), so bar(-)'s default
@@ -2163,7 +2163,7 @@ mod extract_affecting_use_tests {
     /// The 23 passing cases from real portage's
     /// `lib/portage/tests/dep/test_extract_affecting_use.py`, verbatim.
     #[test]
-    fn matches_real_portages_test_corpus() {
+    fn matches_portages_test_corpus() {
         let cases: &[(&str, &str, &[&str])] = &[
             ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "A", &["a"]),
             ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "B", &["b"]),

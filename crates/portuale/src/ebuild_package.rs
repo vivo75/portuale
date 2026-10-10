@@ -101,10 +101,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Whether `command` is the one real package-building command this
 /// module implements -- `ebuild.rs` checks this alongside
-/// `ebuild_phases::is_real_phase_command`/`ebuild_merge::
-/// is_real_merge_command`/`ebuild_unmerge::is_real_unmerge_command`
+/// `ebuild_phases::is_phase_command`/`ebuild_merge::
+/// is_merge_command`/`ebuild_unmerge::is_unmerge_command`
 /// before routing to real execution.
-pub fn is_real_package_command(command: &str) -> bool {
+pub fn is_package_command(command: &str) -> bool {
     command == "package"
 }
 
@@ -1920,11 +1920,11 @@ mod tests {
     }
 
     #[test]
-    fn is_real_package_command_covers_exactly_package() {
-        assert!(is_real_package_command("package"));
-        assert!(!is_real_package_command("qmerge"));
-        assert!(!is_real_package_command("merge"));
-        assert!(!is_real_package_command("install"));
+    fn is_package_command_covers_exactly_package() {
+        assert!(is_package_command("package"));
+        assert!(!is_package_command("qmerge"));
+        assert!(!is_package_command("merge"));
+        assert!(!is_package_command("install"));
     }
 
     #[test]
@@ -1985,7 +1985,7 @@ mod tests {
     }
 
     #[test]
-    fn makeopts_to_job_count_matches_the_real_greedy_regex() {
+    fn makeopts_to_job_count_matches_the_portage_greedy_regex() {
         assert_eq!(makeopts_to_job_count("-j1"), "1");
         assert_eq!(makeopts_to_job_count("-j4 -l5"), "4");
         assert_eq!(makeopts_to_job_count("-j 3 -j12"), "12");
@@ -2425,7 +2425,7 @@ mod tests {
     }
 
     #[test]
-    fn stanza_field_sort_matches_real_keys_sort_with_mtime_repo_last() {
+    fn stanza_field_sort_matches_portage_keys_sort_with_mtime_repo_last() {
         // Real `PackageIndex.write` sorts the *internal* names
         // (`getbinpkg.py:173-174`) and translates on write
         // (`:175-177`): `_mtime_`/`repository` sort after every
@@ -2462,7 +2462,7 @@ mod tests {
     }
 
     #[test]
-    fn quickpkg_from_vdb_writes_real_ordered_stanza_with_eapi_and_repo_revisions() {
+    fn quickpkg_from_vdb_writes_portage_ordered_stanza_with_eapi_and_repo_revisions() {
         // Backlog #203, grounded in the n203 container probe (real
         // `quickpkg =l32/dep-a-1.0` in `localhost/test-portuale:latest`,
         // `/tmp/opencode/n203/probe.log`): the stanza carries the vdb
@@ -3076,7 +3076,7 @@ mod tests {
     /// (`misc-functions.sh:560-561`). The vdb merge copies `build-info`
     /// wholesale, so a `--buildpkg` source merge records them too.
     #[test]
-    fn package_records_binpkgmd5_and_build_id_in_build_info_like_real() {
+    fn package_records_binpkgmd5_and_build_id_in_build_info_like_portage() {
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");

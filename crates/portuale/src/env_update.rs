@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn is_env_d_filename_matches_real_filter() {
+    fn is_env_d_filename_matches_portage_filter() {
         assert!(is_env_d_filename("50-foo"));
         assert!(is_env_d_filename("99profile"));
         assert!(!is_env_d_filename("foo"));

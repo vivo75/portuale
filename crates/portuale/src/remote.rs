@@ -3454,7 +3454,7 @@ fn eapi_is_posixish(eapi: &str) -> bool {
 /// extractor for `pretend`/`prerm` only). Probed against real's own
 /// `split_LC_ALL` + `environ()`: with `LC_ALL` set, all twelve export
 /// when `$T/environment` is absent, seven when present.
-pub(crate) const REAL_LOCALE_CATEGORIES: &[&str] = &[
+pub(crate) const PORTAGE_LOCALE_CATEGORIES: &[&str] = &[
     "LC_COLLATE",
     "LC_CTYPE",
     "LC_MONETARY",
@@ -3472,7 +3472,7 @@ pub(crate) const REAL_LOCALE_CATEGORIES: &[&str] = &[
 /// Port of real's `split_LC_ALL` (`portage/util/locale.py:160`) to the
 /// forwarded regen locale set, for a posixish phase: a set `LC_ALL` fans
 /// out over all twelve real `locale_categories` (see
-/// `REAL_LOCALE_CATEGORIES`; real copies it over the same list,
+/// `PORTAGE_LOCALE_CATEGORIES`; real copies it over the same list,
 /// unconditionally overwriting) and itself
 /// disappears (real blanks it, then `config.environ()` deletes the
 /// placeholder, `config.py:3374-3385`). `LANG` is filled from `LC_ALL`
@@ -3503,7 +3503,7 @@ fn split_server_locale(locale: &[(String, String)], eapi: &str) -> Vec<(String, 
     if lc_all.is_empty() {
         return out;
     }
-    for name in REAL_LOCALE_CATEGORIES {
+    for name in PORTAGE_LOCALE_CATEGORIES {
         match out.iter_mut().find(|(n, _)| n == name) {
             Some(pair) => pair.1 = lc_all.clone(),
             None => out.push((name.to_string(), lc_all.clone())),
@@ -6799,7 +6799,7 @@ mod tests {
     /// re-exports exactly the given locale pairs (quoting values like
     /// any other export).
     #[test]
-    fn postinst_regen_script_matches_real_shell_shape() {
+    fn postinst_regen_script_matches_portage_shell_shape() {
         let staged = render_test_staged();
         let locale = vec![
             ("LANG".to_string(), "C.UTF-8".to_string()),
@@ -6849,7 +6849,7 @@ mod tests {
     /// unexported -- real has no exported `SHELL` to inherit), and
     /// carries the injected locale values as `declare -x`.
     #[test]
-    fn regen_matches_real_o_shell_and_locale() {
+    fn regen_matches_portage_o_shell_and_locale() {
         let tmp = regen_tmp("o-shell-locale");
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -6910,10 +6910,10 @@ mod tests {
     /// leaves `LANGUAGE` alone, and passes everything through
     /// untouched on non-posixish EAPIs.
     #[test]
-    fn split_server_locale_fans_lc_all_out_like_real() {
+    fn split_server_locale_fans_lc_all_out_like_portage() {
         // The twelve `locale_categories` real fans out over
         // (`portage/util/locale.py:22-36`) -- hardcoded here (not via
-        // `REAL_LOCALE_CATEGORIES`) so the test pins the list's
+        // `PORTAGE_LOCALE_CATEGORIES`) so the test pins the list's
         // content, not just its own reference to it.
         const TWELVE: &[&str] = &[
             "LC_COLLATE",
@@ -6929,7 +6929,7 @@ mod tests {
             "LC_PAPER",
             "LC_TELEPHONE",
         ];
-        assert_eq!(REAL_LOCALE_CATEGORIES, TWELVE);
+        assert_eq!(PORTAGE_LOCALE_CATEGORIES, TWELVE);
         assert!(eapi_is_posixish("6"));
         assert!(eapi_is_posixish("8"));
         assert!(!eapi_is_posixish("5"));
@@ -6987,7 +6987,7 @@ mod tests {
     /// `l31-20260927T052232Z`: real has `LANG` + split categories where
     /// `mrg` echoed `LC_ALL` back).
     #[test]
-    fn regen_splits_lc_all_like_real() {
+    fn regen_splits_lc_all_like_portage() {
         let tmp = regen_tmp("lc-all-split");
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();

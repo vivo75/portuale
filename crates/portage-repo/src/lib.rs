@@ -25985,10 +25985,10 @@ fn expand_resolved_slot_with_flipped_use(
     }
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
     // Real `RDEPEND`-first discovery order for the merge-order edges,
-    // same `real_order_keys` as the fresh expansion above. Applied
+    // same `portage_order_keys` as the fresh expansion above. Applied
     // below, after the genuinely-new filter: only edges pointing at a
     // newly-queued atom are added (see the narrowing note there).
-    let real_order_keys: &[&str] = if buildpkgonly_narrow {
+    let portage_order_keys: &[&str] = if buildpkgonly_narrow {
         &["DEPEND", "BDEPEND"]
     } else {
         &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
@@ -26286,7 +26286,7 @@ fn expand_resolved_slot_with_flipped_use(
         .collect();
     if !new_targets.is_empty() {
         let fresh_edges =
-            merge_order::dep_edges_from_metadata(&delta_meta, new_use, real_order_keys, false);
+            merge_order::dep_edges_from_metadata(&delta_meta, new_use, portage_order_keys, false);
         let entry_deps = &mut state.entries[existing_idx].deps;
         for edge in fresh_edges {
             if new_targets.contains(&(edge.category.clone(), edge.package.clone()))
@@ -30263,7 +30263,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     // list shows must match what the recursion
                     // actually queued.
                     let use_flags = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
-                    let real_order_keys: &[&str] = if ctx.with_bdeps {
+                    let portage_order_keys: &[&str] = if ctx.with_bdeps {
                         &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
                     } else {
                         &["RDEPEND", "IDEPEND", "PDEPEND"]
@@ -30274,7 +30274,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         InstalledMetaLayer::Raw
                     };
                     let mut effective: HashMap<String, String> = HashMap::new();
-                    for k in real_order_keys {
+                    for k in portage_order_keys {
                         let s = installed_dep_string(
                             atom_root,
                             ctx.dynamic_deps,
@@ -30296,7 +30296,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     already_installed_deps = merge_order::dep_edges_from_metadata(
                         &effective,
                         &use_flags,
-                        real_order_keys,
+                        portage_order_keys,
                         true,
                     );
                 }
@@ -31820,7 +31820,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // #194: the same blanked keys stay out of the merge-order
         // digraph (real never walks them, so they contribute no edge).
         let filtered_order_keys: Vec<&str>;
-        let real_order_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+        let portage_order_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
             filtered_order_keys = base_order_keys.iter().copied().filter(keep_key).collect();
             &filtered_order_keys
         } else {
@@ -31829,7 +31829,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         state.entries[entry_idx].deps = merge_order::dep_edges_from_metadata(
             &metadata,
             &use_flags,
-            real_order_keys,
+            portage_order_keys,
             candidate_source == CandidateSource::Binary,
         );
         // Track X Slice B fix (#242): the running-root subgraph's own
@@ -37189,7 +37189,7 @@ mod tests {
     /// the subtraction), the forced cell rejects through the
     /// enabled-within-IUSE term instead (R0 n3b).
     #[test]
-    fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_real() {
+    fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
         let dir = slotundo_temp_dir("binpkg-respect-use-forced");
         let binary = || {
             let mut c = candidate("1.0", &["amd64"]);
@@ -37413,7 +37413,7 @@ mod tests {
     }
 
     #[test]
-    fn ebuild_visible_at_and_binary_reinstall_warranted_match_real_identical_binary() {
+    fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_binary() {
         // `ebuild_visible_at` asks the TREE (not the pool): `newpkg` has
         // a visible ebuild, `rebuiltbinarypkg` does not (it is the
         // ebuild-gone bolt).
@@ -38322,7 +38322,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_env_assignments_matches_real_aux_env_search_forms() {
+    fn parse_env_assignments_matches_portage_aux_env_search_forms() {
         // Real `vartree._aux_env_search` (`dbapi/vartree.py:1082-1123`):
         // plain, `declare -FLAGS`, `declare`, and `export` prefixes;
         // single-line quoted values; multi-line continuations joined
@@ -38497,7 +38497,7 @@ mod tests {
     /// `errors="replace"` -- a stray non-UTF-8 byte becomes `U+FFFD`,
     /// not a wholesale `""`.
     #[test]
-    fn read_vdb_string_decodes_invalid_utf8_lossy_like_real() {
+    fn read_vdb_string_decodes_invalid_utf8_lossy_like_portage() {
         let root = tmp_vdb(
             "dev-libs",
             "latin1-1.0",
@@ -38538,7 +38538,7 @@ mod tests {
     /// or the version breaks interoperability with real's reader/writer
     /// on a live vdb in both directions).
     #[test]
-    fn metadata_file_fields_match_reals_literal_set() {
+    fn metadata_file_fields_match_portages_literal_set() {
         assert_eq!(METADATA_FILE_FORMAT_VERSION, 1);
         let mut got: Vec<&str> = METADATA_FILE_FIELDS.to_vec();
         got.sort_unstable();
@@ -42994,7 +42994,7 @@ mod tests {
     }
 
     #[test]
-    fn fixture_eula_style_license_is_masked_by_the_real_default_accept_license() {
+    fn fixture_eula_style_license_is_masked_by_the_portage_default_accept_license() {
         // Neither the fixture profile chain nor make.conf sets
         // ACCEPT_LICENSE at all -- real portage's own "* -@EULA"
         // default applies, and profiles/license_groups defines
@@ -43543,7 +43543,7 @@ mod tests {
     /// (everything `tree_display_order` reads -- deps, blockers,
     /// `required_by` -- is value-addressed, so the reorder is safe).
     #[test]
-    fn tree_display_order_sequences_the_p2b_tree_like_real() {
+    fn tree_display_order_sequences_the_p2b_tree_like_portage() {
         let atoms = vec![
             "dev-libs/p2btarget".to_string(),
             "dev-libs/p2bowner".to_string(),
@@ -45425,7 +45425,7 @@ mod tests {
         // Merge order follows real's own discovery order (RDEPEND,
         // IDEPEND, PDEPEND, DEPEND, BDEPEND -- `_add_pkg_dep_string`'s
         // `deps` tuple, `depgraph.py:4253-4289`), via
-        // `real_discovery_order`: RDEPEND's newpkg is discovered before
+        // `portage_discovery_order`: RDEPEND's newpkg is discovered before
         // DEPEND's builddeponlypkg, which is discovered before BDEPEND's
         // hostdeponlypkg.
         assert_eq!(
@@ -47962,7 +47962,7 @@ mod tests {
     /// (`u249json -> u249make -> u249json`; O1 S0 probe). The old
     /// lowest-index rotation started at `u249make` instead.
     #[test]
-    fn find_hard_cycles_starts_where_reals_get_cycles_starts() {
+    fn find_hard_cycles_starts_where_portages_get_cycles_starts() {
         let cpv = |c: &str, p: &str| format!("{c}/{p}-1");
         let cp = |c: &str, p: &str| (false, c.to_string(), p.to_string());
         // Explicit `discovery` mirroring the resolve (the requested
@@ -48230,7 +48230,7 @@ mod tests {
     }
 
     #[test]
-    fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_real() {
+    fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
         // Backlog #228 fix round 1 (review Important-2): real filters
         // `inst_pkgs` to the child's slot and sub-slot for
         // `slot_operator == "="` (real
@@ -48467,7 +48467,7 @@ mod tests {
     }
 
     #[test]
-    fn virtual_cycle_aborts_like_real_on_the_upstream_fixtures() {
+    fn virtual_cycle_aborts_like_portage_on_the_upstream_fixtures() {
         // Backlog #193, upstream `test_virtual_cycle.py` (bug 965570) as
         // emitted by pmtest `89d17e0`: both cells fail in real
         // (`ResolverPlayground` success=False,
@@ -48871,7 +48871,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_use_conditional_mask_matches_real_on_all_three_fixture_cases() {
+    fn invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases() {
         // Backlog #153: real 3.0.82.2 masks all three `invalid` (oracles
         // captured against a `cp -a` copy of this same tree) --
         // `fucyclec` (atom `[x?]` in DEPEND), `usedeppkg` (atom
@@ -52054,7 +52054,7 @@ mod tests {
     }
 
     #[test]
-    fn autounmask_use_parent_flip_fails_like_real_when_the_child_flag_is_masked() {
+    fn autounmask_use_parent_flip_fails_like_portage_when_the_child_flag_is_masked() {
         // `dev-libs/parentflipeqpkg` (IUSE +feat) RDEPENDs
         // `dev-libs/parentflipchildpkg[feat=]`; the child's own `feat` is
         // `use.mask`'d. Live real (`localhost/test-portuale:latest`,
@@ -52160,7 +52160,7 @@ mod tests {
     }
 
     #[test]
-    fn autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_real() {
+    fn autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_portage() {
         // `dev-libs/pfgraphparent` (IUSE +pf) RDEPENDs
         // `dev-libs/pfgraphchild[pf=]` AND `pf? ( dev-libs/pfgraphextra )`.
         // The child's `pf` is `use.mask`'d. Live real
@@ -53243,7 +53243,7 @@ mod tests {
     /// match of `<3`) and drops `3.0`. A single selection, or atoms whose
     /// selections match nothing else, pass through unchanged.
     #[test]
-    fn minimize_children_collapses_like_real() {
+    fn minimize_children_collapses_like_portage() {
         use md5::Digest as _;
         use std::fmt::Write as _;
         let base = TempDir::new("portage-repo-236-minimize").keep();
@@ -77104,7 +77104,7 @@ mod tests_195d {
     /// 1-72; invalid rows only carry C=0, since filtered child USE
     /// never holds an invalid flag).
     #[test]
-    fn violated_parent_flags_matches_real_across_the_oracle_matrix() {
+    fn violated_parent_flags_matches_portage_across_the_oracle_matrix() {
         // `flag?` -- real `:1525-1531`. Valid: violated iff P && !C.
         for tok in ["foo?", "foo(+)?", "foo(-)?"] {
             for p in [false, true] {
@@ -77200,7 +77200,7 @@ mod tests_195d {
     }
 
     #[test]
-    fn violated_parent_flags_concrete_gate_matches_real() {
+    fn violated_parent_flags_concrete_gate_matches_portage() {
         // Controls: satisfied unconditional tokens leave the parent:foo
         // hit alone (oracle-verified `[foo]`, gate PASS).
         gate_195d("foo?", "bar", true, true, true);

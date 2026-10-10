@@ -2329,7 +2329,7 @@ mod tests {
     /// argv errors are real's (`gpkg-helper.py`): argparse rc 2, the
     /// `compose` usage rc 1.
     #[test]
-    fn argv_errors_are_reals() {
+    fn argv_errors_are_portages() {
         let none = run_helper(&[]);
         assert_eq!(none.status.code(), Some(2));
         assert_eq!(
@@ -2370,7 +2370,7 @@ mod tests {
     /// `InvalidCompressionMethod: foo` and leaves a 512-byte file holding
     /// only `pkg-1/gpkg-1`.
     #[test]
-    fn unknown_compression_fails_after_gpkg_1_like_real() {
+    fn unknown_compression_fails_after_gpkg_1_like_portage() {
         let tmp = TempDir::new("gpkg-badcomp");
         let (meta, image) = (tmp.path().join("m"), tmp.path().join("i"));
         std::fs::create_dir_all(&meta).unwrap();

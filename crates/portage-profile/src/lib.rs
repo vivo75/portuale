@@ -4211,7 +4211,7 @@ sync-uri = https://plain.example.org/amd64/
     }
 
     #[test]
-    fn binrepo_packages_dir_maps_scheme_to_the_real_edb_cache_layout() {
+    fn binrepo_packages_dir_maps_scheme_to_the_portage_edb_cache_layout() {
         let root = Path::new("/eroot");
         let http = BinRepo {
             name: "h".into(),
@@ -7195,7 +7195,7 @@ sync-uri = https://plain.example.org/amd64/
     /// 2026-09-16. Before the fix every value here kept the `\"` escape
     /// and had `\${VAR}` wrongly expanded (the #70 bug).
     #[test]
-    fn make_globals_fetch_commands_match_real_varexpand() {
+    fn make_globals_fetch_commands_match_portage_varexpand() {
         let text = r#"FETCHCOMMAND="wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\" -O \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
 RESUMECOMMAND="wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\" -O \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
 
@@ -7258,7 +7258,7 @@ PORTAGE_GPG_SIGNING_COMMAND="gpg --sign --digest-algo SHA256 --clearsign --yes -
     /// a quote that survives shlex (here from the opposite quote kind)
     /// suspends expansion.
     #[test]
-    fn shlex_and_varexpand_escape_handling_matches_real_getconfig() {
+    fn shlex_and_varexpand_escape_handling_matches_portage_getconfig() {
         let scalars: HashMap<String, String> = [("B".to_string(), "HELLO".to_string())]
             .into_iter()
             .collect();

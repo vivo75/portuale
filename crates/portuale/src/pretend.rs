@@ -16470,7 +16470,7 @@ mod tests {
     }
 
     #[test]
-    fn news_profile_and_keyword_restrictions_match_like_real() {
+    fn news_profile_and_keyword_restrictions_match_like_portage() {
         // Backlog #258: real `DisplayProfileRestriction` /
         // `DisplayKeywordRestriction` (`news.py:388-423`). The l3
         // `l3-20260928T195717Z` container probe counted 15 gentoo items
@@ -16583,7 +16583,7 @@ mod tests {
     }
 
     #[test]
-    fn news_counts_follow_real_count_unread_news_gates() {
+    fn news_counts_follow_portage_count_unread_news_gates() {
         // Real `count_unread_news` (`news.py:470-479`): no profile path
         // at all counts nothing. Real `updateItems` (`news.py:121-133`):
         // an unusable state directory returns before the news dir is
@@ -16654,7 +16654,7 @@ mod tests {
     }
 
     #[test]
-    fn news_state_files_get_the_group_write_bit_like_real() {
+    fn news_state_files_get_the_group_write_bit_like_portage() {
         // Real `apply_secpass_permissions(..., mode=0o064, mask=0)` on
         // each rewritten state file and `ensure_dirs(..., mode=0o074,
         // mask=0)` on the directory (`news.py:121-200`): the bits are
@@ -16944,7 +16944,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_pretend_end_notice_prints_once_like_real() {
+    fn resume_pretend_end_notice_prints_once_like_portage() {
         // Backlog #231 (a): real reaches `post_emerge` after the
         // `--resume --pretend` display too (`actions.py:4289-4297`),
         // whose `not _pkgs_changed` arm prints the notice under
@@ -16981,7 +16981,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_real() {
+    fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage() {
         // Backlog #231 (a): real's pre-resolution notice precedes all
         // of `action_build`'s resume handling (`actions.py:4266` before
         // `:4289`), so even a `--resume --skipfirst` that empties the
@@ -17174,7 +17174,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_read_news_eof_exits_before_resolve_like_real() {
+    fn ask_read_news_eof_exits_before_resolve_like_portage() {
         // Backlog #234 (a): real `_emerge/UserQuery.query`
         // (`_emerge/UserQuery.py:74-76`) prints `Interrupted.` and exits
         // `128 + SIGINT` on EOF -- the news prompt's `sys.exit` fires
@@ -17370,7 +17370,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_merge_sigint_prints_interrupted_and_exits_130_like_real() {
+    fn ask_merge_sigint_prints_interrupted_and_exits_130_like_portage() {
         // Backlog #240: real `_emerge/UserQuery.query`
         // (`_emerge/UserQuery.py:74-76`) catches `KeyboardInterrupt`
         // out of `input()`, prints `Interrupted.`, and exits
@@ -17439,7 +17439,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_read_news_sigint_exits_before_resolve_like_real() {
+    fn ask_read_news_sigint_exits_before_resolve_like_portage() {
         // Backlog #240, the news prompt (`_emerge/actions.py:4266-4288`
         // through `_emerge/UserQuery.py:74-76`): a `^C` at the "read
         // the news items while calculating dependencies?" prompt
@@ -17513,7 +17513,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_real() {
+    fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_portage() {
         // Backlog #240 follow-up: the config `Selection?` menu goes
         // through the same `UserQuery.query` in real
         // (`_emerge/actions.py:746` through
@@ -17642,7 +17642,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_merge_eof_prints_interrupted_without_quitting_like_real() {
+    fn ask_merge_eof_prints_interrupted_without_quitting_like_portage() {
         // Backlog #240's second fix: EOF at the merge prompt printed a
         // spurious `Quitting.` after `Interrupted.` (the `None` arm
         // fell into the decline arm). Real exits from inside
@@ -17781,7 +17781,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_pretend_offer_no_exits_130_like_real() {
+    fn ask_pretend_offer_no_exits_130_like_portage() {
         // Backlog #246, the "No" arm: real returns `128 + SIGINT`
         // with nothing else printed (`actions.py:3997-4003` -- the
         // `== "No"` comparison just returns, no notice, no resolve).
@@ -17839,7 +17839,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_pretend_offer_yes_continues_as_pretend_like_real() {
+    fn ask_pretend_offer_yes_continues_as_pretend_like_portage() {
         // Backlog #246, the "Yes" arm: real sets
         // `opts["--pretend"] = True`, pops `--ask`, and the run
         // continues as a pretend run (`actions.py:4004-4006`). Host
@@ -17895,7 +17895,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_read_news_true_spellings_prompt_like_real() {
+    fn ask_read_news_true_spellings_prompt_like_portage() {
         // Backlog #234 (b): real `true_y_or_n` (`main.py:321-322,625`)
         // accepts `--ask=True` / `--read-news=True` (a bare flag inserts
         // `"True"` via `insert_optional_args`, the choices admit it, and
@@ -17963,7 +17963,7 @@ mod tests {
     }
 
     #[test]
-    fn ask_true_spelling_hits_the_tty_gate_like_real() {
+    fn ask_true_spelling_hits_the_tty_gate_like_portage() {
         // Backlog #234 (b): `--ask=True` parses as ask-on (real
         // `true_y_or_n` choices + `in true_y` normalization,
         // `main.py:321-322,802-805`), so a non-terminal stdin hits real
@@ -18164,7 +18164,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn ask_read_news_without_eselect_prints_real_hint() {
+    fn ask_read_news_without_eselect_prints_portages_hint() {
         // Backlog #231 (c): real catches the spawn's `OSError`
         // (eselect missing) and prints `Please install eselect to use
         // this feature.` (`actions.py:4284-4287`). `PATH` holds only an
@@ -18215,7 +18215,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn remote_success_prints_no_post_merge_notice_like_real() {
+    fn remote_success_prints_no_post_merge_notice_like_portage() {
         // Backlog #231 (b): the remote-execution early return
         // (`take_remote_exec` dispatch) skips `post_emerge`'s tail --
         // correctly so. The remote plan merges onto the *remote* host;
@@ -18893,7 +18893,7 @@ mod tests {
     }
 
     #[test]
-    fn nonpretend_merge_list_shown_only_when_real_shows_it() {
+    fn nonpretend_merge_list_shown_only_when_portage_shows_it() {
         // Backlog #185: real `_emerge/actions.py:464-469`
         // (`mergelist_shown` branch) plus the m185 container probe (real
         // 3.0.81.3, `emerge --oneshot --usepkgonly probe/probe-a` in six
@@ -20314,7 +20314,7 @@ mod tests {
     }
 
     #[test]
-    fn circular_node_text_matches_real_package_str() {
+    fn circular_node_text_matches_portage_package_str() {
         // Backlog #206 S1: real `_emerge/Package.py::Package.__str__`
         // for a merge-bound ebuild — `(cpv:slot/sub::repo, ebuild
         // scheduled for merge)` — byte for byte, grounded on the live
@@ -20485,7 +20485,7 @@ mod tests {
     }
 
     #[test]
-    fn use_suffix_renders_reals_trailing_space_after_each_use_group() {
+    fn use_suffix_renders_portages_trailing_space_after_each_use_group() {
         // Backlog #272: real `_create_use_string`
         // (`output_helpers.py:336-338`) returns `f'{name}="{ret}" '` --
         // one trailing space per non-empty group -- and `print_messages`
@@ -20592,7 +20592,7 @@ mod tests {
     }
 
     #[test]
-    fn backtrack_default_matches_real_portage_twenty() {
+    fn backtrack_default_matches_portage_twenty() {
         // Backlog #263 (R1): real's default `--backtrack` is 20, not 10.
         // Grounded in real Portage 3.0.82.2 (`/usr/sbin/emerge`):
         // `_emerge/depgraph.py:12188` (`_backtrack_depgraph`) reads

@@ -1631,7 +1631,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_one_binary_entry_aborts_a_stale_index_binary_like_real() {
+    fn merge_one_binary_entry_aborts_a_stale_index_binary_like_portage() {
         // Backlog #187, end to end at the merge boundary: the bed's
         // F3a shape (`l32/faultpkg` removed from `$PKGDIR`, its
         // `Packages` stanza kept). Real selects the indexed binary
@@ -1643,7 +1643,7 @@ mod tests {
         // index. Run 'emaint binhost -f'.` to stdout AND the package
         // `build.log`, followed by real's `>>> Failed to emerge
         // <cpv>[ for <root>][, Log file:]` tail (`Scheduler.py`,
-        // byte-pinned by `failed_pkg_msg_matches_real_failed_pkg_msg_bytes`).
+        // byte-pinned by `failed_pkg_msg_matches_portage_failed_pkg_msg_bytes`).
         // The `>>>` lines go to stdout (pinned by the pmtest contract
         // test); the `Err` is the silent `binpkg_missing_failure`
         // sentinel, so the CLI boundary adds no resume notice or
@@ -1753,7 +1753,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_pkg_msg_matches_real_failed_pkg_msg_bytes() {
+    fn failed_pkg_msg_matches_portage_failed_pkg_msg_bytes() {
         // Real `Scheduler._failed_pkg_msg(..., "emerge", "for")`
         // (`Scheduler.py:2366`): each `_status_msg` emits its own
         // leading blank line, then `>>> <msg>`; the log line carries
@@ -2670,7 +2670,7 @@ mod tests {
     }
 
     #[test]
-    fn binhost_fetch_warning_matches_reals_two_line_shape() {
+    fn binhost_fetch_warning_matches_portages_two_line_shape() {
         // Real `bintree.py:1793-1798` for the bed's F3 stub (repo
         // `l32-500`, every GET/HEAD 500): the leading blank line, the
         // two `!!!` lines, the trailing blank line -- all on stderr.

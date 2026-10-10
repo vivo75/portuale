@@ -1497,7 +1497,7 @@ mod tests {
     /// (as `""` when `None`), even though the original 5-field line
     /// omitted it entirely.
     #[test]
-    fn to_needed_line_writes_the_real_rewrite_format_not_the_scanelf_read_format() {
+    fn to_needed_line_writes_the_portage_rewrite_format_not_the_scanelf_read_format() {
         let entry = NeededEntry::parse("X86_64;/usr/bin/true;;  -  ;libc.so.6").unwrap();
         assert_eq!(
             entry.to_needed_line(),
@@ -2016,7 +2016,7 @@ mod tests {
     /// `PROVIDES`, needed sonames become `REQUIRES` unless the package
     /// itself provides them, and the exclude patterns filter both.
     #[test]
-    fn generate_soname_deps_matches_the_real_soname_deps_processor() {
+    fn generate_soname_deps_matches_the_portage_soname_deps_processor() {
         let entries = vec![
             NeededEntry::parse("X86_64;/usr/bin/x;;;libc.so.6;x86_64").unwrap(),
             NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64").unwrap(),

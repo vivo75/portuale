@@ -3797,7 +3797,7 @@ mod tests {
     /// reset `\x1b[39;49;00m`); `ROOT != "/"` appends ` for {root}`
     /// (Emerging) vs ` to {root}` (Installing/Completed).
     #[test]
-    fn merge_progress_lines_match_real_exact_text() {
+    fn merge_progress_lines_match_portage_exact_text() {
         use std::path::Path;
         let plain = crate::color::Colorizer::new(false);
         let root = Path::new("/");
@@ -4829,7 +4829,7 @@ mod tests {
     /// background, and `--quiet` without `--verbose` kills the Jobs
     /// display but keeps the (unblanked) status lines.
     #[test]
-    fn scheduler_status_mode_matches_reals_background_gates() {
+    fn scheduler_status_mode_matches_portages_background_gates() {
         // Serial, nothing quiet: foreground, no Jobs.
         assert_eq!(
             scheduler_status_mode(1, false, None, 3, false),
@@ -4934,7 +4934,7 @@ mod tests {
     /// n197 probe's s2 line up to the cut (including all 36 pad
     /// spaces).
     #[test]
-    fn jobs_line_matches_reals_display_status_shape() {
+    fn jobs_line_matches_portages_display_status_shape() {
         let color = crate::color::Colorizer::new(false);
         assert_eq!(
             jobs_line(&color, 0, 3, 1, 0, 0),

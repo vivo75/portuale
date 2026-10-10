@@ -535,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn eapi_support_matches_real() {
+    fn eapi_support_matches_portage() {
         for eapi in ["0", "5", "8", "9", "9-pre1", "5_pre1", " 8 "] {
             assert!(eapi_is_supported(eapi), "{eapi}");
         }
@@ -545,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn eapi_slot_operator_matches_real() {
+    fn eapi_slot_operator_matches_portage() {
         // Real `_get_eapi_attrs(eapi).slot_operator` (`portage/eapi.py`):
         // `Eapi(eapi) >= Eapi("5")`, dash-suffix-insensitive.
         for eapi in ["5", "6", "7", "8", "9", "9-pre1", " 8 "] {
@@ -557,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn eapi_idepend_matches_real() {
+    fn eapi_idepend_matches_portage() {
         // Real `eapi_has_idepend` (`portage/eapi.py:135`): `idepend =
         // eapi >= Eapi("8")`, dash-suffix-insensitive like the slot
         // operator above.
@@ -570,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn eapi_empty_groups_matches_real() {
+    fn eapi_empty_groups_matches_portage() {
         // Real `_get_eapi_attrs(eapi).empty_groups_always_true`
         // (`portage/eapi.py:295`): `eapi <= Eapi("6")`,
         // dash-suffix-insensitive like the slot operator above.

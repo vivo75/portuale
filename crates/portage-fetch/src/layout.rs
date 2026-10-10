@@ -107,7 +107,7 @@ fn hash_hex(algo: &str, data: &[u8]) -> Option<String> {
 
 /// Real `get_valid_checksum_keys()` on a stock install (portage
 /// 3.0.82.2), minus its pseudo-key `size`.
-const REAL_CHECKSUM_KEYS: &[&str] = &[
+const PORTAGE_CHECKSUM_KEYS: &[&str] = &[
     "BLAKE2B",
     "BLAKE2S",
     "MD5",
@@ -240,7 +240,7 @@ impl MirrorLayoutConfig {
                 // known-hash check -- so a lower-case name is never valid.
                 // No hashing happens here, so every real hash name counts.
                 let algo = val[1].to_uppercase();
-                let supported = REAL_CHECKSUM_KEYS.contains(&val[1].as_str())
+                let supported = PORTAGE_CHECKSUM_KEYS.contains(&val[1].as_str())
                     && match digests {
                         Some(digests) => digests.contains_key(&algo),
                         None => true,
@@ -286,7 +286,7 @@ mod tests {
     /// (`FilenameHashLayout(algo, cutoffs).get_path(name)`, portage
     /// 3.0.82.2), not derived from reading the code.
     #[test]
-    fn filename_hash_paths_match_real_portage() {
+    fn filename_hash_paths_match_portage() {
         let none = HashMap::new();
         for (algo, cutoffs, name, expected) in [
             ("BLAKE2B", "8", "which-2.23.tar.gz", "80/which-2.23.tar.gz"),
@@ -330,7 +330,7 @@ mod tests {
     /// Real `MirrorLayoutConfig.validate_structure` verdicts (portage
     /// 3.0.82.2), filename-less form.
     #[test]
-    fn validate_structure_matches_real_portage() {
+    fn validate_structure_matches_portage() {
         for (entry, expected) in [
             ("flat", true),
             ("flat x", false),

@@ -2635,7 +2635,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_inner_member_matches_real_extract_filename_compression() {
+    fn classify_inner_member_matches_portage_extract_filename_compression() {
         assert!(matches!(
             classify_inner_member("metadata", "metadata.tar"),
             Some(None)
@@ -2741,7 +2741,7 @@ mod tests {
     /// argv its shell string becomes: none without `FEATURES=xattr` or
     /// without a tar that knows `--xattrs`.
     #[test]
-    fn xpak_xattr_tar_options_match_reals_extractor() {
+    fn xpak_xattr_tar_options_match_portages_extractor() {
         let on = crate::ebuild_merge::XattrPolicy {
             enabled: true,
             exclude: "security.evm user.xdg.*".to_string(),
@@ -2886,7 +2886,7 @@ mod tests {
     /// inner-member cells' classes are asserted in their own tests
     /// above; this pins the outer-container and xpak rows.
     #[test]
-    fn binpkg_error_classes_mirror_reals_caller() {
+    fn binpkg_error_classes_mirror_portages_caller() {
         // A trusted outer member that is not a regular file: real's
         // `_verify_binpkg` -> InvalidBinaryPackageFormat -> Invalid.
         let g = build_gpkg_entries(&[
@@ -3010,7 +3010,7 @@ mod tests {
     /// out with `..` is skipped, a leading `/` is stripped, and a
     /// `sub/x` member gets its directory (`xpak.py:486-524`).
     #[test]
-    fn extract_binpkg_writes_xpak_members_verbatim_like_real_unpackinfo() {
+    fn extract_binpkg_writes_xpak_members_verbatim_like_portage_unpackinfo() {
         let real = fs::read(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
         let tmp = TempDir::new("binpkg-xpak-verbatim").keep();
         // The image payload ends where the trailer's `infosize + 8` starts.
@@ -3691,7 +3691,7 @@ mod tests {
     }
 
     #[test]
-    fn gpg_policy_for_features_matches_real_gpkg_init_precedence() {
+    fn gpg_policy_for_features_matches_portage_gpkg_init_precedence() {
         // Real `gpkg.__init__` (`gpkg.py:798-819`): default is
         // verify-when-present, request off.
         assert_eq!(gpg_policy_for_features(""), (true, false));
@@ -3719,7 +3719,7 @@ mod tests {
     /// unset case, where `request` depends on the request feature), then
     /// lets the stronger `FEATURES` token override.
     #[test]
-    fn gpg_verify_from_binrepo_matches_real_gpkg_init_with_an_explicit_verify_signature() {
+    fn gpg_verify_from_binrepo_matches_portage_gpkg_init_with_an_explicit_verify_signature() {
         // `verify-signature = true`: verify + the sidecar requirement.
         assert!(GpgVerify::from_binrepo(true, "sandbox").verify_signature);
         assert!(GpgVerify::from_binrepo(true, "sandbox").request_signature);
@@ -4399,7 +4399,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_binpkg_against_index_reports_size_then_digest_like_real() {
+    fn verify_binpkg_against_index_reports_size_then_digest_like_portage() {
         // Real `_emerge/BinpkgVerifier` checks the stat size against the
         // index `SIZE` first, then each digest the record carries; the
         // failure triple is `(name, got, expected)` with `name ==

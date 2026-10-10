@@ -827,7 +827,7 @@ mod tests {
     /// `install.py`'s `parse_args` (Python 3.14). A known option's value
     /// never becomes a file.
     #[test]
-    fn install_parse_args_matches_reals() {
+    fn install_parse_args_matches_portages() {
         // (argv, files, target_directory, directory)
         type Case<'a> = (&'a [&'a str], &'a [&'a str], Option<&'a str>, bool);
         let cases: &[Case] = &[

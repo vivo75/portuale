@@ -30,7 +30,7 @@
 // checks), PLUS, as of the previous slice, real execution for standalone
 // `config`/`info` too, PLUS, as of this slice, `prerm`/`postrm` joining
 // them as standalone commands (see `ebuild_phases::
-// is_real_standalone_phase_command`'s own doc comment: real, single-
+// is_standalone_phase_command`'s own doc comment: real, single-
 // phase runs via `run_single_phase`, the exact same machinery
 // `preinst`/`postinst` already use internally as part of `merge` -- no
 // new phase-execution machinery needed at all; `preinst`/`postinst`
@@ -229,12 +229,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // dry-runs (e.g. `ebuild foo.ebuild compile clean`). A purely dry-run
     // request keeps the exact pre-existing stub message unchanged.
     if commands.iter().all(|cmd| {
-        ebuild_phases::is_real_phase_command(cmd)
-            || ebuild_phases::is_real_standalone_phase_command(cmd)
-            || ebuild_merge::is_real_merge_command(cmd)
-            || ebuild_merge::is_real_qmerge_command(cmd)
-            || ebuild_unmerge::is_real_unmerge_command(cmd)
-            || ebuild_package::is_real_package_command(cmd)
+        ebuild_phases::is_phase_command(cmd)
+            || ebuild_phases::is_standalone_phase_command(cmd)
+            || ebuild_merge::is_merge_command(cmd)
+            || ebuild_merge::is_qmerge_command(cmd)
+            || ebuild_unmerge::is_unmerge_command(cmd)
+            || ebuild_package::is_package_command(cmd)
     }) {
         let root = portage_repo::root_from_env();
         // Real portage's own make.globals default is `/var/tmp` (the
@@ -472,9 +472,9 @@ pub fn run(args: &[String]) -> ExitCode {
         // `emerge` does -- see `privileges::is_privileged`). Non-root
         // ownership of `$ROOT` (a prefix / staging tree) is still allowed.
         if commands.iter().any(|&c| {
-            ebuild_merge::is_real_merge_command(c)
-                || ebuild_merge::is_real_qmerge_command(c)
-                || ebuild_unmerge::is_real_unmerge_command(c)
+            ebuild_merge::is_merge_command(c)
+                || ebuild_merge::is_qmerge_command(c)
+                || ebuild_unmerge::is_unmerge_command(c)
         }) && !crate::privileges::is_privileged(&root)
         {
             crate::privileges::deny_superuser("ebuild");
@@ -491,13 +491,13 @@ pub fn run(args: &[String]) -> ExitCode {
         // ...)` loop, which likewise re-derives the environment fresh
         // for every top-level command argument.
         for &cmd in &commands {
-            let result = if ebuild_merge::is_real_merge_command(cmd) {
+            let result = if ebuild_merge::is_merge_command(cmd) {
                 ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options, None)
-            } else if ebuild_merge::is_real_qmerge_command(cmd) {
+            } else if ebuild_merge::is_qmerge_command(cmd) {
                 ebuild_merge::run_qmerge(ebuild_path, &root, &portage_tmpdir, &merge_options)
-            } else if ebuild_unmerge::is_real_unmerge_command(cmd) {
+            } else if ebuild_unmerge::is_unmerge_command(cmd) {
                 ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
-            } else if ebuild_package::is_real_package_command(cmd) {
+            } else if ebuild_package::is_package_command(cmd) {
                 ebuild_package::run_package(
                     ebuild_path,
                     &root,
@@ -506,7 +506,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &[],
                     "",
                 )
-            } else if ebuild_phases::is_real_standalone_phase_command(cmd) {
+            } else if ebuild_phases::is_standalone_phase_command(cmd) {
                 ebuild_phases::run_single_phase(
                     ebuild_path,
                     cmd,

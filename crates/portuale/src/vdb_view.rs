@@ -1011,7 +1011,7 @@ mod tests {
     /// Real `_read_metadata_file`'s acceptance rule (`vartree.py:157-185`):
     /// `#format=1` present, `#dir_mtime=<int>` present, equal to the
     /// directory's `st_mtime_ns`.
-    fn real_reader_accepts(bytes: &[u8], dir_mtime_ns: i128) -> bool {
+    fn portage_reader_accepts(bytes: &[u8], dir_mtime_ns: i128) -> bool {
         let text = std::str::from_utf8(bytes).unwrap();
         let (mut version, mut stamp) = (None, None);
         for line in text.lines() {
@@ -1132,7 +1132,7 @@ mod tests {
     }
 
     #[test]
-    fn a_valid_stamp_is_rewritten_to_the_mtime_shown_and_the_real_reader_accepts_it() {
+    fn a_valid_stamp_is_rewritten_to_the_mtime_shown_and_the_portage_reader_accepts_it() {
         for env in envs("stamp") {
             let label = env.label;
             let v = View::new(env.db.clone());
@@ -1147,14 +1147,14 @@ mod tests {
             );
             assert!(bytes.starts_with(b"#format=1\n"), "{label}");
             assert!(
-                real_reader_accepts(&bytes, e.mtime_ns),
+                portage_reader_accepts(&bytes, e.mtime_ns),
                 "{label}: stamp must equal the shown entry mtime {}",
                 e.mtime_ns
             );
             // The files tree itself holds the same fact, so a mount of the
             // files backend is a faithful pass-through.
             let on_disk = fs::read(vdb_dir(&env).join("app-misc/stamped-1.0/metadata")).unwrap();
-            assert!(real_reader_accepts(&on_disk, e.mtime_ns), "{label}");
+            assert!(portage_reader_accepts(&on_disk, e.mtime_ns), "{label}");
             // The view stays a snapshot of one consistent state: the same
             // mtime and the same bytes through `getattr` of an open handle.
             let fh = v.open(m.ino, false).unwrap();
@@ -1174,13 +1174,13 @@ mod tests {
             let stored =
                 fs::read(vdb_dir(&env).join("dev-libs/stalesnapshot-1.0/metadata")).unwrap();
             assert!(
-                !real_reader_accepts(&stored, e.mtime_ns),
+                !portage_reader_accepts(&stored, e.mtime_ns),
                 "{label}: the fixture stamp does not match"
             );
             let bytes = read_all(&v, m.ino);
             assert_eq!(bytes, stored, "{label}: served exactly as stored");
             assert_eq!(m.size, stored.len() as u64, "{label}");
-            assert!(!real_reader_accepts(&bytes, e.mtime_ns), "{label}");
+            assert!(!portage_reader_accepts(&bytes, e.mtime_ns), "{label}");
             // An entry without a metadata file shows none.
             let plain = v.lookup(cat, "oldmovepkg-1.0").unwrap();
             assert_eq!(v.lookup(plain.ino, "metadata"), Err(ViewError::NoEnt));
@@ -1235,7 +1235,7 @@ mod tests {
                 env.label
             );
             assert_eq!(m.size, bytes.len() as u64, "size follows the rewrite");
-            assert!(real_reader_accepts(&bytes, e.mtime_ns));
+            assert!(portage_reader_accepts(&bytes, e.mtime_ns));
         }
     }
 

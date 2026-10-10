@@ -230,7 +230,7 @@ mod tests {
     use portage_util::TempDir;
 
     #[test]
-    fn resolve_folds_no_star_features_in_real_order() {
+    fn resolve_folds_no_star_features_in_portage_order() {
         let (mask, prune) = resolve("", &["noinfo", "noman"]);
         assert_eq!(mask, "/usr/share/man /usr/share/info");
         assert!(prune);
