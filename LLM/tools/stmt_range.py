@@ -2,8 +2,8 @@
 """Print the line range of top-level statements of a function body
 (#336 Phase 6.3; feeds extract_block.py).
 
-Usage: stmt_range.py FILE LINE [COUNT]
-       stmt_range.py FILE LINE --until NEXT
+Usage: stmt_range.py FILE LINE [COUNT] [--indent N]
+       stmt_range.py FILE LINE --until NEXT [--indent N]
 
 LINE is the first line of a statement at 4-space indent. The range starts
 at the comment lines directly above it and ends where COUNT (default 1)
@@ -40,7 +40,7 @@ def stmt_end(src, mask, offs, ln):
     raise SystemExit("no end")
 
 
-def main(path, line, count, until=None):
+def main(path, line, count, until=None, ind="    "):
     src = open(path).read()
     mask = code_mask(src)
     lines = src.split("\n")
@@ -50,27 +50,30 @@ def main(path, line, count, until=None):
         o += len(l) + 1
     ln = line - 1
     start = ln
-    while start > 0 and lines[start - 1].startswith("    //"):
+    while start > 0 and lines[start - 1].startswith(ind + "//"):
         start -= 1
     if until:
         end = until - 2
-        while lines[end - 1].startswith("    //"):
+        while lines[end - 1].startswith(ind + "//"):
             end -= 1
-        while not lines[end].strip() or lines[end].startswith("    //"):
+        while not lines[end].strip() or lines[end].startswith(ind + "//"):
             end -= 1
         print(start + 1, end + 1)
         return
     for _ in range(count):
         end = stmt_end(src, mask, offs, ln)
         ln = end + 1
-        while ln < len(lines) and (not lines[ln].strip() or lines[ln].startswith("    //")):
+        while ln < len(lines) and (not lines[ln].strip() or lines[ln].startswith(ind + "//")):
             ln += 1
     print(start + 1, end + 1)
 
 
 if __name__ == "__main__":
     a = sys.argv[1:]
+    ind = " " * int(a[a.index("--indent") + 1]) if "--indent" in a else "    "
+    if "--indent" in a:
+        del a[a.index("--indent"):a.index("--indent") + 2]
     if "--until" in a:
-        main(a[0], int(a[1]), 0, int(a[a.index("--until") + 1]))
+        main(a[0], int(a[1]), 0, int(a[a.index("--until") + 1]), ind)
     else:
-        main(a[0], int(a[1]), int(a[2]) if len(a) > 2 else 1)
+        main(a[0], int(a[1]), int(a[2]) if len(a) > 2 else 1, ind=ind)
