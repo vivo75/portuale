@@ -223,8 +223,12 @@ mod help;
 mod info;
 mod json;
 mod merge_list;
+mod merge_run;
+mod merge_setup;
 mod news;
+mod post_merge;
 mod problem_reports;
+mod process_globals;
 mod prompt;
 mod removal;
 mod resolve_phases;
@@ -253,8 +257,12 @@ pub(crate) use help::*;
 pub(crate) use info::*;
 pub(crate) use json::*;
 pub(crate) use merge_list::*;
+pub(crate) use merge_run::*;
+pub(crate) use merge_setup::*;
 pub use news::*;
+pub(crate) use post_merge::*;
 pub(crate) use problem_reports::*;
+pub(crate) use process_globals::*;
 pub(crate) use prompt::*;
 pub(crate) use removal::*;
 pub(crate) use resolve_phases::*;
@@ -504,36 +512,14 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
 
-    // `--package-moves` (real `y_or_n`, default "y"): must be applied
-    // before anything reads `profiles/updates/` -- see
-    // `portage_repo::set_package_moves_enabled`. Harmless for every
-    // action (a no-op when `y`).
-    portage_repo::set_package_moves_enabled(package_moves);
-
-    // `--useoldpkg-atoms ATOMS`: a process-global read during candidate
-    // selection (see `portage_repo::set_useoldpkg_atoms`). Set once here,
-    // before any `resolve_pretend_graph` call; empty is a strict no-op.
-    // A clone is kept for the slot-collision `need_rebuild` trailer,
-    // which re-checks the same atoms at render time (real reads
-    // `frozen_config.useoldpkg_atoms` there too).
-    let useoldpkg_atoms_render = useoldpkg_atoms.clone();
-    portage_repo::set_useoldpkg_atoms(useoldpkg_atoms);
-
-    // `--binpkg-changed-deps=y|n` / `--use-ebuild-visibility=y|n`:
-    // resolver-time overrides of automatic defaults, applied as
-    // process-globals (see those setters' own doc comments). `None` /
-    // `false` (the defaults when the flag is absent) are strict no-ops.
-    portage_repo::set_binpkg_changed_deps_override(binpkg_changed_deps_override);
-    portage_repo::set_use_ebuild_visibility(use_ebuild_visibility);
-
-    // `--debug`/`-d` under `--pretend`: besides `PORTAGE_DEBUG=1` in the
-    // phase env (a no-op when nothing is built), real also turns on the
-    // full resolver trace (`initialize_logger(logging.DEBUG)`). Portuale
-    // emits the same shapes -- see `portage_repo::resolver_trace`. Gated
-    // to `--pretend` only (portuale's build path doesn't route through
-    // the traced resolver the way real's does). Process-global, set once
-    // before any `resolve_pretend_graph` call.
-    portage_repo::set_resolver_debug(debug && pretend);
+    let useoldpkg_atoms_render = apply_process_globals(ApplyProcessGlobalsArgs {
+        package_moves,
+        useoldpkg_atoms,
+        binpkg_changed_deps_override,
+        use_ebuild_visibility,
+        debug,
+        pretend,
+    });
 
     if let Some(code) = validate_and_early_actions(ValidateAndEarlyActionsArgs {
         tree,
@@ -1206,197 +1192,47 @@ pub fn run(args: &[String]) -> ExitCode {
             atom_args.iter().any(|a| !a.starts_with('@'))
                 || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()),
         );
-        if nothing_to_merge(pretend, show_merge_list, mergecount) {
-            if deferred {
-                // Real `actions.py:526`: the blank line prints on the
-                // prompt shape too (`prompt` stays `None` on this arm,
-                // so `UserQuery` is skipped), then the run falls through
-                // to the `resume_backup` rotation and
-                // `saveNomergeFavorites` -- only `Scheduler` is skipped
-                // (`:664-675`).
-                println!();
-                crate::mtimedb::rotate_resume_to_backup(&root);
-                // Backlog #232, second half: real
-                // `depgraph.saveNomergeFavorites`
-                // (`depgraph.py:11305-11402`) records the world-candidate
-                // favorites that stayed unmerged. Its own suppression set
-                // (`:11308-11317`) is `--buildpkgonly` / `--fetchonly` /
-                // `--fetch-all-uri` / `--oneshot` / `--onlydeps` /
-                // `--pretend`: `--pretend` never reaches this branch,
-                // `--oneshot` / `--onlydeps` already keep the deferral
-                // gate above at bay (real's folded variable,
-                // `actions.py:257`), and `--fetchonly` / `--fetch-all-uri`
-                // are portuale-unimplemented options (a usage error long
-                // before this point), so only `--buildpkgonly` still
-                // suppresses here. Under `--ask` the
-                // prompt moves here (`:11376-11386`): the additions list
-                // prints first, then `Would you like to add these
-                // packages to your world favorites?`, and a "No" (or EOF,
-                // which `ask_yes_no` folds into the same decline) records
-                // nothing -- the run still succeeds, the rotation above
-                // already happened.
-                if !buildpkgonly {
-                    // Backlog #232 review (Important-2): real's record
-                    // skips non-candidate sets (`depgraph.py:11366`) --
-                    // the same `usersets_world_candidate` filter as the
-                    // gate above, so only the gate-passing sets record.
-                    let record_sets: &[String] = if usersets_world_candidate(&config_root) {
-                        &selected_set_args
-                    } else {
-                        &[]
-                    };
-                    let fav_refs: Vec<&str> = atom_args.to_vec();
-                    let mut additions = match read_world_atoms(&root) {
-                        Ok(current) => {
-                            world_file_additions(&current, &fav_refs, entries, system_atoms, &repos)
-                        }
-                        Err(e) => {
-                            eprintln!("emerge: {e}");
-                            return ExitCode::from(1);
-                        }
-                    };
-                    match read_world_sets(&root) {
-                        Ok(names) => {
-                            let current: Vec<String> =
-                                names.into_iter().map(|n| format!("@{n}")).collect();
-                            additions.extend(world_sets_additions(&current, record_sets));
-                        }
-                        Err(e) => {
-                            eprintln!("emerge: {e}");
-                            return ExitCode::from(1);
-                        }
-                    }
-                    if ask && !additions.is_empty() {
-                        println!();
-                        let mut shown = additions.clone();
-                        shown.sort();
-                        shown.dedup();
-                        for a in &shown {
-                            println!(" {} {}", color.c("GOOD", "*"), a);
-                        }
-                        println!();
-                        if ask_yes_no(
-                            &color,
-                            "Would you like to add these packages to your world favorites?",
-                        ) != Some(true)
-                        {
-                            return ExitCode::SUCCESS;
-                        }
-                    }
-                    // The writers below re-read the world files and
-                    // recompute the same additions instead of reusing
-                    // `additions`: deliberate -- single-threaded, no
-                    // intervening write, so the recompute is identical,
-                    // and it keeps one writer entry point for both this
-                    // arm and the success path.
-                    if let Err(e) = update_world_file(
-                        &root,
-                        &fav_refs,
-                        entries,
-                        system_atoms,
-                        &repos,
-                        oneshot,
-                        onlydeps,
-                    ) {
-                        eprintln!("emerge: {e}");
-                        return ExitCode::from(1);
-                    }
-                    if let Err(e) = update_world_sets_file(&root, record_sets, oneshot, onlydeps) {
-                        eprintln!("emerge: {e}");
-                        return ExitCode::from(1);
-                    }
-                }
-                return ExitCode::SUCCESS;
-            }
-            // Real's own `print()` before the message
-            // (`actions.py:518`): `--ask` reaches here with no blank
-            // line printed yet (the #185 `actions.py:526` blank only
-            // covers the no-prompt shape, and `ask_confirm`'s own
-            // opener never runs).
-            if ask {
-                println!();
-            }
-            println!("Nothing to merge; quitting.");
-            println!();
-            return ExitCode::SUCCESS;
+        if let Some(code) = show_nothing_to_merge(ShowNothingToMergeArgs {
+            pretend,
+            show_merge_list,
+            mergecount,
+            deferred,
+            root: &root,
+            buildpkgonly,
+            config_root: &config_root,
+            selected_set_args: &selected_set_args,
+            atom_args: &atom_args,
+            entries,
+            system_atoms,
+            repos: &repos,
+            ask,
+            color,
+            oneshot,
+            onlydeps,
+        }) {
+            return code;
         }
         // Real `_emerge/actions.py:525-536`: `--ask` prompts once, after
         // the whole merge list is displayed, before anything is built.
         if ask && !ask_confirm(&color, "Would you like to merge these packages?") {
             return ExitCode::from(130);
         }
-        // Backlog #185/#197: real `Scheduler._status_msg`
-        // (`Scheduler.py:2387-2397`) precedes every status line -- the
-        // first `>>> Emerging ...` among them -- with a blank line,
-        // unless the scheduler is in background mode (real
-        // `_background_mode`: parallel `--jobs`, `--quiet`, or
-        // `--quiet-build=y`, except a one-package mergelist without
-        // `--quiet` -- see `emerge_build::scheduler_status_mode`).
-        // #185 ported only the first blank with a `jobs`/`quiet`
-        // approximation; #197 generalizes the rule to every status
-        // line, and the merge functions own every blank through their
-        // `StatusDisplay::status()` -- including the first, so no
-        // blank prints here (fix round 1 removed the duplicate that
-        // printed a second blank before the first `>>>` line). The
-        // exact background predicate still computes here.
-        let status_mode = crate::emerge_build::scheduler_status_mode(
+        let MergeSetupOut {
+            status_mode,
+            package_options,
+            portage_tmpdir,
+            merge_options,
+        } = merge_setup(MergeSetupArgs {
             jobs,
             quiet,
             quiet_build,
-            entries.len(),
+            entries,
             verbose,
-        );
-        // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
-        // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
-        // `package_options_from_env`.
-        let package_options = package_options_from_env(
             shell,
             debug,
-            Some(&config_features_string(&config)),
-            Some(&config),
-        );
-        let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(&config));
-        let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
-        // The compiler / make flags real portage puts in every build
-        // phase's environment, from the resolved config (make.conf +
-        // profile `make.defaults` + the `env` layer -- all folded into
-        // `Config::other_vars`). `merge_one_source_entry` appends the
-        // per-entry `USE` on top. Only the deterministic build-var set --
-        // not every scalar (`PATH`/`HOME`/... are handled by
-        // `phase_env_vars` itself), and `FEATURES` stays out (portuale
-        // models it via its own `feature_enabled`, forcing `""` here).
-        merge_options.build_env = crate::emerge_build::run_wide_phase_env(&config);
-        merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
-        // Real `preinst_mask()`: `INSTALL_MASK` + the `no{man,info,doc}`
-        // `FEATURES` fold, from the resolved config (not the process
-        // env). Applied to every merged image before `CONTENTS` is
-        // recorded -- see `ebuild_merge::apply_install_mask`.
-        (
-            merge_options.install_mask,
-            merge_options.install_mask_prunes_usr_share,
-        ) = config_install_mask(&config);
-        merge_options.set_resolved_features(&config_features_string(&config));
-        // #333: real `dblink` protects `settings["CONFIG_PROTECT"]`, the
-        // resolved fold (calling env included), not the raw process env
-        // `from_env` read (`MergeOptions::apply_config_protect`).
-        merge_options.apply_config_protect(&config);
-        // Real `_grab_pkg_env` into `configdict["pkg"]`: a `package.env`
-        // entry matching a build-bound package layers its env file's
-        // build vars over the run-wide set above.
-        // `emerge_build::entry_package_env_vars` does the per-entry atom
-        // match.
-        merge_options.package_env_vars = config.package_env_vars.clone();
-        // Real `actions.py:664-672`: right before a fresh, non-`--resume`
-        // merge starts, an existing multi-package `mtimedb["resume"]`
-        // (left over from some earlier, abandoned run) is preserved as
-        // `resume_backup` rather than just being silently overwritten
-        // once this run's own outcome gets recorded -- `emerge --resume`
-        // can still recover it later if this run wasn't actually meant
-        // to replace it. This whole branch is only ever reached for a
-        // non-`--resume` action (`--resume` returns early, well above).
-        crate::mtimedb::rotate_resume_to_backup(&root);
+            config: &config,
+            root: &root,
+        });
 
         // Real `FEATURES=buildpkg` / `--buildpkg`/`-b` (real
         // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
@@ -1431,326 +1267,74 @@ pub fn run(args: &[String]) -> ExitCode {
                 return ExitCode::from(1);
             }
         } else if getbinpkg || has_binary_entry {
-            // Remote execution (`mrg --remote-hostname` + `--getbinpkgonly`,
-            // published via the `REMOTE_EXEC` handoff): the same resolved
-            // entries run through the remote plan instead. Binary-only is
-            // enforced (usage error, exit 2); resume/world bookkeeping is
-            // skipped (the client owns that state -- see remote.rs).
-            // The download/ledger `$PKGDIR` is the placed config's own
-            // `PKGDIR` (`config.pkgdir`, honouring the resolve's
-            // `ConfigRootOverride`), not the process `$PKGDIR` env the
-            // local plan uses -- the server stores against the config it
-            // resolved against (plan §7/§8).
-            if let Some(mut rctx) = crate::remote::take_remote_exec() {
-                if let Err(e) = crate::remote::check_binary_plan(entries) {
-                    eprintln!("emerge: {e}");
-                    return ExitCode::from(2);
-                }
-                // Slice 6: CONFIG_PROTECT comes from the placed config
-                // (`Config::resolved_incremental` folds the profile +
-                // make.conf stack) unless explicitly flagged -- the
-                // client merge then protects what the client config
-                // protects, not the flag defaults.
-                if !rctx.config_protect_explicit
-                    && let Some(v) = config.resolved_incremental("CONFIG_PROTECT")
-                    && !v.is_empty()
-                {
-                    rctx.config_protect = v.join(" ");
-                }
-                if !rctx.config_protect_mask_explicit
-                    && let Some(v) = config.resolved_incremental("CONFIG_PROTECT_MASK")
-                    && !v.is_empty()
-                {
-                    rctx.config_protect_mask = v.join(" ");
-                }
-                if let Err(e) = crate::remote::run_remote_plan(
-                    entries,
-                    &config,
-                    &repos,
-                    &root,
-                    &std::path::PathBuf::from(&config.pkgdir),
-                    &portage_tmpdir,
-                    &rctx,
-                    keep_going,
-                ) {
-                    eprintln!("emerge: {e}");
-                    return ExitCode::from(1);
-                }
-                // Backlog #231 (b): real `post_emerge`'s tail (info regen,
-                // preserved-libs notice, config-file check, the GLEP 42
-                // notice at `post_emerge.py:155`) runs only once the vdb
-                // changed (`post_emerge.py:112-117` early-returns
-                // otherwise -- printing just the notice, and only under
-                // `--pretend`). The remote plan merges onto the *remote*
-                // host (`run_remote_plan` ships every unit through the
-                // transport; the local `${ROOT}/var/db/pkg` is never
-                // touched), so from this process's vdb nothing changed:
-                // real's gate evaluates false on both the success and
-                // the failure returns above, and -- being non-`--pretend`
-                // here (every `--pretend` exit returned long before this
-                // dispatch) -- the tail would print nothing. The early
-                // return is therefore the faithful shape; no post-merge
-                // notice here by construction, pinned by the
-                // local-transport contract test. (The pre-resolution
-                // notice already printed before the resolve, like real.)
-                return ExitCode::from(0);
-            }
-            // Real `Scheduler.merge() -> _save_resume_list()` (#168):
-            // persist the full mergelist BEFORE the first merge runs, so a
-            // SIGKILL mid-merge still leaves `--resume` something to replay
-            // (nothing was saved here before -- only the failure path wrote
-            // anything). Each successful merge below shrinks it again
-            // (`run_merge_loop` / the `-j` scheduler); the failure path
-            // re-saves the tail. Silent on write failure, like the
-            // `rotate_resume_to_backup` above (a later failure write warns).
-            // `--buildpkgonly` and remote execution are deliberately
-            // untouched: no save here covers them. The write is
-            // unconditional (real always assigns, #179): an all-noop
-            // plan records the empty list instead of leaving a stale one.
-            let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
-                .iter()
-                .filter_map(emerge_build::resume_cpv)
-                .collect();
-            let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-            let _ = crate::mtimedb::write_resume_list(
-                &root,
-                &atom_args,
-                &resume_mergelist,
-                &resume_opts,
-            );
-            // `emerge --getbinpkg`/`-g` (and `-G`, binary-only): merge
-            // every resolved entry, per-entry `Binary` vs `Source` --
-            // see `emerge_getbinpkg::run_merge_plan`.
-            if let Err(e) = emerge_getbinpkg::run_merge_plan(
+            if let Some(code) = run_binary_merge_plan(RunBinaryMergePlanArgs {
                 entries,
-                &config,
-                &repos,
-                &root,
-                &package_options.pkgdir,
-                &portage_tmpdir,
-                &merge_options,
+                config: &config,
+                repos: &repos,
+                root: &root,
+                portage_tmpdir: &portage_tmpdir,
                 keep_going,
-                buildpkg,
-                &buildpkg_exclude,
-                status_mode,
-            ) {
-                // Backlog #174: a merge-time binpkg digest failure
-                // already printed real's full tail (digest block +
-                // `>>> Failed to emerge ...`, real
-                // `Scheduler._failed_pkg_msg`) and needs no resume-list
-                // notice or `emerge:` line -- real prints neither for a
-                // merge-time package failure. Backlog #187 extends the
-                // same silence to the missing-file sentinel (real
-                // `BinpkgVerifier`'s ENOENT arm). The up-front save above
-                // (minus per-success removals) already leaves the tail
-                // for `--resume`, like real's own start-of-merge save.
-                if crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
-                    || crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
-                {
-                    return ExitCode::from(1);
-                }
-                // Real `Scheduler._save_resume_list`: on a merge
-                // failure, record every still-unmerged package (source
-                // *or* binary -- `entries_not_merged`'s own
-                // `ResumeEntryKind` tag) so `emerge --resume` can pick
-                // up where this left off. Previously missing entirely
-                // for this `--getbinpkg` path -- a failed mixed-source-
-                // and-binary run left nothing for `--resume` to find.
-                // The empty-`unmerged` guard is the failure path's own:
-                // `write_resume_list` itself is unconditional now (real
-                // `_save_resume_list` always assigns, #179), but a
-                // failure with nothing unmerged must leave the
-                // per-merge shrink's own tail alone, not overwrite it
-                // with an empty list.
-                let unmerged = entries_not_merged(&root, entries);
-                let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-                if !unmerged.is_empty() {
-                    if let Err(w) = crate::mtimedb::write_resume_list(
-                        &root,
-                        &atom_args,
-                        &unmerged,
-                        &resume_opts,
-                    ) {
-                        eprintln!("emerge: warning: could not save the resume list: {w}");
-                    } else {
-                        eprintln!(
-                            "\n * The resume list contains packages that could not be \
-                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                             --skipfirst` to skip the first one."
-                        );
-                    }
-                }
-                // Backlog #196 fix round 1: real `post_emerge.py:155`
-                // prints the GLEP 42 notice regardless of retval -- gated
-                // on the vdb having changed (`:112-117`), which here is
-                // `unmerged.len() < entries.len()` (at least one entry
-                // landed; the same structural approximation as the
-                // success path's `!entries.is_empty()` below).
-                merge_failure_news_notice(
-                    unmerged.len() < entries.len(),
-                    &repos,
-                    &root,
-                    &config,
-                    &color,
-                );
-                eprintln!("emerge: {e}");
-                return ExitCode::from(1);
-            }
-        } else {
-            // Plain `emerge <atom>`: real source build + merge (see
-            // `emerge_build::run_source_merge`). The up-front resume save
-            // is real `Scheduler.merge() -> _save_resume_list()` (#168),
-            // same as the `--getbinpkg` arm above -- unconditional (an
-            // all-noop plan records the empty list, #179).
-            let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
-                .iter()
-                .filter_map(emerge_build::resume_cpv)
-                .collect();
-            let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-            let _ = crate::mtimedb::write_resume_list(
-                &root,
-                &atom_args,
-                &resume_mergelist,
-                &resume_opts,
-            );
-            if let Err(e) = emerge_build::run_source_merge(
-                entries,
-                &repos,
-                &root,
-                &portage_tmpdir,
-                &merge_options,
-                keep_going,
-                buildpkg,
-                &buildpkg_exclude,
-                jobs,
-                load_average,
-                // Real `Scheduler._background_mode`: capture per-package
-                // build output when `--quiet-build=y` or `-q` is set (a
-                // `-j` >1 run always captures regardless).
-                quiet_build.unwrap_or(false) || quiet,
-                status_mode,
-            ) {
-                // Real `Scheduler._save_resume_list`: on a merge failure,
-                // record every still-unmerged package so `emerge --resume`
-                // can pick up where this left off. The empty-`unmerged`
-                // guard is the failure path's own (`write_resume_list`
-                // itself is unconditional now, #179): a failure with
-                // nothing unmerged leaves the per-merge shrink's own
-                // tail alone.
-                let unmerged = entries_not_merged(&root, entries);
-                let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-                if !unmerged.is_empty() {
-                    if let Err(w) = crate::mtimedb::write_resume_list(
-                        &root,
-                        &atom_args,
-                        &unmerged,
-                        &resume_opts,
-                    ) {
-                        eprintln!("emerge: warning: could not save the resume list: {w}");
-                    } else {
-                        eprintln!(
-                            "\n * The resume list contains packages that could not be \
-                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                             --skipfirst` to skip the first one."
-                        );
-                    }
-                }
-                // Backlog #196 fix round 1: same failure-path notice as
-                // the `--getbinpkg` arm above (real `post_emerge.py:155`
-                // regardless of retval, gated on the vdb having changed).
-                merge_failure_news_notice(
-                    unmerged.len() < entries.len(),
-                    &repos,
-                    &root,
-                    &config,
-                    &color,
-                );
-                eprintln!("emerge: {e}");
-                return ExitCode::from(1);
-            }
-        }
-
-        // Real `Scheduler._world_atom` / `saveNomergeFavorites`: record
-        // each directly-requested plain target in the world file. Real's
-        // own suppression set includes `--buildpkgonly` (which builds but
-        // never merges, so a package that isn't installed can't be a
-        // world member yet); `--oneshot`/`--onlydeps` are handled inside.
-        if !buildpkgonly {
-            if let Err(e) = update_world_file(
-                &root,
-                &atom_args,
-                entries,
-                system_atoms,
-                &repos,
                 oneshot,
                 onlydeps,
-            ) {
-                eprintln!("emerge: {e}");
-                return ExitCode::from(1);
+                atom_args: &atom_args,
+                package_options: &package_options,
+                merge_options: &merge_options,
+                buildpkg,
+                buildpkg_exclude: &buildpkg_exclude,
+                status_mode,
+                color,
+            }) {
+                return code;
             }
-            // Real `saveNomergeFavorites`'s `@set` half: a directly-given
-            // `@name` set arg is recorded in `world_sets` (same
-            // suppression set as the world file). Backlog #232 review
-            // (Important-2): non-candidate sets are skipped
-            // (`depgraph.py:11366`) -- the same `usersets_world_candidate`
-            // filter as the deferral arm above.
-            let record_sets: &[String] = if usersets_world_candidate(&config_root) {
-                &selected_set_args
-            } else {
-                &[]
-            };
-            if let Err(e) = update_world_sets_file(&root, record_sets, oneshot, onlydeps) {
-                eprintln!("emerge: {e}");
-                return ExitCode::from(1);
-            }
+        } else if let Some(code) = run_source_merge_plan(RunSourceMergePlanArgs {
+            entries,
+            oneshot,
+            onlydeps,
+            root: &root,
+            atom_args: &atom_args,
+            repos: &repos,
+            portage_tmpdir: &portage_tmpdir,
+            merge_options: &merge_options,
+            keep_going,
+            buildpkg,
+            buildpkg_exclude: &buildpkg_exclude,
+            jobs,
+            load_average,
+            quiet_build,
+            quiet,
+            status_mode,
+            config: &config,
+            color,
+        }) {
+            return code;
         }
 
-        // `elog_process` is no longer batched here: real runs it
-        // per-package inside `dblink.merge()` (before the post-merge
-        // `clean`, `vartree.py:6160-6198`), and backlog #42's clean now
-        // removes `${T}` -- so `ebuild_merge::process_merge_elog` is
-        // called from `merge_after_install`/`merge_binpkg` themselves.
-        // The `echo` summary still reaches stdout, the `save`/
-        // `save_summary` files the logdir, and `mail`/`mail_summary`
-        // the MTA exactly as before (see `elog.rs`).
-        if !buildpkgonly {
-            // Real `post_emerge()` (`post_emerge.py:126-130`): once the
-            // merge changed the vdb, regenerate any stale GNU info
-            // directory index *before* the preserved-libs notice below.
-            // The vdb-changed gate is structural here: every merge
-            // failure returned early above, `--pretend` never reaches
-            // this branch, `buildpkgonly` merges nothing, and an empty
-            // mergelist changed nothing either.
-            if !entries.is_empty() {
-                let noinfo = config_features_list(&config).iter().any(|t| t == "noinfo");
-                if let Err(e) =
-                    crate::info_files::post_merge_info_update(&root, &color, quiet, noinfo)
-                {
-                    eprintln!("emerge: {e}");
-                    return ExitCode::from(1);
-                }
-            }
-            // Real `post_emerge()` (`post_emerge.py:141-152`): once the
-            // merge changed the vdb, warn about any library the merge/
-            // unmerge just preserved and point the user at
-            // `emerge @preserved-rebuild`.
-            crate::preserved_libs::show_preserved_libs_notice(&root, &color, quiet, verbose);
-            // Backlog #196: real `post_emerge()` (`post_emerge.py:155`)
-            // prints the GLEP 42 count notice a second time once the
-            // merge changed the vdb (after the preserved-libs notice and
-            // the config-file check, both mirrored above) -- same
-            // FEATURES-plus-nonzero-count gates, no `--quiet` gate. The
-            // vdb-changed gate is structural here: `--buildpkgonly`
-            // builds but never merges (real's `_pkgs_changed` stays
-            // false, so its `post_emerge` early-returns with no notice),
-            // and an empty mergelist changed nothing either. A merge
-            // failure prints the notice too when the vdb changed (real
-            // prints regardless of retval, `post_emerge.py:104-108,155`)
-            // -- see `merge_failure_news_notice` on the two failure
-            // arms above.
-            if !entries.is_empty() {
-                display_news_notice_if_any(&repos, &root, &config, &color);
-            }
+        if let Some(code) = record_world_after_merge(RecordWorldAfterMergeArgs {
+            buildpkgonly,
+            root: &root,
+            atom_args: &atom_args,
+            entries,
+            system_atoms,
+            repos: &repos,
+            oneshot,
+            onlydeps,
+            config_root: &config_root,
+            selected_set_args: &selected_set_args,
+        }) {
+            return code;
+        }
+
+        if let Some(code) = show_post_merge_notices(ShowPostMergeNoticesArgs {
+            buildpkgonly,
+            entries,
+            config: &config,
+            root: &root,
+            color,
+            quiet,
+            verbose,
+            repos: &repos,
+        }) {
+            return code;
         }
     }
 

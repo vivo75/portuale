@@ -256,3 +256,13 @@ The owner approved items 1-27 and commented on two of them: item 2
     `cargo test` runs once per phase. Commits stay one per step, so a
     failure at the end is found with `git bisect` over them. Nothing
     merges to `main` before the final pass is green.
+
+35. **Phase 6.3 cuts the four giants, then stops; the rest is measured
+    after Phase 7.** `run_pass` (4,028), `resolve_config` (1,140) and
+    `collect_feedback` (1,024) are cut, and `pretend::run` will be once
+    phase S is. A scan on 2026-10-10 still finds 58 production functions
+    over 200 lines, comments included; some were born from these cuts
+    (a cut block keeps its length). Phase 7 moves most comment lines to
+    `LLM/code-notes/`, so the list is measured again after it, by code
+    lines. Functions still over 200 code lines then go to #339 with
+    their length and the extraction hint from split-map section 10.

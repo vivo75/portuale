@@ -446,11 +446,12 @@ class Cut:
                            f"    pub(crate) {n}: {t if typed and t else '()'},\n" for n, t in self.outs)
                        + "}\n\n")
         if use_struct:
+            fields_txt = "".join(f"    pub(crate) {n}: {lifetimed(ptype(t, m))},\n" for n, t, m in ps)
+            lt = "'a" in fields_txt
             struct += (f"/// The values [`{self.fname}`] reads from its caller.\n"
-                      f"pub(crate) struct {sname}<'a> {{\n" + "".join(
-                          f"    pub(crate) {n}: {lifetimed(ptype(t, m))},\n" for n, t, m in ps)
-                      + "}\n\n")
-            sig = f"pub(crate) fn {self.fname}(args: {sname}<'_>){ret}"
+                       f"pub(crate) struct {sname}{'<' + chr(39) + 'a>' if lt else ''} {{\n"
+                       + fields_txt + "}\n\n")
+            sig = f"pub(crate) fn {self.fname}(args: {sname}{'<' + chr(39) + '_>' if lt else ''}){ret}"
             fields = ", ".join(n if n not in copy_mut else f"{n}: {n}_out" for n, _, _ in ps)
             prologue = f"    let {sname} {{ {fields} }} = args;\n"
         else:
