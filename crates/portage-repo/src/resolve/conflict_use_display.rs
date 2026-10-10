@@ -1,18 +1,9 @@
-//! USE displays shared by slot-conflict and skipped-update reports.
+//! `USE="…"` displays shared by slot-conflict and skipped-update reports.
 
 use crate::*;
 
-/// Real `pkg_use_display(pkg, opts, modified_use=...)` for a
-/// scheduled-for-merge package (`_emerge/UseFlagDisplay.py:55`) -- the
-/// `USE="…"` (+ one `VAR="…"` per non-hidden `USE_EXPAND` group) pairs
-/// on a slot-conflict instance's / parent's line (and the REQUIRED_USE
-/// violation block, which renders the same helper). Backlog #264: this
-/// is the full display [`skipped_update_use_display_for`] ships for the
-/// skipped-update block -- the effective USE masked to the package's
-/// valid-IUSE domain, so implicit-expand flags (e.g. `elibc_glibc`
-/// under `USE_EXPAND_IMPLICIT="ELIBC"`) render in their own group
-/// instead of vanishing. Empty when the version is gone from every
-/// repo (rendered as a bare `USE=""`).
+/// Full per-package display for a scheduled-for-merge package.
+// Portage: _emerge/UseFlagDisplay.py, pkg_use_display
 pub(crate) fn pkg_use_display_for(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -23,51 +14,9 @@ pub(crate) fn pkg_use_display_for(
     skipped_update_use_display_for(repos, config, category, package, version)
 }
 
-/// Backlog #230: real `pkg_use_display(pkg, opts, modified_use=...)` for a
-/// scheduled-for-merge package (`_emerge/UseFlagDisplay.py:55`), built for
-/// the skipped-update block -- the FULL per-package display. Backlog #264
-/// unified the slot-collision notice onto this same implementation
-/// ([`pkg_use_display_for`] delegates here): real renders both blocks
-/// through the one helper, so portuale does too.
-///
-/// Two real behaviors the approximation misses, both bed-grounded (bed
-/// `l0-fx-20260927T125711Z`, `--backtrack=0 dev-libs/blk0b dev-libs/blk0c
-/// dev-libs/blk0a`: real renders `USE="(test-rust)" ABI_X86="(64)"
-/// LLVM_TARGETS="(X86)"` on the missed line and `USE="(globalforceflag)"`
-/// on the parents where portuale printed bare `USE=""`):
-///
-/// 1. `modified_use` is the package's whole effective USE
-///    (`PORTAGE_USE`), so profile-global flags and forced flags render
-///    even when no ebuild declares them in `IUSE`.
-/// 2. `PORTAGE_USE` itself is the effective USE *masked* to the
-///    package's valid-IUSE domain (`config.py` setcpv, `:2166-2220`): a
-///    flag survives iff it is in the declared `IUSE` or matches the
-///    implicit domain -- EAPI 5+ `IUSE_EFFECTIVE`
-///    (`_calc_iuse_effective`: `IUSE_IMPLICIT` + unprefixed +
-///    expand-implicit values), pre-EAPI-5 `_get_implicit_iuse` (`ARCH` +
-///    `arch.list` + `USE_EXPAND_HIDDEN`-derived `xxx_.*` + the
-///    per-package use.mask/use.force + `build`/`bootstrap`).
-///
-/// Bed-grounded against the real 3.0.82.2 container probe in
-/// `docs/history/` (see `skipped_update_use_display_for`'s callers for
-/// the pointer): `emerge --info dev-libs/pkginfopkg` shows
-/// `USE="alpha -beta" ELIBC="glibc"` -- the `foo`/`bar`/forced globals
-/// masked out, the implicit `elibc_glibc` kept -- and a flagless blk0
-/// package keeps exactly `amd64`→(discarded as `ARCH`), the hidden-expand
-/// `cpu_flags_x86_sse2`, and the forced `globalforceflag`.
-///
-/// Deliberate narrowings: no `--alphabetical` interleave (no contract or
-/// bed cell passes it with this block) and no ANSI colour (a no-op under
-/// `emerge -p` without `--color=y`, matching `render_pkg_use_display`'s
-/// own cut). The installed-consumer twin is
-/// [`skipped_update_installed_use_display_for`].
-///
-/// NOTE (post-#220): the blk0 ebuilds are EAPI 8 now, so the
-/// `eapi_has_iuse_effective` gate selects the `IUSE_EFFECTIVE` domain
-/// and the profile globals mask out -- a flagless blk0 package renders
-/// `USE="" ELIBC="glibc"`. The `pre-EAPI-5 ... forced flags survive`
-/// pin in pmtest's `test_upstream_blocker_pg0_all_orders_pin_x1_and_uninstall_y1`
-/// predates that merge and is stale (see the fix-round-1 report).
+/// Full per-package display for the skipped-update block; the
+/// slot-collision notice shares this implementation.
+// Portage: _emerge/UseFlagDisplay.py, pkg_use_display
 pub fn skipped_update_use_display_for(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -92,9 +41,7 @@ pub fn skipped_update_use_display_for(
         Ok(md) => md,
         Err(_) => return Vec::new(),
     };
-    // Same "absence is real" as `pkg_use_display_for`: a missing IUSE key
-    // declares no flags; a missing md5-cache entry entirely (the `?`
-    // above... here the Err arm) yields no display.
+    // A missing IUSE key declares no flags; an unreadable md5-cache entry yields no display.
     let use_flags = match candidate_iuse_and_use(&cand, category, package, config) {
         Some((_, uf)) => uf,
         None => return Vec::new(),
@@ -121,15 +68,9 @@ pub(crate) struct AssembleTreePkgUseDisplayArgs<'a> {
     pub(crate) version: &'a str,
 }
 
-/// Shared assembly tail of [`skipped_update_use_display_for`] and the
-/// #244-replay conflict displays below: real `pkg_use_display`'s own
-/// grouping (`_emerge/UseFlagDisplay.py:55-122`) over an explicit
-/// enabled set -- the masked `PORTAGE_USE`-equivalent, whose source
-/// differs per caller (the walk-time effective USE for the skipped
-/// block, the flip-applied entry USE for a replayed conflict).
-/// `explicit` is the declared `IUSE` names (the disabled side),
-/// `force_mask` the unfiltered per-package force ∪ mask stack for the
-/// `( )` wraps.
+/// Shared assembly tail of the tree display and the replayed conflict
+/// displays: grouping over an explicit enabled set.
+// Portage: _emerge/UseFlagDisplay.py, pkg_use_display
 pub(crate) fn assemble_tree_pkg_use_display(
     args: AssembleTreePkgUseDisplayArgs<'_>,
 ) -> Vec<(String, String)> {
@@ -152,10 +93,8 @@ pub(crate) fn assemble_tree_pkg_use_display(
         "{category}/{package}-{version}:{}/{}::{}",
         cand.slot, cand.sub_slot, cand.repo_name
     );
-    // Real `pkg.use.force ∪ pkg.use.mask` (`pkgsettings.useforce` /
-    // `usemask` after `setcpv`): the unfiltered per-package stack, since
-    // the `( )` wraps apply to implicit-domain flags too (an implicit
-    // flag is displayed, so a forced implicit flag must wrap).
+    // Portage `pkg.use.force ∪ pkg.use.mask` after `setcpv`: unfiltered, since
+    // the `( )` wraps apply to implicit-domain flags too.
     let force_mask = forced_or_masked_flags_unfiltered(
         &cand.keywords,
         &candidate_str,
@@ -173,27 +112,9 @@ pub(crate) fn assemble_tree_pkg_use_display(
     assemble_pkg_use_display(&kept, &explicit, &force_mask, config)
 }
 
-/// Backlog #230: the installed-consumer twin of
-/// [`skipped_update_use_display_for`] -- real `pkg_use_display` for an
-/// installed parent (`depgraph.py:1696-1700` calls it with the vdb
-/// package's own `use.enabled`). The vdb `USE` is ground truth (real
-/// validates it against the implicit domain at `Package` construction
-/// but never re-masks it), so no masking runs here: enabled is the
-/// recorded `USE`, disabled the recorded `IUSE` minus that. Narrowing,
-/// documented: no profile-force/mask `( )` wraps (those need the tree
-/// candidate's keywords via `forced_or_masked_flags_unfiltered`, and an
-/// installed consumer's version may be gone from every repo -- the same
-/// narrowing `installed_use_display_for` already documents). The exact
-/// trigger that would expose the gap is an installed skipped-block
-/// consumer carrying a flag from the profile/repo force/mask stack:
-/// real wraps it (`forced_flags = chain(pkg.use.force, pkg.use.mask)`,
-/// `UseFlagDisplay.py:60`, applied to installed parents too via
-/// `depgraph.py:1696-1700`) -- e.g. a globally `use.force`d flag
-/// recorded enabled in the vdb `USE` renders `(flag)`, a `use.mask`ed
-/// flag still present in the recorded `IUSE` renders `(-flag)` --
-/// while portuale renders either bare. No grounded case exercises it
-/// (every bed blk0 parent is a merge node), so the wrap gap is pinned
-/// nowhere.
+/// Installed-consumer twin of [`skipped_update_use_display_for`]: reads the
+/// vdb-recorded `IUSE`/`USE` with no masking. No force/mask `( )` wraps.
+// Portage: depgraph.py, pkg_use_display (installed parent)
 pub fn skipped_update_installed_use_display_for(
     root: &Path,
     config: &portage_profile::Config,
@@ -207,12 +128,8 @@ pub fn skipped_update_installed_use_display_for(
     assemble_pkg_use_display(&enabled, &explicit, &HashSet::new(), config)
 }
 
-/// Backlog #230: one consumer's full `pkg_use_display` for a
-/// `SkippedUpdate` row, shared by the three producers. `parent_cpv` is
-/// the `cat/pkg-ver:slot/sub::repo` form `slot_conflict_puller_cpv`
-/// builds (empty for a top-level `(Argument)` parent, whose row the
-/// renderer prints bare -- the display value is unused there).
-/// Installed consumers read the vdb twin, merge consumers the tree twin.
+/// One consumer's full display for a `SkippedUpdate` row. An empty
+/// `parent_cpv` (a top-level argument) renders bare.
 pub(crate) fn skipped_consumer_use_display(
     repos: &[RepoConfig],
     root: &Path,
@@ -231,14 +148,9 @@ pub(crate) fn skipped_consumer_use_display(
     }
 }
 
-/// Backlog #230: real `config.py` setcpv's own
-/// `PORTAGE_USE` masking (`:2166-2220`) -- keep an effective-USE flag
-/// iff it is in the package's declared `IUSE` or matches the implicit
-/// domain. `iuse_effective` selects the EAPI 5+ rule
-/// (`IUSE_EFFECTIVE`, real `_iuse_effective_match`); otherwise the
-/// pre-EAPI-5 `_get_implicit_iuse` rule (`ARCH`, `arch.list`,
-/// `USE_EXPAND_HIDDEN`-derived `xxx_*` prefixes, the per-package
-/// use.mask/use.force stack, `build`/`bootstrap`).
+/// Keeps an effective-USE flag iff it is declared in `IUSE` or matches the
+/// implicit domain.
+// Portage: config.py, setcpv (PORTAGE_USE masking)
 pub(crate) fn mask_use_to_valid_domain(
     explicit: &HashSet<String>,
     use_flags: &HashSet<String>,
@@ -274,15 +186,9 @@ pub(crate) fn mask_use_to_valid_domain(
         .collect()
 }
 
-/// Backlog #230: real `pkg_use_display`'s own assembly
-/// (`_emerge/UseFlagDisplay.py:55-122`), minus colour and
-/// `--alphabetical`. `enabled` is the masked `PORTAGE_USE`-equivalent
-/// set, `explicit` the declared `IUSE` names (the disabled side), and
-/// `forced` the per-package force ∪ mask stack for the `( )` wraps.
-/// `ARCH` is discarded from the `USE` group; `USE_EXPAND_HIDDEN` groups
-/// are skipped; groups render `USE` first then byte-sorted var names,
-/// each enabled-first then byte-sorted (real's default
-/// `sort_separated`, plain string order).
+/// Groups `enabled` by `USE_EXPAND` prefix into `USE` plus one pair per
+/// visible group. `ARCH` is dropped; hidden groups are skipped.
+// Portage: _emerge/UseFlagDisplay.py, pkg_use_display
 pub(crate) fn assemble_pkg_use_display(
     enabled: &HashSet<String>,
     explicit: &HashSet<String>,
@@ -323,7 +229,7 @@ pub(crate) fn assemble_pkg_use_display(
                 .push((f.clone(), f.clone(), true));
         }
     }
-    // Real iterates `pkg.iuse.all` for the disabled side; the same
+    // Portage iterates `pkg.iuse.all` for the disabled side; the same
     // routing by expand prefix applies.
     for f in explicit {
         if enabled.contains(f) {
@@ -351,8 +257,7 @@ pub(crate) fn assemble_pkg_use_display(
     let mut names: Vec<String> = grouped.keys().cloned().collect();
     names.sort();
     let mut out = Vec::new();
-    // Real `var_order.insert(0, "USE")`: the USE group always renders
-    // first (possibly as the bare `USE=""` real always emits).
+    // Portage `var_order.insert(0, "USE")`: the USE group always renders first.
     if let Some(flags) = grouped.remove("USE") {
         out.push(("USE".to_string(), render_use_group(flags, forced)));
     } else {
@@ -369,14 +274,9 @@ pub(crate) fn assemble_pkg_use_display(
     out
 }
 
-/// Backlog #230: one `VAR="…"` group of real `pkg_use_display` --
-/// enabled flags first, then disabled, each byte-sorted by display name
-/// (real's default `sort_separated`); enabled render bare, disabled
-/// `-`-prefixed, and force/mask members `( )`-wrapped (real
-/// `UseFlagDisplay.__str__`, minus the red/blue that are a no-op without
-/// `--color=y`). Entries carry `(full flag name, bare display name,
-/// enabled)`; the wrap lookup runs on the full name, the sort on the
-/// bare display name exactly like real's own `UseFlagDisplay.name`.
+/// Renders one `VAR="…"` group: enabled bare then disabled `-`-prefixed,
+/// each byte-sorted; force/mask members are `( )`-wrapped.
+// Portage: _emerge/UseFlagDisplay.py, UseFlagDisplay.__str__
 pub(crate) fn render_use_group(
     flags: Vec<(String, String, bool)>,
     forced: &HashSet<String>,
@@ -413,20 +313,9 @@ pub(crate) fn render_use_group(
         .join(" ")
 }
 
-/// The same `USE="…"` display pairs as [`pkg_use_display_for`], built from
-/// an **installed** package's vdb-recorded `IUSE`/`USE` instead of a tree
-/// candidate -- real `pkg_use_display(installed_pkg)` for a nomerge node
-/// or an installed parent in the residual installed-instance conflict
-/// report (see `build_residual_slot_conflicts`). Backlog #264: this is
-/// the vdb twin [`skipped_update_installed_use_display_for`] ships for
-/// the skipped-update block, so recorded-USE flags outside the recorded
-/// IUSE (e.g. implicit-expand `elibc_glibc`) render in their own group
-/// the way real's `use.enabled` side does. An empty `IUSE` with an empty
-/// recorded `USE` renders the bare `USE=""` real shows. Narrowing,
-/// documented: no profile-force/mask `( )` wraps (those need the tree
-/// candidate's keywords, which the vdb does not record); a flagless
-/// package -- every residual fixture so far -- renders byte-identical
-/// either way.
+/// Installed-package twin of [`pkg_use_display_for`], from vdb-recorded
+/// `IUSE`/`USE`. No force/mask wraps.
+// Portage: depgraph.py, pkg_use_display (installed node)
 pub fn installed_use_display_for(
     root: &Path,
     config: &portage_profile::Config,
@@ -437,16 +326,8 @@ pub fn installed_use_display_for(
     skipped_update_installed_use_display_for(root, config, category, package, version)
 }
 
-/// Declared-IUSE names and resolved USE for `category/package` at
-/// `version` (highest-`repo_priority` candidate, same re-lookup as
-/// `slot_conflict_meta`/`pkg_use_display_for`) -- the two sets real
-/// `_prepare_conflict_msg_and_check_for_specificity`'s USE branch reads
-/// off each conflicting instance (`other_pkg.iuse`,
-/// `_pkg_use_enabled(other_pkg)`). Empty sets when the version is gone
-/// from every repo or its md5-cache entry is unreadable (same
-/// "absence is real" handling as `pkg_use_display_for`: every required
-/// flag then counts as missing). Read at render time by portuale's
-/// slot-collision `("use", flag)` classification.
+/// Declared IUSE plus resolved USE for one version (highest-priority
+/// candidate). Empty when the version is gone or unreadable.
 pub fn slot_conflict_flag_sets(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
