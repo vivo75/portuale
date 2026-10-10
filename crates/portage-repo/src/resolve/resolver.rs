@@ -3,16 +3,13 @@
 use crate::*;
 
 /// Which dependency-solving algorithm answers a [`ResolveRequest`].
-///
-/// Portuale-only (real `emerge` has no `--solver`): `Portage` is the
-/// default and the backtracking walk real Portage runs;
-/// `PubGrub`/`Resolvo` drive lu-zero's `portage-atom-pubgrub` /
-/// `portage-atom-resolvo` bridges (see `solver_bridge.rs`) and are
-/// Rust-only. The selection rides inside [`ResolveRequest`] so a
+/// Portuale-only (Portage's `emerge` has no `--solver`): `Portage` is the
+/// backtracking walk; `PubGrub`/`Resolvo` drive lu-zero's bridges (see
+/// `solver_bridge.rs`). The selection rides inside [`ResolveRequest`] so a
 /// [`Resolver`] stays a `Box<dyn Resolver>` picked at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SolverKind {
-    /// Portuale's own backtracking graph walk (`BacktrackingResolver`).
+    /// Portuale's backtracking graph walk (`BacktrackingResolver`).
     #[default]
     Portage,
     /// PubGrub version solving over the same repo facts.
@@ -22,8 +19,8 @@ pub enum SolverKind {
 }
 
 impl SolverKind {
-    /// Parse a `--solver=<value>` token. `None` for anything outside the
-    /// three accepted values (the caller reports the usage error).
+    /// Parse a `--solver=<value>` token. `None` for anything else (the caller
+    /// reports the usage error).
     pub fn parse(value: &str) -> Option<SolverKind> {
         match value {
             "portage" => Some(SolverKind::Portage),
@@ -51,15 +48,15 @@ impl std::fmt::Display for SolverKind {
 }
 
 /// A dependency-resolution strategy: [`ResolveRequest`] in, merge-ordered
-/// [`GraphResult`] out (or a hard-error string). The default implementation
-/// is [`BacktrackingResolver`]; alternate architectures plug in wholesale
-/// via [`active_resolver_for`] without touching a call site.
+/// [`GraphResult`] out. Alternates plug in via [`active_resolver_for`]
+/// without touching a call site.
 pub trait Resolver {
     fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, Error>;
 }
 
-/// The default resolver: a single-pass BFS graph walk wrapped in real
-/// `_emerge/resolver/backtracking.py`'s retry loop. See `backtracking_resolve`.
+/// The default resolver: a single-pass BFS graph walk wrapped in the backtracking
+/// retry loop. See `backtracking_resolve`.
+// Portage: _emerge/resolver/backtracking.py
 pub struct BacktrackingResolver;
 
 impl Resolver for BacktrackingResolver {
@@ -68,19 +65,15 @@ impl Resolver for BacktrackingResolver {
     }
 }
 
-/// The resolver portuale uses -- a hook for runtime selection between
-/// resolver implementations, currently always [`BacktrackingResolver`].
+/// The resolver portuale uses: currently always [`BacktrackingResolver`].
 pub fn active_resolver() -> Box<dyn Resolver> {
     active_resolver_for(SolverKind::Portage)
 }
 
-/// Pick the [`Resolver`] for one [`SolverKind`] (`--solver=`): the
-/// backtracking walk for `Portage`, lu-zero's PubGrub / resolvo bridges
-/// (see `solver_bridge.rs`) for the other two. The parked engines only
-/// implement version solving over repo facts: they ignore `--onlydeps`
-/// and its `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` root
-/// filtering (like `--nodeps` / `--buildpkgonly`) -- only the
-/// backtracking walk above applies them.
+/// Pick the [`Resolver`] for one [`SolverKind`]. The parked engines only do
+/// version solving over repo facts: they ignore `--onlydeps` and its root
+/// filtering (like `--nodeps`/`--buildpkgonly); only the backtracking walk
+/// applies them.
 pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
     match kind {
         SolverKind::Portage => Box::new(BacktrackingResolver),

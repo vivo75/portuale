@@ -2,11 +2,10 @@
 
 use crate::*;
 
-/// Phase A3 (023): the effective value of one autounmask flag for the
-/// current pass -- this pass's overlay first, then the cross-pass
-/// accumulator. The walk's two flip sites must see both (a flip folded on
-/// an *earlier* pass lives in `committed`; one folded *earlier this pass*
-/// lives in `overlay`), exactly as the old direct-write-then-read did.
+/// The effective value of one autounmask flag for the current pass: this pass's
+/// overlay first, then the cross-pass accumulator. The walk's two flip sites must
+/// see both (a flip folded on an *earlier* pass lives in `committed`; one folded
+/// *earlier this pass* lives in `overlay`).
 pub(crate) fn overlay_use_want(
     overlay: &HashMap<(String, String), HashMap<String, bool>>,
     committed: &HashMap<(String, String), HashMap<String, bool>>,
@@ -28,17 +27,11 @@ pub(crate) struct OnlydepsWalkDepKeyArgs<'a> {
     pub(crate) onlydeps_blanks_idepend: bool,
 }
 
-/// Backlog #194: whether one dep key is walked for this package.
-/// Real `bin/ebuild.sh`'s own `depend` phase unsets `IDEPEND` below
-/// EAPI 8 (`portage/eapi.py:135`), so a stale or hand-written cache
-/// entry can still *carry* `IDEPEND` under EAPI 7 (real `egencache`
-/// never emits one) -- the read-time gate here drops it anyway. Real
-/// `depgraph.py:4186-4193` additionally blanks an `--onlydeps` root's
-/// `RDEPEND`/`PDEPEND` under `--onlydeps-with-rdeps=n`, and its
-/// `IDEPEND` too unless `--onlydeps-with-ideps` is `y`/`True`.
-/// Extracted (rather than left as `run_pass`'s inline closure) so the
-/// adversarial-cache path stays pinned after the fixtures stopped
-/// carrying one.
+/// Whether one dep key is walked for this package. The read-time gate drops a
+/// stale `IDEPEND` under EAPI 8, and blanks an `--onlydeps` root's `RDEPEND`/
+/// `PDEPEND` (plus `IDEPEND` unless kept) the same way. Extracted so the
+/// adversarial-cache path stays pinned.
+// Portage: eapi.py:135; depgraph.py:4186-4193
 pub(crate) fn onlydeps_walk_dep_key(args: OnlydepsWalkDepKeyArgs<'_>) -> bool {
     let OnlydepsWalkDepKeyArgs {
         key,
@@ -62,12 +55,10 @@ pub(crate) struct OnlydepsRuntimeKeysArgs {
     pub(crate) eapi_has_idepend: bool,
 }
 
-/// Backlog #194: which run-time keys classify atoms as runtime edges
-/// for this package (real `DepPriority`: an atom in a build-time key
-/// but no walked run-time key is `buildtime_hard`, an unbreakable
-/// merge-order edge). Mirrors `onlydeps_walk_dep_key` above: under
-/// `--onlydeps --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on
-/// EAPI 8, `IDEPEND` is still walked, so it still classifies.
+/// Which run-time keys classify atoms as runtime edges for this package (an atom
+/// in a build-time key but no walked run-time key is an unbreakable merge-order
+/// edge). Mirrors `onlydeps_walk_dep_key` above.
+// Portage: DepPriority buildtime_hard
 pub(crate) fn onlydeps_runtime_keys(args: OnlydepsRuntimeKeysArgs) -> &'static [&'static str] {
     let OnlydepsRuntimeKeysArgs {
         onlydeps_blanks_runtime,
@@ -87,35 +78,19 @@ pub(crate) fn onlydeps_runtime_keys(args: OnlydepsRuntimeKeysArgs) -> &'static [
     }
 }
 
-/// #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`)
-/// over one parent's atoms on one cp, each already paired with the
-/// outcome it would resolve to on its own. Returns every atom with the
-/// outcome it keeps: when two or more distinct packages were selected,
-/// real's elimination runs -- installed packages first, then the rest,
-/// each group ascending by version (bug 631894), and a package is dropped
-/// when every atom that matches it also matches another surviving
-/// package -- and each atom is then bound to the highest surviving
-/// package it matches (`child_pkgs.sort(); child_pkgs[-1]`).
+/// Portage's `_minimize_children` over one parent's atoms on one cp, each already
+/// paired with the outcome it would resolve to on its own. Returns every atom with
+/// the outcome it keeps: when two or more distinct packages were selected, the
+/// elimination runs (installed first, then the rest, each ascending by version) and
+/// each atom binds to the highest surviving package it matches.
 ///
-/// A package is `(version, installed)`: the installed instance and a
-/// same-version ebuild are distinct nodes in real. Matching is real's
-/// `findAtomForPackage(pkg, modified_use=self._pkg_use_enabled(pkg))` on
-/// the package's `cat/pkg-ver:slot/sub::repo` string. For an installed
-/// package the use-deps are checked against its recorded vdb `USE`/`IUSE`
-/// (real's `_pkg_use_enabled` for a built package, the same check
-/// [`best_installed_matching`] makes) -- #107: installed `mesa`'s live
-/// `libdisplay-info:=[abi_x86_32(-),abi_x86_64(-)]` and built
-/// `libdisplay-info:0/3=[...]` both bind the installed `0.3.0`. For a
-/// not-yet-built package the use-deps are checked against that version's
-/// ebuild candidate -- its md5-cache IUSE plus its profile-computed
-/// effective USE (real's `_pkg_use_enabled` for an unbuilt package, the
-/// same pair the walk's own selection applies) -- #266: `>=foo-1[bar]`
-/// alongside `<foo-3` collapses onto the lower pick when that pick builds
-/// `bar`, and stays split when it does not. A version with no ebuild
-/// candidate (a binary-only pick) still only ever counts as matching its
-/// own selection.
-/// Atoms without a package (`NoVisibleCandidate`, a removal) are passed
-/// through untouched, like real's `(atom, None)` yield.
+/// A package is `(version, installed)`: the installed instance and a same-version
+/// ebuild are distinct nodes. Matching is `findAtomForPackage` on the package's
+/// `cat/pkg-ver:slot/sub::repo` string; use-deps check against the installed vdb
+/// `USE`/`IUSE` for a built package and against the ebuild candidate's effective
+/// USE for a not-yet-built one. Atoms without a package (`NoVisibleCandidate`, a
+/// removal) pass through untouched.
+// Portage: _emerge/depgraph.py, _minimize_children; _pkg_use_enabled
 pub(crate) fn minimize_children(
     root: &Path,
     repos: &[RepoConfig],
@@ -165,10 +140,9 @@ pub(crate) fn minimize_children(
     };
     let strs: HashMap<(String, bool), String> =
         pkgs.iter().map(|p| (p.clone(), pkg_str(p))).collect();
-    // #266: the ebuild candidate behind each not-yet-built version, for
-    // the use-dep check below. A same-version tie goes to the highest
-    // `repo_priority`, the walk's own selection tie-break; versions with
-    // no ebuild candidate stay absent (binary-only picks keep the old
+    // The ebuild candidate behind each not-yet-built version, for the use-dep
+    // check below. A same-version tie goes to the highest `repo_priority`; versions
+    // with no ebuild candidate stay absent (binary-only picks keep the old
     // own-selection-only match).
     let ebuilds = list_candidates(repos, &key.0, &key.1).unwrap_or_default();
     let mut ebuild_by_version: HashMap<&str, &Candidate> = HashMap::new();
@@ -180,7 +154,7 @@ pub(crate) fn minimize_children(
             }
         }
     }
-    // atom -> packages it matches (real's `atom_pkg_graph.child_nodes`).
+    // atom -> packages it matches.
     let mut matches: Vec<(String, Vec<(String, bool)>)> = Vec::new();
     for (a, o) in &picks {
         let Some(own) = pkg_of(o) else { continue };
@@ -197,8 +171,7 @@ pub(crate) fn minimize_children(
             };
             let use_ok = || match use_deps {
                 None => true,
-                // Real `_pkg_use_enabled` of a built package: its vdb
-                // record (see the doc comment).
+                // A built package: its vdb record.
                 Some(deps) if p.1 => {
                     let vdb_iuse = read_vdb_flag_set(root, &key.0, &key.1, &p.0, "IUSE");
                     let vdb_use = read_vdb_flag_set(root, &key.0, &key.1, &p.0, "USE");
@@ -206,11 +179,8 @@ pub(crate) fn minimize_children(
                     valid.extend(vdb_use.iter().cloned());
                     portage_dep::use_deps_satisfied(deps, &valid, &vdb_use)
                 }
-                // #266: real `_pkg_use_enabled` of a not-yet-built
-                // package -- the ebuild candidate's own effective USE,
-                // the same pair the walk's own selection applies. A
-                // version with no ebuild candidate (a binary-only pick)
-                // keeps the old own-selection-only match.
+                // A not-yet-built package: the ebuild candidate's own effective USE
+                // (a version with no ebuild candidate keeps the own-selection-only match).
                 Some(deps) => ebuild_by_version
                     .get(p.0.as_str())
                     .and_then(|c| candidate_iuse_and_use(c, &key.0, &key.1, config))
@@ -275,63 +245,26 @@ pub(crate) struct ArgPinnedInstalledReuseArgs<'a> {
     pub(crate) fresh_version: &'a str,
 }
 
-/// Backlog #285: real `_wrapped_select_pkg_highest_available_imp`'s
-/// `find_existing_node` pass (`lib/_emerge/depgraph.py:7854`, the `for
-/// find_existing_node in True, False` loop) as a pop-site reuse check.
+/// Portage's `find_existing_node` pass as a pop-site reuse check: Portage consults
+/// the packages already in the graph before picking the highest available one and
+/// reuses the node when the dep atom matches it, unless a higher version is
+/// available in a *different* slot. The winner returns directly.
 ///
-/// Real consults the packages already added to the graph before picking
-/// the highest available one: for the current db's first match it looks
-/// up `_package_tracker.match(root, pkg.slot_atom, installed=False)`
-/// (`:8180-8215`) -- the in-graph nodes in that (main-)`slot_atom`
-/// (`slot_atom` is `cp:slot`, `_emerge/Package.py:139`, so `1/1` and
-/// `1/2` share it) -- and reuses the node when the dep atom matches it
-/// (`atom.match(e_pkg)`), unless a higher version is available in a
-/// *different* slot (then the node is "irrelevant" and the highest
-/// wins). The winner returns directly (`:8370-8371`, mirrored at add
-/// time by `_check_slot_conflict`'s reuse, `:3532-3547`, in `_add_pkg`,
-/// `:3661-3670`).
+/// Portuale resolves the consumer's dep *before* the pinning argument, so no
+/// pass-state node exists yet at selection time: the pinned set is re-derived from
+/// the top-level atoms instead (same-cp atoms, blockers skipped, speculatively
+/// re-resolved as the walk would; memoized per pass in
+/// [`PassState::top_pinned_installed`], which never outlives one pass).
 ///
-/// The slice shape (`=app-misc/mmprov-2 app-misc/mmcons` under
-/// `--update --deep`, real 3.0.82.2 probed 2026-10-02): the `=mmprov-2`
-/// argument puts installed `mmprov-2:1/1` in the graph, and after the
-/// missed-slot-abi backtrack (`_slot_operator_update_backtrack`,
-/// `:2400-2452`) the rebuilt mmcons' dep `app-misc/mmprov:=` reuses
-/// that node (soft/`runtime_slot_op` edge) instead of re-selecting the
-/// highest slot-1 version (mmprov-3). Real only keeps it when it
-/// satisfies the dep atom.
-///
-/// Portuale resolves the consumer's dep *before* the pinning argument
-/// (reversed queue order, #90 S1), so no pass-state node exists yet at
-/// selection time and `resolve_pretend` itself is stateless: the pinned
-/// set is re-derived from the top-level atoms instead. For every
-/// same-cp top-level atom (blockers skipped) the helper speculatively
-/// re-resolves it exactly as the walk would (`is_top_level = true`,
-/// same flags and constraints) and keeps its `AlreadyInstalled`
-/// verdicts as `(version, main slot)` pairs -- the instances the
-/// arguments pin in the graph, whatever the walk order. Memoized per
-/// pass in [`PassState::top_pinned_installed`] (a missing key means
-/// uncomputed; the replace set and every other `BacktrackParams` input
-/// can change the verdict per pass, so the cache never outlives one).
-///
-/// The caller applies the reuse only when its fresh verdict is a new
-/// merge (`New`/`Upgrade`/`Downgrade`) in main slot `S`, and this
-/// helper additionally requires: a pinned instance in that same slot
-/// (real's same-`slot_atom` requirement -- a pin in another slot never
-/// diverts an upgrade, e.g. `=mmprov-1` still upgrades slot 1), the dep
-/// atom matching the pinned `cat/pkg-ver:slot/sub` string (real's
-/// `atom.match`, the "only keeps it when it satisfies the dep atom"
-/// half), and -- for `[use]` deps -- the pinned instance's own recorded
-/// vdb `USE` satisfying them (the same check
-/// [`dependency_avoid_update_candidate`] runs). Highest matching pin
-/// wins (real iterates the tracker descending). A `Reinstall` verdict
-/// is never overridden by the caller (something already decided that
-/// version rebuilds); `resolve_pretend` writes no global state, so the
-/// speculative resolutions are side-effect free.
-///
-/// Cuts (listed, not grown, per the slice): `||`-chosen atoms keep
-/// their own in-graph preference; `@world`/`@selected` members are not
-/// `ctx.atoms` and pin nothing here; cross-root atoms resolve against
-/// the dep's own root.
+/// The caller applies the reuse only for a fresh new merge (`New`/`Upgrade`/
+/// `Downgrade`) in main slot `S`, additionally requiring a pinned instance in that
+/// same slot, the dep atom matching the pinned `cat/pkg-ver:slot/sub` string, and
+/// (for `[use]` deps) the pinned instance's recorded vdb `USE` satisfying them.
+/// Highest matching pin wins; a `Reinstall` verdict is never overridden.
+/// `||`-chosen atoms keep their own preference; `@world`/`@selected` members pin
+/// nothing here; cross-root atoms resolve against the dep's own root.
+// Portage: lib/_emerge/depgraph.py, _wrapped_select_pkg_highest_available_imp;
+// _package_tracker.match; atom.match; _check_slot_conflict
 pub(crate) fn arg_pinned_installed_reuse(args: ArgPinnedInstalledReuseArgs<'_>) -> Option<String> {
     let ArgPinnedInstalledReuseArgs {
         ctx,
@@ -345,9 +278,8 @@ pub(crate) fn arg_pinned_installed_reuse(args: ArgPinnedInstalledReuseArgs<'_>) 
         atom,
         fresh_version,
     } = args;
-    // The fresh pick's own main slot -- the reuse target must sit in it.
-    // Same winner rule as the pop site's own `resolved` pick ("ebuild
-    // type is the last resort", then repo priority).
+    // The fresh pick's own main slot: the reuse target must sit in it. Same winner
+    // rule as the pop site's own `resolved` pick.
     let fresh_slot = list_candidates(&ctx.repos, &key.0, &key.1)
         .ok()?
         .iter()

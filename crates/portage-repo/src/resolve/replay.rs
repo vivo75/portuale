@@ -2,13 +2,10 @@
 
 use crate::*;
 
-/// Backlog #244: `merge_order::replay_create_graph`'s USE model for one
-/// entry -- the ebuild's profile-valid `IUSE`, its configured USE with
-/// no autounmask change applied (`ctx.config`, never a pass's
-/// autounmask-tiered view: the replay layers the needed changes itself),
-/// and the forced/masked flags no change can touch. `None` for anything
-/// but a merge-bound ebuild (an installed or binary package's USE is
-/// fixed, so the replay does not check use-deps against it).
+/// `merge_order::replay_create_graph`'s USE model for one entry: the ebuild's
+/// profile-valid `IUSE`, its configured USE with no autounmask change applied
+/// (the replay layers the needed changes itself), and the forced/masked flags.
+/// `None` for anything but a merge-bound ebuild.
 pub(crate) fn replay_use_of(
     ctx: &ResolveCtx<'_>,
     e: &GraphEntry,
@@ -57,8 +54,9 @@ pub(crate) fn replay_use_of(
     })
 }
 
-/// Backlog #244: real `_create_graph`'s walk over `entries` (see
+/// Portage's `_create_graph` walk over `entries` (see
 /// `merge_order::replay_create_graph`), with the USE model above.
+// Portage: _emerge/depgraph.py, _create_graph
 pub(crate) fn replay_walk(
     ctx: &ResolveCtx<'_>,
     entries: &[GraphEntry],
@@ -76,17 +74,17 @@ pub(crate) fn replay_walk(
     })
 }
 
-/// Backlog #244: whether a pass carries any autounmask USE change -- the
-/// only passes the autounmask-breakage replay has anything to decide on.
+/// Whether a pass carries any autounmask USE change: the only passes the
+/// autounmask-breakage replay has anything to decide on.
 pub(crate) fn pass_has_use_changes(params: &BacktrackParams, pass: &PassResult) -> bool {
     !pass.autounmask_use_changes.is_empty()
         || !pass.use_overlay.is_empty()
         || !params.autounmask_use_config.is_empty()
 }
 
-/// Real `_autounmask_breakage` (`depgraph.py:12262-12280`): the params of
-/// the one final clean pass -- every autounmask change dropped and
-/// suggestion fully off (`myparams["autounmask"] = False`).
+/// The params of the one final clean pass: every autounmask change dropped
+/// and suggestion fully off.
+// Portage: depgraph.py, _autounmask_breakage
 pub(crate) fn breakage_clean_params(params: &BacktrackParams) -> BacktrackParams {
     let mut grown = params.clone();
     grown.autounmask_disabled = true;
@@ -100,17 +98,15 @@ pub(crate) fn breakage_clean_params(params: &BacktrackParams) -> BacktrackParams
     grown
 }
 
-/// Backlog #244: real's clean pass after an autounmask breakage runs
-/// with `allow_backtracking=False` (`depgraph.py:12270-12279`) -- one
-/// pass, reported as it stands, then cut to what real's fail-fast walk
-/// reached ([`fail_fast_truncate`]).
+/// The clean pass after an autounmask breakage runs with backtracking off: one
+/// pass, reported as it stands, then cut to what the fail-fast walk reached.
+// Portage: depgraph.py, _autounmask_breakage
 pub(crate) fn run_breakage_clean_pass(
     ctx: &ResolveCtx<'_>,
     initial: &BacktrackParams,
     restarts: u64,
 ) -> Result<GraphResult, Error> {
-    // Real builds the clean depgraph with no `backtrack_parameters` at
-    // all: none of the search's masks or config carries over.
+    // The clean depgraph carries none of the search's masks or config.
     let clean = breakage_clean_params(initial);
     let pass = run_pass(ctx, &clean, false)?;
     let mut result = assemble_result(ctx, &clean, pass, ctx.config, restarts);
@@ -118,23 +114,13 @@ pub(crate) fn run_breakage_clean_pass(
     Ok(result)
 }
 
-/// Backlog #244: real `_create_graph` returns at the first dependency
-/// that fails (`depgraph.py:3254-3271`, `:3483-3522`); portuale's pass
-/// walks everything and classifies afterwards. Replay real's walk over
-/// the result (autounmask off -- this runs on the breakage clean pass)
-/// and keep only what that walk reached:
-///
-/// - the unsatisfied-dependency report of the first failing atom, with
-///   its own dep chain (real `_get_dep_chain` from the failing parent up
-///   the admitting edges to the argument) -- the other failing atoms
-///   were never reached;
-/// - the slot conflicts between instances admitted before the failure,
-///   instances and parents in admission order (real's package tracker
-///   insertion order) -- a conflict the walk would only have formed
-///   after the failure never existed.
-///
-/// Leaves `result` untouched when the replay finds no failure or the
-/// pass has no report for the failing atom (nothing provably better).
+/// Portage's `_create_graph` returns at the first failing dependency, while
+/// portuale's pass walks everything and classifies afterwards. Replay Portage's
+/// walk over the result and keep only what that walk reached: the first failing
+/// atom's report with its own dep chain, and the slot conflicts admitted before
+/// it (in admission order). Leaves `result` untouched when the replay finds no
+/// failure or the pass has no report for it.
+// Portage: depgraph.py, _create_graph; _get_dep_chain
 pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult) {
     if !matches!(result.outcome, ResolveOutcome::Aborted { .. }) {
         return;
@@ -236,25 +222,11 @@ pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult)
     }
 }
 
-/// Backlog #264: real `pkg_use_display(pkg, modified_use=...)` for a
-/// walked entry the #244 replay placed in a slot-conflict block -- the
-/// header/parent line shows the flip-applied state (real
-/// `_pkg_use_enabled`), grouped into `USE` + `USE_EXPAND` like every
-/// other conflict line. The merge-row display
-/// (`GraphEntry::use_expand_display`) is the wrong helper here: it is
-/// real `_create_use_string`, which knows only `IUSE`-declared flags
-/// and drops unchanged ones at plain `-p`, while real renders the
-/// conflict block through `pkg_use_display` (implicit-expand groups
-/// included, every flag shown).
-///
-/// The modified set is the walk-time effective USE
-/// ([`candidate_iuse_and_use`], the same source
-/// [`skipped_update_use_display_for`] assembles) overridden by the
-/// entry's own `use_flags_display` states -- the replay flips land
-/// there first (`apply_replay_flips`), and only `IUSE`-declared flags
-/// can flip (the flip loop skips anything outside it, same as real's
-/// changed-state reporting). `None` when the candidate or its metadata
-/// is unreadable; the caller then keeps the pre-replay display.
+/// Portage's `pkg_use_display` for a walked entry the replay placed in a
+/// slot-conflict block: the flip-applied state, grouped into `USE` +
+/// `USE_EXPAND`. `None` when the candidate or its metadata is unreadable; the
+/// caller then keeps the pre-replay display.
+// Portage: UseFlagDisplay.pkg_use_display; _pkg_use_enabled
 pub(crate) fn replay_conflict_use_display(
     ctx: &ResolveCtx<'_>,
     entry: &GraphEntry,
@@ -291,17 +263,11 @@ pub(crate) fn replay_conflict_use_display(
     ))
 }
 
-/// Backlog #244: a slot-conflict block as real's package tracker holds it
-/// after the walk `r` replayed over `entries` (see
-/// `merge_order::replay_create_graph`): instances in admission order,
-/// each instance's parents every edge that landed on it in walk order --
-/// including a requester whose use-dep the instance no longer satisfies
-/// once a later requester's autounmask change flipped it (real keeps the
-/// edge; the conflict block lists and marks both) -- and each instance's
-/// `USE="…"` the flip-applied `pkg_use_display` (backlog #264: real
-/// `_pkg_use_enabled` through `UseFlagDisplay.pkg_use_display`, grouped,
-/// not the merge row's `_create_use_string`). Conflicts or
-/// instances the replay cannot place are left as they are.
+/// A slot-conflict block as Portage's package tracker holds it after the
+/// replayed walk: instances in admission order, each instance's parents every
+/// edge that landed on it in walk order, each `USE="…"` the flip-applied
+/// display. Conflicts the replay cannot place are left as they are.
+// Portage: depgraph.py package tracker; UseFlagDisplay.pkg_use_display
 pub(crate) fn replay_slot_conflicts(
     ctx: &ResolveCtx<'_>,
     entries: &[GraphEntry],
@@ -373,14 +339,11 @@ pub(crate) fn replay_slot_conflicts(
     }
 }
 
-/// Backlog #244: the USE changes real's walk needed on this pass
-/// (`r.needed`, beyond the ones `base` already carried in from earlier
-/// passes) applied to the entries they land on -- the row's and the
-/// slot-conflict block's `USE="…"` show the changed state (real
-/// `_pkg_use_enabled`) -- and recorded in `changes` when the pass
-/// itself did not record them (portuale's walk skips the flip when the
-/// requester's atom first lands on another instance of the slot), with
-/// the requester that first needed the change as the chain trigger.
+/// The USE changes the replayed walk needed on this pass (beyond what `base`
+/// already carried) applied to the entries they land on, and recorded in
+/// `changes` when the pass itself did not record them, with the first
+/// requester needing the change as the chain trigger.
+// Portage: depgraph.py, _pkg_use_enabled
 pub(crate) fn apply_replay_flips(
     ctx: &ResolveCtx<'_>,
     entries: &mut [GraphEntry],
