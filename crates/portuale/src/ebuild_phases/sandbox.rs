@@ -54,14 +54,8 @@ pub enum ShellBackend {
 /// portuale actually runs as real bash both come out to this list.
 /// `nofetch` is deliberately excluded (real `spawn_nofetch` uses its own
 /// private tmpdir and neither unshares nor `sandbox`-wraps).
-pub(crate) const SANDBOXED_SRC_PHASES: &[&str] = &[
-    "unpack",
-    "prepare",
-    "configure",
-    "compile",
-    "test",
-    "install",
-];
+/// One name per line.
+pub(crate) const SANDBOXED_SRC_PHASES: &str = include_str!("sandboxed_src_phases.txt");
 
 /// Real `special_env_vars.environ_whitelist` + its `environ_whitelist_re`
 /// (`^(CCACHE_|DISTCC_).*`): the calling-environment variables real
@@ -76,165 +70,17 @@ pub(crate) const SANDBOXED_SRC_PHASES: &[&str] = &[
 /// sets everything portuale actually needs on top. Copied verbatim from
 /// a live `special_env_vars.environ_whitelist` -- entries portuale never
 /// sets simply won't be present to pass through.
-pub(crate) const ENVIRON_WHITELIST: &[&str] = &[
-    "A",
-    "AA",
-    "ACCEPT_LICENSE",
-    "BASH_ENV",
-    "BINPKG_FORMAT",
-    "BROOT",
-    "BUILD_ID",
-    "BUILD_PREFIX",
-    "CATEGORY",
-    "COLORTERM",
-    "COLUMNS",
-    "CVS_RSH",
-    "D",
-    "DISPLAY",
-    "DISTDIR",
-    "DOC_SYMLINKS_DIR",
-    "EAPI",
-    "EBUILD",
-    "EBUILD_FORCE_TEST",
-    "EBUILD_PHASE",
-    "EBUILD_PHASE_FUNC",
-    "ECHANGELOG_USER",
-    "ECLASSDIR",
-    "ECLASS_DEPTH",
-    "ED",
-    "EDITOR",
-    "EMERGE_FROM",
-    "ENV_UNSET",
-    "EPREFIX",
-    "EROOT",
-    "ESYSROOT",
-    "FEATURES",
-    "FILESDIR",
-    "GPG_AGENT_INFO",
-    "HOME",
-    "INSTALL_MASK",
-    "LANG",
-    "LC_ALL",
-    "LC_COLLATE",
-    "LC_CTYPE",
-    "LC_MESSAGES",
-    "LC_MONETARY",
-    "LC_NUMERIC",
-    "LC_PAPER",
-    "LC_TIME",
-    "LD_PRELOAD",
-    "LESS",
-    "LESSOPEN",
-    "LOGNAME",
-    "LS_COLORS",
-    "MAKEFLAGS",
-    "MAKEOPTS",
-    "MERGE_TYPE",
-    "NINJAOPTS",
-    "NOCOLOR",
-    "NO_COLOR",
-    "P",
-    "PAGER",
-    "PATH",
-    "PF",
-    "PKGDIR",
-    "PKGUSE",
-    "PKG_INSTALL_MASK",
-    "PKG_LOGDIR",
-    "PKG_TMPDIR",
-    "PM_EBUILD_HOOK_DIR",
-    "PN",
-    "PORTAGE_ACTUAL_DISTDIR",
-    "PORTAGE_ARCHLIST",
-    "PORTAGE_BASHRC",
-    "PORTAGE_BASHRC_FILES",
-    "PORTAGE_BINPKG_FILE",
-    "PORTAGE_BINPKG_TAR_OPTS",
-    "PORTAGE_BINPKG_TMPFILE",
-    "PORTAGE_BIN_PATH",
-    "PORTAGE_BUILDDIR",
-    "PORTAGE_BUILD_GROUP",
-    "PORTAGE_BUILD_USER",
-    "PORTAGE_BUNZIP2_COMMAND",
-    "PORTAGE_BZIP2_COMMAND",
-    "PORTAGE_COLORMAP",
-    "PORTAGE_COMPRESS",
-    "PORTAGE_COMPRESSION_COMMAND",
-    "PORTAGE_COMPRESS_EXCLUDE_SUFFIXES",
-    "PORTAGE_CONFIGROOT",
-    "PORTAGE_DEBUG",
-    "PORTAGE_DEPCACHEDIR",
-    "PORTAGE_DOHTML_UNWARNED_SKIPPED_EXTENSIONS",
-    "PORTAGE_DOHTML_UNWARNED_SKIPPED_FILES",
-    "PORTAGE_DOHTML_WARN_ON_SKIPPED_FILES",
-    "PORTAGE_EBUILD_EXIT_FILE",
-    "PORTAGE_ECLASS_LOCATIONS",
-    "PORTAGE_FEATURES",
-    "PORTAGE_GID",
-    "PORTAGE_GRPNAME",
-    "PORTAGE_INST_GID",
-    "PORTAGE_INST_UID",
-    "PORTAGE_INTERNAL_CALLER",
-    "PORTAGE_IPC_DAEMON",
-    "PORTAGE_IUSE",
-    "PORTAGE_LOG_FILE",
-    "PORTAGE_OVERRIDE_EPREFIX",
-    "PORTAGE_PIPE_FD",
-    "PORTAGE_PROPERTIES",
-    "PORTAGE_PYM_PATH",
-    "PORTAGE_PYTHON",
-    "PORTAGE_PYTHONPATH",
-    "PORTAGE_QUIET",
-    "PORTAGE_REPOSITORIES",
-    "PORTAGE_REPO_NAME",
-    "PORTAGE_REPO_REVISIONS",
-    "PORTAGE_RESTRICT",
-    "PORTAGE_SOCKS5_PROXY",
-    "PORTAGE_TMPDIR",
-    "PORTAGE_UPDATE_ENV",
-    "PORTAGE_USERNAME",
-    "PORTAGE_VERBOSE",
-    "PORTAGE_WORKDIR_MODE",
-    "PORTAGE_XATTR_EXCLUDE",
-    "PORTDIR",
-    "PORTDIR_OVERLAY",
-    "PR",
-    "PREROOTPATH",
-    "PV",
-    "PVR",
-    "PYTHONDONTWRITEBYTECODE",
-    "REPLACED_BY_VERSION",
-    "REPLACING_VERSIONS",
-    "ROOT",
-    "ROOTPATH",
-    "SANDBOX_LOG",
-    "SSH_AGENT_PID",
-    "SSH_AUTH_SOCK",
-    "STY",
-    "SYSROOT",
-    "T",
-    "TEMP",
-    "TERM",
-    "TERMCAP",
-    "TMP",
-    "TMPDIR",
-    "USER",
-    "USE_EXPAND",
-    "USE_ORDER",
-    "WINDOW",
-    "WORKDIR",
-    "XARGS",
-    "XAUTHORITY",
-    "__PORTAGE_TEST_HARDLINK_LOCKS",
-    "ftp_proxy",
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
-];
+/// One name per line.
+pub(crate) const ENVIRON_WHITELIST: &str = include_str!("environ_whitelist.txt");
+
+/// Whether `name` is a line of the one-name-per-line `table`.
+pub(crate) fn listed(table: &str, name: &str) -> bool {
+    table.lines().any(|line| line == name)
+}
 
 /// `key` survives real portage's `config.environ()` calling-env filter.
 pub(crate) fn environ_whitelisted(key: &str) -> bool {
-    ENVIRON_WHITELIST.contains(&key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
+    listed(ENVIRON_WHITELIST, key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
 }
 
 /// The settings the native `gpkg-helper.py compress` (#326 S4) reads from
@@ -415,7 +261,7 @@ pub(crate) fn sandbox_binary() -> Option<&'static Path> {
 /// on but the binary is missing.
 pub(crate) fn fs_sandbox_for_phase(phase: &str, features: &str) -> bool {
     use std::sync::OnceLock;
-    if !fs_sandbox_requested(features) || !SANDBOXED_SRC_PHASES.contains(&phase) {
+    if !fs_sandbox_requested(features) || !listed(SANDBOXED_SRC_PHASES, phase) {
         return false;
     }
     if sandbox_binary().is_some() {
@@ -530,7 +376,7 @@ pub(crate) fn unshare_combo_usable(flags: &[&str]) -> bool {
 /// outside `SANDBOXED_SRC_PHASES` here, so it never needs its own check.
 pub(crate) fn phase_isolation(env: &Environment, phase: &str, features: &str) -> Isolation {
     use std::sync::OnceLock;
-    if !SANDBOXED_SRC_PHASES.contains(&phase) {
+    if !listed(SANDBOXED_SRC_PHASES, phase) {
         return Isolation::default();
     }
     let mut net = network_sandbox_requested(features);

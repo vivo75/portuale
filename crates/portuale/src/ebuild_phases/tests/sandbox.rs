@@ -78,3 +78,19 @@ fn feature_gates_use_the_resolved_features_string() {
         "resolved"
     );
 }
+
+#[test]
+fn sandbox_name_tables_are_one_plain_name_per_line() {
+    for table in [SANDBOXED_SRC_PHASES, ENVIRON_WHITELIST] {
+        assert!(table.ends_with('\n'));
+        for line in table.lines() {
+            assert!(!line.is_empty() && line.trim() == line, "bad line {line:?}");
+        }
+    }
+    assert_eq!(SANDBOXED_SRC_PHASES.lines().count(), 6);
+    assert_eq!(ENVIRON_WHITELIST.lines().count(), 153);
+    assert!(listed(SANDBOXED_SRC_PHASES, "compile"));
+    assert!(!listed(SANDBOXED_SRC_PHASES, "setup"));
+    assert!(environ_whitelisted("HOME") && environ_whitelisted("CCACHE_DIR"));
+    assert!(!environ_whitelisted("EMERGE_DEFAULT_OPTS"));
+}
