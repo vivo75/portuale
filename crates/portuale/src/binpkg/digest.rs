@@ -2,21 +2,20 @@
 
 use crate::binpkg::*;
 
-/// Real `os.lstat(...)[stat.ST_MTIME]` -- whole seconds, the same
-/// integer real portage's own `_mtime_` index field records
-/// (`bintree.py:2306`'s own `d["_mtime_"] = str(st[stat.ST_MTIME])`).
+/// Whole seconds since the epoch, the same integer Portage's `_mtime_`
+/// index field records.
+// Portage: `bintree._pkgindex_entry`.
 pub(crate) fn file_mtime(st: &fs::Metadata) -> i64 {
     use std::os::unix::fs::MetadataExt;
     st.mtime()
 }
 
-/// A merge-time binpkg size/digest mismatch: real `_emerge/
-/// BinpkgVerifier._digest_exception`'s own `(name, value, expected)`
-/// triple (`BinpkgVerifier.py`), where `name` is `"size"` or a hash
-/// name (`"MD5"`, `"SHA1"`, ...), `got` the live file's value and
-/// `expected` the `<pkgdir>/Packages` index's claim.
+/// A merge-time binpkg size/digest mismatch: the `(name, value, expected)`
+/// triple, where `name` is `"size"` or a hash name (`"MD5"`, `"SHA1"`,
+/// ...), `got` the live file's value and `expected` the index's claim.
+// Portage: `_emerge/BinpkgVerifier._digest_exception`.
 pub struct BinpkgDigestMismatch {
-    /// `"size"` or the hash name, exactly as real reports it.
+    /// `"size"` or the hash name, as reported.
     pub name: String,
     /// The live file's value (`st_size` / lowercase hex digest).
     pub got: String,
@@ -24,29 +23,13 @@ pub struct BinpkgDigestMismatch {
     pub expected: String,
 }
 
-/// Real `_emerge/BinpkgVerifier` + `bintree._get_digests` (backlog
-/// #174): verify a local `$PKGDIR` binpkg at merge time against the
-/// `<pkgdir>/Packages` index record that vouches for it. The size
-/// (`SIZE`) is checked first via `stat(2)`; then every digest the
-/// record carries (`MD5`/`SHA1`, the two real `_pkgindex_entry`
-/// writes, plus `SHA256`/`SHA512` when present) is hashed over the
-/// file and compared. A record with no `SIZE` verifies nothing --
-/// real's own `if "size" not in digests: return OK` (`BinpkgVerifier.
-/// _start`). Returns the first mismatch; the caller renames the file
-/// (`checksum_failure_rename`) and prints real's exact failure block
-/// (`digest_failure_block`). Files the index does not vouch for are
-/// already fully parsed at scan and never reach here with a record.
-///
-/// Fixed digest list, disclosed: real `_get_digests` collects every
-/// key in `get_valid_checksum_keys()` (host-dependent; on this host:
-/// `BLAKE2B/BLAKE2S/MD5/RMD160/SHA1/SHA256/SHA3_256/SHA3_512/SHA512/
-/// WHIRLPOOL/size`) and checks them in frozenset order; portuale
-/// checks `MD5`/`SHA1`/`SHA256`/`SHA512` in that fixed order and skips
-/// the rest (`RMD160`/`WHIRLPOOL`/`BLAKE2B`/`BLAKE2S`/`SHA3_256`/
-/// `SHA3_512` need hashers portuale doesn't vendor -- not small).
-/// Real's own local `--regen` writes only `MD5`/`SHA1` (real
-/// `_pkgindex_hashes`), so the gap only bites on foreign index stanzas
-/// carrying the wider keys.
+/// Verify a local `$PKGDIR` binpkg at merge time against the
+/// `<pkgdir>/Packages` index record that vouches for it: `SIZE` first via
+/// `stat(2)`, then every digest the record carries. A record with no
+/// `SIZE` verifies nothing. Returns the first mismatch; the caller renames
+/// the file and prints the failure block. Files the index does not vouch
+/// for are already fully parsed at scan and never reach here with a record.
+// Portage: `_emerge/BinpkgVerifier`, `bintree._get_digests`.
 pub fn verify_binpkg_against_index(
     path: &Path,
     record: &HashMap<String, String>,
@@ -82,9 +65,7 @@ pub fn verify_binpkg_against_index(
 }
 
 /// Hex digest of the whole file with `algo` (`MD5`/`SHA1`/`SHA256`/
-/// `SHA512`), the same whole-file readers real `perform_multiple_
-/// checksums` runs for a `Packages` entry. `None` for an unknown name
-/// or an unreadable file.
+/// `SHA512`). `None` for an unknown name or an unreadable file.
 pub(crate) fn file_hex_digest(path: &Path, algo: &str) -> Option<String> {
     let bytes = fs::read(path).ok()?;
     let hex = |digest: &[u8]| digest.iter().map(|b| format!("{b:02x}")).collect();
@@ -109,14 +90,13 @@ pub(crate) fn file_hex_digest(path: &Path, algo: &str) -> Option<String> {
     }
 }
 
-/// Real `portage.package.ebuild.fetch._checksum_failure_temp_file`
-/// (`fetch.py:293`): rename a digest-failed file to
-/// `<basename>._checksum_failure_.<rand>` in its own directory and
-/// return the new path. A same-size same-md5
+/// Rename a digest-failed file to `<basename>._checksum_failure_.<rand>`
+/// in its own directory and return the new path. A same-size same-md5
 /// `<basename>._checksum_failure_.*` duplicate is reused instead (the
-/// corrupt file is unlinked, real's own `os.unlink(filename)`), so
-/// repeated failures don't pile up evidence files. `None` when the
-/// rename itself fails (the caller still fails the package).
+/// corrupt file is unlinked), so repeated failures don't pile up evidence
+/// files. `None` when the rename itself fails (the caller still fails the
+/// package).
+// Portage: `package.ebuild.fetch._checksum_failure_temp_file`.
 pub fn checksum_failure_rename(path: &Path) -> Option<PathBuf> {
     let dir = path.parent()?;
     let basename = path.file_name()?.to_str()?;
@@ -147,12 +127,9 @@ pub fn checksum_failure_rename(path: &Path) -> Option<PathBuf> {
             }
         }
     }
-    // Real `tempfile.mkstemp("", <basename> + "._checksum_failure_.",
-    // dir)` (`fetch.py:692-696`): the trailing random part is 8
-    // characters from `tempfile._RandomNameSequence.characters`
-    // (`"abcdefghijklmnopqrstuvwxyz0123456789_"`), `os.urandom`-seeded.
-    // Match that shape exactly (`<rand>` is `[a-z0-9_]{8}`); the loop
-    // retries on the (absurd) collision instead of clobbering.
+    // The trailing random part is 8 characters from the same 37-character
+    // alphabet Portage uses; the loop retries on collision instead of
+    // clobbering.
     for attempt in 0..100u32 {
         let candidate = dir.join(format!("{prefix}{}", checksum_failure_rand(attempt)));
         if candidate.exists() {
@@ -168,11 +145,10 @@ pub fn checksum_failure_rename(path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Real `tempfile._RandomNameSequence`'s own 8-character name
-/// (`tempfile.py`: 8 `choices` over `"abcdefghijklmnopqrstuvwxyz0123456789_"`):
-/// 8 bytes from the OS mixed onto the same 37-character alphabet. The
-/// `attempt` salts the deterministic fallback (no OS entropy available)
-/// so retries still vary; the caller re-checks `exists()` either way.
+/// An 8-character name over `"abcdefghijklmnopqrstuvwxyz0123456789_"`:
+/// 8 bytes from the OS mixed onto that alphabet. The `attempt` salts the
+/// deterministic fallback (no OS entropy available) so retries still vary;
+/// the caller re-checks `exists()` either way.
 pub(crate) fn checksum_failure_rand(attempt: u32) -> String {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
     let mut bytes = [0u8; 8];
@@ -204,15 +180,13 @@ pub(crate) fn checksum_failure_rand(attempt: u32) -> String {
         .collect()
 }
 
-/// Real `_emerge/BinpkgVerifier._digest_exception`'s own failure block
-/// (`BinpkgVerifier.py`), byte-shaped: a leading blank line, three
+/// The digest-failure block, byte-shaped: a leading blank line, three
 /// `!!!` lines (the path, the `Failed on <name> verification` reason,
-/// `Got`/`Expected`), then the bare `File renamed to '<path>'` line
-/// (no `!!!` prefix, real's own `f"File renamed to ..."`). Real emits
-/// it through the scheduler (stdout + package log); portuale prints it
-/// to stdout. `renamed` is the `checksum_failure_rename` result -- when
-/// the rename itself failed the caller passes the original path (the
-/// file is still there), so the line always names a real location.
+/// `Got`/`Expected`), then the bare `File renamed to '<path>'` line (no
+/// `!!!` prefix). `renamed` is the `checksum_failure_rename` result; when
+/// the rename itself failed the caller passes the original path, so the
+/// line always names an existing location.
+// Portage: `_emerge/BinpkgVerifier._digest_exception`.
 pub fn digest_failure_block(
     path: &Path,
     mismatch: &BinpkgDigestMismatch,

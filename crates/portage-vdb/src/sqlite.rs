@@ -1,15 +1,13 @@
-//! The SQLite backend (feat#157, backlog #305 S2.3: schema and open;
-//! S2.4: the read side; S2.5: writes in `write.rs`, transaction model in
-//! the crate doc). Design: `docs/vdb_to_db.md` §4, §7.1.
+//! The SQLite backend: one database file, WAL, `synchronous=FULL`.
 //!
-//! One database file, WAL, `synchronous=FULL`. The `entry_file` rows are
-//! the truth; `owner`, `dep_atom` and `needed` are derived from them and
-//! can be rebuilt. `meta.schema_version` ([`SCHEMA_VERSION`]) is
-//! independent of `METADATA_FILE_FORMAT_VERSION` (plan §1, Q4).
+//! The `entry_file` rows are the truth; `owner`, `dep_atom` and `needed`
+//! are derived from them and can be rebuilt.
 //!
-//! Local filesystems only (WAL needs shared memory, §4). A network
-//! filesystem is **not** detected here: that would need `statfs` magic
-//! numbers and a libc dependency; it is documented, not enforced.
+//! Local filesystems only (WAL needs shared memory). A network filesystem
+//! is **not** detected here: that would need `statfs` magic numbers and a
+//! libc dependency; it is documented, not enforced.
+//!
+//! Design: `docs/vdb_to_db.md` §4, §7.1.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -41,23 +39,14 @@ const BUSY_TIMEOUT_MS: u32 = 5000;
 
 /// The schema, applied in one transaction when the file is created.
 ///
-/// Differences from `vdb_to_db.md` §7.1, all from the current interface
-/// (lib.rs module doc): `entry` is keyed by `(category, pf)` (item 1; no
-/// `pn`/`ver` split), a pending entry is a row with `state = 'merging'`
-/// (item 3), the `metadata` stamp state is stored per entry (item 12),
-/// the directory mode is kept, and `counter` is not unique (a corpus can
-/// hold duplicates). `owner` and `needed` carry the keys the S2.4 reads
-/// need; `preserved_lib` is keyed by the registry key `cp:slot` with a
-/// position so the path order survives (an entry with no paths is one row
-/// with a NULL `path`, so `files` and `sqlite` round-trip it alike).
-/// `world` / `world_sets` keep the written order in `pos`. Paths and file
-/// data are BLOB.
-///
-/// S2.5 edits (nothing is released, so `SCHEMA_VERSION` stays 1):
-/// `UNIQUE (category, pf, state)` instead of `(category, pf)`, because a
-/// pending same-`pf` replacement is a `merging` row beside the `installed`
-/// row of the same key (S2.4 finding); `preserved_lib.path` nullable and
-/// `world*.pos` (the conformance suite needs both round trips).
+/// `entry` is keyed by `(category, pf)` (no `pn`/`ver` split); a pending
+/// entry is a row with `state = 'merging'` beside the `installed` row of
+/// the same key. The `metadata` stamp state is stored per entry, the
+/// directory mode is kept, and `counter` is not unique. `preserved_lib` is
+/// keyed by the registry key `cp:slot` with a position so the path order
+/// survives (an entry with no paths is one row with a NULL `path`, so
+/// `files` and `sqlite` round-trip it alike). `world` / `world_sets` keep
+/// the written order in `pos`. Paths and file data are BLOB.
 pub const SCHEMA: &str = "
 CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
@@ -405,7 +394,7 @@ fn blob(conn: &Connection, id: i64, name: &str) -> rusqlite::Result<Option<Vec<u
 /// in `names` plus `metadata`: one `SELECT` over `entry` and one scan of
 /// `entry_file` restricted to those names, joined here by `entry_id`
 /// (a per-entry join does a B-tree seek per name and is 4x slower on a
-/// real VDB; the scan skips the large blobs' overflow pages).
+/// tree-sized VDB; the scan skips the large blobs' overflow pages).
 fn load_live(conn: &Connection, names: &[&str]) -> rusqlite::Result<Vec<Loaded>> {
     let mut out: Vec<Loaded> = Vec::new();
     let mut by_id: HashMap<i64, usize> = HashMap::new();
@@ -643,7 +632,7 @@ impl InstalledDb for SqliteDb {
         None
     }
 
-    /// `meta.generation`: +1 on every committed write (S2.5). Served
+    /// `meta.generation`: +1 on every committed write. Served
     /// from the read cache (validated by `data_version`).
     fn generation(&self) -> Result<u64> {
         Ok(self.cached(false)?.0)
@@ -767,7 +756,7 @@ impl InstalledDb for SqliteDb {
     /// `substr` on the blob: `Some(empty)` at or past the end, short at
     /// the end, `None` for a missing entry or file. (SQLite reads the blob
     /// to cut it; incremental blob I/O would avoid that and needs
-    /// rusqlite's `blob` feature, left for S7.)
+    /// rusqlite's `blob` feature.)
     fn read_file_at(
         &self,
         key: &EntryKey,
@@ -898,9 +887,8 @@ impl InstalledDb for SqliteDb {
     /// The live entries whose `dep_atom` rows name `cp` in one of `classes`,
     /// or carry the unsure marker (`cp = ""`, see `dep_cp::dep_index_key`),
     /// in `(category, pf)` order, with their `USE` and the requested classes
-    /// normalised like `aux_get`. A superset of the real dependents (module
-    /// doc, item 8); an entry none of whose tokens is, or might be, `cp` is
-    /// not read at all (S8.1).
+    /// normalised like `aux_get`. A superset of the true dependents; an
+    /// entry none of whose tokens is, or might be, `cp` is not read at all.
     fn reverse_dependents(&self, cp: &str, classes: &[DepClass]) -> Result<Vec<DepRecord>> {
         if classes.is_empty() {
             return Ok(Vec::new());
@@ -924,7 +912,7 @@ impl InstalledDb for SqliteDb {
             .collect())
     }
 
-    /// From the `owner` table (S8.2): an indexed lookup of each distinct
+    /// From the `owner` table: an indexed lookup of each distinct
     /// path (both spellings `CONTENTS` can have, see `owner_spellings`),
     /// with the rule of `FilesDb::owners` (`claim_paths`): one leading `/`
     /// ignored on both sides, the first matching input path reported, the
@@ -1246,9 +1234,9 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // S2.4: the read side against `FilesDb`. Writes are S2.5, so the
-    // database is seeded with raw SQL from what a `FilesDb` (written
-    // through its own `WriteTxn`) shows, and every read is compared.
+    // The read side against `FilesDb`: the database is seeded with raw SQL
+    // from what a `FilesDb` (written through its own `WriteTxn`) shows,
+    // and every read is compared.
 
     use crate::{FilesDb, METADATA_FILE_FIELDS};
 
@@ -1277,7 +1265,8 @@ mod tests {
                 .unwrap();
             }
             if state == "installed" {
-                // The derived tables of a live entry, as a real write fills them.
+                // The derived tables of a live entry, as a production write
+                // fills them.
                 write::derive_all(&conn, id).unwrap();
             }
         }
@@ -1363,7 +1352,7 @@ mod tests {
         let p = EntryKey::new("dev-libs", "p-1");
         let owned: &[u8] = b"dir /usr\nobj /usr/bin/x abc 1\nsym /usr/bin/y -> x 1\nfoo /usr/z\n";
         // a: sealed (valid stamp); a non-UTF-8 field is sealed as its
-        // lossy text, like an unsealed one (#309).
+        // lossy text, like an unsealed one.
         put_files(
             &fdb,
             &a,
@@ -1693,8 +1682,8 @@ mod tests {
             .sdb
             .reverse_dependents("x/y", &[DepClass::Rdepend, DepClass::Depend])
             .unwrap();
-        // Only the entries whose deps carry a token (here the non-atoms "x" and
-        // "y", i.e. the unsure marker) come back (S8.1).
+        // Only the entries whose deps carry an unclassifiable token (the
+        // unsure marker) come back.
         assert_eq!(recs.len(), 3);
         let ra = recs.iter().find(|r| r.key == f.keys[0]).unwrap();
         assert_eq!(ra.use_flags, "a b");
@@ -1722,7 +1711,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // S2.5: writes, transactions and the derived tables.
+    // Writes, transactions and the derived tables.
 
     fn count(db: &SqliteDb, table: &str) -> i64 {
         db.conn
@@ -2140,8 +2129,7 @@ bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
         out
     }
 
-    /// S8.3: damaged index rows (a missing owner, a foreign owner, the
-    /// unsure `dep_atom` marker an older build never wrote (R18), a junk
+    /// Damaged index rows (a missing owner, a foreign owner, a junk
     /// `needed` row) give wrong answers until `rebuild_index` restores
     /// exactly the rows the merge wrote.
     #[test]
@@ -2491,7 +2479,7 @@ bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
     }
 
     // ------------------------------------------------------------------
-    // S3.2: the read cache, validated by `PRAGMA data_version`.
+    // The read cache, validated by `PRAGMA data_version`.
 
     /// What the cached reads show, for comparison with `FilesDb`.
     fn cached_view(db: &impl InstalledDb, keys: &[EntryKey]) -> String {

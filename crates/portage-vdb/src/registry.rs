@@ -1,15 +1,10 @@
-//! The process-wide backend registry (`vdb_to_db.md` §6.2).
+//! The process-wide backend registry.
 //!
 //! The resolver and the merge code are free functions that take a
 //! `root: &Path`; they look up the backend for that root here instead of
-//! threading a new parameter through their callers. Same env-free
-//! process-global pattern as `portage_repo::set_resolver_debug`, with a
-//! map instead of a flag. `mrg` registers its chosen backend before
-//! `pretend::run` (S3.1); `emerge` never registers, so every root falls
-//! back to a [`FilesDb`].
+//! threading a new parameter through their callers.
 //!
-//! **Root keys are the path as given**, not canonicalised, exactly like
-//! today's `root.join("var/db/pkg")` (no extra syscall). `Path` equality
+//! **Root keys are the path as given**, not canonicalised. `Path` equality
 //! compares components, so `/r` and `/r/` are the same key, but `/r` and
 //! a symlink to it are not. Callers must register and look up with the
 //! same spelling of the root.
@@ -74,8 +69,7 @@ mod tests {
     use crate::{BackendKind, Error};
     use std::sync::Mutex;
 
-    /// The registry is process-global and the test harness runs tests in
-    /// parallel: serialise the tests that touch it.
+    /// The registry is process-global; serialise the tests that touch it.
     static LOCK: Mutex<()> = Mutex::new(());
 
     fn guard() -> std::sync::MutexGuard<'static, ()> {
@@ -96,8 +90,7 @@ mod tests {
         assert_eq!(vdb(&a), root.join("var/db/pkg"));
         let b = for_root(root);
         assert!(Arc::ptr_eq(&a, &b), "the default is cached per root");
-        // Same key for a trailing slash (component equality, no
-        // canonicalisation).
+        // Same key for a trailing slash (no canonicalisation).
         let c = for_root(Path::new("/nonexistent/s1.1/default/"));
         assert!(Arc::ptr_eq(&a, &c));
     }
@@ -115,7 +108,6 @@ mod tests {
         let now = for_root(root);
         assert!(Arc::ptr_eq(&now, &other));
         assert_eq!(vdb(&now), Path::new("/nonexistent/shadow"));
-        // Registering again replaces it.
         let third: Arc<dyn InstalledDb> = Arc::new(FilesDb::new(Path::new("/elsewhere")));
         let prev = register(root, Arc::clone(&third)).expect("registered one");
         assert!(Arc::ptr_eq(&prev, &other));
@@ -179,16 +171,15 @@ mod tests {
                 "/nonexistent/s1.1/stub/var/db/pkg/app-shells/bash-5.2"
             ))
         );
-        // S1.2 moved the per-entry reads here: a missing VDB is "no
-        // entries", not an error.
+        // A missing VDB is "no entries", not an error.
         assert_eq!(db.generation().unwrap(), 0);
         assert_eq!(db.aux_get(&key, "SLOT").unwrap(), None);
         assert!(matches!(
             db.reverse_dependents("a/b", &[]),
             Err(Error::Unsupported(_))
         ));
-        // S1.4: `begin_write` works (no I/O). S2.6: `set_counter` is
-        // implemented; an unwritable root is an I/O error naming the path.
+        // `begin_write` works (no I/O). `set_counter` on an unwritable
+        // root is an I/O error naming the path.
         let mut txn = db.begin_write().unwrap();
         let msg = txn.set_counter(crate::Counter(1)).unwrap_err().to_string();
         assert!(
@@ -196,7 +187,7 @@ mod tests {
             "{msg}"
         );
         drop(txn);
-        // S1.6: a missing store reads as empty.
+        // A missing store reads as empty.
         assert!(db.world().unwrap().atoms.is_empty());
         assert!(db.world_sets().unwrap().sets.is_empty());
     }

@@ -1,37 +1,11 @@
-// The `$PKGDIR` directory-scan fallback -- real `bintree._populate_local`
-// (see `LLM/agent-context.md`). Every other binary-package path in this
-// portuale is `<pkgdir>/Packages`-index driven and format-agnostic, so a
-// `gpkg`/`xpak` *listed in an index* already resolves for `--pretend`.
-// What the index reader can't do is the "no trusted index" branch: when
-// `$PKGDIR` holds binpkg *files* but no `Packages`, open each file, read
-// its own embedded metadata, and build the pool from that. That needs a
-// real per-format reader -- this module has both:
-//
-//   - `read_gpkg_metadata`: real `gpkg.get_metadata()` -- a `.gpkg.tar`
-//     is a plain tar container; find/decompress the inner `metadata.tar`
-//     and read each `metadata/<KEY>` member. The inner tar is read **in
-//     process** with the `tar` crate (`#58`, K0): a member is judged
-//     from its own header -- regular/unknown type -> bytes, symlink/
-//     hardlink -> the target member resolved inside the archive, and
-//     anything else is an error -- exactly real `tarfile.extractfile`,
-//     so no symlink is followed and no FIFO/device is opened before the
-//     member is accepted. The outer container and the `image.tar` unpack
-//     still shell out to `tar` (the compressors stay subprocesses), the
-//     same "shell out to the real tool" stance every other real-
-//     execution path here takes (`wget`/`ldconfig`/`scanelf`/`bash`/
-//     `brush`/the compressors `ebuild_package.rs` already runs); `tar`
-//     and these compressors are hard Gentoo requirements anyway.
-//   - `read_xpak_metadata`: real `xpak.tbz2.scan` -- the self-describing
-//     `XPAKPACK…XPAKSTOP…STOP` trailer appended after the image tarball.
-//     Pure Rust, no subprocess, reads only the bounded file tail.
-//   - `populate_local_pkgdir`: walks `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}`
-//     and synthesizes one `Packages`-style entry per file, fast-pathed
-//     against any already-parsed `<pkgdir>/Packages` entry whose own
-//     `_mtime_`/`SIZE` still agree with the live file (real's own
-//     mtime-staleness revalidation -- see its own doc comment). Its
-//     output becomes `portage_profile::Config::scanned_binpkgs` (NOT
-//     written back to `Packages` -- portuale recomputes each run, so
-//     `--pretend` still writes nothing).
+// The `$PKGDIR` directory-scan fallback (Portage: `bintree._populate_local`).
+// Every other binary-package path here is `<pkgdir>/Packages`-index driven,
+// so a `gpkg`/`xpak` *listed in an index* already resolves. When `$PKGDIR`
+// holds binpkg *files* but no `Packages`, each file's own embedded metadata
+// is read instead, with a per-format reader (`read_gpkg_metadata` for
+// `.gpkg.tar`, `read_xpak_metadata` for `.tbz2`/`.xpak`). The scan output
+// becomes `portage_profile::Config::scanned_binpkgs`, never written back
+// to `Packages`.
 
 use portage_util::TempDir;
 
@@ -66,38 +40,25 @@ use std::path::{Path, PathBuf};
 
 use std::process::{Command, Stdio};
 
-/// Why reading one binpkg file failed, in the two classes real's
-/// `bintree._populate_local` caller distinguishes (`bintree.py:1185`):
-///
-/// - `Invalid`: the file is readable but is not a valid/usable binpkg --
-///   real's `(PortagePackageException, SignatureException)` catch. The
-///   `$PKGDIR` scan prints real's own
-///   `!!! Invalid binary package: '<path>', <msg>` and skips the file
-///   (`populate_local_pkgdir`).
-/// - `Fatal`: the read itself failed -- real lets these propagate (a
-///   `KeyError`/`AttributeError`/`RecursionError` from `tarfile`, an
-///   inner `tarfile.ReadError`, an `OSError`). The scan aborts.
-///
-/// The classification mirrors real's exception families site by site;
-/// the per-site table is `LLM/07.60-gpkg-populate-read-errors.opus.md`
-/// section 4. Every `.xpak` read error is `Fatal`: real's
-/// `tbz2.get_data()` returns `None` on any scan failure and the caller
-/// then raises `AttributeError` on `None.get`.
+/// Why reading one binpkg file failed: `Invalid` (not a valid/usable
+/// binpkg; the scan warns and skips the file) or `Fatal` (the read
+/// itself failed; the scan aborts).
+// Portage: `bintree._populate_local`'s caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinpkgError {
-    /// Real's skip class: warn (real's own message) and drop the file.
+    /// The scan warns and drops the file.
     Invalid(String),
-    /// Real's abort class: the scan stops with the message.
+    /// The scan stops with the message.
     Fatal(String),
 }
 
 impl BinpkgError {
-    /// `true` for real's skip class.
+    /// `true` for the skip class.
     pub fn is_invalid(&self) -> bool {
         matches!(self, BinpkgError::Invalid(_))
     }
 
-    /// `true` for real's abort class.
+    /// `true` for the abort class.
     pub fn is_fatal(&self) -> bool {
         matches!(self, BinpkgError::Fatal(_))
     }
@@ -124,11 +85,9 @@ impl From<BinpkgError> for String {
     }
 }
 
-/// The `.tar<ext>` suffixes real `gpkg.gpkg.ext_list`
-/// (`lib/portage/gpkg.py:821-829`) maps to a compression method, paired
-/// with that method's own real `_compressors` decompress argv
-/// (`lib/portage/util/compression_probe.py:10-53`; `{JOBS}` -> `0` =
-/// "all cores", real's own substitution).
+/// The `.tar<ext>` suffixes map to a compression method, paired with
+/// that method's decompress argv (`{JOBS}` -> `0` means all cores).
+// Portage: `gpkg.gpkg.ext_list`, `util/compression_probe._compressors`.
 fn gpkg_compressions() -> &'static [(&'static str, &'static [&'static str])] {
     &[
         (".gz", &["gzip", "-dc"]),
@@ -141,11 +100,10 @@ fn gpkg_compressions() -> &'static [(&'static str, &'static [&'static str])] {
     ]
 }
 
-/// Real `gpkg._extract_filename_compression` (`gpkg.py:2176`): given an
-/// inner member's basename, return `Some(None)` if it is exactly
-/// `<want>.tar`, `Some(Some(decompress_argv))` if it is
-/// `<want>.tar<ext>` for a known `ext`, or `None` if it names something
-/// else.
+/// Given an inner member's basename, return `Some(None)` for exactly
+/// `<want>.tar`, `Some(Some(decompress_argv))` for `<want>.tar<ext>`
+/// with a known `ext`, or `None` if it names something else.
+// Portage: `gpkg._extract_filename_compression`.
 fn classify_inner_member(
     want: &str,
     member_basename: &str,
@@ -163,9 +121,7 @@ fn classify_inner_member(
 }
 
 /// A best-effort temp directory, removed when the guard drops. The
-/// `nanos` suffix keeps concurrent reads (e.g. a `$PKGDIR` scan over
-/// many files) from colliding -- same shape `ebuild_phases`/`fetch`
-/// already use for their own scratch dirs.
+/// `nanos` suffix keeps concurrent reads from colliding.
 struct ScratchDir(PathBuf);
 
 impl ScratchDir {

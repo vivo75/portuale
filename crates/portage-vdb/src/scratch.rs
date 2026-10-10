@@ -1,9 +1,6 @@
-//! Scratch copies of an entry for code that needs a path (S4.1, N9).
+//! Scratch copies of an entry for code that needs a path.
 //!
-//! Bash and the copiers take files by path: `PORTAGE_UPDATE_ENV` (the
-//! `pkg_postinst` rewrite of `environment.bz2`), the saved-environment
-//! phases of an installed instance (`pkg_prerm`, `pkg_postrm`,
-//! `pkg_config`) and `quickpkg`. On `files` the caller uses
+//! Bash and the copiers take files by path. On `files` the caller uses
 //! [`InstalledDb::entry_path`] and none of this runs. A database backend
 //! has no entry directory, so the caller writes the files it needs into a
 //! scratch directory ([`materialize_files`], [`materialize_entry`]), hands
@@ -140,7 +137,7 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(std::fs::read(dir.join("environment.bz2")).unwrap(), b"old");
         assert!(!dir.join("missing").exists());
-        // Unchanged: nothing is written, the generation stays.
+        // Unchanged content writes nothing.
         let g = db.generation().unwrap();
         assert!(!absorb_file(&db, &key, &dir, "environment.bz2").unwrap());
         assert_eq!(db.generation().unwrap(), g);
@@ -163,9 +160,7 @@ mod tests {
         assert!(!materialize_entry(&db, &EntryKey::new("x", "y-1"), &whole).unwrap());
     }
 
-    /// `finish_entry_replacing` on sqlite: the old entry is installed and
-    /// the new one pending until the commit; one commit (generation + 1)
-    /// swaps them.
+    /// Swaps the pending entry in for the live one in a single commit.
     #[test]
     fn finish_entry_replacing_swaps_in_one_commit() {
         let t = tmp("replace");
@@ -183,7 +178,7 @@ mod tests {
         let mut txn = db.begin_write().unwrap();
         txn.finish_entry_replacing(&new, std::slice::from_ref(&old))
             .unwrap();
-        // Not committed yet: readers see the old state.
+        // Not committed yet: readers still see the old state.
         assert!(db.has_entry(&old).unwrap());
         assert!(!db.has_entry(&new).unwrap());
         assert_eq!(db.pending_entries().unwrap(), vec![new.clone()]);

@@ -2,28 +2,19 @@
 
 use crate::binpkg::*;
 
-/// Real binary-package unpack (`portage.xpak.tbz2.decompose` /
-/// `portage.gpkg.gpkg.decompress` + `_generate_metadata_from_dir` in
-/// reverse): write a binpkg's *image* -- the built filesystem tree --
-/// into `image_dest`, and its scalar metadata (one `<KEY>` file each,
-/// real `build-info` shape) into `build_info_dest`.
-///
-/// xpak (`.tbz2`): `[image tarball][XPAK trailer]`; the image is the
-/// leading `file_len - (infosize + 8)` bytes -- a compressed tar whose
-/// codec `tar` auto-detects. gpkg (`.gpkg.tar`): the outer tar's
+/// Unpack a binpkg's *image* (the built filesystem tree) into `image_dest`,
+/// and its scalar metadata (one `<KEY>` file each) into `build_info_dest`.
+/// xpak (`.tbz2`): `[image tarball][XPAK trailer]`, the image a compressed
+/// tar `tar` auto-detects. gpkg (`.gpkg.tar`): the outer tar's
 /// `<basename>/image.tar[.<comp>]` member.
 ///
-/// The scalar metadata is `read_{xpak,gpkg}_metadata`'s own map; the two
-/// non-scalar members (`environment.bz2` -- the package's saved build-
-/// time bash environment -- and `<pf>.ebuild`) are written back
-/// **verbatim** as raw bytes, not through the lossy scalar path. Real
-/// portage keeps both in the vdb, and portuale now needs them: the
-/// binpkg merge runs real `pkg_preinst`/`pkg_postinst` by `bunzip2`'ing
-/// `environment.bz2` into `${T}/environment` (real `BinpkgEnvExtractor`
-/// -> `bin/ebuild.sh`'s own saved-env source path).
+/// The two non-scalar members (`environment.bz2`, `<pf>.ebuild`) are written
+/// back **verbatim** as raw bytes, not through the lossy scalar path: the
+/// merge runs `pkg_preinst`/`pkg_postinst` from the saved `environment.bz2`.
 ///
-/// `gpg` is the merge-time signature policy (see [`GpgVerify`]) -- real
-/// `_verify_binpkg` runs before anything is unpacked for the merge.
+/// The Manifest digest + signature checks run before anything is unpacked.
+// Portage: `xpak.tbz2.decompose`, `gpkg.gpkg.decompress`,
+// `BinpkgEnvExtractor`, `gpkg._verify_binpkg`.
 pub fn extract_binpkg(
     binpkg_path: &Path,
     image_dest: &Path,
@@ -40,26 +31,20 @@ pub fn extract_binpkg(
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     if name.ends_with(".gpkg.tar") {
-        // Real `_verify_binpkg`: the Manifest digest + signature checks
-        // run before anything is unpacked for the merge.
+        // The Manifest checks run before anything is unpacked.
         verify_gpkg_manifest(binpkg_path, gpg)?;
         extract_gpkg_member(binpkg_path, "image", image_dest)?;
-        // Real `bintree.dbapi.unpack_metadata` -> `gpkg().unpack_metadata`:
-        // every `metadata/` member extracted **verbatim** into build-info.
-        // Not a scalar parse + reserialize -- that lost `environment.bz2`
-        // entirely (`read_gpkg_metadata` skips a non-UTF-8 member) and
-        // turned every empty field (`DEBUGBUILD`) into a stray `"\n"`.
+        // Every `metadata/` member extracted **verbatim**: a scalar parse +
+        // reserialize lost `environment.bz2` and turned empty fields into
+        // stray newlines.
         extract_gpkg_member(binpkg_path, "metadata", build_info_dest)?;
         return Ok(());
     }
 
-    // xpak (`.tbz2`/`.xpak`): the image tarball prefix, then real
-    // `bintree.dbapi.unpack_metadata` -> `tbz2.unpackinfo`
-    // (`xpak.py:486-524`): every XPAK member written VERBATIM. It is not a
-    // scalar parse plus reserialize. That turned an empty `DEBUGBUILD`
-    // into `"\n"` and trimmed the trailing space real keeps on the last
-    // `NEEDED` line (L2 xpak control, #326 S5), the same bug the gpkg
-    // branch above fixed.
+    // xpak: every XPAK member written VERBATIM, not parsed + reserialized
+    // (which turned an empty `DEBUGBUILD` into `"\n"` and trimmed the
+    // trailing space kept on the last `NEEDED` line).
+    // Portage: `bintree.dbapi.unpack_metadata`, `tbz2.unpackinfo`.
     extract_xpak_image(binpkg_path, image_dest, xattrs)?;
     let seg = read_xpak_segment(binpkg_path)?;
     for (name, bytes) in parse_xpak_members(&seg)? {
@@ -74,10 +59,10 @@ pub fn extract_binpkg(
     Ok(())
 }
 
-/// Real `unpackinfo`'s target path for one member: the name with
-/// leading `/` stripped, joined under `dest` and normalized. A name
-/// whose `..` components climb out of `dest` is skipped (`None`), as
-/// real's `if not filename.startswith(mydest): continue` does.
+/// `unpackinfo`'s target path for one member: the name with leading `/`
+/// stripped, joined under `dest` and normalized. A name whose `..`
+/// components climb out of `dest` is skipped (`None`).
+// Portage: `xpak.tbz2.unpackinfo`.
 pub(crate) fn xpak_member_dest(dest: &Path, name: &str) -> Option<PathBuf> {
     let mut parts: Vec<&str> = Vec::new();
     for comp in name.trim_start_matches('/').split('/') {
@@ -95,19 +80,12 @@ pub(crate) fn xpak_member_dest(dest: &Path, name: &str) -> Option<PathBuf> {
     Some(parts.iter().fold(dest.to_path_buf(), |p, c| p.join(c)))
 }
 
-/// `#58` K2: the metadata half of `extract_gpkg_member` -- real
-/// `bintree.dbapi.unpack_metadata` -> `gpkg().unpack_metadata(dest_dir)`
-/// extracts every inner `metadata/` member into build-info. Portuale
-/// resolves the S1 reader and writes each member as a **regular file**
-/// with its header mode (masked to `0o7777`, setuid/setgid stripped).
-/// Real would extract an in-archive symlink as a symlink there, which
-/// every later reader of build-info (`populate_vdb_tmp`,
-/// `BINPKGMD5`, the saved-`environment.bz2` extractor, the `pkg_*`
-/// phases) would then follow -- a documented difference, and real's
-/// writer never emits one. Duplicates (`tar_safe_extract`'s "Duplicate
-/// files detected") are refused (K5), and so are nested keys (K4: they
-/// would need directory creation real's writer never necessitates). The
-/// `dest` directory exists by the time `extract_binpkg` calls this.
+/// The metadata half of `extract_gpkg_member`: every inner `metadata/`
+/// member is written as a **regular file** with its header mode (masked to
+/// `0o7777`, setuid/setgid stripped). An in-archive symlink is never
+/// extracted as one (later readers would follow it); duplicates and nested
+/// keys are refused. `dest` exists by the time this runs.
+// Portage: `bintree.dbapi.unpack_metadata`, `gpkg.unpack_metadata`.
 pub(crate) fn extract_gpkg_metadata(
     gpkg: &Path,
     dest: &Path,
@@ -143,40 +121,32 @@ pub(crate) fn extract_gpkg_metadata(
         std::io::Write::write_all(&mut file, &entry.bytes)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         drop(file);
-        // `OpenOptions::mode` passes through the process umask; real's
-        // `tarfile.extract` chmods the header mode on afterwards, so set
-        // it explicitly for a umask-independent result.
+        // `OpenOptions::mode` passes through the process umask, so set the
+        // header mode explicitly afterwards for a umask-independent result.
         fs::set_permissions(&path, fs::Permissions::from_mode(mode))
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(())
 }
 
-/// `#58` K2 / S4: real `gpkg.tar_safe_extract`'s member rules, applied
-/// to the already-decompressed scratch `image.tar` **before** GNU `tar`
-/// unpacks it -- so nothing reaches the filesystem until the whole
-/// member list is accepted (real validates the same way inside
-/// `gpkg.decompress`, `gpkg.py:1071-1103`, but only as it extracts).
-/// Real's own check order (`gpkg.py:690-724`): duplicate name, absolute
-/// name, `..` traversal, `isdev()` (Python 3.14 includes FIFOs), and a
-/// hard link whose target is not an earlier member; symlinks are allowed
-/// (a real image carries them legitimately).
+/// Pre-scan the decompressed scratch `image.tar` with the member rules
+/// **before** GNU `tar` unpacks it, so nothing reaches the filesystem
+/// until the whole member list is accepted. Check order: duplicate name,
+/// absolute name, `..` traversal, device/FIFO, and a hard link whose
+/// target is not an earlier member; symlinks are allowed.
 ///
-/// One deliberate addition beyond real's rule set (owner-approved
-/// 2026-09-16 from S0 cell i18): a member whose path traverses an
-/// earlier symlink member is refused. Real's `tar_safe_extract` would
-/// extract through that symlink -- as root straight into the host --
-/// while GNU `tar` refuses at unpack time; refusing before unpacking
-/// makes the guarantee independent of the unpacker. A real tree can
-/// never produce the shape (a symlink has no children on disk).
+/// One deliberate addition: a member whose path traverses an earlier
+/// symlink member is refused (extracting through it would write outside
+/// the destination; a genuine tree can never produce the shape, since a
+/// symlink has no children on disk).
+// Portage: `gpkg.tar_safe_extract`.
 pub(crate) fn scan_image_tar(image_tar: &Path, gpkg: &Path) -> Result<(), String> {
     let file = fs::File::open(image_tar).map_err(|e| format!("{}: {e}", image_tar.display()))?;
     let mut archive = tar::Archive::new(file);
     let entries = archive
         .entries()
         .map_err(|e| format!("{}: reading image.tar: {e}", gpkg.display()))?;
-    // Real `tar_safe_extract.file_list`, one entry per accepted member
-    // (trailing `/` trimmed the way Python `tarfile` trims it).
+    // One entry per accepted member (trailing `/` trimmed).
     let mut names: Vec<Vec<u8>> = Vec::new();
     let mut symlinks: Vec<Vec<u8>> = Vec::new();
     for entry in entries {
@@ -244,9 +214,9 @@ pub(crate) fn scan_image_tar(image_tar: &Path, gpkg: &Path) -> Result<(), String
     Ok(())
 }
 
-/// The xpak `[image tarball]` prefix -> `dest`. Real
-/// `xpak.tbz2.decompose`: the image is everything before the
-/// `XPAKPACK…STOP` trailer.
+/// The xpak `[image tarball]` prefix -> `dest`: the image is everything
+/// before the `XPAKPACK…STOP` trailer.
+// Portage: `xpak.tbz2.decompose`.
 pub(crate) fn extract_xpak_image(
     binpkg_path: &Path,
     dest: &Path,
@@ -297,15 +267,11 @@ pub(crate) fn extract_xpak_image(
     run_tar(&args)
 }
 
-/// Real `BinpkgExtractorAsync._xpak_start` (`BinpkgExtractorAsync.py:
-/// 39-50`, #334): under `FEATURES=xattr`, when the tar knows `--xattrs`,
-/// extract with `--xattrs --xattrs-include='*'` plus one
-/// `--xattrs-exclude=<pat>` per `PORTAGE_XATTR_EXCLUDE` pattern. Real
-/// builds a shell string, so its quoted `'*'` reaches tar as the plain
-/// word `*`; this argv is what that shell hands tar. The xpak itself was
-/// packed with `gtar --xattrs` under the same feature
-/// (`misc-functions.sh:587-590`). gpkg neither stores nor restores
-/// xattrs in real, so only the xpak image takes these.
+/// Under `FEATURES=xattr`, when tar knows `--xattrs`, extract with
+/// `--xattrs --xattrs-include='*'` plus one `--xattrs-exclude=<pat>` per
+/// `PORTAGE_XATTR_EXCLUDE` pattern. Only the xpak image takes these (gpkg
+/// neither stores nor restores xattrs).
+// Portage: `BinpkgExtractorAsync._xpak_start`.
 pub(crate) fn xpak_xattr_tar_options(
     xattrs: &crate::ebuild_merge::XattrPolicy,
     tar_knows_xattrs: bool,
@@ -323,7 +289,7 @@ pub(crate) fn xpak_xattr_tar_options(
     opts
 }
 
-/// Real's `b"--xattrs" in $(gtar --help)` probe, run once per process.
+/// The `b"--xattrs" in $(gtar --help)` probe, run once per process.
 pub(crate) fn tar_supports_xattrs() -> bool {
     use std::sync::OnceLock;
     static KNOWS: OnceLock<bool> = OnceLock::new();
@@ -338,23 +304,20 @@ pub(crate) fn tar_supports_xattrs() -> bool {
 
 /// Locate `<basename>/<want>.tar[.<comp>]` in a gpkg's outer tar,
 /// decompress it if needed, and extract it into `dest`. Shares the outer
-/// unpack, the `#56` trusted-name regular-file walk and the `gpkg-1`
-/// validity guard with `read_gpkg_metadata`.
+/// unpack, the trusted-name regular-file walk and the `gpkg-1` validity
+/// guard with `read_gpkg_metadata`.
 ///
-/// The `image` half keeps GNU `tar` (`-xpf --strip-components=1`) for
-/// its ownership/permission/xattr/sparse semantics, with real
-/// `tar_safe_extract`'s rules applied by a pre-scan first (`#58` K2,
-/// S4). The `metadata` half is resolved in process (`#58` S3,
-/// [`extract_gpkg_metadata`]).
+/// The `image` half keeps GNU `tar` (`-xpf --strip-components=1`) for its
+/// ownership/permission/xattr/sparse semantics, with the member rules
+/// applied by a pre-scan first ([`scan_image_tar`]). The `metadata` half
+/// is resolved in process ([`extract_gpkg_metadata`]).
 pub(crate) fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), String> {
     if !gpkg_path.is_file() {
         return Err(format!("{}: not a file", gpkg_path.display()));
     }
 
-    // `#58` S5: the outer container is read in process -- the `#56`
-    // trusted-name regular-member check, the one-level structure and the
-    // `gpkg-1` marker all come from the tar headers before any bytes are
-    // streamed.
+    // The outer container is read from its tar headers: regular-member
+    // check, one-level structure and marker, before any bytes stream.
     let (members, gpkg_marker) = read_outer_members(gpkg_path)?;
     if !gpkg_marker {
         return Err(format!(
@@ -368,8 +331,8 @@ pub(crate) fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> 
         .ok_or_else(|| format!("{}: no `{want}.tar` member", gpkg_path.display()))?;
 
     if want == "metadata" {
-        // `#58` K2/S3: the inner metadata tar is resolved in process and
-        // written as regular files only (no scratch copy, no `tar -xpf`).
+        // The inner metadata tar is resolved in process and written as
+        // regular files only (no scratch copy, no `tar -xpf`).
         let metadata = outer_member_read(gpkg_path, &member.raw_name, |entry| {
             let member_bytes =
                 read_member_bytes_capped(entry, MAX_INNER_METADATA_BYTES, &member.name)?;
@@ -385,21 +348,13 @@ pub(crate) fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> 
     outer_member_read(gpkg_path, &member.raw_name, |source| {
         decompress_member_to_file(&member.name, source, comp, &inner_tar)
     })?;
-    // Real `gpkg.decompress` validates the image stream with
-    // `tar_safe_extract` as it extracts (`gpkg.py:1094-1096`); portuale
-    // validates the whole scratch `image.tar` first (`#58` S4,
-    // [`scan_image_tar`]) so a rejected member never reaches the
-    // filesystem, then lets GNU `tar` do the actual unpack below.
+    // Portage validates the image stream as it extracts; validate the whole
+    // scratch `image.tar` first ([`scan_image_tar`]) so a rejected member
+    // never reaches the filesystem, then let GNU `tar` unpack it.
     scan_image_tar(&inner_tar, gpkg_path)?;
-    // Real `gpkg.tar_safe_extract.extractall(dest)`: the inner tarball's
-    // members all live under a single `<want>/` top-level directory
-    // (real `gpkg._add_data`: `image_tar.add(root_dir, "image",
-    // recursive=True)`), and portage strips it -- it extracts to a temp
-    // dir and moves `<want>/*` into `dest`. `--strip-components=1` is the
-    // same strip: the format guarantees the one prefix component, so the
-    // members become `usr/...` / `environment.bz2` directly. Without it
-    // every path in the merged package's vdb `CONTENTS` was recorded as
-    // `/image/...`, which breaks unmerge (portuale's and real portage's).
+    // The inner tarball's members all live under a single `<want>/`
+    // top-level directory, stripped here; without the strip every merged
+    // path would be recorded as `/image/...`, which breaks unmerge.
     run_tar(&[
         "-xpf",
         &lossy(&inner_tar),

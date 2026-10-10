@@ -2,58 +2,35 @@
 
 use crate::binpkg::*;
 
-/// Real `portage.gpkg.gpkg._verify_binpkg` (`lib/portage/gpkg.py:1626`),
-/// checksum layer + GPG signature layer. A `.gpkg.tar` is a plain
-/// (outer) tar whose members are every one exactly one level deep under
-/// a single shared prefix directory (real "gpkg file structure" guard);
-/// the `<prefix>/Manifest` member records one
+/// Verify a `.gpkg.tar`'s `Manifest`: checksum layer + GPG signature layer.
+/// A `.gpkg.tar` is a plain tar whose members are each exactly one level
+/// deep under a single shared prefix; `<prefix>/Manifest` records one
 /// `DATA <basename> <size> BLAKE2B <hex> SHA512 <hex>` line per other
-/// member (real `_record_checksum` / `_add_manifest`, and
-/// `MANIFEST2_HASH_DEFAULTS = {BLAKE2B, SHA512}`). This checks:
-///   - `#56`/GLEP 78: the one prefix is a **real** directory and every
-///     trusted member inside it (`gpkg-1`, `Manifest`, the two inner
-///     tars, `.sig` sidecars) is a **regular file** -- `symlink_metadata`,
-///     no follow, before anything is read (real's own reader can never
-///     read through one either; see `TEST/findings/l2.md` "## #56 S0");
-///   - a `Manifest` member exists (real `MissingSignature` otherwise);
-///   - the GPG layer (real `request_signature` / `signature_exist` /
-///     `verify_signature`): when the container carries any `.sig`
-///     member or an inline-signed Manifest -- or `gpg.request_signature`
-///     (`FEATURES=binpkg-request-signature`) says signatures are
-///     mandatory -- the Manifest is verified as a clear-signed message
-///     and every other member against its detached `.sig` sidecar, via
-///     the system `gpg` (see [`GpgVerify`]). A failed Manifest check is
-///     fatal only when `gpg.verify_signature` (real's own
-///     `if self.verify_signature: raise` -- `binpkg-ignore-signature`
-///     falls back to the raw Manifest bytes); a missing sidecar is
-///     always fatal under `request_signature` (real `MissingSignature`),
-///     except for the never-signed `gpkg-1` version marker. `.sig`
-///     members themselves are digest-checked against their own Manifest
-///     records, exactly like every other member (real's loop verifies
-///     the `.sig` file bytes too -- `f_signature` is only `None` for
-///     choosing *plain* over *GPG* verification, not for skipping).
-///   - every member has a `DATA` record whose `size` and *every*
-///     recognised hash match -- reusing `portage_fetch::verify_digests`
-///     (size first, then BLAKE2B/SHA512), with real's "at least one
-///     supported checksum" floor;
-///   - the member set and the record set match exactly (real's
-///     `unverified_files` / `unverified_manifest` leftovers checks).
+/// member. This checks that the prefix is a real directory and every
+/// trusted member a regular file (no follow, before anything is read), a
+/// `Manifest` member exists, the GPG layer, every member's `DATA` record,
+/// and that the member set and the record set match exactly.
 ///
-/// Deliberate cuts: no dropped-privilege (`nobody`/`nogroup`) `gpg`
-/// spawn when root (real `checksum_helper`'s own `GPG_VERIFY_USER_DROP`;
-/// tests run unprivileged and production merges already run as root
-/// throughout); `[PORTAGE_CONFIG]`/`[SIGNATURE]` substitution is plain
-/// whitespace splitting, not real's `shlex` + `varexpand`.
+/// The GPG layer: when the container carries any `.sig` member or an
+/// inline-signed Manifest, or signatures are mandatory
+/// (`FEATURES=binpkg-request-signature`), the Manifest is verified as a
+/// clear-signed message and every other member against its detached `.sig`
+/// sidecar. A failed Manifest check is fatal only under
+/// `verify_signature` (otherwise the raw bytes are used); a missing sidecar
+/// is always fatal under `request_signature`, except for the never-signed
+/// `gpkg-1` marker. `.sig` members are digest-checked like every other one.
+///
+/// Deliberate cuts: no dropped-privilege `gpg` spawn when root; the
+/// `[PORTAGE_CONFIG]`/`[SIGNATURE]` substitution is plain whitespace
+/// splitting, not `shlex` + `varexpand`.
+// Portage: `gpkg._verify_binpkg`.
 pub(crate) fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<(), String> {
     if !gpkg_path.is_file() {
         return Err(format!("{}: not a file", gpkg_path.display()));
     }
 
-    // `#58` S5: the outer container is read in process. Real
-    // `_verify_binpkg`'s structure rules (relative names, one level deep
-    // under one common prefix, no duplicates) and `#56`'s "a trusted
-    // name is a regular member" all come from the tar headers here,
-    // before any member bytes are read.
+    // Structure rules and the regular-member check come from the tar
+    // headers, before any member bytes are read.
     let (members, _) = read_outer_members(gpkg_path)?;
     let manifest_member = members
         .iter()
@@ -69,19 +46,15 @@ pub(crate) fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<
     })?;
     let manifest_text = String::from_utf8_lossy(&manifest_bytes);
 
-    // Real `_verify_binpkg`'s own GPG trigger (`gpkg.py:1682-1686` +
-    // `:1711-1712`): "if any signature exists, we assume all files have
-    // signature" -- any `.sig` sidecar member, or an inline PGP block in
-    // the Manifest itself.
+    // "If any signature exists, we assume all files have signature": any
+    // `.sig` sidecar member, or an inline PGP block in the Manifest.
     let signature_exist = members.iter().any(|member| member.name.ends_with(".sig"))
         || manifest_text.contains("-----BEGIN PGP SIGNATURE-----");
 
-    // Real Manifest-signature branch (`gpkg.py:1714-1731`): verify the
-    // clear-signed Manifest and parse the cleartext. A failure is fatal
-    // only under `verify_signature` -- with `binpkg-ignore-signature`
-    // real falls back to the raw bytes (and the armor-skipping parse
-    // below reads the cleartext body straight through, as portuale
-    // always used to).
+    // Verify the clear-signed Manifest and parse the cleartext. A failure
+    // is fatal only under `verify_signature`; otherwise the raw bytes are
+    // used (and the armor-skipping parse below reads the cleartext body
+    // straight through).
     let manifest_text: std::borrow::Cow<'_, str> = if gpg.request_signature || signature_exist {
         match verify_clearsigned_manifest(&manifest_bytes, gpg, gpkg_path) {
             Ok(cleartext) => {
@@ -98,10 +71,8 @@ pub(crate) fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<
         std::borrow::Cow::Borrowed(manifest_text.as_ref())
     };
 
-    // Parse the `DATA` lines. When signature checking is off
-    // (`binpkg-ignore-signature`) a clear-signed Manifest is still
-    // parsed raw, so PGP-armor lines are skipped and the cleartext body
-    // read straight through; a verified cleartext has no armor left.
+    // With signature checking off a clear-signed Manifest is still parsed
+    // raw, so armor lines are skipped; a verified cleartext has no armor.
     let mut records: HashMap<String, portage_fetch::DistfileDigests> = HashMap::new();
     for line in manifest_text.lines() {
         let line = line.trim();
@@ -111,8 +82,8 @@ pub(crate) fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<
         let mut parts = line.split_whitespace();
         match parts.next() {
             Some("DATA") => {}
-            // A PGP-armored Manifest wraps `DATA` lines in a signed
-            // block; anything else on a non-blank line is malformed.
+            // A PGP-armored Manifest wraps `DATA` lines; anything else on a
+            // non-blank line is malformed.
             Some(_) if manifest_text.contains("BEGIN PGP") => continue,
             _ => {
                 return Err(format!(
@@ -180,16 +151,13 @@ pub(crate) fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<
             && (gpg.request_signature || signature_exist)
             && gpg.verify_signature
         {
-            // Real per-file GPG branch (`gpkg.py:1764-1788`): a member
-            // whose `.sig` sidecar exists is verified detached before
-            // its digests are compared; the never-signed `gpkg-1`
-            // version marker is digest-only; anything else is
-            // `MissingSignature`.
+            // A member with a `.sig` sidecar is verified detached before its
+            // digests are compared; the never-signed `gpkg-1` marker is
+            // digest-only; anything else is `MissingSignature`.
             let sidecar = format!("{name}.sig");
             match members.iter().find(|other| other.name == sidecar) {
                 Some(sidecar_member) => {
-                    // Signature verification needs the bytes in memory
-                    // (`run_gpg_verify` writes them to gpg's stdin); the
+                    // The bytes are already in memory for gpg's stdin; the
                     // digest below reuses them instead of re-reading.
                     let member_bytes = outer_member_read(gpkg_path, &member.raw_name, |entry| {
                         read_member_bytes(entry)
@@ -224,9 +192,8 @@ pub(crate) fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<
                 None => {}
             }
         }
-        // `#58` S5: the member is hashed straight from its container
-        // stream (`verify_digests_reader`) -- no extraction to disk and
-        // no buffering, so a large image member is a sequential read.
+        // The member is hashed straight from its container stream: no
+        // extraction to disk and no buffering.
         outer_member_read(gpkg_path, &member.raw_name, |reader| {
             portage_fetch::verify_digests_reader(name, reader, record).map_err(|e| e.to_string())
         })
@@ -258,18 +225,16 @@ pub(crate) fn read_member_bytes(mut reader: impl Read) -> Result<Vec<u8>, String
     Ok(bytes)
 }
 
-/// `read_member_bytes` with the `#58` S1 zip-bomb cap: used for the inner
-/// metadata member, which the decompressed-size cap
-/// ([`MAX_INNER_METADATA_BYTES`]) would otherwise not bound if it stayed
-/// compressed.
+/// `read_member_bytes` with a zip-bomb cap: for the inner metadata member,
+/// which the decompressed-size cap ([`MAX_INNER_METADATA_BYTES`]) would
+/// otherwise not bound while compressed.
 pub(crate) fn read_member_bytes_capped(
     mut reader: impl Read,
     cap: u64,
     label: &str,
 ) -> Result<Vec<u8>, BinpkgError> {
     let mut bytes = Vec::new();
-    // A truncated/corrupt member would fail real's Manifest size+digest
-    // check on the metadata member first (DigestException -> skip).
+    // A truncated/corrupt member fails the Manifest size+digest check first.
     reader
         .by_ref()
         .take(cap + 1)

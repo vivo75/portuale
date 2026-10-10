@@ -6,7 +6,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Check if a line matches any of the database path patterns
 fn matches_pattern(line: &str) -> bool {
     line.contains("var/db/pkg")
         || (line.contains(r#""db")"#) && line.contains(r#"join("pkg")"#))
@@ -21,7 +20,6 @@ fn matches_pattern(line: &str) -> bool {
         || line.contains("cache/edb/counter")
 }
 
-/// Find spans of #[cfg(test)] annotations to exclude them
 fn find_test_spans(lines: &[&str]) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut i = 0;
@@ -33,7 +31,6 @@ fn find_test_spans(lines: &[&str]) -> Vec<(usize, usize)> {
             let mut j = i + 1;
 
             while j < lines.len() {
-                // Strip comments and strings from the line
                 let code = strip_comments_and_strings(lines[j]);
 
                 for ch in code.chars() {
@@ -62,10 +59,9 @@ fn find_test_spans(lines: &[&str]) -> Vec<(usize, usize)> {
     spans
 }
 
-/// Strip comments and string/char literals from a line of Rust code, the
-/// same rough way `LLM/evidence/305-s0-inventory.py` does: cut at the
-/// first `//`, then blank `"..."` strings and real char literals (`'x'`,
-/// `'\\n'`). A lone `'` is a lifetime (`'a`, `'_`, `'static`) and is kept.
+/// Strip comments and string/char literals from a line, roughly: cut at
+/// the first `//`, blank `"..."` strings and char literals. A lone `'`
+/// is a lifetime and is kept.
 fn strip_comments_and_strings(line: &str) -> String {
     let code = match line.find("//") {
         Some(i) => &line[..i],
@@ -108,23 +104,18 @@ fn strip_comments_and_strings(line: &str) -> String {
     result
 }
 
-/// Check if a line is a pure comment (only comment content, no code)
 fn is_pure_comment(line: &str) -> bool {
     let stripped = line.trim_start();
     if stripped.starts_with("///") || stripped.starts_with("//!") || stripped.starts_with("//") {
-        // It's a comment - check if there's any code part
         if stripped.starts_with("///") || stripped.starts_with("//!") {
-            // Doc comments are always pure
             return true;
         }
-        // For //, check if the part before // has code
         let code_part = strip_comments_and_strings(line);
         return code_part.trim().is_empty();
     }
     false
 }
 
-/// Allowlist of (distinctive substring, reason)
 fn get_allowlist() -> Vec<(&'static str, &'static str)> {
     vec![
         // Doc comments and help/message strings that mention paths but don't construct them
@@ -182,7 +173,6 @@ fn get_allowlist() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// Recursively walk directories and collect .rs files
 fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.filter_map(Result::ok) {
@@ -212,7 +202,6 @@ fn no_hand_built_vdb_paths() {
 
     let mut violations = Vec::new();
 
-    // Collect all .rs files
     let mut rs_files = Vec::new();
     collect_rs_files(&crates_root, &mut rs_files);
     // A wrong root yields no files, and an empty walk would pass vacuously.
@@ -253,7 +242,6 @@ fn no_hand_built_vdb_paths() {
         for (line_no, line) in lines.iter().enumerate() {
             let line_num = line_no + 1;
 
-            // Check if this line is in a #[cfg(test)] span
             let in_test_span = test_spans
                 .iter()
                 .any(|(start, end)| start <= &line_num && &line_num <= end);
@@ -261,14 +249,11 @@ fn no_hand_built_vdb_paths() {
                 continue; // Skip test code
             }
 
-            // Check if this line matches any pattern
             if matches_pattern(line) {
-                // Skip pure comment lines
                 if is_pure_comment(line) {
                     continue;
                 }
 
-                // Check if this line is in the allowlist
                 let is_allowed = allowlist_set.iter().any(|substr| line.contains(substr));
                 if !is_allowed {
                     let rel_path = path.strip_prefix(&crates_root).unwrap_or(&path);

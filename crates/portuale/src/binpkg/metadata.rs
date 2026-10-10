@@ -2,66 +2,35 @@
 
 use crate::binpkg::*;
 
-/// Real `portage.gpkg.gpkg.get_metadata()` / `unpack_metadata(want=None)`
-/// (`lib/portage/gpkg.py:838-870`), narrowed to the local metadata read:
-/// a `.gpkg.tar` is a plain (uncompressed) tar whose members are
-/// `<basename>/{gpkg-1, metadata.tar[.<comp>], image.tar[.<comp>],
-/// Manifest}` (+ optional `.sig` files). Returns the `metadata/<KEY>` ->
-/// value map -- real `_strip_metadata_prefix` over the inner
-/// `metadata.tar`'s own members -- each value UTF-8 with surrounding
-/// whitespace trimmed (the same shape a vdb aux file / `read_md5_cache`
-/// entry already has). A member whose bytes aren't valid UTF-8
-/// (`environment.bz2`) is skipped, not an error.
+/// Read the `metadata/<KEY>` map from a `.gpkg.tar`: a plain tar whose
+/// members are `<basename>/{gpkg-1, metadata.tar[.<comp>],
+/// image.tar[.<comp>], Manifest}` (+ optional `.sig` files). Each value is
+/// UTF-8 with surrounding whitespace trimmed; a member whose bytes aren't
+/// valid UTF-8 (`environment.bz2`) is skipped, not an error.
 ///
-/// This reader is the "populate the pool" path (real
-/// `bintree._populate_local` / `get_metadata`); it trusts the container
-/// the same way the `Packages`-index reader "trusts the index outright"
-/// (real `FEATURES=pkgdir-index-trusted`). The *merge* path
-/// (`extract_binpkg`) runs the real `Manifest` digest check first --
-/// see [`verify_gpkg_manifest`]. Still required here: the `gpkg-1`
-/// version marker's *presence* (real `_get_inner_tarinfo`'s own
-/// `InvalidBinaryPackageFormat` guard) and, since `#56`, that every
-/// trusted member name is a **regular member** ([`read_outer_members`],
-/// since `#58` S5 from the tar header instead of an extracted
-/// `symlink_metadata`): a symlinked marker/metadata/`Manifest` member is
-/// an error naming the member and its type, never a follow (see
-/// `TEST/findings/l2.md` "## #56 S0" -- before this, this path listed
-/// the host `/etc` through a symlinked prefix and read a host file
-/// through a symlinked `Manifest`). Since `#58`, the inner
-/// `metadata.tar` is read in process with the `tar` crate
-/// ([`read_inner_metadata`]), porting real `tarfile.extractfile`: a
-/// symlink/hardlink resolves **inside the archive** (or errors), and a
-/// directory/FIFO/device member or a name outside `metadata/` is an
-/// error -- before this, the extracted tree was walked with
-/// `Path::is_file`/`fs::read`, so an inner
-/// `metadata/DESCRIPTION -> /etc/hostname` symlink returned the host
-/// file's bytes (see `TEST/findings/l2.md` "## #58 S0").
+/// This is the "populate the pool" path: it trusts the container the same
+/// way the `Packages`-index reader trusts the index. The *merge* path
+/// runs the `Manifest` digest check first (see [`verify_gpkg_manifest`]).
+/// Still required here: the `gpkg-1` version marker's *presence*, and that
+/// every trusted member name is a **regular member** (a symlinked
+/// marker/metadata/`Manifest` is an error, never a follow).
 ///
-/// **Deliberate cut**: NO GPG `.sig` check on this populate path --
-/// a container that carries `.sig` members still has its cleartext
-/// `DATA` digests verified at *merge* time (real portage's own
-/// `binpkg-ignore-signature` behaviour is what an unverified read
-/// amounts to), and the merge (`extract_binpkg` ->
-/// `verify_gpkg_manifest`) enforces the real `request_signature` /
-/// `verify_signature` policy via the system `gpg` (see [`GpgVerify`]).
-/// Real `unpack_metadata`/`get_metadata` verify
-/// (`_verify_binpkg(metadata_only=True)` still checks the metadata
-/// `.sig` + Manifest), so a corrupt-or-foreign-signed binpkg resolves
-/// in portuale's pool but fails at merge; the resolve side stays
-/// deterministic and `gpg`-free on purpose.
+/// **Deliberate cut**: no GPG `.sig` check here; the merge enforces the
+/// signature policy via the system `gpg` (see [`GpgVerify`).
+// Portage: `gpkg.get_metadata`, `gpkg.unpack_metadata`,
+// `gpkg._strip_metadata_prefix`, `tarfile.extractfile`.
 pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, BinpkgError> {
     if !gpkg_path.is_file() {
-        // real `_verify_binpkg`'s FileNotFound (PortagePackageException).
+    // A missing file is `Invalid`, not `Fatal`.
         return Err(BinpkgError::Invalid(format!(
             "{}: not a file",
             gpkg_path.display()
         )));
     }
 
-    // 1. Read the outer container in process (`#58` K7/S5): the `gpkg-1`
-    //    validity marker, the one-level structure and `#56`'s regular-
-    //    member check all come from the tar headers, before anything is
-    //    written or decompressed.
+    // Read the outer container from its tar headers: marker, one-level
+    // structure and regular-member checks, before anything is written or
+    // decompressed.
     let (members, gpkg_marker) = read_outer_members(gpkg_path)?;
     if !gpkg_marker {
         return Err(BinpkgError::Invalid(format!(
@@ -81,21 +50,15 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, B
             ))
         })?;
 
-    // 2. Read the inner `metadata.tar` in process (`#58` S1/K0): the
-    //    member's stream goes straight into the `tar` crate (through the
-    //    decompressor where needed) and every entry is resolved exactly
-    //    like real `tarfile.extractfile`. Nothing is written to disk
-    //    before it is accepted, so a symlink can only ever yield another
-    //    member's bytes and no host path is ever read.
+    // Read the inner `metadata.tar` in process: symlinks resolve inside
+    // the archive only, so no host path is ever read.
     let metadata = outer_member_read(gpkg_path, &metadata_member.raw_name, |entry| {
         let member_bytes =
             read_member_bytes_capped(entry, MAX_INNER_METADATA_BYTES, &metadata_member.name)?;
         read_inner_metadata(gpkg_path, &metadata_member.name, &member_bytes, comp)
     })?;
 
-    // 3. The existing value shaping: UTF-8 + trim; a member whose bytes
-    //    aren't valid UTF-8 (e.g. `environment.bz2`) is skipped, not an
-    //    error.
+    // UTF-8 + trim; non-UTF-8 members are skipped, not an error.
     let mut out = HashMap::new();
     for entry in metadata.entries {
         let Ok(text) = String::from_utf8(entry.bytes) else {
@@ -106,29 +69,17 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, B
     Ok(out)
 }
 
-/// Real `portage.xpak`'s own `.tbz2` reader (`tbz2.scan` +
-/// `getindex_mem`/`searchindex`, `lib/portage/xpak.py:395-460` / `234-266`).
-/// An xpak binary package is `[image tarball]` immediately followed by a
-/// self-describing XPAK trailer:
+/// Read the key -> value map from an xpak (`.tbz2`/`.xpak`) trailer:
+/// `[image tarball]` followed by a self-describing XPAK segment:
 ///
 /// ```text
 ///   "XPAKPACK"  be32(indexsize)  be32(datasize)  <index>  <data>  "XPAKSTOP"  be32(infosize)  "STOP"
 /// ```
 ///
-/// where `infosize` is the length of the `XPAKPACK`…`XPAKSTOP` segment
-/// and `<index>` is a flat run of `be32(namelen) name be32(datapos)
-/// be32(datalen)` records into `<data>`. Every metadata key (`DEPEND`,
-/// `SLOT`, …) is one record. Returns the key -> value map, each value
-/// UTF-8 (lossy-decoded, then trimmed -- values carry a trailing newline
-/// like a vdb aux file). `CONTENTS` is never present in a *binary*
-/// package's own xpak (real `xpak()` skips it -- it's generated at merge
-/// time).
-///
-/// Only the bounded `infosize + 8` tail of the file is read; the image
-/// tarball itself is never touched (this reader answers "what metadata
-/// does this binpkg carry", the same narrow question `read_gpkg_metadata`
-/// does for gpkg). Codec-agnostic: the trailer is raw, whatever
-/// compressor produced the tarball.
+/// Each value is UTF-8 (lossy-decoded) and trimmed. `CONTENTS` is never
+/// present (it is generated at merge time). Only the bounded tail of the
+/// file is read; the image tarball itself is never touched.
+// Portage: `portage.xpak.tbz2.scan`, `getindex_mem`, `searchindex`.
 pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>, BinpkgError> {
     let seg = read_xpak_segment(binpkg_path)?;
     Ok(parse_xpak_members(&seg)?
@@ -137,17 +88,14 @@ pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>,
         .collect())
 }
 
-/// The `"XPAKPACK" … "XPAKSTOP"` segment bytes (real `tbz2.scan`): read
-/// the last 16 bytes (`"XPAKSTOP" be32(infosize) "STOP"`), then the
-/// `infosize + 8` byte segment they point back to. Only this bounded
-/// tail of the file is ever touched.
+/// The `"XPAKPACK" … "XPAKSTOP"` segment bytes: read the last 16 bytes
+/// (`"XPAKSTOP" be32(infosize) "STOP"`), then the `infosize + 8` byte
+/// segment they point back to.
 pub(crate) fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, BinpkgError> {
     use std::io::{Read, Seek, SeekFrom};
 
-    // Every xpak read error is Fatal: real's `tbz2.scan()` swallows the
-    // failure and returns falsy, `get_data()` then returns None, and the
-    // caller raises AttributeError on `None.get` -- real *aborts*, it
-    // never skips a broken `.tbz2`/`.xpak`.
+    // Every xpak read error is Fatal: Portage swallows the scan failure
+    // and then raises on `None`, so it aborts, never skips, a broken file.
     let fatal = |e: String| BinpkgError::Fatal(e);
     let mut f = fs::File::open(binpkg_path)
         .map_err(|e| fatal(format!("{}: {e}", binpkg_path.display())))?;
@@ -187,11 +135,9 @@ pub(crate) fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, BinpkgErr
     Ok(seg)
 }
 
-/// Walk an xpak segment's index (real `getindex_mem`/`searchindex`:
-/// `"XPAKPACK" be32(indexsize) be32(datasize) <index> <data>`, then
-/// `while startpos + 8 < len` over `be32(namelen) name be32(datapos)
-/// be32(datalen)` records into `<data>`). Returns every member as
-/// `(name, &data bytes)`, borrowing from `seg`.
+/// Walk an xpak segment's index into `(name, &data bytes)` members,
+/// borrowing from `seg`.
+// Portage: `portage.xpak.getindex_mem`, `searchindex`.
 pub(crate) fn parse_xpak_members(seg: &[u8]) -> Result<Vec<(String, &[u8])>, BinpkgError> {
     if seg.len() < 16 || &seg[0..8] != b"XPAKPACK" {
         return Err(BinpkgError::Fatal(

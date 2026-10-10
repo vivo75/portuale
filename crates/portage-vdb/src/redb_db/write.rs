@@ -1,33 +1,29 @@
-//! `RedbDb`'s write side (S5.3): [`RedbTxn`] and the derived multimaps.
+//! `RedbDb`'s write side: [`RedbTxn`] and the derived multimaps.
 //!
 //! See the crate module doc, "Write transactions", for the model; this
 //! file follows `sqlite/write.rs` method by method.
 //!
 //! One [`RedbTxn`] is one `redb::WriteTransaction`, opened by
 //! `RedbDb::begin_write` and committed by [`WriteTxn::commit`]; dropping it
-//! without a commit aborts it (redb's own drop). Every method opens the
-//! tables it needs, uses them and lets them go before the next call, so no
-//! table is ever open twice.
+//! without a commit aborts it. Every method opens the tables it needs,
+//! uses them and lets them go before the next call, so no table is ever
+//! open twice.
 //!
 //! # Derived multimap rows
 //!
 //! They exist only for live (`installed`) entries and are rebuilt from the
-//! stored files, so removing them re-derives the rows from the stored file
-//! first (the invariant "rows = f(files)").
+//! stored files.
 //!
 //! - `owner`: key = the path bytes as written in `CONTENTS`; value =
-//!   `id u64`, `seq u32`, `kind` (u32-length string), `md5` (flag `u8`,
-//!   string), `mtime` (flag `u8`, `i64`), `target` (flag `u8`, u32-length
-//!   bytes). Same line rule as sqlite's `owner` table; `id` first, so the
-//!   rows of one entry for one path sort together.
+//!   `id u64`, `seq u32`, `kind`, `md5`, `mtime`, `target`. Same line rule
+//!   as sqlite's `owner` table; `id` first, so one entry's rows for one
+//!   path sort together.
 //! - `dep_atom`: key = `cp`; value = `id u64`, `class u8` (index in
-//!   `DEP_CLASSES`: DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND), then the
-//!   atom token as the remaining bytes. One value per distinct `(class,
-//!   cp, token)`, from the shared `dep_cp`; a token it cannot classify is
-//!   stored under the key `""` (S8.1, `reverse_dependents` always reads it).
-//! - `needed`: key = `id u64`; value = `seq u32`, `arch`, `obj` (bytes),
-//!   `soname`, `rpath`, `needed` (u32-length strings; the no-rpath
-//!   sentinel is stored as `""`). Removal is `remove_all(id)`.
+//!   `DEP_CLASSES`), then the atom token. One value per distinct `(class,
+//!   cp, token)`, from the shared `dep_cp`; an unclassifiable token is
+//!   stored under the key `""`, which `reverse_dependents` always reads.
+//! - `needed`: key = `id u64`; value = `seq u32`, `arch`, `obj`, `soname`,
+//!   `rpath`, `needed`. Removal is `remove_all(id)`.
 
 use std::collections::BTreeSet;
 use std::os::unix::fs::MetadataExt as _;
@@ -258,7 +254,7 @@ impl WriteTxn for RedbTxn<'_> {
                 let Some(raw) = read_file(t, rec.id, field)? else {
                     continue;
                 };
-                // Lossy, like real's consolidation (`errors="replace"`, #309).
+                // Lossy, like Portage's consolidation.
                 let text = String::from_utf8_lossy(&raw);
                 data.push((
                     field.to_string(),
