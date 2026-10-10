@@ -6,6 +6,7 @@ Assembling the final result.
 
 ## fn assemble_result abi-rebuild fallback
 - Portage depgraph's slot-operator auto-rebuild (backlog #24 S3): the consumers themselves are walked nodes now (seeded + flipped in `run_pass` from `params.slot_operator_replace_installed`). `collect_feedback` already ran the scan for every pass it decided.
+- Nothing is synthesised here -- only the `_forced_rebuilds` display pairs are recomputed for `_show_abi_rebuild_info`.
 - Backlog #268: raw request atoms for the #252 gate.
 
 ## fn assemble_result continuity pairs
@@ -13,6 +14,7 @@ Assembling the final result.
 
 ## fn assemble_result rebuild-if entries
 - Same `all_installed_packages` scan / entry shape as the slot-operator pass.
+- Portage `_rebuild_config.trigger_rebuilds()` (`--rebuild-if-unbuilt` / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an installed package whose build-time dep is being merged this run gets its own `[ebuild R]` rebuild entry.
 
 ## fn assemble_result resolution-walk dump
 - Emitted here (final entries, successful pass) rather than threaded through the BFS (see `resolver_trace::dump_resolution_walk`).
@@ -42,14 +44,17 @@ Assembling the final result.
 
 ## fn assemble_result USE-line refresh
 - Portage `_pkg_use_enabled` consults `_needed_use_config_changes` for the display regardless.
+- Portage `--autounmask-backtrack` off (the default): the backward-cascade re-check folded a `package.use` change into `autounmask_use_config` but the driver did NOT re-drive the walk, so the affected package's entry still shows its pre-flip USE.
 
 ## fn assemble_result residual slot conflicts
 - Portage's nomerge-node collision report. Backlog #57: the keeper-reachable triangle (othermod's `<2.0` against the merged 2.0, and keeper's dropped pin against the same pair). Portage renders one block whose installed side lists both parents -- exactly the residual record, which carries the dropped consumer pins on top of the same hard pullers.
+- Fed through `record_slot_conflict`, not appended blind: the walker's own installed-instance check can now produce a record for the very same `(package, merge version, installed version)` triple (the keeper-reachable triangle).
 
 ## fn assemble_result withhold rows
 - Backlog #90 (S2) + #92: same shape, same rc 0; the renderer cannot tell the producers apart.
 - Backlog #209: Portage never reports the slot-operator path -- the minimizer/probe selection writes no `_runtime_pkg_mask` and no `_conflict_missed_update`, so `_show_missed_update` (`_emerge/depgraph.py:1566`) has nothing to render (the r25 shape merges silently at `backtrack: 0/20`, both bound forms of the consumer's pin). A plain-pin withhold still synthesizes its rows: Portage reaches it through the slot-conflict solver, whose "Record missed updates" tail (`:2089-2110`) runs with no `_allow_backtracking` gate, so the notice prints even with backtracking off (the #90 S2 two-target cell pins it).
 - Withhold rows: alphabetical by package, then atom and consumer. Backlog #270: like Portage's `_conflict_missed_update` dict (insertion order of the solver's removals, `depgraph.py:1529-1565`), not alphabetical.
+- `raw_atom` is the verbatim recorded text: the live `:=` form and the recorded `:S/SS=` form both carry a slot operator there, while `atom` is normalised (the built form strips to a bare version pin), so the raw text is what classifies the path.
 
 ## fn assemble_result masked/use/plain-miss chains
 - The atom+masked data was recorded at each `NoVisibleCandidate` push. Backlog #20 for the `[use]` disclosures.

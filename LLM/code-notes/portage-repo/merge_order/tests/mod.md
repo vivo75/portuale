@@ -9,7 +9,7 @@ Shared helpers for the merge-order unit tests.
 
 ## section installed / vdb-backed inputs
 - Survivor of the backlog #145 installed/vdb-backed-inputs work.
-- `mo_tmp_vdb` mirrors `lib.rs`'s own `tmp_vdb` helper; the committed fixture vdb has no injected-libc record, which is why tests build their own.
+- `mo_tmp_vdb` mirrors `lib.rs`'s own `tmp_vdb` helper; the committed fixture vdb has no injected-libc record, which is why tests build their own. A scratch vdb: `var/db/pkg/<cat>/<pf>/` with the given files; the unique root avoids `all_installed_packages`' per-root cache and lets each test build the exact installed shape it needs.
 
 ## fn new_entry
 - Mirrors `synthetic_installed_entry`'s full field list.

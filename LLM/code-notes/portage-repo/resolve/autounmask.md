@@ -14,6 +14,7 @@ Autounmask dependency chains and suggestions.
 
 ## fn render_required_use_block
 - Portage `depgraph.py::_show_unsatisfied_dep` (`:6763-6799` + the `:6899-6912` dep-chain tail). `reduced_human` / `full_human` are already `portage_required_use::human_readable`-rewritten.
+- The `!!! The ebuild selected to satisfy "<atom>" has unmet requirements.` header, the `- <cpv>::<repo> USE="…"` line, the minimal still-unsatisfied sub-expression, the complete expression (only when it differs), then the `(dependency required by "…" [ebuild])` chain.
 
 ## fn check_if_latest_atom_form
 - Portage `_display_autounmask`'s `check_if_latest(pkg, check_visibility=...)` (`depgraph.py:10649`). Keywords always use `=` (bug #536392, "don't unmask undesired versions"). A use-masked-only candidate is still `is_visible`. Portage calls `check_if_latest(pkg)` for license changes.

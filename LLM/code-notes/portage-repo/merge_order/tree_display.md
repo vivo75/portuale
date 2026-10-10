@@ -9,7 +9,7 @@
 - Portage applies overlap guards to strong (`!!`) blockers (`forbid_overlap`, portage-essential); v1 schedules soft (`!`) rows only and leaves strong rows hidden.
 
 ## fn tree_schedule_stuck
-- Mirrors Portage's choice loop in narrowed form: Portage picks by fewest parent-deps with an early break at one; single-pending shapes -- every oracle here -- decide identically to first-in-entry-order. Portage's edge reversal makes the merge node the uninstall's child (`depgraph.py:10190` -- `mygraph.add(slot_node, uninst_task)`).
+- Mirrors Portage's choice loop in narrowed form: Portage picks by fewest parent-deps with an early break at one; single-pending shapes -- every oracle here -- decide identically to first-in-entry-order. Among pending rows whose uninstall is not yet scheduled, whose installed instance is not itself a graph node (Portage `digraph.contains(inst_pkg)` skips those), and whose blocker is soft, take the first in entry order. Portage's edge reversal makes the merge node the uninstall's child (`depgraph.py:10190` -- `mygraph.add(slot_node, uninst_task)`).
 - Backlog #131: the direction is load-bearing for the display order -- as the replacement's child (the pre-#131 shape) the replacement rejoins a later batch; as its parent the next round picks the replacement alone, exactly like Portage's round-2 pick. The frontier never learned the pre-#131 child shape either (likewise never synced). Appended to `order` like Portage's `mygraph.add` appends new nodes.
 
 ## fn tree_note_selection

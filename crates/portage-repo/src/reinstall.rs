@@ -399,7 +399,8 @@ pub(crate) struct BinaryReinstallWarrantedArgs<'a> {
 ///   - without it (gated on `update`): a binary whose `BUILD_TIME` differs
 ///     *and* whose ebuild is no longer visible is merged over the
 ///     installed package.
-/// Portage: depgraph.py's two `rebuilt_binary` triggers folded into one.
+///
+ /// Portage: depgraph.py's two `rebuilt_binary` triggers folded into one.
 pub(crate) fn binary_reinstall_warranted(args: BinaryReinstallWarrantedArgs<'_>) -> bool {
     let BinaryReinstallWarrantedArgs {
         root,
