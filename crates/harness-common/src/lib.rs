@@ -1,10 +1,7 @@
 // Shared CLI scaffolding for portuale's neutral test-harness binaries
-// (versions-harness, atom-harness, use-reduce-harness, required-use-harness;
-// see LLM/agent-context.md, "Test/benchmark harness architecture"). Every
-// harness is a thin per-crate `dispatch(op, args)` over the library surface
-// plus the same two-mode driver: one operation per process invocation in
-// correctness mode, or a stdin "batch" loop in benchmark mode. The argv/output
-// contract this implements is identical to the Python-side harnesses.
+// (versions-harness, atom-harness, use-reduce-harness,
+// required-use-harness): one operation per invocation, or a stdin
+// "batch" loop in benchmark mode.
 
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
@@ -12,14 +9,11 @@ use std::process::ExitCode;
 /// Result of a single harness operation, formatted for the output contract.
 pub type DispatchResult = Result<String, String>;
 
-/// Per-op library dispatch: `dispatch(op, args)` returns the op's output
-/// string or an error message.
+/// Per-op library dispatch: `dispatch(op, args)` returns the op's output or error message.
 pub type Dispatch = fn(op: &str, args: &[&str]) -> DispatchResult;
 
-/// Correctness/benchmark batch mode: read one operation per line from stdin
-/// ("<op> <args...>"), write each result as its own line on stdout, and stop
-/// with `ExitCode::FAILURE` at the first dispatch error. Empty lines are
-/// skipped so trailing newlines never terminate the loop.
+/// Batch mode: one `<op> <args...>` per stdin line, one result per stdout
+/// line; `ExitCode::FAILURE` at the first dispatch error. Empty lines are skipped.
 pub fn run_batch(dispatch: Dispatch) -> ExitCode {
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -42,10 +36,8 @@ pub fn run_batch(dispatch: Dispatch) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Standard harness `main`: no argv → print `usage: {usage}` and exit 2;
-/// `batch` → `run_batch` stdin loop; otherwise dispatch the single op with
-/// its remaining argv, printing the result on stdout and exiting 0, or the
-/// error on stderr and exiting 2.
+/// Standard harness `main`: no argv prints `usage: {usage}` (exit 2);
+/// `batch` runs the stdin loop; otherwise dispatches the single op.
 pub fn main_dispatch(usage: &str, dispatch: Dispatch) -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();

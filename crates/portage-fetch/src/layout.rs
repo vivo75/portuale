@@ -1,52 +1,40 @@
-// Real distfiles mirror layouts (`lib/portage/package/ebuild/fetch.py`:
+// Portage's distfiles mirror layouts (`lib/portage/package/ebuild/fetch.py`:
 // `FlatLayout`, `FilenameHashLayout`, `ContentHashLayout`,
 // `MirrorLayoutConfig`): the path a file lives at under a mirror's
 // `distfiles/` directory, as described by that mirror's own
-// `distfiles/layout.conf`.
-//
-// This matters for correctness, not just cosmetics: the real Gentoo
-// mirrors (`distfiles.gentoo.org` and the mirrors real portage has
-// cached in `.mirror-cache.json`) publish only `0=filename-hash BLAKE2B
-// 8` -- the flat `<mirror>/distfiles/<file>` path 404s there, the
-// hashed `<mirror>/distfiles/<2 hex>/<file>` one is served.
+// `distfiles/layout.conf`. This matters for correctness: the Gentoo
+// mirrors publish only the hashed layout path and 404 the flat one (see notes).
 //
 // Scope: the pure path math and `layout.conf` parsing. Fetching a
 // mirror's `layout.conf` and the `.mirror-cache.json` cache live with
 // the fetch loop (`portuale/src/fetch.rs`).
 //
-// Documented divergences:
-//   - `filename-hash` hashes with `BLAKE2B`, `BLAKE2S`, `MD5`, `SHA1`,
-//     `SHA256`, `SHA512`. Real also hashes with `RMD160`/`SHA3_256`/
-//     `SHA3_512`/`WHIRLPOOL`; a `filename-hash` structure naming one of
-//     those is treated as unsupported here, so the next structure entry
-//     (ultimately flat) is used instead. (`content-hash` needs no
-//     hashing, so it accepts every real name.)
-//   - `layout.conf` is parsed by a small `configparser` subset (see
-//     `MirrorLayoutConfig::parse`), not the full INI grammar.
+// Documented divergences (see notes for detail):
+//   - `filename-hash` with `RMD160`/`SHA3_256`/`SHA3_512`/`WHIRLPOOL`
+//     is unsupported here, so the next structure entry is used instead.
+//   - `layout.conf` is parsed by a small `configparser` subset.
 
 use std::collections::HashMap;
 
 use blake2::Digest;
 
-/// One real mirror layout (`get_best_supported_layout`'s return value).
+/// One Portage mirror layout (see `MirrorLayoutConfig::best_supported`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirrorLayout {
-    /// Real `FlatLayout`: `<file>`.
+    /// Portage `FlatLayout`: `<file>`.
     Flat,
-    /// Real `FilenameHashLayout`: hex digest of the UTF-8 filename, cut
+    /// Portage `FilenameHashLayout`: hex digest of the UTF-8 filename, cut
     /// into directory levels by `cutoffs` (bits, multiples of 4).
     FilenameHash { algo: String, cutoffs: Vec<i64> },
-    /// Real `ContentHashLayout`: the file's own Manifest digest, cut the
+    /// Portage `ContentHashLayout`: the file's own Manifest digest, cut the
     /// same way; the last path element is the full digest.
     ContentHash { algo: String, cutoffs: Vec<i64> },
 }
 
 impl MirrorLayout {
-    /// Real `get_path(filename)`. `digests` is the file's Manifest
-    /// digest map (algorithm name -> lowercase hex); only
-    /// `ContentHash` reads it, and returns `None` when the digest is
-    /// missing (unreachable after `MirrorLayoutConfig::best_supported`,
-    /// which only picks a content-hash layout whose digest exists).
+    /// Portage `get_path(filename)`. `digests` is the file's Manifest
+    /// digest map (algorithm name -> lowercase hex); only `ContentHash`
+    /// reads it, returning `None` when the digest is missing.
     pub fn get_path(&self, filename: &str, digests: &HashMap<String, String>) -> Option<String> {
         match self {
             Self::Flat => Some(filename.to_string()),
@@ -62,10 +50,7 @@ impl MirrorLayout {
     }
 }
 
-/// The `for c in self.cutoffs: ret += fnhash[:c//4] + "/"; fnhash =
-/// fnhash[c//4:]` loop, with Python's slice semantics (a negative or
-/// zero cutoff is accepted by real `verify_args` and sliced as Python
-/// would).
+// Portage's cutoff loop, with Python slice semantics for negative/zero cutoffs.
 fn cut_path(hex: &str, cutoffs: &[i64]) -> String {
     let mut remaining: Vec<char> = hex.chars().collect();
     let mut ret = String::new();
@@ -90,8 +75,8 @@ fn python_slice_index(i: i64, len: usize) -> usize {
     idx as usize
 }
 
-/// Real `checksum_str(data, hashname)` for the algorithms this crate
-/// carries (see the module doc); `None` for any other name.
+/// Portage `checksum_str(data, hashname)` for the algorithms this crate
+/// carries; `None` for any other name (see notes for the full list).
 fn hash_hex(algo: &str, data: &[u8]) -> Option<String> {
     let bytes: Vec<u8> = match algo {
         "BLAKE2B" => blake2::Blake2b512::digest(data).to_vec(),
@@ -105,8 +90,7 @@ fn hash_hex(algo: &str, data: &[u8]) -> Option<String> {
     Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Real `get_valid_checksum_keys()` on a stock install (portage
-/// 3.0.82.2), minus its pseudo-key `size`.
+/// Portage `get_valid_checksum_keys()` on a stock install, minus its pseudo-key `size`.
 const PORTAGE_CHECKSUM_KEYS: &[&str] = &[
     "BLAKE2B",
     "BLAKE2S",
@@ -124,9 +108,9 @@ fn supports_algo(algo: &str) -> bool {
     hash_hex(algo, b"").is_some()
 }
 
-/// Real `FilenameHashLayout.verify_args`: exactly `(name, algo,
-/// cutoffs)`, `algo` a (case-sensitive) known hash, and every
-/// `:`-separated cutoff an integer divisible by 4.
+/// Portage `FilenameHashLayout.verify_args`: exactly `(name, algo,
+/// cutoffs)` with a known (case-sensitive) hash and `:`-separated cutoffs
+/// that are integers divisible by 4.
 fn cutoffs_valid(cutoffs: &str) -> Option<Vec<i64>> {
     cutoffs
         .split(':')
@@ -134,7 +118,7 @@ fn cutoffs_valid(cutoffs: &str) -> Option<Vec<i64>> {
         .collect()
 }
 
-/// Real `MirrorLayoutConfig`: the ordered `[structure]` entries of a
+/// Portage `MirrorLayoutConfig`: the ordered `[structure]` entries of a
 /// mirror's `layout.conf`, each already whitespace-split.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MirrorLayoutConfig {
@@ -142,18 +126,13 @@ pub struct MirrorLayoutConfig {
 }
 
 impl MirrorLayoutConfig {
-    /// Real `read_from_file`: `[structure]` keys `0`, `1`, ... read in
+    /// Portage `read_from_file`: `[structure]` keys `0`, `1`, ... in
     /// order until the first missing one, each value `.split()`.
     ///
-    /// The `configparser` subset: blank lines and lines whose first
-    /// non-blank character is `#` or `;` are skipped; `[name]` opens a
-    /// section; `key = value` / `key: value` sets an option (key
-    /// stripped and lower-cased, value stripped); an indented line
-    /// after an option continues its value. Errors real
-    /// `configparser` raises (and real `async_mirror_url` turns into
-    /// "use flat, don't cache") are errors here too: an option before
-    /// any section header, a duplicate section or option, and a
-    /// non-blank line that is neither a header nor `key=value`.
+    /// The `configparser` subset: blank lines and `#`/`;` comments are
+    /// skipped; `[name]` opens a section; `key = value` / `key: value`
+    /// sets an option (key stripped and lower-cased); an indented line
+    /// continues the previous value. Malformed input is an error (see notes).
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
         let mut current: Option<String> = None;
@@ -213,9 +192,8 @@ impl MirrorLayoutConfig {
         Ok(Self { structure })
     }
 
-    /// Real `validate_structure(val, filename)`: with digests given,
-    /// a content-hash layout is only valid for an algorithm the file
-    /// actually has a digest for.
+    /// Portage `validate_structure(val, filename)`: with digests given,
+    /// a content-hash layout is only valid for an algorithm the file has.
     pub fn validate_structure(val: &[String], digests: Option<&HashMap<String, String>>) -> bool {
         Self::layout_for(val, digests).is_some()
     }
@@ -233,12 +211,11 @@ impl MirrorLayoutConfig {
                 })
             }
             "content-hash" if val.len() == 3 => {
-                // Real `ContentHashLayout.verify_args`: the upper-cased
-                // name must be a digest the file has (or, filename-less,
-                // a known hash) AND the as-written name must pass
-                // `FilenameHashLayout.verify_args`'s case-sensitive
-                // known-hash check -- so a lower-case name is never valid.
-                // No hashing happens here, so every real hash name counts.
+                // Portage `ContentHashLayout.verify_args`: the upper-cased
+                // name must be a known hash AND (filename-less aside) one
+                // the file has a digest for; the as-written name must also
+                // pass the case-sensitive known-hash check. No hashing
+                // happens here, so every Portage hash name counts.
                 let algo = val[1].to_uppercase();
                 let supported = PORTAGE_CHECKSUM_KEYS.contains(&val[1].as_str())
                     && match digests {
@@ -257,7 +234,7 @@ impl MirrorLayoutConfig {
         }
     }
 
-    /// Real `get_best_supported_layout(filename)`: the first valid
+    /// Portage `get_best_supported_layout(filename)`: the first valid
     /// structure entry, else flat.
     pub fn best_supported(&self, digests: Option<&HashMap<String, String>>) -> MirrorLayout {
         self.structure
@@ -282,9 +259,7 @@ mod tests {
         .best_supported(None)
     }
 
-    /// Expected paths are real portage's own output
-    /// (`FilenameHashLayout(algo, cutoffs).get_path(name)`, portage
-    /// 3.0.82.2), not derived from reading the code.
+    /// Expected paths are Portage's own output (portage 3.0.82.2).
     #[test]
     fn filename_hash_paths_match_portage() {
         let none = HashMap::new();
@@ -327,8 +302,7 @@ mod tests {
         );
     }
 
-    /// Real `MirrorLayoutConfig.validate_structure` verdicts (portage
-    /// 3.0.82.2), filename-less form.
+    /// Expected verdicts are Portage `MirrorLayoutConfig.validate_structure` (portage 3.0.82.2).
     #[test]
     fn validate_structure_matches_portage() {
         for (entry, expected) in [
@@ -367,7 +341,7 @@ mod tests {
                 "{entry:?} with digests"
             );
         }
-        // Empty cutoffs: `int("")` fails in real too.
+        // Empty cutoffs: `int("")` fails in Portage too.
         assert!(!MirrorLayoutConfig::validate_structure(
             &["filename-hash".into(), "BLAKE2B".into(), String::new()],
             None

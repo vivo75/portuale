@@ -1,7 +1,5 @@
-// Neutral CLI test-harness binary for portuale's atom matching (see
-// LLM/agent-context.md and crates/portage-dep/src/lib.rs for the v1
-// grammar this implements). Same argv/output contract as
-// python/atom_harness.py.
+// Neutral CLI test-harness binary for portuale's atom matching (same
+// argv/output contract as python/atom_harness.py).
 //
 // Usage:
 //   atom-harness parse <atom>              -> tab-separated fields, or "INVALID"
@@ -18,10 +16,7 @@
 use portage_dep::{Blocker, SlotOperator, UseDep, UseDepDefault, UseDepOp, parse_atom};
 use std::process::ExitCode;
 
-/// Reconstructs one use-dep token's canonical text ("{prefix}{flag}{default}{suffix}"),
-/// matching real `a.use.tokens`' own original-text preservation byte for
-/// byte, since portuale's grammar doesn't normalize anything the token
-/// regex didn't already require.
+/// Reconstructs one use-dep token's canonical text, byte-identical to Portage's `a.use.tokens`.
 fn format_use_dep(u: &UseDep) -> String {
     let (prefix, suffix) = match u.op {
         UseDepOp::Enabled => ("", ""),
@@ -86,9 +81,8 @@ fn format_match(atom_str: &str, candidates: &[&str]) -> String {
     }
 }
 
-/// `extract_affecting_use`: sorted comma-joined flags, or "INVALID" for
-/// malformed dep syntax. The dep string is the args after the atom joined
-/// on a single space (its tokens are whitespace-split again inside).
+/// `extract_affecting_use` as sorted comma-joined flags, or "INVALID".
+/// The dep string is the args after the atom joined on a single space.
 fn format_affecting(atom_str: &str, dep_tokens: &[&str]) -> String {
     match portage_dep::extract_affecting_use(&dep_tokens.join(" "), atom_str) {
         None => "INVALID".to_string(),
