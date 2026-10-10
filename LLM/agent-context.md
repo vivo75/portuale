@@ -366,6 +366,17 @@ Part 3 = non-goals). Keep that file current when a slice closes an entry.
 When scoping the next slice, re-ground candidates in current code
 (`what-this-proves.md` / `git log` / the source), never in a stale list.
 
+### Reference material
+
+- `3rdparty/devmanual/` — a local checkout of the Gentoo devmanual
+  (`function-reference/`, `tools-reference/`, per-phase
+  `ebuild-writing/functions/*/text.xml`; pinned in `3rdparty/repos.toml`).
+  Ground ebuild-helper (`doins`, `dodir`, `insinto`, …) or phase-ordering
+  semantics against it.
+- `LLM/reference/` — host setup and background notes (the local distfile
+  mirror, related Rust Portage projects, the prompts behind
+  `docs/cleanroom/`).
+
 ## Real ebuild phase execution + filesystem merge
 
 Live. `ebuild <file> install|merge|unmerge|package` and non-`--pretend`
