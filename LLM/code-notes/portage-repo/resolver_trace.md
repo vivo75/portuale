@@ -8,6 +8,7 @@
 
 ## fn out
 - Portage `writemsg_level(..., level=logging.DEBUG)` (`level < WARNING` -> stdout).
+- `tr!(...)` -> stdout narration, no-op unless `--pretend --debug` is active. (`err()` is called directly for the stderr dumps.)
 
 ## fn err
 - Portage plain `portage.writemsg(...)`.
@@ -25,6 +26,7 @@
 ## fn node_label
 - Portage `_emerge/Package.py::__str__` (`_emerge/Package.py:568`), minus the ANSI colour Portage wraps the cpv in.
 - Portage `build_id_str` -- only a merge-bound multi-instance binary carries one here (portuale doesn't track an installed package's vdb `BUILD_ID` on `GraphEntry`; that only shows for the rare `binpkg-multi-instance` vdb, a documented cut).
+- Portage `_emerge.Package.__str__` (`_emerge/Package.py:568`), minus the ANSI colour Portage wraps the cpv in: `(cat/pkg-ver[-build_id]:slot/sub_slot::repo, <state>)` where `<state>` is `installed` for a nomerge node and `<type_name> scheduled for merge` for a merge-bound one.
 
 ## fn is_nomerge
 - Portage `pkg.operation == "nomerge"`, the same test `merge_order::build_digraph` makes for `Digraph::installed`.

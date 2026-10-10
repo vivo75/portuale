@@ -23,3 +23,6 @@ The unsatisfied slot-operator dependency probe.
 - Portage probes one dep edge (parent -> the built atom, `:3447-3458` into the `:2817` probe); Portage restarts on the first hitting edge (`:3453-3455`), this seeds every hitting owner of the cp in one pass (residue #256).
 - The puller triples pair owner and atom text; Portage's USE-evaluated view matches: a conditional built want that evaluates false is absent.
 - #254's conditional shape heals only through the matchall reduction.
+- Parent source: Portage `dep.parent.installed`; #257: otherwise a merge-bound binary parent (Portage's `not parent.installed` mask arm).
+- The replacement's live atoms are Portage's `replacement_parent.validated_atoms` (`_emerge/Package.py:329-359`): `use_reduce(..., matchall=True)`, every conditional branch kept regardless of the replacement's USE (#254's conditional shape heals only through this).
+- Portage `:2843-2845`: USE discarded, then `_select_package` -- visible tree or installed.

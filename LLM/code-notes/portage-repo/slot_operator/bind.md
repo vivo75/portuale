@@ -22,6 +22,7 @@ Binding `:=` dependencies to the selected slot.
 
 ## fn strip_libc_atoms
 - Applied to the flattened set; Portage strips only each key's outer level, the flat comparison has no levels left (documented narrowing).
+- Portage `strip_libc_deps` (`portage/dep/libc.py`): remove every atom whose `cat/pkg` is an installed libc provider from a rule-8 side. Applied to the flattened set (Portage strips only each key's outer level; the flat comparison has no levels left -- documented narrowing).
 
 ## fn tree_metadata_for
 - The source rule 8's *new* side is compared from (Portage `pkgsettings.setcpv(pkg)` -> `configdict["pkg"]`).

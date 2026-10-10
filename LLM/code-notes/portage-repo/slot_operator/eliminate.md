@@ -7,7 +7,7 @@ Eliminating unnecessary slot-operator rebuilds.
 - Portage `match(root, atom, installed=False)` only ever sees a *non-installed* graph pkg; the S3 flip is the only thing that constructs `slot_operator_rebuild: true`, and an ordinary Upgrade/Reinstall-for-USE entry keeps its rebuild like Portage's `installed_instance.cpv != pkg.cpv` / `_reinstall_nodes` arms.
 - Rule 7 hoisted above rule 1 (Portage checks `pkg.built` between rule 6 and 8): the pre-filter can only *keep* a rebuild, and rules 1-6/8 are all keep-on-mismatch, so the only decision it can change is the all-rules-pass demotion that IS rule 7's domain -- no ordering counter-example exists.
 - Portage `installed_instance = match_pkgs(pkg.slot_atom)[0]`: the installed instance in the *entry's* own main slot.
-- Rule 3 detail (Portage 3898-3899, S5): Portage also checks `_changed_slot(pkg)`, always false for a merge-bound ebuild entry -- its slot *is* the tree ebuild's -- and rule 6 is the ebuild equivalent, so this is behaviour-neutral until the binary halves land (v2 `#24c`).
+- Rule 3 detail (Portage 3898-3899, S5): `--changed-slot` keeps a rebuild whose tree ebuild at the same cpv moved (slot, sub_slot) vs the installed instance (Portage `_changed_slot(installed_instance)`). Portage also checks `_changed_slot(pkg)`, always false for a merge-bound ebuild entry -- its slot *is* the tree ebuild's -- and rule 6 is the ebuild equivalent, so this is behaviour-neutral until the binary halves land (v2 `#24c`).
 - Rule 8 detail: Portage `except InvalidDependString: continue` keeps the rebuild on an unparsable *installed* string; treating either side's parse failure as "not equal" keeps it too.
 - Skipped entirely under `--emptytree` (Portage `"empty" in myparams`) and under any live slot conflict (`entries` cannot see the pass; the caller checks, Portage bug 922038).
 
@@ -26,6 +26,7 @@ Eliminating unnecessary slot-operator rebuilds.
 - `world_selected_atoms` is the `world` file's own atoms unioned with every `world_sets` nested set (Portage `@selected`; portuale's `@world` expands to exactly this -- see `pretend.rs::expand_selected`); `system_atoms` is the profile's own `packages` file.
 - The edges are every installed package's vdb `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND`, USE-reduced against its own recorded `USE` and matched by `cat/pkg` (Portage's `_parent_atoms` is cp-level for this purpose).
 - Portage `_parent_atoms` records the cp edge regardless; an installed package is a single instance per cp in portuale's model, so no `match_from_list` narrowing.
+- The `(category, package)` of every installed package reachable, over the **installed** dependency graph, from the required sets (`@world` ∪ `@selected` ∪ `@system`).
 
 ## fn strip_revision
 - Portage `catpkgsplit(cpv)[:-1]` -- "revision numbers are ignored" for `--rebuild-if-new-ver`.
@@ -33,5 +34,5 @@ Eliminating unnecessary slot-operator rebuilds.
 ## fn rebuild_if_entries
 - Portage `_emerge/depgraph.py`'s `_rebuild_config` covers an already-installed package whose own build-time dependency (`DEPEND`/`BDEPEND` in its vdb, resolved against its *built* `USE`) is satisfied by a package this run is merging. `_needs_rebuild(dep_pkg)` -- for portuale every merge is from source (`dep_pkg.built` is always false), so: `unbuilt` triggers always (a source build invalidates any binary parent); `new_rev` triggers unless the merged `cat/pkg-version` (revision included) is already one of the installed versions of that cp; `new_ver` is the same but with the `-r<n>` revision stripped from both sides.
 - The caller resolves the Portage precedence (`unbuilt` > `new_rev` > `new_ver`; `=n` disables) so at most one of the three is set here.
-- Both matchers use the same two-tier `matches_config_entry` matcher `excluded` uses. Structurally a sibling of `slot_operator_rebuild_entries` above (same `all_installed_packages` scan, same `Reinstall` rebuild-entry shape) -- `--rebuild-if-new-slot` stays that function's job.
+- `--rebuild-exclude ATOMS` matches the *parent* (skip rebuilding it); `--rebuild-ignore ATOMS` matches the *dep* (it never triggers a rebuild) -- both the same two-tier `matches_config_entry` matcher `excluded` uses. Structurally a sibling of `slot_operator_rebuild_entries` above (same `all_installed_packages` scan, same `Reinstall` rebuild-entry shape) -- `--rebuild-if-new-slot` stays that function's job.
 - #72 B3: a removal merges nothing.
