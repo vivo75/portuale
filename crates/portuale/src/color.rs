@@ -1,28 +1,20 @@
-// ANSI colour for `emerge --pretend` output -- increment 2 of the `-pv`
-// real-`output.py` layout + colour buildout (increment 1 landed the
-// bracket layout, see `pretend.rs::attr_display_field`).
-//
-// This ports the small slice of `lib/portage/output.py` the pretend
-// renderer needs: the RGB-name -> ANSI-code table (`output.py:30-92`),
-// `colorize()` (`output.py:383-392`), the handful of `_styles` entries
-// (`output.py:126-154`), and `nc_len()` (`output.py:249-251`), plus
-// `/etc/portage/color.map` parsing (`output.py:158-230`, `_parse_color_map`
-// -- see `color_map_overrides`) and the `PORTAGE_COLORMAP` phase-env
-// export (`output.py:365`, `colormap()` -- see
-// `ebuild_phases::phase_colormap_export`).
+// ANSI colour for `emerge --pretend` output: the slice of Portage's
+// `output.py` the pretend renderer needs (colour table, `colorize`,
+// `_styles` keys, `nc_len`, `color.map` parsing, `PORTAGE_COLORMAP`).
+// Portage: lib/portage/output.py
 
 use std::collections::HashMap;
 
-/// Real `output.py`'s own `esc_seq` + the `rgb_ansi_colors[i]` ->
-/// `ansi_codes[i]` mapping (`output.py:68-92`): `ansi_codes` is
-/// `[30m, 30;01m, 31m, 31;01m, …]`, paired positionally with the 16
-/// `0xRRGGBB` names.
+/// The `esc_seq` + `rgb_ansi_colors[i]` -> `ansi_codes[i]` mapping:
+/// `ansi_codes` is `[30m, 30;01m, 31m, 31;01m, …]`, paired positionally
+/// with the 16 `0xRRGGBB` names.
+// Portage: output.py, esc_seq
 fn code(name: &str) -> &'static str {
     match name {
         "normal" => "\x1b[0m",
         "reset" => "\x1b[39;49;00m",
         "bold" => "\x1b[01m",
-        // rgb_ansi_colors / ansi_codes pairs (`output.py:68-92`).
+        // `rgb_ansi_colors` / `ansi_codes` pairs.
         "black" => "\x1b[30m",        // 0x000000
         "darkgray" => "\x1b[30;01m",  // 0x555555
         "darkred" => "\x1b[31m",      // 0xAA0000
@@ -43,21 +35,19 @@ fn code(name: &str) -> &'static str {
     }
 }
 
-/// Real `output.py:126-154`'s `_styles` map, narrowed to the keys the
-/// pretend renderer's `colorize()` calls reach. Each maps to exactly one
-/// colour-name (real `_styles` values are 1-tuples for all of these).
+/// The `_styles` map, narrowed to the keys the pretend renderer's
+/// `colorize()` calls reach. Each maps to exactly one colour-name.
+// Portage: output.py, _styles
 fn style(key: &str) -> &'static str {
     match key {
         "BAD" => "red",
         "WARN" => "yellow",
         "GOOD" => "green",
-        // Real `output.py:126-154` -- used by the `PORTAGE_COLORMAP`
-        // phase-env export (`colormap()`'s 10 `PORTAGE_COLOR_*` keys).
+        // Used by the `PORTAGE_COLORMAP` phase-env export.
         "NORMAL" => "normal",
         "HILITE" => "teal",
         "BRACKET" => "blue",
-        // Real `output.py:128-135`'s `EOutput` `e*` prefixes -- the elog
-        // `echo` module (`elog::echo_summary`).
+        // The `EOutput` `e*` prefixes for the elog `echo` module.
         "ERR" => "red",
         "INFO" => "darkgreen",
         "LOG" => "green",
@@ -77,17 +67,15 @@ fn style(key: &str) -> &'static str {
         "PKG_NOMERGE_WORLD" => "blue",
         "PKG_BLOCKER" => "red",
         "PKG_BLOCKER_SATISFIED" => "teal",
-        // Real `output.py:154-155` -- `UserQuery.query`'s own default
-        // `[Yes/No]` colours (`pretend.rs`'s own `ask_confirm`).
+        // `UserQuery.query`'s own default `[Yes/No]` colours.
         "PROMPT_CHOICE_DEFAULT" => "green",
         "PROMPT_CHOICE_OTHER" => "red",
         _ => "",
     }
 }
 
-/// Every `_styles` key name -- so `color_map_overrides` can validate a
-/// `color.map` `KEY=` (real `_parse_color_map`: `if k not in _styles and
-/// k not in codes: ParseError`). Kept in sync with `style()` above.
+/// Every `_styles` key name, so `color_map_overrides` can validate a
+/// `color.map` `KEY`. Kept in sync with `style()` above.
 const STYLE_KEYS: &[&str] = &[
     "BAD",
     "WARN",
@@ -142,16 +130,13 @@ const CODE_NAMES: &[&str] = &[
     "lightgray",
 ];
 
-/// Real `output.py::_parse_color_map` (`output.py:158-230`): parse
-/// `<config_root>/etc/portage/color.map` (`$PORTAGE_CONFIGROOT` here,
-/// read the same env-first way `resolve_havecolor` reads `$NO_COLOR`)
-/// and return every override as `key -> final escape sequence`. A line
-/// is `KEY = VALUE` (`#` starts a comment); `KEY` must be a known
-/// `_styles`/`codes` name; `VALUE` is either a raw ANSI code
-/// (`^[0-9;]*m$` -> `\x1b[` + it) or a space-separated list of `codes`
-/// names (concatenated). A malformed line is skipped with a warning
-/// (portuale's `onerror`), never fatal. Cached once per process (real
-/// portage's own `_color_map_loaded` one-shot).
+/// Parse `<config_root>/etc/portage/color.map` and return every
+/// override as `key -> final escape sequence`. A line is `KEY = VALUE`
+/// (`#` starts a comment); `KEY` must be a known `_styles`/`codes`
+/// name; `VALUE` is a raw ANSI code or a space-separated list of
+/// `codes` names. A malformed line is skipped with a warning, never
+/// fatal. Cached once per process.
+// Portage: output.py, _parse_color_map
 fn color_map_overrides() -> &'static HashMap<String, String> {
     use std::sync::OnceLock;
     static MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -223,11 +208,10 @@ fn color_map_overrides() -> &'static HashMap<String, String> {
     })
 }
 
-/// Real `output.py::colormap()` (`output.py:365-379`): the
-/// `PORTAGE_COLORMAP` phase-env value -- bash source that `bin/isolated-
-/// functions.sh` `eval`s so an ebuild's `elog`/`einfo`/`ewarn` use the
-/// same (possibly `color.map`-overridden) colours `emerge` itself does.
-/// One `PORTAGE_COLOR_<KEY>=$'<ansi>'` line per real `colormap()` key.
+/// The `PORTAGE_COLORMAP` phase-env value: bash source the ebuild
+/// helpers `eval` so `elog`/`einfo`/`ewarn` use the same (possibly
+/// `color.map`-overridden) colours `emerge` itself does.
+// Portage: output.py, colormap
 pub fn phase_colormap_export() -> String {
     [
         "BAD", "BRACKET", "ERR", "GOOD", "HILITE", "INFO", "LOG", "NORMAL", "QAWARN", "WARN",
@@ -238,17 +222,15 @@ pub fn phase_colormap_export() -> String {
     .join("\n")
 }
 
-/// `\x1b` -> `\E` for a bash `$'...'` literal (real `colormap()` emits
-/// `$'\e[...'`-style sequences).
+/// `\x1b` -> `\E` for a bash `$'...'` literal.
 fn ansi_escape(seq: &str) -> String {
     seq.replace('\x1b', "\\E")
 }
 
-/// The escape sequence for `name` (a `_styles` key or a `codes`
-/// colour-name), honouring `color.map` overrides: an override for `name`
-/// itself wins; else the hardcoded `codes` entry; else `name` is a
-/// `_styles` key -> resolve to its colour-name (which may itself be
-/// overridden).
+/// The escape sequence for `name`, honouring `color.map` overrides:
+/// an override for `name` itself wins; else the hardcoded `codes`
+/// entry; else a `_styles` key resolves to its colour-name (which may
+/// itself be overridden).
 fn resolved_code(name: &str) -> String {
     if let Some(v) = color_map_overrides().get(name) {
         return v.clone();
@@ -267,11 +249,10 @@ fn resolved_code(name: &str) -> String {
         .unwrap_or_else(|| code(s).to_string())
 }
 
-/// Real `output.py:249-251`'s `nc_len`: the visible length of a string,
-/// with ANSI SGR sequences (`\x1b` … `m`) removed first. Real portage's
-/// pattern is `re.sub(esc_seq + "^m]+m", "", mystr)` i.e. `\x1b[^m]+m`;
-/// this is the same, sans regex. Used for `--columns` padding so a
-/// coloured line lines up the same as an uncoloured one.
+/// The visible length of a string, with ANSI SGR sequences removed
+/// first. Used for `--columns` padding so a coloured line lines up
+/// like an uncoloured one.
+// Portage: output.py, nc_len
 pub fn nc_len(s: &str) -> usize {
     let mut n = 0usize;
     let mut chars = s.chars();
@@ -289,16 +270,15 @@ pub fn nc_len(s: &str) -> usize {
     n
 }
 
-/// Real `output.py`'s own gate for whether colour is emitted, ported from
-/// `lib/_emerge/actions.py:2816-2828` + `lib/portage/util/no_color`:
-///
-/// 1. off, then on unless `no_color` -- `NO_COLOR` set to anything, or
-///    `NOCOLOR` = `yes`/`true`;
+/// Whether colour is emitted:
+/// 1. off, then on unless `no_color` -- `NO_COLOR` set, or `NOCOLOR`
+///    = `yes`/`true`;
 /// 2. an explicit `--color y|n` overrides everything;
 /// 3. otherwise also off when `TERM=dumb` or stdout is not a tty.
 ///
 /// `color_opt` is `Some(true)`/`Some(false)` for `--color y`/`--color n`,
 /// `None` when the flag was not given.
+// Portage: actions.py, no_color
 pub fn resolve_havecolor(color_opt: Option<bool>) -> bool {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let no_color = env("NO_COLOR").is_some()
@@ -322,10 +302,9 @@ pub fn resolve_havecolor(color_opt: Option<bool>) -> bool {
     havecolor
 }
 
-/// A colouriser bound to a resolved `havecolor` value -- real portage's
-/// module-global `havecolor` plus its `colorize()` function, together.
-/// When `enabled` is false every method returns its input unchanged, so
-/// callers never branch on colour themselves.
+/// A colouriser bound to a resolved `havecolor` value. When `enabled`
+/// is false every method returns its input unchanged, so callers never
+/// branch on colour themselves.
 #[derive(Clone, Copy)]
 pub struct Colorizer {
     pub enabled: bool,
@@ -344,10 +323,10 @@ impl Colorizer {
         Self { enabled }
     }
 
-    /// Real `colorize(key, text)` (`output.py:383-392`): a `codes` key
-    /// wraps directly, a `_styles` key resolves to its colour-name(s)
-    /// first; either way `text` is followed by `codes["reset"]`. `key`
-    /// here is always a `_styles` key or a bare colour name.
+    /// `colorize(key, text)`: a `codes` key wraps directly, a `_styles`
+    /// key resolves to its colour-name first; either way `text` is
+    /// followed by `codes["reset"]`.
+    // Portage: output.py, colorize
     pub fn c(&self, key: &str, text: &str) -> String {
         if !self.enabled {
             return text.to_string();
@@ -360,10 +339,8 @@ impl Colorizer {
     }
 
     /// The raw open/close sequences `c(key, _)` wraps text in (both
-    /// empty when disabled or the key has no code -- exactly the cases
-    /// `c` returns its input unchanged). For callers that must know
-    /// where wrapped text lands in the output, e.g. aligned `^`
-    /// markers over colorized atoms.
+    /// empty when disabled or the key has no code). For callers that
+    /// must know where wrapped text lands, e.g. aligned `^` markers.
     pub(crate) fn wrap_codes(&self, key: &str) -> (String, String) {
         if !self.enabled {
             return (String::new(), String::new());
@@ -375,10 +352,9 @@ impl Colorizer {
         (seq, resolved_code("reset"))
     }
 
-    /// Real `Display.pkgprint` (`output.py:265-292`), the merge-list case
-    /// only (`pkg_info.merge` is always true for every bracket entry this
-    /// portuale prints): pick the palette entry from `built` (binary) +
-    /// `system` + `world`. `system` wins over `world`, exactly as real.
+    /// The merge-list palette: pick the entry from `built` (binary) +
+    /// `system` + `world`. `system` wins over `world`.
+    // Portage: output.py, Display.pkgprint
     pub fn pkgprint(&self, args: PkgprintArgs<'_>) -> String {
         let PkgprintArgs {
             text,
@@ -405,7 +381,7 @@ mod tests {
     #[test]
     fn colorize_matches_portage_escape_codes() {
         let c = Colorizer::new(true);
-        // Real `colorize("green", "N")` = codes["green"] + "N" + reset.
+        // `colorize("green", "N")` = codes["green"] + "N" + reset.
         assert_eq!(c.c("green", "N"), "\x1b[32;01mN\x1b[39;49;00m");
         // A `_styles` key resolves to its colour name first.
         assert_eq!(c.c("PKG_MERGE", "x"), "\x1b[32mx\x1b[39;49;00m");

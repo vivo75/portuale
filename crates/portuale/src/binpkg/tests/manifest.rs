@@ -22,7 +22,7 @@ fn verify_gpkg_manifest_rejects_a_size_mismatch_without_hashing() {
     let manifest = format!(
         "{}{}",
         data_line("gpkg-1", b""),
-        // deliberately wrong size -- caught before any hashing
+        // Deliberately wrong size: caught before any hashing.
         "DATA image.tar 999999 BLAKE2B dead SHA512 beef\n",
     );
     let g = build_gpkg(
@@ -37,7 +37,7 @@ fn verify_gpkg_manifest_rejects_a_size_mismatch_without_hashing() {
 #[test]
 fn verify_gpkg_manifest_rejects_a_tampered_member() {
     let img: &[u8] = b"the real image bytes";
-    // Manifest records the digests of *different* bytes.
+    // Manifest records the digests of different bytes.
     let manifest = format!(
         "{}{}",
         data_line("gpkg-1", b""),
@@ -80,9 +80,8 @@ fn verify_gpkg_manifest_rejects_a_manifest_only_file() {
 fn verify_gpkg_manifest_accepts_a_real_signed_container() {
     let home = test_gpg_home("signed-ok");
     let g = fixture("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar");
-    // The committed fixture was signed by real, unmodified
-    // `bin/gpkg-helper.py compress` with the trusted test key: the
-    // Manifest clear-sign + both detached `.sig` sidecars verify.
+    // Signed by unmodified `bin/gpkg-helper.py compress` with the
+    // trusted test key: Manifest clear-sign + both detached sidecars.
     verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true))
         .expect("signed fixture verifies");
     // `binpkg-request-signature` on a fully-signed container.
@@ -93,10 +92,8 @@ fn verify_gpkg_manifest_accepts_a_real_signed_container() {
 
 #[test]
 fn verify_gpkg_manifest_skips_gpg_entirely_under_ignore_signature() {
-    // `binpkg-ignore-signature`: even a garbage `gpg` binary path
-    // succeeds -- proving no subprocess runs at all (the cleartext
-    // `DATA` body is read straight through the armor, the standing
-    // unsigned-container behaviour).
+    // Under `binpkg-ignore-signature` no subprocess runs at all (the
+    // cleartext `DATA` body reads straight through the armor).
     let gpg = GpgVerify {
         verify_signature: false,
         request_signature: false,
@@ -110,10 +107,8 @@ fn verify_gpkg_manifest_skips_gpg_entirely_under_ignore_signature() {
 #[test]
 fn verify_gpkg_manifest_rejects_an_unsigned_container_under_request_signature() {
     let home = test_gpg_home("unsigned-request");
-    // The unsigned fixture has no `.sig` members and a plain
-    // Manifest: real `_verify_binpkg` tries the clear-sign verify
-    // first and reports the NODATA cause (real `show_gpg_error`'s
-    // own "binpkg appears unsigned" summary).
+    // No `.sig` members and a plain Manifest: the clear-sign verify
+    // runs first and reports NODATA ("binpkg appears unsigned").
     let err = verify_gpkg_manifest(
         &fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
         &test_gpg_verify(&home, true, true),
@@ -127,8 +122,7 @@ fn verify_gpkg_manifest_rejects_an_unsigned_container_under_request_signature() 
 #[test]
 fn verify_gpkg_manifest_rejects_a_tampered_signed_member() {
     let home = test_gpg_home("tampered");
-    // Flip a byte of the signed `image.tar.gz`: the detached `.sig`
-    // no longer matches, before digests are even compared.
+    // A flipped byte breaks the detached `.sig` before digests compare.
     let g = repack_gpkg_with_mutation(
         &fixture("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar"),
         "tampered",
@@ -149,8 +143,8 @@ fn verify_gpkg_manifest_rejects_a_tampered_signed_member() {
 #[test]
 fn verify_gpkg_manifest_rejects_a_member_without_its_sig_sidecar() {
     let home = test_gpg_home("missing-sidecar");
-    // Validly clear-signed Manifest, but no `payload.bin.sig`:
-    // real `MissingSignature` (`gpkg.py:1783-1786`).
+    // Clear-signed Manifest but no `payload.bin.sig`.
+    // Portage: gpkg.py, MissingSignature
     let g = build_signed_gpkg(&home, GPG_TRUSTED_KEY, false, None);
     let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
     assert!(err.contains("signature not found"), "{err}");
@@ -162,10 +156,8 @@ fn verify_gpkg_manifest_rejects_a_member_without_its_sig_sidecar() {
 #[test]
 fn verify_gpkg_manifest_rejects_a_signature_from_an_untrusted_key() {
     let home = test_gpg_home("untrusted");
-    // Signed end-to-end with the committed *untrusted* test key:
-    // the cryptography is valid, but real `_check_gpg_status`
-    // demands `TRUST_ULTIMATE`/`TRUST_FULLY`, so this is real's own
-    // "signed with a known key of undefined trust" failure.
+    // Valid crypto from the untrusted key: trust check demands
+    // `TRUST_ULTIMATE`/`TRUST_FULLY`.
     let g = build_signed_gpkg(&home, GPG_UNTRUSTED_KEY, true, None);
     let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
     assert!(err.contains("GnuPG verification failed"), "{err}");

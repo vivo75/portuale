@@ -2,13 +2,11 @@ use super::*;
 
 #[test]
 fn populate_local_pkgdir_synthesizes_a_packages_style_entry_per_binpkg_file() {
-    // fixtures/pkgdir/dev-libs/ holds a real `.tbz2` and a real
-    // `.gpkg.tar` (among other loose binpkgs) plus an index-only
-    // `Packages` file (fixtures/pkgdir/Packages) covering unrelated
-    // CPVs. `populate_local_pkgdir` walks the directory unconditionally
-    // (real `_populate_local`'s default `reindex=True`), so entries
-    // for these two files are always freshly parsed from disk
-    // regardless of what the index claims.
+    // The fixture dir holds a `.tbz2` and a `.gpkg.tar` plus an
+    // index-only `Packages` file covering unrelated CPVs. The scan
+    // walks unconditionally, so both files are freshly parsed from
+    // disk regardless of what the index claims.
+    // Portage: bintree.py, _populate_local
     let entries = populate_local_pkgdir(&fixture("pkgdir"), true).expect("scan succeeds");
     let by_cpv: HashMap<&str, &HashMap<String, String>> = entries
         .iter()
@@ -36,7 +34,7 @@ fn populate_local_pkgdir_synthesizes_a_packages_style_entry_per_binpkg_file() {
         gpkg.get("DEPEND").map(String::as_str),
         Some("dev-libs/newpkg")
     );
-    // `repository` -> `REPO` (real `Packages` field name).
+    // `repository` -> `REPO` (the `Packages` field name).
     assert_eq!(gpkg.get("REPO").map(String::as_str), Some("gentoo"));
     assert!(!gpkg.contains_key("repository"));
 
@@ -65,10 +63,10 @@ fn populate_local_pkgdir_of_a_missing_or_empty_dir_is_empty() {
     );
 }
 
-/// Real `_populate_local`'s two classes at the scan boundary
-/// (`bintree.py:1185-1199`): an `Invalid` file is skipped (with
-/// real's warning -- the exact line is pinned by the CLI contract
-/// test, not here) and the rest of the pool still resolves.
+/// An `Invalid` file is skipped and the rest of the pool still
+/// resolves; the exact warning line is pinned by the CLI contract
+/// test, not here.
+// Portage: bintree.py, _populate_local
 #[test]
 fn populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool() {
     let scratch = ScratchDir::new("scan-skip-invalid").unwrap();
@@ -92,8 +90,7 @@ fn populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool() {
     );
 }
 
-/// The other class: a `Fatal` file (real would traceback) still stops
-/// the whole scan.
+/// The other class: a `Fatal` file still stops the whole scan.
 #[test]
 fn populate_local_pkgdir_aborts_on_fatal_files() {
     let scratch = ScratchDir::new("scan-fatal").unwrap();
@@ -111,20 +108,9 @@ fn populate_local_pkgdir_aborts_on_fatal_files() {
 
 #[test]
 fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
-    // Backlog #174: real's own default (`FEATURES=
-    // pkgdir-index-trusted` is in real `make.globals`' own default
-    // `FEATURES`) runs `_populate_local` with `reindex=False` -- the
-    // `<pkgdir>/Packages` stanza vouches for the file even when its
-    // `_mtime_`/`SIZE` no longer agree with the live file, and the
-    // file's own bytes are first touched at merge by
-    // `BinpkgVerifier`. So a stale stanza is reused verbatim here
-    // (proven by a bogus SLOT the index claims that the real
-    // `.tbz2` itself does not carry) instead of being re-derived
-    // from the file -- the corruption surfaces at merge via
-    // `verify_binpkg_against_index`, with real's `!!! Digest
-    // verification failed:` block. (This test previously asserted
-    // the reindex behavior -- stale means re-parse -- which is only
-    // real with an explicit `-pkgdir-index-trusted`.)
+    // A stale stanza is reused verbatim (proven by a bogus SLOT the
+    // index claims that the archive itself does not carry); the
+    // corruption surfaces at merge via the digest check.
     let scratch = ScratchDir::new("mtime-staleness").unwrap();
     let pkgdir = scratch.path();
     let cat_dir = pkgdir.join("dev-libs");
@@ -155,10 +141,8 @@ fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
         "an unchanged index entry must be trusted, not re-derived"
     );
 
-    // The same claim, but with a wrong _mtime_ -- still stale, so
-    // the index is *still* trusted verbatim (backlog #174): the
-    // bogus SLOT survives, and the size/digest mismatch is merge
-    // time's job, not the scan's.
+    // The same claim with a wrong _mtime_: still trusted verbatim;
+    // the size/digest mismatch is merge time's job, not the scan's.
     let stale = format!(
         "CPV: dev-libs/packagepkg-1.0\nSLOT: 99-not-the-real-slot\nSIZE: {real_size}\n_mtime_: {}\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
         real_mtime + 1000
@@ -175,17 +159,8 @@ fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
 
 #[test]
 fn populate_local_pkgdir_accepts_a_truncated_binpkg_the_index_vouches_for() {
-    // Backlog #174 (the F2 shape): real `emerge --oneshot
-    // --usepkgonly l32/faultpkg` with the gpkg truncated to half
-    // *selects* the binary -- the `<pkgdir>/Packages` stanza (written
-    // by `--regen` before the truncation, so its `SIZE` is the
-    // whole-file size) vouches for it at scan under real's default
-    // `FEATURES=pkgdir-index-trusted`, and the failure surfaces at
-    // merge via `BinpkgVerifier`. Portuale used to fully parse the
-    // container at scan, hit `unexpected EOF during skip`, and drop
-    // the candidate with `!!! Invalid binary package`, ending in
-    // `there are no ebuilds to satisfy`. The scan must return the
-    // index stanza verbatim -- stale `SIZE` included -- so the merge
+    // A truncated file the index vouches for is selected: the scan
+    // returns the stanza verbatim (stale `SIZE` included) so the merge
     // path can verify against it.
     let scratch = ScratchDir::new("index-vouched-truncated").unwrap();
     let pkgdir = scratch.path();
@@ -227,13 +202,9 @@ fn populate_local_pkgdir_accepts_a_truncated_binpkg_the_index_vouches_for() {
 
 #[test]
 fn populate_local_pkgdir_vouches_by_category_plus_basename() {
-    // Backlog #174 review: the index-vouched branch must match the
-    // stanza by category + basename (`CPV` starting with
-    // `{category}/`), not the first same-basename stanza. The same
-    // `PF` can exist in two categories with the same basename
-    // (`cat-a/same-1.0.tbz2` vs `cat-b/same-1.0.tbz2`); each file
-    // must reuse its own category's stanza. The vouched path never
-    // parses the container, so the files' bytes are irrelevant.
+    // The vouch matches by category + basename, not the first
+    // same-basename stanza: the same `PF` can exist in two categories.
+    // The vouched path never parses the container.
     let scratch = ScratchDir::new("index-vouched-category").unwrap();
     let pkgdir = scratch.path();
     for cat in ["cat-a", "cat-b"] {
@@ -265,20 +236,8 @@ fn populate_local_pkgdir_vouches_by_category_plus_basename() {
 
 #[test]
 fn populate_local_pkgdir_reinjects_a_removed_files_index_stanza() {
-    // Backlog #187 (the bed's F3a shape): the local `Packages`
-    // still lists a binary whose file was removed, while a
-    // sibling binpkg is still on disk. Real trusts the index
-    // under its default `FEATURES=pkgdir-index-trusted`
-    // (`_populate_local(reindex=False)` `cpv_inject`s every
-    // stanza without stating any file, `bintree.py:1057-1064`),
-    // so the removed package stays a selectable binary and only
-    // fails at merge (`BinpkgVerifier`). Portuale's file-driven
-    // scan used to drop the orphan outright -- and with any other
-    // file present the non-empty scan shadowed the raw-index
-    // fallback too, so the resolver silently fell back to the
-    // ebuild (rc 0) where real aborts (rc 1). The orphan must
-    // rejoin the pool verbatim (`PATH` as the index claims it),
-    // while the surviving file keeps its fast-path entry.
+    // A removed file's stanza rejoins the pool verbatim while the
+    // surviving file keeps its fast-path entry.
     let scratch = ScratchDir::new("index-orphan-stale").unwrap();
     let pkgdir = scratch.path();
     let cat_dir = pkgdir.join("dev-libs");
@@ -317,9 +276,8 @@ fn populate_local_pkgdir_reinjects_a_removed_files_index_stanza() {
         Some("dev-libs/packagepkg-1.0")
     );
 
-    // The lone-orphan shape (no file on disk at all): the scan
-    // still yields the stanza -- the pool never degrades to "no
-    // binary".
+    // The lone-orphan shape (no file on disk at all) still yields
+    // the stanza.
     fs::remove_file(&dest).unwrap();
     fs::write(
         pkgdir.join("Packages"),
@@ -338,16 +296,9 @@ fn populate_local_pkgdir_reinjects_a_removed_files_index_stanza() {
 
 #[test]
 fn populate_local_pkgdir_reindex_reparses_a_changed_file() {
-    // Backlog #199: real `_populate_local(reindex=True)` (explicit
-    // `FEATURES=-pkgdir-index-trusted`, `bintree.py:1110-1136`) only
-    // reuses an index stanza whose `_mtime_` *and* `SIZE` still agree
-    // with the live file's `lstat(2)` (and which carries real's
-    // `minimum_keys`); a file whose stat fields changed is re-parsed
-    // from disk (`bintree.py:1179-1351`). So a stale stanza (bogus
-    // `_mtime_`, proven stale by a fabricated SLOT the real archive
-    // does not carry) is trusted verbatim with `trust_index == true`
-    // (backlog #174) but re-derived with `false`: the real SLOT,
-    // SIZE and `_mtime_` come back.
+    // Reindex mode reuses a stanza only when `_mtime_` and `SIZE`
+    // agree and every minimum key is present; a changed file is
+    // re-parsed from disk. Trusted mode keeps the stale stanza.
     let scratch = ScratchDir::new("reindex-changed").unwrap();
     let pkgdir = scratch.path();
     let cat_dir = pkgdir.join("dev-libs");
@@ -396,19 +347,9 @@ fn populate_local_pkgdir_reindex_reparses_a_changed_file() {
 
 #[test]
 fn populate_local_pkgdir_reindex_reparses_a_key_incomplete_stanza() {
-    // Backlog #199 fix round 1: real's fast path reuses a stanza
-    // only when the stat fields agree *and* every `minimum_keys`
-    // entry is present (`bintree.py:1115-1126` -- `_mtime_`, `SIZE`,
-    // then `if not minimum_keys.difference(d)`). A stanza whose
-    // `_mtime_`/`SIZE` still match the live file but which lacks a
-    // minimum key (no `EAPI` here) is therefore re-parsed under
-    // `FEATURES=-pkgdir-index-trusted` (`trust_index == false`,
-    // real `_populate_local(reindex=True)`): the bogus `SLOT` the
-    // stanza claims gives way to the archive's real one. In trusted
-    // mode the same stanza is still vouched verbatim -- the fast
-    // path now misses, but the stale-vouch arm (backlog #174)
-    // reuses it byte-identically, so the trusted default is
-    // unchanged by the added check.
+    // A stanza matching in stat fields but missing a minimum key
+    // (no `EAPI` here) is re-parsed in reindex mode, still vouched
+    // verbatim in trusted mode.
     let scratch = ScratchDir::new("reindex-key-incomplete").unwrap();
     let pkgdir = scratch.path();
     let cat_dir = pkgdir.join("dev-libs");
@@ -450,17 +391,9 @@ fn populate_local_pkgdir_reindex_reparses_a_key_incomplete_stanza() {
 
 #[test]
 fn populate_local_pkgdir_reindex_drops_a_removed_files_index_stanza() {
-    // Backlog #199: real `_populate_local(reindex=True)` deletes
-    // every index stanza with no live file from the pool
-    // (`bintree.py:1353-1356` -- `del metadata[instance_key]` for an
-    // `instance_key not in pkg_paths`). A stanza whose file was
-    // removed is re-injected verbatim with `trust_index == true`
-    // (backlog #187) but absent with `false`, while the surviving
-    // file's own entry is identical either way. The survivor's
-    // stanza carries every `minimum_keys` entry (with live
-    // `_mtime_`/`SIZE`), so the fast path vouches it verbatim in
-    // both modes -- the equality below pins that, not a re-parse
-    // that merely happens to agree.
+    // A removed file's stanza is re-injected in trusted mode but
+    // absent in reindex mode; the survivor's entry is identical
+    // either way.
     let scratch = ScratchDir::new("reindex-removed").unwrap();
     let pkgdir = scratch.path();
     let cat_dir = pkgdir.join("dev-libs");
@@ -504,12 +437,9 @@ fn populate_local_pkgdir_reindex_drops_a_removed_files_index_stanza() {
 
 #[test]
 fn populate_local_pkgdir_parses_unindexed_files_in_both_modes() {
-    // Backlog #199: real `_populate_local(reindex=True)` parses every
-    // file the fast path did not match (`bintree.py:1179-1351`), so a
-    // file no stanza covers joins the pool -- and portuale's walk
-    // runs in trusted mode too (unlike real's `reindex=False`, which
-    // never walks; kept so a `Packages`-less `$PKGDIR` still
-    // resolves), so an unindexed file parses identically either way.
+    // A file no stanza covers joins the pool in both modes (the walk
+    // runs in trusted mode too, so a `Packages`-less `$PKGDIR` still
+    // resolves).
     let scratch = ScratchDir::new("reindex-unindexed").unwrap();
     let pkgdir = scratch.path();
     let cat_dir = pkgdir.join("dev-libs");

@@ -2,10 +2,8 @@ use super::*;
 
 #[test]
 fn read_gpkg_metadata_rejects_a_non_gpkg_tar() {
-    // A plain tar with a top-level `a.txt`: real's one-level
-    // structure check (`f.count("/") != 1`) rejects it before any
-    // marker lookup (`#58` S5; the old filesystem walk never saw the
-    // raw member name).
+    // A flat top-level tar fails the one-level structure check before
+    // any marker lookup.
     let scratch = ScratchDir::new("gpkg-negtest").unwrap();
     let junk = scratch.path().join("a.txt");
     fs::write(&junk, b"x").unwrap();
@@ -18,20 +16,17 @@ fn read_gpkg_metadata_rejects_a_non_gpkg_tar() {
         "{err}"
     );
 
-    // A structurally valid container with no `gpkg-1` marker is the
-    // real `_get_inner_tarinfo` guard.
+    // A structurally valid container with no `gpkg-1` marker fails the
+    // inner-tar lookup guard.
     let g = build_gpkg("foo-1.0", &[("metadata.tar", b"x")], None);
     let err = read_gpkg_metadata(&g).unwrap_err();
     assert!(err.is_invalid(), "{err:?}");
     assert!(err.message().contains("gpkg-1"), "{err}");
 }
 
-/// #334 end to end: an xpak whose image tarball was packed with
-/// `tar --xattrs` (real `__dyn_package` under `FEATURES=xattr`)
-/// restores the attributes on extraction under `xattr`, minus
-/// `PORTAGE_XATTR_EXCLUDE`, and none without it. Real Portage does the
-/// same in the bed image: pmtest `differential-test-bed/scripts/
-/// 329-xattr.sh <pm> [-xattr] binpkg`.
+/// End to end: an xpak packed with `tar --xattrs` restores attributes
+/// under `xattr` (minus the exclude list) and none without it.
+// Portage: BinpkgExtractorAsync._xpak_start
 #[test]
 fn extract_binpkg_restores_xpak_xattrs_under_features_xattr() {
     use std::os::unix::ffi::OsStrExt;
@@ -102,10 +97,8 @@ fn extract_binpkg_restores_xpak_xattrs_under_features_xattr() {
 
 #[test]
 fn verify_binpkg_against_index_reports_size_then_digest_like_portage() {
-    // Real `_emerge/BinpkgVerifier` checks the stat size against the
-    // index `SIZE` first, then each digest the record carries; the
-    // failure triple is `(name, got, expected)` with `name ==
-    // "size"` for the size check.
+    // The stat size is checked against the index `SIZE` first, then
+    // each digest the record carries.
     let scratch = ScratchDir::new("verify-against-index").unwrap();
     let file = scratch.path().join("pkg-1.0.gpkg.tar");
     fs::write(&file, b"0123456789abcdef").unwrap();
@@ -115,7 +108,7 @@ fn verify_binpkg_against_index_reports_size_then_digest_like_portage() {
         .map(|b| format!("{b:02x}"))
         .collect();
 
-    // No SIZE: nothing to verify against (real's own early OK).
+    // No SIZE: nothing to verify against.
     let mut record = HashMap::new();
     assert!(verify_binpkg_against_index(&file, &record).is_ok());
 
@@ -138,9 +131,8 @@ fn verify_binpkg_against_index_reports_size_then_digest_like_portage() {
     assert_eq!(mismatch.got, md5);
     assert_eq!(mismatch.expected, "0".repeat(32));
 
-    // The failure block is real `BinpkgVerifier._digest_exception`'s
-    // own shape: leading blank line, three `!!!` lines, then the
-    // bare `File renamed to` line (no `!!!` prefix).
+    // The failure block shape: leading blank line, three `!!!` lines,
+    // then the bare `File renamed to` line.
     let renamed = scratch.path().join("pkg-1.0.gpkg.tar._checksum_failure_.x");
     let block = digest_failure_block(&file, &mismatch, &renamed);
     assert_eq!(
@@ -156,15 +148,11 @@ fn verify_binpkg_against_index_reports_size_then_digest_like_portage() {
 
 #[test]
 fn checksum_failure_rename_moves_to_a_checksum_failure_sibling() {
-    // Real `_checksum_failure_temp_file` (`fetch.py:692-696` is
-    // `tempfile.mkstemp("", <basename> + "._checksum_failure_.",
-    // dir)`): the corrupt file is renamed to
-    // `<basename>._checksum_failure_.<rand>` in its own directory,
-    // where `<rand>` is real `tempfile._RandomNameSequence`'s own
-    // shape -- 8 characters over `[a-z0-9_]` (the bed oracle shows
-    // `._checksum_failure_.4b2g93ai`). A second, identical failure
-    // reuses the existing sibling (same size + md5) instead of
+    // The corrupt file is renamed to `<basename>._checksum_failure_.<rand>`
+    // in its own directory (`<rand>` is 8 chars over `[a-z0-9_]`). A
+    // second identical failure reuses the existing sibling instead of
     // piling up evidence.
+    // Portage: fetch.py, _checksum_failure_temp_file
     let scratch = ScratchDir::new("checksum-failure-rename").unwrap();
     let dir = scratch.path();
     let first = dir.join("pkg-1.0.gpkg.tar");

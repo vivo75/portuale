@@ -2,42 +2,18 @@
 
 use crate::ebuild_merge::*;
 
-/// Real `mypkglist = others_in_slot + blockers` (`dblink.merge()`'s own
-/// blocker half -- `others_in_slot` is already `find_collisions`'s own
-/// `own_versions`). Real `dblink._blockers` is never computed by
-/// `dblink` itself: it's injected by the real depgraph resolver, which
-/// already knows the full dependency graph by the time a merge runs.
-/// Portuale's own `ebuild <file> merge` has no depgraph at all (a
-/// standalone, single-ebuild real-execution path, unlike `emerge
-/// --pretend`) -- so this is a new, self-contained computation:
-/// resolves real `repos.conf`/profile/USE config for the merging
-/// package's own repo (`portage_repo::find_repos` +
-/// `portage_profile::resolve_config`, the exact same machinery
-/// `pretend.rs` already uses, including its own real `masters =`
-/// resolution), computes the merging package's own effective USE the
-/// same way `portage_repo`'s own (now `pub`) `effective_use_flags`
-/// always has, flattens its own real `DEPEND`+`RDEPEND`+`BDEPEND`+
-/// `PDEPEND`+`IDEPEND` (`portage_use_reduce::use_reduce_flat`) against
-/// it, and matches every blocker atom found (`!atom`/`!!atom`,
-/// `portage_dep::parse_atom`'s own `.blocker`) against every real
-/// installed package (`portage_dep::match_from_list`, which -- real,
-/// verified behavior already relied on elsewhere in portuale --
-/// ignores an atom's blocker marker entirely when matching, so the
-/// blocker atom string can be passed in as-is). Real weak vs. strong
-/// blockers are not distinguished (`dblink.merge()`'s own `mypkglist`
-/// construction doesn't either -- both kinds exclude a collision the
-/// same way). Returns every matched installed package as a bare
-/// `(category, pf)` pair.
+/// `mypkglist = others_in_slot + blockers`: the blocker half. Portage's
+/// `dblink._blockers` is injected by the depgraph resolver, which knows
+/// the full graph by merge time; standalone `ebuild <file> merge` has no
+/// depgraph, so this resolves config, computes effective USE, flattens
+/// all five `*DEPEND` keys and matches every blocker atom against every
+/// installed package. Weak vs. strong blockers are not distinguished
+/// (Portage's `mypkglist` construction doesn't either).
 ///
-/// Degrades gracefully to an empty set on any resolution failure
-/// (missing `repos.conf`, unreadable md5-cache, an ebuild path outside
-/// any real repo, etc.) -- config resolution isn't guaranteed to
-/// succeed in every context `ebuild <file> merge` is used from (unlike
-/// `emerge --pretend`, portuale's own real-execution CLI has never
-/// required it before this slice), and a collision that would have been
-/// excluded here just gets reported as an ordinary one instead: never a
-/// false negative in the direction that could silently corrupt a real
-/// merge.
+/// Degrades to an empty set on any resolution failure: a missed
+/// exclusion only reports an ordinary collision, never a silent
+/// corruption.
+// Portage: vartree.py, dblink.merge
 pub(crate) fn blocked_installed_packages(
     root: &Path,
     config_root: &Path,
@@ -114,17 +90,11 @@ pub(crate) fn blocked_installed_packages(
     .unwrap_or_default()
 }
 
-/// The installed-package scan + blocker-atom match half of
-/// `blocked_installed_packages` (real `mypkglist`'s `blockers` term),
-/// split out so `merge_binpkg` can reuse it: a binary package's
-/// `*DEPEND` build-info files are already USE-reduced at build time, so
-/// the merge side has a flat token list in hand without ever resolving
-/// config/USE against a repo (which a binpkg has no path to). Matches
-/// every `!atom`/`!!atom` (`portage_dep::parse_atom`'s own `.blocker`)
-/// against every installed vdb entry (`category/pf:slot/sub_slot`, so a
-/// slot-restricted blocker like `!dev-libs/foo:0` matches correctly).
-/// Weak vs. strong blockers are not distinguished (`dblink.merge()`'s
-/// own `mypkglist` construction doesn't either).
+/// The installed-package scan + blocker-atom match half, split out so
+/// `merge_binpkg` can reuse it: a binpkg's `*DEPEND` files are already
+/// USE-reduced at build time. Matches every `!atom`/`!!atom` against
+/// every installed entry (`category/pf:slot/sub_slot`).
+// Portage: vartree.py, dblink.merge
 pub(crate) fn blockers_from_flat_deps(
     root: &Path,
     flat_deps: &[String],
@@ -142,9 +112,8 @@ pub(crate) fn blockers_from_flat_deps(
                     .into_iter()
                     .flatten()
                     .map(move |pf| {
-                        // #116: through the vdb seam, so this scan sees the
-                        // same normalised `SLOT` every other consumer does
-                        // (a missing field is `""` -> `("", "")` here).
+                        // Through the vdb seam, so the scan sees the same
+                        // normalised `SLOT` every consumer does.
                         let slot = portage_repo::vdb_entry_slot(root, &category_name, &pf);
                         let (slot, sub_slot) = slot
                             .split_once('/')
@@ -184,29 +153,17 @@ pub(crate) fn blockers_from_flat_deps(
     .unwrap_or_default()
 }
 
-/// Real PMS 13.4's own symlink-over-directory ban (checked
-/// unconditionally, regardless of `FEATURES`, but only for the symlinks
-/// real actually checks -- file-target/dangling ones; a symlink whose
-/// target is a directory is in real `os.walk`'s `dirs`, never in
-/// `file_list`/`symlink_list`, so it is skipped here, like real) plus real `FEATURES=
-/// collision-protect`'s own ordinary-collision detection, plus real
-/// preserve-libs collision exclusion and real blocker exclusion (`mypkglist
-/// = others_in_slot + blockers` -- see `blocked_installed_packages`'s own
-/// doc comment for the full real grounding; `FEATURES=protect-owned` is
-/// real too, but decided by the caller, `run_merge`, using this
-/// function's own `collisions` result together with `find_owners`, not
-/// inside this function itself). Walks `d` (the real install image,
-/// `${D}`) the same way `merge_tree` does,
-/// but read-only and file/symlink-only (real `_collision_protect` never
-/// checks directories at all -- a directory merging into an existing
-/// directory is normal, not a collision). Returns `(collisions,
-/// symlink_collisions, plib_collisions)` as real, `ROOT`-relative
-/// absolute paths (`plib_collisions` keyed by the preserved lib's own
-/// owning cpv); the caller decides whether `collisions` alone should
-/// abort the merge (gated on `FEATURES=collision-protect`) --
-/// `symlink_collisions` always should, and `plib_collisions` never does
-/// (real `_collision_protect` excludes those from `collisions`
-/// unconditionally, regardless of `FEATURES`).
+/// PMS 13.4's symlink-over-directory ban (unconditional, but only for
+/// the checked file-target/dangling symlinks) plus ordinary-collision
+/// detection, preserve-libs exclusion and blocker exclusion.
+/// `FEATURES=protect-owned` is decided by the caller from this
+/// function's `collisions` plus `find_owners`, not inside. Walks `d`
+/// read-only and file/symlink-only (directories merging into existing
+/// directories are normal). Returns `(collisions, symlink_collisions,
+/// plib_collisions)` as `ROOT`-relative absolute paths; only the caller
+/// decides whether `collisions` aborts, `symlink_collisions` always
+/// should, `plib_collisions` never does.
+// Portage: vartree.py, dblink._collision_protect
 pub(crate) type CollisionsResult =
     Result<(Vec<String>, Vec<String>, BTreeMap<String, BTreeSet<String>>), String>;
 /// Arguments of [`find_collisions`].
@@ -266,20 +223,12 @@ pub(crate) fn find_collisions(args: FindCollisionsArgs<'_>) -> CollisionsResult 
                 continue;
             }
 
-            // Real `os.walk(srcroot)` (which builds real `filelist`/
-            // `linklist`, `vartree.py:4625-4681`) puts a symlink that
-            // points to a directory into the `dirs` list, not `files` --
-            // so it never reaches `filelist`/`linklist` and is never
-            // collision-checked at all (verified: `link_to_dir` lands in
-            // `dirs`, `link_to_file`/dangling land in `files`). A
-            // directory-target symlink colliding with a real directory
-            // (e.g. linux-firmware's `nvidia/ad10x` symlinks over
-            // installed directories) is therefore ignored here, matching
-            // real: no `symlink_collisions` entry, no abort. Only
-            // file-target/dangling symlinks are checked below. `metadata`
-            // follows the link exactly like `os.walk`'s own `is_dir()`
-            // does (image-relative for relative targets); a dangling
-            // link errors here and falls through to the check, like real.
+            // `os.walk` puts a directory-target symlink into `dirs`, not
+            // `files`, so it is never collision-checked; only
+            // file-target/dangling symlinks are checked below.
+            // `metadata` follows the link like `os.walk`'s `is_dir()`
+            // does; a dangling link errors and falls through to the
+            // check.
             if file_type.is_symlink()
                 && std::fs::metadata(&src).map(|m| m.is_dir()).unwrap_or(false)
             {
@@ -320,25 +269,14 @@ pub(crate) fn find_collisions(args: FindCollisionsArgs<'_>) -> CollisionsResult 
     Ok((collisions, symlink_collisions, plib_collisions))
 }
 
-/// Real `vardbapi._owners.get_owners()`, narrowed: for each of
-/// `collisions`, walks every installed package under `<root>/var/db/
-/// pkg` (all categories, all packages -- real portage keeps a
-/// persistent reverse index for this; portuale just scans fresh every
-/// time, acceptable for a real, but not performance-critical, error-
-/// reporting path only reached when a merge is about to abort anyway)
-/// and returns the `category/pf` -> claimed-paths map for whichever
-/// ones actually claim it.
+/// For each collision, the installed packages claiming it. A fresh scan
+/// of every installed `CONTENTS` per abort (an error path only); no
+/// persistent reverse index.
 ///
-/// The scan is [`portage_vdb::InstalledDb::owners`] (S1.5: the old
-/// two-level walk and per-entry `CONTENTS` read moved into `FilesDb`
-/// unchanged). Two things the old loop did stay here because they live
-/// above `portage-vdb`: an entry whose directory name does not split as
-/// `<package>-<version>` (`portage_repo::split_pf`) claims nothing (the
-/// old walk skipped it before reading its `CONTENTS`; it is now read and
-/// its claims dropped), and the result is regrouped as `category/pf` ->
-/// the matched collision strings (the same absolute strings the old
-/// direct read pushed). `owns_path` keeps reading through the
-/// `mrg_director::PackagesDb` seam.
+/// Above `portage-vdb`, two behaviours stay here: an entry name that is
+/// not `<package>-<version>` claims nothing, and the result is regrouped
+/// as `category/pf` -> matched collision strings. `owns_path` reads
+/// through the `PackagesDb` seam.
 pub(crate) fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<String>> {
     let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let paths: Vec<&[u8]> = collisions.iter().map(|c| c.as_bytes()).collect();
@@ -346,8 +284,8 @@ pub(crate) fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String
         return owners;
     };
     for (path, key) in claims {
-        // The old walk skipped an entry name that is not
-        // `<package>-<version>` before reading its `CONTENTS`.
+        // The old walk skipped a non-`<package>-<version>` entry name
+        // before reading its `CONTENTS`.
         if portage_repo::split_pf(&key.pf).is_none() {
             continue;
         }
@@ -359,14 +297,9 @@ pub(crate) fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String
     owners
 }
 
-/// Real "package NOT merged due to file collisions" abort message,
-/// narrowed to what portuale can cheaply compute (see this module's
-/// own module doc comment): every colliding path, annotated with
-/// whichever other real installed package(s) `find_owners` found
-/// actually claiming it (`(unclaimed)` when none did -- a real,
-/// possible outcome: a stray file on disk with no owner at all, real
-/// portage's own "None of the installed packages claim the file(s)"
-/// case).
+/// The "package NOT merged due to file collisions" abort message: every
+/// colliding path, annotated with the installed packages claiming it
+/// (`(unclaimed)` when none did -- e.g. a stray file with no owner).
 pub(crate) fn collision_message(
     root: &Path,
     cpv: &str,

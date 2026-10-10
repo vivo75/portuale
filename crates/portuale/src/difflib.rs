@@ -1,26 +1,18 @@
-// A faithful, minimal port of CPython's `difflib.SequenceMatcher.ratio()`
-// (`Lib/difflib.py`), just enough for `emerge --search`'s own real fuzzy
-// matching (`_emerge/search.py`: `difflib.SequenceMatcher().ratio() >=
-// cutoff`). Real portage gates on all three of `real_quick_ratio()`,
-// `quick_ratio()` and `ratio()` -- but the first two are upper bounds on
-// the third (`ratio <= quick_ratio <= real_quick_ratio` always), so
-// `ratio() >= cutoff` alone is the exact combined condition.
+// A minimal port of CPython's `difflib.SequenceMatcher.ratio()`, just
+// enough for `emerge --search` fuzzy matching: `ratio() >= cutoff` is
+// the exact combined condition for the three gated ratios, since
+// `ratio <= quick_ratio <= real_quick_ratio` always.
 //
-// Scope match with CPython: `isjunk` is always `None` (search.py never
-// passes one), so there is no junk set at all; and `autojunk` only fires
-// for a `b` of length >= 200, which a search key / package-name part
-// never reaches -- so both the junk sets and the autojunk pruning are
-// omitted here. Everything else (`find_longest_match`'s `j2len` DP, the
-// earliest-match tie-break, the recursive `get_matching_blocks` split,
-// `2.0 * matches / total`) is ported literally so a Rust search produces
-// byte-identical results to real `emerge --search`'s `difflib`-backed one.
+// `isjunk` is always `None` and `autojunk` never fires for short search
+// keys, so both are omitted. Everything else is ported literally for
+// byte-identical results.
+// Portage: _emerge/search.py; CPython: Lib/difflib.py
 
 use std::collections::HashMap;
 
-/// Real `SequenceMatcher(None, a, b).ratio()`: `2.0 * M / (len(a) +
-/// len(b))` where `M` is the total size of the non-overlapping matching
-/// blocks `get_matching_blocks()` finds. Operates on `char`s (real
-/// `difflib` compares Python string elements, i.e. code points).
+/// `SequenceMatcher(None, a, b).ratio()`: `2.0 * M / (len(a) + len(b))`
+/// where `M` is the total non-overlapping matching-block size.
+/// Operates on `char`s (Python string elements).
 pub fn ratio(a: &str, b: &str) -> f64 {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -29,8 +21,7 @@ pub fn ratio(a: &str, b: &str) -> f64 {
         // Real `_calculate_ratio(0, 0)` -> `1.0`.
         return 1.0;
     }
-    // Real `__chain_b`: map each element of `b` to its ascending list of
-    // indices.
+    // `__chain_b`: map each element of `b` to its ascending index list.
     let mut b2j: HashMap<char, Vec<usize>> = HashMap::new();
     for (j, &c) in b.iter().enumerate() {
         b2j.entry(c).or_default().push(j);
@@ -47,14 +38,9 @@ pub fn ratio(a: &str, b: &str) -> f64 {
     2.0 * matches as f64 / total as f64
 }
 
-/// Real `difflib.get_close_matches(word, possibilities, n, cutoff)`: the
-/// up-to-`n` entries of `possibilities` whose `ratio()` against `word`
-/// reaches `cutoff`, best first. Real `get_close_matches` sets `word` as
-/// seq2 and each possibility as seq1, so the score is `ratio(possibility,
-/// word)`; its `_nlargest(n, [(score, x), ...])` orders by `(score, x)`
-/// descending, so a score tie breaks toward the lexicographically larger
-/// string -- reproduced here. (Real portage calls this with the default
-/// `n=3`, `cutoff=0.6` via `_similar_name_search`.)
+/// `get_close_matches(word, possibilities, n, cutoff)`: the up-to-`n`
+/// entries reaching `cutoff`, best first. Score ties break toward the
+/// lexicographically larger string.
 pub fn get_close_matches(
     word: &str,
     possibilities: &[String],
@@ -85,10 +71,8 @@ struct MatchingCharCountArgs<'a> {
     bhi: usize,
 }
 
-/// Real `get_matching_blocks()`'s recursion, summed: `find_longest_match`
-/// on the window, then recurse into the slice before it and the slice
-/// after it. Block *order* doesn't matter for the sum, so the explicit
-/// LIFO queue is just a recursion here.
+/// `get_matching_blocks()`'s recursion, summed. Block order doesn't
+/// matter for the sum, so the LIFO queue is just recursion here.
 fn matching_char_count(args: MatchingCharCountArgs<'_>) -> usize {
     let MatchingCharCountArgs {
         a,
@@ -148,10 +132,9 @@ struct FindLongestMatchArgs<'a> {
     bhi: usize,
 }
 
-/// Real `find_longest_match(alo, ahi, blo, bhi)` with no junk: the
-/// `j2len` dynamic-programming scan for the longest common contiguous
-/// run, ties broken toward the earliest `i` (then earliest `j`), then
-/// extended maximally on both ends.
+/// `find_longest_match(alo, ahi, blo, bhi)` with no junk: the `j2len`
+/// scan for the longest common run, ties toward the earliest `i`
+/// (then earliest `j`), then extended maximally on both ends.
 fn find_longest_match(args: FindLongestMatchArgs<'_>) -> (usize, usize, usize) {
     let FindLongestMatchArgs {
         a,
@@ -190,9 +173,8 @@ fn find_longest_match(args: FindLongestMatchArgs<'_>) -> (usize, usize, usize) {
         }
         j2len = newj2len;
     }
-    // Real: extend the match on both sides for as long as the elements
-    // stay equal (the junk-aware second pair of loops never fires here --
-    // there is no junk).
+    // Extend the match while elements stay equal (the junk-aware loops
+    // never fire: there is no junk).
     while besti > alo && bestj > blo && a[besti - 1] == b[bestj - 1] {
         besti -= 1;
         bestj -= 1;
@@ -212,7 +194,7 @@ mod tests {
     use super::{get_close_matches, ratio};
 
     // Values below were produced by CPython's own
-    // `difflib.SequenceMatcher(None, a, b).ratio()`.
+    // `SequenceMatcher(None, a, b).ratio()`.
     fn approx(x: f64, y: f64) {
         assert!((x - y).abs() < 1e-9, "{x} != {y}");
     }
@@ -223,15 +205,12 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        // CPython: difflib.get_close_matches("appel", words) -> ['apple', 'ape']
+        // `get_close_matches("appel", words)` -> `['apple', 'ape']`.
         assert_eq!(
             get_close_matches("appel", &words, 3, 0.6),
             vec!["apple", "ape"]
         );
-        // difflib.get_close_matches("dev-libs/newpgk",
-        //   ["dev-libs/newpkg", "dev-libs/oldpkg"])
-        //   -> ['dev-libs/newpkg', 'dev-libs/oldpkg'] (both clear 0.6;
-        //   newpkg scores higher).
+        // Both clear 0.6; newpkg scores higher.
         let cps: Vec<String> = ["dev-libs/oldpkg", "dev-libs/newpkg"]
             .iter()
             .map(|s| s.to_string())
@@ -257,8 +236,8 @@ mod tests {
 
     #[test]
     fn is_symmetric_in_length_but_order_sensitive_like_cpython() {
-        // difflib.ratio() is NOT symmetric in general; these particular
-        // pairs happen to be, and match CPython.
+        // `ratio()` is NOT symmetric in general; these pairs happen to
+        // be, and match CPython.
         approx(ratio("abc", "cba"), ratio("cba", "abc"));
     }
 }

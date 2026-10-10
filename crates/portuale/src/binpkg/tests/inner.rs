@@ -30,8 +30,7 @@ fn read_inner_metadata_decompresses_through_the_pipe() {
     assert_eq!(by_key["SLOT"], b"0\n");
     assert_eq!(by_key["RDEPEND"], b"dev-libs/newpkg\n");
 
-    // A failing decompressor is still an error (the old path
-    // reported zstd's own `({status})`).
+    // A failing decompressor is still an error.
     let broken = scratch.path().join("broken.tar.zst");
     fs::write(&broken, b"this is not a zstd stream").unwrap();
     let err = read_inner_metadata(
@@ -64,9 +63,8 @@ fn read_inner_metadata_round_trips_regular_members() {
 
 #[test]
 fn read_inner_metadata_resolves_symlinks_in_archive() {
-    // S0 i2 plus a `../`-normalized target and a link chain: real
-    // joins `dirname(name)/linkname` and normpaths it, and recurses
-    // through further links.
+    // Covers a `../`-normalized target and a link chain: links join
+    // `dirname(name)/linkname`, normalize, and recurse.
     let metadata = read_inner(&[
         inner_entry("metadata/SLOT", b"0\n"),
         inner_symlink("metadata/DESCRIPTION", "SLOT"),
@@ -83,8 +81,7 @@ fn read_inner_metadata_resolves_symlinks_in_archive() {
 
 #[test]
 fn read_inner_metadata_rejects_a_symlink_out_of_the_archive() {
-    // S0 i1: real raises `KeyError: linkname ... not found`; the
-    // host file must never be read (the old walk followed it).
+    // A link out of the archive errors; the host file is never read.
     let err = read_inner(&[
         inner_entry("metadata/SLOT", b"0\n"),
         inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
@@ -97,7 +94,7 @@ fn read_inner_metadata_rejects_a_symlink_out_of_the_archive() {
 
 #[test]
 fn read_inner_metadata_resolves_hardlinks_to_earlier_members() {
-    // S0 i3: the target has to be *earlier* than the link.
+    // The target has to be *earlier* than the link.
     let metadata = read_inner(&[
         inner_entry("metadata/SLOT", b"0\n"),
         inner_hardlink("metadata/DESCRIPTION", "metadata/SLOT"),
@@ -114,7 +111,7 @@ fn read_inner_metadata_resolves_hardlinks_to_earlier_members() {
 
 #[test]
 fn read_inner_metadata_rejects_hardlinks_to_later_or_missing_members() {
-    // S0 i3b: target comes later.
+    // Target comes later.
     let err = read_inner(&[
         inner_hardlink("metadata/AAA", "metadata/SLOT"),
         inner_entry("metadata/SLOT", b"0\n"),
@@ -122,7 +119,7 @@ fn read_inner_metadata_rejects_hardlinks_to_later_or_missing_members() {
     .unwrap_err();
     assert!(err.is_fatal(), "{err:?}");
     assert!(err.message().contains("not in the archive"), "{err}");
-    // S0 i4: target is not a member at all.
+    // Target is not a member at all.
     let err = read_inner(&[inner_hardlink("metadata/DESCRIPTION", "etc/hostname")]).unwrap_err();
     assert!(err.is_fatal(), "{err:?}");
     assert!(err.message().contains("not in the archive"), "{err}");
@@ -130,8 +127,7 @@ fn read_inner_metadata_rejects_hardlinks_to_later_or_missing_members() {
 
 #[test]
 fn read_inner_metadata_rejects_fifo_and_device_members() {
-    // S0 i5/i6: real's `extractfile` returns `None` -> error; the
-    // type is named.
+    // FIFO/device members error, naming the type.
     let err =
         read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)]).unwrap_err();
     assert!(err.is_fatal(), "{err:?}");
@@ -148,9 +144,9 @@ fn read_inner_metadata_rejects_fifo_and_device_members() {
 
 #[test]
 fn read_inner_metadata_rejects_directory_members_and_outside_names() {
-    // The committed fixture's inner `metadata/` directory member:
-    // Python tarfile strips the trailing slash, real
-    // `_strip_metadata_prefix` rejects the bare `metadata` name.
+    // The inner `metadata/` directory member is rejected as outside
+    // `metadata/`: `tarfile` strips the trailing slash, leaving the
+    // bare `metadata` name.
     let err = read_inner(&[
         inner_special("metadata/", tar::EntryType::Directory),
         inner_entry("metadata/SLOT", b"0\n"),
@@ -158,8 +154,8 @@ fn read_inner_metadata_rejects_directory_members_and_outside_names() {
     .unwrap_err();
     assert!(err.is_invalid(), "{err:?}");
     assert!(err.message().contains("outside metadata/"), "{err}");
-    // S0 i7: a nested directory member is a `None.read()` error for
-    // real; the `sub/KEY` member after it never resolves.
+    // A nested directory member errors; the `sub/KEY` member after it
+    // never resolves.
     let err = read_inner(&[
         inner_special("metadata/sub/", tar::EntryType::Directory),
         inner_entry("metadata/sub/KEY", b"nested\n"),
@@ -167,8 +163,7 @@ fn read_inner_metadata_rejects_directory_members_and_outside_names() {
     .unwrap_err();
     assert!(err.is_fatal(), "{err:?}");
     assert!(err.message().contains("a directory"), "{err}");
-    // S0 i8: a name outside `metadata/` (real
-    // `InvalidBinaryPackageFormat`).
+    // A name outside `metadata/`.
     let err = read_inner(&[inner_entry("other/KEY", b"outside\n")]).unwrap_err();
     assert!(err.is_invalid(), "{err:?}");
     assert!(err.message().contains("outside metadata/"), "{err}");
@@ -176,7 +171,7 @@ fn read_inner_metadata_rejects_directory_members_and_outside_names() {
 
 #[test]
 fn read_inner_metadata_reads_nested_keys_without_a_directory() {
-    // S0 i7b: real's own key is the remainder after `metadata/`.
+    // The key is the remainder after `metadata/`.
     let metadata = read_inner(&[inner_entry("metadata/sub/KEY", b"nested\n")]).expect("reads");
     assert_eq!(
         inner_pairs(&metadata),
@@ -186,8 +181,7 @@ fn read_inner_metadata_reads_nested_keys_without_a_directory() {
 
 #[test]
 fn read_inner_metadata_errors_on_symlink_cycles() {
-    // S0 i10: real hits Python's `RecursionError`; portuale stops at
-    // its own depth cap with a named error.
+    // A symlink cycle stops at the depth cap with a named error.
     let err = read_inner(&[
         inner_symlink("metadata/A", "B"),
         inner_symlink("metadata/B", "A"),
@@ -199,8 +193,7 @@ fn read_inner_metadata_errors_on_symlink_cycles() {
 
 #[test]
 fn read_inner_metadata_last_wins_and_flags_duplicate_keys() {
-    // S0 i11: real's dict comprehension keeps the last member with a
-    // name; S3 refuses the archive on the flagged duplicate.
+    // Last member with a name wins; the duplicate is flagged.
     let metadata = read_inner(&[
         inner_entry("metadata/SLOT", b"0\n"),
         inner_entry("metadata/SLOT", b"1\n"),
@@ -215,8 +208,7 @@ fn read_inner_metadata_last_wins_and_flags_duplicate_keys() {
 
 #[test]
 fn read_inner_metadata_rejects_traversal_and_absolute_names() {
-    // S0 i12/i12b: real's read path would produce a `../KEY` key and
-    // its merge path rejects both; portuale refuses both everywhere.
+    // Both traversal and absolute names are refused everywhere.
     for name in ["metadata/../KEY", "/metadata/KEY"] {
         let err = read_inner(&[inner_entry(name, b"x\n")]).unwrap_err();
         assert!(err.is_invalid(), "{name}: {err:?}");
@@ -226,8 +218,8 @@ fn read_inner_metadata_rejects_traversal_and_absolute_names() {
 
 #[test]
 fn read_inner_metadata_reads_unknown_entry_types_as_regular_files() {
-    // Real: `tarinfo.isreg() or tarinfo.type not in SUPPORTED_TYPES`
-    // -> bytes.
+    // Unknown entry types read as regular files.
+    // Portage: gpkg.py, SUPPORTED_TYPES
     let metadata =
         read_inner(&[inner_special("metadata/ODD", tar::EntryType::new(b'X'))]).expect("reads");
     assert_eq!(

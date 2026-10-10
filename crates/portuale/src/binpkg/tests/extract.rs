@@ -1,8 +1,8 @@
 use super::*;
 
-/// #334: real `BinpkgExtractorAsync._xpak_start`'s tar options, as the
-/// argv its shell string becomes: none without `FEATURES=xattr` or
-/// without a tar that knows `--xattrs`.
+/// The extractor's tar options as argv: none without `FEATURES=xattr`
+/// or without a tar that knows `--xattrs`.
+// Portage: BinpkgExtractorAsync._xpak_start
 #[test]
 fn xpak_xattr_tar_options_match_portages_extractor() {
     let on = crate::ebuild_merge::XattrPolicy {
@@ -45,8 +45,8 @@ fn extract_binpkg_unpacks_an_xpak_image_and_build_info() {
         fs::read_to_string(bi.join("RDEPEND")).unwrap().trim(),
         "dev-libs/samepkg"
     );
-    // The two non-scalar members are kept verbatim: a real bzip2
-    // stream (magic `BZh`) and the real ebuild source.
+    // The two non-scalar members are kept verbatim: a bzip2 stream
+    // (magic `BZh`) and the ebuild source.
     let env_bz2 = fs::read(bi.join("environment.bz2")).expect("environment.bz2 kept");
     assert_eq!(&env_bz2[..3], b"BZh", "a real bzip2 stream, byte-exact");
     assert!(
@@ -57,11 +57,10 @@ fn extract_binpkg_unpacks_an_xpak_image_and_build_info() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// #326 S5 (L2 xpak control): real `tbz2.unpackinfo` writes every
-/// XPAK member verbatim. An empty `DEBUGBUILD` stays empty, and the
-/// trailing space real's `NEEDED` keeps survives. A name that climbs
-/// out with `..` is skipped, a leading `/` is stripped, and a
-/// `sub/x` member gets its directory (`xpak.py:486-524`).
+/// XPAK members are written verbatim: empty stays empty, trailing
+/// spaces survive, `..` is skipped, a leading `/` is stripped, and
+/// `sub/x` gets its directory.
+// Portage: xpak.py, tbz2.unpackinfo
 #[test]
 fn extract_binpkg_writes_xpak_members_verbatim_like_portage_unpackinfo() {
     let real = fs::read(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
@@ -122,18 +121,14 @@ fn extract_binpkg_unpacks_a_real_gpkg_image_and_build_info() {
         &crate::ebuild_merge::XattrPolicy::default(),
     )
     .expect("gpkg extract succeeds");
-    // The inner `image/` and `metadata/` top-level dirs real's
-    // `tar_safe_extract` strips are stripped here too -- members land
-    // directly, not one level deep. A missing strip is what made the
-    // merged vdb `CONTENTS` record every path as `/image/...`.
+    // The inner `image/` and `metadata/` top-level dirs are stripped:
+    // members land directly, not one level deep.
     assert!(image.join("hello.txt").is_file(), "image prefix stripped");
     assert!(!image.join("image").exists(), "no leftover image/ dir");
     assert!(bi.join("SLOT").is_file(), "metadata prefix stripped");
     assert!(!bi.join("metadata").exists(), "no leftover metadata/ dir");
-    // `#58` S3: the metadata side now writes the resolved member
-    // bytes verbatim as regular files with the header mode (0o644 in
-    // the fixture), the same bytes and modes the former `tar -xpf`
-    // left (captured on `main`).
+    // The metadata side writes resolved member bytes verbatim as
+    // regular files with the header mode.
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(fs::read(bi.join("SLOT")).unwrap(), b"0\n");
     assert_eq!(fs::read(bi.join("EAPI")).unwrap(), b"8\n");
@@ -171,15 +166,12 @@ fn extract_binpkg_rejects_a_gpkg_with_a_bad_manifest() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-// ---- #58 S3: the merge-path metadata extraction ----
+// The merge-path metadata extraction.
 
 #[test]
 fn extract_binpkg_writes_an_inner_metadata_symlink_as_a_regular_file() {
-    // S0 i2: real's unpack extracts the symlink as a symlink (its
-    // own writer never emits one); portuale writes the *resolved
-    // target bytes* as a regular file, with the member's header
-    // mode. `pretend.rs::run_info` calls extract_binpkg with no
-    // prior read, so this path is what protects it.
+    // An in-archive symlink yields the resolved target bytes as a
+    // regular file with the header mode.
     let g = build_gpkg_with_inner_entries(
         "gen-1.0",
         &[
@@ -226,8 +218,8 @@ fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
         assert!(err.contains(needle), "expected {needle:?} in {err:?}");
         let _ = fs::remove_dir_all(&tmp);
     };
-    // S0 i1: an escaping symlink (the old `tar -xpf` extracted the
-    // symlink itself into build-info, where later readers follow it).
+    // An escaping symlink is rejected: it would land in build-info
+    // where later readers follow it.
     check(
         &[
             inner_entry("metadata/SLOT", b"0\n"),
@@ -235,13 +227,12 @@ fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
         ],
         "not in the archive",
     );
-    // S0 i5: real's 3.14 `isdev()` rejects a FIFO on merge too; the
-    // old `tar -xpf` created one in build-info.
+    // A FIFO is rejected on merge too.
     check(
         &[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)],
         "a FIFO",
     );
-    // S0 i7/i7b: nested keys (K4).
+    // Nested keys.
     check(
         &[
             inner_special("metadata/sub/", tar::EntryType::Directory),
@@ -250,7 +241,7 @@ fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
         "a directory",
     );
     check(&[inner_entry("metadata/sub/KEY", b"nested\n")], "is nested");
-    // S0 i11: duplicates (real `tar_safe_extract`).
+    // Duplicates are rejected.
     check(
         &[
             inner_entry("metadata/SLOT", b"0\n"),
@@ -262,10 +253,8 @@ fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
 
 #[test]
 fn extract_binpkg_keeps_extracting_image_symlinks() {
-    // K2 does not touch the image until S4's pre-scan: a legitimate
-    // relative symlink must still land as a symlink (real extracts
-    // image symlinks as-is; only devices/dup/abs/traversal/escaping
-    // hardlinks are rejected).
+    // A legitimate relative image symlink still lands as a symlink;
+    // only devices/dups/abs/traversal/escaping hardlinks are rejected.
     let g = build_gpkg_with_inner_tars(
         "gen-1.0",
         &[inner_entry("metadata/SLOT", b"0\n")],
@@ -319,7 +308,7 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
         );
         let _ = fs::remove_dir_all(&tmp);
     };
-    // S0 i13/i13b: a char device (real `isdev()`; 3.14 includes FIFO).
+    // A char device or FIFO.
     check(
         &[inner_special("image/dev/null0", tar::EntryType::Char)],
         "a character device",
@@ -328,7 +317,7 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
         &[inner_special("image/dev/pipe0", tar::EntryType::Fifo)],
         "a FIFO",
     );
-    // S0 i14/i15: a hard link to a non-member or a later member.
+    // A hard link to a non-member or a later member.
     check(
         &[inner_hardlink("image/usr/bin/x", "/etc/hostname")],
         "not an earlier member",
@@ -340,7 +329,7 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
         ],
         "not an earlier member",
     );
-    // S0 i16: duplicate names (GNU tar used to last-wins silently).
+    // Duplicate names.
     check(
         &[
             inner_entry("image/usr/lib/libfoo.so", b"first\n"),
@@ -348,7 +337,7 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
         ],
         "is a duplicate",
     );
-    // S0 i17/i17b: traversal / absolute member names.
+    // Traversal / absolute member names.
     check(
         &[inner_entry("image/../etc/x", b"traversal\n")],
         "has a path traversal",
@@ -357,8 +346,7 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
         &[inner_entry("/image/etc/x", b"absolute\n")],
         "has an absolute name",
     );
-    // S0 i18: a member under an earlier symlink member (the
-    // owner-approved rule beyond real's own set).
+    // A member under an earlier symlink member.
     check(
         &[
             inner_symlink("image/usr/lib/x", "/etc"),
@@ -370,9 +358,9 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
 
 #[test]
 fn extract_binpkg_keeps_a_valid_sparse_xattr_image_working() {
-    // S0 cell i19: the regression shape -- legitimate symlink,
-    // hardlink-to-earlier, GNU sparse file, PAX xattr records -- must
-    // still extract exactly as before S4 (the pre-scan only rejects).
+    // The regression shape: legitimate symlink, hardlink-to-earlier,
+    // sparse file and PAX xattr records must still extract (the
+    // pre-scan only rejects).
     let tmp = TempDir::new("binpkg-gpkg-i19").keep();
     let stage = tmp.join("stage");
     fs::create_dir_all(&stage).unwrap();
@@ -422,9 +410,7 @@ fn extract_binpkg_keeps_a_valid_sparse_xattr_image_working() {
         fs::read(image.join("usr/share/xattr.txt")).unwrap(),
         b"xattr carrier\n"
     );
-    // GNU `tar -xpf` (no `--xattrs`) ignores the PAX xattr records,
-    // exactly as before the pre-scan and as real's own `decompress`
-    // (`TEST/findings/l2.md` "## #58 S0" cell i19).
+    // GNU `tar -xpf` (no `--xattrs`) ignores the PAX xattr records.
     let xpath = std::ffi::CString::new(
         image
             .join("usr/share/xattr.txt")

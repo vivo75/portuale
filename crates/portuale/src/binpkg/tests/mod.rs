@@ -8,17 +8,15 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// `usize -> u32` narrowing that panics (like Python's
-/// `struct.pack(">I", n)` raising) instead of silently wrapping; the
-/// fixture-making sizes are far below `u32::MAX`, so this only fires
-/// when a test is corrupted by mistake.
+/// `usize -> u32` narrowing that panics instead of silently wrapping;
+/// the fixture-making sizes are far below `u32::MAX`.
 fn xpak_u32(len: usize) -> u32 {
     u32::try_from(len).expect("xpak length exceeds u32::MAX")
 }
 
-/// Build a real XPAK segment (real `xpak.xpak_mem` layout) and append
-/// it to some prefix bytes, exactly the way a real `.tbz2` is
-/// `[tarball][XPAK trailer]`.
+/// Build an XPAK segment and append it to prefix bytes, the way a
+/// `.tbz2` is `[tarball][XPAK trailer]`.
+// Portage: xpak.py, xpak_mem
 fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut index = Vec::new();
     let mut data = Vec::new();
@@ -44,9 +42,8 @@ fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
-/// Assemble a real (plain outer tar) gpkg container from a set of
-/// `<prefix>/<name>` members plus a `Manifest` body, in real gpkg
-/// member order.
+/// Assemble a plain-outer-tar gpkg container from `<prefix>/<name>`
+/// members plus a `Manifest` body, in gpkg member order.
 fn build_gpkg(prefix: &str, members: &[(&str, &[u8])], manifest: Option<&str>) -> PathBuf {
     let scratch = ScratchDir::new("gpkg-build").unwrap();
     // leak the scratch dir for the caller's test lifetime
@@ -73,13 +70,13 @@ fn build_gpkg(prefix: &str, members: &[(&str, &[u8])], manifest: Option<&str>) -
     root.join("out.gpkg.tar")
 }
 
-/// One member of a `#56` crafted test container.
+/// One member of a crafted test container.
 enum GpkgEntry<'a> {
     File(&'a [u8]),
     Symlink(&'a str),
     Fifo,
-    /// `fs::hard_link` to an earlier member: real GNU `tar` records it
-    /// as `LNKTYPE`.
+    /// `fs::hard_link` to an earlier member: GNU `tar` records it as
+    /// `LNKTYPE`.
     Hardlink(&'a str),
     CharDevice {
         major: u32,
@@ -87,9 +84,8 @@ enum GpkgEntry<'a> {
     },
 }
 
-/// `build_gpkg`'s typed sibling: stage one filesystem object per
-/// entry (each name is the full member path, `<prefix>/<name>` or a
-/// crafted top-level name) and let real GNU `tar` write the headers.
+/// `build_gpkg`'s typed sibling: stage one filesystem object per entry
+/// and let GNU `tar` write the headers.
 fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> PathBuf {
     let scratch = ScratchDir::new("gpkg-build-typed").unwrap();
     // leak the scratch dir for the caller's test lifetime
@@ -137,9 +133,8 @@ fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> PathBuf {
     root.join("out.gpkg.tar")
 }
 
-/// `#56` S1: every one of the three outer-container sites must reject
-/// `g`, and every error must contain each of `needles` (the member
-/// name and, for the type checks, its type).
+/// Every one of the three outer-container sites must reject `g`, and
+/// every error must contain each of `needles`.
 fn assert_rejects_everywhere(g: &Path, needles: &[&str]) {
     let check = |site: &str, err: &str| {
         for needle in needles {
@@ -192,17 +187,12 @@ fn data_line(name: &str, bytes: &[u8]) -> String {
     )
 }
 
-// ---- GPG binpkg signatures (`FEATURES=binpkg-signing`) ----
+// GPG binpkg signatures (`FEATURES=binpkg-signing`).
 
-/// Portage's own committed GnuPG test keyring, copied verbatim into
-/// pmtest (`fixtures/helpers/gpg-keyring/`, from
-/// `lib/portage/tests/.gnupg` -- the same keys real's own
-/// `test_gpkg_gpg.py` signs with; #326 S4, so these tests run with
-/// no Portage checkout): trusted
-/// `0x5D90EA06352177F6`, untrusted `0x8812797DDF1DD192`, both with
-/// passphrase `GentooTest`. Neither key expires, so a container
-/// signed with them verifies deterministically for the life of the
-/// fixture.
+/// Portage's committed GnuPG test keyring, copied into pmtest
+/// (`fixtures/helpers/gpg-keyring/`): trusted `0x5D90EA06352177F6`,
+/// untrusted `0x8812797DDF1DD192`, passphrase `GentooTest`. Neither
+/// key expires.
 const GPG_TRUSTED_KEY: &str = "0x5D90EA06352177F6";
 
 const GPG_UNTRUSTED_KEY: &str = "0x8812797DDF1DD192";
@@ -210,9 +200,8 @@ const GPG_UNTRUSTED_KEY: &str = "0x8812797DDF1DD192";
 const GPG_PASSPHRASE: &str = "GentooTest";
 
 /// A writable copy of the committed keyring under a fresh tempdir
-/// (`gpg` refuses a homedir it doesn't own outright, and signs /
-/// verifies with lock files inside it -- the committed tree itself
-/// must stay read-only). `chmod 700`, real's own requirement.
+/// (`gpg` refuses a homedir it doesn't own; the committed tree stays
+/// read-only). `chmod 700`.
 fn test_gpg_home(tag: &str) -> std::path::PathBuf {
     fn copy_dir(src: &Path, dest: &Path) {
         fs::create_dir_all(dest).unwrap();
@@ -235,9 +224,7 @@ fn test_gpg_home(tag: &str) -> std::path::PathBuf {
     dest
 }
 
-/// Best-effort `gpg-agent` shutdown for a test homedir (a signing
-/// `gpg` daemonizes its agent, which would otherwise outlive the
-/// test session -- real portage's own `conftest.py` does the same).
+/// Best-effort `gpg-agent` shutdown for a test homedir.
 /// Verify-only tests never start an agent and don't need this.
 fn kill_gpg_agent(home: &Path) {
     let _ = Command::new("gpgconf")
@@ -258,10 +245,8 @@ fn test_gpg_verify(home: &Path, request: bool, verify: bool) -> GpgVerify {
     }
 }
 
-/// Clear-sign `data` exactly the way real `checksum_helper(SIGNING,
-/// detached=False)` does for the `Manifest` (`gpkg.py:1552-1560`):
-/// `gpg --clearsign` over stdin. Detached-signs `data` the way real
-/// signs each member (`--detach-sig`, `gpkg.py:1031-1058`).
+/// Clear-sign `data` for the `Manifest`; detached-sign it for a member.
+// Portage: gpkg.py, checksum_helper
 fn gpg_sign(home: &Path, key: &str, data: &[u8], clearsign: bool) -> Vec<u8> {
     use std::io::Write;
     let mut cmd = Command::new("/usr/bin/gpg");
@@ -304,11 +289,9 @@ fn gpg_sign(home: &Path, key: &str, data: &[u8], clearsign: bool) -> Vec<u8> {
     output.stdout
 }
 
-/// Copy a `.gpkg.tar` fixture to a tempdir, unpack its outer tar,
-/// let `mutate` alter the unpacked `<prefix>/` tree, and repack --
-/// for tamper tests that must keep a parseable container (flipping
-/// bytes in the packed tar directly would just corrupt the tar
-/// framing instead of failing the signature).
+/// Copy a `.gpkg.tar` fixture to a tempdir, unpack its outer tar, let
+/// `mutate` alter the unpacked tree, and repack. Packed-byte flips
+/// would only corrupt the tar framing.
 fn repack_gpkg_with_mutation(src: &Path, tag: &str, mutate: impl Fn(&Path)) -> PathBuf {
     let root = TempDir::new(&format!("portuale-gpg-{tag}")).keep();
     let outer = root.join("outer");
@@ -321,11 +304,9 @@ fn repack_gpkg_with_mutation(src: &Path, tag: &str, mutate: impl Fn(&Path)) -> P
         "-C".into(),
         lossy(&outer),
     ];
-    // List the prefix's files, not the prefix directory itself:
-    // GNU tar would also write a `<prefix>/` directory member, which
-    // real's one-level structure check rejects (`#58` S5; the old
-    // filesystem walk ignored directory entries). The signed fixture
-    // is flat.
+    // List the prefix's files, not the prefix directory itself: GNU
+    // tar would also write a `<prefix>/` directory member, which the
+    // one-level structure check rejects. The signed fixture is flat.
     for prefix_dir in read_dir_sorted(&outer).unwrap() {
         let prefix = prefix_dir
             .file_name()
@@ -394,10 +375,9 @@ fn build_signed_gpkg(
     root.join("out.gpkg.tar")
 }
 
-// ---- #58 S1: the in-process inner metadata.tar reader ----
+// The in-process inner metadata.tar reader.
 
-/// One inner-tar member for the S1 unit tests: the same raw fields
-/// the crafted S0 cells set, written through `tar::Builder`.
+/// One inner-tar member for the unit tests, written through `tar::Builder`.
 struct InnerTestEntry<'a> {
     name: &'a str,
     entry_type: tar::EntryType,
@@ -449,8 +429,7 @@ fn build_inner_tar(entries: &[InnerTestEntry<'_>]) -> Vec<u8> {
         header.set_mode(0o644);
         header.set_entry_type(entry.entry_type);
         // Raw name bytes: `Header::set_path` refuses `..`/absolute
-        // names, which is exactly what the crafted cells need to
-        // carry.
+        // names, which the crafted cells need to carry.
         let name = entry.name.as_bytes();
         header.as_ustar_mut().unwrap().name[..name.len()].copy_from_slice(name);
         if !entry.link_name.is_empty() {
@@ -466,9 +445,7 @@ fn build_inner_tar(entries: &[InnerTestEntry<'_>]) -> Vec<u8> {
     builder.into_inner().unwrap()
 }
 
-/// Write the crafted tar to a scratch file (the shape
-/// `read_inner_metadata` gets when the outer member is uncompressed)
-/// and read it back.
+/// Write the crafted tar to a scratch file and read it back.
 fn read_inner(entries: &[InnerTestEntry<'_>]) -> Result<InnerMetadata, BinpkgError> {
     let bytes = build_inner_tar(entries);
     read_inner_metadata(
@@ -495,10 +472,9 @@ fn inner_values(metadata: &InnerMetadata) -> HashMap<&str, &[u8]> {
         .collect()
 }
 
-/// `#58` S2: a valid outer gpkg whose inner `metadata.tar` carries
-/// `inner_entries` and whose Manifest is recomputed around the real
-/// member bytes -- `verify_gpkg_manifest` passes, so a
-/// `read_gpkg_metadata` error can only come from the inner check.
+/// A valid outer gpkg whose inner `metadata.tar` carries
+/// `inner_entries` and whose Manifest is recomputed, so `verify`
+/// passes and a metadata error can only come from the inner check.
 fn build_gpkg_with_inner_entries(prefix: &str, inner_entries: &[InnerTestEntry<'_>]) -> PathBuf {
     build_gpkg_with_inner_tars(
         prefix,
@@ -507,7 +483,7 @@ fn build_gpkg_with_inner_entries(prefix: &str, inner_entries: &[InnerTestEntry<'
     )
 }
 
-/// The same with both inner tars under test (`#58` S3/S4 image side).
+/// The same with both inner tars under test (image side).
 fn build_gpkg_with_inner_tars(
     prefix: &str,
     metadata_entries: &[InnerTestEntry<'_>],
@@ -520,7 +496,7 @@ fn build_gpkg_with_inner_tars(
     )
 }
 
-/// The outer-container builder for raw inner-tar bytes (the S4
+/// The outer-container builder for raw inner-tar bytes (the
 /// sparse/xattr image comes from GNU `tar`, not `tar::Builder`).
 fn build_gpkg_with_tar_bytes(prefix: &str, meta: &[u8], image: &[u8]) -> PathBuf {
     let gpkg1: &[u8] = b"";
@@ -541,10 +517,10 @@ fn build_gpkg_with_tar_bytes(prefix: &str, meta: &[u8], image: &[u8]) -> PathBuf
     )
 }
 
-// ---- #58 S4: the image.tar pre-scan ----
+// The image.tar pre-scan.
 
-/// Stage a real directory tree, let GNU `tar --sparse --xattrs` write
-/// the image member (S0 cell i19's shape), and return its bytes.
+/// Stage a directory tree, let GNU `tar --sparse --xattrs` write the
+/// image member, and return its bytes.
 fn build_gnu_sparse_image(stage: &Path) -> Vec<u8> {
     use std::io::{Seek, SeekFrom, Write};
     let img = stage.join("image");
