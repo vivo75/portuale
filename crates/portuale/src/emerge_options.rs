@@ -1,220 +1,21 @@
-// Enumerates the real `emerge` CLI's full option surface (see
-// lib/_emerge/main.py: the `options` list, `shortmapping` dict,
-// `argument_options` dict, and `actions` frozenset), so that using any
-// real emerge flag portuale doesn't implement yet produces a clear
-// "recognized, but not implemented" message -- distinct from a
-// genuinely unknown/misspelled flag. The set that IS implemented is the
-// one `emerge --help` documents (see `pretend/help.txt`); every
-// table here exists purely for recognition, not behavior, and each
-// implemented flag is excluded from these tables (from `VALUE_OPTIONS`
-// too, not just `BOOLEAN_OPTIONS`). The contract suite pins the text each
-// table produces.
-//
-// KNOWN, DOCUMENTED SCOPE CUTS:
-//   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
-//     doc comment for the algorithm. It's real `argparse`-native
-//     behavior for plain boolean short options, not (as an earlier
-//     version of this comment claimed) something `insert_optional_args`
-//     alone provides; verified empirically against real `argparse`
-//     before relying on it. `insert_optional_args` is real and separate:
-//     it's what lets a handful of specific short options (`-v` among
-//     them) take an *optional* value, which argparse's own bundling
-//     can't express on its own -- see pretend.rs for the `-v`-specific
-//     port of that piece.
-//   - `Category::Value` marks which real options take an argument
-//     (real emerge's own `argument_options` dict), for accurate
-//     enumeration, but the caller (`pretend.rs`) never needs to parse
-//     or skip over that argument: every lookup here reports and exits
-//     immediately, so nothing after a recognized-but-unimplemented
-//     option is ever looked at again in that invocation.
-//   - `--help`/`-h` IS implemented now, deliberately excluded from
-//     `ACTIONS` below for the same reason `--pretend`/`-p` and
-//     `--verbose`/`-v` are excluded from their own tables -- see
-//     pretend.rs for the portuale-specific (not a port of real emerge's own
-//     `_emerge/help.py`) help text, and why it's checked before anything
-//     else, unconditionally, regardless of position in argv.
-//   - `--newuse`/`-N` and `--changed-use`/`-U` (a real, narrower
-//     alternative) ARE both implemented now too, deliberately excluded
-//     from `BOOLEAN_OPTIONS` for the same reason -- see pretend.rs for
-//     the flag parsing and portage-repo's
-//     `reinstall_flags_for_use_change` for the reinstall-detection
-//     logic (and how the two flags combine when both are given).
-//   - `--nodeps`/`-O` IS implemented now too, deliberately excluded from
-//     `BOOLEAN_OPTIONS` for the same reason -- see
-//     `resolve_pretend_graph`'s own doc comment (portage-repo) for how it
-//     disables the dependency walk entirely.
-//   - `--onlydeps`/`-o`, `--nodeps`'s real complement (man/emerge.1:
-//     "Only merge (or pretend to merge) the dependencies of the packages
-//     specified, not the packages themselves"), IS implemented now too,
-//     deliberately excluded from `BOOLEAN_OPTIONS` for the same reason --
-//     see pretend.rs's print loop, which is the only thing it changes:
-//     `resolve_pretend_graph` itself needs no changes at all, since
-//     dependency recursion already happens identically regardless of
-//     which top-level entries end up printed.
-//   - `--update`/`-u` IS implemented now too, deliberately excluded from
-//     `BOOLEAN_OPTIONS` for the same reason -- see `resolve_pretend`'s
-//     own doc comment (portage-repo) for the real `avoid_update`/
-//     `dont_miss_updates` behavior it ports: without it, an
-//     already-installed version that still satisfies the requested atom
-//     is kept as-is, never upgraded to a newer visible version just
-//     because one exists.
-//   - `--deep`/`-D` IS implemented now too, deliberately excluded from
-//     `VALUE_OPTIONS` for the same reason -- it's real `argument_options`
-//     with an *optional* value (`--deep` alone means unlimited depth;
-//     `--deep=N`/`--deep N` bounds it), not a plain boolean, so
-//     pretend.rs's own parsing follows the same `insert_optional_args`
-//     pattern already established there for `--verbose`/`-v`. See
-//     `resolve_pretend_graph`'s own doc comment (portage-repo) for
-//     `Deep`, the real depth-cutoff semantics it ports.
-//   - `--exclude`/`-X` IS implemented now too, deliberately excluded from
-//     `VALUE_OPTIONS` for the same reason -- unlike every other value
-//     option here, its own value is *required*, not optional, and real
-//     `main.py` declares it `"action": "append"` (repeatable, each
-//     occurrence's own value itself a space-separated atom list -- see
-//     pretend.rs's own parsing). Deliberately NOT bundle-compatible (a
-//     bundled `-X` gets its own specific "requires an argument, can't be
-//     bundled" message instead), since there's no sensible default value
-//     the way a bundled `-v`/`-D` has. See `resolve_pretend`'s own doc
-//     comment (portage-repo) for the real `excluded_pkgs`/
-//     `WildcardPackageSet` behavior it ports, and its own documented
-//     scope cut relative to real depgraph.py's ~18 call sites.
-//   - `--deselect`/`-W` IS implemented now too, deliberately excluded
-//     from `VALUE_OPTIONS` for the same reason -- like `--verbose`/`-v`,
-//     it's real `argument_options` with a `y_or_n`-choices *optional*
-//     value, ported with the exact same "peek the next token, consume
-//     only if it's exactly y/n" pattern. Unlike every other implemented
-//     flag here, though, a bare `--deselect`/`-W` turns the whole
-//     invocation into a different, standalone action (real `main.py`'s
-//     own "if myaction is None and myoptions.deselect is True: myaction
-//     = 'deselect'") rather than modifying the ordinary `--pretend`
-//     resolution -- see `pretend.rs`'s own `run_deselect` for the real
-//     `action_deselect` behavior it ports, and its own documented
-//     `Atom.intersects()` scope cut.
-//   - `--with-bdeps` IS implemented now too, deliberately excluded from
-//     `VALUE_OPTIONS` for the same reason -- real `argument_options` with
-//     `"choices": ("y", "n")`, a REQUIRED closed-choice value (unlike
-//     `--exclude`'s arbitrary text, or `--deep`/`--verbose`'s optional
-//     peek): a missing value, or one that's neither `y` nor `n`, is a
-//     real, immediate usage error either way (the latter is real
-//     `argparse`'s own choices validation), so it has no short alias and
-//     is deliberately NOT bundle-compatible either -- real `main.py`
-//     declares no `shortopt` for it at all, so there's no bundling
-//     concept to begin with, unlike `--exclude`'s own deliberate bundling
-//     cut. See `resolve_pretend_graph`'s own doc comment (portage-repo)
-//     for the real `depgraph.py`/`create_depgraph_params.py` `bdeps`
-//     semantics it ports (`n` skips DEPEND/BDEPEND for an
-//     already-installed package's own dependency walk under `--deep`;
-//     `y`/the real default `auto` both keep them, collapsed into one
-//     bool since `depgraph.py` itself never distinguishes the two).
-//     `--with-bdeps-auto` (the only other real lever on this same
-//     `bdeps` value) IS implemented too now, deliberately excluded from
-//     `VALUE_OPTIONS` for the same reason -- the identical REQUIRED
-//     closed-choice shape `--with-bdeps` itself has. See `pretend.rs`'s
-//     own CLI parsing for the precedence: `--with-bdeps-auto=n` only
-//     changes the *default* `with_bdeps` value (from real portage's own
-//     "auto" to "n") -- an explicit `--with-bdeps` always wins
-//     regardless, matching real `create_depgraph_params.py`'s own `bdeps
-//     = myopts.get("--with-bdeps"); if bdeps is not None: ... elif
-//     ... myopts.get("--with-bdeps-auto") != "n" ...: myparams["bdeps"] =
-//     "auto"` -- the `--usepkg`-gated half of that same real condition
-//     is always true here, since portuale's CLI has no `--usepkg` at
-//     all.
-//   - `--changed-deps` IS implemented now too, deliberately excluded from
-//     `VALUE_OPTIONS` for the same reason -- real `default_arg_opts` with
-//     a `y_or_n` *optional* value, the identical shape `--verbose`/`-v`
-//     and `--deselect`/`-W` already have (no short alias for this one,
-//     though -- real `main.py` declares none). See `PretendOutcome::
-//     Reinstall`'s own doc comment (portage-repo) and `deps_changed`'s
-//     own doc comment for the real `depgraph.py::_changed_deps` behavior
-//     it ports (reinstalls an already-installed package whose own
-//     vdb-recorded dependency strings differ from the repo's current
-//     ebuild) and its own documented flat-comparison scope cut (this
-//     portuale has no structured, non-flat `use_reduce` anywhere, so a
-//     dependency moved between two dep-string keys with the same net
-//     atom set, or a pure `||`-restructuring, isn't detected as
-//     "changed" here the way real portage's own structured comparison
-//     would). `--changed-deps-report` IS implemented now too,
-//     deliberately excluded from `VALUE_OPTIONS` for the same reason --
-//     the identical `y_or_n` optional-value shape `--changed-deps`
-//     itself already has (no short alias for this one either; real
-//     `main.py` declares none). See `resolve_pretend_graph`'s own doc
-//     comment (portage-repo) for the real `depgraph.py::
-//     _changed_deps_report` behavior this ports: a report-only WARN,
-//     never a resolution change, reusing `deps_changed` unmodified for
-//     the comparison itself. Real portage: "This is completely silent...
-//     if --changed-deps or --dynamic-deps is enabled" -- ported as
-//     simply never bothering to compute anything at all when
-//     `changed_deps` is true, since real portage's own
-//     `_changed_deps_pkgs` collection is discarded unread in that case
-//     anyway (a documented, behavior-preserving simplification, not a
-//     guess). `--dynamic-deps` itself stays unimplemented/unrecognized
-//     in portuale (real portage's own now-defunct alternate resolver
-//     strategy), so only the `--changed-deps` half of that real
-//     silencing condition is reachable here at all.
-//   - `--changed-slot` IS implemented now too, deliberately excluded
-//     from `VALUE_OPTIONS` for the same reason -- real `default_arg_opts`
-//     with a `y_or_n` *optional* value, the identical shape
-//     `--changed-deps` already has (no short alias for this one either).
-//     See `PretendOutcome::Reinstall`'s own doc comment (portage-repo)
-//     and `slot_changed`'s own doc comment for the real
-//     `depgraph.py::_changed_slot` behavior it ports (reinstalls an
-//     already-installed package whose own vdb-recorded `SLOT` differs
-//     from the repo's current ebuild) and its own documented scope cut:
-//     real portage's own consumers of `_changed_slot` live deep inside
-//     binary-package/slot-operator-rebuild scheduling portuale has
-//     none of, so this is ported as simply another independent
-//     `Reinstall` trigger instead of replicating that considerably
-//     messier real control flow.
-//   - `--with-test-deps` IS implemented now too, deliberately excluded
-//     from `VALUE_OPTIONS` for the same reason -- the identical
-//     `y_or_n` optional-value shape `--changed-slot` already has (no
-//     short alias for this one either). See `resolve_pretend_graph`'s
-//     own doc comment (portage-repo) for the real `depgraph.py::
-//     _add_pkg` gating it ports (top-level atoms only, "test" a valid,
-//     not-already-enabled, not-use-masked IUSE flag) and
-//     `use_reduce_flat_subset`'s own doc comment (portage-use-reduce)
-//     for the real `use_reduce(..., subset={"test"})` extraction it's
-//     built on.
-//   - `--noreplace`/`-n` and `--selective` ARE implemented now too,
-//     found and grounded by comparing portuale's own output against
-//     the real, installed system `emerge` on a real package
-//     (`sys-apps/portage`) and tracing real portage's own decision
-//     live: a bare `emerge <atom>` with no other flags does NOT keep an
-//     already-installed, already-satisfying package as-is in real
-//     portage -- it's reinstalled anyway, unless real `myparams[
-//     "selective"]` is set, which `--update`/`--newuse`/`--changed-use`/
-//     `--changed-deps`/`--changed-slot`/`--noreplace`/`--selective`/
-//     `--newrepo` all independently do (`create_depgraph_params.py`).
-//     `--noreplace` is a plain boolean, hence bundle-compatible
-//     (`-pn`, alongside the other bundle-compatible booleans);
-//     `--selective` has the identical *meaning* but a real `y_or_n`
-//     *optional* value instead (the same shape `--changed-deps` already
-//     has, deliberately excluded from `VALUE_OPTIONS` for the same
-//     reason, no short alias of its own -- "n" explicitly cancels
-//     `selective` even if another flag already set it, real
-//     `create_depgraph_params.py`'s own unconditional `if myopts.get(
-//     "--selective") == "n": pop`). See `resolve_pretend`'s own doc
-//     comment (portage-repo) for the full grounding, including why this
-//     portuale's own `selective` computation needs no separate
-//     `--reinstall` flag (`--changed-use` already covers its whole real
-//     contribution) and the documented, narrower scope cut around real
-//     `--newrepo` (needs a vdb `REPOSITORY` reader portuale doesn't
-//     have).
-//   - `--binpkg-changed-deps[=y|n]` and `--use-ebuild-visibility[=y|n]`
-//     ARE implemented now too, deliberately excluded from `VALUE_OPTIONS`
-//     for the same reason -- both real `true_y_or_n` + `default_arg_opts`
-//     (bare -> `y`), the same shape the `--rebuild-if-*` block parses.
-//     Each is a resolver-time override of an automatic default:
-//     `--binpkg-changed-deps=n` turns off the changed-`*DEPEND`
-//     binary-rejection that's otherwise auto-on for any non-`--usepkgonly`
-//     run (and `=y` forces it on even under `--usepkgonly`);
-//     `--use-ebuild-visibility` enforces the `_equiv_ebuild_visible`
-//     check on a built candidate even under `--usepkgonly` / a
-//     `--useoldpkg-atoms` match (real `depgraph.py:8027`'s `not
-//     use_ebuild_visibility and (usepkgonly or useoldpkg)` guard). Both
-//     applied via process-globals (`portage_repo::set_binpkg_changed_
-//     deps_override` / `set_use_ebuild_visibility`), the env-free pattern
-//     `--useoldpkg-atoms` / `--package-moves` already use.
+//! Recognition tables for Portage's full `emerge` CLI option surface
+//! (`lib/_emerge/main.py`: the `options` list, the `shortmapping` and
+//! `argument_options` dicts, and the `actions` frozenset).
+//!
+//! These tables exist purely for recognition, not behavior: using a
+//! Portage flag portuale doesn't implement yet reports "recognized, but
+//! not implemented", distinct from a genuinely unknown flag. Every flag
+//! portuale implements is excluded here and handled directly by the caller
+//! (the implemented set is what `emerge --help` documents, in
+//! `pretend/help.txt`); the contract suite pins the text each table
+//! produces. Per-flag grounding for each exclusion lives in the notes.
+//!
+//! Two parsing facts the caller relies on: short boolean flags bundle
+//! (`-pv` is argparse-native bundling for plain boolean shorts, not
+//! `insert_optional_args`, which separately lets `-v` take an optional
+//! value); and `Category::Value` marks which options take an argument,
+//! but lookups report-and-exit immediately, so the argument is never
+//! parsed here.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -229,14 +30,9 @@ pub struct Lookup {
     pub canonical: &'static str,
 }
 
-/// Real boolean (no-argument) options, from `main.py`'s `options` list
-/// plus its two `longopt_aliases` entries (`--cols`, `--skip-first`) --
-/// `--pretend`/`-p`, `--verbose`/`-v`, `--newuse`/`-N`,
-/// `--changed-use`/`-U`, `--nodeps`/`-O`, `--onlydeps`/`-o`,
-/// `--oneshot`/`-1`, and
-/// `--update`/`-u` are all deliberately excluded, since they're
-/// implemented and handled directly by the caller, not through this "not
-/// implemented" table.
+/// Portage's boolean (no-argument) options: the `options` list plus the two
+/// `longopt_aliases` entries. Implemented flags (handled directly by the
+/// caller, listed in the module docs) are excluded.
 pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alphabetical", None),
     ("--buildpkgonly", Some("-B")),
@@ -263,29 +59,14 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--skip-first", None),
 ];
 
-/// Real value-taking options, from `main.py`'s `argument_options` dict
-/// (each key, with its `"shortopt"` if any).
+/// Portage's value-taking options: the `argument_options` dict (each key,
+/// with its `shortopt` if any). Same exclusion rule as above.
 pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alert", Some("-A")),
-    // `--ask`/`-a` (real `true_y_or_n`) IS implemented -- the interactive
-    // `Would you like to ...?` prompt before a real merge/removal (see
-    // pretend.rs's own parse loop + `ask_confirm`). Excluded here for the
-    // same reason `--verbose`/`-v` is.
+    // Implemented: the interactive prompt (see pretend.rs).
     ("--autounmask", None),
-    // `--autounmask-continue` (real `true_y_or_n`) and
-    // `--autounmask-backtrack` (real `y|n`) ARE recognized now -- both
-    // inert in this `--pretend`-only portuale (real portage gates
-    // write-and-continue on `"--pretend" not in myopts`, and portuale
-    // has no backtracking resolver), except the `actions.py:3772`
-    // `--autounmask-continue has been disabled by --autounmask=n`
-    // warning. See pretend.rs.
-    // `--autounmask-only` (real `true_y_or_n`, `actions.py:456`) IS
-    // implemented -- resolve, show the `display_problems()`
-    // equivalent, exit 0 (see pretend.rs's `autounmask_only` /
-    // `show_merge_list`); under `--pretend` the merge list is re-shown
-    // ahead of the change blocks too (backlog #271, real
-    // `_display_autounmask` -> `_show_merge_list`). Excluded here for
-    // the same reason.
+    // Recognized; inert under --pretend except one warning (see pretend.rs).
+    // Implemented: resolve, show problems, exit 0 (see pretend.rs).
     ("--autounmask-license", None),
     ("--autounmask-unrestricted-atoms", None),
     ("--autounmask-use", None),
@@ -299,44 +80,21 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--buildpkg-exclude", None),
     ("--config-root", None),
     ("--color", None),
-    // `--complete-graph` / `--complete-graph-if-new-use` /
-    // `--complete-graph-if-new-ver` ARE implemented -- real
-    // `create_depgraph_params.py:169-175` + `depgraph.py::_complete_graph`.
-    // In this `--pretend` portuale `complete` mode collapses to a forced deep
-    // walk (see `portage_repo::resolve_pretend_graph`'s `complete` param
-    // and `complete_graph_auto_enable`); `pretend.rs` parses all three
-    // and runs the two-pass auto-enable.
+    // Implemented: forced deep walk (see pretend.rs and portage-repo).
     ("--depclean-lib-check", None),
-    // `--dynamic-deps` IS implemented -- ON by default (portuale's own
-    // long-standing `--deep` behaviour); `=n` walks an installed
-    // package's vdb dep snapshot instead (see `enqueue_dependencies`).
+    // Implemented: on by default; `=n` walks the vdb dep snapshot.
     ("--fail-clean", None),
-    // `--fuzzy-search` / `--regex-search-auto` / `--search-similarity` IS
-    // implemented -- `emerge --search`'s real `difflib` fuzzy matching +
-    // regex-auto detection (see pretend.rs's `run_search` +
-    // `portuale/src/difflib.rs`). Excluded here for the same reason.
+    // Implemented: fuzzy matching + regex-auto detection (see pretend.rs).
     ("--ignore-built-slot-operator-deps", None),
     ("--ignore-soname-deps", None),
-    // `--ignore-world` IS implemented -- real `create_depgraph_params.py:128`
-    // (`is True`, so bare / `=y` / `=True` only) + `depgraph.py:357-360`
-    // (empties `_required_set_names`, dropping `@world` -- which nests
-    // `@selected`/`@system`/`@profile` -- from the complete-graph seeds)
-    // + `:10107` (skips the `@selected` uninstall guard). Portuale empties
-    // `complete_seed_atoms` (which also empties `blocker_retry_seed_atoms`
-    // via the existing clone); explicit args, `--deep`/`--update` and the
-    // removal actions (real returns early for those) are untouched. See
-    // pretend.rs's own parse loop + `run_resolve`'s seed block.
+    // Implemented: drops `@world` from the complete-graph seeds (see pretend.rs).
     ("--jobs", Some("-j")),
     ("--jobs-tmpdir-require-free-gb", None),
     ("--keep-going", None),
     ("--load-average", Some("-l")),
-    // `--misspell-suggestions` IS implemented -- `difflib` close-name
-    // suggestions when a top-level `cat/pkg` doesn't exist (see
-    // pretend.rs's `misspell_suggestion_block`).
+    // Implemented: close-name suggestions for unknown `cat/pkg` (see pretend.rs).
     ("--reinstall", None),
-    // `--reinstall-atoms ATOMS` IS implemented -- a matching
-    // already-installed package is forced to re-merge (see pretend.rs's
-    // parse loop + `resolve_pretend_graph`'s `reinstall_atoms`).
+    // Implemented: force a matching installed package to re-merge (see pretend.rs).
     ("--binpkg-respect-use", None),
     ("--getbinpkg", Some("-g")),
     ("--getbinpkgonly", Some("-G")),
@@ -344,52 +102,26 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--getbinpkg-include", None),
     ("--usepkg-exclude", None),
     ("--usepkg-include", None),
-    // `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` ARE implemented
-    // -- real `main.py` `true_y_or_n` (`"True"`/`"y"`/`"n"`, bare inserts
-    // `"True"`), `depgraph.py:4186-4193` (blank an `--onlydeps` root's
-    // `RDEPEND`+`PDEPEND` on `=n`, its `IDEPEND` too unless ideps is
-    // `y`/`True`). See pretend.rs's own parse loop + `ResolveRequest`'s
-    // `onlydeps*` fields. Excluded here for the same reason.
-    // `--rebuild-exclude` / `--rebuild-ignore` IS implemented -- filters
-    // for the `--rebuild-if-*` scan (see pretend.rs + portage-repo's
-    // `rebuild_if_entries`).
-    // `--package-moves` IS implemented -- `=n` disables `profiles/updates/`
-    // move application (`portage_repo::set_package_moves_enabled`).
+    // Implemented: blank an `--onlydeps` root's runtime deps on `=n` (see pretend.rs).
+    // Implemented: filters for the `--rebuild-if-*` scan (see pretend.rs).
+    // Implemented: `=n` disables `profiles/updates/` move application.
     ("--prefix", None),
     ("--pkg-format", None),
-    // `--quickpkg-direct` / `--quickpkg-direct-root` ARE implemented --
-    // when `--usepkg` + `--quickpkg-direct=y` + target `ROOT` != source
-    // root, the source root's installed packages join the binary pool
-    // (see `portage_repo::set_quickpkg_direct_root`).
-    // `--quiet`/`-q` (real `true_y_or_n`, verbosity level 1) and
-    // `--quiet-build[=y|n]` (redirect build output to `${T}/build.log`)
-    // are both implemented now -- deliberately excluded here for the same
-    // reason `--verbose`/`-v` is: the caller parses them directly. See
-    // pretend.rs.
+    // Implemented: source root's installed packages join the binary pool (see portage-repo).
+    // Implemented: verbosity control, parsed by the caller (see pretend.rs).
     ("--quiet-fail", None),
-    // `--read-news` IS implemented -- with `--ask`, offer `eselect news
-    // read` while calculating dependencies (see pretend.rs, backlog
-    // #231) -- deliberately excluded here for the same reason `--ask`
-    // is: the caller parses it directly.
-    // `--rebuild-if-new-slot` / `-new-rev` / `-new-ver` / `-unbuilt` ARE
-    // implemented -- rebuild an installed package whose build-time dep is
-    // being merged this run (see pretend.rs + portage-repo's
-    // `rebuild_if_entries`; `-new-slot` is the pre-existing `:=`
-    // slot-operator auto-rebuild).
+    // Implemented: offer `eselect news read` with `--ask` (see pretend.rs).
+    // Implemented: rebuild an installed package whose build-time dep is merged this run.
     ("--rebuilt-binaries", None),
     ("--rebuilt-binaries-timestamp", None),
-    // `--regex-search-auto` / `--search-similarity`: implemented, see the
-    // `--fuzzy-search` note above.
+    // Implemented, see the `--fuzzy-search` note above.
     ("--root", None),
     ("--root-deps", None),
     ("--search-index", None),
     ("--select", Some("-w")),
     ("--sync-submodule", None),
     ("--sysroot", None),
-    // `--useoldpkg-atoms ATOMS` IS implemented -- for a matching package,
-    // prefer an existing binary package over a newer unbuilt ebuild (see
-    // `portage_repo::set_useoldpkg_atoms`; only bites under
-    // `--usepkg`/`--getbinpkg`).
+    // Implemented: prefer an existing binary over a newer unbuilt ebuild (see portage-repo).
     ("--usepkg", Some("-k")),
     ("--usepkgonly", Some("-K")),
     ("--usepkg-exclude-live", None),
@@ -397,11 +129,9 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--verbose-slot-rebuilds", None),
 ];
 
-/// Real actions (things that replace, not augment, "calculate and show a
-/// merge list" -- `--depclean`, `--sync`, `--search`, etc.), from
-/// `main.py`'s `actions` frozenset, with short aliases from
-/// `shortmapping` where real emerge defines one. `--help`/`-h` is
-/// deliberately excluded -- see the module doc comment.
+/// Portage's actions (things that replace, not augment, "calculate and show
+/// a merge list"): the `actions` frozenset, with `shortmapping` aliases.
+/// `--help`/`-h` is excluded (handled by the caller, like `--pretend`).
 pub const ACTIONS: &[(&str, Option<&str>)] = &[
     ("--clean", None),
     ("--check-news", None),
@@ -429,8 +159,8 @@ fn find(table: &[(&'static str, Option<&'static str>)], name: &str) -> Option<&'
 }
 
 /// Looks `token` (a single argv entry, e.g. `"--deep"`, `"-D"`, or
-/// `"--deep=1"`) up across all three tables. Returns `None` if it isn't
-/// any real emerge option/action this table knows about at all.
+/// `"--deep=1"`) up across all three tables. Returns `None` when it isn't
+/// a Portage option/action at all.
 pub fn lookup(token: &str) -> Option<Lookup> {
     let name = match token.split_once('=') {
         Some((name, _)) if name.starts_with("--") => name,
@@ -507,122 +237,87 @@ mod tests {
 
     #[test]
     fn does_not_recognize_pretend_itself() {
-        // --pretend/-p is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--pretend").is_none());
         assert!(lookup("-p").is_none());
     }
 
     #[test]
     fn does_not_recognize_newuse_itself() {
-        // --newuse/-N is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--newuse").is_none());
         assert!(lookup("-N").is_none());
     }
 
     #[test]
     fn does_not_recognize_changed_use_itself() {
-        // --changed-use/-U, --newuse's real, narrower alternative, is
-        // now implemented and handled directly by the caller too, not
-        // through this "not implemented" table.
         assert!(lookup("--changed-use").is_none());
         assert!(lookup("-U").is_none());
     }
 
     #[test]
     fn does_not_recognize_with_test_deps_itself() {
-        // --with-test-deps is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--with-test-deps").is_none());
     }
 
     #[test]
     fn does_not_recognize_read_news_itself() {
-        // --read-news is handled directly by the caller (it's
-        // implemented, backlog #231), not through this "not
-        // implemented" table.
         assert!(lookup("--read-news").is_none());
     }
 
     #[test]
     fn does_not_recognize_onlydeps_itself() {
-        // --onlydeps/-o, --nodeps's real complement, is now implemented
-        // and handled directly by the caller too, not through this "not
-        // implemented" table.
         assert!(lookup("--onlydeps").is_none());
         assert!(lookup("-o").is_none());
     }
 
     #[test]
     fn does_not_recognize_oneshot_itself() {
-        // --oneshot/-1 is implemented now (suppresses the world-file
-        // write on a real merge, and the world colour at --pretend) --
-        // handled directly by the caller, not this "not implemented" table.
         assert!(lookup("--oneshot").is_none());
         assert!(lookup("-1").is_none());
     }
 
     #[test]
     fn does_not_recognize_deep_itself() {
-        // --deep/-D is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--deep").is_none());
         assert!(lookup("-D").is_none());
     }
 
     #[test]
     fn does_not_recognize_exclude_itself() {
-        // --exclude/-X is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--exclude").is_none());
         assert!(lookup("-X").is_none());
     }
 
     #[test]
     fn does_not_recognize_deselect_itself() {
-        // --deselect/-W is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--deselect").is_none());
         assert!(lookup("-W").is_none());
     }
 
     #[test]
     fn does_not_recognize_with_bdeps_or_with_bdeps_auto_either() {
-        // Both are handled directly by the caller now (both
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--with-bdeps").is_none());
         assert!(lookup("--with-bdeps-auto").is_none());
     }
 
     #[test]
     fn does_not_recognize_changed_deps_or_changed_deps_report_either() {
-        // Both are handled directly by the caller now (both
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--changed-deps").is_none());
         assert!(lookup("--changed-deps-report").is_none());
     }
 
     #[test]
     fn does_not_recognize_changed_slot_itself() {
-        // --changed-slot is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--changed-slot").is_none());
     }
 
     #[test]
     fn does_not_recognize_noreplace_or_selective_either() {
-        // Both are handled directly by the caller now (both
-        // implemented), not through this "not implemented" table.
         assert!(lookup("--noreplace").is_none());
         assert!(lookup("--selective").is_none());
     }
 
     #[test]
     fn does_not_recognize_the_2026_09_02_batch_flags() {
-        // --ask, --autounmask-only, and the --search fuzzy/regex
-        // modifiers are all handled directly by the caller now (all
-        // implemented), not through this "not implemented" table.
         for flag in [
             "--ask",
             "-a",
@@ -640,12 +335,7 @@ mod tests {
 
     #[test]
     fn does_not_recognize_ignore_world_itself() {
-        // --ignore-world is handled directly by the caller (it's
-        // implemented: real `create_depgraph_params.py:128-129` +
-        // `depgraph.py:357-360`), not through this "not implemented"
-        // table. It has no short alias (real `main.py` declares none),
-        // and the `=n` spelling must not match either (lookup strips the
-        // value before the table search).
+        // Implemented: handled by the caller. No short alias; `=n` strips before lookup.
         assert!(lookup("--ignore-world").is_none());
         assert!(lookup("--ignore-world=n").is_none());
     }
