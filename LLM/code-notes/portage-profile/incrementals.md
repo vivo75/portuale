@@ -18,3 +18,6 @@ Incremental-variable token semantics (USE, FEATURES, and the tracked set behind 
 ## fn apply_use_incremental
 - Portage's `config.py:2888-2945` USE-loop order is wildcard removal first, then `discard(token[1..])`; for `-foo_*` that second step is a no-op on a flag literally named `foo_*` (which is why `apply_incremental`'s exact-removal arm could never express this).
 - The wildcard arm lives **inside Portage's USE loop**, not in the generic incremental loop: non-USE incrementals (`FEATURES`, `CONFIG_PROTECT`, `ACCEPT_KEYWORDS`, the name lists, …) keep using `apply_incremental` and have no `_*` semantics. The positive `foo_*` form is deliberately out of scope here too: it expands against a package's `IUSE`, which only the IUSE-aware `effective_use_flags` path has.
+
+## fn apply_use_incremental_token
+- `-<prefix>_*`: Portage `x[-2:] == "_*"`, `prefix = x[1:-1]` (the trailing underscore is part of the prefix).

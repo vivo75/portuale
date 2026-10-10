@@ -51,11 +51,11 @@ pub struct Config {
     pub envd_use_tokens: Vec<String>,
     /// `<eroot>/etc/profile.env` assigns `PATH`: the phase `PATH` is then
     /// the config-file stack's value, not the calling env's.
-    // Portage: doebuild.py:365-368, _doebuild_path
+    // Portage: doebuild.py, _doebuild_path
     pub envd_sets_path: bool,
     /// Raw text of `<eroot>/etc/profile.env` as last read (`""` when
     /// missing). `env_d_changed` compares the live file against this.
-    // Portage: config.py:2691-2699, reload
+    // Portage: config.py, reload
     pub envd_raw: String,
     /// The `eroot` the `profile.env` was read from (empty on a
     /// `Config::default()`): the per-package-task reload re-reads the
@@ -64,7 +64,7 @@ pub struct Config {
     /// The env.d scalar layer as last read, after the `_env_d_blacklist`
     /// pop. Keys a higher layer also assigned stay listed here;
     /// `envd_higher_keys` tells `reload_env_d` which those are.
-    // Portage: config.py:724-743
+    // Portage: config.py, init (env.d read)
     pub envd_vars: HashMap<String, String>,
     /// Every key a higher config layer assigned during `resolve_config`
     /// (plus `"USE"` when the globals/profile `USE`-reset dropped env.d's
@@ -78,7 +78,7 @@ pub struct Config {
     /// The `PROFILE_ONLY_VARIABLES` fold as of `resolve_config`, the
     /// profile half of the env.d blacklist. Frozen because Portage
     /// computes the blacklist once at init and `reload()` reuses it.
-    // Portage: config.py:734-743
+    // Portage: config.py, init (env.d blacklist)
     pub envd_profile_only: Vec<String>,
     pub accept_keywords: HashSet<String>,
     /// Raw atom or bounded-wildcard-atom strings from `package.mask`, with
@@ -273,7 +273,7 @@ impl Config {
     /// untouched; other keys match the new file. The USE-context
     /// fingerprint is refreshed for the `portage-repo` memos.
     /// Higher-layer expansions are deliberately not redone.
-    // Portage: config.py:2691-2699, reload
+    // Portage: config.py, reload
     pub fn reload_env_d(&mut self, eroot: &Path) {
         let text = std::fs::read_to_string(eroot.join("etc/profile.env")).unwrap_or_default();
         let blacklist: HashSet<String> = self

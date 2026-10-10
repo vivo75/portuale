@@ -3,6 +3,8 @@ make.conf-style parsing: logical lines, shell tokens, `${VAR}` substitution, and
 
 ## fn logical_lines
 - Joined physical lines are separated by a single space. Ports Portage's `getconfig`'s `shlex` reading across newlines inside quotes, which `cnf/make.globals` relies on for its multi-line `FEATURES=`.
+- Splits `text` into logical assignment lines, joining physical lines continued either by a trailing unescaped `\` or by an unclosed `'`/`"` quote -- Portage `getconfig`'s `shlex` reads across newlines inside quotes, which `cnf/make.globals` relies on for its multi-line `FEATURES=`. Quote characters are kept; `parse_kv_line` strips the outer pair. Joined physical lines are separated by a single space.
+- A full-line comment outside any continuation is skipped whole (Portage `getconfig`'s `shlex` sets `commenters = "#"`) -- without this a `#` inside comment prose, e.g. `Don't`, would open a bogus quote that swallows the rest of the file.
 
 ## fn shlex_token
 - Portage's `portage.util.getconfig` tokenizes a `KEY=VALUE` line with a POSIX `shlex` lexer (`shlex.py:read_token`, `posix=True`, `wordchars` extended by getconfig to `~!@#$%*_\:;?,./-+{}`, `quotes = "'"`, `escape = \`); the value token is quote-removed and backslash-processed *before* `varexpand` (`portage/util/__init__.py:885`) ever sees it. Portuale used to strip only the outer quote pair, so an escaped `\"` kept its backslash and `\$` reached the `${VAR}` regex, which expanded it. On this host that corrupted every `make.globals` fetch command: Portage resolves `wget ... -O "${DISTDIR}/${FILE}" "${URI}"`, portuale's value was `wget ... -O \"\/var/cache/distfiles/\\" \"\\"` (backlog #70).
@@ -13,6 +15,7 @@ make.conf-style parsing: logical lines, shell tokens, `${VAR}` substitution, and
 
 ## fn parse_kv_line
 - Runs the `shlex` tokenization even with `expand=False`, like Portage's `getconfig`. Out of scope: conditionals, function defs, etc.; Portage's make.defaults/make.conf files don't use them.
+- Parses one `KEY="value"` / `KEY='value'` / `KEY=value` line, returning the value as the `shlex`-tokenized text ([`shlex_token`]; Portage `getconfig` runs this even with `expand=False`). `None` for comments, blank lines, or anything that isn't a simple assignment (conditionals, function defs, etc. -- out of scope; Portage make.defaults/make.conf files don't use them).
 
 ## fn process_make_conf_file
 - Resolves `source <path>` directives against `config_root` as if it were `/` (chroot-style), matching PORTAGE_CONFIGROOT/ROOT semantics elsewhere in portuale: an absolute `source /etc/make.local` reads `<config_root>/etc/make.local`, not the host path. A missing sourced file is silently skipped (lenient default; bash would error, but no fixture or usage in portuale relies on that).

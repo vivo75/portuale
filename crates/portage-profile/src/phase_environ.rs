@@ -1,6 +1,6 @@
 //! Portage `config.environ()` for build-phase environments: the export
 //! set a source build's every phase sees, built from the resolved
-//! [`Config`]. Expected values verified live against Portage (S0 recon).
+//! [`Config`]. Expected values verified live against Portage.
 //!
 //! Rules mirrored (`ebuild/config.py`, `_config/special_env_vars.py`):
 //! the `env` layer is the whole calling environment (highest priority);
@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::Config;
 
 /// `environ_filter` keys: never exported to the ebuild environment.
-// Portage: special_env_vars.py:257-348 (vendored 3.0.82.2)
+// Portage: special_env_vars.py, environ_filter (vendored 3.0.82.2)
 pub const ENVIRON_FILTER: &[&str] = &[
     "DEPEND",
     "RDEPEND",
@@ -113,7 +113,7 @@ pub const ENVIRON_FILTER: &[&str] = &[
 /// config files; set programmatically by the phase runner instead. The
 /// keys this module computes (`USE`, `IUSE_EFFECTIVE`) insert after the
 /// gate on purpose.
-// Portage: special_env_vars.py:15-74
+// Portage: special_env_vars.py, env_blacklist
 pub const ENV_BLACKLIST: &[&str] = &[
     "A",
     "AA",
@@ -245,7 +245,7 @@ pub struct PhaseUse<'a> {
 
 /// `PORTAGE_USE`: `enabled ∩ (IUSE ∪ IUSE_EFFECTIVE)`, sorted. Exported
 /// as `USE` and written to a binpkg's `metadata/USE` / `Packages` index.
-// Portage: config.py:2261,3329
+// Portage: config.py, PORTAGE_USE / environ
 pub fn portage_use(config: &Config, iuse: &[String], enabled: &[String]) -> Vec<String> {
     let valid: BTreeSet<&str> = iuse
         .iter()
@@ -319,7 +319,7 @@ fn sorted_joined<'a>(set: impl IntoIterator<Item = &'a String>) -> String {
 /// `pkg` is `None` for a run without a resolved candidate: no
 /// `USE`/`IUSE_EFFECTIVE` is produced and every `USE_EXPAND` variable is
 /// its profile scalar if set, else `""`.
-// Portage: config.py:3263-3350
+// Portage: config.py, environ
 pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String, String)> {
     let mut env: BTreeMap<String, String> = BTreeMap::new();
 
@@ -340,7 +340,7 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
     // 2b. `doebuild_environment()` config-only dynamic defaults: `PATH`
     //     when env.d sets it; `MAKEOPTS`/`GNUMAKEFLAGS` from the CPU count
     //     when neither is set.
-    // Portage: doebuild.py:365-378,646-653
+    // Portage: doebuild.py, _doebuild_path and MAKEOPTS defaults
     if config.envd_sets_path
         && let Some(path) = config.other_vars.get("PATH")
     {
@@ -407,7 +407,7 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
 /// `Some(pkg)`: `USE`, `IUSE_EFFECTIVE`, and every `USE_EXPAND` value
 /// derived from the effective USE (empty when off). `None`: no
 /// `USE`/`IUSE_EFFECTIVE`; unprefixed names (`ARCH`) keep their scalar.
-// Portage: config.py:2218-2252
+// Portage: config.py, setcpv
 pub fn phase_environ_pkg(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String, String)> {
     let mut env: BTreeMap<String, String> = BTreeMap::new();
     match pkg {
@@ -469,7 +469,7 @@ mod tests {
 
     /// A synthetic amd64-shaped profile under a temp `config_root` (no
     /// `make.globals`; everything from there is seeded in `make.conf`).
-    /// Expected values from Portage (S0 oracle env).
+    /// Expected values from Portage (oracle env).
     fn synthetic_root(name: &str, make_conf: &str) -> (std::path::PathBuf, PathBuf) {
         let root = TempDir::new(&format!("portage-profile-phase-environ-{name}")).keep();
         let _ = fs::remove_dir_all(&root);
@@ -585,7 +585,7 @@ mod tests {
             sorted.dedup();
             assert_eq!(keys, sorted);
 
-            // Expected values from Portage (S0 oracle rows).
+            // Expected values from Portage (oracle rows).
             assert_eq!(get(&env, "ARCH"), Some("amd64"));
             assert_eq!(get(&env, "ELIBC"), Some("glibc"));
             assert_eq!(get(&env, "KERNEL"), Some("linux"));
