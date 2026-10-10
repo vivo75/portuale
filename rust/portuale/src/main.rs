@@ -119,7 +119,45 @@ fn print_applets() {
     println!("Run `portuale <applet> --help` for that applet's own options.");
 }
 
+/// `--help` / `--version` (any spelling) never touch the installed
+/// database, so they must not fail on a missing one.
+fn is_help_or_version(args: &[String]) -> bool {
+    args.iter()
+        .any(|a| matches!(a.as_str(), "--help" | "-h" | "--version" | "-V"))
+}
+
+/// `emerge --pretend` in any spelling: `--pretend` or a short-option
+/// cluster holding `p` (`-p`, `-pv`, `-uDNp`).
+fn emerge_is_pretend(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        a == "--pretend" || (a.starts_with('-') && !a.starts_with("--") && a[1..].contains('p'))
+    })
+}
+
+/// #318: the backend `PORTUALE_VDB_BACKEND` selects (environment, then
+/// make.conf), opened and registered before the applet runs, the same
+/// rule `mrg` applies without its flags. `None` keeps the run going on
+/// the files tree; `Err` is the exit status to stop with.
+fn select_vdb_for(
+    who: &str,
+    args: &[String],
+    readonly: bool,
+) -> Result<Option<crate::vdb_ipc::Server>, ExitCode> {
+    if is_help_or_version(args) {
+        return Ok(None);
+    }
+    mrg::select_vdb(who, None, None, readonly).map_err(|(message, code)| {
+        eprintln!("{message}");
+        ExitCode::from(code)
+    })
+}
+
 fn run_emerge(args: &[String]) -> ExitCode {
+    // Held for the whole run: the redb parent pipe stops when it drops.
+    let _vdb_ipc = match select_vdb_for("emerge", args, emerge_is_pretend(args)) {
+        Ok(server) => server,
+        Err(code) => return code,
+    };
     let code = pretend::run(args);
     // `docs/history/second_python_copy_removal.md` §4: the L0 bed and the
     // contract suite ask for the count of dependency tokens the resolver
@@ -134,6 +172,13 @@ fn run_emerge(args: &[String]) -> ExitCode {
 }
 
 fn run_ebuild(args: &[String]) -> ExitCode {
+    // Read-write even for a build-only command: its phases' `has_version`
+    // reach a redb file only through the parent pipe a read-write open
+    // starts (redb allows one process per file).
+    let _vdb_ipc = match select_vdb_for("ebuild", args, false) {
+        Ok(server) => server,
+        Err(code) => return code,
+    };
     ebuild::run(args)
 }
 

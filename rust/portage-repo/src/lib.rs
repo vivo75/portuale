@@ -1183,6 +1183,14 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
     find_repos_impl(config_root, true)
 }
 
+/// [`find_repos`] for a process-internal config probe that runs before
+/// the CLI's own load (the VDB backend's make.conf lookup, #318): no
+/// "Section ... has name different from repository name" line, so the
+/// run prints it exactly as often as before the probe existed.
+pub fn find_repos_quiet(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
+    find_repos_impl(config_root, false)
+}
+
 /// [`find_repos`] without the user-facing "Section ... has name different
 /// from repository name" line, for the internal location-keyed lookups
 /// (`repo_config_for_location` -- and therefore `repo_masters_for_location`

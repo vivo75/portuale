@@ -383,7 +383,15 @@ pub fn build_bundle(
     let unit = staging_tmp.join(&pf);
     let image = unit.join("image");
     let build_info = unit.join("build-info");
-    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info, gpg)?;
+    // The remote client merges through its own generated scripts; the
+    // #334 xattr restore covers the local merge only.
+    crate::binpkg::extract_binpkg(
+        binpkg_path,
+        &image,
+        &build_info,
+        gpg,
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )?;
 
     // Real `_emerge/Binpkg._start_task`: "Store the md5sum in the vdb."
     // The same digest the local `merge_binpkg` records (whole binpkg

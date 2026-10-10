@@ -1264,6 +1264,7 @@ pub fn extract_binpkg(
     image_dest: &Path,
     build_info_dest: &Path,
     gpg: &GpgVerify,
+    xattrs: &crate::ebuild_merge::XattrPolicy,
 ) -> Result<(), String> {
     fs::create_dir_all(image_dest).map_err(|e| format!("{}: {e}", image_dest.display()))?;
     fs::create_dir_all(build_info_dest)
@@ -1294,7 +1295,7 @@ pub fn extract_binpkg(
     // into `"\n"` and trimmed the trailing space real keeps on the last
     // `NEEDED` line (L2 xpak control, #326 S5), the same bug the gpkg
     // branch above fixed.
-    extract_xpak_image(binpkg_path, image_dest)?;
+    extract_xpak_image(binpkg_path, image_dest, xattrs)?;
     let seg = read_xpak_segment(binpkg_path)?;
     for (name, bytes) in parse_xpak_members(&seg)? {
         let Some(dest) = xpak_member_dest(build_info_dest, &name) else {
@@ -1477,7 +1478,11 @@ fn scan_image_tar(image_tar: &Path, gpkg: &Path) -> Result<(), String> {
 /// The xpak `[image tarball]` prefix -> `dest`. Real
 /// `xpak.tbz2.decompose`: the image is everything before the
 /// `XPAKPACK…STOP` trailer.
-fn extract_xpak_image(binpkg_path: &Path, dest: &Path) -> Result<(), String> {
+fn extract_xpak_image(
+    binpkg_path: &Path,
+    dest: &Path,
+    xattrs: &crate::ebuild_merge::XattrPolicy,
+) -> Result<(), String> {
     use std::io::{Read, Seek, SeekFrom};
 
     let mut f =
@@ -1516,7 +1521,50 @@ fn extract_xpak_image(binpkg_path: &Path, dest: &Path) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", image_tar.display()))?;
     drop(out);
     // `tar -x` auto-detects gzip/bzip2/xz/zstd/... on read.
-    run_tar(&["-xpf", &lossy(&image_tar), "-C", &lossy(dest)])
+    let (tar, dest) = (lossy(&image_tar), lossy(dest));
+    let mut args = vec!["-xpf", tar.as_str(), "-C", dest.as_str()];
+    let excludes = xpak_xattr_tar_options(xattrs, tar_supports_xattrs());
+    args.extend(excludes.iter().map(String::as_str));
+    run_tar(&args)
+}
+
+/// Real `BinpkgExtractorAsync._xpak_start` (`BinpkgExtractorAsync.py:
+/// 39-50`, #334): under `FEATURES=xattr`, when the tar knows `--xattrs`,
+/// extract with `--xattrs --xattrs-include='*'` plus one
+/// `--xattrs-exclude=<pat>` per `PORTAGE_XATTR_EXCLUDE` pattern. Real
+/// builds a shell string, so its quoted `'*'` reaches tar as the plain
+/// word `*`; this argv is what that shell hands tar. The xpak itself was
+/// packed with `gtar --xattrs` under the same feature
+/// (`misc-functions.sh:587-590`). gpkg neither stores nor restores
+/// xattrs in real, so only the xpak image takes these.
+fn xpak_xattr_tar_options(
+    xattrs: &crate::ebuild_merge::XattrPolicy,
+    tar_knows_xattrs: bool,
+) -> Vec<String> {
+    if !xattrs.enabled || !tar_knows_xattrs {
+        return Vec::new();
+    }
+    let mut opts = vec!["--xattrs".to_string(), "--xattrs-include=*".to_string()];
+    opts.extend(
+        xattrs
+            .exclude
+            .split_whitespace()
+            .map(|pat| format!("--xattrs-exclude={pat}")),
+    );
+    opts
+}
+
+/// Real's `b"--xattrs" in $(gtar --help)` probe, run once per process.
+fn tar_supports_xattrs() -> bool {
+    use std::sync::OnceLock;
+    static KNOWS: OnceLock<bool> = OnceLock::new();
+    *KNOWS.get_or_init(|| {
+        Command::new("tar")
+            .arg("--help")
+            .output()
+            .map(|o| o.stdout.windows(8).any(|w| w == b"--xattrs"))
+            .unwrap_or(false)
+    })
 }
 
 /// Locate `<basename>/<want>.tar[.<comp>]` in a gpkg's outer tar,
@@ -2689,6 +2737,104 @@ mod tests {
         out
     }
 
+    /// #334: real `BinpkgExtractorAsync._xpak_start`'s tar options, as the
+    /// argv its shell string becomes: none without `FEATURES=xattr` or
+    /// without a tar that knows `--xattrs`.
+    #[test]
+    fn xpak_xattr_tar_options_match_reals_extractor() {
+        let on = crate::ebuild_merge::XattrPolicy {
+            enabled: true,
+            exclude: "security.evm user.xdg.*".to_string(),
+        };
+        assert_eq!(
+            xpak_xattr_tar_options(&on, true),
+            [
+                "--xattrs",
+                "--xattrs-include=*",
+                "--xattrs-exclude=security.evm",
+                "--xattrs-exclude=user.xdg.*",
+            ]
+        );
+        assert!(xpak_xattr_tar_options(&on, false).is_empty());
+        assert!(
+            xpak_xattr_tar_options(&crate::ebuild_merge::XattrPolicy::default(), true).is_empty()
+        );
+    }
+
+    /// #334 end to end: an xpak whose image tarball was packed with
+    /// `tar --xattrs` (real `__dyn_package` under `FEATURES=xattr`)
+    /// restores the attributes on extraction under `xattr`, minus
+    /// `PORTAGE_XATTR_EXCLUDE`, and none without it. Real Portage does the
+    /// same in the bed image: pmtest `differential-test-bed/scripts/
+    /// 329-xattr.sh <pm> [-xattr] binpkg`.
+    #[test]
+    fn extract_binpkg_restores_xpak_xattrs_under_features_xattr() {
+        use std::os::unix::ffi::OsStrExt;
+        if !tar_supports_xattrs() {
+            eprintln!("skipped: tar has no --xattrs");
+            return;
+        }
+        let tmp = TempDir::new("binpkg-xpak-xattrs").keep();
+        let _ = fs::remove_dir_all(&tmp);
+        let stage = tmp.join("stage");
+        fs::create_dir_all(stage.join("usr/share/xa")).unwrap();
+        let f = stage.join("usr/share/xa/f");
+        fs::write(&f, b"payload").unwrap();
+        let fb = f.as_os_str().as_bytes();
+        if crate::helpers::xattr_set(fb, b"user.keep", b"k").is_err() {
+            eprintln!("skipped: no user xattrs on {}", tmp.display());
+            return;
+        }
+        crate::helpers::xattr_set(fb, b"user.skip", b"s").unwrap();
+        let tar_path = tmp.join("image.tar");
+        run_tar(&[
+            "-cf",
+            &lossy(&tar_path),
+            "--xattrs",
+            "-C",
+            &lossy(&stage),
+            ".",
+        ])
+        .unwrap();
+        let pkg = tmp.join("xa-1.tbz2");
+        fs::write(
+            &pkg,
+            make_xpak_binpkg(&fs::read(&tar_path).unwrap(), &[("SLOT", b"0\n")]),
+        )
+        .unwrap();
+
+        let on = crate::ebuild_merge::XattrPolicy {
+            enabled: true,
+            exclude: "user.sk*".to_string(),
+        };
+        let off = crate::ebuild_merge::XattrPolicy::default();
+        for (name, policy, keep) in [("on", &on, true), ("off", &off, false)] {
+            let image = tmp.join(format!("image-{name}"));
+            extract_binpkg(
+                &pkg,
+                &image,
+                &tmp.join(format!("bi-{name}")),
+                &GpgVerify::default(),
+                policy,
+            )
+            .expect("extract succeeds");
+            let got = image.join("usr/share/xa/f");
+            let gb = got.as_os_str().as_bytes();
+            assert_eq!(fs::read(&got).unwrap(), b"payload");
+            assert_eq!(
+                crate::helpers::xattr_get(gb, b"user.keep").ok(),
+                keep.then(|| b"k".to_vec()),
+                "{name}"
+            );
+            assert_eq!(
+                crate::helpers::xattr_get(gb, b"user.skip").ok(),
+                None,
+                "{name}"
+            );
+        }
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn read_xpak_metadata_walks_the_index_and_returns_every_key() {
         let scratch = ScratchDir::new("xpak-test").unwrap();
@@ -2833,6 +2979,7 @@ mod tests {
             &image,
             &bi,
             &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
         )
         .expect("extract succeeds");
 
@@ -2885,7 +3032,14 @@ mod tests {
         fs::write(&pkg, bytes).unwrap();
         let image = tmp.join("image");
         let bi = tmp.join("bi");
-        extract_binpkg(&pkg, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
+        extract_binpkg(
+            &pkg,
+            &image,
+            &bi,
+            &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
+        )
+        .expect("extract succeeds");
         assert_eq!(fs::read(bi.join("DEBUGBUILD")).unwrap(), b"");
         assert_eq!(
             fs::read(bi.join("NEEDED")).unwrap(),
@@ -2912,6 +3066,7 @@ mod tests {
             &image,
             &bi,
             &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
         )
         .expect("gpkg extract succeeds");
         // The inner `image/` and `metadata/` top-level dirs real's
@@ -3306,6 +3461,7 @@ mod tests {
             &tmp.join("image"),
             &tmp.join("build-info"),
             &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
         )
         .unwrap_err();
         assert!(err.contains("size mismatch"), "{err}");
@@ -4833,7 +4989,14 @@ mod tests {
         let tmp = TempDir::new("binpkg-gpkg-meta").keep();
         let image = tmp.join("image");
         let bi = tmp.join("build-info");
-        extract_binpkg(&g, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
+        extract_binpkg(
+            &g,
+            &image,
+            &bi,
+            &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
+        )
+        .expect("extract succeeds");
         use std::os::unix::fs::PermissionsExt;
         let desc = fs::symlink_metadata(bi.join("DESCRIPTION")).unwrap();
         assert!(
@@ -4856,6 +5019,7 @@ mod tests {
                 &tmp.join("image"),
                 &tmp.join("build-info"),
                 &GpgVerify::default(),
+                &crate::ebuild_merge::XattrPolicy::default(),
             )
             .unwrap_err();
             assert!(err.contains(needle), "expected {needle:?} in {err:?}");
@@ -4912,7 +5076,14 @@ mod tests {
         let tmp = TempDir::new("binpkg-gpkg-imgsym").keep();
         let image = tmp.join("image");
         let bi = tmp.join("build-info");
-        extract_binpkg(&g, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
+        extract_binpkg(
+            &g,
+            &image,
+            &bi,
+            &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
+        )
+        .expect("extract succeeds");
         let link = image.join("usr/lib/liblink.so");
         let meta = fs::symlink_metadata(&link).unwrap();
         assert!(meta.file_type().is_symlink(), "image symlink kept");
@@ -4987,6 +5158,7 @@ mod tests {
                 &tmp.join("image"),
                 &tmp.join("build-info"),
                 &GpgVerify::default(),
+                &crate::ebuild_merge::XattrPolicy::default(),
             )
             .unwrap_err();
             assert!(err.contains(needle), "expected {needle:?} in {err:?}");
@@ -5061,7 +5233,14 @@ mod tests {
         verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
         let image = tmp.join("image");
         let bi = tmp.join("build-info");
-        extract_binpkg(&g, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
+        extract_binpkg(
+            &g,
+            &image,
+            &bi,
+            &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
+        )
+        .expect("extract succeeds");
 
         use std::os::unix::fs::MetadataExt;
         let link = image.join("usr/lib/liblink.so");

@@ -2488,8 +2488,14 @@ mod tests {
 
         let image_out = run.work.path().join("extracted-image");
         let bi_out = run.work.path().join("extracted-build-info");
-        crate::binpkg::extract_binpkg(&run.out, &image_out, &bi_out, &unsigned_verify())
-            .expect("extract");
+        crate::binpkg::extract_binpkg(
+            &run.out,
+            &image_out,
+            &bi_out,
+            &unsigned_verify(),
+            &crate::ebuild_merge::XattrPolicy::default(),
+        )
+        .expect("extract");
         assert_eq!(
             tree_listing(&image_out),
             tree_listing(&run.work.path().join("image")),
