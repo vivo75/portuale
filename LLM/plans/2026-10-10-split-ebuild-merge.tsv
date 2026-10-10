@@ -1,0 +1,15 @@
+# #336 Phase 6: crates/portuale/src/ebuild_merge/mod.rs split spec (split_module.py). MERGE PATH.
+pub struct MergeOptions	options	Merge options and the xattr policy.
+pub(crate) fn is_protected(	protect	CONFIG_PROTECT: protected paths, ._cfg names, atomic replaces, xattrs.
+pub(crate) struct XattrPolicy	options
+fn xattrs_equal(	protect
+type PlibEntries	plib_registry	The preserved-libs registry and its storage.
+fn unregister_preserved_libs(	plib_merge	Preserved libraries during a merge.
+pub(crate) fn preserve_libs_on_unmerge(	plib_unmerge	Preserved libraries during unmerge and prune.
+fn repository_name_for(	tree	Merging the image tree onto ROOT.
+fn create_vdb_tmp(	vdb_entry	Writing and publishing the VDB entry; env.d updates.
+pub(crate) fn apply_install_mask(	installed_instance	INSTALL_MASK and what is already installed.
+fn blocked_installed_packages(	collisions	Blockers against installed packages and file collisions.
+pub(crate) fn feature_enabled(	lib
+fn merge_after_install(	after_install	The post-install merge driver and same-slot unmerge.
+pub fn merge_binpkg(	from_binpkg	Merging a binary package.
