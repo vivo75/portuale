@@ -5,8 +5,7 @@ use crate::remote::*;
 // --- Shell quoting ---------------------------------------------------------
 
 /// Quote one argv word for `bash -s` payloads: single-quote, escaping
-/// embedded quotes as `'\''`. Server-side, unit-tested -- client paths
-/// are never string-interpolated raw.
+/// embedded quotes as `'\''`. Client paths are never interpolated raw.
 pub fn sh_quote(word: &str) -> String {
     let mut out = String::with_capacity(word.len() + 2);
     out.push('\'');
@@ -24,13 +23,10 @@ pub fn sh_quote(word: &str) -> String {
 
 // --- SSH transport ---------------------------------------------------------
 
-/// Directory for ControlPersist sockets (`0700`). Unix-domain socket
-/// paths cap at ~108 bytes, and `%C` alone still needs ~60 of those, so
-/// candidates are tried shortest-first and any base that cannot fit is
-/// skipped: `$XDG_RUNTIME_DIR` (usually `/run/user/<uid>`, the shortest
-/// stable per-user dir), then `$HOME/.portuale/cp`. `None` when neither
-/// exists nor fits -- the caller then skips multiplexing entirely
-/// (slower, still correct).
+/// Directory for ControlPersist sockets (`0700`). Candidates are
+/// tried shortest-first and a base that cannot fit the ~108-byte
+/// socket cap is skipped; `None` disables multiplexing (slower,
+/// still correct).
 pub(crate) fn control_dir() -> Option<std::path::PathBuf> {
     control_dir_for(
         std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from),
@@ -70,8 +66,7 @@ pub(crate) fn control_dir_for(
 }
 
 /// Build the `ssh` argv (without the remote command): multiplexed,
-/// non-interactive (`BatchMode=yes` fails fast instead of prompting),
-/// rc 255 = transport error per the ansible convention.
+/// non-interactive (`BatchMode=yes` fails fast instead of prompting).
 pub(crate) fn ssh_argv(ctx: &RemoteContext, control: Option<&std::path::Path>) -> Vec<String> {
     let mut argv = vec!["ssh".to_string(), "-p".to_string(), ctx.port.to_string()];
     if let Some(key) = &ctx.key_file {
@@ -109,9 +104,9 @@ pub(crate) fn ssh_argv(ctx: &RemoteContext, control: Option<&std::path::Path>) -
     argv
 }
 
-/// True when an ssh failure is a *transport* problem (vs. a remote
-/// command failure): exit 255, spawn failure, or the classic fatal
-/// signatures on stderr.
+/// True when an ssh failure is a *transport* problem rather than a
+/// remote command failure: exit 255, spawn failure, or classic
+/// fatal signatures on stderr.
 pub(crate) fn is_transport_error(code: Option<i32>, stderr: &str) -> bool {
     if code == Some(255) {
         return true;
@@ -124,17 +119,11 @@ pub(crate) fn is_transport_error(code: Option<i32>, stderr: &str) -> bool {
             || stderr.contains("Permission denied"))
 }
 
-/// The local transport's `bash -s`: the client side of a `local` run is
-/// this same host, so the child would inherit the server process's
-/// environment. Two things must not ride along or be missing (#313):
-/// the server's own VDB selection (`PORTUALE_VDB_*`, set by `mrg` for a
-/// `--remote-vdb=server:` copy) -- a client phase's `has_version` /
-/// `best_version` must read the *client's* VDB, which stays a files tree
-/// (`mrg.rs` `setup_vdb`) -- and `PORTUALE_BIN`, which the vendored
-/// `portageq-wrapper` shim execs (`#326 S8.3`: every generated script
-/// exports the resolved absolute path, and local transport keeps
-/// `current_exe()` with no install). Over ssh neither is forwarded, so
-/// only this transport needs it.
+/// The local transport's `bash -s`: the child would inherit the
+/// server process's environment, so the server's own VDB selection
+/// (the `PORTUALE_VDB_*` vars and the VDB IPC var) is removed and
+/// `PORTUALE_BIN` is set. Only this transport needs it; over ssh
+/// nothing is forwarded.
 pub(crate) fn local_client_bash() -> std::process::Command {
     let mut cmd = std::process::Command::new("bash");
     cmd.arg("-s");
@@ -192,10 +181,8 @@ pub(crate) fn run_script_stdin(
 
 /// Run an arbitrary remote command (`tar`, …), not just `bash -s`.
 /// stdout bytes come back to the caller (used by the config pull).
-/// `remote_argv` is an argv, never shell text: over ssh, which joins its
-/// trailing words with spaces for the remote shell, each word is
-/// `sh_quote`d, so a client path with spaces or metacharacters (e.g. a
-/// `--remote-portuale-dir`) stays one word (#326 S8 review).
+/// `remote_argv` is an argv, never shell text: over ssh each word is
+/// `sh_quote`d, so a client path with spaces stays one word.
 pub(crate) fn run_raw_command(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -293,8 +280,8 @@ pub(crate) fn send_file(
 }
 
 /// Ship in-memory bytes to a client path: the `send_file` transport
-/// with bytes the server never wrote to disk (old-hook envs staged for
-/// the merge driver, backlog #171).
+/// for bytes the server never wrote to disk (old-hook envs staged
+/// for the merge driver).
 pub(crate) fn send_bytes(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,

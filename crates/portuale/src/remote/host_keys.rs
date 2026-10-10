@@ -4,9 +4,7 @@ use crate::remote::*;
 
 /// `ssh-keygen -F <id>` output, if the id is already known (empty =
 /// first contact). Best-effort: failures mean "unknown", never fatal.
-/// Follows a custom `UserKnownHostsFile` from `--remote-ssh-args` --
-/// without it ssh-keygen would read the default file while ssh used the
-/// custom one (and vice versa).
+/// Follows a custom `UserKnownHostsFile` from `--remote-ssh-args`.
 pub(crate) fn known_host_lines(ctx: &RemoteContext, id: &str) -> String {
     let mut cmd = std::process::Command::new("ssh-keygen");
     if let Some(file) = known_hosts_file(ctx) {
@@ -72,9 +70,8 @@ pub(crate) fn known_hosts_file(ctx: &RemoteContext) -> Option<String> {
 }
 
 /// The known_hosts id(s) this connection is stored under: a
-/// `-o HostKeyAlias=X` inside `--remote-ssh-args` redirects it (else the
-/// hostname itself, plus the `[host]:port` spelling for non-default
-/// ports, which plain `-F host` does not match).
+/// `-o HostKeyAlias=X` redirects it, else the hostname plus the
+/// `[host]:port` spelling for non-default ports.
 pub(crate) fn lookup_ids(ctx: &RemoteContext) -> Vec<String> {
     if let Some(alias) = ssh_option_value(ctx, "HostKeyAlias") {
         return vec![alias];

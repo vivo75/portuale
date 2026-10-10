@@ -1,18 +1,8 @@
 use super::*;
 
-/// Backlog #171c task 4: the `--remote-binpkg` trial path places
-/// `/etc/portage` through the shared `place_config_root` helper --
-/// `Server` used directly, `Client` pulled over local transport and
-/// re-rooted -- with the `PORTAGE_CONFIGROOT` override held for the
-/// resolve, so the same `load_repos_and_config` +
-/// `config_install_mask` / `config_features_string` /
-/// `config_bzip2_command` getters the plan path uses see the placed
-/// tree. A synthetic client tree pins both placements (`server:`
-/// takes a config root in real-root layout, `client:` the
-/// `/etc/portage` dir itself -- the contract suite's
-/// `test_mrg_remote_resolve_merges_a_binhost_binary` uses
-/// `server:{root}` the same way); the pulled temp dir is gone after
-/// the `Client` resolve (task 3).
+/// Both placements resolve through the shared helper: `Server` used
+/// directly, `Client` pulled over local transport and re-rooted, with the
+/// override held for the resolve. The pulled temp dir is gone afterwards.
 #[test]
 fn placed_config_root_covers_both_placements() {
     // `PORTAGE_CONFIGROOT` is process-global (see
@@ -66,7 +56,7 @@ fn placed_config_root_covers_both_placements() {
         );
         ctx.etc_portage = placement.clone();
         let placed = place_config_root(&ctx, None).expect("placement resolves");
-        // Both shapes resolve to a real-root layout: the `Client`
+        // Both shapes resolve to a root layout: the `Client`
         // pull is re-rooted as `<tmp>/etc/portage`, the `Server`
         // root is used directly.
         assert!(
@@ -107,7 +97,7 @@ fn placed_config_root_covers_both_placements() {
             None => std::env::remove_var("PORTAGE_CONFIGROOT"),
         }
     }
-    // Task 3: the pulled temp copy is removed best-effort with the
+    // The pulled temp copy is removed best-effort with the
     // resolve; the server source tree is untouched.
     assert!(
         client_tmp.as_ref().is_some_and(|dir| !dir.exists()),
@@ -120,14 +110,9 @@ fn placed_config_root_covers_both_placements() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 follow-up 4, step 2: a dangling absolute
-/// `make.profile` into the client's repo path plus a client
-/// `repos.conf` naming that repo resolves to the **same-named**
-/// server repo's profile -- even when the main repo provides the
-/// same relative profile with different content (a pure
-/// main-first scan would pick the wrong one). Real's stacking
-/// order holds: server `make.globals` + profile + client
-/// `make.conf` (`config.py:446-499`, `const.INCREMENTALS`).
+/// A dangling `make.profile` into the client's repo path resolves to the
+/// same-named server repo's profile, even when the main repo provides the
+/// same relative profile with different content.
 #[test]
 fn remote_client_make_profile_resolves_against_same_named_server_repo() {
     let tmp = regen_tmp("make-profile-name");
@@ -184,9 +169,8 @@ fn remote_client_make_profile_resolves_against_same_named_server_repo() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 follow-up 4, step 3: with **no** client `repos.conf`
-/// (the owner Q10 client holds no repo at all) the dangling link
-/// resolves by `profiles/<rel>` against the server repos.
+/// With no client `repos.conf`, the dangling link resolves by
+/// `profiles/<rel>` against the server repos.
 #[test]
 fn remote_client_make_profile_resolves_without_client_repos_conf() {
     let tmp = regen_tmp("make-profile-norepos");
@@ -226,9 +210,8 @@ fn remote_client_make_profile_resolves_without_client_repos_conf() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 follow-up 4, step 5: an unresolvable target fails
-/// loudly -- a `!!!` message naming the target -- never a silent
-/// empty chain.
+/// An unresolvable target fails loudly, naming the target -- never a
+/// silent empty chain.
 #[test]
 fn remote_client_make_profile_unresolvable_fails_loudly() {
     let tmp = regen_tmp("make-profile-loud");
@@ -274,9 +257,8 @@ fn remote_client_make_profile_unresolvable_fails_loudly() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 follow-up 4, step 4: a directory `make.profile`
-/// keeps working through the normal machinery -- its `parent`
-/// `gentoo:base` entry resolves against the configured repos.
+/// A directory `make.profile` keeps working through the normal machinery:
+/// its `parent` entries resolve against the configured repos.
 #[test]
 fn remote_client_make_profile_dir_with_cross_repo_parent_resolves() {
     let tmp = regen_tmp("make-profile-dir");
@@ -338,11 +320,9 @@ fn remote_client_make_profile_dir_with_cross_repo_parent_resolves() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 follow-up 4, step 3 order: with no client
-/// `repos.conf` and two server repos providing `profiles/<rel>`,
-/// the main repo wins; the link itself is client-relative (its
-/// text climbs out of the client's `/etc/portage`, never followed
-/// there).
+/// With no client `repos.conf` and two server repos providing
+/// `profiles/<rel>`, the main repo wins; the link may be client-relative
+/// (resolved against the client's `/etc/portage`, never followed there).
 #[test]
 fn remote_client_make_profile_prefers_main_repo_and_relative_targets() {
     let tmp = regen_tmp("make-profile-order");
@@ -394,13 +374,9 @@ fn remote_client_make_profile_prefers_main_repo_and_relative_targets() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171b task 1: `--remote-binpkg` loads the placed client
-/// config through the SAME shared helper `pretend::run` uses
-/// (`load_repos_and_config`: one resolver call, no duplicate
-/// logic), so `build_bundle` / the env regen see the same
-/// `INSTALL_MASK` (+ the `no{man,info,doc}` fold), merge-time
-/// `FEATURES` and `PORTAGE_BZIP2_COMMAND` as the plan path. A
-/// synthetic client config root pins the wiring end to end.
+/// `--remote-binpkg` loads the placed client config through the same
+/// shared resolver the plan path uses, so `build_bundle` and the env regen
+/// see the same mask, merge-time `FEATURES` and `PORTAGE_BZIP2_COMMAND`.
 #[test]
 fn remote_binpkg_path_resolves_the_placed_client_config() {
     // `INSTALL_MASK` is process-global (see `PLACED_CONFIG_ENV_LOCK`);
@@ -456,30 +432,18 @@ fn remote_binpkg_path_resolves_the_placed_client_config() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 follow-up 5 (l171f; review of l171e): the owner
-/// Q10 client holds no `repos.conf` at all -- the pulled config
-/// must resolve on the PRODUCTION path (`place_config_root` +
-/// `load_repos_and_config`, the shared chain `run_remote_resolve`
-/// / `pretend::run` and `run_bundle_stage` both resolve through),
-/// not just through the test-only
-/// `l171e_resolve_with_server_repos` helper. The server root
-/// carries its repos *only* in the global
-/// `usr/share/portage/config/repos.conf` slot (real's
-/// `repository/config.py:1488-1508` reads the global file before
-/// the user's); the seed copies it into the placed root because
-/// the pulled tree has none, the dangling `make.profile` remaps
-/// onto the server repo, and the resolved `FEATURES` stack server
-/// globals + profile + client `make.conf` in real's order
-/// (`config.py:446-499`, `const.INCREMENTALS`).
+/// A client with no `repos.conf` at all resolves on the production path
+/// (`place_config_root` + `load_repos_and_config`): the server's global
+/// `repos.conf` is seeded into the placed root, and only its content
+/// arrives there.
 #[test]
 fn remote_client_without_repos_conf_resolves_on_the_production_path() {
     let tmp = regen_tmp("norepos-production");
     // A server root with repos in the global slot (the exact file
     // `place_config_root` seeds from) *and* a user slot -- like a
-    // real server, which always has `/etc/portage/repos.conf`, so
-    // `find_repos` on the server root itself keeps working. The
-    // user slot carries an extra overlay the global slot lacks, so
-    // the placed tree pins the seed's source: only the global
+    // genuine server, so `find_repos` on the server root itself keeps
+    // working. The user slot carries an extra overlay the global slot
+    // lacks, so the placed tree pins the seed's source: only the global
     // content may arrive.
     let server_root = tmp.join("serverroot");
     std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
@@ -528,7 +492,7 @@ fn remote_client_without_repos_conf_resolves_on_the_production_path() {
     );
     let eroot = tmp.join("eroot");
     // The production resolver both mrg paths share -- previously
-    // `Err(NoReposConf)` here (review of l171e).
+    // `Err(NoReposConf)` here.
     let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
         .expect("placed client config resolves without a client repos.conf");
     // Only the seeded global content arrived: the server user

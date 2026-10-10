@@ -56,12 +56,8 @@ fn merge_driver_protects_a_modified_config() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #97's core invariant for the remote driver: replacing a
-/// file must never write the existing inode. An open fd must keep
-/// reading the old bytes after the merge while the path carries the
-/// new content on a fresh inode. The old `cp -p "$src" "$dest"`
-/// truncates that inode -- fatal for an mmap'd `libc.so.6` /
-/// `libreadline.so.8` in a running client (backlog #96).
+/// Replacing a file must never write the existing inode: an open fd keeps
+/// the old bytes while the path carries the new content on a fresh inode.
 #[test]
 fn merge_driver_never_writes_the_existing_inode() {
     use std::io::Read;
@@ -108,12 +104,8 @@ fn merge_driver_never_writes_the_existing_inode() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// The live shape of backlog #97: a client re-merging a binary that
-/// is currently executing (its own `/bin/bash`, or glibc's ld.so).
-/// The old `cp -p` hit `ETXTBSY` and failed the copy step; the
-/// temp+rename replacement succeeds and the running process keeps
-/// its old inode. `/bin/sleep` stands in for the shell: the same
-/// execve-protected kernel path.
+/// Re-merging a currently-executing binary succeeds, and the running
+/// process keeps its old inode while the path carries the new binary.
 #[test]
 fn merge_driver_replaces_a_running_executable_atomically() {
     use std::os::unix::fs::MetadataExt as _;
@@ -197,9 +189,8 @@ fn merge_driver_aborts_on_unowned_collision() {
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("usr/share")).unwrap();
     std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
-    // A file another installed package owns: fail-closed (no
-    // protect-owned nuance in v1). An unowned orphan would simply
-    // be overwritten -- only foreign ownership aborts.
+    // A file another installed package owns: fail-closed. An unowned
+    // orphan is simply overwritten -- only foreign ownership aborts.
     std::fs::write(
         root.join("usr/share/foreign.txt"),
         "mine
@@ -237,15 +228,8 @@ fn merge_driver_aborts_on_unowned_collision() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171: a merge through the real driver + the regen
-/// postinst run leaves `var/db/pkg/<cat>/<pf>/environment.bz2`
-/// whose decompressed content is the **postinst-time** env -- a
-/// variable the test sets only in `pkg_postinst` is present, the
-/// stray build-time `x=""` is gone (real `ebuild.sh`'s own
-/// `unset path seen i x` after sourcing), `FEATURES` /
-/// `PORTAGE_FEATURES` are the resolved merge-time value (not the
-/// build-time `buildpkg` one) -- and **no** plain `environment`
-/// file (real's vdb has `environment.bz2` only).
+/// A merge plus the regen postinst run leaves `environment.bz2` holding
+/// the postinst-time env, and no plain `environment` file.
 #[test]
 fn regen_postinst_rewrites_vdb_env_from_merge_time_env() {
     let tmp = regen_tmp("merge-time");
@@ -260,7 +244,7 @@ fn regen_postinst_rewrites_vdb_env_from_merge_time_env() {
     let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
     assert!(markers.iter().any(|m| m == "MERGE_VDB=ok"), "{markers:?}");
     let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
-    // No plain `environment` in the vdb (real's shape).
+    // No plain `environment` in the vdb (Portage's shape).
     assert!(
         !vdb.join("environment").exists(),
         "MERGE_FLOW must not write a plain environment file"
@@ -328,11 +312,8 @@ fn regen_postinst_rewrites_vdb_env_from_merge_time_env() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171: a package **without** `pkg_postinst` still gets a
-/// regenerated env -- real's postinst `EbuildPhase` always starts
-/// (`phase-functions.sh:1061-1083` runs the hooks, no-op when
-/// undefined, then the `PORTAGE_UPDATE_ENV` block), so the phase rc
-/// is 0 and the env carries the merge-time `FEATURES`.
+/// A package without `pkg_postinst` still gets a regenerated env: an
+/// undefined function is a no-op that still re-saves.
 #[test]
 fn regen_runs_without_pkg_postinst() {
     let tmp = regen_tmp("no-postinst");
@@ -378,13 +359,8 @@ fn regen_runs_without_pkg_postinst() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171b tasks 2-3, stage level: a real regen run under
-/// local bash leaves no `O` line in `environment.regen` (real
-/// `doebuild.py:475` sets `mysettings["O"]` but
-/// `config.environ()` drops it via `special_env_vars.py:
-/// environ_filter`), records `SHELL` as `declare --` (bash's own,
-/// unexported -- real has no exported `SHELL` to inherit), and
-/// carries the injected locale values as `declare -x`.
+/// A regen run leaves no `O` line, records `SHELL` unexported, and
+/// carries the injected locale values.
 #[test]
 fn regen_matches_portage_o_shell_and_locale() {
     let tmp = regen_tmp("o-shell-locale");
@@ -445,11 +421,8 @@ fn regen_matches_portage_o_shell_and_locale() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171c task 1, stage level: a real regen run with only
-/// `LC_ALL=C.UTF-8` forwarded records `LANG` + all twelve real
-/// locale categories as `C.UTF-8` and no `LC_ALL` line (bed run
-/// `l31-20260927T052232Z`: real has `LANG` + split categories where
-/// `mrg` echoed `LC_ALL` back).
+/// A regen run with only `LC_ALL=C.UTF-8` forwarded records `LANG` plus
+/// all twelve categories as `C.UTF-8`, and no `LC_ALL`.
 #[test]
 fn regen_splits_lc_all_like_portage() {
     let tmp = regen_tmp("lc-all-split");
@@ -504,18 +477,8 @@ fn regen_splits_lc_all_like_portage() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 follow-up 3 (owner Q9 = b): the pulled client
-/// config stacks the **server's** `make.globals` as its bottom
-/// layer. A synthetic server root carries
-/// `usr/share/portage/config/make.globals` with
-/// `FEATURES="news sandbox"`; the pulled client `make.conf` says
-/// `FEATURES="-news sign"` -- real's incremental fold
-/// (`const.INCREMENTALS`, `config.py:446-499`) resolves that to
-/// `sandbox sign`, and the regen'd vdb env carries exactly that
-/// list (not the build-time `buildpkg` one). `PORTAGE_CONFIGROOT`
-/// is pinned to the synthetic server root (process-global; see
-/// `PLACED_CONFIG_ENV_LOCK`) and ambient `FEATURES`/`INSTALL_MASK`
-/// cleared so the host cannot leak into the hermetic resolve.
+/// The pulled client config stacks the server's `make.globals` as its
+/// bottom layer (expected value from the incremental fold).
 #[test]
 fn remote_client_config_stacks_server_make_globals() {
     let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
@@ -636,9 +599,8 @@ fn remote_client_config_stacks_server_make_globals() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171, failure path: a forced pull failure (no
-/// `environment.regen` in the unit) keeps the build-time
-/// `environment.bz2` byte-identical and reports the step.
+/// A failed pull keeps the build-time `environment.bz2` byte-identical
+/// and reports the step.
 #[test]
 fn install_keeps_build_time_env_when_pull_fails() {
     let tmp = regen_tmp("failure");
@@ -673,10 +635,8 @@ fn install_keeps_build_time_env_when_pull_fails() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 review: a failed atomic install leaves no client
-/// tmp litter -- the remote temp name is removed best-effort.
-/// (Local transport; the ssh branch's `rm -f` needs a live client
-/// and is not covered here.)
+/// A failed atomic install leaves no client tmp litter: the remote temp
+/// name is removed best-effort.
 #[test]
 fn install_file_atomic_removes_tmp_when_mv_fails() {
     let tmp = regen_tmp("install-tmp");
@@ -698,14 +658,9 @@ fn install_file_atomic_removes_tmp_when_mv_fails() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #262: the ssh leg of the atomic install must stage the
-/// bytes into a *file* before shipping them. `TempDir::new` creates
-/// a directory (backlog #260), so staging straight into its path
-/// fails with `Is a directory (os error 21)` on every ssh install
-/// -- the regen'd env never reaches the vdb and the build-time env
-/// (with its stray `declare -- x=""`) survives. Against an
-/// unreachable host the install still fails, but past staging, at
-/// transport -- the assertion pins exactly that boundary.
+/// The ssh leg stages the bytes into a file before shipping: against an
+/// unreachable host the install still fails, but past staging -- at
+/// transport.
 #[test]
 fn install_file_atomic_ssh_stages_bytes_before_transport() {
     let ctx = ctx_with_args("unreachable.invalid", None);
@@ -722,10 +677,8 @@ fn install_file_atomic_ssh_stages_bytes_before_transport() {
     );
 }
 
-/// Pure unit: the `PORTAGE_BZIP2_COMMAND` scrub rewrites only the
-/// unit-local passthrough stand-in -- to the resolved client value
-/// when one is configured, to the `make.globals` default otherwise
-/// -- and copies every other value verbatim.
+/// The scrub rewrites only the unit-local passthrough stand-in; every
+/// other value passes verbatim and a missing line stays missing.
 #[test]
 fn scrub_bzip2_command_rewrites_only_the_passthrough() {
     let regen = b"declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"'/tmp/w/bin/bzip2-passthrough'\"\ndeclare -x USE=\"amd64\"\n";
@@ -745,7 +698,7 @@ fn scrub_bzip2_command_rewrites_only_the_passthrough() {
     // copied verbatim, never forced to the configured one ...
     let foreign = b"declare -x PORTAGE_BZIP2_COMMAND=\"/opt/bin/pbzip2\"\n";
     assert_eq!(scrub_bzip2_command(foreign, "lbzip2"), foreign);
-    // ... real's own spelling passes through byte-identical ...
+    // ... Portage's own spelling passes through byte-identical ...
     let real = b"declare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\n";
     assert_eq!(scrub_bzip2_command(real, "lbzip2"), real);
     // ... and a missing line stays missing (never invent it).
@@ -760,8 +713,8 @@ fn scrub_bzip2_command_rewrites_only_the_passthrough() {
     );
 }
 
-/// Pure unit: the old-version probe parser takes only `OLDPF=`
-/// lines apart into `(pf, slot)`.
+/// The old-version probe parser takes only `OLDPF=` lines apart into
+/// `(pf, slot)`.
 #[test]
 fn parse_oldpf_probe_parses_only_probe_lines() {
     assert_eq!(
@@ -775,9 +728,8 @@ fn parse_oldpf_probe_parses_only_probe_lines() {
     assert!(parse_oldpf_probe("OLDPF= SLOT=0\n").is_empty());
 }
 
-/// Backlog #171 review: when both the `environment.bz2` pull and
-/// the plain fallback pull fail, the staging warning carries the
-/// original bz2 error (no more silent staging failures).
+/// When both the `environment.bz2` pull and the plain fallback pull fail,
+/// the staging warning carries the original bz2 error.
 #[test]
 fn ship_old_hook_envs_warns_when_both_pulls_fail() {
     let tmp = regen_tmp("old-noenv");
@@ -818,10 +770,9 @@ fn ship_old_hook_envs_warns_when_both_pulls_fail() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171: with only `environment.bz2` in the old vdb entry
-/// and no client `bzip2` on `PATH`, `run_old_hook` still gets a
-/// sourceable env via the server-side decompress staged at
-/// `$UNIT/old-env/<pf>`.
+/// With only `environment.bz2` in the old entry and no client `bzip2` on
+/// `PATH`, the hook still gets a sourceable env via the staged
+/// server-side decompress.
 #[test]
 fn old_hook_uses_server_decompressed_env_without_client_bzip2() {
     let tmp = regen_tmp("old-shipped");
@@ -836,7 +787,7 @@ fn old_hook_uses_server_decompressed_env_without_client_bzip2() {
         "EAPI=8\nDESCRIPTION=\"synthetic old-hook probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
     )
     .unwrap();
-    // Only `environment.bz2` -- no plain file (real's shape).
+    // Only `environment.bz2` -- no plain file (Portage's shape).
     let compressed =
         bzip2_compress(old_hook_environment().as_bytes()).expect("server bzip2 compresses");
     std::fs::write(oldvdb.join("environment.bz2"), &compressed).unwrap();
@@ -889,9 +840,8 @@ fn old_hook_uses_server_decompressed_env_without_client_bzip2() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171 review: an older-`mrg` entry with **both** files
-/// whose staging failed still runs its hooks on a bzip2-less
-/// client, from the plain `environment` final fallback.
+/// An entry with both files whose staging failed still runs its hooks
+/// from the plain `environment` final fallback.
 #[test]
 fn old_hook_falls_back_to_plain_when_bz2_present_without_client_bzip2() {
     let tmp = regen_tmp("old-both");
@@ -940,9 +890,8 @@ fn old_hook_falls_back_to_plain_when_bz2_present_without_client_bzip2() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171, legacy fallback: a vdb entry written by an older
-/// `mrg` (plain `environment`, no `environment.bz2`) still sources
-/// with no client `bzip2` and nothing staged.
+/// A legacy entry (plain `environment`, no `environment.bz2`) still
+/// sources with no client `bzip2` and nothing staged.
 #[test]
 fn old_hook_falls_back_to_legacy_plain_environment() {
     let tmp = regen_tmp("old-legacy");

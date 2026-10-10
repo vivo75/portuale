@@ -2,11 +2,10 @@ use super::*;
 
 use portage_util::TempDir;
 
-// --- #326 S8.1: digest, architecture, binary preflight gates ----------
+// --- Client-binary gates: digest, architecture, preflight facts ------------------
 
-/// Fake (but well-formed) full SHA-256 hex for gate tests: the
-/// preflight values carry hex text, so any 64-hex string decides the
-/// same way a real digest would.
+/// Fake (but well-formed) full SHA-256 hex for gate tests: any 64-hex
+/// string decides the same way a genuine digest would.
 const S8_DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 const S8_SHORT: &str = "0123456789abcdef";
@@ -47,10 +46,7 @@ fn s8_values(
 
 /// `portuale` must never be invoked by bare name in generated client
 /// scripts -- only through `$PORTUALE_BIN`, an absolute path, or a
-/// non-command token (`portuale-python`, `portuale-<hash>`,
-/// `portuale-remote:`, `.portuale.` mktemp names, the ping token,
-/// `(portuale #nn)` code comments).
-/// Returns the offending lines.
+/// non-command token. Returns the offending lines.
 fn bare_portuale_hits(script: &str) -> Vec<String> {
     let mut scrubbed = script.to_string();
     for token in [
@@ -153,9 +149,8 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-/// Synthetic merge through the real driver: protect rename and
-/// fail-closed collision, no binpkg needed (unit staged by hand,
-/// `filemeta` via the real collector).
+/// Synthetic merge through the driver: protect rename and fail-closed
+/// collision, no binpkg needed.
 fn synthetic_unit(
     tmp: &std::path::Path,
     files: &[(&str, &str)],
@@ -164,8 +159,7 @@ fn synthetic_unit(
     synthetic_unit_bytes(tmp, &bytes)
 }
 
-/// [`synthetic_unit`] with binary payloads (a real executable in the
-/// image, for the atomic-replacement pins).
+/// [`synthetic_unit`] with binary payloads.
 fn synthetic_unit_bytes(
     tmp: &std::path::Path,
     files: &[(&str, &[u8])],
@@ -221,12 +215,8 @@ fn synthetic_unit_bytes(
 static PLACED_CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
-    // Unit tests run stages directly (no preflight): the scripts
-    // still need a resolved absolute path, so the fixture context
-    // carries the built `portuale` binary next to `deps/` -- a real
-    // binary, never the libtest harness (#326 D8: the phase shims
-    // exec `$PORTUALE_BIN`, and a harness would answer its test
-    // banner). `cargo build -p portuale` before `cargo test`.
+    // Direct stage runs (no preflight) still need a resolved absolute
+    // path in the fixture context: the built `portuale` binary.
     let abs = {
         let mut exe = std::env::current_exe().expect("current test exe");
         exe.pop();
@@ -260,21 +250,12 @@ fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
         require_ledger_match: false,
         portuale_binary: None,
         portuale_dir: None,
-        // Unit tests run stages directly (no preflight): the scripts
-        // still need a resolved absolute path, so the fixture context
-        // carries a fake-but-absolute one.
         bin_plan: ClientBinPlan::Local(abs),
     }
 }
 
-/// Build-time hook env, mimicking `__save_ebuild_env` output with a
-/// stray build-host local (`declare -- x=""`, as the bed's
-/// `setuid-1.0-1.gpkg.tar` build-time env carries) and build-time
-/// `FEATURES` (with `buildpkg`). Real binpkg envs also carry the
-/// hook functions themselves (the phase runs from the saved env,
-/// never re-sourcing the ebuild) -- `with_postinst` adds the test's
-/// `pkg_postinst`, without which the regen run is a no-op like
-/// real's undefined-function case.
+/// Build-time hook env mimicking `__save_ebuild_env` output, with a stray
+/// build-host local and build-time `FEATURES` (with `buildpkg`).
 fn build_time_environment(with_postinst: bool) -> String {
     let mut lines = vec![
         "declare -x EAPI=\"8\"",
@@ -296,11 +277,9 @@ fn build_time_environment(with_postinst: bool) -> String {
     lines.join("\n") + "\n"
 }
 
-/// A full client unit for the regen tests: image + build-info (with
-/// the given ebuild text and `DEFINED_PHASES`) + build-time
-/// `$UNIT/environment` + the real runtime `bin/` + `filemeta`, so
-/// both `run_merge_stage` and the regen phase run for real under
-/// local bash.
+/// A full client unit for the regen tests: image + build-info (with the
+/// given ebuild text and `DEFINED_PHASES`) + build-time `$UNIT/environment`
+/// + runtime `bin/` + `filemeta`.
 fn regen_unit(
     tmp: &std::path::Path,
     ebuild: &str,
@@ -322,18 +301,16 @@ fn regen_unit(
         std::fs::write(build_info.join(name), content).unwrap();
     }
     std::fs::write(build_info.join("regen-1.0.ebuild"), ebuild).unwrap();
-    // The saved env carries the hooks the phase runs (real
-    // `__save_ebuild_env` keeps `pkg_postinst`; an ebuild without
-    // one yields an env without one).
+    // The saved env carries the hooks the phase runs (an ebuild without
+    // `pkg_postinst` yields an env without one).
     let with_postinst = ebuild.contains("pkg_postinst()");
     std::fs::write(
         unit.join("environment"),
         build_time_environment(with_postinst),
     )
     .unwrap();
-    // Like a real binpkg, `build-info/` carries the build-time
-    // `environment.bz2` (the MERGE_FLOW vdb fallback the regen
-    // later overwrites).
+    // Like a binpkg, `build-info/` carries the build-time
+    // `environment.bz2` (the vdb fallback the regen later overwrites).
     {
         let compressed = bzip2_compress(build_time_environment(with_postinst).as_bytes())
             .expect("server bzip2 compresses");
@@ -429,11 +406,8 @@ fn render_test_staged() -> crate::remote_bundle::StagedBundle {
     }
 }
 
-/// Backlog #171 follow-up 4 (owner Q10 = b) scaffolding: a
-/// synthetic server root (`etc/portage/repos.conf` + the server's
-/// own `make.globals`, the two server-side inputs `place_config_root`
-/// reads before repointing `PORTAGE_CONFIGROOT`). Returns the root;
-/// repos are added per-test with `l171e_server_repo`.
+/// Synthetic server root: `etc/portage/repos.conf` + the server's own
+/// `make.globals`.
 fn l171e_server_root(tmp: &std::path::Path, repos_conf: &str) -> std::path::PathBuf {
     let server_root = tmp.join("serverroot");
     std::fs::create_dir_all(server_root.join("etc/portage/repos.conf")).unwrap();
@@ -525,11 +499,9 @@ impl Drop for ServerEnvPin {
     }
 }
 
-/// Resolve a placed client tree's config against explicit server
-/// repos (kept for the l171e remap tests, which pin the rewritten
-/// link against hand-picked server repos; the production path now
-/// resolves through the shared `load_repos_and_config` -- see
-/// `remote_client_without_repos_conf_resolves_on_the_production_path`).
+/// Resolve a placed client tree's config against explicit server repos
+/// (kept for the remap tests; the production path uses the shared
+/// `load_repos_and_config`).
 fn l171e_resolve_with_server_repos(
     placed_dir: &std::path::Path,
     server_root: &std::path::Path,
@@ -595,9 +567,8 @@ fn old_hook_environment() -> String {
         + "\n"
 }
 
-/// PATH farm: symlinks to every `/usr/bin` + `/bin` entry EXCEPT
-/// `bzip2`, so `command -v bzip2` fails exactly like a bzip2-less
-/// client (plan §6 tool floor).
+/// PATH farm: symlinks to every `/usr/bin` + `/bin` entry except
+/// `bzip2`, so `command -v bzip2` fails exactly like a bzip2-less client.
 fn farm_path_without_bzip2(dir: &std::path::Path) -> String {
     let farm = dir.join("farm");
     std::fs::create_dir_all(&farm).unwrap();
@@ -621,9 +592,8 @@ fn farm_path_without_bzip2(dir: &std::path::Path) -> String {
     farm.to_str().unwrap().to_string()
 }
 
-/// Drive `run_old_hook` straight through local bash (header exports
-/// plus the real `MERGE_HELPERS` plus both old phases) under a PATH
-/// with no `bzip2`. Returns stdout.
+/// Drive `run_old_hook` straight through local bash under a PATH with no
+/// `bzip2`. Returns stdout.
 fn run_old_hook_snippet(
     unit: &str,
     root: &str,
@@ -631,11 +601,9 @@ fn run_old_hook_snippet(
     farm_path: &str,
     oldvdb: &str,
 ) -> String {
-    // #326 S8.3: the old hooks resolve `PORTAGE_PYTHON` through
+    // The old hooks resolve `PORTAGE_PYTHON` through
     // `$UNITBIN/portuale-python`, whose shim execs `$PORTUALE_BIN` --
-    // the header of a real merge driver exports the resolved client
-    // binary, so this snippet exports the built binary directly
-    // (never the libtest harness, #326 D8).
+    // export the built binary directly (never the libtest harness).
     let mut exe = std::env::current_exe().expect("current test exe");
     exe.pop();
     if exe.ends_with("deps") {
@@ -687,18 +655,14 @@ fn run_old_hook_snippet(
     stdout
 }
 
-// --- #326 S8 e2e: install and reuse over the local transport --------
+// --- Client-binary install e2e over local transport --------------------------------
 //
-// Local transport installs nothing by design (D5) -- except through
+// Local transport installs nothing by design -- except through
 // `--remote-portuale-dir`, which names local paths the test owns, so
 // the ssh-shaped install path (mktemp, stream, chmod, digest, mv,
-// ping) runs without sshd. The shipped file is the built `portuale`
-// binary itself (via `--remote-portuale-binary`), so the install's
-// `__helper ping` answers the D8 token for real.
+// ping) runs without sshd.
 
-/// The `portuale` binary next to the current test executable (the
-/// same layout `pretend.rs`'s remote test relies on; `cargo
-/// build --release -p portuale` before `cargo test --release`).
+/// The `portuale` binary next to the current test executable.
 fn s8_portuale_bin() -> std::path::PathBuf {
     let mut exe = std::env::current_exe().expect("current test exe");
     exe.pop();
@@ -722,9 +686,8 @@ fn s8_sha256(path: &std::path::Path) -> String {
     )
 }
 
-/// One S8 e2e tree: a client root + workdir, a `--remote-portuale-dir`
-/// bin dir, and a minimal `server:` config (a main repo over an empty
-/// dir, like `placed_config_root_covers_both_placements`).
+/// One end-to-end tree: a client root + workdir, a `--remote-portuale-dir`
+/// bin dir, and a minimal `server:` config.
 struct S8Tree {
     tmp: std::path::PathBuf,
     root: std::path::PathBuf,
@@ -775,9 +738,8 @@ impl Drop for S8Tree {
     }
 }
 
-/// Run the child `portuale mrg` trial flow against the tree: local
-/// transport, the built binary as the shipped file, one fixture
-/// binpkg. `extra` appends argv (e.g. `--pretend`).
+/// Run the child `portuale mrg` trial flow against the tree.
+/// `extra` appends argv (e.g. `--pretend`).
 fn s8_run(tree: &S8Tree, extra: &[&str]) -> std::process::Output {
     let binpkg = s8_fixtures().join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2");
     assert!(

@@ -2,11 +2,8 @@
 
 use crate::remote::*;
 
-/// Slice-2 stage for `--remote-binpkg <file>`: build the bundle
-/// (server-side, `remote_bundle`), stream it to
-/// `$WORKDIR/<pf>/bundle.tar`, unpack + verify there. Exit 0 = `UNPACK=ok`.
-/// One repo-ledger line, shared by both sides: `<unix-ts> <repo> <commit> <cpv>`
-/// (docs/remote-merge.md §8).
+/// One repo-ledger line, shared by both sides:
+/// `<unix-ts> <repo> <commit> <cpv>`.
 pub(crate) struct LedgerEntry {
     pub ts: u64,
     pub repo: String,
@@ -57,9 +54,8 @@ pub(crate) fn sanitize_hostname(hostname: &str) -> String {
 }
 
 /// Server-side ledger record after one merged entry:
-/// `<pkgdir>/remote-ledger/<hostname>`, last 10 kept. Pass the ledger
-/// *directory* (`<placed-PKGDIR>/remote-ledger`, or `--remote-ledger-dir`
-/// when set) -- the hostname file hangs off it.
+/// `<pkgdir>/remote-ledger/<hostname>`, last 10 kept. Takes the ledger
+/// *directory*; the hostname file hangs off it.
 pub(crate) fn record_server_ledger(
     ledger_dir: &std::path::Path,
     hostname: &str,
@@ -74,10 +70,8 @@ pub(crate) fn client_ledger_file(ctx: &RemoteContext) -> String {
     format!("{}/var/db/remote-repos", ctx.root.trim_end_matches('/'))
 }
 
-/// The newest (last non-empty) line of a last-10 ledger file: the plan's
-/// append-ordered `<unix-ts> <repo> <commit> <cpv>` line (`docs/
-/// remote-merge.md` §8). `None` for an absent/empty ledger -- a client
-/// (or server) that has never recorded provenance.
+/// The newest (last non-empty) line of a last-10 ledger file.
+/// `None` for an absent/empty ledger.
 pub(crate) fn newest_ledger_line(text: &str) -> Option<String> {
     text.lines()
         .map(str::trim)
@@ -93,11 +87,8 @@ pub(crate) fn server_latest_ledger(base: &std::path::Path, hostname: &str) -> Op
         .and_then(|text| newest_ledger_line(&text))
 }
 
-/// Strict-mode provenance comparison (`--remote-require-ledger-match`,
-/// plan §8): the client's and server's *newest* ledger line must agree --
-/// both absent (fresh client + no server record) or byte-identical. Any
-/// asymmetry is drift: a client that lost its ledger, was reimaged or
-/// hand-edited, or was last merged by a different server.
+/// Strict-mode provenance comparison: the client's and server's
+/// *newest* ledger line must agree (both absent counts as agreeing).
 pub(crate) fn ledger_lines_match(client: Option<&str>, server: Option<&str>) -> bool {
     match (client, server) {
         (None, None) => true,
@@ -106,9 +97,9 @@ pub(crate) fn ledger_lines_match(client: Option<&str>, server: Option<&str>) -> 
     }
 }
 
-/// Read the client ledger's newest line over the transport (plan §8's
-/// "provenance story"). Missing/empty reads as `None`; only a transport
-/// or command failure is an `Err`.
+/// Read the client ledger's newest line over the transport.
+/// Missing/empty reads as `None`; only a transport or command
+/// failure is an `Err`.
 pub(crate) fn read_client_latest_ledger(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,

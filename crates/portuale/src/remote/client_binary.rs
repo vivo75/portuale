@@ -2,25 +2,15 @@
 
 use crate::remote::*;
 
-// --- Client portuale binary (slice 8, #326 D5/Q1-Q3/Q5) ----------------------
-//
-// The server installs and verifies its own binary on the client: the file
-// it ships is `current_exe()`, or `--remote-portuale-binary=<path>` (e.g.
-// a static musl build when the server itself runs a dynamic dev build).
-// The client must hold a file with the same full SHA-256; whatever file
-// is found, the full digest is always what gets compared. `<hash>` in
-// `portuale-<hash>` is the first 16 hex digits of that digest (Q5).
-// Different server builds get different names, so they never overwrite
-// each other; a plain `portuale` whose digest differs is never touched
-// (it may be an operator's own install).
+// --- Client portuale binary ----------------------------------------------------
 
 /// Default client search directories, in D5 order.
 pub(crate) fn default_bin_dirs() -> Vec<String> {
     vec!["/opt/bin".to_string(), "/usr/local/bin".to_string()]
 }
 
-/// Candidate directories: only the `--remote-portuale-dir=<abs>` pair
-/// when that option is given (Q1), else the default pair.
+/// Candidate directories: only the `--remote-portuale-dir` pair
+/// when that option is given, else the default pair.
 pub(crate) fn bin_search_dirs(ctx: &RemoteContext) -> Vec<String> {
     match &ctx.portuale_dir {
         Some(dir) => vec![dir.clone()],
@@ -28,7 +18,7 @@ pub(crate) fn bin_search_dirs(ctx: &RemoteContext) -> Vec<String> {
     }
 }
 
-/// Candidate files in D5 order: per directory, `portuale` then
+/// Candidate files in check order: per directory, `portuale` then
 /// `portuale-<hash>`. The first file whose full digest matches is used.
 pub(crate) fn bin_candidates(dirs: &[String], short_hash: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -67,9 +57,9 @@ pub(crate) fn elf_machine(bytes: &[u8]) -> Result<u16, String> {
     }
 }
 
-/// Hash the binary the server will ship and read its ELF machine (Q3).
-/// Errors name `--remote-portuale-binary` when that option selected the
-/// file.
+/// Hash the binary the server will ship and read its ELF machine.
+/// Errors name `--remote-portuale-binary` when that option selected
+/// the file.
 pub(crate) fn server_bin_info(ctx: &RemoteContext) -> Result<ServerBinInfo, String> {
     let (path, named) = match &ctx.portuale_binary {
         Some(custom) => (std::path::PathBuf::from(custom), true),
@@ -132,10 +122,9 @@ pub(crate) fn machine_name(machine: u16) -> String {
     }
 }
 
-/// Whether the shipped binary runs on the client (Q3): `Some(true)` when
+/// Whether the shipped binary runs on the client: `Some(true)` when
 /// the client's `uname -m` is one of the machine's names, `Some(false)`
-/// on a definite mismatch, `None` when either side is unknown -- an
-/// unknown pair is a mismatch only when both are known.
+/// on a definite mismatch, `None` when either side is unknown.
 pub(crate) fn arch_matches(machine: u16, uname_m: &str) -> Option<bool> {
     let names = machine_unames(machine)?;
     if uname_m.is_empty() {
@@ -147,7 +136,7 @@ pub(crate) fn arch_matches(machine: u16, uname_m: &str) -> Option<bool> {
 /// Server-side preflight facts for the binary gates: what to look for
 /// and what to compare against. `None` for local transport without
 /// `--remote-portuale-dir`, which keeps `current_exe()` and installs
-/// nothing (D5).
+/// nothing.
 pub(crate) struct BinPreflight {
     /// `bin_search_dirs(ctx)`.
     pub dirs: Vec<String>,
@@ -181,7 +170,7 @@ pub(crate) fn bin_preflight(ctx: &RemoteContext) -> Result<Option<BinPreflight>,
 
 /// Whether `dir` (preflight index `j`) may receive the install: it must
 /// exist and be writable, and a world-writable directory without the
-/// sticky bit is refused (D5). `Err` names the reason for the report.
+/// sticky bit is refused. `Err` names the reason for the report.
 pub(crate) fn dir_writable_for_install(
     values: &HashMap<String, String>,
     j: usize,
@@ -208,11 +197,11 @@ pub(crate) fn dir_writable_for_install(
     Ok(())
 }
 
-/// Evaluate the S8.1 gates over parsed preflight values: `(plan,
-/// failures, notes)`. The first digest match wins; no match plans an
-/// install as `<dir>/portuale-<hash>` in the first usable directory; a
-/// mismatched plain `portuale` is a note (reported, left alone); an
-/// arch mismatch or no usable directory fails.
+/// Evaluate the client-binary gates over parsed preflight values:
+/// `(plan, failures, notes)`. The first digest match wins; no match
+/// plans an install as `<dir>/portuale-<hash>` in the first usable
+/// directory; a mismatched plain `portuale` is a note (reported, left
+/// alone); an arch mismatch or no usable directory fails.
 pub(crate) fn evaluate_bin_gates(
     values: &HashMap<String, String>,
     pre: &BinPreflight,
@@ -282,9 +271,9 @@ pub(crate) fn evaluate_bin_gates(
     (ClientBinPlan::Unresolved, failures, notes)
 }
 
-/// Run the install stage when the plan says so (S8.2): `Use`/`Local`
-/// are no-ops (no status line -- a reuse prints nothing);
-/// `Unresolved` is an internal error (preflight never ran).
+/// Run the install stage when the plan says so: `Use`/`Local` are
+/// no-ops (no status line -- a reuse prints nothing); `Unresolved`
+/// is an internal error (preflight never ran).
 pub(crate) fn ensure_client_binary(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -349,7 +338,7 @@ pub(crate) fn client_file_digest(
 }
 
 /// Best-effort removal of a client temp path (the install's failure
-/// cleanup, S8.2).
+/// cleanup).
 pub(crate) fn remove_client_path(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -416,10 +405,10 @@ pub(crate) fn ping_client_binary(
     Ok(())
 }
 
-/// The S8.2 install: `mktemp <dir>/.portuale.XXXXXX`, stream the server
+/// The install: `mktemp <dir>/.portuale.XXXXXX`, stream the server
 /// binary over the existing connection (the way bundles stream), `chmod
 /// 0755`, re-check the digest, `mv` to `<dir>/portuale-<hash>`, then
-/// `"<abs>" __helper ping` (which must print the D8 token). On any
+/// `"<abs>" __helper ping` (which must print the ping token). On any
 /// failure the temp file is removed and the run fails before any unit
 /// is consumed. Prints the status line `portuale-remote: install-bin
 /// <rc>`.
@@ -447,8 +436,7 @@ pub(crate) fn install_client_binary(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| format!("mrg: install target {target} has no parent directory"))?;
     // `mktemp <dir>/.portuale.XXXXXX`.
-    let tmp: String = match ctx.transport {
-        RemoteTransport::Local => {
+    let tmp: String = match ctx.transport {        RemoteTransport::Local => {
             let mut attempt = 0;
             loop {
                 let nanos = std::time::SystemTime::now()
@@ -512,7 +500,6 @@ pub(crate) fn install_client_binary(
     if let Err(message) = send_bytes(ctx, control, &bytes, &tmp) {
         return Err(fail("stream", message));
     }
-    // `chmod 0755`.
     match ctx.transport {
         RemoteTransport::Local => {
             use std::os::unix::fs::PermissionsExt as _;
@@ -551,7 +538,6 @@ pub(crate) fn install_client_binary(
             ));
         }
     }
-    // `mv` to `<dir>/portuale-<hash>`.
     match ctx.transport {
         RemoteTransport::Local => {
             if let Err(e) = std::fs::rename(&tmp, target) {
@@ -579,7 +565,7 @@ pub(crate) fn install_client_binary(
             }
         }
     }
-    // The install must execute: `"<abs>" __helper ping` prints D8's token.
+    // The install must execute: `"<abs>" __helper ping` must print the ping token.
     if let Err(message) = ping_client_binary(ctx, control, target) {
         remove_client_path(ctx, control, target);
         return Err(message);

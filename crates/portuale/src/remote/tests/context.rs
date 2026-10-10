@@ -10,17 +10,12 @@ fn remote_exec_handoff_sets_and_takes() {
     assert!(take_remote_exec().is_none());
 }
 
-/// Backlog #171c task 1, unit level: the `split_LC_ALL` port fans a
-/// set `LC_ALL` out over all twelve real `locale_categories` and
-/// drops it (real `portage/util/locale.py:22-36,160` +
-/// `config.py:3374-3385`), fills an unset `LANG`, never clobbers
-/// an explicit one, drops an empty `LC_ALL` without fanning out,
-/// leaves `LANGUAGE` alone, and passes everything through
-/// untouched on non-posixish EAPIs.
+/// A set `LC_ALL` fans out over the twelve categories and drops; an empty
+/// `LC_ALL` drops without fanning out; `LANGUAGE` is untouched; non-posixish
+/// EAPIs pass through.
 #[test]
 fn split_server_locale_fans_lc_all_out_like_portage() {
-    // The twelve `locale_categories` real fans out over
-    // (`portage/util/locale.py:22-36`) -- hardcoded here (not via
+    // The twelve categories, hardcoded here (not via
     // `PORTAGE_LOCALE_CATEGORIES`) so the test pins the list's
     // content, not just its own reference to it.
     const TWELVE: &[&str] = &[
@@ -47,8 +42,8 @@ fn split_server_locale_fans_lc_all_out_like_portage() {
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.clone())
     };
-    // The brief's case: server `LC_ALL=C.UTF-8` alone → `LANG` +
-    // all twelve categories carry it, no `LC_ALL`.
+    // Server `LC_ALL=C.UTF-8` alone → `LANG` + all twelve categories
+    // carry it, no `LC_ALL`.
     let out = split_server_locale(&[("LC_ALL".to_string(), "C.UTF-8".to_string())], "8");
     assert!(get(&out, "LC_ALL").is_none(), "LC_ALL survived:\n{out:?}");
     assert_eq!(get(&out, "LANG").as_deref(), Some("C.UTF-8"));
@@ -59,7 +54,7 @@ fn split_server_locale_fans_lc_all_out_like_portage() {
             "{name} not split"
         );
     }
-    // Real overwrites unconditionally; an explicit `LANG` still wins.
+    // The fan-out overwrites unconditionally; an explicit `LANG` still wins.
     let out = split_server_locale(
         &[
             ("LC_ALL".to_string(), "C.UTF-8".to_string()),
@@ -84,7 +79,7 @@ fn split_server_locale_fans_lc_all_out_like_portage() {
     assert!(get(&out, "LC_ALL").is_none());
     assert_eq!(get(&out, "LANG").as_deref(), Some("C"));
     assert!(get(&out, "LC_CTYPE").is_none());
-    // Non-posixish EAPIs keep `LC_ALL` as-is (real never splits).
+    // Non-posixish EAPIs keep `LC_ALL` as-is.
     let input = vec![("LC_ALL".to_string(), "C.UTF-8".to_string())];
     assert_eq!(split_server_locale(&input, "5"), input);
 }

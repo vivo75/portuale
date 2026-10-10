@@ -62,8 +62,7 @@ fn preflight_gates_catch_old_bash_missing_tools_and_roots() {
     let (failures, _) = preflight_gates(&missing);
     assert_eq!(failures.len(), 5, "{failures:?}");
 
-    // A missing vdb warns (slice-5 placement matrix owns the degrade),
-    // never fails.
+    // A missing vdb warns, never fails.
     let mut novdb = ok.clone();
     novdb.insert("VDB_DIR".to_string(), "no".to_string());
     let (failures, warnings) = preflight_gates(&novdb);
@@ -73,9 +72,9 @@ fn preflight_gates_catch_old_bash_missing_tools_and_roots() {
 
 #[test]
 fn preflight_script_reports_candidates_dirs_and_uname() {
-    // Render level with real temp dirs: the script's candidate
-    // digests, writability and mode facts must match `sha256sum` /
-    // `stat` run directly.
+    // Render level with temp dirs: the script's candidate digests,
+    // writability and mode facts must match `sha256sum` / `stat` run
+    // directly.
     let tmp = TempDir::new("portuale-remote-binscript").keep();
     let dir = tmp.join("bin");
     std::fs::create_dir_all(&dir).unwrap();
@@ -186,15 +185,10 @@ fn unpack_script_rejects_a_truncated_bundle() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #170: end to end through the real `MERGE_FLOW` -- a bundle
-/// built with a non-empty resolved mask merges without the masked
-/// files (not on the root, not in the vdb `CONTENTS`), while the
-/// merge-time aux files land in `var/db/pkg/<cat>/<pf>/`: real
-/// `_emerge/Binpkg.py:374` (`BINPKGMD5`) and `vartree.py:4581`
-/// `preinst_mask` (`INSTALL_MASK`). The fixture image ships
-/// `usr/share/packagepkg/hello.txt`, so the anchored
-/// `/usr/share/packagepkg` mask stands in for the bed's
-/// `/usr/share/porttest/im/...` mask.
+/// End to end through the merge driver (expected value from Portage): a
+/// bundle built with a non-empty mask merges without the masked files
+/// (not on the root, not in CONTENTS), while the merge-time aux files
+/// land in the vdb entry.
 #[test]
 fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
     use md5::Digest as _;
@@ -212,8 +206,8 @@ fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
         install_mask_prunes_usr_share: false,
     })
     .expect("fixture tbz2 stages");
-    // Deliver the bundle the way the stream would, then run the real
-    // unpack driver.
+    // Deliver the bundle the way the stream would, then run the unpack
+    // driver.
     let work = tmp.join("work");
     let unit = work.join("packagepkg-1.0");
     std::fs::create_dir_all(&unit).unwrap();
@@ -236,7 +230,7 @@ fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
         output.status.success() && stdout.contains("UNPACK=ok"),
         "unpack driver failed:\n{stdout}"
     );
-    // Run the real merge driver against a scratch root.
+    // Run the merge driver against a scratch root.
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
     let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
@@ -268,26 +262,17 @@ fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #169, site (b): the receive driver must preserve
-/// setuid/setgid/sticky bits through the bundle tarball: an
-/// unprivileged `tar -xf` applies the umask and strips all three
-/// bits at extraction, `tar -xpf` (`--preserve-permissions`) keeps
-/// them, so the merge stage never sees them otherwise (the bed's
-/// non-root client capture, `4711/2755/1750 -> 711/755/750`). End to end through both shell
-/// fragments: stage a unit with modes 4711/2755/1750 plus a 2750
-/// directory, tar it the way `build_bundle` does, run the real
-/// `unpack_script`, then the real merge driver, and assert the
-/// modes on the merged root. Fails while unpack uses `tar -xf`;
-/// as non-root the merge's chown step is skipped, so this
-/// isolates the extraction site.
+/// End to end through both shell fragments: a staged unit with modes
+/// 4711/2755/1750 plus a 2750 directory must keep those modes on the
+/// merged root after unpack + merge.
 #[test]
 fn unpack_then_merge_preserves_special_mode_bits() {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     let tmp = TempDir::new("portuale-remote-setuid").keep();
     let pf = "probe-1.0";
-    // Stage the unit the way `build_bundle` lays it out (`<pf>/`
-    // with image/, build-info/, remote-manifest, filemeta).
+    // Stage the unit the way `build_bundle` lays it out (`<pf>/` with
+    // image/, build-info/, remote-manifest, filemeta).
     let staging = tmp.join("staging").join(pf);
     let image = staging.join("image");
     for (rel, mode) in [
@@ -318,8 +303,8 @@ fn unpack_then_merge_preserves_special_mode_bits() {
     let entries = crate::remote_bundle::collect_filemeta(&image).unwrap();
     let filemeta = crate::remote_bundle::render_filemeta(&entries).unwrap();
     std::fs::write(staging.join("filemeta"), &filemeta).unwrap();
-    // Tar `<pf>/` exactly like `build_bundle` (`tar -cf`, `-C` the
-    // staging dir), then deliver it as the streamed bundle.
+    // Tar `<pf>/` like `build_bundle` (`tar -cf`, `-C` the staging dir),
+    // then deliver it as the streamed bundle.
     let tarball = tmp.join("bundle.tar");
     let status = std::process::Command::new("tar")
         .args(["-cf"])

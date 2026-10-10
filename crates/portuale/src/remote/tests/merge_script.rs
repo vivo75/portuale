@@ -1,10 +1,8 @@
 use super::*;
 
-/// #326 S8.3: every generated script kind exports the resolved
-/// absolute `PORTUALE_BIN` (and `PORTAGE_PYM_PATH=/`, unsetting
-/// `PORTAGE_IPC_DAEMON`), resolves `PORTAGE_PYTHON` through the
-/// bundle's own `$UNITBIN/portuale-python`, and invokes no
-/// `portuale` command by bare name.
+/// Every generated script kind exports the resolved absolute
+/// `PORTUALE_BIN` and resolves `PORTAGE_PYTHON` through `$UNITBIN`;
+/// no `portuale` command runs by bare name.
 #[test]
 fn generated_scripts_use_absolute_portuale_bin() {
     const ABS: &str = "/opt/bin/portuale-0123456789abcdef";
@@ -43,9 +41,9 @@ fn generated_scripts_use_absolute_portuale_bin() {
     let helpers_flow = format!("{MERGE_HELPERS}\n{MERGE_FLOW}");
     let unpack = unpack_script("/work", "probe-1.0", 1234);
     let preflight = preflight_script("/", "/work", None);
-    // The three rendered kinds export the absolute path (the old
-    // hooks inherit the merge header's export at runtime); the
-    // read-only unpack/preflight drivers invoke no binary at all.
+    // The three rendered kinds export the absolute path (the old hooks
+    // inherit the merge header's export at runtime); the read-only
+    // unpack/preflight drivers invoke no binary at all.
     for (name, script) in [
         ("phase", phase.as_str()),
         ("regen", regen.as_str()),
@@ -103,16 +101,11 @@ fn generated_scripts_use_absolute_portuale_bin() {
     }
 }
 
-/// Backlog #172: `phase_exports` carries `MERGE_TYPE=binary` exactly
-/// when real's `eapi_exports_merge_type` holds.
+/// `phase_exports` carries `MERGE_TYPE=binary` exactly when
+/// `eapi_exports_merge_type` holds (expected value from Portage).
 #[test]
 fn phase_exports_gates_merge_type_on_eapi() {
-    // Real `_emerge/Binpkg.py:92` sets `MERGE_TYPE=binary` for a binpkg
-    // merge, and real `config.environ()` (`config.py:3335-3336`) exports
-    // it only when `eapi_exports_merge_type` holds (EAPI >= 4,
-    // `eapi.py:300`). Bed `l31-20260926T061556Z` shows real appending
-    // `merge_type=binary` x4 (322 B) where mrg wrote `?` x4 (302 B).
-    // `mrg` only merges binpkgs, so `binary` is the only value.
+    // Binpkg merges set `MERGE_TYPE=binary`; EAPI < 4 gates it off.
     fn exports_for(eapi: &str) -> String {
         let staged = crate::remote_bundle::StagedBundle {
             tarball: std::path::PathBuf::from("/tmp/bundle.tar"),
@@ -177,11 +170,9 @@ fn phase_exports_gates_merge_type_on_eapi() {
     );
 }
 
-/// Positive pretend dispatch through the real stack: a synthetic unit
-/// (hand-written ebuild + environment carrying `pkg_pretend`, the real
-/// shipped `bin/`) runs the generated phase script under local bash.
-/// Proves template + `ebuild.sh` + DEFINED_PHASES-agnostic dispatch;
-/// the ebuild/env being synthetic is the only unreal part.
+/// A synthetic unit (hand-written ebuild + environment carrying
+/// `pkg_pretend`, the shipped `bin/`) runs the generated phase script
+/// under local bash; the ebuild/env being synthetic is the only gap.
 #[test]
 fn phase_script_runs_pkg_pretend_from_saved_env() {
     let tmp = TempDir::new("portuale-remote-pretend").keep();
@@ -198,7 +189,7 @@ fn phase_script_runs_pkg_pretend_from_saved_env() {
         "EAPI=8\npkg_pretend() {\n\techo pretend-ok >> \"${EROOT}/var/lib/probe.log\"\n}\n",
     )
     .unwrap();
-    // The real runtime, as shipped in bundles.
+    // The runtime, as shipped in bundles.
     let status = std::process::Command::new("cp")
         .args(["-a"])
         .arg(crate::ebuild_phases::bin_dir().unwrap())
@@ -237,8 +228,8 @@ fn phase_script_runs_pkg_pretend_from_saved_env() {
         root: root.to_str().unwrap(),
         workdir_parent: tmp.to_str().unwrap(),
         colormap: "", // The phase may invoke the shipped `portuale-python` shim,
-        // which execs `$PORTUALE_BIN`: a real binary, never the
-        // libtest harness (#326 D8).
+        // which execs `$PORTUALE_BIN`: a genuine binary, never the
+        // libtest harness.
         portuale_bin: s8_portuale_bin().to_str().unwrap(),
     });
     let output = std::process::Command::new("bash")
@@ -265,11 +256,8 @@ fn phase_script_runs_pkg_pretend_from_saved_env() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #171b task 3: the server's set locale variables reach
-/// the client phase env, and only those -- a fake getter pins the
-/// selection (`LANG` set + empty-but-set `LANGUAGE` forwarded in
-/// `REGEN_LOCALE_VARS` order; unset `LC_ALL` skipped; a
-/// non-locale variable never consulted).
+/// The server's set locale variables reach the client phase env, and
+/// only those (a fake getter pins the selection).
 #[test]
 fn collect_server_locale_forwards_only_set_vars() {
     use std::collections::HashMap;
@@ -283,10 +271,8 @@ fn collect_server_locale_forwards_only_set_vars() {
     assert_eq!(got[1].1, "");
 }
 
-/// Backlog #171b tasks 2-3, render level: the regen script unsets
-/// `O`, unsets `SHELL`, unsets `LC_ALL` (EAPI 8 is posixish), and
-/// re-exports exactly the given locale pairs (quoting values like
-/// any other export).
+/// Render level: the regen script unsets `O`/`SHELL`/`LC_ALL` (posixish)
+/// and re-exports exactly the given locale pairs.
 #[test]
 fn postinst_regen_script_matches_portage_shell_shape() {
     let staged = render_test_staged();
@@ -330,16 +316,10 @@ fn postinst_regen_script_matches_portage_shell_shape() {
     );
 }
 
-/// Backlog #169, site (a): `chown(2)` on a regular file clears
-/// `S_ISUID`/`S_ISGID` even when owner and group are unchanged, so
-/// the merge copy driver must apply ownership *before* restoring
-/// the mode -- real `lib/portage/util/movefile.py::_apply_stat`
-/// does `os.chown` then `os.chmod` for exactly this reason. That
-/// needs root to observe behaviourally (no sudo on this host), so
-/// this pins the order structurally in `MERGE_FLOW` instead: the
-/// `chown --reference` line must precede the `chmod --reference`
-/// line in both the `obj` (`$tmp`) and `dir` (`$dest`) branches.
-/// Fails while chmod runs first.
+/// The merge copy driver applies ownership before restoring the mode
+/// (`chown` then `chmod`), since `chown(2)` clears setuid/setgid even
+/// when owner and group are unchanged.
+// Portage: lib/portage/util/movefile.py, _apply_stat
 #[test]
 fn merge_flow_applies_chown_before_chmod() {
     for (what, chown, chmod) in [

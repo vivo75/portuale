@@ -1,8 +1,6 @@
 //! Remote binary-package merge over SSH (`mrg --remote-*`).
 //!
-//! Plan: `docs/remote-merge.md` (slice 1 covers this module's surface --
-//! option validation, the multiplexed `ssh` transport, and the read-only
-//! preflight; no payload streaming yet).
+//! Plan: `docs/remote-merge.md`.
 //!
 //! Shape, mirroring Ansible's `ansible.builtin.ssh` (a wrapper around the
 //! system `ssh` binary, multiplexed, rc 255 = transport error): the server
@@ -16,8 +14,7 @@
 //! scope for `mrg` -- it is the old format and `mrg` does not target full
 //! binary-format compatibility (the shared server-side `binpkg` reader may
 //! open `.tbz2` incidentally, but that is never a tested or guaranteed
-//! `mrg` path; `emerge`/`ebuild` keep their own local xpak support, see
-//! `docs/remote-merge.md` §1 / §14).
+//! `mrg` path; `emerge`/`ebuild` keep their own local xpak support).
 
 use clap::ArgMatches;
 
@@ -111,8 +108,7 @@ impl RemoteTransport {
 }
 
 /// Where a config tree lives (`--remote-etc-portage server:<path>` /
-/// `client:<path>`). The vdb/edb placements of the plan table land in
-/// slice 6 with the vdb shadow; only etc-portage is placed here.
+/// `client:<path>`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigPlacement {
     /// Read directly off the server filesystem.
@@ -137,12 +133,9 @@ impl ConfigPlacement {
 
 /// mrg -> pretend handoff for remote resolve runs: `mrg` sets it from the
 /// validated CLI surface, `pretend::run`'s getbinpkg dispatch takes it.
-/// Same process-global-options precedent as portage-repo's own
-/// `USEOLDPKG_ATOMS`/`BINPKG_CHANGED_DEPS_OVERRIDE` statics (plain
-/// `RwLock`, `unwrap()` like theirs): set immediately before the
-/// in-process `pretend::run` call, taken (cleared) at the dispatch site,
-/// so nothing leaks across calls. Only `mrg` remote-with-atoms ever sets
-/// it; the `emerge` applet never does.
+/// Set immediately before the in-process `pretend::run` call, taken
+/// (cleared) at the dispatch site, so nothing leaks across calls. Only
+/// `mrg` remote-with-atoms ever sets it; the `emerge` applet never does.
 static REMOTE_EXEC: std::sync::RwLock<Option<RemoteContext>> = std::sync::RwLock::new(None);
 
 /// Publish a remote execution for the upcoming `pretend::run` call.
@@ -191,8 +184,7 @@ pub struct RemoteContext {
     pub etc_portage: ConfigPlacement,
     /// Where the client installed-db lives (default
     /// `client:<root>/var/db/pkg`). `server:` = stateless client: files
-    /// merge with no vdb entry, no old hooks, and fail-closed collisions
-    /// (slice 6).
+    /// merge with no vdb entry, no old hooks, and fail-closed collisions.
     pub vdb: ConfigPlacement,
     /// Binhost-index cache side, informational (default
     /// `server:<root>/var/cache/edb`): the client has no binhosts, so
@@ -202,44 +194,43 @@ pub struct RemoteContext {
     /// `<placed-PKGDIR>/remote-ledger`).
     pub ledger_dir: Option<String>,
     /// Strict-mode ledger provenance enforcement
-    /// (`--remote-require-ledger-match`, plan §8): abort before merging
-    /// anything unless the client's and server's newest ledger line agree.
+    /// (`--remote-require-ledger-match`): abort before merging anything
+    /// unless the client's and server's newest ledger line agree.
     pub require_ledger_match: bool,
-    /// Binary the server ships to the client (`--remote-portuale-binary`,
-    /// #326 D5/Q3): `None` = this process's own binary (`current_exe()`).
+    /// Binary the server ships to the client (`--remote-portuale-binary`):
+    /// `None` = this process's own binary (`current_exe()`).
     pub portuale_binary: Option<String>,
     /// Client directory holding the portuale binary
-    /// (`--remote-portuale-dir`, #326 Q1): `None` = the default pair
+    /// (`--remote-portuale-dir`): `None` = the default pair
     /// (`/opt/bin`, then `/usr/local/bin`). Must be absolute when given.
     pub portuale_dir: Option<String>,
-    /// Resolved client binary placement (post-preflight, #326 S8.1):
+    /// Resolved client binary placement (post-preflight):
     /// `Unresolved` until the preflight facts decide it. Local transport
     /// without the override never resolves past `Unresolved` -- it keeps
-    /// `current_exe()` and installs nothing (#326 D5).
+    /// `current_exe()` and installs nothing.
     pub bin_plan: ClientBinPlan,
-    /// Space-separated CONFIG_PROTECT list for the client merge (real
-    /// default `/etc`; the resolve path derives it from the placed
-    /// config unless explicitly flagged -- slice 6).
+    /// Space-separated CONFIG_PROTECT list for the client merge (default
+    /// `/etc`; the resolve path derives it from the placed
+    /// config unless explicitly flagged).
     pub config_protect: String,
     /// Whether `--remote-config-protect` was passed explicitly.
     pub config_protect_explicit: bool,
-    /// Space-separated CONFIG_PROTECT_MASK list (real default
+    /// Space-separated CONFIG_PROTECT_MASK list (Portage default
     /// `/etc/env.d`).
     pub config_protect_mask: String,
     /// Whether `--remote-config-protect-mask` was passed explicitly.
     pub config_protect_mask_explicit: bool,
 }
 
-/// Resolved client binary placement (#326 S8.1 gates): the absolute client
-/// path every generated script exports as `PORTUALE_BIN`, however it got
-/// there.
+/// Resolved client binary placement: the absolute client path every
+/// generated script exports as `PORTUALE_BIN`, however it got there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientBinPlan {
     /// No preflight ran yet (fresh CLI parse, or local transport without
     /// `--remote-portuale-dir`, which skips the gates by design).
     Unresolved,
-    /// The running binary itself (local transport without the override,
-    /// #326 D5): no preflight checks, no install.
+    /// The running binary itself (local transport without the override):
+    /// no preflight checks, no install.
     Local(String),
     /// A client path whose full SHA-256 already matches: use it, install
     /// nothing.
@@ -288,8 +279,7 @@ fn get(matches: &ArgMatches, id: &str) -> Option<String> {
 }
 
 /// Whether `id` was provided on the command line, type-agnostic -- the
-/// `REMOTE_OPTION_IDS` presence check must see both `Value` string
-/// options and `Flag` bools (which `get_one::<String>` would panic on).
+/// presence check must see both `Value` string options and `Flag` bools.
 fn provided(matches: &ArgMatches, id: &str) -> bool {
     matches.contains_id(id)
         && matches
@@ -350,9 +340,8 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
         None => ConfigPlacement::Client(format!("{}/var/db/pkg", root.trim_end_matches('/'))),
         Some(raw) => ConfigPlacement::parse("--remote-vdb", &raw)?,
     };
-    // Informational (plan §7/§10): the client has no binhosts -- only
-    // `server:` parses. The resolve reads its own cache; this records
-    // intent for a future slice that threads it through.
+    // Informational: the client has no binhosts, so only `server:`
+    // parses; the resolve reads its own cache.
     let edb = match get(matches, "remote_edb") {
         None => ConfigPlacement::Server(format!("{}/var/cache/edb", root.trim_end_matches('/'))),
         Some(raw) => match ConfigPlacement::parse("--remote-edb", &raw)? {

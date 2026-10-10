@@ -22,11 +22,11 @@ pub fn run_remote_cli(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<String
     run_remote_resolve(matches, ctx, argv)
 }
 
-// --- Resolve-path support (slice 5) --------------------------------------------
+// --- Resolve-path support ----------------------------------------------------------
 
 /// Repo position for one merged entry: `(repo name, commit hash)` from
 /// the repo checkout the entry resolved from (`unknown` when the repo is
-/// not git or git is unavailable -- same honesty rule as elsewhere).
+/// not git or git is unavailable).
 pub(crate) fn repo_position(
     repos: &[portage_repo::RepoConfig],
     repo_name: &Option<String>,
@@ -79,7 +79,7 @@ pub fn run_remote_resolve(
     }
     let control_dir = control_dir();
     let control = control_dir.as_deref();
-    // Fail-early stage 2 (plan §5.5): client sanity before resolving.
+    // Fail-early: client sanity before resolving.
     let (values, bin) = match run_preflight_inner(&ctx, control) {
         Ok(pair) => pair,
         Err(message) => {
@@ -88,10 +88,10 @@ pub fn run_remote_resolve(
         }
     };
     let (mut failures, mut warnings) = evaluate_preflight(&ctx, &values);
-    // S8.1 binary gates (read-only): the plan rides the handoff into
+    // Binary gates (read-only): the plan rides the handoff into
     // `run_remote_plan`, which installs only when units ship. Local
     // transport without the override skips the gates and keeps
-    // `current_exe()` (#326 D5).
+    // `current_exe()`.
     match bin {
         Some(pre) => {
             let override_given = ctx.portuale_dir.is_some();
@@ -113,10 +113,8 @@ pub fn run_remote_resolve(
         return print_preflight_report(&ctx, &failures, &warnings, first_contact);
     }
     print_preflight_report(&ctx, &failures, &warnings, first_contact);
-    // etc-portage placement → config root for the resolve (shared
-    // helper: `Server` direct, `Client` pulled). `_placed` stays alive
-    // across the resolve (config root + env override); its temp pull
-    // is removed best-effort on drop at scope end.
+    // Place etc-portage for the resolve; `_placed` stays alive across
+    // it and its temp pull is removed best-effort on drop.
     let _placed = match place_config_root(&ctx, control) {
         Ok(placed) => placed,
         Err(message) => {
@@ -132,7 +130,7 @@ pub fn run_remote_resolve(
     code
 }
 
-/// BFS-drop the transitive dependents of a failed package (real
+/// BFS-drop the transitive dependents of a failed package (Portage
 /// `_calc_resume_list`): every skipped cp records the failed cpv that
 /// doomed it, for the `skipped (… failed)` trailer.
 pub(crate) fn drop_dependents(
@@ -166,16 +164,13 @@ pub(crate) struct RunRemotePlanArgs<'a> {
 }
 
 /// One resolved binary plan, executed remotely entry by entry in merge
-/// order (sequential; `--remote-jobs` stays a reserved knob). Report is
-/// per-unit trailers (the flow's `>>> Remote merged <cpv>` line, plus
-/// `!!! Remote <cpv>: failed: …` and `>>> Remote <cpv>: skipped (…)` from
-/// the loop) with a closing `>>> Remote summary: …` line (plan §11). Without `--keep-going` the
-/// first unit error aborts the plan; with it, the error fails just that
-/// unit and BFS-drops its transitive dependents (the `run_merge_loop`
-/// `_calc_resume_list` policy), merging the rest and returning a
-/// combined failed+skipped report. `AlreadyInstalled` stays a silent
-/// no-op like the local plan. Anything else non-`Binary` cannot occur
-/// (`check_binary_plan` gates first) and fails loudly.
+/// order (sequential). Report is per-unit trailers plus a closing
+/// `>>> Remote summary: …` line. Without `--keep-going` the first unit
+/// error aborts the plan; with it, the error fails just that unit and
+/// BFS-drops its transitive dependents, merging the rest.
+/// `AlreadyInstalled` stays a silent no-op like the local plan. Anything
+/// else non-`Binary` cannot occur (`check_binary_plan` gates first) and
+/// fails loudly.
 pub(crate) fn run_remote_plan(args: RunRemotePlanArgs<'_>) -> Result<(), String> {
     let RunRemotePlanArgs {
         entries,
@@ -189,10 +184,9 @@ pub(crate) fn run_remote_plan(args: RunRemotePlanArgs<'_>) -> Result<(), String>
     } = args;
     use portage_repo::PretendOutcome;
     use std::collections::HashMap;
-    // Backlog #322: every shipped unit carries the vendored phase runtime
-    // (`build_bundle`), so a binary that cannot find it fails here -- the
-    // gate stage, before the vdb shadow, the ledger gate, any ssh and any
-    // write -- instead of panicking after the plan is printed.
+    // Every shipped unit carries the vendored phase runtime, so a binary
+    // that cannot find it fails here -- before the vdb shadow, the ledger
+    // gate, any ssh and any write -- instead of panicking after the plan.
     if entries.iter().any(|e| {
         !matches!(
             e.outcome,
@@ -203,8 +197,8 @@ pub(crate) fn run_remote_plan(args: RunRemotePlanArgs<'_>) -> Result<(), String>
     }
     let control_dir = control_dir();
     let control = control_dir.as_deref();
-    // Vdb shadow for the pre-ship pre-check (plan §7): pulled once for
-    // client placement, read directly for server placement.
+    // Vdb shadow for the pre-ship pre-check: pulled once for client
+    // placement, read directly for server placement.
     let shadow = load_vdb_shadow(ctx, control)?;
     if matches!(ctx.vdb, ConfigPlacement::Server(_)) {
         println!(
@@ -212,18 +206,17 @@ pub(crate) fn run_remote_plan(args: RunRemotePlanArgs<'_>) -> Result<(), String>
         );
     }
     // Server ledger base: `--remote-ledger-dir` wins, else the placed
-    // config's own `<PKGDIR>/remote-ledger` (plan §8).
+    // config's own `<PKGDIR>/remote-ledger`.
     let server_ledger_base: std::path::PathBuf = match &ctx.ledger_dir {
         Some(dir) => std::path::PathBuf::from(dir),
         None => pkgdir.join("remote-ledger"),
     };
-    // Strict-mode provenance gate (plan §8): fail early, before anything
-    // ships, when the client and server ledger record disagree.
+    // Strict-mode provenance gate: fail early, before anything ships,
+    // when the client and server ledger record disagree.
     if ctx.require_ledger_match {
         check_ledger_match(ctx, control, &server_ledger_base)?;
     }
-    // cp -> the cps that depend on it (each entry's own `required_by`),
-    // the same edge set `run_merge_loop` drops on.
+    // cp -> the cps that depend on it (each entry's own `required_by`).
     let dependents: HashMap<(String, String), Vec<(String, String)>> = entries
         .iter()
         .map(|e| {
@@ -238,30 +231,21 @@ pub(crate) fn run_remote_plan(args: RunRemotePlanArgs<'_>) -> Result<(), String>
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     let mut merged: u32 = 0;
-    // Real `preinst_mask()` (`bin/misc-functions.sh`): the placed
-    // config's resolved `INSTALL_MASK` + the `no{man,info,doc}` FEATURES
-    // fold, through the same `pretend::config_install_mask` resolver the
-    // local merge uses -- so a remote merge masks exactly what a local
-    // one would (backlog #170). `ConfigPlacement::Client` resolves the
-    // pulled client `/etc/portage`; `ConfigPlacement::Server` the
-    // server's own (both are `config` here: the resolve already ran
-    // under `ConfigRootOverride` for the placed root).
+    // The placed config's resolved `INSTALL_MASK` + the `no{man,info,doc}`
+    // fold, through the same resolver the local merge uses -- so a remote
+    // merge masks exactly what a local one would.
     let (install_mask, install_mask_prunes_usr_share) = crate::pretend::config_install_mask(config);
-    // Backlog #171: the same placed config's resolved `FEATURES` list
-    // rides every unit's regen postinst run (the local
-    // `refresh_features` rule), so the vdb env carries the merge-time
+    // The same placed config's resolved `FEATURES` list rides every
+    // unit's regen postinst run, so the vdb env carries the merge-time
     // features, not the binpkg's build-time ones.
     let regen_features = crate::pretend::config_features_string(config);
-    // Backlog #171 review: the same placed config's resolved
-    // `PORTAGE_BZIP2_COMMAND` rides the regen install too, so the
-    // scrubbed vdb env records the client's configured compressor
-    // (e.g. `lbzip2`), not always the `make.globals` default.
+    // The same placed config's resolved `PORTAGE_BZIP2_COMMAND` rides the
+    // regen install too, so the scrubbed vdb env records the client's
+    // configured compressor.
     let regen_bzip2 = crate::pretend::config_bzip2_command(config);
-    // S8.2 install (a client mutation, so after the read-only stages --
-    // the shadow, the ledger gate and the resolve above): one stage per
-    // invocation, only when at least one unit ships, never with an
-    // empty plan. `--pretend` never reaches here (`mrg` routes it
-    // locally with the remote options dropped).
+    // Client-binary install (a client mutation, so after the read-only
+    // stages): one stage per invocation, only when at least one unit
+    // ships. `--pretend` never reaches here.
     let ships = entries.iter().any(|e| {
         matches!(
             e.outcome,
@@ -276,8 +260,7 @@ pub(crate) fn run_remote_plan(args: RunRemotePlanArgs<'_>) -> Result<(), String>
     }
     for entry in entries {
         let version = match &entry.outcome {
-            // #72 B3: a removal is not remotely merged (execution is a
-            // non-goal).
+            // A removal is not remotely merged (execution is a non-goal).
             PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::Uninstall { .. } => continue,
             PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
                 version.clone()
@@ -317,8 +300,7 @@ pub(crate) fn run_remote_plan(args: RunRemotePlanArgs<'_>) -> Result<(), String>
         match unit {
             Ok(()) => {
                 // The flow's own `>>> Remote merged <cpv>` line is this
-                // unit's trailer; only failed/skipped need plan-level
-                // trailers here.
+                // unit's trailer; only failed/skipped need plan-level ones.
                 merged += 1;
             }
             Err(message) => {
@@ -480,14 +462,14 @@ pub(crate) fn run_one_remote_unit(args: RunOneRemoteUnitArgs<'_>) -> Result<(), 
     Ok(())
 }
 
-/// Slice-1 entry point: connect, preflight, report. Exit 0 = every hard
-/// gate passed; 1 = a gate failed or the client is unreachable.
-/// Slice 2+ entry point with `--remote-binpkg`: preflight, then bundle,
-/// stream, unpack and verify one explicit binpkg file.
+/// Entry point: connect, preflight, report. Exit 0 = every hard gate
+/// passed; 1 = a gate failed or the client is unreachable. With
+/// `--remote-binpkg`: preflight, then bundle, stream, unpack and verify
+/// one explicit binpkg file.
 pub fn run_remote(ctx: &RemoteContext) -> ExitCode {
-    // Backlog #322: an explicit `--remote-binpkg` bundles the phase
-    // runtime into the unit, so a binary with no runtime fails here, with
-    // one message, before the first connection -- not after the preflight.
+    // An explicit `--remote-binpkg` bundles the phase runtime into the
+    // unit, so a binary with no runtime fails here, with one message,
+    // before the first connection -- not after the preflight.
     if ctx.binpkg.is_some()
         && let Err(message) = crate::ebuild_phases::require_phase_runtime()
     {
@@ -508,9 +490,9 @@ pub fn run_remote(ctx: &RemoteContext) -> ExitCode {
         }
     };
     let (mut failures, mut warnings) = evaluate_preflight(ctx, &values);
-    // The trial path ships one unit, so it enforces the S8.1 binary
-    // gates like the resolve path; the preflight-only run ships nothing
-    // and skips them (like `--pretend`, which installs nothing).
+    // The trial path ships one unit, so it enforces the binary gates
+    // like the resolve path; the preflight-only run ships nothing and
+    // skips them (like `--pretend`, which installs nothing).
     let mut ctx = ctx.clone();
     if ctx.binpkg.is_some() {
         match bin {

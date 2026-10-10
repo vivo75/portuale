@@ -58,7 +58,7 @@ fn bin_search_dirs_prefers_the_override_pair() {
     assert_eq!(bin_search_dirs(&ctx), vec!["/opt/bin", "/usr/local/bin"]);
     ctx.portuale_dir = Some("/srv/bin".to_string());
     assert_eq!(bin_search_dirs(&ctx), vec!["/srv/bin"]);
-    // D5 order: per directory, `portuale` then `portuale-<hash>`.
+    // Per directory, `portuale` then `portuale-<hash>`.
     assert_eq!(
         bin_candidates(&bin_search_dirs(&ctx), S8_SHORT),
         vec![
@@ -71,8 +71,8 @@ fn bin_search_dirs_prefers_the_override_pair() {
 #[test]
 fn bin_gates_use_the_first_match_in_d5_order() {
     let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 62);
-    // Both a plain and a hashed candidate match: the first in D5
-    // order (the plain `/opt/bin/portuale`) wins.
+    // Both a plain and a hashed candidate match: the first (the plain
+    // `/opt/bin/portuale`) wins.
     let values = s8_values(
         &[S8_DIGEST, "missing", S8_DIGEST, "missing"],
         &[("yes", "yes", "755"), ("yes", "yes", "755")],
@@ -139,9 +139,8 @@ fn bin_gates_plan_an_install_when_nothing_matches() {
 #[test]
 fn bin_gates_report_a_mismatched_plain_portuale_and_leave_it_alone() {
     let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 62);
-    // A non-matching plain `portuale` is reported and left alone:
-    // the install goes next to it as `portuale-<hash>`, never over
-    // it.
+    // A non-matching plain `portuale` is reported and left alone: the
+    // install goes next to it as `portuale-<hash>`, never over it.
     let values = s8_values(
         &[S8_WRONG, "missing", "missing", "missing"],
         &[("yes", "yes", "755"), ("yes", "yes", "755")],
@@ -209,8 +208,8 @@ fn bin_gates_fail_an_arch_mismatch_naming_the_binary_option() {
 #[test]
 fn bin_gates_fail_without_a_writable_dir() {
     let pre = s8_pre(&["/opt/bin", "/usr/local/bin"], 62);
-    // Neither default directory usable, no override: the message
-    // names the option and the root-login alternative (Q1).
+    // Neither default directory usable, no override: the message names
+    // the option and the root-login alternative.
     let values = s8_values(
         &["missing", "missing", "missing", "missing"],
         &[("no", "no", "unknown"), ("yes", "no", "755")],
@@ -260,7 +259,7 @@ fn bin_gates_refuse_a_world_writable_dir_without_the_sticky_bit() {
     }
 }
 
-/// #326 S8 e2e: the first run installs `portuale-<hash>` (with the
+/// End to end: the first run installs `portuale-<hash>` (with the
 /// `install-bin 0` line) and merges the unit; the second run reuses
 /// it with no `install-bin` line.
 #[test]
@@ -305,8 +304,8 @@ fn s8_install_then_reuse_over_local_transport() {
     assert_eq!(s8_sha256(&installed), digest);
 }
 
-/// #326 S8 e2e (Q5/D5): a matching plain `portuale` placed first is
-/// reused -- nothing is installed next to it.
+/// End to end: a matching plain `portuale` placed first is reused --
+/// nothing is installed next to it.
 #[test]
 fn s8_matching_plain_portuale_is_reused() {
     let tree = S8Tree::fresh("plain-match");
@@ -333,8 +332,8 @@ fn s8_matching_plain_portuale_is_reused() {
     );
 }
 
-/// #326 S8 e2e (Q5/D5): a non-matching plain `portuale` is left
-/// byte-identical, and `portuale-<hash>` is installed next to it.
+/// End to end: a non-matching plain `portuale` is left byte-identical,
+/// and `portuale-<hash>` is installed next to it.
 #[test]
 fn s8_mismatched_plain_portuale_is_left_alone() {
     let tree = S8Tree::fresh("plain-mismatch");
@@ -367,8 +366,7 @@ fn s8_mismatched_plain_portuale_is_left_alone() {
     );
 }
 
-/// #326 S8 e2e (D5): a corrupted `portuale-<hash>` (wrong digest) is
-/// replaced.
+/// End to end: a corrupted `portuale-<hash>` (wrong digest) is replaced.
 #[test]
 fn s8_corrupted_hashed_binary_is_replaced() {
     let tree = S8Tree::fresh("corrupt-replace");
@@ -393,11 +391,8 @@ fn s8_corrupted_hashed_binary_is_replaced() {
     assert_eq!(s8_sha256(&hashed), digest);
 }
 
-/// #326 S8 e2e (S8.2): `--pretend` installs nothing. Pretend stays
-/// local (`mrg` routes it to `pretend::run` with the remote options
-/// dropped), so the client bin dir is untouched even for a run that
-/// resolves. Setup mirrors `pretend.rs`'s local-transport remote
-/// test: a `file://` binhost plus the fixture client config.
+/// End to end: `--pretend` installs nothing (pretend stays local, with
+/// the remote options dropped).
 #[test]
 fn s8_pretend_installs_nothing() {
     fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {

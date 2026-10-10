@@ -3,11 +3,10 @@
 use crate::remote::*;
 
 /// Client vdb destination for this run: the placed path, plus whether
-/// the driver runs stateless (server-side vdb placement, plan §7 -- the
-/// driver merges files only: no vdb entry, no old hooks, fail-closed
-/// collisions). Shared by the merge driver and the #171 env-regen
-/// install (a stateless merge has no vdb entry to attach the regen'd
-/// env to, so the install is skipped while postinst still runs).
+/// the driver runs stateless (server-side vdb placement -- the driver
+/// merges files only: no vdb entry, no old hooks, fail-closed
+/// collisions). A stateless merge has no vdb entry to attach the regen'd
+/// env to, so the install is skipped while postinst still runs.
 pub(crate) fn client_vdb_placement(ctx: &RemoteContext) -> (String, bool) {
     match &ctx.vdb {
         ConfigPlacement::Client(path) => (path.clone(), false),
@@ -40,7 +39,7 @@ pub(crate) fn merge_failure_tail(stdout: &str, stderr: &str, code: Option<i32>) 
 
 /// Run the merge driver; `Ok(markers)` are the `MERGE_<STEP>=ok` lines
 /// for the report, `Err(message)` the failure tail. The success gate is
-/// the driver's own `STATUS=merged` trailer (plan §11), with exit 0 +
+/// the driver's own `STATUS=merged` trailer, with exit 0 +
 /// `MERGE_DONE=ok` kept as the backstop.
 pub(crate) fn run_merge_stage(
     ctx: &RemoteContext,
@@ -99,19 +98,15 @@ pub(crate) fn run_merge_stage(
     }
 }
 
-// --- Merge-time vdb environment regeneration (backlog #171) -------------------
+// --- Merge-time vdb environment regeneration ---------------------------------------
 //
-// Real regenerates the vdb env from the live postinst environment of
-// the merge (`vartree.py:5334` `PORTAGE_UPDATE_ENV=<dbpkgdir>/
-// environment.bz2`; `bin/phase-functions.sh:1072-1082`), while `mrg`
-// kept the binpkg's build-time env. The client regenerates
-// uncompressed (no `bzip2` on the client, plan §6/§14.1) and the
+// The client regenerates uncompressed (no `bzip2` on the client) and the
 // server compresses + installs; old-instance hooks get their env
 // server-decompressed the same way.
 
 /// Outcome of the regen postinst run: the phase rc (non-zero is
-/// non-fatal, real `_postinst_failure`) plus whether the client left a
-/// fresh `$UNIT/environment.regen` behind.
+/// non-fatal, like Portage's `_postinst_failure`) plus whether the
+/// client left a fresh `$UNIT/environment.regen` behind.
 pub(crate) struct RegenReport {
     pub(crate) phase_rc: i32,
     pub(crate) regen_present: bool,
@@ -131,10 +126,8 @@ pub(crate) struct RunPostinstRegenStageArgs<'a> {
 /// Run the regen postinst script and print its log straight through.
 /// `Err` is a transport/command failure only -- a non-zero phase rc or
 /// a missing regen file is a warn-and-continue `RegenReport`, never a
-/// unit failure (real `_postinst_failure`). `locale` is the server's
-/// own locale pairs for the client phase env (see
-/// `collect_server_locale`); the unit flow collects them from the
-/// process environment, tests inject them explicitly.
+/// unit failure (like Portage's `_postinst_failure`). `locale` is the
+/// server's own locale pairs for the client phase env.
 pub(crate) fn run_postinst_regen_stage(
     args: RunPostinstRegenStageArgs<'_>,
 ) -> Result<RegenReport, String> {
@@ -192,7 +185,7 @@ pub(crate) fn run_postinst_regen_stage(
 
 /// Pull one remote file's bytes to the server (`cat` remotely; a plain
 /// read for the `local` transport, where client paths are server
-/// paths). `Err` is the pull failure (the #171 regen warn path).
+/// paths). `Err` is the pull failure.
 pub(crate) fn pull_file(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -258,7 +251,7 @@ pub(crate) fn bzip2_pipe(args: &[&str], bytes: &[u8]) -> Result<Vec<u8>, String>
 }
 
 /// Server-side compression for the pulled regen'd env: `bzip2 -9`, the
-/// same level real's `PORTAGE_UPDATE_ENV` block uses (`-f9`).
+/// same level Portage's `PORTAGE_UPDATE_ENV` block uses.
 pub(crate) fn bzip2_compress(bytes: &[u8]) -> Result<Vec<u8>, String> {
     bzip2_pipe(&["-c", "-f9"], bytes)
 }
@@ -270,17 +263,8 @@ pub(crate) fn bzip2_decompress(bytes: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Rewrite the `${PORTAGE_BZIP2_COMMAND}` line in a pulled regen'd
 /// environment **only** when its value is the unit-local
-/// `bzip2-passthrough` stand-in the regen postinst run used, replacing
-/// it with the resolved client command (`bzip2_command` -- the
-/// server-resolved client `PORTAGE_BZIP2_COMMAND`, `make.globals`'
-/// `bzip2` when nothing is configured). Real's merge-time save records
-/// its live value (verified on this host's own
-/// `/var/db/pkg/*/environment.bz2`, which all carry
-/// `declare -x PORTAGE_BZIP2_COMMAND="bzip2"`), while ours ran with a
-/// per-unit workdir path that must not leak into the vdb (and would
-/// keep the L1 `environment` rows red: `normalize.py` compares the
-/// content verbatim). Any other value -- real's own spelling, a
-/// foreign path, anything -- is copied verbatim; a missing line stays
+/// `bzip2-passthrough` stand-in, replacing it with the resolved client
+/// command. Any other value is copied verbatim; a missing line stays
 /// missing (never invent it).
 pub(crate) fn scrub_bzip2_command(bytes: &[u8], bzip2_command: &str) -> Vec<u8> {
     let mut out = Vec::new();
@@ -315,8 +299,7 @@ pub(crate) fn scrub_bzip2_command(bytes: &[u8], bzip2_command: &str) -> Vec<u8> 
 
 /// Install `bytes` at `dest` on the client atomically (temp name +
 /// `mv`, so a concurrent unmerge never reads a half-written env). A
-/// failed `mv` best-effort removes the remote temp name (review #4 --
-/// no client tmp litter).
+/// failed `mv` best-effort removes the remote temp name.
 pub(crate) fn install_file_atomic(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -338,12 +321,9 @@ pub(crate) fn install_file_atomic(
             Ok(())
         }
         RemoteTransport::Ssh => {
-            // Backlog #262: `TempDir::new` creates a directory (backlog
-            // #260), so the bytes must ride a file *inside* it --
-            // staging straight into its path fails every ssh install
-            // with `Is a directory`, and the vdb keeps the build-time
-            // env (with its stray `declare -- x=""`) instead of the
-            // regen'd one.
+            // `TempDir::new` creates a directory, so the bytes must ride
+            // a file *inside* it -- staging straight into its path fails
+            // every ssh install with `Is a directory`.
             let server_dir = TempDir::new("portuale-regen-install").keep();
             let server_tmp = server_dir.join("regen.env");
             std::fs::write(&server_tmp, bytes)
@@ -378,9 +358,8 @@ pub(crate) fn install_file_atomic(
 /// Pull the regen'd env, scrub it, compress it server-side and install
 /// it over the vdb's build-time `environment.bz2`. `Err` is
 /// `(failing step, detail)` -- `pull`, `compress` or `install` -- for
-/// the caller's one-`!!!` warn-and-continue line. `regen_bzip2` is the
-/// resolved client `PORTAGE_BZIP2_COMMAND` for the scrub (`None` on
-/// paths that resolve no config -- the `make.globals` default).
+/// the caller's warn-and-continue line. `regen_bzip2` is the resolved
+/// client `PORTAGE_BZIP2_COMMAND` used by the scrub.
 pub(crate) fn install_regenerated_env(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -398,9 +377,9 @@ pub(crate) fn install_regenerated_env(
     Ok(())
 }
 
-/// The #171 failure line (coordinator decision): names the package and
-/// the failing step (`postinst`, `pull`, `compress`, `install`); the
-/// vdb keeps the build-time `environment.bz2` and the merge continues.
+/// The failure line: names the package and the failing step (`postinst`,
+/// `pull`, `compress`, `install`); the vdb keeps the build-time
+/// `environment.bz2` and the merge continues.
 pub(crate) fn regen_warn_message(cpv: &str, step: &str) -> String {
     format!(
         "!!! Remote {cpv}: merge-time environment regen failed at {step}, keeping build-time environment.bz2"
@@ -459,14 +438,10 @@ pub(crate) struct ShipOldHookEnvsArgs<'a> {
 }
 
 /// Stage every same-slot installed version's saved env for the merge
-/// driver's `run_old_hook` (backlog #171): probe the client vdb for
-/// same-package versions, pull each `environment.bz2`, decompress it
-/// **server-side**, and ship the plain text to `$UNIT/old-env/<pf>`.
-/// A version with no bz2 (older `mrg` entries carry only a plain
-/// `environment`) ships that file as-is; a version with neither
-/// warns with both pull errors (and still hits the driver's own
-/// warn-and-skip). Best-effort throughout:
-/// every failure lands in `warnings` and the merge continues.
+/// driver's `run_old_hook`: probe the client vdb for same-package
+/// versions, pull each `environment.bz2`, decompress it **server-side**,
+/// and ship the plain text to `$UNIT/old-env/<pf>`. Best-effort
+/// throughout: every failure lands in `warnings` and the merge continues.
 pub(crate) fn ship_old_hook_envs(args: ShipOldHookEnvsArgs<'_>) -> OldHookShipment {
     let ShipOldHookEnvsArgs {
         ctx,
@@ -546,12 +521,8 @@ pub(crate) fn ship_old_hook_envs(args: ShipOldHookEnvsArgs<'_>) -> OldHookShipme
                     .push(format!("{pf}: decompress: {message}")),
             },
             Err(bz2_message) => {
-                // No bz2 (older `mrg` entries carry only a plain file,
-                // or nothing at all): ship the plain text as-is. When
-                // the plain pull fails too, the original bz2 error goes
-                // into `warnings` (review #3 -- silent staging failures
-                //); a version with neither file warns here and hits the
-                // driver's own warn-and-skip as well.
+                // No bz2: ship the plain file as-is; when the plain pull
+                // fails too, warn with both pull errors.
                 let old_plain = format!("{vdbroot}/{pf}/environment");
                 match pull_file(ctx, control, &old_plain) {
                     Ok(plain) => {
@@ -572,8 +543,8 @@ pub(crate) fn ship_old_hook_envs(args: ShipOldHookEnvsArgs<'_>) -> OldHookShipme
     shipment
 }
 
-/// The S8.1-resolved absolute client binary for generated scripts
-/// (#326 D5/S8.3): every script exports this as `PORTUALE_BIN`.
+/// The resolved absolute client binary for generated scripts:
+/// every script exports this as `PORTUALE_BIN`.
 pub(crate) fn client_bin_abs(ctx: &RemoteContext) -> Result<&str, String> {
     ctx.bin_plan.abs().ok_or_else(|| {
         "mrg: internal error: the client binary was never resolved (preflight did not run)"

@@ -2,17 +2,15 @@
 
 use crate::remote::*;
 
-// --- Client merge (slice 4) ----------------------------------------------------
+// --- Client merge ------------------------------------------------------------------
 
-/// Real `eapi_exports_merge_type` (`lib/portage/eapi.py:63`, attrs table
-/// `:300`: `exports_merge_type = eapi >= Eapi("4")`): `MERGE_TYPE` reaches
-/// the phase env only for EAPI 4+ (real `config.py:3335-3336` pops it
-/// otherwise). An unsupported or unparseable EAPI takes real's
-/// `_get_eapi_attrs` fallback row (`eapi.py:247-258`), which exports.
+/// Whether `MERGE_TYPE` reaches the phase env: only for EAPI 4+. An
+/// unsupported or unparseable EAPI takes the exporting fallback row.
+// Portage: lib/portage/eapi.py, eapi_exports_merge_type
 pub(crate) fn eapi_exports_merge_type(eapi: &str) -> bool {
-    // Real tests the *whole* string against `_supported_eapis`; anything
-    // that is not a plain supported number (e.g. `3-foo`) takes the
-    // exporting fallback row.
+    // Portage tests the *whole* string against `_supported_eapis`;
+    // anything that is not a plain supported number (e.g. `3-foo`)
+    // takes the exporting fallback row.
     match eapi.trim().parse::<u32>() {
         Ok(n) => n >= 4,
         Err(_) => true,
@@ -37,24 +35,12 @@ pub(crate) struct PhaseExportsArgs<'a> {
     pub(crate) portuale_bin: &'a str,
 }
 
-/// `export` block for the new instance's phase script (`phase_script`;
-/// the replaced instance's prerm/postrm go through the merge driver's own
-/// `run_old_hook`, which deliberately exports no `MERGE_TYPE`: real's
-/// unmerge re-creates the old instance's settings, `vartree.py:4535-4540`,
-/// and never passes through the scheduler that sets it): path overrides with
-/// caller-side values, everything else from the sourced saved env.
-/// `unit_bin` is the shipped runtime dir (`$UNIT/bin`,
-/// `$OLD_TMP/bin` symlink or copy -- callers decide).
-/// `MERGE_TYPE=binary` rides the same line as `EMERGE_FROM` (real
-/// `_emerge/Binpkg.py:92` sets it for every binpkg merge; `mrg` only
-/// merges binpkgs), gated on [`eapi_exports_merge_type`].
-/// `portuale_bin` is the S8.1-resolved absolute client path (#326 D5):
-/// every client call uses it, never `$PATH` -- `PORTAGE_PYTHON` is the
-/// shipped `portuale-python` shim through the script's own `$UNITBIN`
-/// (`$UNIT/bin`, defined by each script header), `PORTAGE_PYM_PATH` is
-/// `/` (no checkout on the client), and `PORTAGE_IPC_DAEMON` is unset
-/// (no IPC daemon, #326 D6 -- this also scrubs a value inherited over
-/// the local transport).
+/// `export` block for the new instance's phase script: path overrides
+/// with caller-side values, everything else from the sourced saved env.
+/// `MERGE_TYPE=binary` rides the same line as `EMERGE_FROM` (only binpkgs
+/// merge here), gated on [`eapi_exports_merge_type`]. `portuale_bin` is
+/// the resolved absolute client path: every client call uses it, never
+/// `$PATH`.
 pub(crate) fn phase_exports(args: PhaseExportsArgs<'_>) -> String {
     let PhaseExportsArgs {
         ebuild,
@@ -122,7 +108,7 @@ pub(crate) fn phase_exports(args: PhaseExportsArgs<'_>) -> String {
     )
 }
 
-// --- Client phases (slice 3) -------------------------------------------------
+// --- Client phases -----------------------------------------------------------------
 
 /// Arguments of [`phase_script`].
 pub(crate) struct PhaseScriptArgs<'a> {
@@ -135,16 +121,11 @@ pub(crate) struct PhaseScriptArgs<'a> {
     pub(crate) portuale_bin: &'a str,
 }
 
-/// One phase invocation, generated bash: recreate the local
-/// `run_phase_from_saved_env` + `run_one_phase_bash` setup client-side
-/// (fresh `bash bin/ebuild.sh <phase>` process per phase -- the readonly
-/// `EBUILD_PHASE` semantics demand it, exactly like local `spawnebuild`).
-/// Path overrides are exported with client-side values; everything else
-/// (EAPI, PN/PV/…, USE) rides the sourced saved environment, whose stale
-/// path copies ebuild.sh's own `__preprocess_ebuild_env` strips (the
-/// `environment.raw` marker enables that filtering, mirroring local).
-/// `S` is deliberately *not* exported: ebuild.sh defaults it to
-/// `${WORKDIR}/${P}` with `P` from the saved env (exact local behavior).
+/// One phase invocation, generated bash: recreate the local phase setup
+/// client-side (fresh `bash bin/ebuild.sh <phase>` process per phase --
+/// the readonly `EBUILD_PHASE` semantics demand it, exactly like local
+/// `spawnebuild`). `S` is deliberately *not* exported: ebuild.sh
+/// defaults it to `${WORKDIR}/${P}` (exact local behavior). Reports
 /// `PHASE_<phase>=<rc>` on stdout, phase log raw on stdout/stderr.
 pub(crate) fn phase_script(args: PhaseScriptArgs<'_>) -> String {
     let PhaseScriptArgs {
@@ -156,9 +137,8 @@ pub(crate) fn phase_script(args: PhaseScriptArgs<'_>) -> String {
         colormap,
         portuale_bin,
     } = args;
-    // D keeps local's trailing slash. `UNITBIN` is the shipped runtime
-    // dir (`$UNIT/bin`): `phase_exports` resolves `PORTAGE_PYTHON`
-    // through it, so no shim falls back to `PATH` (#326 D5/S8.3).
+    // `UNITBIN` is the shipped runtime dir: `PORTAGE_PYTHON` resolves
+    // through it, so no shim falls back to `PATH`.
     format!(
         concat!(
             "UNIT={unit}\n",
@@ -196,13 +176,9 @@ pub(crate) fn phase_script(args: PhaseScriptArgs<'_>) -> String {
 }
 
 /// Locale variables the regen postinst run re-exports into the client
-/// phase env: real's saved locale comes from the calling environment
-/// through `environ_whitelist` (`special_env_vars.py`: `LANG` plus the
-/// `LC_*` list), and for `mrg` the calling environment is the server
-/// process. `LANGUAGE` is **not** in real's whitelist -- it rides along
-/// here only because the slice brief names it explicitly; see
-/// `collect_server_locale`. Only set variables are ever forwarded
-/// (never invented defaults).
+/// phase env. Only set variables are ever forwarded (never invented
+/// defaults). `LANGUAGE` is not in Portage's whitelist -- it rides along
+/// because the slice brief names it explicitly.
 pub(crate) const REGEN_LOCALE_VARS: &[&str] = &[
     "LANG",
     "LANGUAGE",
@@ -216,12 +192,9 @@ pub(crate) const REGEN_LOCALE_VARS: &[&str] = &[
     "LC_PAPER",
 ];
 
-/// The server process's own locale values for the client regen phase
-/// env, as `(name, value)` pairs in `REGEN_LOCALE_VARS` order -- one
-/// entry per variable the getter reports as set (even empty: a set-but-
-/// empty `LANG` is still the calling environment's value, which is what
-/// real's whitelist passes through). Production passes
-/// `|name| std::env::var(name).ok()`; tests inject a fake map.
+/// The server process's own locale values for the client regen phase env,
+/// as `(name, value)` pairs in `REGEN_LOCALE_VARS` order. Production
+/// passes `|name| std::env::var(name).ok()`; tests inject a fake map.
 pub(crate) fn collect_server_locale(get: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
     REGEN_LOCALE_VARS
         .iter()
@@ -229,35 +202,22 @@ pub(crate) fn collect_server_locale(get: impl Fn(&str) -> Option<String>) -> Vec
         .collect()
 }
 
-/// Real's `posixish_locale` EAPI attribute (`eapi.py:182,309`): true
-/// from EAPI 6 on. Only posixish phases run the `LC_ALL` split below
-/// (`EbuildPhase.py:51-56`); older EAPIs keep `LC_ALL` as-is.
+/// Whether an EAPI runs posixish locale handling: true from EAPI 6 on.
+/// An unparseable EAPI defaults to the modern rule.
+// Portage: eapi.py, posixish_locale
 pub(crate) fn eapi_is_posixish(eapi: &str) -> bool {
     let digits: String = eapi
         .trim()
         .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect();
-    // Real rejects an unknown EAPI outright; anything reaching us parsed
-    // off an ebuild, so default an unparseable value to the modern rule
-    // (the same direction the local phase path's unconditional split
-    // already takes).
+    // Anything reaching us parsed off an ebuild, so default an
+    // unparseable value to the modern rule.
     digits.parse::<u64>().map(|n| n >= 6).unwrap_or(true)
 }
 
-/// Real's `locale_categories` (`portage/util/locale.py:22-36`): the full
-/// set `split_LC_ALL` copies a set `LC_ALL` over -- the six POSIX
-/// categories, `LC_PAPER`, and the five GNU extensions
-/// (`LC_ADDRESS`, `LC_IDENTIFICATION`, `LC_MEASUREMENT`, `LC_NAME`,
-/// `LC_TELEPHONE`). The fan-out below iterates this list, not the
-/// forwarding set: real's split operates on settings, and for a
-/// binpkg-merge postinst `$T/environment` does not exist yet, so
-/// `config.environ()` applies no whitelist filter
-/// (`config.py:3286-3299`) and all twelve reach the phase env and the
-/// `PORTAGE_UPDATE_ENV` save (`EbuildPhase.py:158,259` runs the env
-/// extractor for `pretend`/`prerm` only). Probed against real's own
-/// `split_LC_ALL` + `environ()`: with `LC_ALL` set, all twelve export
-/// when `$T/environment` is absent, seven when present.
+/// The twelve locale categories a set `LC_ALL` fans out over. The
+/// fan-out below iterates this list, not the forwarding set.
 pub(crate) const PORTAGE_LOCALE_CATEGORIES: &[&str] = &[
     "LC_COLLATE",
     "LC_CTYPE",
@@ -273,22 +233,12 @@ pub(crate) const PORTAGE_LOCALE_CATEGORIES: &[&str] = &[
     "LC_TELEPHONE",
 ];
 
-/// Port of real's `split_LC_ALL` (`portage/util/locale.py:160`) to the
-/// forwarded regen locale set, for a posixish phase: a set `LC_ALL` fans
-/// out over all twelve real `locale_categories` (see
-/// `PORTAGE_LOCALE_CATEGORIES`; real copies it over the same list,
-/// unconditionally overwriting) and itself
-/// disappears (real blanks it, then `config.environ()` deletes the
-/// placeholder, `config.py:3374-3385`). `LANG` is filled from `LC_ALL`
-/// only when the server left it unset -- real's split never touches
-/// `LANG`, but with `LC_ALL` set and `LANG` unset the effective locale
-/// is `LC_ALL`'s value everywhere, and the bed shows real's saved env
-/// carrying `LANG` alongside the split categories. An explicitly set
-/// `LANG` is never clobbered; `LANGUAGE` (not a locale category, rides
-/// along per the l171b brief) is never touched. A set-but-empty
-/// `LC_ALL` is dropped without fanning out (real's `if lc_all:` is
-/// falsy, then `environ()` deletes the placeholder). Non-posixish
-/// EAPIs return the pairs unchanged (real never calls the split there).
+/// Fan out a set `LC_ALL` over all twelve `PORTAGE_LOCALE_CATEGORIES`
+/// for a posixish phase (itself disappearing), filling `LANG` only when
+/// the server left it unset. `LANGUAGE` is never touched; a set-but-empty
+/// `LC_ALL` is dropped without fanning out. Non-posixish EAPIs return
+/// the pairs unchanged.
+// Portage: portage/util/locale.py, split_LC_ALL
 pub(crate) fn split_server_locale(
     locale: &[(String, String)],
     eapi: &str,
@@ -334,46 +284,24 @@ pub(crate) struct PostinstRegenScriptArgs<'a> {
     pub(crate) portuale_bin: &'a str,
 }
 
-/// The merge-time environment-regeneration postinst run (backlog #171):
-/// real `vartree.py:5334` sets `PORTAGE_UPDATE_ENV=<dbpkgdir>/
-/// environment.bz2` around *every* merge's postinst phase, and
-/// `bin/phase-functions.sh:1072-1082` re-saves the vdb env from the
-/// live phase env through it -- so the vdb env carries the merge-time
-/// config, not the binpkg's build-time one. `mrg` runs this phase on
-/// the client for every merged unit, **whether or not `pkg_postinst`
-/// is defined**: real's `prerm|postrm|preinst|postinst|config|info`
-/// case (`phase-functions.sh:1061-1083`) runs
-/// `__ebuild_phase_with_hooks pkg_${1}` unconditionally
-/// (`__ebuild_phase` is a no-op for an undefined function) and *then*
-/// the `PORTAGE_UPDATE_ENV` block -- so an undefined `pkg_postinst`
-/// still regenerates the env. `pkg_postinst` itself still runs only if
-/// defined (the same no-op rule; nothing faked).
+/// The merge-time environment-regeneration postinst run: `mrg` runs this
+/// phase on the client for every merged unit, **whether or not
+/// `pkg_postinst` is defined** (an undefined function is a no-op that
+/// still regenerates the env).
 ///
-/// `PORTAGE_UPDATE_ENV` points at a unit-local file
-/// (`$UNIT/environment.regen`) and `PORTAGE_BZIP2_COMMAND` at the
-/// bundle's `bzip2-passthrough` (plain text out; the server compresses
-/// -- the client must have no `bzip2`, plan §6). `FEATURES` /
-/// `PORTAGE_FEATURES` carry the resolved client list (the local
-/// `refresh_features` rule), so the env records the merge-time
-/// features (e.g. no `buildpkg`). `locale` re-exports the server's own
-/// locale values (see `REGEN_LOCALE_VARS` / `collect_server_locale`,
-/// split per `split_server_locale` on posixish EAPIs) so
-/// the regen'd env carries them exactly as real's calling-environment
-/// whitelist does. `PHASE_postinst=<rc>` plus
-/// `REGEN_ENV=ok|missing|skip:no-hooks` come back on stdout; the
-/// script exits with the phase rc (a non-zero postinst is non-fatal --
-/// real `_postinst_failure` -- as long as the regen file exists).
+/// `PORTAGE_UPDATE_ENV` points at a unit-local file and
+/// `PORTAGE_BZIP2_COMMAND` at the bundle's `bzip2-passthrough` (plain
+/// text out; the server compresses -- the client must have no `bzip2`).
+/// `FEATURES` / `PORTAGE_FEATURES` carry the resolved client list, and
+/// `locale` re-exports the server's own values (split per
+/// `split_server_locale` on posixish EAPIs). The script exits with the
+/// phase rc (a non-zero postinst is non-fatal); `PHASE_postinst=<rc>`
+/// plus `REGEN_ENV=ok|missing|skip:no-hooks` come back on stdout.
 ///
-/// `O` is unset and `SHELL` unset before the phase runs: real's
-/// phase shell never has `O` (`config.environ()` drops it via
-/// `special_env_vars.py: environ_filter` even though `doebuild.py:475`
-/// sets `mysettings["O"]`) and its saved `SHELL` is `declare --`
-/// (bash initializes its own -- `SHELL` is in neither the whitelist
-/// nor the config), while `mrg` exported a unit-local `O` and usually
-/// inherits an exported `SHELL`. `LC_ALL` is unset on posixish EAPIs
-/// and the forwarded locale arrives pre-split (see
-/// `split_server_locale`); the unset also kills any `LC_ALL` leaking
-/// in from the sourced build-time environment.
+/// `O` and `SHELL` are unset before the phase runs, like Portage's phase
+/// shell; `LC_ALL` is unset on posixish EAPIs (also killing leaks from
+/// the sourced build-time environment).
+// Portage: vartree.py, PORTAGE_UPDATE_ENV; phase-functions.sh, PORTAGE_UPDATE_ENV block
 pub(crate) fn postinst_regen_script(args: PostinstRegenScriptArgs<'_>) -> String {
     let PostinstRegenScriptArgs {
         unit_dir,
@@ -397,17 +325,14 @@ pub(crate) fn postinst_regen_script(args: PostinstRegenScriptArgs<'_>) -> String
         regen = sh_quote(&format!("{unit_dir}/environment.regen")),
         passthrough = sh_quote(&format!("{unit_dir}/bin/bzip2-passthrough")),
     ));
-    // Backlog #171b: match real's phase shell (see the fn doc comment)
-    // so the `PORTAGE_UPDATE_ENV` save matches real's saved env.
+    // Match Portage's phase shell (see the fn doc comment) so the
+    // `PORTAGE_UPDATE_ENV` save matches Portage's saved env.
     extra.push_str("unset O\n");
-    // Backlog #171c: `unset` (not `export -n`) reproduces real exactly:
-    // bash self-initializes an unexported `SHELL`, while `export -n`
-    // would keep a non-default server value.
+    // `unset` (not `export -n`) reproduces Portage exactly: bash
+    // self-initializes an unexported `SHELL`.
     extra.push_str("unset SHELL\n");
-    // Backlog #171c: real's posixish phases never see `LC_ALL`
-    // (`split_LC_ALL` + `config.environ()`); the unset also covers an
-    // `LC_ALL` leaking in from the sourced build-time environment, and
-    // the exports below carry the pre-split values.
+    // Posixish phases never see `LC_ALL`; the unset also covers an
+    // `LC_ALL` leaking in from the sourced build-time environment.
     let posixish = eapi_is_posixish(&staged.eapi);
     if posixish {
         extra.push_str("unset LC_ALL\n");
@@ -462,42 +387,28 @@ pub(crate) fn postinst_regen_script(args: PostinstRegenScriptArgs<'_>) -> String
     )
 }
 
-// --- Client merge driver (slice 4): helpers ----------------------------------
+// --- Client merge driver: helpers --------------------------------------------------
 
-/// Longest-prefix `is_protected` + `alloc_cfg` + `env_val` + `run_old_hook`
-/// helpers shared by the merge flow. Pure bash, no placeholders except
-/// the colormap/PATH roots baked by the caller template below.
+/// `is_protected` + `alloc_cfg` + `env_val` + `run_old_hook` helpers,
+/// shared by the merge flow.
 pub(crate) const MERGE_HELPERS: &str = include_str!("merge_helpers.sh");
 
-// --- Client merge flow (slice 4) -----------------------------------------------
+// --- Client merge flow -------------------------------------------------------------
 
 /// Merge flow: old-prerm → ownership scan → gate+copy → vdb → remove-old
-/// → old-postrm → env-update, appended after `MERGE_HELPERS`. Shell vars
-/// (`UNIT`, `ROOT`, `VDB`, `VDBROOT`, `NEWPF`, `PKG`, `MAINS`, `PROTECT`,
-/// `MASK`, `STATELESS`, …) come from `merge_script`'s header. Machine
+/// → old-postrm → env-update, appended after `MERGE_HELPERS`. Machine
 /// lines `MERGE_<STEP>=…` plus a final `STATUS=merged` (or
 /// `STATUS=failed:<step>` from `mfail`); any `mfail` prints
 /// `MERGE_FAIL=<step> <detail>` and exits 1. `STATELESS=1` (server-side
-/// vdb placement) skips old-version discovery and the ownership scan --
-/// any existing file/symlink destination (outside CONFIG_PROTECT
-/// divert) is a fail-closed collision, and old hooks never run.
-/// New-postinst runs separately afterwards (see `run_bundle_stage`).
-///
-/// The `client:<path>` VDB is read and written by this bash on the
-/// client, so it stays in the files format by construction: portuale
-/// has no code there to call `portage-vdb` from (feat#157 design §6.3).
-/// Only the server-side `VdbShadow` read goes through `portage-vdb`.
+/// vdb placement) skips old-version discovery and the ownership scan.
+/// New-postinst runs separately afterwards.
 pub(crate) const MERGE_FLOW: &str = include_str!("merge_flow.sh");
 
 /// Merge header: all values the flow needs, pre-quoted. The unit layout
 /// mirrors the local merge (`image/`, `build-info/`, shipped `bin/`).
-/// Client ledger destination + line baked into the merge driver.
-/// `None` file skips the client record (the `--remote-binpkg` trial path
-/// keeps no ledger; the resolve path always records).
-/// `portuale_bin` is the S8.1-resolved absolute client path (#326 D5),
-/// exported for the whole driver (including the old hooks, which inherit
-/// the header's exports); `PORTAGE_PYM_PATH` is `/` and
-/// `PORTAGE_IPC_DAEMON` is unset, like the phase scripts.
+/// Client ledger destination + line baked into the merge driver; `None`
+/// file skips the client record. `portuale_bin` is the resolved absolute
+/// client path, exported for the whole driver (including the old hooks).
 #[derive(Debug, Clone)]
 pub(crate) struct LedgerSpec {
     pub file: String,

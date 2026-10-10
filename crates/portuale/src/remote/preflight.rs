@@ -7,7 +7,7 @@ use crate::remote::*;
 /// Read-only gates, generated bash (no arrays, no `set -e` -- every gate
 /// reports instead of aborting). `KEY=VALUE` on stdout, human log on
 /// stderr. `@ROOT@`/`@WORKDIR@` are substituted server-side, pre-quoted.
-/// `bin` is `(dirs, candidates)` from the S8.1 search (#326 D5): per
+/// `bin` is `(dirs, candidates)` from the client-binary search: per
 /// candidate the full digest or `missing`, plus `uname -m` and each
 /// directory's existence, writability and octal mode. `None` skips the
 /// binary section (local transport without the override installs
@@ -85,8 +85,8 @@ pub(crate) fn parse_kv(stdout: &str) -> HashMap<String, String> {
 }
 
 /// Evaluate the preflight gates: `(failures, warnings)`. Hard gates fail
-/// the run; a missing vdb only warns in slice 1 (placement matrix and
-/// the stateless degrade land in slice 5 -- see docs/remote-merge.md §7).
+/// the run; a missing vdb only warns (the placement matrix owns the
+/// degrade -- see docs/remote-merge.md §7).
 pub(crate) fn preflight_gates(values: &HashMap<String, String>) -> (Vec<String>, Vec<String>) {
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
@@ -173,8 +173,8 @@ pub(crate) fn clock_gate(
 /// Human log lines (client stderr) print straight through on success.
 /// The binary facts (`bin_preflight`) are computed before the first
 /// connection, so an unreadable `--remote-portuale-binary` fails fast.
-/// Returns the parsed values plus the binary facts the S8.1 gates decide
-/// on (`None` when the run skips those gates by design).
+/// Returns the parsed values plus the binary facts the client-binary
+/// gates decide on (`None` when the run skips those gates by design).
 pub(crate) fn run_preflight_inner(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -271,7 +271,7 @@ pub(crate) fn print_preflight_report(
     }
 }
 
-// --- Bundle streaming (slice 2) --------------------------------------------
+// --- Bundle streaming --------------------------------------------------------
 
 /// Unpack driver: byte-count gate, `tar -xpf`, member + manifest sanity.
 /// Values baked in server-side, pre-quoted. The tarball itself arrived
