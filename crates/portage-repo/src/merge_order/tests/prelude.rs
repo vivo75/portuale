@@ -2,12 +2,8 @@ use super::*;
 
 #[test]
 fn select_dep_target_keeps_the_flag_carrier_a_later_flip_broke() {
-    // Backlog #244 (`aub0`, argv `c a b`): B's `d[foo]` landed on
-    // d-0 (foo on by default); A's autounmask `-foo` then flipped
-    // d-0, so no instance satisfies `d[foo]` any more. Real keeps
-    // B's edge on d-0 -- the conflict block lists B under it -- so the
-    // USE narrowing falls back to the instances whose IUSE carries
-    // `foo`, not to the vercmp-highest d-1 (which lacks the flag).
+    // Keeps the flag carrier a later flip broke: B's `d[foo]` stays on
+    // d-0 (whose IUSE carries `foo`), not the vercmp-highest d-1.
     let rt = DepPriority {
         runtime: true,
         ..DepPriority::default()
@@ -69,8 +65,7 @@ fn select_dep_target_narrows_and_ranks_like_portage() {
     merged.sub_slot = Some("0".into());
     let root = Path::new("/nonexistent-root-for-unit-test");
     let none = HashSet::new();
-    // A version-qualified atom matches only the merge-bound 2.0, so
-    // the single-match ranking path picks it.
+    // A version-qualified atom matches only the merge-bound 2.0.
     let entries = vec![
         installed.clone(),
         merged.clone(),
@@ -99,7 +94,7 @@ fn select_dep_target_narrows_and_ranks_like_portage() {
         Some(1)
     );
     // A bare atom matches both, but `merge_bound_only` drops the
-    // installed candidate and still picks the merge-bound one.
+    // installed candidate.
     let entries = vec![
         installed.clone(),
         merged,
@@ -160,9 +155,7 @@ fn select_dep_target_narrows_and_ranks_like_portage() {
 
 #[test]
 fn select_dep_target_elimination_keeps_the_last_on_a_version_tie() {
-    // Two same-version candidates: elimination drops the first and
-    // keeps the last; the single-match shortcut must keep the
-    // vercmp tie on the first.
+    // Two same-version candidates: elimination keeps the last.
     let runtime = DepPriority {
         runtime: true,
         ..DepPriority::default()
@@ -203,8 +196,8 @@ fn select_dep_target_elimination_orders_installed_before_merge_bound() {
         runtime: true,
         ..DepPriority::default()
     };
-    // Installed 2.0 first: it is eliminated first, the merge-bound
-    // 1.0 survives -- a version compare would keep the installed one.
+    // Installed 2.0 first: it is eliminated first, so the merge-bound
+    // 1.0 survives (a version compare would keep the installed one).
     let mut installed = new_entry("dev-libs", "x", "2.0", Vec::new());
     installed.outcome = PretendOutcome::AlreadyInstalled {
         version: "2.0".into(),
@@ -232,9 +225,8 @@ fn select_dep_target_elimination_orders_installed_before_merge_bound() {
         Some(1),
         "the installed candidate is eliminated first"
     );
-    // The mirrored order: merge-bound 1.0 first in the entry array,
-    // installed 2.0 second. The `(false, true)` arm must still sort
-    // the installed one first.
+    // Mirrored order: the `(false, true)` arm still sorts the installed
+    // one first.
     let mut installed = new_entry("dev-libs", "x", "2.0", Vec::new());
     installed.outcome = PretendOutcome::AlreadyInstalled {
         version: "2.0".into(),
@@ -258,10 +250,7 @@ fn select_dep_target_elimination_orders_installed_before_merge_bound() {
 
 #[test]
 fn select_dep_target_keeps_nvc_out_of_the_elimination() {
-    // An NVC candidate neither eliminates nor is eliminated: it
-    // stays alive and wins the ranking (its empty version ties, and
-    // it is first), where the elimination would otherwise remove it
-    // and leave an installed candidate.
+    // An NVC candidate neither eliminates nor is eliminated.
     let runtime = DepPriority {
         runtime: true,
         ..DepPriority::default()
@@ -302,10 +291,8 @@ fn select_dep_target_keeps_nvc_out_of_the_elimination() {
 
 #[test]
 fn select_dep_target_runs_elimination_for_three_candidates() {
-    // Three matching slots and two kept sibling atoms: elimination
-    // removes the two candidates every sibling set also matches,
-    // leaving x1; the rank-only path would pick the vercmp-highest
-    // x3.
+    // Three matching slots and two kept sibling atoms: elimination leaves
+    // x1; the rank-only path would pick the vercmp-highest x3.
     let runtime = DepPriority {
         runtime: true,
         ..DepPriority::default()
@@ -319,9 +306,8 @@ fn select_dep_target_runs_elimination_for_three_candidates() {
     let mut x3 = new_entry("dev-libs", "x", "3.0", Vec::new());
     x3.slot = Some("2".into());
     x3.sub_slot = Some("2".into());
-    // Two separate `||` groups (different keys), so both branches
-    // are kept: the bare atom matches all three slots, the `:0`
-    // atom only x1.
+    // Two separate `||` groups (different keys), so both branches are
+    // kept.
     let bare = DepEdge {
         atom: "dev-libs/x".to_string(),
         evaluated: "dev-libs/x".to_string(),
@@ -412,9 +398,8 @@ fn rank_best_prefers_a_merge_bound_candidate_over_a_newer_installed_one() {
         new_entry("dev-libs", "a", "1.0", Vec::new()),
     ];
     let installed = vec![true, false];
-    // Installed first in the iterator, merge-bound second: the
-    // `(true, false)` arm picks the merge-bound one even though the
-    // installed candidate's version is higher.
+    // Installed first, merge-bound second: the `(true, false)` arm picks
+    // the merge-bound one despite the higher installed version.
     assert_eq!(
         DigraphPrelude::rank_best(&entries, &installed, [0usize, 1].into_iter()),
         Some(1)

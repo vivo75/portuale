@@ -2,15 +2,9 @@ use super::*;
 
 #[test]
 fn tree_simulation_solves_a_stalled_replacement_row() {
-    // Backlog #81 S1: the C0 p2b shape in miniature. Owner O merges
-    // (1.0 -> 1.1) carrying a satisfied Replacement row for the
-    // installed 1.0 that R=blocked-2.0 replaces in-slot. Both nodes
-    // are roots, so tree mode's one-at-a-time selection stalls on
-    // round one with the blocker pending, schedules the uninstall,
-    // and solves the row when the uninstall is selected -- while the
-    // flat greedy pop would drain both without stalling. (Real's
-    // verdict for the full shape is in `TEST/findings/l0.md` "#75
-    // C0"; the flat-hidden half is `replacement_wait_index`'s call.)
+    // The C0 p2b shape in miniature: owner O merges carrying a satisfied
+    // Replacement row that tree mode stalls on, then solves via the
+    // scheduled uninstall. Expected value from Portage (`TEST/findings/l0.md`).
     let plain = |atom: &str, cat: &str, pkg: &str| DepEdge {
         atom: atom.to_string(),
         evaluated: atom.to_string().clone(),
@@ -48,11 +42,9 @@ fn tree_simulation_solves_a_stalled_replacement_row() {
     );
     replacement.slot = Some("0".into());
     replacement.sub_slot = Some("0".into());
-    // A third, unrelated root merge: without it the replacement
-    // would be the lone leaf of round two and real's len==1 shortcut
-    // would take it immediately (no stall, no row -- same as real).
-    // With two roots left, tree mode's one-at-a-time scan skips both
-    // and the stuck branch fires while the blocker is pending.
+    // A third, unrelated root merge: without it the replacement would be
+    // the lone leaf of round two and the len==1 shortcut would take it
+    // immediately (no stall, no row -- same as Portage).
     let other = new_entry("dev-libs", "other", "1.0", Vec::new());
     let entries = vec![owner, replacement, other];
     let root = Path::new("/nonexistent-root-for-unit-test");
@@ -124,9 +116,9 @@ fn tree_schedule_stuck_pins_guards_and_node_bookkeeping() {
     assert!(ts.pending[1].node.is_none(), "a strong row stays hidden");
     let node = ts.pending[2].node.expect("the soft eligible row schedules");
     assert_eq!(g.n, 3);
-    // #131: the synthetic node is the replacement's parent (real's
-    // edge reversal), not its child -- the replacement is picked
-    // single the next round instead of rejoining a later batch.
+    // The synthetic node is the replacement's parent (Portage's edge
+    // reversal), not its child: the replacement is picked single the
+    // next round instead of rejoining a later batch.
     assert!(
         g.parents[node].is_empty(),
         "the synthetic node has no parents"
@@ -203,7 +195,7 @@ fn tree_note_selection_pins_the_verdict_lifecycle() {
 #[test]
 fn tree_solved_replacements_skips_a_same_version_row() {
     // A Replacement row whose merge-bound entry resolves at the same
-    // version as the matched installed one is not a pending row.
+    // version as the installed one is not a pending row.
     let mut owner = new_entry("dev-libs", "bparent", "1.1", Vec::new());
     owner.slot = Some("0".into());
     owner.sub_slot = Some("0".into());

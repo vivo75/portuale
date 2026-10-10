@@ -3,8 +3,7 @@ use super::*;
 #[test]
 fn disabled_path_matches_direct_scans() {
     // The PORTAGE_SERIALIZE_FRONTIER_DISABLE fallback routes every
-    // query to the plain scans: leaves_via/is_leaf_via with None
-    // agree with the direct calls on an arbitrary graph.
+    // query to the plain scans.
     let mut rng = Rng(0xabcdef);
     let n = 8;
     let mut edges = Vec::new();
@@ -25,8 +24,7 @@ fn disabled_path_matches_direct_scans() {
 fn frontier_levels_cover_every_ladder_rung() {
     let g = test_graph(2, &[(0, 1, prio(0))]);
     let fr = SerializeFrontier::build(&g);
-    // Level 0 is the None filter, then one level per rung of both
-    // ladders (3 + 7).
+    // Level 0 is the None filter, then one level per rung of both ladders.
     assert!(fr.levels[0].is_none(), "level 0 is the None filter");
     assert_eq!(fr.levels.len(), 11);
     assert_eq!(fr.level_of(None), Some(0));
@@ -43,8 +41,8 @@ fn frontier_levels_cover_every_ladder_rung() {
 
 #[test]
 fn frontier_matches_direct_scans_through_removals() {
-    // Diamond with mixed priorities: 0 -> {1, 2} -> 3, plus an
-    // optional edge and a multi-priority edge.
+    // Diamond with mixed priorities, plus an optional edge and a
+    // multi-priority edge.
     let g = test_graph(
         4,
         &[
@@ -60,8 +58,8 @@ fn frontier_matches_direct_scans_through_removals() {
     g.add_edge(0, 3, prio(16));
     let mut fr = SerializeFrontier::build(&g);
     assert_equivalent(&g, &mut fr);
-    // Drain in an order that frees parents mid-sequence, mirroring
-    // the selection loop (remove + retain each step).
+    // Drain in an order that frees parents mid-sequence, mirroring the
+    // selection loop.
     for node in [3, 1, 2, 0] {
         g.alive[node] = false;
         fr.remove(node, &g.children[node].clone(), &g.parents[node].clone());
@@ -73,10 +71,8 @@ fn frontier_matches_direct_scans_through_removals() {
 
 #[test]
 fn frontier_matches_direct_scans_on_random_graphs() {
-    // 50 deterministic graphs, 1..12 nodes, random edges (usually
-    // acyclic, sometimes not -- cycles only make leaf sets smaller,
-    // never less comparable) with random 1-2-priority lists, drained
-    // in random order with retain, comparing after every mutation.
+    // 50 deterministic graphs drained in random order, comparing after
+    // every mutation.
     let mut rng = Rng(0x12345678);
     for _ in 0..50 {
         let n = 1 + rng.below(12);
@@ -117,7 +113,7 @@ fn frontier_matches_direct_scans_on_random_graphs() {
 
 #[test]
 fn frontier_add_edge_only_grows_survival() {
-    // Parity with real's add_edge contract: adding a priority only
+    // Parity with Portage's add_edge contract: adding a priority only
     // makes an edge survive more levels, never fewer.
     let mut g = test_graph(2, &[(0, 1, prio(32))]);
     let mut fr = SerializeFrontier::build(&g);
@@ -148,7 +144,7 @@ fn frontier_add_edge_only_grows_survival() {
 }
 
 // -----------------------------------------------------------------
-// #144: the scheduler loop
+// The scheduler loop
 // -----------------------------------------------------------------
 
 #[test]

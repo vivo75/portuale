@@ -6,16 +6,9 @@ use crate::*;
 /// e.g. "foo-1.2.3-r1") as a plain `KEY=value` map.
 ///
 /// Memoised per file path and returned as a shared `Arc`: the resolver
-/// reads the same md5-cache entry many times over one `emerge -pu`
-/// (`list_candidates`, then every visibility / USE / slot-op /
-/// changed-deps check for a candidate), and the first cut of this cache
-/// -- which `clone()`d the map on every hit -- still showed ~10% of the
-/// run in `HashMap<String,String>` copies. The tree's md5-cache is
-/// immutable for the process lifetime (real portage's `portdbapi` keeps
-/// the same entries in its own `_aux_cache`); `--regen`, portuale's only
-/// md5-cache writer, is a separate process. No caller mutates the map.
-/// Validation is a sibling memo (`md5_cache_entry_is_valid`), so this
-/// reader stays a reader (#46 S3).
+/// reads the same entry many times per run. The tree's md5-cache is
+/// immutable for the process lifetime; `--regen` is a separate process.
+/// No caller mutates the map.
 pub(crate) fn read_md5_cache(
     repo_location: &Path,
     category: &str,
@@ -47,11 +40,9 @@ pub(crate) fn read_md5_cache(
             map.insert(line[..eq].to_string(), line[eq + 1..].to_string());
         }
     }
-    // Real `profiles/updates/` package moves (SCOPE_BACKLOG Part 2 Section
-    // H item 2): a sync bakes the `move`/`slotmove` directives into
-    // `metadata/md5-cache` when it regenerates ebuild metadata. Portuale
-    // reads a static fixture cache, so it applies them here on read
-    // instead -- real `update_dbentry` over each `*DEPEND` string.
+    // `profiles/updates/` moves apply here on read: a sync bakes them
+    // into the cache, but portuale reads a static cache.
+    // Portage: update_dbentry over each `*DEPEND` string.
     for key in ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"] {
         if let Some(dep) = map.get(key)
             && let Some(updated) = apply_updates_to_dep_string(dep)
@@ -67,53 +58,36 @@ pub(crate) fn read_md5_cache(
     Ok(map)
 }
 
-/// The hook `repo_aux_metadata` asks on a cache miss: it receives the
-/// repo location plus `category`/`pf` and returns the aux dict a `depend`
-/// phase produced (real `porttree.py`'s ebuild fallback). A plain `fn`
-/// pointer, because the phase runner lives in the binary crate
-/// (`portuale`), which cannot be referenced from here -- the layering
-/// constraint C2 documents.
+/// The hook `repo_aux_metadata` asks on a cache miss: the aux dict a
+/// `depend` phase produced. A plain `fn` pointer, because the phase
+/// runner lives in the binary crate, which cannot be referenced from here.
+/// Portage: porttree.py's ebuild fallback.
 pub type AuxMetadataProvider = fn(&Path, &str, &str) -> Result<HashMap<String, String>, String>;
 
 pub(crate) static AUX_METADATA_PROVIDER: OnceLock<AuxMetadataProvider> = OnceLock::new();
 
 /// Register the process-wide fallback provider (idempotent: only the
-/// first registration wins, so a second call is a no-op). Called once at
-/// startup by the binary that can run ebuild phases; with no provider
-/// registered, `repo_aux_metadata` behaves exactly as before C2.
+/// first registration wins). Called once at startup by the binary that
+/// can run ebuild phases.
 pub fn register_aux_metadata_provider(provider: AuxMetadataProvider) {
     let _ = AUX_METADATA_PROVIDER.set(provider);
 }
 
-/// The single entry point for a repo's aux metadata for `category/pf`
-/// ("package-version", e.g. `foo-1.2.3-r1`): every production
-/// `read_md5_cache` call site in this crate and in `portuale`/`mrg-director`
-/// goes through here.
+/// The single entry point for a repo's aux metadata for `category/pf`.
+/// Every production `read_md5_cache` call site goes through here.
 ///
-/// This is the C2 hook site, and since #46 S3 the #46 validation site:
-/// a per-cp cache **miss** (no `metadata/md5-cache/<category>/<pf>`
-/// file) *or an entry real's `validate_entry` rejects* (stale `_md5_`,
-/// stale `_eclasses_`, unsupported EAPI -- `md5_cache_entry_is_valid`)
-/// asks the registered depend-phase provider for the metadata the cache
-/// cannot supply -- real `porttree.py`'s `_pull_valid_cache` falling
-/// through its rungs to `doebuild(mydo="depend")` (C0's P8 oracle).
-/// With no provider registered (unit tests, `mrg`-only builds) a miss
-/// keeps the same `Error::ReadFile` as before and an invalid entry is
-/// returned as-is (E3), so cached repos -- every L0/L1 probe -- are
-/// untouched. An entry whose ebuild is gone is trusted outright (E4).
-/// Provider results are memoised per cp for the process lifetime (the
-/// resolver reads one entry many times; C3 layers the cross-process
-/// `depcachedir` write-back on top).
+/// A cache miss *or* an entry `md5_cache_entry_is_valid` rejects asks the
+/// registered depend-phase provider for the metadata the cache cannot
+/// supply. With no provider registered a miss keeps `Error::ReadFile` and
+/// an invalid entry is returned as-is, so cached repos are untouched. An
+/// entry whose ebuild is gone is trusted outright. Provider results are
+/// memoised per cp for the process lifetime.
+/// Portage: porttree.py's `_pull_valid_cache` falling through to
+/// `doebuild(mydo="depend")`.
 ///
-/// #55 adds the rung-selection gate in front: when
-/// [`has_usable_md5_cache`] is false the md5-cache rung is skipped
-/// outright -- real's first known `cache-formats` entry is `pms` (no
-/// portuale reader, L1) or `FEATURES=metadata-transfer` removed the
-/// pregen rung (`porttree.py:322`) -- and the provider path is entered
-/// directly, exactly like `_pull_valid_cache` walking on to the
-/// depcachedir and `depend` phase (S0 cells c/d/f/g). The entry bytes
-/// are then never read: a `pms`-first repo's `metadata/md5-cache` is
-/// ignored even when present and valid.
+/// When [`has_usable_md5_cache`] is false the md5-cache rung is skipped
+/// outright and the provider path is entered directly -- then the entry
+/// bytes are never read, even when present and valid.
 pub fn repo_aux_metadata(
     repo_location: &Path,
     category: &str,
@@ -156,13 +130,9 @@ pub fn repo_aux_metadata(
     }
 }
 
-/// The resolved [`RepoConfig`] for one repo location, memoised per path
-/// (config files are immutable for the process lifetime -- `find_repos`
-/// is a pure read). `None` when the process's own config
-/// (`PORTAGE_CONFIGROOT` + `repos.conf`) does not describe that location
-/// at all -- direct fixture/unit-test callers of the location-keyed
-/// functions, which then keep their pre-#55 local fallbacks. The same
-/// lookup `md5_dict::repo_masters_for_location` used to do inline.
+/// The resolved [`RepoConfig`] for one repo location, memoised per path.
+/// `None` when the process's own config does not describe that location
+/// at all -- direct fixture/unit-test callers keep local fallbacks then.
 pub(crate) fn repo_config_for_location(repo_location: &Path) -> Option<RepoConfig> {
     type Memo = HashMap<PathBuf, Option<RepoConfig>>;
     static MEMO: OnceLock<RwLock<Memo>> = OnceLock::new();
@@ -182,12 +152,10 @@ pub(crate) fn repo_config_for_location(repo_location: &Path) -> Option<RepoConfi
     found
 }
 
-/// The C2 fallback shared by a missing entry (`failure` is the
-/// `read_md5_cache` error) and an entry real's validator rejects
-/// (`failure` is `Error::StaleMd5Cache`): fallback memo, recursion
-/// guard, provider. The provider failure always surfaces as `failure`
-/// (E5: never fall back to stale data), which reads as an unusable
-/// entry for the caller.
+/// The fallback shared by a missing entry and an entry the validator
+/// rejects: fallback memo, recursion guard, provider. A provider failure
+/// always surfaces as the original `failure` (never stale data), which
+/// reads as an unusable entry for the caller.
 pub(crate) fn provide_aux_metadata(
     repo_location: &Path,
     category: &str,
@@ -208,12 +176,9 @@ pub(crate) fn provide_aux_metadata(
                 category.to_string(),
                 pf.to_string(),
             );
-            // The provider itself runs the depend phase, whose env
-            // assembly reads `RESTRICT`/`PROPERTIES` through this same
-            // entry point -- a *nested* miss must not recurse into the
-            // provider again (it would never terminate). Real has the
-            // same shape: the depend phase reads the ebuild, not the
-            // cache it is generating.
+            // The provider itself runs the depend phase, whose env assembly
+            // reads through this same entry point -- a nested miss must not
+            // recurse into the provider again (it would never terminate).
             thread_local! {
                 static IN_PROVIDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
             }
@@ -241,26 +206,20 @@ pub(crate) fn provide_aux_metadata(
                     }
                     Ok(map)
                 }
-                // The provider already reported its own failure; the
-                // caller's contract (an unusable entry) is `failure`.
+                // The provider already reported its own failure; the caller's
+                // contract (an unusable entry) is `failure`.
                 Err(_) => Err(failure),
             }
         }
     }
 }
 
-/// Whether the on-disk `metadata/md5-cache/<category>/<pf>` entry passes
-/// real `validate_entry` for the `md5_database` (pairs) format,
-/// memoised per path -- real `_pull_valid_cache` validates each rung
-/// once and the resolver reads the same cp many times. Raw text, not the
-/// `read_md5_cache` map: `apply_updates_to_dep_string` rewrites the
-/// `*DEPEND` values, and while the validator does not look at them the
-/// raw bytes are what real reads.
+/// Whether the on-disk entry passes Portage's `validate_entry` for the
+/// `md5_database` (pairs) format, memoised per path. Validates the raw
+/// text, not the `read_md5_cache` map (which rewrites `*DEPEND` values).
 ///
-/// `true` when the ebuild is missing (E4: trust the entry -- real would
-/// report the package as non-existent, but no portuale reader reaches an
-/// ebuild-less entry) and when `pf` is not a `package-version` name at
-/// all.
+/// `true` when the ebuild is missing (trust the entry) and when `pf` is
+/// not a `package-version` name at all.
 pub(crate) fn md5_cache_entry_is_valid(repo_location: &Path, category: &str, pf: &str) -> bool {
     let cache_path = repo_location
         .join("metadata")
@@ -287,12 +246,11 @@ pub(crate) fn md5_cache_entry_is_valid(repo_location: &Path, category: &str, pf:
             return true;
         }
         let Ok(text) = fs::read_to_string(&cache_path) else {
-            // `read_md5_cache` already failed; keep the trust direction.
+            // `read_md5_cache` already failed; keep trusting the entry.
             return true;
         };
-        // Only `_eclasses_` validation needs the masters chain; resolving
-        // it loads the repo config, so keep the common eclass-less entry
-        // (most of them) off that path.
+        // Only `_eclasses_` validation needs the masters chain, so keep the
+        // common eclass-less entry off the repo-config path.
         let needs_eclasses = text.lines().any(|line| {
             line.strip_prefix("_eclasses_=")
                 .is_some_and(|value| !value.trim().is_empty())
@@ -310,26 +268,16 @@ pub(crate) fn md5_cache_entry_is_valid(repo_location: &Path, category: &str, pf:
     is_valid
 }
 
-/// Whether real portage would read this repo's pregenerated aux metadata
-/// from `metadata/md5-cache` rather than falling through to the
-/// writable depcachedir / `depend` phase: the **first known** entry of
+/// Whether Portage would read this repo's pregenerated aux metadata from
+/// `metadata/md5-cache`: the **first known** entry of
 /// [`RepoConfig::cache_formats`] is `md5-dict`.
+/// Portage: config.py, parse_layout + iter_pregenerated_caches +
+/// get_pregenerated_cache.
 ///
-/// Real's chain: `parse_layout` resolves `cache-formats` (lowercased +
-/// split, auto-detect `md5-dict` then `pms`) into the repo's list
-/// (`config.py:1564-1577`); `iter_pregenerated_caches`
-/// (`config.py:576-605`) yields one database per known format in list
-/// order, skipping unknown names; `get_pregenerated_cache`
-/// (`config.py:607-616`) keeps only the first. So `cache-formats = pms
-/// md5-dict` resolves to `metadata/cache` even when only
-/// `metadata/md5-cache` exists -- every lookup misses and falls through
-/// -- and `foo` yields no pregen cache at all. Portuale has no `pms`
-/// reader (#55 decision L1, a documented narrowing -- slower, not
+/// Portuale has no `pms` reader (a documented narrowing -- slower, not
 /// different: the depcachedir rung and `depend` phase produce the same
-/// metadata real reads from a valid `pms` cache), so "the first known
-/// format is `md5-dict`" is exactly "portuale may read
-/// `metadata/md5-cache`". Pure, so the read-path gate and `--regen`'s
-/// writer both resolve the same way; memoised per path only by callers.
+/// metadata), so "the first known format is `md5-dict`" is exactly
+/// "portuale may read `metadata/md5-cache`".
 pub fn pregen_md5_cache_enabled(repo: &RepoConfig) -> bool {
     repo.cache_formats
         .iter()
@@ -337,36 +285,23 @@ pub fn pregen_md5_cache_enabled(repo: &RepoConfig) -> bool {
         .is_some_and(|f| f.as_str() == "md5-dict")
 }
 
-/// Whether real `egencache --update` would write this repo's
+/// Whether `egencache --update` would write this repo's
 /// `metadata/md5-cache`: `md5-dict` is among the **known** resolved
-/// `cache-formats`, in any position, or the list is empty -- egencache
-/// always passes `force=True`, which defaults an empty list to
-/// `("md5-dict",)`.
+/// `cache-formats`, in any position, or the list is empty.
+/// Portage: egencache iterates every known format with `force=True`.
 ///
-/// Real `egencache` builds its target list with
-/// `conf.iter_pregenerated_caches(force=True, readonly=False)`
-/// (`bin/egencache:350-362`), which yields every known format in list
-/// order (and `("md5-dict",)` when the list is empty), then writes each
-/// -- S0 cell h1/h3: `pms` alone writes `metadata/cache` only, `pms
-/// md5-dict` writes both dirs. Portuale's `--regen` is egencache-shaped
-/// but has no `pms` writer (#55 L3), so this predicate decides where it
-/// may write: the md5-dict half when real would write that dir
-/// (including the fresh-tree default), skipping the repo otherwise
-/// (never the wrong dir). Note the reader's mirror
-/// ([`pregen_md5_cache_enabled`]) is *not* the same for an empty list:
-/// `get_pregenerated_cache` uses `force=False`, so a repo with no
-/// `cache-formats` and no cache dir reads from the ebuild, while
+/// Note the reader's mirror ([`pregen_md5_cache_enabled`]) is *not* the
+/// same for an empty list: the reader uses `force=False`, so a repo with
+/// no `cache-formats` and no cache dir reads from the ebuild, while
 /// egencache still creates `metadata/md5-cache` for it.
 pub fn regen_writes_md5_cache(repo: &RepoConfig) -> bool {
     repo.cache_formats.is_empty() || repo.cache_formats.iter().any(|f| f == "md5-dict")
 }
 
 /// Whether the process's resolved `FEATURES` names `metadata-transfer`
-/// (real `porttree.py:322`: `if "metadata-transfer" not in
-/// self.settings.features: self._create_pregen_cache()` -- the token
-/// removes the pregen repo cache rung entirely), resolved once per
-/// process. `false` whenever the config cannot be resolved (fail open:
-/// the pre-#55 behaviour).
+/// (which removes the pregen repo cache rung entirely), resolved once per
+/// process. `false` whenever the config cannot be resolved (fail open).
+/// Portage: porttree.py's `_create_pregen_cache` gate.
 pub(crate) fn metadata_transfer_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
     *FLAG.get_or_init(|| metadata_transfer_in_config(&config_root_from_env(), &root_from_env()))
@@ -374,11 +309,7 @@ pub(crate) fn metadata_transfer_enabled() -> bool {
 
 /// The resolved-config half of [`metadata_transfer_enabled`], split out
 /// so a unit test can point it at a fixture config root without touching
-/// the process environment. Builds the same `repos.conf` + profile /
-/// `make.conf` / `env`-layer stack the CLI layers pass to
-/// `portage_profile::resolve_config` (the `env` layer includes a
-/// `FEATURES=… emerge` override, which real treats as incremental --
-/// `const.INCREMENTALS`).
+/// the process environment.
 pub(crate) fn metadata_transfer_in_config(config_root: &Path, root: &Path) -> bool {
     let Ok(repos) = find_repos_impl(config_root, false) else {
         return false;
@@ -426,23 +357,13 @@ pub(crate) fn metadata_transfer_in_config(config_root: &Path, root: &Path) -> bo
 }
 
 /// Whether `repo_location` ships a usable `metadata/md5-cache`, memoised
-/// per repo path: the resolved rung-selection predicate #55 wires into
-/// every md5-cache reader.
+/// per repo path: the rung-selection predicate every md5-cache reader uses.
 ///
-/// Grounding: real portage's auxdb/cache-format selection
-/// (`repository/config.py::iter_pregenerated_caches`, driven by
-/// `porttree.py:392`'s `_create_pregen_cache`) treats the md5-cache as one
-/// *cache format* among several (`pms`'s `metadata/cache`, `md5-dict`'s
-/// `metadata/md5-cache`); when the first known format is not `md5-dict`,
-/// or `FEATURES=metadata-transfer` removed the rung (`porttree.py:322`),
-/// `aux_get` falls back to the writable depcachedir and then to
-/// generating metadata from the ebuild via the depend phase. The same
-/// split here: `true` means aux metadata can be read from the md5-cache
-/// dir; `false` means it must come from the provider path (C2/C3). A
-/// location the process config does not describe (direct fixture /
-/// unit-test callers) keeps the pre-#55 "the directory exists" fallback.
-/// A written directory may still hold entries #46 S3 rejects; this flag
-/// only says the rung is in use.
+/// `true` means aux metadata can be read from the md5-cache dir; `false`
+/// means it must come from the provider path. A location the process
+/// config does not describe keeps the "the directory exists" fallback for
+/// direct fixture/unit-test callers. This flag only says the rung is in
+/// use -- a written directory may still hold entries the validator rejects.
 pub fn has_usable_md5_cache(repo_location: &Path) -> bool {
     type UsableFlags = HashMap<PathBuf, bool>;
     static FLAGS: OnceLock<RwLock<UsableFlags>> = OnceLock::new();
@@ -455,8 +376,8 @@ pub fn has_usable_md5_cache(repo_location: &Path) -> bool {
     }
 
     let usable = match repo_config_for_location(repo_location) {
-        // `pregen_md5_cache_enabled` first so a `pms`-first repo skips
-        // the (memoised, but full-config) FEATURES resolution.
+        // The md5-cache gate first so a `pms`-first repo skips the
+        // (memoised, but full-config) FEATURES resolution.
         Some(repo) => pregen_md5_cache_enabled(&repo) && !metadata_transfer_enabled(),
         None => repo_location.join("metadata").join("md5-cache").is_dir(),
     };

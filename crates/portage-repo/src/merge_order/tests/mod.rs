@@ -85,7 +85,7 @@ impl Rng {
 }
 
 /// Cycle node sets, order-insensitive (rotations of one ring are
-/// distinct records, like real).
+/// distinct records, like Portage).
 fn cycle_sets(cycles: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let mut out: Vec<Vec<usize>> = cycles
         .iter()
@@ -138,7 +138,7 @@ fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -
 }
 
 // -----------------------------------------------------------------
-// #146: dep-key / priority mapping
+// Dep-key / priority mapping
 // -----------------------------------------------------------------
 
 fn dep_metadata(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -152,12 +152,10 @@ fn tokens(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
-/// Backlog #244: the `aub0` shape (upstream
-/// `test_autounmask_use_breakage`) -- A needs `d[-foo]`, B needs
-/// `d[foo]`, C needs `>=d-1`; `d-0` declares `foo` (on by default),
-/// `d-1` does not. The replay walks the arguments LIFO and fails at
-/// the first contradiction or unsatisfied atom, like real
-/// `_create_graph`.
+/// The `aub0` shape: A needs `d[-foo]`, B needs `d[foo]`, C needs
+/// `>=d-1`; `d-0` declares `foo` (on by default), `d-1` does not.
+/// Portage: _create_graph walks the arguments LIFO and fails at the
+/// first contradiction or unsatisfied atom.
 fn aub0_entries(order: &[&str]) -> Vec<GraphEntry> {
     let rt = DepPriority {
         runtime: true,
@@ -218,14 +216,12 @@ fn plain_edge(atom: &str, category: &str, package: &str, priority: DepPriority) 
 }
 
 // -----------------------------------------------------------------
-// #145: installed / vdb-backed inputs
+// Installed / vdb-backed inputs
 // -----------------------------------------------------------------
 
 /// A scratch vdb: `var/db/pkg/<cat>/<pf>/` with the given files.
-/// Mirrors `lib.rs`'s own `tmp_vdb` helper; the unique root avoids
-/// `all_installed_packages`' per-root cache and lets each test build
-/// the exact installed shape it needs (the committed fixture vdb has
-/// no injected-libc record).
+/// Each test builds the exact installed shape it needs under a unique
+/// root (avoids the per-root installed-packages cache).
 type VdbFile<'a> = (&'a str, &'a str);
 
 type VdbEntry<'a> = (&'a str, &'a str, &'a [VdbFile<'a>]);
@@ -269,7 +265,7 @@ fn runtime_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
     )
 }
 
-/// A runtime edge tagged as real's `RDEPEND` key (`key == 0`), which
+/// A runtime edge tagged as Portage's `RDEPEND` key (`key == 0`), which
 /// `seed_toolchain_asap` reads providers from.
 fn rdepend_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
     let mut edge = runtime_edge(atom, cat, pkg);

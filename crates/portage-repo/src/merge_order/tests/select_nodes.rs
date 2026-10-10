@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn select_nodes_pins_the_greedy_batch_and_root_leaf_order() {
-    // 1 -> 2, plus the parentless leaf 0: at rung NONE the batch
-    // pops both leaves in order; the one-at-a-time path would pick
-    // the parented 2 first.
+    // 1 -> 2, plus the parentless leaf 0: at rung NONE the batch pops
+    // both leaves in order; one-at-a-time would pick the parented 2 first.
     let entries: Vec<GraphEntry> = (0..3)
         .map(|i| new_entry("dev-libs", &format!("p{i}"), "1.0", Vec::new()))
         .collect();
@@ -16,9 +15,8 @@ fn select_nodes_pins_the_greedy_batch_and_root_leaf_order() {
 
 #[test]
 fn select_nodes_harvests_a_runtime_cycle() {
-    // 0 <-> 1 runtime plus 2 -> 0 runtime: no NORMAL rung leaf
-    // exists, so the cycle handler harvests the ring (preferring the
-    // installed node) and the requirer drains afterwards.
+    // 0 <-> 1 runtime plus 2 -> 0: no NORMAL rung leaf exists, so the
+    // cycle handler harvests the ring (installed leaf first).
     let entries: Vec<GraphEntry> = (0..3)
         .map(|i| new_entry("dev-libs", &format!("c{i}"), "1.0", Vec::new()))
         .collect();
@@ -35,9 +33,8 @@ fn select_nodes_harvests_a_runtime_cycle() {
 
 #[test]
 fn select_nodes_escalates_to_the_satisfied_range() {
-    // A ring of satisfied buildtime edges: NORMAL's cycle search has
-    // no mergeable leaf, so the `drop_satisfied` escalation to
-    // `DepPrioritySatisfiedRange` is what breaks the ring.
+    // A ring of satisfied buildtime edges: only the `drop_satisfied`
+    // escalation to the satisfied range breaks it.
     let entries: Vec<GraphEntry> = (0..2)
         .map(|i| new_entry("dev-libs", &format!("s{i}"), "1.0", Vec::new()))
         .collect();
@@ -54,10 +51,9 @@ fn select_nodes_escalates_to_the_satisfied_range() {
 
 #[test]
 fn select_nodes_promotes_an_unsatisfied_pdep_child_to_asap() {
-    // virtual/libc is installed and seeds its provider P as asap; P
-    // is selected at the relaxed rung that ignores its runtime_post
-    // edge, and its still alive unsatisfied PDEPEND child C is
-    // promoted ahead of the bias order (which would batch D first).
+    // virtual/libc is installed and seeds its provider P as asap; P's
+    // still-alive unsatisfied PDEPEND child C is promoted ahead of the
+    // bias order.
     let mut virt = new_entry(
         "virtual",
         "libc",
@@ -104,17 +100,14 @@ fn select_nodes_promotes_an_unsatisfied_pdep_child_to_asap() {
 }
 
 // -----------------------------------------------------------------
-// #144 fix pass: the reviewer's counterexamples
+// Fix pass: the reviewer's counterexamples
 // -----------------------------------------------------------------
 
 #[test]
 fn select_nodes_prefers_a_leaf_whose_parent_is_an_asap_node() {
-    // The asap block cannot select (every asap node has a child that
-    // survives all SATISFIED rungs), and the cycle search's asap-only
-    // candidate set is empty, so `prefer_asap` flips and the rung
-    // loop reaches the asap-parent preference: leaf 4 (parent 1 is
-    // asap) wins over 2/3, while a mutated gate/predicate picks 2 or
-    // 3 instead.
+    // The asap block cannot select and the cycle search's asap-only set
+    // is empty, so the rung loop reaches the asap-parent preference:
+    // leaf 4 (parent 1 is asap) wins over 2/3.
     let entries = vec![
         new_entry(
             "virtual",
@@ -179,11 +172,8 @@ fn select_nodes_prefers_a_leaf_whose_parent_is_an_asap_node() {
 
 #[test]
 fn select_nodes_promotes_only_an_unsatisfied_pdep_child() {
-    // The provider is selected at rung 1 (its child's edge is
-    // optional), but that child is already "satisfied" for the
-    // promotion predicate (`optional` returns true), so it must NOT
-    // be promoted; `||` in the predicate promotes it and reorders
-    // the run.
+    // The provider's optional child is already satisfied for the
+    // promotion predicate, so it must NOT be promoted.
     let mut virt = new_entry(
         "virtual",
         "libc",
@@ -230,10 +220,8 @@ fn select_nodes_promotes_only_an_unsatisfied_pdep_child() {
 
 #[test]
 fn select_nodes_escalates_to_the_satisfied_range_before_the_roots() {
-    // The reviewer's counterexample for `drop_satisfied && !ptr::eq`
-    // -> `||`: the early SATISFIED escalation steals the selection
-    // from the roots-last-resort fallback that runs in the same
-    // iteration.
+    // The early SATISFIED escalation must not steal the selection from
+    // the roots-last-resort fallback running in the same iteration.
     let entries = vec![
         new_entry("virtual", "libc", "1.0", Vec::new()),
         new_entry("dev-libs", "p1", "1.0", Vec::new()),
@@ -253,9 +241,8 @@ fn select_nodes_escalates_to_the_satisfied_range_before_the_roots() {
 
 #[test]
 fn select_nodes_pins_the_normal_range_cycle_pass() {
-    // The reviewer's counterexample for deleting the `!` on
-    // `!ptr::eq(range, &NORMAL)`: when the range is already SATISFIED
-    // the mutant drops the NORMAL cycle pass instead of adding it.
+    // When the range is already SATISFIED the NORMAL cycle pass must
+    // still run.
     let mut virt = new_entry(
         "virtual",
         "libc",

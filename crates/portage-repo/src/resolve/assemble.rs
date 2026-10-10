@@ -7,23 +7,18 @@ pub(crate) fn assemble_result(
     params: &BacktrackParams,
     mut pass: PassResult,
     config: &portage_profile::Config,
-    // #59 S2: the search's restart count (`passes - 1` inside
-    // `backtracking_resolve`'s loop), real `_backtrack_depgraph`'s
-    // `backtracked`.
+    // The search's restart count (Portage `_backtrack_depgraph`'s `backtracked`).
     backtrack_restarts: u64,
 ) -> GraphResult {
-    // Real depgraph's slot-operator auto-rebuild (#24 S3): the consumers
-    // themselves are walked nodes now (seeded + flipped in `run_pass`
-    // from `params.slot_operator_replace_installed`), so nothing is
-    // synthesised here -- only the `_forced_rebuilds` display pairs are
-    // recomputed for `_show_abi_rebuild_info`. `collect_feedback` already
-    // ran the scan for every pass it decided; the `get_best_run` re-pass
-    // does not go through it, hence the fallback.
+    // Slot-operator auto-rebuild: the consumers are walked nodes now, so
+    // nothing is synthesised here -- only the `_forced_rebuilds` display
+    // pairs are recomputed (the `get_best_run` re-pass needs the fallback).
+    // Portage: depgraph.py.
     let mut abi_rebuilds = match pass.abi_rebuilds.take() {
         Some(pairs) => pairs,
         None if ctx.ignore_built_slot_operator_deps || !ctx.rebuild_if_new_slot => Vec::new(),
         None => {
-            // #268: raw request atoms for the `#252` gate (see above).
+            // Raw request atoms for the scan's top-level gate.
             let top_atoms: HashSet<String> =
                 ctx.top_level.iter().map(|s| (*s).to_string()).collect();
             slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
@@ -43,11 +38,9 @@ pub(crate) fn assemble_result(
             .1
         }
     };
-    // Backlog #214 (v2 `#24e`): continuity pairs for conflict-fired
-    // rebuilds (see [`slot_conflict_abi_display_pairs`]) -- the firing
-    // pass restarts, so the scan never sees the edge on the settling
-    // pass. Unioned with the scan's pairs and deduped, so shapes the
-    // scan already covers render exactly once.
+    // Continuity pairs for conflict-fired rebuilds (the firing pass
+    // restarts, so the scan never sees the edge on the settling pass).
+    // Unioned with the scan's pairs and deduped.
     abi_rebuilds.extend(slot_conflict_abi_display_pairs(
         ctx.root,
         &pass.entries,
@@ -57,11 +50,10 @@ pub(crate) fn assemble_result(
     abi_rebuilds.sort();
     abi_rebuilds.dedup();
 
-    // Real `_rebuild_config.trigger_rebuilds()` (`--rebuild-if-unbuilt`
-    // / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an installed
-    // package whose build-time dep is being merged this run gets its
-    // own `[ebuild R]` rebuild entry. Same `all_installed_packages`
-    // scan / entry shape as the slot-operator pass above.
+    // `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`:
+    // an installed package whose build-time dep is merged this run gets its
+    // own `[ebuild R]` rebuild entry.
+    // Portage: _rebuild_config.trigger_rebuilds.
     pass.entries
         .extend(rebuild_if_entries(RebuildIfEntriesArgs {
             root: ctx.root,
@@ -73,22 +65,15 @@ pub(crate) fn assemble_result(
             rebuild_ignore: ctx.rebuild_ignore,
         }));
 
-    // `emerge --pretend --debug` stages 2/4/6: the per-package
-    // resolution narration, emitted here (final `entries`, successful
-    // pass) rather than threaded through the BFS -- see
-    // `resolver_trace::dump_resolution_walk`. Before the merge-order
-    // sort / `digraph:` dump, matching real's order (walk, then
-    // graph).
+    // `emerge --pretend --debug` stages 2/4/6: the per-package resolution
+    // narration, emitted here on the final entries (before the merge-order
+    // sort / `digraph:` dump, matching Portage's order).
     resolver_trace::dump_resolution_walk(&pass.entries, ctx.root, &pass.parent_atoms, &ctx.repos);
 
-    // Real portage's `mylist` is dependency-first (its Scheduler installs
-    // a package only after everything it depends on); portuale's BFS
-    // builds `entries` the other way (a package's entry is pushed before
-    // its dependencies are ever queued). Re-sort into merge order now
-    // that every `required_by` edge is known -- see
-    // `topological_merge_order`. The insertion rank travels alongside
-    // for the cycle reporter below (backlog #278: real `get_cycles`
-    // iterates digraph insertion order).
+    // Portage's `mylist` is dependency-first; portuale's BFS builds `entries`
+    // the other way. Re-sort into merge order now that every `required_by`
+    // edge is known; the insertion rank travels alongside for the cycle
+    // reporter below.
     let (sorted_entries, insertion_rank) = topological_merge_order(TopologicalMergeOrderArgs {
         entries: pass.entries,
         top_level_atoms: ctx.atoms,
@@ -101,15 +86,14 @@ pub(crate) fn assemble_result(
     });
     pass.entries = sorted_entries;
 
-    // Real depgraph.py:5706-5717 -- see GraphResult::
-    // buildpkgonly_deps_unsatisfied's own doc comment.
+    // See GraphResult::buildpkgonly_deps_unsatisfied's doc comment.
     let buildpkgonly_deps_unsatisfied = ctx.buildpkgonly && {
         let needs_action: HashSet<(String, String)> = pass
             .entries
             .iter()
             .filter(|e| {
-                // #72 B3: a removal is not an action that satisfies a
-                // buildpkgonly dependency.
+                // A removal is not an action that satisfies a buildpkgonly
+                // dependency.
                 !matches!(
                     e.outcome,
                     PretendOutcome::AlreadyInstalled { .. }
@@ -125,14 +109,9 @@ pub(crate) fn assemble_result(
                     .iter()
                     .any(|owner| needs_action.contains(owner))
         });
-        // #143 S1: real's hard blocker edge defeats the all-zeros
-        // check the same way — a blocker-paired uninstall ordered
-        // after a merge-bound entry (its `required_by` anchor) is a
-        // pending hard dependency, so `--buildpkgonly` refuses to
-        // resolve (upstream pg1 A/B: the three rows print, then the
-        // two `!!!` lines, rc 1). After the S1 gate the only
-        // uninstalls that can exist under `buildpkgonly` are
-        // strong-buildtime ones, exactly real's abort shape.
+        // A blocker-paired uninstall ordered after a merge-bound entry is a
+        // pending hard dependency, so `--buildpkgonly` refuses to resolve.
+        // Portage: depgraph.py.
         let blocker_edge = pass.entries.iter().any(|e| {
             matches!(e.outcome, PretendOutcome::Uninstall { .. })
                 && e.required_by
@@ -142,12 +121,9 @@ pub(crate) fn assemble_result(
         merge_edge || blocker_edge
     };
 
-    // Real `_serialize_tasks` -> `_show_circular_deps`: an
-    // unbreakable build-time dependency cycle among the merge-bound
-    // packages. `topological_merge_order` above already left such a
-    // cycle in discovery order (it can't linearize one); this
-    // records it for `pretend.rs` to render the fatal
-    // `* Error: circular dependencies:` block.
+    // An unbreakable build-time cycle among the merge-bound packages, for
+    // `pretend.rs` to render the fatal `* Error: circular dependencies:`
+    // block. Portage: _serialize_tasks -> _show_circular_deps.
     let mut circular_deps = find_hard_cycles(
         &pass.entries,
         &pass.edge_kind_map,
@@ -156,23 +132,13 @@ pub(crate) fn assemble_result(
         Some(&insertion_rank),
     );
 
-    // Backlog #221: a persisting restart cycle the hard reporter cannot
-    // see -- either backtracking never ran (`--backtrack=0`, where real
-    // fails instead of retrying: pg5's runtime-closing ring) or a retry
-    // ran and the demotion did not break it (real's `unsolved_cycle` --
-    // e.g. a single-branch `||` closing the ring, demoted but still
-    // picked as last resort). Real's own error block covers these (its
-    // `get_cycles` runs over the `medium_soft` rung, which keeps
-    // unsatisfied runtime edges), so report the persisting ring in the
-    // same `circular_deps` shape instead of settling `Complete` over an
-    // unlinearizable graph. Gated to otherwise-clean passes (an
-    // unsatisfiable dep, slot conflict or orphan blocker is what real
-    // reports first -- same precedence as `collect_feedback`'s own
-    // trigger), to an empty hard report (no double render), and to
-    // passes that could not have retried past this ring: with
-    // backtracking on, a clean pass carrying a trigger cycle always
-    // retries out of `collect_feedback`, so a settled one either broke
-    // the ring (nothing to report) or is unsolved (recorded map).
+    // A persisting restart cycle the hard reporter cannot see: backtracking
+    // never ran (`--backtrack=0`) or a retry ran and the demotion did not
+    // break it. Reported in the same `circular_deps` shape instead of
+    // settling `Complete` over an unlinearizable graph -- gated to
+    // otherwise-clean passes (an unsatisfiable dep, slot conflict or orphan
+    // blocker is what Portage reports first) and to an empty hard report.
+    // Portage: get_cycles over the `medium_soft` rung; `unsolved_cycle`.
     let pass_has_nvc = pass.suppressed_nvc
         || pass
             .entries
@@ -197,13 +163,8 @@ pub(crate) fn assemble_result(
             if cpvs.len() != cycle.len() {
                 continue;
             }
-            // Backlog #278 leaves this leg on the old lowest-index
-            // rotation on purpose: it only fires when the hard reporter
-            // above is empty (persisting soft-containing rings real
-            // prints from its own fuller-graph `shortest_cycle[0]`),
-            // and rotating those to entries order would move pins (e.g.
-            // `sbrA`) real grounds elsewhere. It also dedupes the
-            // one-cycle-per-hard-edge repeats into a single ring.
+            // Lowest-index rotation: rotating to entries order would move
+            // pins grounded elsewhere, and this dedupes repeats into one ring.
             let min_pos = cpvs
                 .iter()
                 .enumerate()
@@ -217,11 +178,9 @@ pub(crate) fn assemble_result(
         }
     }
 
-    // Elementary-cycle enumeration + reduced display order for the
-    // `large_cycle_count` trailer and the cycle-only re-display
-    // (real `circular_dependency_handler`, fed by `get_cycles` over
-    // the `medium_soft` rung). Built on demand: only a reported hard
-    // cycle consumes either number, so acyclic resolves pay nothing.
+    // Cycle enumeration + reduced display order for the `large_cycle_count`
+    // trailer and the cycle-only re-display. Built on demand: acyclic
+    // resolves pay nothing. Portage: circular_dependency_handler.
     let (large_cycle_count, cycle_display, cycle_display_idx) = if circular_deps.is_empty() {
         (false, Vec::new(), Vec::new())
     } else {
@@ -242,12 +201,9 @@ pub(crate) fn assemble_result(
         (cycles.len() > 3, display, display_idx)
     };
 
-    // Backtracking slice: the `--autounmask-use` changes recorded
-    // during the already-resolved-slot re-check (see
-    // `autounmask_use_change_records`) -- the graph has settled with
-    // those flips applied, so surface them in the same "necessary to
-    // proceed" block as the fresh-path ones. Deduped by `(atom,
-    // token)`.
+    // `--autounmask-use` changes from the already-resolved-slot re-check:
+    // the graph settled with those flips applied, so surface them in the
+    // same block as the fresh-path ones. Deduped by `(atom, token)`.
     for rec in &params.autounmask_use_change_records {
         if !pass
             .autounmask_use_changes
@@ -258,15 +214,9 @@ pub(crate) fn assemble_result(
         }
     }
 
-    // Real `_display_autounmask` emits **one line per package** --
-    // it iterates `_needed_use_config_changes.items()` (one entry per
-    // `pkg`) and joins every flipped flag of that pkg into a single
-    // `>=<cpv> flag -flag …` line, in the order the flips were
-    // discovered. Portuale accumulates one `AutounmaskChange` per
-    // flip site, so `>=dev-qt/qtbase-6.11.1` needing both `cups` and
-    // `vulkan` (each from a different consumer) landed on two lines.
-    // Coalesce by `atom`, first-seen order, joining tokens and
-    // dropping a flag already present.
+    // Portage emits one line per package (joining every flipped flag of
+    // that pkg); portuale accumulates one change per flip site, so coalesce
+    // by `atom` in first-seen order.
     {
         let mut merged: Vec<AutounmaskChange> = Vec::new();
         for ch in pass.autounmask_use_changes.drain(..) {
@@ -289,13 +239,10 @@ pub(crate) fn assemble_result(
         pass.autounmask_use_changes = merged;
     }
 
-    // Real `--autounmask-backtrack` off (the default): the backward-
-    // cascade re-check folded a `package.use` change into
-    // `autounmask_use_config` but the driver did NOT re-drive the walk,
-    // so the affected package's entry still shows its pre-flip USE. Real
-    // portage's `_pkg_use_enabled` consults `_needed_use_config_changes`
-    // for the display regardless -- so re-render just that USE line here
-    // (its `flag?`-gated deps still, correctly, do not appear).
+    // With `--autounmask-backtrack` off the driver did NOT re-drive the walk
+    // after the backward-cascade fold, so the affected entry still shows its
+    // pre-flip USE: re-render just that USE line here (its `flag?`-gated
+    // deps still do not appear).
     if !ctx.autounmask_backtrack_enabled && !params.autounmask_use_config.is_empty() {
         let tier = autounmask_use_tier(&params.autounmask_use_config);
         let mut tier_config = ctx.config.clone();
@@ -306,23 +253,14 @@ pub(crate) fn assemble_result(
     }
 
     // Residual installed-instance slot conflicts for reverse-dep pins
-    // dropped as jointly unsatisfiable with the hard requirements
-    // (see the feed above and `build_residual_slot_conflicts`): the
-    // merge proceeds with the hard-required version, and the broken
-    // installed consumers are reported against the installed
-    // instance -- real's nomerge-node collision report. Appended
-    // after every merge-vs-merge record, so those keep their
-    // long-standing order.
+    // dropped as jointly unsatisfiable: the merge proceeds with the
+    // hard-required version, and the broken installed consumers are
+    // reported against the installed instance. Appended after every
+    // merge-vs-merge record, so those keep their order.
     //
-    // #57: fed through `record_slot_conflict`, not appended blind. The
-    // walker's own installed-instance check can now produce a record for
-    // the very same `(package, merge version, installed version)` triple
-    // (the keeper-reachable triangle: othermod's `<2.0` against the
-    // merged 2.0, *and* keeper's dropped pin against the same pair).
-    // Real renders one block whose installed side lists both parents,
-    // which is exactly the residual record -- it carries the dropped
-    // consumer pins on top of the same hard pullers -- so letting it
-    // replace the walker's record keeps the union and the single block.
+    // Fed through `record_slot_conflict`, not appended blind, so a record
+    // the walker's own check already produced for the same triple keeps the
+    // union and the single block.
     for sc in build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
         repos: &ctx.repos,
         config,
@@ -334,27 +272,16 @@ pub(crate) fn assemble_result(
         record_slot_conflict(&mut pass.slot_conflicts, sc);
     }
 
-    // Backlog #90 (S2) + #92: enforced holdable pins that withhold an
-    // upgrade join the direct solve's removal rows in the same skip
-    // block (same shape, same rc 0; the renderer cannot tell the
-    // producers apart). Exact-dedupe against the removal rows covers
-    // the pathological both-paths shape.
+    // Enforced holdable pins that withhold an upgrade join the direct
+    // solve's removal rows in the same skip block. Exact-dedupe covers the
+    // pathological both-paths shape.
     //
-    // Backlog #209: under `--backtrack=0` a slot-operator withhold
-    // stays silent. Real never reports that path: the minimizer/probe
-    // selection writes no `_runtime_pkg_mask` and no
-    // `_conflict_missed_update`, so `_show_missed_update`
-    // (`_emerge/depgraph.py:1566`) has nothing to render (the r25 shape
-    // merges silently at `backtrack: 0/20`, both bound forms of the
-    // consumer's pin). A plain-pin withhold still synthesizes its rows:
-    // real reaches it through the slot-conflict solver, whose "Record
-    // missed updates" tail (`:2089-2110`) runs with no
-    // `_allow_backtracking` gate, so the notice prints even with
-    // backtracking off (the #90 S2 two-target cell pins it).
-    // `raw_atom` is the verbatim recorded text: the live `:=` form and
-    // the recorded `:S/SS=` form both carry a slot operator there,
-    // while `atom` is normalised (the built form strips to a bare
-    // version pin), so the raw text is what classifies the path.
+    // Under `--backtrack=0` a slot-operator withhold stays silent, while a
+    // plain-pin withhold still synthesizes its rows. `raw_atom` (verbatim
+    // recorded text) is what classifies the path: the built `atom` is
+    // normalised and strips the slot operator away.
+    // Portage: _show_missed_update; the slot-conflict solver's "Record
+    // missed updates" tail.
     let bt0_plain_pins: Vec<RevDepPin> = if ctx.backtrack_max == 0 {
         params
             .reverse_dep_pins
@@ -372,9 +299,8 @@ pub(crate) fn assemble_result(
     } else {
         &params.reverse_dep_pins
     };
-    // The withhold rows keep their established deterministic order
-    // (alphabetical by package, then atom and consumer); the direct
-    // solve's rows ahead of them keep real's first-seen block order.
+    // The withhold rows keep alphabetical order; the direct solve's rows
+    // ahead of them keep Portage's first-seen block order.
     let mut withheld =
         constraint_withheld_updates(&ctx.repos, ctx.root, config, &pass.entries, enforced_pins);
     withheld.sort_by(|a, b| {
@@ -394,9 +320,8 @@ pub(crate) fn assemble_result(
             ))
     });
     pass.skipped_updates.extend(withheld);
-    // #270: first-seen order, like real's `_conflict_missed_update` dict
-    // (insertion order of the solver's removals, `depgraph.py:1529-1565`),
-    // not alphabetical -- exact duplicates collapse to their first row.
+    // First-seen order, like Portage's `_conflict_missed_update` dict --
+    // exact duplicates collapse to their first row.
     let mut unique: Vec<SkippedUpdate> = Vec::with_capacity(pass.skipped_updates.len());
     for row in std::mem::take(&mut pass.skipped_updates) {
         if !unique.contains(&row) {
@@ -406,8 +331,7 @@ pub(crate) fn assemble_result(
     pass.skipped_updates = unique;
 
     // Masked-dependency chains are walked out of the final entries
-    // (`required_by` is only complete post-pass); the atom+masked
-    // data was recorded at each `NoVisibleCandidate` push above.
+    // (`required_by` is only complete post-pass).
     for rep in &mut pass.masked_deps {
         let atom = rep.atom.clone();
         rep.chain = masked_dep_chain(MaskedDepChainArgs {
@@ -421,8 +345,8 @@ pub(crate) fn assemble_result(
             atom: &atom,
         });
     }
-    // Same walk for the `[use]`-unsatisfied disclosures (#20): the chain
-    // shape is real `_get_dep_chain`'s, shared with the masked block.
+    // Same walk for the `[use]`-unsatisfied disclosures.
+    // Portage: _get_dep_chain.
     for rep in &mut pass.use_unsat_deps {
         let atom = rep.atom.clone();
         rep.chain = masked_dep_chain(MaskedDepChainArgs {
@@ -436,35 +360,17 @@ pub(crate) fn assemble_result(
             atom: &atom,
         });
     }
-    // #135 (d) post-pass: every dependency `NoVisibleCandidate` entry
-    // that neither sibling block claimed gets a plain-miss disclosure.
-    // Placed here, after the walk, so it also catches NVC entries
-    // created outside `run_pass`'s own NVC push (the binary-dep path
-    // creates them at the merge-entry push, where the disclosure block
-    // does not run) -- the reason `--usepkgonly`'s `newpkg` miss used
-    // to fall through to the bare line with `plain_miss_deps` empty.
+    // Plain-miss post-pass: every dependency `NoVisibleCandidate` entry
+    // neither sibling block claimed gets a disclosure. Placed after the
+    // walk so it also catches NVC entries created outside `run_pass`'s own
+    // push (e.g. the binary-dep path).
     let mut extra_plain_miss: Vec<PlainMissDepReport> = Vec::new();
     for e in &pass.entries {
         if !matches!(e.outcome, PretendOutcome::NoVisibleCandidate) {
             continue;
         }
-        // Backlog #195 (round 2): a dependency collected into a parent
-        // USE flip (record-and-fail) is not a miss at all -- real drops
-        // the collected item from `_unsatisfied_deps_for_display`, so
-        // the sweep must not re-add it here (same gate as the walk-time
-        // disclosure block and the abort renderer). Invariant: the
-        // `parent_flip_recorded` latch is only ever inserted on the
-        // record-and-fail path, after `suggested_parent_use_candidate`
-        // returned `Some` -- so every latched key has
-        // `parent_use_suggestion.is_some()`, and the latch-keyed
-        // walk-time gate suppresses exactly the entries these
-        // `is_some()` gates suppress. One corner breaks the converse:
-        // when the re-probe fails after the suggestion returned `Some`
-        // (the `NoVisibleCandidate` break in the `'parent_flip` arm),
-        // the entry keeps `Some` with no latch -- walk-time records a
-        // miss block for it, but the sweep and the abort renderer still
-        // skip it. Benign (no corpus cell hits it) and deliberate: the
-        // flip genuinely did not rescue the dep.
+        // A dependency collected into a parent USE flip (record-and-fail)
+        // is not a miss at all -- the sweep must not re-add it here.
         if e.parent_use_suggestion.is_some() {
             continue;
         }
@@ -502,11 +408,9 @@ pub(crate) fn assemble_result(
         });
     }
     pass.plain_miss_deps.extend(extra_plain_miss);
-    // #135 (e): the `#required by …` chain is walked out of the final
-    // entries (post `required_by` fill) exactly like the disclosure
-    // chains above -- the walk-time call sites record `Vec::new()`.
-    // Backlog #248: same no-start-node rule as the USE fill (a change
-    // on an argument package yields just the `(argument)` line).
+    // The `#required by …` chains are walked out of the final entries;
+    // the walk-time call sites record `Vec::new()`. A change on an
+    // argument package yields just the `(argument)` line.
     fill_non_use_change_chains(
         &pass.entries,
         &mut pass.autounmask_keyword_changes,
@@ -531,7 +435,7 @@ pub(crate) fn assemble_result(
         &ctx.top_level,
         ctx.root,
     );
-    // Same walk for the plain-miss disclosures (#135 (d)).
+    // Same walk for the plain-miss disclosures.
     for rep in &mut pass.plain_miss_deps {
         let atom = rep.atom.clone();
         rep.chain = masked_dep_chain(MaskedDepChainArgs {
@@ -546,13 +450,10 @@ pub(crate) fn assemble_result(
         });
     }
 
-    // Backlog #19 Slice 3: classify the settled graph the way real's
-    // abandon sites would have (see `abort_outcome`). Backlog #193:
-    // the virtual-cycle probe runs on the same settled graph (real's
-    // `_virt_deps_visible` recursion over the selected providers);
-    // like `find_hard_cycles` it is unconditional -- its own cheap
-    // gate (no merge-bound virtual, no probe) keeps ordinary resolves
-    // free.
+    // Classify the settled graph the way Portage's abandon sites would
+    // have (see `abort_outcome`); the virtual-cycle probe runs on the same
+    // settled graph, unconditionally but with a cheap gate.
+    // Portage: _virt_deps_visible.
     let virtual_cycle = find_virtual_cycles(&pass.entries, ctx.root);
     let outcome = abort_outcome(AbortOutcomeArgs {
         entries: &pass.entries,
@@ -564,13 +465,10 @@ pub(crate) fn assemble_result(
         virtual_cycle: &virtual_cycle,
     });
 
-    // Backlog #129 (S1): real `display_problems` shows missed updates
-    // only with no unresolved conflicts (`depgraph.py:11127-11132` --
-    // slot collisions or unsatisfied blockers hide them as possibly
-    // irrelevant): the settled backtrack masks become skip records only
-    // on a clean `Complete` graph with no surviving slot conflicts, no
-    // unsolvable blocker rows and no orphan rows. A mask-free search
-    // (including every `--backtrack=0` run) derives nothing here.
+    // Portage shows missed updates only with no unresolved conflicts: the
+    // settled backtrack masks become skip records only on a clean `Complete`
+    // graph. A mask-free search (including every `--backtrack=0` run)
+    // derives nothing here. Portage: display_problems.
     let mut skipped_missing_deps: Vec<SkippedMissingDep> = Vec::new();
     let mut skipped_missing_dep_full: Vec<SkippedMissingDepFull> = Vec::new();
     if matches!(outcome, ResolveOutcome::Complete)
@@ -590,22 +488,15 @@ pub(crate) fn assemble_result(
                 params,
                 missing_args: &pass.missing_args,
             });
-        // Real chains the mask dict before the handler removals
-        // (`:1533-1536`), so mask rows lead in first-seen order and the
-        // direct-solve rows (first-seen block order) and the sorted
-        // withhold rows keep their established order behind them. No
-        // re-sort: alphabetical would scramble the mask insertion order
-        // real renders in. Both sources
-        // collapse per `(root, slot_atom)` keeping the highest missed
-        // pkg (`:1553-1562`) -- see `collapse_skipped_updates`.
+        // Mask rows lead in first-seen order; both sources collapse per
+        // `(root, slot_atom)` keeping the highest missed pkg. No re-sort:
+        // alphabetical would scramble the mask insertion order Portage
+        // renders in. Portage: depgraph.py.
         //
-        // #292: a slot the pass already holds (portuale restarted over a
-        // conflict real settles in its in-pass solver, so the same record
-        // sits in both sources) is real's single `_conflict_missed_update`
-        // entry, at the solver's position -- not a leading
-        // `_runtime_pkg_mask` one. Move such a slot's rows to where its
-        // first pass row sits (rows inside the slot keep their order);
-        // slots only the mask knows keep leading.
+        // A slot the pass already holds is Portage's single
+        // `_conflict_missed_update` entry at the solver's position, not a
+        // leading `_runtime_pkg_mask` one: such a slot's rows move to where
+        // its first pass row sits; slots only the mask knows keep leading.
         let slot_of = |s: &SkippedUpdate| (s.category.clone(), s.package.clone(), s.slot.clone());
         let mask_len = mask_skipped.len();
         let mut anchor: HashMap<(String, String, String), usize> = HashMap::new();
@@ -645,15 +536,9 @@ pub(crate) fn assemble_result(
         autounmask_use_changes: pass.autounmask_use_changes,
         autounmask_license_changes: pass.autounmask_license_changes,
         autounmask_mask_changes: pass.autounmask_mask_changes,
-        // Backlog #217: the settled accumulator still holds a flip
-        // folded for an already-graphed package (the Settle/Feedback
-        // params carry the pass's overlay union -- see
-        // `collect_feedback`'s `grown`), i.e. real's final pass grew
-        // `_needed_use_config_changes` for a digraph node and wanted a
-        // restart instead of reaching the `_success_without_autounmask`
-        // tail -- or the pass rescued a failed dep via a parent USE
-        // flip (real `_apply_parent_use_changes` collecting
-        // post-failure). Either way the tail was pre-empted.
+        // The settled accumulator may still hold a flip folded for an
+        // already-graphed package (or a parent-flip rescue): either way the
+        // clean tail was pre-empted, so report no clean tail.
         autounmask_no_clean_tail: !params.autounmask_use_config.is_empty()
             || pass.parent_flip_rescued,
         settled_with_backtracking: false,

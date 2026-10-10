@@ -2,14 +2,9 @@ use super::*;
 
 #[test]
 fn self_referential_disjunctive_bdepend_skips_the_self_branch() {
-    // #53: `dev-lang/mogo`'s own BDEPEND is
-    // `|| ( >=mogo-1.24 >=mogoboot-1.24 )`. The resolver picks the
-    // non-circular `mogoboot` branch (L0 finding D, `b5b256f`) --
-    // `alt_suppressed` must agree, not let the self branch win via
-    // its trivial "matches the owner's own not-yet-merged graph
-    // node" match, which used to add a permanent `mogo -> mogo`
-    // buildtime self-edge and demote the real edge to `mogoboot`
-    // down to the weaker `required_by`-fallback `runtime` priority.
+    // The resolver picks the non-circular `mogoboot` branch; the self
+    // branch must not win via its trivial "matches the owner's own node" match.
+    // Portage: dep_check.py, dep_zapdeps (L0 finding D)
     let mogo_deps = vec![
         DepEdge {
             atom: ">=dev-lang/mogo-1.24".to_string(),
@@ -69,16 +64,8 @@ fn self_referential_disjunctive_bdepend_skips_the_self_branch() {
 
 #[test]
 fn nvc_entries_do_not_participate_in_minimize_elimination() {
-    // #85 follow-up (`opartlya` disclosure order): a
-    // `NoVisibleCandidate` entry is never a *selected* package --
-    // real's `_select_package` returns None for its atom, so it
-    // never enters `_minimize_children`'s elimination. Here the
-    // bare atom matches both the NVC entry and the installed 1.0;
-    // without the NVC exclusion the ascending-version elimination
-    // drops the NVC entry (its empty version sorts first) and the
-    // edge moves to the installed entry, flipping the merge order
-    // of the disclosure rows. With it, the pre-#85 ranking stands
-    // and the NVC entry keeps the edge.
+    // A `NoVisibleCandidate` entry never enters the minimize elimination.
+    // Portage: depgraph.py, _select_package returns None for its atom.
     let plain = |atom: &str| DepEdge {
         atom: atom.to_string(),
         evaluated: atom.to_string().clone(),
@@ -103,10 +90,8 @@ fn nvc_entries_do_not_participate_in_minimize_elimination() {
     installed.slot = Some("0".into());
     installed.sub_slot = Some("0".into());
     let user = new_entry("dev-libs", "user", "1.0", vec![plain("dev-libs/partly")]);
-    // NVC first, like the resolver records it. `resolved_dep_targets`
-    // is the tree view (`merge_bound_only`), which never edges to an
-    // installed node -- assert on `build_digraph`, the scheduler
-    // view, where the edge lives.
+    // NVC first, like the resolver records it. Assert on `build_digraph`
+    // (the scheduler view); the tree view never edges to an installed node.
     let entries = vec![nvc, installed, user];
     let root = Path::new("/nonexistent-root-for-unit-test");
     let g = build_digraph(
@@ -326,8 +311,8 @@ fn build_digraph_required_by_fallback_adds_only_the_missing_owner_edge() {
         "fallback priority: {:?}",
         fallback.1
     );
-    // With an unrelated child already on the owner, the fallback
-    // still appears (the skip is keyed to the removal's own index).
+    // With an unrelated child already on the owner, the fallback still
+    // appears (the skip is keyed to the removal's own index).
     let leaf = new_entry("dev-libs", "leaf", "1.0", Vec::new());
     let entries = vec![owner, dep, leaf];
     let g = build_digraph(
@@ -350,9 +335,8 @@ fn build_digraph_fallback_skips_a_cp_the_owner_already_edged() {
         runtime: true,
         ..DepPriority::default()
     };
-    // The owner's forward edge resolves the slot-qualified atom to
-    // slot 1; slot 2's own required_by names the owner, but the
-    // cp-level fallback must not add a second edge to it.
+    // The owner's forward edge resolves `x:1` to slot 1; the cp-level
+    // fallback must not add a second edge to slot 2.
     let owner = new_entry(
         "dev-libs",
         "owner",
@@ -379,8 +363,7 @@ fn build_digraph_fallback_skips_a_cp_the_owner_already_edged() {
         "no fallback edge to the other slot of the same cp: {:?}",
         g.children[0]
     );
-    // A same-category different-package child does not count as the
-    // same cp: the fallback must still be added.
+    // A same-category different-package child is not the same cp.
     let owner = new_entry(
         "dev-libs",
         "owner",
@@ -420,10 +403,8 @@ fn build_digraph_skips_a_self_named_required_by() {
 
 #[test]
 fn build_digraph_expands_disjunctive_bundles_by_their_own_key() {
-    // Two deferred bundles from different dep keys must each expand
-    // only their own key's edges: RDEPEND's bundle is queued first,
-    // DEPEND's second, and the LIFO pop expands DEPEND's before
-    // RDEPEND's.
+    // Two deferred bundles from different dep keys each expand only their
+    // own key's edges; the LIFO pop expands DEPEND's before RDEPEND's.
     let runtime = DepPriority {
         runtime: true,
         ..DepPriority::default()
@@ -521,8 +502,8 @@ fn deep_system_deps_follows_only_runtime_edges() {
 
 #[test]
 fn seed_toolchain_asap_pins_the_provider_lookup() {
-    // Two new providers, plus a duplicate atom for the same provider
-    // and an installed one that must not be seeded.
+    // Two new providers, plus a duplicate atom and an installed one that
+    // must not be seeded.
     let entries = vec![
         {
             let mut e = new_entry(
@@ -566,8 +547,7 @@ fn seed_toolchain_asap_pins_the_provider_lookup() {
             e
         },
     ];
-    // os-headers first, then libc; the duplicate atom is deduped and
-    // the installed provider is skipped.
+    // The duplicate atom is deduped and the installed provider skipped.
     assert_eq!(seed_toolchain_asap(&entries), vec![1, 4]);
     // A reinstall provider is not seeded.
     let mut entries = entries;

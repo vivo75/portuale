@@ -2,13 +2,8 @@ use super::*;
 
 #[test]
 fn resolved_dep_targets_ranks_by_vercmp_not_by_string_order() {
-    // #82: `print_tree` carried a private copy of this narrowing
-    // whose tie-break was `jv.cmp(bv)`, a **string** compare, under
-    // which `1.9` outranks `1.10`. Real resolves a slot-unqualified
-    // atom through `_select_pkg_highest_available`, i.e. the
-    // vercmp-highest of the matching graph nodes -- the container
-    // oracle for the shape is `TEST/findings/l0.md` "#82"
-    // (`dev-libs/treeslotuser`).
+    // Ranks by vercmp, not string order (`1.10` beats `1.9`).
+    // Portage: depgraph.py, _select_pkg_highest_available
     let plain = |cat: &str, pkg: &str| DepEdge {
         atom: format!("{cat}/{pkg}"),
         evaluated: format!("{cat}/{pkg}").clone(),
@@ -34,8 +29,7 @@ fn resolved_dep_targets_ranks_by_vercmp_not_by_string_order() {
         "1.0",
         vec![plain("dev-libs", "slotted")],
     );
-    // `low` first in the array, so "first on ties" would pick it if
-    // the ranking were not comparing versions at all.
+    // `low` first, so "first on ties" would pick it without version ranking.
     let entries = vec![low, high, user];
     let root = Path::new("/nonexistent-root-for-unit-test");
     let targets = resolved_dep_targets(&entries, root, &HashMap::new());
@@ -62,16 +56,8 @@ fn resolved_dep_targets_ranks_by_vercmp_not_by_string_order() {
 
 #[test]
 fn unqualified_atom_collapses_onto_the_slot_qualified_sibling_target() {
-    // #85: real's `_minimize_children` (`depgraph.py:4751-4856`).
-    // `user` pulls slot `:0` (selects 1.9) and the bare cp (selects
-    // 1.10, the vercmp-highest). Real eliminates the redundant 1.10
-    // selection -- the `:0` atom matches only 1.9 while the bare atom
-    // matches both -- so the bare atom resolves to 1.9 and the
-    // scheduler graph holds no `user → 1.10` edge (real's own
-    // `--debug` digraph dump for `dev-libs/treeslotuser` shows only
-    // the 1.9 and parent edges). Without the elimination the extra
-    // edge doubles 1.10's parent count and `_merge_order_bias` flips
-    // the pair to `1.10, 1.9`.
+    // Eliminates the redundant bare-atom selection (matches only via `:0`).
+    // Portage: depgraph.py, _minimize_children
     let plain = |atom: &str| DepEdge {
         atom: atom.to_string(),
         evaluated: atom.to_string().clone(),
@@ -121,11 +107,8 @@ fn unqualified_atom_collapses_onto_the_slot_qualified_sibling_target() {
 
 #[test]
 fn resolved_dep_targets_reports_an_installed_target_as_no_tree_edge() {
-    // #82: the single `merge_bound_only` difference between the two
-    // callers. `build_digraph` edges to an installed (nomerge) node
-    // the way real's digraph does; `print_tree` must not, because
-    // portuale renders no line for one and the edge would open a
-    // hole in the tree.
+    // The one `merge_bound_only` difference: the tree view drops the
+    // installed edge, the scheduling graph keeps it.
     let dep = DepEdge {
         atom: "dev-libs/onlyinstalled".to_string(),
         evaluated: "dev-libs/onlyinstalled".to_string().clone(),
@@ -161,11 +144,8 @@ fn resolved_dep_targets_reports_an_installed_target_as_no_tree_edge() {
 
 #[test]
 fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
-    // #76 B1: real `dep_zapdeps`' all-in-graph bin outranks
-    // all-installed, so the kept branch is the merge-bound one; the
-    // public helper must report exactly that (B0 q2), and
-    // `build_digraph` -- which shares `suppressed_alt_edges` -- must
-    // record an edge only to it.
+    // All-in-graph outranks all-installed, so the merge-bound branch is kept.
+    // Portage: dep_check.py, dep_zapdeps
     let owner_deps = vec![
         DepEdge {
             atom: "~dev-libs/newdep-2".to_string(),
@@ -225,7 +205,7 @@ fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
         !children.contains(&2),
         "no edge to the suppressed branch: {children:?}"
     );
-    // The #53 self-branch exclusion the helper shares.
+    // The self-branch exclusion the helper shares.
     let mogo_deps = vec![
         DepEdge {
             atom: ">=dev-lang/mogo-1.24".to_string(),
@@ -268,10 +248,7 @@ fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
 
 #[test]
 fn select_dep_target_eliminates_with_suppressed_sibling_sets() {
-    // A suppressed `||` sibling must not join the minimize universe:
-    // with the sibling's set {x1} counted, the shared-by-all test
-    // keeps x1 and drops x2, flipping the pick away from the
-    // vercmp-highest merge-bound target.
+    // A suppressed `||` sibling stays out of the minimize universe.
     let runtime = DepPriority {
         runtime: true,
         ..DepPriority::default()
@@ -327,7 +304,7 @@ fn select_dep_target_eliminates_with_suppressed_sibling_sets() {
 }
 
 // -----------------------------------------------------------------
-// #144 follow-up: the survivors of the first cluster run
+// Survivors of the first cluster run
 // -----------------------------------------------------------------
 
 #[test]
@@ -343,9 +320,7 @@ fn suppressed_alt_edges_requires_every_atom_of_a_branch_to_match() {
         e.key = 3;
         e
     };
-    // Branch 0 is only *partly* installed (one installed atom, one
-    // merge-bound); branch 1 is fully installed. The all-installed
-    // bin must pick branch 1.
+    // Branch 0 is only partly installed; branch 1 is fully installed.
     let mut i1 = new_entry("dev-libs", "i1", "1.0", Vec::new());
     i1.outcome = PretendOutcome::AlreadyInstalled {
         version: "1.0".into(),
@@ -382,9 +357,8 @@ fn suppressed_alt_edges_requires_every_atom_of_a_branch_to_match() {
         HashSet::from([2usize, 3]),
         "only a branch whose every atom matches installed wins the all-installed bin"
     );
-    // A branch whose second atom matches nothing at all is not an
-    // `all_any` candidate; with no other branch resolving, nothing
-    // is suppressed.
+    // A branch matching nothing is no `all_any` candidate: with no other
+    // branch resolving, nothing is suppressed.
     let owner = new_entry(
         "app-misc",
         "owner",

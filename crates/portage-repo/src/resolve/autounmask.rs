@@ -2,13 +2,11 @@
 
 use crate::*;
 
-/// Real `_get_dep_chain_as_comment` (`depgraph.py:6457`), narrowed to
-/// portuale's own one-level-parent tracking: the `#required by …`
-/// lines for an autounmask change on `owner`'s dependency (or a
-/// top-level `current_atom`). A top-level atom yields a single
-/// `required by <atom> (argument)`; a dependency yields `required by
-/// <parent cpv>::<repo>` and, when that parent is itself a command-line
-/// argument, a trailing `required by <parent atom> (argument)`.
+/// The `#required by …` lines for an autounmask change on `owner`'s
+/// dependency (or a top-level `current_atom`), narrowed to portuale's
+/// one-level-parent tracking. A top-level atom yields a single
+/// `required by <atom> (argument)` line.
+/// Portage: depgraph.py, _get_dep_chain_as_comment.
 pub(crate) fn autounmask_dep_chain(
     owner: &Option<(String, String)>,
     current_atom: &str,
@@ -17,9 +15,8 @@ pub(crate) fn autounmask_dep_chain(
     root: &Path,
 ) -> Vec<String> {
     let Some(start) = owner else {
-        // Real `_get_dep_chain_as_comment` for a top-level change prints
-        // the argument atom *as given* (`dev-libs/useflagpkg[-foo]`),
-        // not the change's own `>=<cpv>` left-hand form.
+        // A top-level change prints the argument atom *as given*, not the
+        // change's own `>=<cpv>` left-hand form.
         let arg = top_level
             .iter()
             .find(|t| {
@@ -32,19 +29,12 @@ pub(crate) fn autounmask_dep_chain(
             .unwrap_or(current_atom);
         return vec![format!("required by {arg} (argument)")];
     };
-    // Real `_get_dep_chain_as_comment` walks the whole parent chain to
-    // the argument, not just the immediate owner (#135 (e); bed
-    // `l0-fx-20260922T192350Z` arm A prints three rows where portuale
-    // printed one). Each node renders `required by <cpv>::<repo>`
-    // (vdb repo for an installed parent -- real's `installed_use_str`
-    // counterpart) or `required by <atom> (argument)`.
+    // Walks the whole parent chain to the argument, not just the immediate
+    // owner. Each node renders `required by <cpv>::<repo>` (vdb repo for an
+    // installed parent) or `required by <atom> (argument)`.
     //
-    // Single-branch rule (deliberate, unverified against real on a
-    // multi-parent shape): the owner is re-derived as the first
-    // `required_by` entry and the ascent follows one branch, where the
-    // sibling `masked_dep_chain` discloses every failing branch. All
-    // pinned chains are linear; real's branch choice on a multi-parent
-    // autounmask cell has no oracle.
+    // Single-branch rule (deliberate): the owner is re-derived as the first
+    // `required_by` entry and the ascent follows one branch.
     let mut chain: Vec<String> = Vec::new();
     let mut visited: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut cur = start.clone();
@@ -95,7 +85,7 @@ pub(crate) fn autounmask_dep_chain(
                     chain.push(format!("required by {}/{}-{v}::{repo}", cur.0, cur.1));
                 }
             }
-            // Ascend to the parent's own requirer (one hop per loop).
+            // Ascend to the parent's own requirer, one hop per loop.
             match parent.required_by.first() {
                 Some(next) if *next != cur => {
                     cur = next.clone();
@@ -118,10 +108,9 @@ pub(crate) fn autounmask_dep_chain(
     chain
 }
 
-/// Real `pkg_use_display(pkg, opts)`'s own return string -- `USE="…"`
-/// then one ` VAR="…"` per non-hidden `USE_EXPAND` group -- from the
-/// `(name, body)` pairs [`pkg_use_display_for`] produces. Mirrors
-/// `portuale::pretend::render_pkg_use_display`.
+/// `USE="…"` then one ` VAR="…"` per non-hidden `USE_EXPAND` group, from
+/// the `(name, body)` pairs [`pkg_use_display_for`] produces.
+/// Portage: pkg_use_display.
 pub(crate) fn render_use_display_pairs(disp: &[(String, String)]) -> String {
     let use_body = disp
         .iter()
@@ -137,14 +126,11 @@ pub(crate) fn render_use_display_pairs(disp: &[(String, String)]) -> String {
     out
 }
 
-/// The `(node, node_type)` pairs for real `_show_unsatisfied_dep`'s own
-/// trailing `(dependency required by "<node>" [<node_type>])` lines,
-/// narrowed to portuale's one-level-parent tracking (`_get_dep_chain`
-/// with `target_atom` set: first the failing package's direct parent,
-/// then that parent's own command-line argument when it is one). Empty
-/// when the failing package IS the top-level atom -- real skips the whole
-/// block then (`if not isinstance(myparent, AtomArg)`), since the atom is
-/// already the `xinfo` shown above.
+/// The `(node, node_type)` pairs for `_show_unsatisfied_dep`'s trailing
+/// `(dependency required by "<node>" [<node_type>])` lines, narrowed to
+/// portuale's one-level-parent tracking. Empty when the failing package IS
+/// the top-level atom (the atom is already the `xinfo` shown above).
+/// Portage: depgraph.py, _show_unsatisfied_dep.
 pub(crate) fn required_use_dep_chain(
     owner: &Option<(String, String)>,
     top_level: &std::collections::HashSet<&str>,
@@ -198,15 +184,12 @@ pub(crate) struct RenderRequiredUseBlockArgs<'a> {
     pub(crate) dep_chain: &'a [(String, String)],
 }
 
-/// Real `depgraph.py::_show_unsatisfied_dep`'s own REQUIRED_USE block
-/// (`:6763-6799` + the `:6899-6912` dep-chain tail): the `!!! The ebuild
-/// selected to satisfy "<atom>" has unmet requirements.` header, the
+/// `_show_unsatisfied_dep`'s REQUIRED_USE block: the header, the
 /// `- <cpv>::<repo> USE="…"` line, the minimal still-unsatisfied
-/// sub-expression, the complete expression (only when it differs), then
-/// the `(dependency required by "…" [ebuild])` chain. `reduced_human` /
-/// `full_human` are already [`portage_required_use::human_readable`]-
-/// rewritten. Colorization is a documented no-op (matches `emerge -p`
+/// sub-expression, the complete expression (only when it differs), then the
+/// dep chain. Colorization is a documented no-op (matches `emerge -p`
 /// without `--color=y`).
+/// Portage: depgraph.py, _show_unsatisfied_dep.
 pub(crate) fn render_required_use_block(args: RenderRequiredUseBlockArgs<'_>) -> String {
     let RenderRequiredUseBlockArgs {
         xinfo,
@@ -252,20 +235,16 @@ pub(crate) struct CheckIfLatestAtomFormArgs<'a> {
     pub(crate) check_visibility: bool,
 }
 
-/// Real `_display_autounmask`'s own `check_if_latest(pkg,
-/// check_visibility=...)` (`depgraph.py:10649`), for an autounmask
-/// change's left-hand atom: `>=<cpv>` when `resolved` is the highest
-/// candidate of its cp, `>=<cpv>:<slot>` when it's the highest *in its
-/// own slot*, else `=<cpv>`. Real portage uses `>=` for USE **and
-/// license** changes (unlike keywords, which always use `=` -- bug
-/// #536392, "don't unmask undesired versions") so the change keeps
-/// applying to newer builds.
+/// An autounmask change's left-hand atom: `>=<cpv>` when `resolved` is the
+/// highest candidate of its cp, `>=<cpv>:<slot>` when it's the highest *in
+/// its own slot*, else `=<cpv>`. `>=` for USE and license changes (unlike
+/// keywords, which always use `=`), so the change keeps applying to newer
+/// builds.
+/// Portage: _display_autounmask's check_if_latest.
 ///
-/// `check_visibility` mirrors real's own parameter: `true` for USE
-/// changes (a use-masked-only candidate is still `is_visible`, so only
-/// genuinely-visible higher builds should widen the atom), `false` for
-/// **license** changes (real calls `check_if_latest(pkg)` there -- every
-/// higher build counts, visible or not).
+/// `check_visibility`: `true` for USE changes (only genuinely-visible
+/// higher builds widen the atom), `false` for license changes (every
+/// higher build counts).
 pub(crate) fn check_if_latest_atom_form(args: CheckIfLatestAtomFormArgs<'_>) -> String {
     let CheckIfLatestAtomFormArgs {
         resolved,
@@ -292,8 +271,7 @@ pub(crate) fn check_if_latest_atom_form(args: CheckIfLatestAtomFormArgs<'_>) -> 
     }
 }
 
-/// The `check_visibility=True` form (USE changes) -- see
-/// `check_if_latest_atom_form`.
+/// The `check_visibility=True` form (USE changes).
 pub(crate) fn autounmask_use_atom_form(
     resolved: &Candidate,
     all_candidates: &[Candidate],
@@ -313,8 +291,7 @@ pub(crate) fn autounmask_use_atom_form(
 
 /// The `'backtrack` loop's `autounmask_use_config` accumulator rendered
 /// as `Config::autounmask_use` -- one `(cat/pkg, [±flag …])` entry per
-/// package, tokens sorted for determinism. Fed to `effective_use_flags`
-/// as the top USE tier on the next attempt.
+/// package, tokens sorted for determinism.
 pub(crate) fn autounmask_use_tier(
     acc: &HashMap<(String, String), HashMap<String, bool>>,
 ) -> Vec<(String, Vec<String>)> {

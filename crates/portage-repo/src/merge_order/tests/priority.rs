@@ -2,12 +2,9 @@ use super::*;
 
 #[test]
 fn dep_edges_carry_the_evaluated_atom_for_candidates_display() {
-    // #138 (Phase 5b S3): real's `--debug` prints `Depstring:` raw
-    // and `Candidates:` evaluated -- the *evaluated* form must ride
-    // the edge beside the raw token. The parent was built -flip, so
-    // `~dev-libs/x-1.0[flip=]` evaluates to `[-flip]` (oracle:
-    // `logs/l111-s0-20260921/real-rest-debug.log`, bed
-    // `l0-fx-20260922T192350Z` arm A).
+    // Portage's `--debug` prints `Depstring:` raw and `Candidates:`
+    // evaluated -- the evaluated form rides the edge. Expected value
+    // from Portage's debug log, container bed.
     let mut metadata = HashMap::new();
     metadata.insert(
         "RDEPEND".to_string(),
@@ -74,7 +71,7 @@ fn dep_edges_from_metadata_pins_every_key_and_priority() {
     let keys = ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"];
     let edges = dep_edges_from_metadata(&metadata, &HashSet::new(), &keys, false);
     assert_eq!(edges.len(), 5);
-    // Real's own deps-tuple key order.
+    // Portage's own deps-tuple key order.
     let by_key: HashMap<u8, &DepEdge> = edges.iter().map(|e| (e.key, e)).collect();
     assert_eq!(by_key.len(), 5, "one edge per key: {edges:#?}");
     assert_eq!(by_key[&0].package, "rdep");
@@ -278,10 +275,8 @@ fn split_disjunctive_pins_group_and_branch_bookkeeping() {
 
 #[test]
 fn ignore_predicates_pin_every_ladder_rung() {
-    // The expected value of every `ignore_priority` predicate for
-    // every combination of `DepPriority` flags. Mirrors the ladder's
-    // own documented rule; any deleted `!`, flipped connective, or
-    // constant-return mutant disagrees on some word.
+    // The expected value of every `ignore_priority` predicate for every
+    // combination of `DepPriority` flags.
     fn expect_n_optional(p: &DepPriority) -> bool {
         p.optional
     }
@@ -435,8 +430,7 @@ fn ignore_name_pins_every_traced_filter() {
 
 #[test]
 fn priority_ranges_pin_their_named_rungs() {
-    // Every ladder index resolves to the predicate of its documented
-    // name.
+    // Every ladder index resolves to the predicate of its documented name.
     for word in 0..128u64 {
         let p = prio(word);
         assert_eq!(
@@ -526,15 +520,13 @@ fn priority_ranges_pin_their_named_rungs() {
 }
 
 // -----------------------------------------------------------------
-// #146 follow-up: the survivors of the first after-run
+// Follow-up: survivors of the first after-run
 // -----------------------------------------------------------------
 
 #[test]
 fn split_disjunctive_keeps_a_group_when_a_second_group_marker_is_pending() {
-    // A defensive-shape pin: `||` immediately followed by another
-    // group inside an open group must not restart the group
-    // bookkeeping (a structured reduce flattens nested `||`, so this
-    // pins the guard against a future walker change).
+    // A defensive-shape pin: `||` immediately followed by another group
+    // inside an open group must not restart the bookkeeping.
     assert_eq!(
         split_disjunctive(&tokens(&["||", "(", "||", "(", "dev-libs/a", ")", ")"])),
         (vec![], vec![("dev-libs/a".to_string(), 0, 0)])

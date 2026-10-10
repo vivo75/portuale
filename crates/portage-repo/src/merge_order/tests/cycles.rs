@@ -3,8 +3,7 @@ use super::*;
 #[test]
 fn elementary_cycles_counts_rotations_like_portage() {
     // Square 0->1->2->3->0: one ring per node (rotations), four
-    // records -- the shape that trips real's `> 3` large-cycle
-    // advisory.
+    // records -- the shape that trips Portage's `> 3` large-cycle advisory.
     let square = test_graph(
         4,
         &[
@@ -33,7 +32,7 @@ fn elementary_cycles_counts_rotations_like_portage() {
         ],
     );
     assert!(elementary_cycles(&dag, None).is_empty());
-    // Self-loop: the singleton record, like real's
+    // Self-loop: the singleton record, like Portage's
     // shortest_path(x, x) == [x].
     let slf = test_graph(1, &[(0, 0, prio(1))]);
     assert_eq!(elementary_cycles(&slf, None), vec![vec![0]]);
@@ -85,7 +84,7 @@ fn elementary_cycles_keeps_every_tied_shortest_path() {
 #[test]
 fn reduced_merge_order_drains_a_set_in_leaf_order() {
     // Square with a downstream outsider (4, depending on 0), all in
-    // the drain set like real's stuck remainder: leaf-drain order,
+    // the drain set like Portage's stuck remainder: leaf-drain order,
     // outsider with the rest.
     let g = test_graph(
         5,
