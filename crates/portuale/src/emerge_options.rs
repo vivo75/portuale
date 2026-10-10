@@ -4,7 +4,7 @@
 // real emerge flag portuale doesn't implement yet produces a clear
 // "recognized, but not implemented" message -- distinct from a
 // genuinely unknown/misspelled flag. The set that IS implemented is the
-// one `emerge --help` documents (see `pretend.rs`'s `HELP_TEXT`); every
+// one `emerge --help` documents (see `pretend/help.txt`); every
 // table here exists purely for recognition, not behavior, and each
 // implemented flag is excluded from these tables (from `VALUE_OPTIONS`
 // too, not just `BOOLEAN_OPTIONS`). The contract suite pins the text each
