@@ -3,7 +3,8 @@
 (#336 Phase 6.3: `pretend::run` phases D-S and the other function cuts).
 
 Usage: extract_block.py SRC START END FNAME TARGET_RS [--doc TEXT] [--crate PKG]
-                        [--try ERR] [--ret TYPE] [--loop LABEL --indent N] [--keep]
+                        [--try ERR] [--ret TYPE] [--loop LABEL --indent N] [--diverges]
+                        [--value LABEL TYPE PAT] [--own A,B] [--keep]
 
 SRC lines START..END (1-based, inclusive) must be whole statements of the
 host function's top-level block (4-space indent). They move verbatim into
@@ -38,6 +39,13 @@ With `--loop LABEL --indent N` the range is statements of the body of the
 host's loop `'LABEL` at indent N: a `continue` to that loop becomes
 `return ControlFlow::Break(())` and the call site `continue 'LABEL`s;
 `return Err(..)` and `?` stay (`Result<_, ERR>`, needs `--try ERR`).
+`--value LABEL TYPE PAT` (with --loop): START..END is the body of
+`let PAT = 'LABEL: { .. };`; `break 'LABEL X` returns
+`ControlFlow::Continue(X)` and the whole `let` becomes
+`let ControlFlow::Continue(PAT) = f(..) else { continue 'loop; };`.
+`--own A,B`: these parameters go by value (the range consumes them).
+`--diverges`: the statement right after the range leaves the block (a
+let-else's closing `continue`), so the host reads nothing the range moves.
 
 A `return X` in the range ends the host (`--ret TYPE` names the host's
 return type, default `ExitCode`): the function returns
@@ -221,7 +229,7 @@ def code_only(text):
 
 class Cut:
     def __init__(self, src, start, end, fname, target, doc, pkg, err=None, ret="ExitCode",
-                 loop=None, indent=4):
+                 loop=None, indent=4, diverges=False, value=None, own=()):
         self.src, self.start, self.end = src, start, end
         self.fname, self.target, self.doc, self.pkg = fname, target, doc, pkg
         self.orig_src = open(src).read()
@@ -235,6 +243,17 @@ class Cut:
         body = "\n".join(self.region)
         self.ind = " " * indent
         self.loop = loop.lstrip("'") if loop else None
+        self.own = set(own)
+        # --value LABEL TYPE PAT: START..END is the body of
+        # `let PAT = 'LABEL: { ... };` (the lines right inside it); the
+        # whole `let` is replaced and `break 'LABEL X` returns X
+        self.value = value
+        self.site = (self.start - 1, self.end + 1)
+        if value:
+            lines0 = self.orig_src.split("\n")
+            assert re.match(rf"^\s*let .* = '{value[0]}: \{{$", lines0[self.start - 2]), lines0[self.start - 2]
+            assert lines0[self.end].strip() == "};", lines0[self.end]
+            assert self.loop, "--value needs --loop"
         self.ret_ty = ret
         if self.loop:
             # inside the host loop: `return Err(..)` and `?` stay as they are
@@ -249,6 +268,16 @@ class Cut:
             brk = "return Ok(ControlFlow::Break(()))" if self.fallible else "return ControlFlow::Break(())"
             for a, b in reversed(ctl):
                 body = body[:a] + brk + body[b:]
+            if self.value:
+                ok = (lambda x: f"Ok({x})") if self.fallible else (lambda x: x)
+                body, n = re.subn(rf"\bbreak '{self.value[0]}\s+(.*?);",
+                                  lambda m: "return " + ok(f"ControlFlow::Continue({m.group(1)})") + ";", body)
+                assert n and f"'{self.value[0]}" not in code_only(body), "multi-line `break 'label` value"
+                # a nested branch's tail expression that is the block value
+                body = re.sub(rf"(?m)^(\s+){re.escape(self.value[2])}$",
+                              lambda m: m.group(1) + "return " + ok(f"ControlFlow::Continue({self.value[2]})"),
+                              body)
+                self.ctl = True
             self.returns = False
             self.loop_err = err
         self.raw_body = body
@@ -261,13 +290,17 @@ class Cut:
         # outputs: top-level `let` names of the range read after it
         host_end = next(i for i in range(self.end, len(lines)) if lines[i] == "}")
         after = code_only("\n".join(lines[self.end:host_end]))
+        if diverges:
+            # the range is followed by `continue`/`return`: nothing after
+            # it in the host reads what it binds or moves
+            after = ""
         self.after = after
         names = []
         for l in self.region:
             m = re.match(rf"^{self.ind}let (?:mut )?([a-z_]\w*)\b(?!\()", l)
             if m and m.group(1) not in names and re.search(rf"(?<![\w.]){m.group(1)}\b", after):
                 names.append(m.group(1))
-        self.outs = [[n, None] for n in names]
+        self.outs = [] if value else [[n, None] for n in names]
         self.params = []          # [name, type, mode] mode: val|ref|mut
         self.imports = []         # `use` lines for bare type names
 
@@ -307,6 +340,8 @@ class Cut:
             ts = [t if typed and t else "()" for _, t in self.outs]
             o = None if not ts else ts[0] if len(ts) == 1 else pascal(self.fname) + "Out"
             inner = (f"ControlFlow<(), {o}>" if o else "ControlFlow<()>") if self.ctl else o
+            if self.value:
+                inner = f"ControlFlow<(), {self.value[1]}>"
             return f"Result<{inner or '()'}, {self.loop_err}>" if self.fallible else inner
         if self.err:
             ts = [t if typed and t else "()" for _, t in self.outs]
@@ -343,7 +378,10 @@ class Cut:
         ind = self.ind
         if self.loop:
             ce = call + ("?" if self.fallible else "")
-            if self.ctl and onames:
+            if self.value:
+                site = [f"{ind[:-4]}let ControlFlow::Continue({self.value[2]}) = {ce} else {{",
+                        f"{ind[:-4]}    continue '{self.loop};", f"{ind[:-4]}}};"]
+            elif self.ctl and onames:
                 site = [f"{ind}let ControlFlow::Continue({mpat}) = {ce} else {{",
                         f"{ind}    continue '{self.loop};", f"{ind}}};"]
             elif self.ctl:
@@ -363,12 +401,17 @@ class Cut:
             site = [f"    if let Some({rv}) = {call} {{", f"        return {rv};", "    }"]
         else:
             site = [f"    {call};"]
-        new_src = lines[:self.start - 1] + site + lines[self.end:]
+        if self.value:
+            new_src = lines[:self.start - 2] + site + lines[self.end + 1:]
+        else:
+            new_src = lines[:self.start - 1] + site + lines[self.end:]
         rt = self.ret_type(typed)
         ret = f" -> {rt}" if rt else ""
         writeback = "".join(f"    *{n}_out = {n};\n" for n, _, _ in ps if n in copy_mut)
         if probe:
             tail = "\n" + "".join(f"    let _: () = {n};\n" for n in onames) + "    todo!()\n"
+        elif self.value:
+            tail = "\n" + writeback
         elif self.loop:
             val = pat
             if self.ctl:
@@ -485,6 +528,12 @@ class Cut:
             if p and code in ("E0594", "E0596", "E0384") and p[2] != "mut":
                 p[2] = "mut"
                 changed = True
+            elif p and code == "E0507" and p[2] in ("ref", "mut") \
+                    and not re.search(rf"(?<![\w.]){p[0]}\b", self.after):
+                # moved out of (a field of) a borrowed parameter the host
+                # never reads again: hand the whole value over
+                p[2] = "own"
+                changed = True
             elif p and code == "E0382" and p[2] == "val":
                 p[2] = "ref"
                 changed = True
@@ -554,6 +603,20 @@ class Cut:
                     short = re.fullmatch(rf"\s*{expr},?\s*", line) is not None
                     edits.append((s["line_start"], s["column_start"], s["column_end"],
                                   (f"{expr}: " if short else "") + f"std::mem::take({expr})"))
+        # `Vec<String>::contains(&x)` with `x` now a `&str` parameter
+        strs = {n for n, t, m in self.params if m == "ref" and t == "String"}
+        for m in errs:
+            if (m.get("code") or {}).get("code") != "E0308" or "found `&&str`" not in m["rendered"]:
+                continue
+            for s in m["spans"]:
+                if not s.get("is_primary") or os.path.abspath(s["file_name"]) != tgt:
+                    continue
+                line = text[s["line_start"] - 1]
+                for n in strs:
+                    k = line.find(f".contains(&{n})")
+                    if k >= 0:
+                        edits.append((s["line_start"], k + 1, k + len(f".contains(&{n})") + 1,
+                                      f".iter().any(|s| s == {n})"))
         if not edits:
             return False
         for ln, a, b, rep in sorted(set(edits), key=lambda e: (e[0], -e[1])):
@@ -616,7 +679,7 @@ class Cut:
             t = types.get(p[0]) or fallback.get(p[0])
             if t is None:
                 sys.exit(f"no type for {p[0]}: types={types} fallback={fallback}")
-            p[1], p[2] = t, ("val" if is_copy(t) else "ref")
+            p[1], p[2] = t, ("val" if is_copy(t) else "own" if p[0] in self.own else "ref")
             # mutated in the body: a mutating method, `&mut x`, or an assignment
             code = code_only(self.raw_body)
             n = re.escape(p[0])
@@ -679,7 +742,10 @@ def main():
     ret = a[a.index("--ret") + 1] if "--ret" in a else "ExitCode"
     loop = a[a.index("--loop") + 1] if "--loop" in a else None
     indent = int(a[a.index("--indent") + 1]) if "--indent" in a else 4
-    cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg, err, ret, loop, indent)
+    value = tuple(a[a.index("--value") + 1:a.index("--value") + 4]) if "--value" in a else None
+    own = a[a.index("--own") + 1].split(",") if "--own" in a else ()
+    cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg, err, ret, loop, indent,
+              "--diverges" in a, value, own)
     try:
         cut.run()
     except SystemExit as e:
