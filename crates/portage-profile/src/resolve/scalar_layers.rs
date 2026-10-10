@@ -33,38 +33,14 @@ pub(crate) fn load_scalar_layers(
         repo_aliases,
         parent_colon_repos,
     } = args;
-    // Real `regenerate()` stacks its dbs `env.d`, `globals`, `defaults`
-    // (the profile chain), `conf` (`make.conf`), `env` -- in that order
-    // (real config.py:531 + `mydbs = self.configlist[:-1]` in
-    // `regenerate`). Portuale reads them here in the same order so the
-    // `const.INCREMENTALS` fold in `resolved_incremental` matches.
-    //
-    // `env.d`: real `_get_env_d` -> `<eroot>/etc/profile.env` (the
-    // compiled `env-update` output; `eroot`, not `config_root` -- see
-    // `resolve_config`'s doc comment). Only its incremental entries
-    // (`CONFIG_PROTECT` / `CONFIG_PROTECT_MASK`, written there by
-    // packages' `/etc/env.d/*` fragments) feed `emerge --info`; the rest
-    // is build-phase env portuale doesn't model.
-    //
-    // Eager (portuale resolves eagerly where real expands lazily on
-    // access): values already known -- earlier lines of this file --
-    // substitute, matching real's on-access result for backward
-    // references; forward references to later files stay literal here
-    // and pick up their values when those files are read (the eager
-    // approximation portuale uses throughout). Either way the values
-    // seed `scalars`, so every later file (globals, profile chain,
-    // `make.conf`, `package.env` files) expands against them -- real's
-    // `expand_map = env_d.copy()` seeding.
-    //
-    // `parse_envd_text` is the one function both the first load and
-    // `Config::reload_env_d` read through. The static half of real
-    // `_env_d_blacklist` (`_env_blacklist`, real `config.py:734-743`;
-    // portuale's `ENV_BLACKLIST`) is popped here; the profile half
-    // (`PROFILE_ONLY_VARIABLES`) is not known until the chain resolves,
-    // so those keys are popped right after the chain loop below. env.d
-    // is a real scalar db too (real `configdict["env.d"]`): its `LANG`
-    // / `LEX` / … surface in `emerge --info`. Lowest priority --
-    // `make.globals`, the profile chain and `make.conf` all override.
+    // Layers in Portage `regenerate()` order: env.d, globals, the profile
+    // chain (`defaults`), make.conf (`conf`). Portage: config.py:531
+    // `env.d` is `<eroot>/etc/profile.env` (compiled `env-update` output).
+    // Values substitute eagerly here (matching Portage's on-access result
+    // for backward references) and seed `scalars` for every later file.
+    // Only the static blacklist half is popped now; the profile half
+    // (`PROFILE_ONLY_VARIABLES`) waits for the chain. Portage: _get_env_d
+    // `parse_envd_text` serves both the first load and `reload_env_d`.
     if let Ok(text) = fs::read_to_string(eroot.join("etc/profile.env")) {
         let parsed = parse_envd_text(&text);
         for (key, value) in &parsed.vars {
@@ -96,20 +72,12 @@ pub(crate) fn load_scalar_layers(
             .filter(|(k, _)| !ENV_BLACKLIST.contains(&k.as_str()))
             .collect();
     }
-    // Which `scalars` keys the env.d read owned, for the higher-layer
-    // recording at every insert site below (`process_lines`,
-    // `process_make_conf_file`, `apply_env_layer`, the `USE_EXPAND`
-    // env-value loop): a key the env.d map holds that a later layer
-    // assigns joins `envd_higher_keys`, so `reload_env_d` leaves the
-    // higher value standing.
+    // Which `scalars` keys the env.d read owned, so a later layer assigning
+    // the same key joins `envd_higher_keys` and `reload_env_d` keeps it.
 
-    // `globals`: `cnf/make.globals`, always sourced -- the base layer
-    // under the profile chain (real config.py:532). Real portage ships it
-    // at `portage.const.GLOBAL_CONFIG_PATH` (`/usr/share/portage/config`);
-    // portuale reads it `config_root`-relative, which resolves to that
-    // same absolute path for a live `PORTAGE_CONFIGROOT=/` run and stays
-    // absent (so contributes nothing, deterministically) under a test /
-    // fixture `config_root`.
+    // `globals`: `cnf/make.globals`, always sourced as the base layer
+    // (Portage: config.py:532, `portage.const.GLOBAL_CONFIG_PATH`).
+    // Read `config_root`-relative: the live path under `/`, absent under tests.
     let globals_path = config_root.join("usr/share/portage/config/make.globals");
     if globals_path.is_file() {
         let text = fs::read_to_string(&globals_path).map_err(|e| Error::ReadFile {
@@ -129,24 +97,17 @@ pub(crate) fn load_scalar_layers(
     } else {
         Vec::new()
     };
-    // Per-level record of which scalars *this* level's `make.defaults` set
-    // (and to what) -- needed for the real config.py "translate profile
-    // USE_EXPAND defaults into per-level USE flags" fold (2849-2889) done
-    // once `USE_EXPAND` itself is final, further below.
+    // Per-level record of what this level's `make.defaults` set, for the
+    // profile USE_EXPAND-defaults fold once USE_EXPAND itself is final.
     let mut level_scalar_deltas: Vec<HashMap<String, String>> = Vec::new();
     for level in &chain {
-        // `defaults`-tier walk, one profile at a time (real
-        // `regenerate()` over `configdict["defaults"]`): this level's
-        // `make.defaults` `USE=`, then this level's own `package.use`.
-        // `use_tokens` accumulates every level's `USE=` flat too (the
-        // fallback path + inspection) -- slice out just this level's by
-        // length delta.
+        // One level's `make.defaults` USE plus its own package.use; the
+        // length delta slices out just this level's USE contribution.
         let before = config.use_tokens.len();
         let scalars_before = scalars.clone();
         let make_defaults = level.join("make.defaults");
         if make_defaults.is_file() {
-            // Real config.py quirk: USE is excluded from cross-level
-            // substitution -- see the module doc comment.
+            // USE is excluded from cross-level substitution (Portage quirk).
             scalars.remove("USE");
             note_higher(&mut *config, "USE");
             let text = fs::read_to_string(&make_defaults).map_err(|e| Error::ReadFile {
@@ -172,15 +133,12 @@ pub(crate) fn load_scalar_layers(
                 .collect(),
         );
     }
-    // `scalars` as the profile chain left it, before `make.conf`/env: a
-    // USE_EXPAND variable still at this value below has had its final say
-    // from the profile (`defaults` tier) and is folded per-level here, not
-    // again in the global `conf`-tier loop.
-    // Profile half of real `_env_d_blacklist` (`profile_only_variables`,
-    // `config.py:734-743`): the profile's own `PROFILE_ONLY_VARIABLES`
-    // fold (env.d's own assignment, source 0, excluded) names keys env.d
-    // must not supply. A key the globals/profile chain also assigned
-    // keeps that value; one only env.d held is dropped from `scalars`.
+    // `scalars` as the profile chain left it, before make.conf/env: a
+    // USE_EXPAND variable still at this value folded per-level, not again
+    // in the global conf-tier loop (Portage skips the `defaults` re-fold).
+    // Profile half of the env.d blacklist (`config.py:734-743`): keys the
+    // profile's `PROFILE_ONLY_VARIABLES` names are dropped unless a higher
+    // layer also assigned them.
     if !config.envd_vars.is_empty() {
         let skip = usize::from(
             config

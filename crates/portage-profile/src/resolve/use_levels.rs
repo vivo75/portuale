@@ -9,23 +9,14 @@ pub(crate) fn use_mask_force_levels(
     chain: &[PathBuf],
     config: &mut Config,
 ) -> Result<(), Error> {
-    // Per-level view of the eight sources just parsed flat above, so
-    // `portage-repo` can replay real `UseManager.getUseMask`/`getUseForce`'s
-    // *interleaved* per-level stacking (`for i, _ in enumerate(...):
-    // append usemask[i], usestablemask[i], pusemask[i][cp],
-    // pusestablemask[i][cp]` -> one `stack_lists(incremental=1)`). Level
-    // 0 is synthetic: the repo-level `package.use.*` (main repo, then
-    // each overlay `::repo`-scoped) that real prepends before the
-    // profile loop. Levels 1.. are the profile chain, in order. The
-    // global `use.mask`/`use.force` files read per level again here (the
-    // flat fields stacked them into a single set); a re-read of a
-    // handful of usually-absent small files, once per (memoised)
-    // `resolve_config`.
+    // Per-level view of the eight sources parsed flat above, replaying
+    // Portage's interleaved per-level stacking. Level 0 is synthetic
+    // (repo-level package.use.*); levels 1.. are the profile chain.
+    // Portage: UseManager.getUseMask/getUseForce
     let mut levels: Vec<UseMaskForceLevel> = Vec::new();
     {
-        // Level 0 (synthetic): repo-level `package.use.*` -- main repo,
-        // then each overlay `::repo`-scoped, exactly the concatenation
-        // the flat fields' repo-level prefix already uses.
+        // Level 0: repo-level `package.use.*`, same concatenation the flat
+        // fields' repo-level prefix uses.
         let repo_pkg = |file: &str| -> Result<Vec<(String, Vec<String>)>, Error> {
             let mut l = read_config_lines(&main_repo_location.join("profiles").join(file))?;
             for (repo_name, repo_location) in overlay_repos {

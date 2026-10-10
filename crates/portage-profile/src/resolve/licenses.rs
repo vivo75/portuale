@@ -9,17 +9,8 @@ pub(crate) fn fold_licenses_and_accepts(
     config: &mut Config,
     scalars: &HashMap<String, String>,
 ) -> Result<(), Error> {
-    // license_groups: real `LicenseManager._read_license_groups`
-    // (`LicenseManager.py:47`) over `LocationsManager.profile_locations`
-    // (`LocationsManager.py:432`) -- which is the `profiles/` directory
-    // of the *main repo and each overlay*, NOT the individual
-    // profile-chain levels (real gentoo puts `license_groups` at
-    // `<repo>/profiles/license_groups`, never in a `profiles/<foo>/`
-    // profile dir -- verified live against a real tree). Then the
-    // user-level `/etc/portage/license_groups`. "extend, don't
-    // stack/replace" semantics -- see `parse_license_groups_lines`. Read
-    // before ACCEPT_LICENSE/package.license below, both of which need
-    // the full, final group map to expand `@group` tokens against.
+    // `license_groups` lives in each repo's `profiles/` dir (extend, don't replace),
+    // read before ACCEPT_LICENSE/package.license expand `@group`.
     let mut license_groups: HashMap<String, Vec<String>> = HashMap::new();
     for (_name, location) in all_repos {
         for (name, members) in parse_license_groups_lines(&read_config_lines(
@@ -35,13 +26,8 @@ pub(crate) fn fold_licenses_and_accepts(
     }
     config.license_groups = license_groups;
 
-    // ACCEPT_LICENSE: last-level-wins scalar (see `accept_license`'s own
-    // doc comment for why, and the real "* -@EULA" default portuale
-    // replicates when it's never set anywhere at all) -- `scalars`
-    // already holds whatever the profile chain + make.conf left it as,
-    // via the same catch-all `scalars.insert` every other scalar
-    // variable already goes through in `process_lines`/
-    // `process_make_conf_file`.
+    // ACCEPT_LICENSE: last-level-wins scalar, `* -@EULA` default when unset.
+    // `scalars` already holds the profile chain + make.conf value.
     let accept_license_str = scalars
         .get("ACCEPT_LICENSE")
         .cloned()
@@ -52,9 +38,7 @@ pub(crate) fn fold_licenses_and_accepts(
         .collect();
     config.accept_license = expand_license_tokens(&accept_license_tokens, &config.license_groups);
 
-    // package.license: user-level only -- see `package_license`'s own
-    // doc comment for the deliberately-not-replicated `profile-license`
-    // profile-format and `*/*`-global-extraction real quirks.
+    // package.license: user-level only (no profile format replicated).
     let package_license_lines =
         read_config_lines(&config_root.join("etc/portage/package.license"))?;
     config.package_license = parse_package_license_lines(&package_license_lines)
@@ -62,10 +46,8 @@ pub(crate) fn fold_licenses_and_accepts(
         .map(|(atom, tokens)| (atom, expand_license_tokens(&tokens, &config.license_groups)))
         .collect();
 
-    // ACCEPT_PROPERTIES/ACCEPT_RESTRICT: last-level-wins scalars, real
-    // "*" default (see `accept_properties`'s own doc comment) -- no
-    // `@group` expansion for either, unlike ACCEPT_LICENSE/
-    // package.license just above.
+    // ACCEPT_PROPERTIES/ACCEPT_RESTRICT: last-level-wins scalars, `*`
+    // default, no `@group` expansion (unlike ACCEPT_LICENSE).
     config.accept_properties = scalars
         .get("ACCEPT_PROPERTIES")
         .map(|s| s.split_whitespace().map(String::from).collect())
@@ -75,9 +57,7 @@ pub(crate) fn fold_licenses_and_accepts(
         .map(|s| s.split_whitespace().map(String::from).collect())
         .unwrap_or_else(|| vec!["*".to_string()]);
 
-    // package.properties/package.accept_restrict: user-level only, same
-    // "atom + raw tokens" shape package.license already reads (reused
-    // directly -- see parse_package_license_lines's own doc comment).
+    // package.properties/package.accept_restrict: user-level only, same shape.
     config.package_properties = parse_package_license_lines(&read_config_lines(
         &config_root.join("etc/portage/package.properties"),
     )?);

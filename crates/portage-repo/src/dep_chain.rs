@@ -13,35 +13,18 @@ pub(crate) struct ChainNodeUsedepSuffixArgs<'a> {
     pub(crate) child: &'a (String, String),
 }
 
-/// Real `_get_dep_chain`'s affecting-USE `pkg[flag]` suffix for one chain
-/// node (`depgraph.py:6257+` via `portage.dep.extract_affecting_use`):
-/// the flags in the node's own dep strings whose `flag?` conditionals
-/// gate the edge down to `child`, rendered `[flag]` for flags enabled in
-/// the node's own USE and `[-flag]` for disabled ones (real
-/// `_pkg_use_enabled`), minus `use.mask`/`use.force`. `""` when no dep
-/// string names `child`, when no conditional gates the edge, or when the
-/// node's metadata/USE can't be read (the chain keeps its bare row --
-/// today's behaviour everywhere the suffix doesn't apply).
+/// Portage `_get_dep_chain`'s affecting-USE `pkg[flag]` suffix for one chain
+/// node (depgraph.py:6257+ via `portage.dep.extract_affecting_use`): flags in
+/// the node's dep strings whose `flag?` conditionals gate the edge to `child`,
+/// `[flag]` when enabled in the node's USE, `[-flag]` when disabled, minus
+/// use.mask/use.force. `""` when nothing gates the edge or metadata can't be
+/// read (the chain keeps its bare row).
 ///
-/// Sources mirror the node's kind: a merge-bound node reads the
-/// same-version repo candidate's metadata (`BDEPEND`, `DEPEND`,
-/// `IDEPEND`, `PDEPEND`, `RDEPEND` -- real `Package._dep_keys`) and its
-/// effective USE; an installed node reads the vdb (`RDEPEND`, `PDEPEND`,
-/// `DEPEND` files; the recorded `USE`). Real filters the dep strings by
-/// the edge's own buildtime/runtime priority and portuale doesn't track
-/// it, so every available key is scanned (union -- wider only when one
-/// cp is gated differently under two keys). Real matches the linking
-/// atom by exact token text (evaluated for the first row, unevaluated
-/// parent atoms after); portuale re-derives it as the first token whose
-/// cp is `child`'s, which agrees everywhere except a doubly-conditional
-/// edge (`flag? ( pkg[other=] )`), where real's two forms can disagree
-/// with each other too. Multi-flag rows sort (real iterates a `set`,
-/// hash order under the bed's `PYTHONHASHSEED=0`; every fixture and live
-/// row so far carries one flag). A malformed dep string is skipped (real
-/// raises for ebuilds -- a display path must not fail the resolve).
-/// Mask/force for an installed node reuses the same-version repo
-/// candidate's keywords for the stability decision, falling back to no
-/// exclusion when no such candidate exists.
+/// Approximations: every dep key is scanned (no buildtime/runtime split);
+/// the linking atom is re-derived as the first token with the child's cp;
+/// multi-flag rows sort (Portage iterates a `set`); malformed strings are
+/// skipped (a display path must not fail the resolve). Mask/force for an
+/// installed node reuses the same-version repo candidate's keywords.
 pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> String {
     let ChainNodeUsedepSuffixArgs {
         repos,
@@ -52,8 +35,8 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
         installed,
         child,
     } = args;
-    // Same-version repo candidate when one exists: metadata location for
-    // merge-bound nodes, keyword source for the stability decision.
+    // Same-version repo candidate when one exists: metadata for merge-bound
+    // nodes, keyword source for the stability decision.
     let candidate = list_candidates(repos, &node.category, &node.package)
         .ok()
         .and_then(|cs| {
@@ -80,9 +63,8 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
             .map(|k| metadata.get(*k).cloned().unwrap_or_default())
             .collect()
     };
-    // The linking atom, re-derived: the first token whose cp is the
-    // child's (real records the per-edge parent atom; portuale's
-    // `required_by` keeps cp pairs only).
+    // The linking atom, re-derived: the first token with the child's cp
+    // (Portage records the per-edge parent atom; `required_by` keeps pairs).
     let mut linking: Option<&str> = None;
     'scan: for s in &strings {
         for tok in s.split_whitespace() {
@@ -109,8 +91,7 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
     if affecting.is_empty() {
         return String::new();
     }
-    // Real `affecting_use.difference_update(node.use.mask,
-    // node.use.force)`.
+    // Portage `affecting_use.difference_update(node.use.mask, node.use.force)`.
     if let Some(ref cand) = candidate {
         let candidate_str = format!(
             "{}/{}-{}:{}/{}::{}",
@@ -151,8 +132,8 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
     if affecting.is_empty() {
         return String::new();
     }
-    // The node's own enabled set: effective USE merge-bound, recorded
-    // vdb USE installed.
+    // The node's own enabled set: effective USE merge-bound, recorded vdb
+    // USE installed.
     let enabled: HashSet<String> = if installed {
         if !vdb_entry_is_dir(root, &node.category, &node.package, version) {
             return String::new();
@@ -183,10 +164,9 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
     format!("[{}]", flags.join(","))
 }
 
-/// `masked_dep_chain`'s `(node, type)` for one chain entry, or `None` to stop. `child`
-/// is the cp below this node on the chain (the failed dependency
-/// for the first row) -- its linking atom decides the affecting-USE
-/// suffix.
+/// `masked_dep_chain`'s `(node, type)` for one chain entry, or `None` to stop.
+/// `child` is the cp below this node (the failed dependency for the first
+/// row); its linking atom decides the affecting-USE suffix.
 pub(crate) fn chain_node_line(
     entry: &GraphEntry,
     root: &Path,
@@ -262,35 +242,19 @@ pub(crate) struct MaskedDepChainArgs<'a> {
     pub(crate) package: &'a str,
     pub(crate) atoms: &'a [String],
     pub(crate) root: &'a Path,
-    /// Backlog #286: the disclosed miss atom. Direct parents are
-    /// restricted to those pulling this atom (real `_get_dep_chain`
-    /// starts from the one failing parent edge, not every puller of
-    /// the package): a built `:S/SS=` atom and a live `:=` atom on one
-    /// package have different pullers, and the aggregated chain would
-    /// blame both. A parent qualifies on an evaluated-or-raw edge-atom
-    /// match; when no direct parent matches (conditional-evaluated
-    /// edges, missing dep lists), the restriction is vacuous and every
-    /// direct parent stays, exactly as before.
+    /// Backlog #286: the disclosed miss atom. Direct parents are restricted to
+    /// those pulling this atom (Portage starts from the one failing parent
+    /// edge); the restriction is vacuous when no direct parent matches.
     pub(crate) atom: &'a str,
 }
 
-/// Real `_get_dep_chain` for one masked-dependency disclosure
-/// (`depgraph.py:6257+`): `(node, type)` pairs from the failed
-/// dependency's direct parents up to the top-level argument(s),
-/// innermost first. `entries` must be final (post `required_by` fill).
-/// A merge-bound parent renders `cat/pkg-ver::repo` as `ebuild`
-/// (`binary` for a binpkg parent); an installed one renders its vdb
-/// repo (`__unknown__` fallback, like real) as `installed`; a
-/// top-level atom targeting the chain top renders as `argument`. One
-/// sub-chain per direct parent (real shows only its DFS-first abandon
-/// -- portuale never abandons, so all failing branches disclose, with
-/// #19 parked); cycles guarded by a visited set; ascent stops at the
-/// first arg-targeted node (real prefers arguments since they are root
-/// nodes). Narrowings, documented: every matching top-level atom is
-/// shown (real shows the pulling one -- portuale doesn't track which).
-/// The affecting-USE suffix is real's own ([`chain_node_usedep_suffix`]
-/// documents its approximations); a node whose metadata can't be read
-/// keeps today's bare row.
+/// Portage `_get_dep_chain` for one masked-dependency disclosure
+/// (depgraph.py:6257+): `(node, type)` pairs from the failed dependency's
+/// direct parents up to the top-level argument(s), innermost first.
+/// Narrowings: every matching top-level atom is shown (Portage shows the
+/// pulling one -- untracked here); one sub-chain per direct parent (Portage
+/// shows only its DFS-first abandon; #19 parked); the affecting-USE suffix
+/// is Portage's own ([`chain_node_usedep_suffix`] has the approximations).
 pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, String)> {
     let MaskedDepChainArgs {
         repos,
@@ -302,10 +266,9 @@ pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, Str
         root,
         atom,
     } = args;
-    /// This `cp`'s chain node: the merge-bound entry first (it
-    /// supersedes any same-cp `AlreadyInstalled` shadow, like everywhere
-    /// else), else the installed one. `None` for a `NoVisibleCandidate`
-    /// (no version to name) or a missing entry -- the chain stops.
+    /// This `cp`'s chain node: the merge-bound entry first (superseding any
+    /// same-cp `AlreadyInstalled` shadow), else the installed one. `None`
+    /// for `NoVisibleCandidate` or a missing entry -- the chain stops.
     fn select_entry<'a>(
         entries: &'a [GraphEntry],
         cp: &(String, String),
@@ -338,8 +301,8 @@ pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, Str
     let mut visited: HashSet<(String, String)> = HashSet::new();
     let direct_all: Vec<(String, String)> =
         start.map(|e| e.required_by.clone()).unwrap_or_default();
-    // Backlog #286: keep only the direct parents that pull the
-    // disclosed atom (see `atom` above); vacuous when none match.
+    // Backlog #286: keep only the direct parents pulling the disclosed atom;
+    // vacuous when none match.
     let direct: Vec<(String, String)> = {
         let pulling: Vec<(String, String)> = direct_all
             .iter()
@@ -366,8 +329,8 @@ pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, Str
         if !visited.insert(parent.clone()) {
             continue;
         }
-        // The cp below the current node: the failed dependency for the
-        // first row, the previous chain node after each ascent step.
+        // The cp below the current node: the failed dependency first, the
+        // previous chain node after each ascent step.
         let mut child = (category.to_string(), package.to_string());
         let mut cur = parent;
         while let Some(entry) = select_entry(entries, &cur) {
@@ -375,8 +338,8 @@ pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, Str
                 break;
             };
             chain.push((node, ty));
-            // A chain top directly targeted from the command line ends
-            // in its argument line(s), like real stopping at args.
+            // A chain top targeted from the command line ends in its argument
+            // line(s), like Portage stopping at args.
             let args = chain_arg_lines(atoms, &cur);
             if !args.is_empty() {
                 chain.extend(args);

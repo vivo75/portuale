@@ -1,19 +1,8 @@
 use super::*;
 
-/// End-to-end check against fixtures/repo/profiles (base,
-/// arch/amd64 -> multi-parent -> default) + fixtures/etc/portage/make.conf
-/// (which sources fixtures/etc/make.local). Traced by hand:
-///   base:            USE="foo"; USE="${USE} bar"      -> {foo, bar}
-///   arch/amd64:      ARCH="amd64"; ACCEPT_KEYWORDS="${ARCH}" -> keywords {amd64}
-///   default:         USE="-bar baz"                   -> {foo, baz}
-///   make.local (sourced first from make.conf):
-///                    USE="${USE} localflag"            -> {foo, baz, localflag}
-///   make.conf:       USE="confflag"                    -> {foo, baz, localflag, confflag}
-/// `env.d` comes from `eroot`, not `config_root` (real `_get_env_d`):
-/// with the fixture tree as `config_root` (whose own
-/// `etc/profile.env` sets `USE='envdusetestflag'`), an `eroot`
-/// without any `profile.env` yields no `envd_use_tokens`, while an
-/// `eroot` equal to the fixture root keeps the flag.
+/// End-to-end check against fixtures/repo/profiles + make.conf (which sources
+/// make.local). Hand-traced USE/keyword accumulation; env.d USE follows `eroot`.
+/// Expected values from the committed fixture tree.
 #[test]
 fn envd_use_tokens_follow_eroot_not_config_root() {
     let root = fixtures_root();
@@ -40,14 +29,9 @@ fn envd_use_tokens_follow_eroot_not_config_root() {
     let _ = fs::remove_dir_all(&bare);
 }
 
-/// Backlog #332: real `_emerge/Scheduler.py:1899-1913`
-/// (`_allocate_config`) calls `config.reload()` before every package
-/// task (`portage/package/ebuild/config.py:2691-2699`), so a package
-/// built after a merge that installed an `/etc/env.d/*` file sees the
-/// new variables. `Config::reload_env_d` is portuale's `reload()` for
-/// the eroot-only `profile.env` it reads (see `resolve_config`'s doc
-/// comment for the broot cut): re-reading replaces the env.d scalar
-/// layer and incremental layer without touching higher layers.
+/// Backlog #332: `Config::reload_env_d` re-reads the eroot-only `profile.env`,
+/// replacing the env.d scalar and incremental layers without touching higher
+/// layers. Expected behavior from Portage's per-package `config.reload()`.
 #[test]
 fn reload_env_d_picks_up_a_rewritten_profile_env() {
     let root = TempDir::new("portage-profile-test-envd-reload").keep();
@@ -56,9 +40,8 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
     fs::create_dir_all(&repo).unwrap();
     fs::create_dir_all(portage_dir.join("env")).unwrap();
     fs::create_dir_all(root.join("etc")).unwrap();
-    // `make.conf` sets one key: the higher layer `reload_env_d` must
-    // not override. `CONFIG_PROTECT` has an env.d layer and a
-    // `make.conf` layer so the test can tell replacement from append.
+    // make.conf owns one key (reload must not override it); CONFIG_PROTECT has
+    // both an env.d and a make.conf layer to tell replacement from append.
     fs::write(
         portage_dir.join("make.conf"),
         "ENVDRELOAD_KEEP=\"from-make-conf\"\nENVDRELOAD_LATE=\"from-make-conf\"\n\
@@ -88,8 +71,7 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
         })
     };
     let mut config = resolve();
-    // The first load applies the env blacklist too (real
-    // `config.py:724-743` pops `_env_d_blacklist` from `env.d`):
+    // The first load applies the env blacklist too (Portage config.py:724-743):
     // `EAPI` (in `ENV_BLACKLIST`) never enters `other_vars`.
     assert_eq!(config.other_vars.get("EAPI"), None);
     assert_eq!(
@@ -109,9 +91,8 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
         ])
     );
 
-    // A merge ran `env-update`: a new key appears, the
-    // `make.conf`-owned key changes upstream, a key disappears, and
-    // the blacklisted key is still filtered.
+    // A merge ran `env-update`: a new key appears, the `make.conf`-owned key
+    // changes upstream, a key disappears, the blacklisted key stays filtered.
     fs::write(
         root.join("etc/profile.env"),
         "export ENVDRELOAD_KEEP='changed-envd'\n\
@@ -132,8 +113,8 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
         config.other_vars.get("ENVDRELOAD_KEEP").map(String::as_str),
         Some("from-make-conf")
     );
-    // A key env.d only starts setting mid-run still loses to the
-    // `make.conf` value it lies under (real's layered lookup).
+    // A key env.d only starts setting mid-run still loses to the `make.conf`
+    // value it lies under (Portage's layered lookup).
     assert_eq!(
         config.other_vars.get("ENVDRELOAD_LATE").map(String::as_str),
         Some("from-make-conf")
@@ -152,10 +133,9 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// Backlog #332: the profile half of real `_env_d_blacklist`
-/// (`profile_only_variables`, `config.py:734-743`) drops env.d keys the
-/// profile's `PROFILE_ONLY_VARIABLES` names, on the first load and on
-/// every reload alike (`reload()` reuses the init-time blacklist).
+/// Backlog #332: the profile half of the env.d blacklist drops env.d keys the
+/// profile's `PROFILE_ONLY_VARIABLES` names, on first load and every reload.
+/// Expected behavior from Portage config.py:734-743.
 #[test]
 fn reload_env_d_never_admits_a_profile_only_variable() {
     let root = TempDir::new("portage-profile-test-envd-profile-only").keep();
@@ -207,11 +187,8 @@ fn reload_env_d_never_admits_a_profile_only_variable() {
 #[test]
 fn resolves_fixture_profile_chain_and_make_conf() {
     let root = fixtures_root();
-    // The fixture's own default/parent has a real cross-repo entry
-    // ("overlay:crossrepo-parent"), so this test needs "overlay" in
-    // its own repo list too -- mirroring exactly what production
-    // (portuale's pretend.rs, built from real find_repos) already
-    // passes for this same fixture tree.
+    // The fixture's default/parent has a cross-repo entry, so this test needs
+    // "overlay" in its repo list too -- mirroring what production passes.
     let overlay_repos = [("overlay".to_string(), root.join("overlay"))];
     let config = resolve_config(ResolveConfigArgs {
         config_root: &root,
@@ -231,22 +208,13 @@ fn resolves_fixture_profile_chain_and_make_conf() {
             "localflag".to_string(),
             "confflag".to_string(),
             "video_cards_nvidia".to_string(),
-            // USE_EXPAND_UNPREFIXED="ARCH" in profiles/arch/amd64/
-            // make.defaults, real Gentoo's own mechanism for how
-            // "amd64" exists as a plain USE flag at all.
+            // UNPREFIXED="ARCH": how "amd64" exists as a plain USE flag.
             "amd64".to_string(),
-            // ELIBC="glibc" in profiles/base/make.defaults (ELIBC is
-            // in USE_EXPAND), same USE_EXPAND folding video_cards_*
-            // already exercises -- and ELIBC is also in
-            // USE_EXPAND_IMPLICIT, see the iuse_effective assert below.
+            // ELIBC="glibc": USE_EXPAND folding; also in USE_EXPAND_IMPLICIT.
             "elibc_glibc".to_string(),
-            // CPU_FLAGS_X86="sse2" (CPU_FLAGS_X86 is in USE_EXPAND);
-            // it is also USE_EXPAND_HIDDEN, but that only affects the
-            // `emerge -pv` display, never the resolved flag set.
+            // CPU_FLAGS_X86="sse2": HIDDEN affects only `emerge -pv` display.
             "cpu_flags_x86_sse2".to_string(),
-            // LUA_SINGLE_TARGET="lua5-1" in profiles/base/make.defaults
-            // (dev-libs/singletargetpkg's per-level fold fixture) --
-            // folded into the base level's own make_defaults_use.
+            // LUA_SINGLE_TARGET: the per-level USE_EXPAND-fold fixture.
             "lua_single_target_lua5-1".to_string(),
         ])
     );
@@ -255,17 +223,12 @@ fn resolves_fixture_profile_chain_and_make_conf() {
         HashSet::from([
             "VIDEO_CARDS".to_string(),
             "ELIBC".to_string(),
-            // LINGUAS is in USE_EXPAND for the _* wildcard fixture
-            // (dev-libs/wildexpandpkg) -- no LINGUAS= value set, so
-            // it folds nothing here.
+            // LINGUAS: in USE_EXPAND for the _* wildcard fixture, valueless.
             "LINGUAS".to_string(),
-            // PYTHON_TARGETS + CPU_FLAGS_X86 exist for the
-            // `emerge -pv` USE_EXPAND-grouping fixtures
-            // (packageuseexpandpkg / hiddenexpandpkg).
+            // PYTHON_TARGETS + CPU_FLAGS_X86: the USE_EXPAND-grouping fixtures.
             "PYTHON_TARGETS".to_string(),
             "CPU_FLAGS_X86".to_string(),
-            // LUA_SINGLE_TARGET for dev-libs/singletargetpkg's
-            // per-level USE_EXPAND-fold fixture.
+            // LUA_SINGLE_TARGET: the per-level fold fixture.
             "LUA_SINGLE_TARGET".to_string(),
         ])
     );
@@ -277,23 +240,16 @@ fn resolves_fixture_profile_chain_and_make_conf() {
         config.use_expand_implicit,
         HashSet::from(["ELIBC".to_string()])
     );
-    // Real EAPI 5+ IUSE_EFFECTIVE: ELIBC is in USE_EXPAND ∩
-    // USE_EXPAND_IMPLICIT, so every USE_EXPAND_VALUES_ELIBC value gets
-    // the lowercase "elibc_" prefix -- valid implicit IUSE for every
-    // package even when unlisted in its own IUSE.
+    // EAPI 5+ IUSE_EFFECTIVE: ELIBC is in USE_EXPAND ∩ USE_EXPAND_IMPLICIT,
+    // so every USE_EXPAND_VALUES_ELIBC value is valid implicit IUSE.
     assert_eq!(
         config.iuse_effective,
         HashSet::from(["elibc_glibc".to_string(), "elibc_musl".to_string()])
     );
     assert_eq!(config.accept_keywords, HashSet::from(["amd64".to_string()]));
-    // Neither the fixture profile chain nor make.conf sets
-    // ACCEPT_LICENSE at all -- real portage's own "* -@EULA"
-    // default applies. Real `LicenseManager` reads `license_groups`
-    // from each repo's own `profiles/` dir (`LocationsManager.
-    // profile_locations`): `repo/profiles/license_groups` defines
-    // EULA="SomeEula", `overlay/profiles/license_groups` extends it
-    // with "CrossRepoNonfree" -- so "@EULA" expands to both members,
-    // main repo first then overlay, rather than staying literal.
+    // Neither the fixture chain nor make.conf sets ACCEPT_LICENSE: Portage's
+    // "* -@EULA" default applies. `license_groups` comes from each repo's
+    // own `profiles/` dir (main first, then overlay), never a chain level.
     assert_eq!(
         config.accept_license,
         vec![
@@ -313,12 +269,8 @@ fn resolves_fixture_profile_chain_and_make_conf() {
 
 #[test]
 fn license_groups_come_from_each_repo_profiles_dir_not_the_profile_chain() {
-    // A `license_groups` file dropped into a profile-chain directory
-    // (`repo/profiles/base/`) must be IGNORED -- real portage reads
-    // it only from `<repo>/profiles/license_groups`
-    // (`LocationsManager.profile_locations`). The fixture's real
-    // groups live at `repo/profiles/license_groups` +
-    // `overlay/profiles/license_groups`.
+    // A `license_groups` file in a profile-chain directory must be IGNORED:
+    // Portage reads it only from `<repo>/profiles/license_groups`.
     let root = fixtures_root();
     let stray = root.join("repo/profiles/base/license_groups");
     std::fs::write(&stray, "EULA StrayShouldBeIgnored\n").unwrap();
@@ -333,8 +285,7 @@ fn license_groups_come_from_each_repo_profiles_dir_not_the_profile_chain() {
     });
     std::fs::remove_file(&stray).ok();
     let config = config.expect("fixture config must resolve");
-    // Only the two real repo-level members, in repo-then-overlay
-    // order -- the stray chain-level entry is not present.
+    // Only the two repo-level members, in repo-then-overlay order.
     assert_eq!(
         config.license_groups.get("EULA"),
         Some(&vec![
@@ -370,11 +321,8 @@ fn missing_profile_and_make_conf_yield_empty_config() {
 
 #[test]
 fn cross_repo_profile_parent_resolves_a_named_repos_own_profile() {
-    // The leaf profile lives outside any known repo, but its own
-    // "parent" file names "otherrepo:base" -- expand_parent_colon
-    // must resolve that to otherrepo's own profiles/base directory
-    // regardless, proving repo-name lookup doesn't depend on the
-    // referencing node's own repo membership.
+    // The leaf lives outside any repo but its "parent" names "otherrepo:base":
+    // repo-name lookup must not depend on the referencing node's membership.
     let root = TempDir::new("portage-profile-test-cross-repo-named").keep();
     let main_repo = root.join("repo");
     let other_repo = root.join("otherrepo");
@@ -413,10 +361,8 @@ fn cross_repo_profile_parent_resolves_a_named_repos_own_profile() {
 
 #[test]
 fn cross_repo_profile_parent_resolves_an_aliased_repo_name() {
-    // Same as above, but the `parent` line names the repo by an
-    // *alias* ("ovl") rather than its canonical name ("otherrepo").
-    // Real `_expand_parent_colon` -> `get_location_for_name` is keyed
-    // on aliases too, so `resolve_config` gets `repo_aliases`.
+    // Same, but naming the repo by alias ("ovl" for "otherrepo").
+    // Portage `_expand_parent_colon` keys on aliases too.
     let root = TempDir::new("portage-profile-test-cross-repo-alias").keep();
     let main_repo = root.join("repo");
     let other_repo = root.join("otherrepo");
@@ -453,8 +399,7 @@ fn cross_repo_profile_parent_resolves_an_aliased_repo_name() {
     .expect("aliased cross-repo parent must resolve");
     assert!(config.use_flags.contains("aliasedflag"));
 
-    // ...and without the alias registered, it's the same clear error
-    // an unknown repo name gets.
+    // ...and without the alias registered, the same clear error as unknown names.
     let err = resolve_config(ResolveConfigArgs {
         config_root: &root,
         main_repo_location: &main_repo,
@@ -499,12 +444,9 @@ fn cross_repo_profile_parent_unknown_repo_name_is_a_clear_error() {
 
 #[test]
 fn same_repo_colon_profile_parent_resolves_within_the_current_repo() {
-    // A bare ":base" parent entry (no repo name before the colon)
-    // means "this same repo" -- resolved via whichever repo the
-    // *referencing* profile node's own directory belongs to, not
-    // necessarily the main repo (repo_containing's own longest-
-    // prefix-match), so the leaf profile here lives inside the main
-    // repo itself.
+    // A bare ":base" means "this same repo", via the referencing node's own
+    // repo membership (longest-prefix match); the leaf lives in the main repo.
+    // Portage `_allow_parent_colon` gate: needs `portage-2` in layout.conf.
     let root = TempDir::new("portage-profile-test-same-repo-colon").keep();
     let main_repo = root.join("repo");
     fs::create_dir_all(main_repo.join("profiles/leaf")).unwrap();
@@ -515,8 +457,8 @@ fn same_repo_colon_profile_parent_resolves_within_the_current_repo() {
     )
     .unwrap();
     fs::write(main_repo.join("profiles/leaf/parent"), ":base\n").unwrap();
-    // Real `_allow_parent_colon` gate: a profile node inside a repo
-    // needs that repo's own `layout.conf` to declare `portage-2`.
+    // Portage `_allow_parent_colon` gate: a profile node inside a repo
+    // needs that repo's `layout.conf` to declare `portage-2`.
     fs::create_dir_all(main_repo.join("metadata")).unwrap();
     fs::write(
         main_repo.join("metadata/layout.conf"),
@@ -546,12 +488,8 @@ fn same_repo_colon_profile_parent_resolves_within_the_current_repo() {
 
 #[test]
 fn colon_profile_parent_is_not_expanded_when_the_repo_lacks_portage_2() {
-    // Real `_allow_parent_colon` gate: the identical setup as
-    // `same_repo_colon_profile_parent_resolves` but with NO
-    // `metadata/layout.conf` (so `profile-formats` doesn't contain
-    // `portage-2`). The `:base` line is then left literal, and
-    // resolution fails trying to open `<leaf>/:base` -- proving the
-    // gate actually gates.
+    // Same setup but with NO `metadata/layout.conf`: the `:base` line stays
+    // literal and resolution fails on `<leaf>/:base` -- proving the gate gates.
     let root = TempDir::new("portage-profile-test-colon-no-portage2").keep();
     let main_repo = root.join("repo");
     fs::create_dir_all(main_repo.join("profiles/leaf")).unwrap();
@@ -610,13 +548,8 @@ fn same_repo_colon_profile_parent_outside_any_known_repo_is_a_clear_error() {
 
 #[test]
 fn diamond_profile_inheritance_does_not_double_apply_a_shared_ancestor() {
-    // level "top" has two parents ("left", "right") that both inherit
-    // from the same "shared" ancestor; "shared" must only contribute
-    // its USE flag once, not twice (which -- since it's a set -- isn't
-    // observable via *membership*, but the visited-set/cycle-safety
-    // mechanism is exactly what also protects a genuine cycle, so this
-    // proves that mechanism doesn't accidentally block a legitimate
-    // multi-path DAG from resolving at all).
+    // Diamond: "shared" must contribute its USE flag once, and the
+    // visited-set mechanism must not block a legitimate multi-path DAG.
     let root = TempDir::new("portage-profile-test-diamond").keep();
     let profile_dir = root.join("etc/portage");
     fs::create_dir_all(&profile_dir).unwrap();
@@ -662,16 +595,11 @@ fn package_mask_unmask_accept_keywords_load_correctly() {
         "dev-libs/foo\ndev-libs/bar\n-dev-libs/bar\n",
     )
     .unwrap();
-    // package.unmask: unrelated to the removal above -- a completely
-    // separate list, checked per-candidate by the caller.
+    // package.unmask is a separate list, checked per-candidate by the caller.
     fs::write(portage_dir.join("package.unmask"), "dev-libs/baz\n").unwrap();
-    // package.accept_keywords: a normal entry, a "**" entry, and a
-    // bare-atom (no keywords) line -- this fixture sets no global
-    // ACCEPT_KEYWORDS at all, so the bare atom's own real
-    // accept_keywords_defaults substitution has nothing to derive a
-    // "~arch" set from and it stays present with an empty token
-    // list (see the dedicated accept_keywords_defaults tests below
-    // for the substitution actually producing tokens).
+    // A normal entry, a "**" entry, and a bare-atom line. No global
+    // ACCEPT_KEYWORDS here, so the bare atom keeps an empty token list
+    // (see the accept_keywords_defaults tests for the substitution).
     fs::write(
         portage_dir.join("package.accept_keywords"),
         "dev-qt/* ~amd64\nsci-misc/live-thing **\ndev-libs/bare-no-op\n",
@@ -702,18 +630,9 @@ fn package_mask_unmask_accept_keywords_load_correctly() {
 
 #[test]
 fn package_mask_atom_removal_applies_across_repo_profile_and_user_sources() {
-    // repo-level: masks a and b -- gets "::testrepo"-scoped (the
-    // main repo's own repo-level entries now get the same scoping
-    // an overlay's own already did).
-    // profile-level (the one chain level): "-a" removes the
-    // repo-level entry (its own unscoped "-dev-libs/a" still cancels
-    // the now-scoped "dev-libs/a::testrepo" -- see stack_mask_lines's
-    // own "ignore_repo" doc comment), adds c.
-    // user-level: "-c" removes the profile-level entry, adds d.
-    // Final: b::testrepo (repo, survives) + d (user) -- a and c were
-    // each removed by a LATER source than the one that added them,
-    // which only works if -atom removal spans all three sources, not
-    // just within each file on its own.
+    // Repo-level masks get `::testrepo`-scoped like an overlay's; the profile
+    // "-a" still cancels the scoped entry (see `stack_mask_lines`), and the
+    // user "-c" cancels the profile entry: removal spans all three sources.
     let root = TempDir::new("portage-profile-test-cross-source-mask").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -758,10 +677,8 @@ fn package_mask_atom_removal_applies_across_repo_profile_and_user_sources() {
 
 #[test]
 fn overlay_package_mask_is_scoped_to_its_own_repo_only() {
-    // Main repo has no mask at all; the overlay masks dev-libs/a
-    // with a bare atom (no "::repo" part) -- resolve_config must
-    // auto-scope it to "::overlay" via scope_repo_mask_lines, so it
-    // never also masks a same-named package in the main repo.
+    // The overlay's bare atom must auto-scope to "::overlay", never masking
+    // a same-named main-repo package.
     let root = TempDir::new("portage-profile-test-overlay-mask").keep();
     let repo = root.join("repo");
     let overlay = root.join("overlay");
@@ -786,12 +703,8 @@ fn overlay_package_mask_is_scoped_to_its_own_repo_only() {
 
 #[test]
 fn overlay_package_unmask_gets_the_same_scoping_as_overlay_package_mask() {
-    // Both files live in the same overlay, so both entries get the
-    // identical "::overlay" auto-scoping -- the actual mask/unmask
-    // cancellation happens downstream in portage-repo's is_visible,
-    // which matches both against the same "::overlay"-suffixed
-    // candidate string; this test only checks that resolve_config
-    // itself scopes both sources consistently.
+    // Both entries get the identical "::overlay" scoping; the mask/unmask
+    // cancellation itself happens downstream in portage-repo's is_visible.
     let root = TempDir::new("portage-profile-test-overlay-mask-unmask").keep();
     let repo = root.join("repo");
     let overlay = root.join("overlay");
@@ -821,14 +734,8 @@ fn overlay_package_unmask_gets_the_same_scoping_as_overlay_package_mask() {
 
 #[test]
 fn overlay_package_mask_inherits_the_main_repos_own_entries_via_implicit_masters() {
-    // Real masters: an overlay with no explicit "masters =" always
-    // implicitly masters the main repo -- so the main repo's own
-    // package.mask entry for "dev-libs/a" must also end up
-    // "::overlay"-scoped (on top of its own, separate "::testrepo"
-    // scoping from being the main repo's own repo-level entry, see
-    // this function's own doc comment on that follow-up), even
-    // though the overlay's own package.mask never mentions
-    // "dev-libs/a" at all (only "b").
+    // An overlay with no explicit "masters =" implicitly masters the main repo,
+    // so main's mask entry lands both "::testrepo"- and "::overlay"-scoped.
     let root = TempDir::new("portage-profile-test-overlay-masters-mask").keep();
     let repo = root.join("repo");
     let overlay = root.join("overlay");
@@ -861,12 +768,8 @@ fn overlay_package_mask_inherits_the_main_repos_own_entries_via_implicit_masters
 
 #[test]
 fn overlay_package_unmask_does_not_inherit_via_masters() {
-    // Real MaskManager.py's own package.unmask loop never consults
-    // masters at all -- only package.mask does. The main repo's own
-    // package.unmask entry must stay "::testrepo"-scoped only (its
-    // own repo-level scoping, see this function's own doc comment on
-    // that follow-up), never *also* "::overlay"-scoped just because
-    // the overlay implicitly masters the main repo.
+    // Portage's package.unmask loop never consults masters: main's entry stays
+    // "::testrepo"-scoped only, never also "::overlay"-scoped.
     let root = TempDir::new("portage-profile-test-overlay-masters-unmask").keep();
     let repo = root.join("repo");
     let overlay = root.join("overlay");
@@ -894,11 +797,8 @@ fn overlay_package_unmask_does_not_inherit_via_masters() {
 
 #[test]
 fn explicit_repo_masters_overrides_the_implicit_main_repo_default() {
-    // Real explicit "masters =" (portage_repo::find_repos, resolved
-    // into `repo_masters` by the caller) fully replaces the implicit
-    // "masters the main repo alone" default this crate always fell
-    // back to before -- an explicit empty masters list means NO
-    // package.mask inheritance at all, even from the main repo.
+    // An explicit (here empty) "masters =" replaces the implicit main-repo
+    // default: no package.mask inheritance at all, even from the main repo.
     let root = TempDir::new("portage-profile-test-explicit-masters-empty").keep();
     let repo = root.join("repo");
     let overlay = root.join("overlay");
@@ -919,11 +819,8 @@ fn explicit_repo_masters_overrides_the_implicit_main_repo_default() {
         eroot: &root,
     })
     .expect("config must resolve");
-    // The main repo's own "dev-libs/a" entry still applies to
-    // itself (real portage's own repo-level package.mask always
-    // masks its own repo, independent of who masters whom) -- but
-    // is NOT inherited by the overlay, since its own masters is
-    // explicitly empty.
+    // Main's entry still masks its own repo (independent of masters) but is
+    // not inherited by the explicitly-empty-masters overlay.
     assert_eq!(
         config.package_mask,
         vec!["dev-libs/a::testrepo".to_string()]
@@ -932,9 +829,8 @@ fn explicit_repo_masters_overrides_the_implicit_main_repo_default() {
 
 #[test]
 fn explicit_repo_masters_resolves_a_non_main_master_chain() {
-    // A repo can explicitly declare a master other than the main
-    // repo -- its own package.mask must be stacked in too, exactly
-    // like the implicit main-repo case already is.
+    // A repo can declare a non-main master: its mask stacks in like the
+    // implicit main-repo case. Main's own entry must NOT apply downstream.
     let root = TempDir::new("portage-profile-test-explicit-masters-chain").keep();
     let repo = root.join("repo");
     let overlay = root.join("overlay");
@@ -943,8 +839,7 @@ fn explicit_repo_masters_resolves_a_non_main_master_chain() {
     fs::create_dir_all(overlay.join("profiles")).unwrap();
     fs::create_dir_all(downstream.join("profiles")).unwrap();
 
-    // The main repo's own entry must NOT apply (downstream doesn't
-    // declare it as a master); the overlay's own entry must.
+    // Main's entry must NOT apply (not a declared master); the overlay's must.
     fs::write(repo.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
     fs::write(overlay.join("profiles/package.mask"), "dev-libs/b\n").unwrap();
 
@@ -977,12 +872,7 @@ fn explicit_repo_masters_resolves_a_non_main_master_chain() {
 
 #[test]
 fn overlay_package_use_is_scoped_to_its_own_repo_only() {
-    // Main repo has no package.use at all; the overlay sets a flag
-    // for dev-libs/a with a bare atom (no "::repo" part) --
-    // resolve_config must auto-scope it to "::overlay" via
-    // scope_repo_package_use_lines, the same way package.mask's own
-    // overlay entries are scoped, so it never also applies to a
-    // same-named package in the main repo.
+    // The overlay's bare atom auto-scopes to "::overlay", like package.mask.
     let root = TempDir::new("portage-profile-test-overlay-package-use").keep();
     let repo = root.join("repo");
     let overlay = root.join("overlay");
@@ -1010,14 +900,8 @@ fn overlay_package_use_is_scoped_to_its_own_repo_only() {
 
 #[test]
 fn system_packages_stack_across_profile_levels_with_atom_removal_and_star_filter() {
-    // base: adds "*dev-libs/a" (a real @system atom) and a bare
-    // "dev-libs/hint" line (no "*" -- a real "known but not system"
-    // hint, must never contribute an atom on its own).
-    // leaf (its own parent -> base): "-*dev-libs/a" removes base's
-    // own system atom (proving -atom removal spans levels, not just
-    // within one file), and adds "*dev-libs/b".
-    // Final @system list: just "dev-libs/b" -- "a" was added then
-    // removed, "hint" was never eligible in the first place.
+    // Base adds "*dev-libs/a" plus a bare "hint" line (never an atom alone);
+    // the leaf's "-*dev-libs/a" spans levels. Final @system: just "dev-libs/b".
     let root = TempDir::new("portage-profile-test-system-packages").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -1052,15 +936,8 @@ fn system_packages_stack_across_profile_levels_with_atom_removal_and_star_filter
 
 #[test]
 fn profile_packages_are_the_unstarred_lines_of_profile_set_repo_levels() {
-    // Both levels live in a repo whose layout.conf declares
-    // `profile-set`, so their own `packages` files are @profile
-    // sources: unstarred lines stack (with cross-level -atom
-    // removal), starred lines still go to @system only.
-    // base: "*dev-libs/sysbase" + "dev-libs/baseonly"
-    // leaf (parent -> ../base): "-dev-libs/baseonly" +
-    //        "dev-libs/leafonly" + "*dev-libs/sysleaf"
-    // @profile: ["dev-libs/leafonly"] (baseonly removed)
-    // @system:  ["dev-libs/sysbase", "dev-libs/sysleaf"]
+    // Both levels live in a `profile-set` repo: unstarred lines stack with
+    // cross-level removal into @profile; starred lines go to @system only.
     let root = TempDir::new("portage-profile-test-profile-packages").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1117,10 +994,8 @@ fn profile_packages_are_the_unstarred_lines_of_profile_set_repo_levels() {
 
 #[test]
 fn profile_packages_require_the_profile_set_format() {
-    // The committed fixture repo's shape: `profile-formats =
-    // portage-2` without `profile-set`, so nothing is an @profile
-    // source and the whole `packages` file stays @system-only (real
-    // `ProfilePackageSet.load`'s own gate). @system is unaffected.
+    // Without `profile-set` nothing is an @profile source (Portage
+    // ProfilePackageSet.load's gate); @system is unaffected.
     let root = TempDir::new("portage-profile-test-no-profile-set").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1170,10 +1045,8 @@ fn profile_packages_require_the_profile_set_format() {
 
 #[test]
 fn package_provided_stacks_the_profile_chain_plus_the_user_file_with_atom_removal() {
-    // base: provides dev-libs/a-1.0 and dev-libs/b-1.0.
-    // leaf (parent -> base): removes b, adds dev-libs/c-1.0.
-    // user (/etc/portage/profile/package.provided): removes a.
-    // Final: just dev-libs/c-1.0.
+    // Base provides a and b; the leaf removes b and adds c; the user file
+    // removes a. Final: just dev-libs/c-1.0.
     let root = TempDir::new("portage-profile-test-package-provided").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1218,22 +1091,9 @@ fn package_provided_stacks_the_profile_chain_plus_the_user_file_with_atom_remova
 
 #[test]
 fn use_mask_and_use_force_stack_across_levels_but_stay_out_of_use_flags() {
-    // base: make.defaults enables "normalflag" and "maskflag"
-    // normally; use.force forces on "forceflag" and "bothflag".
-    // leaf (its own parent -> base): use.mask masks "maskflag" (an
-    // otherwise-normal USE flag) and "bothflag" (proving mask wins
-    // when a flag is both forced AND masked, matching real
-    // regenerate()'s update-then-difference_update order).
-    // use_force/use_mask stack correctly across levels -- but,
-    // unlike an earlier version of portuale, are deliberately NOT
-    // folded into use_flags at all: real regenerate() applies them
-    // as the literal last step of its own incremental USE walk,
-    // strictly after package.use, so `use_flags` here stays exactly
-    // what make.defaults/make.conf alone produced (see
-    // `use_force`'s own doc comment for the full grounding);
-    // `portage-repo`'s own `effective_use_flags` applies
-    // `use_force`/`use_mask` at that later, correct position
-    // instead.
+    // Mask wins when a flag is both forced AND masked (Portage's
+    // update-then-difference_update order). Force/mask stack across levels
+    // but deliberately stay out of `use_flags` (applied per-candidate later).
     let root = TempDir::new("portage-profile-test-use-mask-force").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -1280,11 +1140,8 @@ fn use_mask_and_use_force_stack_across_levels_but_stay_out_of_use_flags() {
 
 #[test]
 fn archlist_stacks_across_profile_levels_with_removal_semantics() {
-    // base: arch.list declares "amd64" and "x86". leaf (its own
-    // parent -> base): arch.list removes "x86" (a "-x86" line) and
-    // adds "arm64" -- proving the same chain-order, "-entry"-removal
-    // stacking use.mask/use.force already get (real config.py's own
-    // stack_lists(archlist, incremental=1)).
+    // Same chain-order `-entry`-removal stacking use.mask/use.force get
+    // (Portage config.py stack_lists(archlist, incremental=1)).
     let root = TempDir::new("portage-profile-test-archlist").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -1322,12 +1179,8 @@ fn archlist_stacks_across_profile_levels_with_removal_semantics() {
 
 #[test]
 fn use_expand_variable_names_stack_incrementally_across_profile_levels() {
-    // base declares USE_EXPAND="VIDEO_CARDS" and VIDEO_CARDS="nvidia";
-    // leaf (its own parent -> base) declares USE_EXPAND="PYTHON_TARGETS"
-    // (incremental add, not a replace -- both variable names must end
-    // up recognized) and PYTHON_TARGETS="python3_11". Each variable's
-    // own value is set at only one level, proving expansion works
-    // regardless of which level actually declared USE_EXPAND for it.
+    // USE_EXPAND names add incrementally (not replace) across levels, and each
+    // variable's value expands regardless of which level declared the name.
     let root = TempDir::new("portage-profile-test-use-expand-names-stack").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -1375,14 +1228,8 @@ fn use_expand_variable_names_stack_incrementally_across_profile_levels() {
 
 #[test]
 fn use_expand_variable_value_expands_with_negation_and_plus_stripped() {
-    // A single USE_EXPAND variable's own value exercises all three
-    // ordinary incremental token forms in one pass (real config.py's
-    // own early-expand loop keeps a "-" token's own "-" outside the
-    // new prefix, and a "+" token has it stripped, same as any
-    // ordinary USE token): "nvidia" adds, "+intel" adds (with the
-    // "+" stripped, not baked into the flag name), "-nvidia" then
-    // removes the flag "nvidia" itself already added earlier in the
-    // very same value list -- final: only video_cards_intel remains.
+    // One value exercising all three token forms: "nvidia" adds, "+intel" adds
+    // ("+" stripped), "-nvidia" removes. Final: only video_cards_intel.
     let root = TempDir::new("portage-profile-test-use-expand-negation").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -1419,13 +1266,9 @@ fn use_expand_variable_value_expands_with_negation_and_plus_stripped() {
 
 #[test]
 fn profile_make_defaults_use_expand_is_folded_per_level_before_package_use() {
-    // Real config.py 2849-2889: a USE_EXPAND value set in a profile
-    // level's make.defaults is translated to its equivalent USE flag
-    // *in that level's* make_defaults_use, prepended before the raw
-    // `USE=`, so the same level's package.use can still cancel it --
-    // and it is NOT also folded into the high-priority conf tier
-    // (real skips configdict["defaults"] in its own re-fold, 2964).
-    // The neovim `^^ ( lua_single_target_* )` case in miniature.
+    // A profile USE_EXPAND value folds into that level's make_defaults_use
+    // (prepended, so package.use can cancel it), never into the conf tier.
+    // Portage config.py:2849-2889; the neovim REQUIRED_USE case in miniature.
     let root = TempDir::new("portage-profile-test-use-expand-per-level-fold").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1485,13 +1328,9 @@ fn profile_make_defaults_use_expand_is_folded_per_level_before_package_use() {
 
 #[test]
 fn use_expand_value_set_at_two_profile_levels_stacks_incrementally() {
-    // Real Gentoo: profiles/default/linux/make.defaults sets
-    // VIDEO_CARDS="dummy fbdev"; profiles/arch/amd64/make.defaults sets
-    // VIDEO_CARDS="amdgpu fbdev intel ...". VIDEO_CARDS is not in
-    // INCREMENTALS, but real config.py folds *each* level's own value
-    // into that level's USE (2853-2866), and USE is incremental -- so
-    // the later level does NOT wipe `dummy`; the union stands. A
-    // genuine `-video_cards_*` in a later level still cancels.
+    // Each level's value folds into that level's USE (USE is incremental), so
+    // the later level never wipes the earlier; a `-video_cards_*` still cancels.
+    // Portage config.py:2853-2866; mirrors Gentoo's default/linux + arch/amd64.
     let root = TempDir::new("portage-profile-test-use-expand-two-level-stack").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1526,25 +1365,20 @@ fn use_expand_value_set_at_two_profile_levels_stacks_incrementally() {
         eroot: &root,
     })
     .expect("config must resolve");
-    // base-only value survives the leaf's own VIDEO_CARDS assignment.
+    // Base-only values survive the leaf's assignment; the later `-` cancels.
     assert!(config.use_flags.contains("video_cards_dummy"));
-    // both levels' additive values are present.
+    // Both levels' additive values are present; the later `-radeon` cancels.
     assert!(config.use_flags.contains("video_cards_amdgpu"));
     assert!(config.use_flags.contains("video_cards_fbdev"));
     assert!(config.use_flags.contains("video_cards_vesa"));
-    // a real `-` in the later level still cancels the earlier value.
+    // A `-` in the later level still cancels the earlier value.
     assert!(!config.use_flags.contains("video_cards_radeon"));
 }
 
 #[test]
 fn use_expand_prefix_wildcard_cancels_parent_level_values() {
-    // #67 S2 regression pin: a leaf level's `VIDEO_CARDS="-* intel"`
-    // must cancel the parent levels' `video_cards_*` flags (real
-    // config.py:2925's `-<prefix>_*` removal) while keeping the
-    // leaf's own `intel`. Pre-fix the expanded token was
-    // `-video_cards_*`, which apply_incremental treated as an exact
-    // removal of a flag literally named `video_cards_*` -- a no-op --
-    // so the parent's cards survived.
+    // #67 S2 regression pin: the leaf's `VIDEO_CARDS="-* intel"` cancels the
+    // parents' `video_cards_*` flags (Portage config.py:2925) keeping `intel`.
     let root = TempDir::new("portage-profile-test-use-expand-prefix-wildcard").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1586,11 +1420,8 @@ fn use_expand_prefix_wildcard_cancels_parent_level_values() {
 
 #[test]
 fn use_expand_unprefixed_variable_contributes_a_bare_flag_no_prefix() {
-    // Real Gentoo's own USE_EXPAND_UNPREFIXED="ARCH" mechanism:
-    // ARCH="amd64" must contribute the bare flag "amd64" directly,
-    // NOT "arch_amd64" -- the defining difference from an ordinary
-    // USE_EXPAND variable, which use_expand_variable_names_stack_
-    // incrementally_across_profile_levels above already covers.
+    // ARCH="amd64" contributes the bare flag, not "arch_amd64" -- the defining
+    // difference from a prefixed USE_EXPAND variable.
     let root = TempDir::new("portage-profile-test-use-expand-unprefixed").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -1630,12 +1461,8 @@ fn use_expand_unprefixed_variable_contributes_a_bare_flag_no_prefix() {
 
 #[test]
 fn use_expand_unprefixed_variable_value_expands_with_negation_and_plus_stripped() {
-    // Same three ordinary incremental token forms
-    // use_expand_variable_value_expands_with_negation_and_plus_stripped
-    // above already covers for a prefixed USE_EXPAND variable, but
-    // for an unprefixed one: "foo" adds, "+bar" adds ("+" stripped),
-    // "-foo" then removes "foo" itself, added earlier in the same
-    // value list -- final: only "bar" remains, no prefix on either.
+    // Same three token forms as the prefixed case, unprefixed: "foo" adds,
+    // "+bar" adds, "-foo" removes. Final: only "bar".
     let root = TempDir::new("portage-profile-test-use-expand-unprefixed-negation").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -1672,12 +1499,8 @@ fn use_expand_unprefixed_variable_value_expands_with_negation_and_plus_stripped(
 
 #[test]
 fn package_accept_keywords_stacks_profile_chain_then_user_no_repo_source() {
-    // Profile-level entry for "a", user-level entry for "b" -- both
-    // must appear, in that order (profile-chain first, matching real
-    // KeywordsManager.getPKeywords), proving there's no repo-level
-    // source at all (only portuale's existing repo/profiles/package.mask
-    // convention would exist if there were one, and this test
-    // deliberately never creates that file).
+    // Profile-chain first (Portage KeywordsManager.getPKeywords); no repo-level
+    // source exists, so the repo file is deliberately never created here.
     let root = TempDir::new("portage-profile-test-accept-keywords-stack").keep();
     let repo = root.join("repo");
     let portage_dir = root.join("etc/portage");
@@ -1712,10 +1535,7 @@ fn package_accept_keywords_stacks_profile_chain_then_user_no_repo_source() {
         vec![
             ("dev-libs/a".to_string(), vec!["~amd64".to_string()]),
             ("dev-libs/b".to_string(), vec!["~amd64".to_string()]),
-            // No global ACCEPT_KEYWORDS is set anywhere in this
-            // fixture, so the bare atom's own accept_keywords_defaults
-            // substitution has nothing to derive from and it stays
-            // present with an empty token list.
+            // No global ACCEPT_KEYWORDS here, so the bare atom keeps an empty list.
             ("dev-libs/bare-no-op".to_string(), Vec::new()),
         ]
     );
@@ -1723,11 +1543,8 @@ fn package_accept_keywords_stacks_profile_chain_then_user_no_repo_source() {
 
 #[test]
 fn accept_keywords_defaults_substitutes_tilde_arch_for_a_bare_atom() {
-    // Real accept_keywords_defaults: a bare package.accept_keywords
-    // atom means "~" + every plain token in the *current* global
-    // ACCEPT_KEYWORDS -- here just "amd64", so "dev-libs/foo" gets
-    // an implicit "~amd64", the same as if the user had written
-    // "dev-libs/foo ~amd64" themselves.
+    // A bare atom means "~" + every plain global ACCEPT_KEYWORDS token: here
+    // just "amd64", so the entry gets an implicit "~amd64".
     let root = TempDir::new("portage-profile-test-accept-keywords-defaults").keep();
     let repo = root.join("repo");
     let leaf = root.join("leaf-profile");
@@ -1765,10 +1582,8 @@ fn accept_keywords_defaults_substitutes_tilde_arch_for_a_bare_atom() {
 
 #[test]
 fn accept_keywords_defaults_excludes_already_prefixed_tokens() {
-    // Real accept_keywords_defaults only derives from *plain* global
-    // ACCEPT_KEYWORDS tokens (keyword[:1] not in "~-") -- an
-    // already-"~"-prefixed or "-"-prefixed global token is excluded
-    // entirely, not doubly-prefixed or left bare.
+    // Only *plain* global tokens derive (keyword[:1] not in "~-"): "~x86" and
+    // "-arm" are excluded entirely, not doubly-prefixed or left bare.
     let root = TempDir::new("portage-profile-test-accept-keywords-defaults-filter").keep();
     let repo = root.join("repo");
     let leaf = root.join("leaf-profile");
@@ -1810,12 +1625,8 @@ fn accept_keywords_defaults_excludes_already_prefixed_tokens() {
 
 #[test]
 fn package_use_splits_repo_profile_and_user_into_their_own_fields() {
-    // Repo-level entry for "a", profile-level entry for "b",
-    // user-level entry for "c" -- each lands in its own `Config`
-    // field at its own real USE_ORDER position (the "Config depth"
-    // slice), proving no source is silently dropped and no `-atom`
-    // removal happens anywhere (package.use is purely additive,
-    // unlike package.mask).
+    // Each source lands in its own `Config` field at its own USE_ORDER position
+    // (the "Config depth" slice); package.use is purely additive, no removal.
     let root = TempDir::new("portage-profile-test-package-use-stack").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -1860,10 +1671,8 @@ fn package_use_splits_repo_profile_and_user_into_their_own_fields() {
 
 #[test]
 fn env_layer_overrides_config_vars() {
-    // A minimal profile: ARCH/ACCEPT_KEYWORDS + a USE_EXPAND var, so
-    // the env layer's incremental (ACCEPT_KEYWORDS, USE), last-wins
-    // (a USE_EXPAND value + a plain scalar) and USE_EXPAND-name paths
-    // are all exercised.
+    // Exercises the env layer's incremental (ACCEPT_KEYWORDS, USE), last-wins
+    // (USE_EXPAND value + plain scalar) and USE_EXPAND-name paths.
     let root = TempDir::new("portage-profile-test-env-layer").keep();
     let repo = root.join("repo");
     let prof = repo.join("profiles/default");
@@ -1935,14 +1744,8 @@ fn env_layer_overrides_config_vars() {
 
 #[test]
 fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
-    // Backlog #219 fix round 1: `CONFIG_PROTECT`,
-    // `CONFIG_PROTECT_MASK` and `ENV_UNSET` are in real
-    // `const.INCREMENTALS` (`const.py:125-138`), so real
-    // `config.regenerate()` stacks the calling env as the final
-    // source (`mydbs = configlist[:-1] + [backupenv]`,
-    // `config.py:2735-2736`) -- like `FEATURES`, not last-wins.
-    // `emerge --info`'s `settings.get(k)` then prints the stacked,
-    // sorted union.
+    // Backlog #219: CONFIG_PROTECT/_MASK and ENV_UNSET are in Portage
+    // const.INCREMENTALS, so the calling env stacks as the final source.
     let root = TempDir::new("portage-profile-test-info-incrementals").keep();
     let repo = root.join("repo");
     let prof = repo.join("profiles/default");
@@ -1991,8 +1794,7 @@ fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
         );
     });
 
-    // Calling env stacks onto the file fold (union, sorted --
-    // including `-tok` removal, as in real's fold).
+    // Calling env stacks onto the file fold (union, sorted, with `-tok` removal).
     with_test_env(
         &[
             ("CONFIG_PROTECT", "/env-protect"),
@@ -2022,10 +1824,9 @@ fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
 
 #[test]
 fn user_package_use_star_atom_folds_onto_the_global_use() {
-    // Real UseManager.extract_global_USE_changes: a "*/*" entry in the
-    // USER package.use is popped out of the per-package dict and
-    // stacked onto the global USE like make.conf USE= would --
-    // USE_EXPAND-prefix shorthand included.
+    // A user "*/*" entry pops out of the per-package dict and stacks onto the
+    // global USE like make.conf USE= would (shorthand included).
+    // Portage: UseManager.extract_global_USE_changes
     let root = TempDir::new("portage-profile-test-global-puse").keep();
     let repo = root.join("repo");
     let prof = repo.join("profiles/default");
@@ -2064,7 +1865,7 @@ fn user_package_use_star_atom_folds_onto_the_global_use() {
         assert!(!c.use_flags.contains("profileflag"));
         assert!(c.use_flags.contains("video_cards_nouveau"));
         assert!(!c.use_flags.contains("video_cards_nvidia"));
-        // The "*/*" entry is popped; only the real per-package one stays.
+        // The "*/*" entry is popped; only the per-package one stays.
         assert!(!c.package_use_user.iter().any(|(a, _)| a == "*/*"));
         assert!(c.package_use_user.iter().any(|(a, _)| a == "dev-libs/x"));
     });
@@ -2183,8 +1984,8 @@ fn envd_use_tokens_are_read_from_profile_env() {
     fs::create_dir_all(&etc).unwrap();
     fs::write(repo.join("profiles/repo_name"), "testrepo\n").unwrap();
 
-    // real `env-update` output shape: `export KEY='value'` lines, a
-    // plain assignment, and unrelated keys that must be ignored.
+    // Portage `env-update` output shape: `export` lines, a plain assignment,
+    // and unrelated keys that must be ignored.
     fs::write(
         etc.join("profile.env"),
         "# generated\n\
@@ -2238,8 +2039,8 @@ fn package_env_resolves_env_file_use_including_source_and_missing_files() {
          dev-libs/c\n",
     )
     .unwrap();
-    // `debug` sources `common` (relative) which sets one flag; `debug`
-    // itself sets another and a non-USE var (ignored by this slice).
+    // `debug` sources `common` (relative); `gone` is missing and contributes
+    // nothing; dev-libs/c (no file names) is dropped entirely.
     fs::write(
         env_dir.join("debug"),
         "source common\nUSE=\"dbgflag\"\nCFLAGS=\"-O0 -g\"\n",
@@ -2247,7 +2048,6 @@ fn package_env_resolves_env_file_use_including_source_and_missing_files() {
     .unwrap();
     fs::write(env_dir.join("common"), "USE=\"commonflag\"\n").unwrap();
     fs::write(env_dir.join("shared"), "USE=\"sharedflag -commonflag\"\n").unwrap();
-    // `gone` is referenced but doesn't exist -> contributes nothing.
 
     let config = resolve_config(ResolveConfigArgs {
         config_root: &root,
@@ -2270,14 +2070,12 @@ fn package_env_resolves_env_file_use_including_source_and_missing_files() {
             ("dev-libs/b".to_string(), vec!["gone".to_string()]),
         ]
     );
-    // dev-libs/c (no file names) is dropped entirely.
+    // dev-libs/c (no file names) is dropped.
     assert_eq!(
         config.package_env_use,
         vec![(
             "dev-libs/a".to_string(),
-            // `debug` -> source common ("commonflag"), then "dbgflag";
-            // then `shared` -> "sharedflag", "-commonflag". Order and
-            // negation are preserved for `apply_incremental`.
+            // Order and negation preserved for `apply_incremental`.
             vec![
                 "commonflag".to_string(),
                 "dbgflag".to_string(),
@@ -2299,11 +2097,8 @@ fn package_env_resolves_env_file_use_including_source_and_missing_files() {
 
 #[test]
 fn package_env_expands_dollar_vars_against_the_global_map_with_chaining() {
-    // Real `_grab_pkg_env`'s per-package expand map: `${SHARED}` from
-    // `make.conf` (already in the global map), `INNER` chained from
-    // the same file's own earlier line, and `ACROSS` chained from an
-    // earlier file of the same entry. The scalar half expands the
-    // same way.
+    // Portage `_grab_pkg_env`'s per-package expand map: make.conf values plus
+    // same-file and earlier-file chaining. The scalar half expands the same way.
     let root = TempDir::new("portage-profile-test-package-env-expand").keep();
     let repo = root.join("repo");
     let portage_dir = root.join("etc/portage");
@@ -2359,10 +2154,8 @@ fn package_env_expands_dollar_vars_against_the_global_map_with_chaining() {
 
 #[test]
 fn package_use_expand_shorthand_applies_prefix_to_following_tokens_on_the_same_line() {
-    // User-level "dev-libs/a VIDEO_CARDS: nvidia -intel plainflag" --
-    // "nvidia"/"intel" get the video_cards_ prefix (negation kept
-    // outside it), "plainflag" (before the "VIDEO_CARDS:" marker)
-    // does not.
+    // "nvidia"/"-intel" get the video_cards_ prefix (negation outside it);
+    // "plainflag" (before the marker) does not.
     let root = TempDir::new("portage-profile-test-package-use-expand-shorthand").keep();
     let repo = root.join("repo");
     let portage_dir = root.join("etc/portage");
@@ -2400,8 +2193,7 @@ fn package_use_expand_shorthand_applies_prefix_to_following_tokens_on_the_same_l
 
 #[test]
 fn package_use_expand_shorthand_resets_at_the_start_of_each_line() {
-    // Two lines for the SAME atom: the first sets a shorthand prefix
-    // that must not leak into the second line's own tokens.
+    // The first line's shorthand prefix must not leak into the second line.
     let root = TempDir::new("portage-profile-test-package-use-expand-reset").keep();
     let repo = root.join("repo");
     let portage_dir = root.join("etc/portage");
@@ -2438,10 +2230,8 @@ fn package_use_expand_shorthand_resets_at_the_start_of_each_line() {
 
 #[test]
 fn package_use_expand_shorthand_is_user_level_only() {
-    // The same "VIDEO_CARDS:" syntax in a repo-level or profile-level
-    // package.use file is genuine real behavior's own literal,
-    // unexpanded token -- real portage's shorthand support is
-    // user-only (see parse_package_use_lines's own doc comment).
+    // In repo/profile files the "VAR:" syntax stays a literal, unexpanded token:
+    // Portage's shorthand support is user-only (see `parse_package_use_lines`).
     let root = TempDir::new("portage-profile-test-package-use-expand-user-only").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -2475,12 +2265,8 @@ fn package_use_expand_shorthand_is_user_level_only() {
 
 #[test]
 fn package_use_mask_and_force_stack_repo_then_profile_only_no_user_source() {
-    // Repo-level entry for "a", profile-level entry for "b" -- both
-    // must appear, in that order; a user-level package.use.mask/
-    // .force file is deliberately written too, and must be
-    // completely ignored -- real portage has no such source at all
-    // (confirmed by reading UseManager.__init__'s own file/variable
-    // table), unlike package.use itself.
+    // A deliberately-written user-level file must be completely ignored:
+    // Portage has no such source (see UseManager's file/variable table).
     let root = TempDir::new("portage-profile-test-package-use-mask-force").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
@@ -2534,12 +2320,8 @@ fn package_use_mask_and_force_stack_repo_then_profile_only_no_user_source() {
 
 #[test]
 fn use_stable_mask_and_force_stack_profile_chain_only_and_stay_out_of_use_flags() {
-    // use.stable.mask/.force: profile-chain only (no repo-level
-    // source, matching use_mask/use_force's own existing profile-
-    // chain-only sourcing) -- and, unlike use_mask/use_force,
-    // deliberately never folded into use_flags itself (see
-    // use_stable_force's own doc comment: stability is per-candidate,
-    // so portage-repo applies these conditionally instead).
+    // Profile-chain only, and never folded into use_flags (stability is
+    // per-candidate, so portage-repo applies these conditionally instead).
     let root = TempDir::new("portage-profile-test-use-stable-mask-force").keep();
     let repo = root.join("repo");
     let leaf = root.join("leaf-profile");
@@ -2580,11 +2362,8 @@ fn use_stable_mask_and_force_stack_profile_chain_only_and_stay_out_of_use_flags(
 
 #[test]
 fn package_use_stable_mask_and_force_stack_repo_then_profile_only_no_user_source() {
-    // Mirrors package_use_mask_and_force_stack_repo_then_profile_only_no_user_source
-    // exactly, for the stable variant: repo-level entry for "a",
-    // profile-level entry for "b", a deliberately-written user-level
-    // file completely ignored (no such source exists in real
-    // portage).
+    // Mirrors the non-stable test above for the stable variant; the user-level
+    // file is ignored (no such source in Portage).
     let root = TempDir::new("portage-profile-test-package-use-stable-mask-force").keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");

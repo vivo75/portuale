@@ -2,146 +2,45 @@
 
 use crate::*;
 
-/// Real `emerge --depclean`'s own removal list (`_calc_depclean` +
-/// `create_cleanlist`, no `args_set`): every installed package NOT
-/// reachable, over the *installed* dependency graph, from the required
-/// roots.
+/// Portage `emerge --depclean`'s removal list (`_calc_depclean` +
+/// `create_cleanlist`): every installed package NOT reachable, over the
+/// installed dependency graph (vdb `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND`,
+/// flattened against vdb `USE`, every `||` branch kept), from the required
+/// roots. Roots, `args`-mode and lib-check details: see `DepcleanCleanlistArgs`.
 ///
-/// The graph: node = installed package; edge A -> B when B satisfies one
-/// of A's own vdb-recorded `RDEPEND`, `PDEPEND`, `DEPEND` or `BDEPEND`
-/// atoms, flattened against A's own vdb-recorded `USE` (`flat_dep_atoms`
-/// -- every branch of a `||` group is kept, the conservative choice for a
-/// removal decision).
+/// **Narrowings** (Portage runs the full `depgraph` in "remove" mode):
+/// slot-operator rebuild edges, `package.provided`, `--deselect=n`, and
+/// `world_sets` `@`-refs are still out.
 ///
-/// The build-time keys (`DEPEND`/`BDEPEND`) are followed because real
-/// `_calc_depclean` builds its graph via the full `depgraph` in "remove"
-/// mode, where `create_depgraph_params(myopts, "remove")` sets
-/// `bdeps="auto"` (`create_depgraph_params.py:100-103`) and
-/// `depgraph.py:4208-4213` only discards `DEPEND`/`BDEPEND` from a
-/// removal walk when `--with-bdeps=n` is given explicitly. So a package
-/// that is *only* a build-time dependency of a kept package is itself
-/// kept -- `emerge --depclean` will not remove something the tree still
-/// needs in order to rebuild what stays installed. Real removal walks
-/// build deps against the root being cleaned (`depend_root = myroot`,
-/// `depgraph.py:4218-4219`), i.e. the same vdb, so portuale reads them
-/// from the same `<root>` vdb as the runtime keys.
-///
-/// **No `args`** (a full `emerge --depclean`): roots = the installed
-/// packages `world_atoms` ∪ `system_atoms` match; cleanlist = every
-/// installed package none of them reach.
-///
-/// **`args` given** (`emerge --depclean <atoms>`): real `_calc_depclean`
-/// plus `_complete_graph` in "remove" mode drop the world "selected"
-/// plain atoms entirely (the default `--deselect` behavior -- the named
-/// packages get removed *and* deselected) and make every installed
-/// package NOT matching an `args` atom a protected root. So here roots =
-/// `system_atoms` ∪ `{=cpv | installed, unmatched by args}`, and the
-/// cleanlist is just the `args`-matched packages none of those reach.
-///
-/// **`lib_protected_providers`**: the `--depclean-lib-check` feedback
-/// path. Real `_calc_depclean` computes the tentative cleanlist, then
-/// (`actions.py:1356-1573`) runs a soname-linkage scan over `NEEDED.ELF.2`
-/// and, for any cleanlist package that solely provides a library still
-/// needed by a *surviving* consumer, re-adds that provider (and its own
-/// dependencies, via `_complete_graph`) to the graph so it is kept. The
-/// caller (which owns the `NEEDED.ELF.2` linkage map -- see
-/// `portuale`'s `needed_elf`) performs that scan on the result of a
-/// first `lib_protected_providers = &[]` call, then calls again passing
-/// the packages it found here. They are seeded as additional reachability
-/// roots, so the returned cleanlist, `required_count`, `kept_parents` and
-/// removal order are all recomputed consistently -- exactly as if an
-/// ordinary dependency had pulled each protected provider in.
-///
-/// **Documented narrowings** (real `_calc_depclean` via the full
-/// `depgraph` in "remove" mode does more):
-/// slot-operator rebuild edges, `package.provided`, `--deselect=n` (keeps
-/// the world atoms as roots in `args` mode), and `world_sets` `@`-refs as
-/// roots are all still out. A lib-protected provider is kept but, unlike
-/// real portage (which labels its reverse-dep entry with the link-level
-/// consumer), contributes no `--verbose` `kept_parents` line of its own
-/// unless an ordinary dependency also reaches it.
-/// `depclean_cleanlist`'s result: the packages to remove (already in
-/// real `_calc_depclean`'s own unmerge order -- see
-/// `topological_removal_order`), the size of the required-set closure
-/// (real `req_pkg_count`, the `Required packages:` stat), and `ordered`
-/// -- true when there were dependency edges *between* cleanlist members,
-/// so the caller must render them in `cleanlist` order rather than
-/// regrouping by `cat/pn` (real `_unmerge_display`'s own `if not
-/// ordered:` regroup branch, `unmerge.py:459-474`).
+/// Result: packages to remove (already in unmerge order -- see
+/// `topological_removal_order`), the required-set size (`required_count`),
+/// and `ordered` -- true when edges exist *between* cleanlist members, so the
+/// caller renders in `cleanlist` order rather than regrouping by `cat/pn`.
 #[derive(Debug, Clone)]
 pub struct DepcleanResult {
     pub cleanlist: Vec<InstalledPackage>,
     pub required_count: usize,
     pub ordered: bool,
-    /// Real `create_cleanlist`'s own `elif "--verbose": show_parents(pkg)`
-    /// (`actions.py:1324`/`1331`): for every *kept* installed package
-    /// (no-args: all of them; args: only the `args`-matched ones), the
-    /// reverse-dependency lines real `show_parents` would print. Each
-    /// `(package, parent_lines)` -- `parent_lines` already rendered and
-    /// sorted the way `show_parents` emits them (`<parent> requires
-    /// <atom>, <atom>` per line, lines sorted ascending, atoms within a
-    /// line sorted by atom package-name descending). A kept package
-    /// whose only parent is the internal protected-set (real
-    /// `protected_set_name` filter) contributes no entry. `package`s are
-    /// in cpv order.
+    /// Portage `show_parents` lines for every *kept* package, rendered and
+    /// sorted (`<parent> requires <atom>, <atom>` per line), cpv order.
     pub kept_parents: Vec<(InstalledPackage, Vec<String>)>,
-    /// Real `_calc_depclean`'s `unresolved_deps()` (`actions.py:1137-1248`):
-    /// `(atom, parent_cpv)` for every *kept* installed package's hard
-    /// runtime dependency (`RDEPEND`/`PDEPEND`) that no installed package
-    /// satisfies. Non-empty means real depclean/prune prints the
-    /// `* Dependencies could not be completely resolved ...` block and
-    /// exits 1 without removing anything -- the caller
-    /// (`run_depclean_pretend` / `run_prune_pretend`) does exactly that.
-    /// Sorted, deduped. See `unresolved_runtime_deps` for the narrowings.
+    /// `(atom, parent_cpv)` for every *kept* package's hard runtime dependency
+    /// no installed package satisfies: the caller prints the unresolvable
+    /// block and exits 1 without removing anything. Sorted, deduped.
     pub unresolved: Vec<(String, String)>,
 }
 
-/// Real `_calc_depclean`'s own unmerge-order pass (`actions.py:1591-1731`):
-/// build a digraph over the cleanlist where an edge `depender -> dep`
-/// exists whenever one cleanlist member satisfies another's `DEPEND` /
-/// `RDEPEND` / `BDEPEND` / `PDEPEND` / `IDEPEND` (flattened against the
-/// depender's own vdb `USE`), then topologically sort it so each package
-/// is unmerged *before* the packages it depends on -- real portage does
-/// this "to avoid breaking things that may need to run during pkg_prerm
-/// or pkg_postrm".
+/// Portage `_calc_depclean`'s unmerge-order pass (`actions.py:1591-1731`):
+/// topologically sorts the cleanlist digraph so each package unmerges *before*
+/// what it depends on. Returns `(ordered, cleanlist)`: with no edges `ordered`
+/// is `false` and the input order stands; otherwise the order is Portage's
+/// repeated-root-node pop (all current roots at once, cpv-descending).
 ///
-/// Returns `(ordered, cleanlist)`. When the digraph has no edges at all
-/// (`len(graph.order) == len(graph.root_nodes())` in real portage),
-/// `ordered` is `false` and the input order (the `cat`/`pn`/version sort
-/// `depclean_cleanlist` already applied) is kept -- real
-/// `_unmerge_display` then does its own `cat/pn` grouping. When there
-/// are edges, `ordered` is `true` and the returned order is real
-/// portage's own repeated-root-node pop: every current root (nothing
-/// left depends on it) is emitted at once, sorted by cpv descending
-/// (real `nodes.sort(reverse=True)`), then removed.
-///
-/// Each edge carries the `UnmergeDepPriority` of the `*DEPEND` key that
-/// created it (real `actions.py:1608-1622` + `UnmergeDepPriority.__int__`,
-/// higher = harder): `IDEPEND` 0, `RDEPEND` -2 (bumped to **-1** when the
-/// atom is `slot_operator_built` -- `foo/bar:2/2=`, real
-/// `runtime_slot_op`, bug 916135), `PDEPEND` -3, `DEPEND`/`BDEPEND` -4.
-/// A `DEPEND`/`BDEPEND` slot-op edge stays -4 (real `__int__` never
-/// bumps `buildtime_slot_op`). When one `(i, j)` edge is produced by
-/// more than one key, the highest priority wins (real `digraph`'s own
-/// sorted `priorities[-1]`).
-///
-/// The topological pop mirrors real `actions.py:1713-1727`: while any
-/// package still has an un-removed depender, take the current true roots
-/// (nothing left depends on them) and emit **all** of them at once,
-/// cpv-descending. Only when there are none -- a genuine dependency
-/// cycle -- fall back to real portage's `ignore_priority_range` scan
-/// (`[-4, -3, -2, -1, 0]`): find the packages whose every remaining
-/// incoming edge is `<= ignore_priority`, and pop just **one** of them
-/// (the cpv-max), so the fewest ordering edges possible are dropped to
-/// break the cycle. `ignore_priority == 0` always yields at least one
-/// node, so the loop always terminates.
-///
-/// Still narrower than real `actions.py` in one spot: `flat_dep_atoms`
-/// keeps every `||` branch (real `_select_atoms` resolves to one), so a
-/// disjunctive dep can add a few extra ordering edges -- the
-/// conservative direction. Real's `node_refcounts` pre-sort has no
-/// observable effect (every batch is re-sorted by cpv anyway), so it
-/// isn't reproduced.
+/// Each edge carries its `*DEPEND` key's `UnmergeDepPriority` (higher = harder;
+/// `RDEPEND` bumps to -1 for a `slot_operator_built` atom, bug 916135). Cycles
+/// break via the `ignore_priority_range` scan, popping just the cpv-max node.
+/// One narrowing: `flat_dep_atoms` keeps every `||` branch (Portage resolves
+/// to one), adding extra ordering edges -- the conservative direction.
 pub(crate) fn topological_removal_order(
     root: &Path,
     cleanlist: Vec<InstalledPackage>,
@@ -154,9 +53,8 @@ pub(crate) fn topological_removal_order(
         .iter()
         .map(|p| format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot))
         .collect();
-    // `deps[i]` = indices `j` such that `cleanlist[i]` depends on
-    // `cleanlist[j]`, i.e. `i` must be unmerged before `j`.
-    // `edge_prio[(i, j)]` = the highest `UnmergeDepPriority` seen for it.
+    // `deps[i]` = indices `j` that `cleanlist[i]` depends on (`i` unmerges
+    // before `j`); `edge_prio[(i, j)]` = the highest priority seen for it.
     let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut edge_prio: HashMap<(usize, usize), i32> = HashMap::new();
     for (i, p) in cleanlist.iter().enumerate() {
@@ -179,7 +77,7 @@ pub(crate) fn topological_removal_order(
                 let Some(atom) = portage_dep::parse_atom(atom_str) else {
                     continue;
                 };
-                // Real `Atom.slot_operator_built`: `:=` with a sub-slot.
+                // Portage `Atom.slot_operator_built`: `:=` with a sub-slot.
                 let slot_op_built = atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
                     && atom.sub_slot.is_some();
                 let prio = if dep_key == "RDEPEND" && slot_op_built {
@@ -238,14 +136,14 @@ pub(crate) fn topological_removal_order(
     while result.len() < n {
         let mut ready: Vec<usize> = (0..n).filter(|&k| !done[k] && indeg[k] == 0).collect();
         if !ready.is_empty() {
-            // Real `nodes.sort(reverse=True)`: cpv descending; emit all.
+            // Portage `nodes.sort(reverse=True)`: cpv descending; emit all.
             ready.sort_by(|&a, &b| cpv_cmp(&cleanlist[b], &cleanlist[a]));
             for k in ready {
                 remove(k, &mut done, &mut indeg, &mut result);
             }
             continue;
         }
-        // Genuine cycle -- real `ignore_priority_range` scan. Pop ONE.
+        // Genuine cycle -- Portage `ignore_priority_range` scan. Pop ONE.
         let mut popped = false;
         for ignore in [-4i32, -3, -2, -1, 0] {
             let mut cand: Vec<usize> = (0..n)
@@ -273,12 +171,9 @@ pub(crate) fn topological_removal_order(
     (true, result)
 }
 
-/// Real `show_parents`'s own per-package rendering (`actions.py:1274-1291`):
-/// group a kept package's recorded `(parent descriptor, atom)` edges by
-/// parent, render one `"<parent> requires <atom>, <atom>"` line each with
-/// the atoms sorted by atom package-name descending
-/// (`sorted(atoms, reverse=True, key=attrgetter("package"))`), then sort
-/// the lines. Shared by `depclean_cleanlist` and `prune_cleanlist`.
+/// Portage `show_parents`' per-package rendering (`actions.py:1274-1291`): one
+/// `"<parent> requires <atom>, <atom>"` line per parent (atoms sorted by atom
+/// package-name descending), then the lines sorted. Shared by both cleanlists.
 pub(crate) fn render_show_parents(edges: &[(String, String)]) -> Vec<String> {
     let mut by_parent: HashMap<&str, Vec<&str>> = HashMap::new();
     for (par, atom) in edges {
@@ -307,11 +202,10 @@ pub(crate) fn render_show_parents(edges: &[(String, String)]) -> Vec<String> {
 }
 
 /// `package.provided` (`pkgsettings.pprovideddict`): true when `atom_str`'s
-/// `cat/pkg` is listed and its constraint matches one of that cp's
-/// provided CPVs (real `portage.match_from_list(atom, pprovided)`, e.g.
-/// `depgraph.py:5497-5503` for a top-level target, `dep_check.py:1052`
-/// area for a dependency -- the same check the main resolver's own
-/// `pprovided_refs` logic performs).
+/// `cat/pkg` is listed and its constraint matches one of that cp's provided
+/// CPVs (Portage `match_from_list(atom, pprovided)`). Same check the main
+/// resolver's `pprovided_refs` logic performs.
+/// Portage: depgraph.py:5497-5503, dep_check.py:1052
 pub(crate) fn pprovided_matches(atom_str: &str, package_provided: &[String]) -> bool {
     !package_provided.is_empty()
         && portage_dep::match_from_list(
@@ -324,26 +218,16 @@ pub(crate) fn pprovided_matches(atom_str: &str, package_provided: &[String]) -> 
         .is_some_and(|m| !m.is_empty())
 }
 
-/// Real `_calc_depclean`'s `unresolved_deps()` check (`actions.py:1137-1245`),
-/// narrowed: a *kept* installed package's hard runtime dependency
-/// (`RDEPEND`/`PDEPEND` -- real `dep.priority > UnmergeDepPriority.SOFT`,
-/// i.e. `runtime`/`runtime_post`; `DEPEND`/`BDEPEND` are `buildtime` =
-/// SOFT and never trip the halt) that no *installed* package satisfies.
-/// Non-empty -> real depclean/prune prints the `* Dependencies could not
-/// be completely resolved ...` block and exits 1 without removing
-/// anything.
+/// Portage `_calc_depclean`'s `unresolved_deps()` check (`actions.py:1137-1245`),
+/// narrowed: a *kept* package's hard runtime dependency (`RDEPEND`/`PDEPEND` --
+/// Portage `dep.priority > UnmergeDepPriority.SOFT`) that no *installed*
+/// package satisfies. Non-empty halts with the unresolvable-dependencies block.
 ///
-/// **Documented narrowings**: an atom inside a `||` group is not checked
-/// -- the any-of resolution needed to decide whether the *whole* group is
-/// unsatisfiable is out of scope, and the reachability walk already keeps
-/// every `||` alternative so a partly-broken group never wrongly shrinks
-/// the cleanlist. A libc-provider atom (real `find_libc_deps` -- what an
-/// installed `virtual/libc` pulls in) is never flagged: real relies on
-/// libc genuinely being installed, and `strip_libc_deps`'s whole premise
-/// is that implicit libc deps are noise, so a config/fixture without an
-/// installed libc must not spuriously halt. The real "show the
-/// unevaluated atom when it differs and vardb matches it"
-/// readability case (`actions.py:1196`) is not reproduced.
+/// **Documented narrowings**: atoms inside `||` groups are not checked (the
+/// reachability walk already keeps every alternative); libc-provider atoms are
+/// never flagged (`strip_libc_deps` treats implicit libc deps as noise); the
+/// "show the unevaluated atom" readability case is not reproduced.
+/// Portage: actions.py:1196, `find_libc_deps`
 pub(crate) fn unresolved_runtime_deps(
     root: &Path,
     kept: &[&InstalledPackage],
@@ -351,9 +235,8 @@ pub(crate) fn unresolved_runtime_deps(
     libc_cps: &HashSet<(String, String)>,
     package_provided: &[String],
 ) -> Vec<(String, String)> {
-    // Include the sub-slot (real `_match_slot` checks it whenever the
-    // atom specifies one, slot operator or not -- a built `foo:2/3=` dep
-    // is only satisfied by an installed `foo` at slot 2 sub-slot 3).
+    // Sub-slot included: Portage `_match_slot` checks it whenever the atom
+    // specifies one -- a built `foo:2/3=` dep needs slot 2 sub-slot 3.
     let candidate_strs: Vec<String> = installed
         .iter()
         .map(|p| {
@@ -441,30 +324,22 @@ pub(crate) fn unresolved_runtime_deps(
 /// Arguments of [`depclean_cleanlist`].
 pub struct DepcleanCleanlistArgs<'a> {
     pub root: &'a Path,
-    /// `(atom, set_label)` -- the `@world` closure's seeds and which set
-    /// token real `show_parents` would name as their parent (`@selected`
-    /// for a `world` file line, `@<name>` for a `world_sets` nested set).
-    /// The label is only used for the `--verbose` reverse-dep display.
+    /// `(atom, set_label)` -- the `@world` closure's seeds and which set token
+    /// Portage `show_parents` would name as their parent (`@selected` for a
+    /// `world` line, `@<name>` for a nested `world_sets` set). Display only.
     pub world_seeds: &'a [(String, String)],
     pub system_atoms: &'a [String],
     pub args: &'a [String],
-    /// Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
-    /// "n"` (default `true`): in `args` mode, `if deselect:` empties the
-    /// `@selected`/`world` set (`actions.py:1037`) so a named package
-    /// that is *also* in `world` still gets removed. `--depclean <atoms>
-    /// --deselect=n` keeps `world` as a protection root instead, so a
-    /// world member named as an arg is kept. No effect without `args`
-    /// (the `world` seeds are always used then).
+    /// Portage `action_depclean`'s `deselect` (default `true`): in `args` mode
+    /// the `@selected`/`world` set is emptied (`actions.py:1037`), so a named
+    /// package also in `world` is still removed. `--deselect=n` keeps `world`
+    /// as a protection root instead. No effect without `args`.
     pub deselect: bool,
-    /// `--depclean-lib-check` feedback: installed packages the caller's
-    /// `NEEDED.ELF.2` soname scan found are still needed at link level by
-    /// a surviving consumer. Seeded as extra reachability roots. Empty on
-    /// the caller's first pass (and always when `--depclean-lib-check=n`).
+    /// `--depclean-lib-check` feedback: packages the caller's `NEEDED.ELF.2`
+    /// soname scan found still needed at link level. Seeded as extra roots;
+    /// empty on the first pass (and always with `--depclean-lib-check=n`).
     pub lib_protected_providers: &'a [InstalledPackage],
-    /// `package.provided` (`config.package_provided`, real
-    /// `pkgsettings.pprovideddict`). See `pprovided_matches`'s own doc
-    /// comment for the real citations and the exact real behaviour this
-    /// mirrors.
+    /// `package.provided` (`config.package_provided`). See `pprovided_matches`.
     pub package_provided: &'a [String],
 }
 
@@ -518,31 +393,20 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
     // Roots.
     let mut reachable: HashSet<(String, String, String)> = HashSet::new();
     let mut queue: Vec<InstalledPackage> = Vec::new();
-    // Real `_dynamic_config._parent_atoms`: child key -> [(parent
-    // descriptor, atom)], where the parent descriptor is a cpv (a
-    // `Package` parent) or an `@set` label (a `SetArg` parent). Every
-    // dep that resolves to an installed package records an edge, whether
-    // or not it was the one that first pulled that package in.
+    // Portage `_dynamic_config._parent_atoms`: child key -> [(parent, atom)],
+    // recording every resolving dep edge, not just the first puller.
     let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
     for (atom_str, label) in system_atoms.iter().map(|a| (a.as_str(), "@system")).chain(
-        // `args` mode drops the `@world` seeds (real `_complete_graph`
-        // empties `selected_set`) -- UNLESS `--deselect=n` keeps them
-        // (real `action_depclean`'s `if deselect:` guard); `@system`
-        // seeds in every mode.
+        // `args` mode drops the `@world` seeds (Portage empties `selected_set`)
+        // unless `--deselect=n`; `@system` seeds in every mode.
         world_seeds
             .iter()
             .filter(|_| args.is_empty() || !deselect)
             .map(|(a, l)| (a.as_str(), l.as_str())),
     ) {
-        // `package.provided`: a `@world`/`@system` seed atom this covers
-        // is intercepted before it ever becomes a graph root (real
-        // `_resolve`'s per-arg loop, `depgraph.py:5497-5503` --
-        // `pprovided and match_from_list(atom, pprovided): ... continue`,
-        // *before* `_add_pkg`/`_select_package` ever run). It therefore
-        // never becomes a depclean protection root here either, even if
-        // an installed package of the same cpv happens to exist --
-        // that's the real `-pc` advisory's "will be removed by depclean
-        // even if in world" case. See `pprovided_matches`.
+        // `package.provided`: a seed atom this covers never becomes a graph root
+        // (Portage intercepts before `_add_pkg`; the `-pc` "removed even if
+        // in world" case). See `pprovided_matches`.
         if pprovided_matches(atom_str, package_provided) {
             continue;
         }
@@ -557,22 +421,18 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         }
     }
     if !args.is_empty() {
-        // `args` mode: every installed package the args *don't* match is
-        // a protected root (real `protected_set`). Its parent is the
-        // internal protected-set SetArg, which `show_parents` filters
-        // out -- so no edge is recorded for the seed itself.
+        // `args` mode: every installed package the args *don't* match is a
+        // protected root (Portage `protected_set`); no edge is recorded for
+        // the seed itself, since `show_parents` filters that parent out.
         for p in &installed {
             if !matched_by_args(p) && reachable.insert(key(p)) {
                 queue.push(p.clone());
             }
         }
     }
-    // `--depclean-lib-check` feedback: a provider the caller's soname
-    // scan found is still needed at link level becomes a root, so it and
-    // its own dependency closure drop out of the cleanlist (real
-    // `_calc_depclean` re-adds it via `resolver._add_pkg` then
-    // `_complete_graph`). No parent edge for the provider itself -- see
-    // this function's own doc comment.
+    // `--depclean-lib-check` feedback: a still-needed provider becomes a root,
+    // dropping it and its closure out of the cleanlist (Portage re-adds via
+    // `_add_pkg` + `_complete_graph`). No parent edge for the provider itself.
     for p in lib_protected_providers {
         if reachable.insert(key(p)) {
             queue.push(p.clone());
@@ -590,11 +450,8 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
                 continue;
             };
             for atom_str in atoms {
-                // `package.provided`: a dependency atom this covers is
-                // satisfied without ever adding a graph edge to a
-                // literal installed provider (real `dep_check.py:1052`
-                // area -- the same intercept the main resolver's own
-                // `pprovided_refs` check applies). See `pprovided_matches`.
+                // `package.provided`: satisfied without adding a graph edge to the
+                // installed provider (Portage `dep_check.py:1052` intercept).
                 if pprovided_matches(&atom_str, package_provided) {
                     continue;
                 }
@@ -624,8 +481,8 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
             .then_with(|| vercmp_ordering(&a.version, &b.version))
     });
 
-    // Real `show_parents` for every *kept* installed package, cpv-sorted
-    // (no-args: all reachable; args: only `args`-matched reachable ones).
+    // Portage `show_parents` for every *kept* package, cpv-sorted (no-args: all
+    // reachable; args: only `args`-matched reachable ones).
     let mut kept: Vec<&InstalledPackage> = installed
         .iter()
         .filter(|p| reachable.contains(&key(p)))
@@ -648,9 +505,8 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         }
     }
 
-    // Real `unresolved_deps()` -- checked over *every* kept installed
-    // package (real `_complete_graph`'s full required set, not just the
-    // `args`-matched ones).
+    // Portage `unresolved_deps()`, over *every* kept package (the full required
+    // set, not just the `args`-matched ones).
     let all_kept: Vec<&InstalledPackage> = installed
         .iter()
         .filter(|p| reachable.contains(&key(p)))
@@ -674,52 +530,28 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
     }
 }
 
-/// Real `emerge --prune`'s removal list (`_calc_depclean` with
-/// `action="prune"` -- `actions.py:1059-1110` plus `create_cleanlist`'s
-/// own prune branch, `:1334-1340`).
+/// Portage `emerge --prune`'s removal list (`_calc_depclean` with
+/// `action="prune"`): seed the closure from every installed package *except*
+/// non-highest versions matched by `args_set` (given atoms, or every
+/// multi-version cp); the cleanlist is what the closure doesn't reach. Same
+/// closure and order as `depclean_cleanlist`, same lib-check wiring.
 ///
-/// `--prune` removes *superseded* installed versions: for every cp with
-/// more than one version installed, the non-highest versions, kept only
-/// if something still needs that exact old version. Real portage seeds
-/// its `protected_set` with every installed cp as a bare `cp` atom --
-/// which resolves to just the *highest* installed version -- then the
-/// per-package loop additionally, explicitly protects the highest
-/// version of every cp and every non-highest version an argument atom
-/// does not match. With no `args`, `args_set` auto-fills with every
-/// multi-version cp, so the removal candidates are exactly the
-/// non-highest versions of multi-version cps. `emerge --prune <atom>`
-/// uses those atoms as `args_set` instead: only non-highest versions
-/// they match become candidates.
-///
-/// Equivalently: seed the reachability closure from every installed
-/// package *except* the ones that are both non-highest-in-their-cp and
-/// matched by `args_set`; those excepted packages are the candidates,
-/// and the cleanlist is the ones the closure doesn't reach. Same
-/// `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND` closure and
-/// `topological_removal_order` as `depclean_cleanlist`.
-///
-/// `--depclean-lib-check` is wired the same way as `depclean_cleanlist`
-/// (via `lib_protected_providers`).
-///
-/// **Deliberately out** (matching `depclean_cleanlist`'s own cuts):
-/// `--prune --nodeps` (the obscure `_unmerge_display` prune branch that
-/// skips the closure entirely), the `--deselect` world-file rewrite
-/// (`--pretend` never writes it), and slot-operator rebuild edges.
+/// **Deliberately out**: `--prune --nodeps`, the `--deselect` world-file
+/// rewrite, and slot-operator rebuild edges.
+/// Portage: actions.py:1059-1110, unmerge.py `_unmerge_display` prune branch
 pub fn prune_cleanlist(
     root: &Path,
     args: &[String],
-    // `--depclean-lib-check` feedback -- see `depclean_cleanlist`.
+    // `--depclean-lib-check` feedback and `package.provided`: see
+    // `depclean_cleanlist`'s params. `--prune` has no atom-seeded roots, so
+    // `package.provided` only reaches the walk and `unresolved_deps()`.
     lib_protected_providers: &[InstalledPackage],
-    // `package.provided` -- see `depclean_cleanlist`'s own param. `--prune`
-    // has no atom-seeded roots (its protected set is bare installed
-    // packages, not atoms), so this only reaches the dependency-walk and
-    // `unresolved_deps()` intercepts, same as `depclean_cleanlist`.
     package_provided: &[String],
 ) -> DepcleanResult {
     let installed = all_installed_packages(root);
     let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
 
-    // Highest installed version per cp (real `pkgs_for_cp[-1]`).
+    // Highest installed version per cp (Portage `pkgs_for_cp[-1]`).
     let mut highest: HashMap<(String, String), String> = HashMap::new();
     for p in &installed {
         let cp = (p.category.clone(), p.package.clone());
@@ -736,8 +568,8 @@ pub fn prune_cleanlist(
             .is_some_and(|v| v == &p.version)
     };
 
-    // `args_set`: the given atoms, or -- with none -- every cp with more
-    // than one installed version (real `actions.py:1071-1075`).
+    // `args_set`: the given atoms, or every multi-version cp with none
+    // (Portage `actions.py:1071-1075`).
     let multi_version: HashSet<(String, String)> = {
         let mut counts: HashMap<(String, String), usize> = HashMap::new();
         for p in &installed {
@@ -763,8 +595,8 @@ pub fn prune_cleanlist(
         })
     };
 
-    // A candidate for pruning = a non-highest version its args_set
-    // matches; everything else seeds the closure.
+    // A candidate for pruning = a non-highest version its args_set matches;
+    // everything else seeds the closure.
     let is_candidate = |p: &InstalledPackage| !is_highest(p) && matched_by_args(p);
 
     let candidate_strs: Vec<(String, &InstalledPackage)> = installed
@@ -793,10 +625,8 @@ pub fn prune_cleanlist(
 
     let mut reachable: HashSet<(String, String, String)> = HashSet::new();
     let mut queue: Vec<InstalledPackage> = Vec::new();
-    // Real `_parent_atoms` -- only the dep-walk edges (a `Package`
-    // parent). The prune seeds are all pulled in by the internal
-    // protected-set / bare-`cp` roots, which `show_parents` filters out,
-    // so no edge is recorded for the seed itself.
+    // Portage `_parent_atoms`: only dep-walk edges here (the prune seeds come
+    // from the internal protected-set roots, which `show_parents` filters out).
     let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
     for p in &installed {
         if !is_candidate(p) && reachable.insert(key(p)) {
@@ -821,8 +651,7 @@ pub fn prune_cleanlist(
                 continue;
             };
             for atom_str in atoms {
-                // `package.provided` -- see `depclean_cleanlist`'s own
-                // dependency-walk intercept.
+                // `package.provided`: same dependency-walk intercept as above.
                 if pprovided_matches(&atom_str, package_provided) {
                     continue;
                 }
@@ -851,10 +680,8 @@ pub fn prune_cleanlist(
             .then_with(|| vercmp_ordering(&a.version, &b.version))
     });
 
-    // Real `create_cleanlist`'s prune branch: `elif "--verbose":
-    // show_parents(pkg)` for every `args_set`-matched *kept* version --
-    // i.e. every reachable installed package `matched_by_args` covers,
-    // that has a non-protected-set parent edge. cpv-sorted.
+    // Portage `create_cleanlist`'s prune branch: `show_parents(pkg)` for every
+    // `args_set`-matched *kept* version with a non-protected-set parent edge.
     let mut kept: Vec<&InstalledPackage> = installed
         .iter()
         .filter(|p| reachable.contains(&key(p)) && matched_by_args(p))
@@ -910,28 +737,12 @@ pub struct PruneNodepsCp {
     pub other_versions: Vec<String>,
 }
 
-/// Real `emerge --prune --nodeps`'s own selection (`unmerge.py:245-272`,
-/// the `_unmerge_display` prune branch that `--nodeps` routes to
-/// *instead of* `_calc_depclean` -- `actions.py:2684`). No dependency
-/// check at all: for every cp with more than one version matched,
-/// protect the "best" version and select every other for removal.
-///
-/// "Best" is real portage's own: the highest version, except that on a
-/// same-slot collision (two versions in one slot -- a broken vdb) the
-/// one with the highest `COUNTER` (most recently installed) wins. This
-/// portuale's single-slot fixtures never hit that collision, so `best` is
-/// just the highest version -- the `COUNTER` tiebreak is a documented
-/// narrowing, the same category as the other `-pC` slot refinements.
-///
-/// **`args` empty** (`emerge --prune --nodeps`): every installed cp
-/// (real `vardb.cp_all()`); a single-version cp is skipped (real `if
-/// len(mymatch) == 1: continue`).
-///
-/// **`args` given**: each atom's `vardb.match` set; the best/rest split
-/// is over *that* set (so `--prune --nodeps '<cat/pkg-3'` keeps
-/// `pkg-2` even if `pkg-3` is also installed). A cp matched by several
-/// atoms appears once -- the `selected` sets unioned, `best` taken over
-/// the union (real `_unmerge_display`'s own `if not ordered:` regroup).
+/// Portage `emerge --prune --nodeps` (`unmerge.py:245-272`, routed *instead of*
+/// `_calc_depclean`): no dependency check -- per matched cp, protect the "best"
+/// version (highest; highest `COUNTER` on a same-slot collision, never hit in
+/// fixtures), select the rest. With `args` the split is over each atom's match
+/// set; without, over every installed cp (Portage `vardb.cp_all()`), skipping
+/// single-version cps.
 pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
     let installed = all_installed_packages(root);
     let matched: Vec<&InstalledPackage> = if args.is_empty() {
@@ -977,18 +788,11 @@ pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp
     out
 }
 
-/// Real `emerge --clean`'s own selection (`unmerge.py:274-293`, the
-/// `unmerge_action == "clean"` branch): like `--prune --nodeps` but
-/// **per slot** -- for every `(cp, slot)`, keep only the highest
-/// version, select every older one for removal. `args` given: the
-/// best/rest split is over the union of the matched sets, grouped by
-/// `(cp, slot)`; `args` empty (`emerge --clean` alone): every installed
-/// `(cp, slot)` (real `vardb.cp_all()` -> `cp_list`).
-///
-/// Same `COUNTER`-tiebreak narrowing as [`prune_nodeps_selection`] (the
-/// portuale's single-instance-per-slot fixtures never hit it), and no
-/// `sys-apps/portage` self-skip (real `unmerge.py:368`: the self-skip is
-/// explicitly *not* applied for `--clean`).
+/// Portage `emerge --clean`'s selection (`unmerge.py:274-293`): like
+/// `--prune --nodeps` but **per slot** -- for every `(cp, slot)` keep only the
+/// highest version. Same `COUNTER`-tiebreak narrowing as
+/// [`prune_nodeps_selection`], and no `sys-apps/portage` self-skip (Portage
+/// `unmerge.py:368` explicitly skips it for `--clean`).
 pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
     let installed = all_installed_packages(root);
     let matched: Vec<&InstalledPackage> = if args.is_empty() {
@@ -1015,8 +819,8 @@ pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
             .or_default()
             .push(p.version.clone());
     }
-    // Collapse back to one entry per cp (real `_unmerge_display` regroups
-    // the `pkgmap` by `mykey` = cp), unioning the per-slot removal sets.
+    // Collapse back to one entry per cp (Portage regroups by cp), unioning
+    // the per-slot removal sets.
     let mut by_cp: HashMap<(String, String), (String, Vec<String>)> = HashMap::new();
     for ((category, package, _slot), mut versions) in by_cp_slot {
         versions.sort_by(|a, b| vercmp_ordering(a, b));
@@ -1050,18 +854,12 @@ pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
     out
 }
 
-/// Real `strip_slots` (`lib/portage/dep/_slot_operator.py:11`), for one
-/// atom string: rewrites a "built" slot-operator atom (`cat/pkg:2=` -- the
-/// concrete slot portage records in the vdb when a `cat/pkg:=` dependency
-/// is merged) back to `cat/pkg:=`, so `deps_changed`'s own vdb-vs-ebuild
-/// comparison doesn't flag every `:=` dependency as changed purely because
-/// the vdb side carries the resolved slot and the current ebuild doesn't.
-/// Only touches atoms whose `slot_operator` is `=` *and* that carry an
-/// explicit slot -- a plain `:=` (no slot), a `:2` / `:2/3` (no operator),
-/// or a `:2*` is left untouched, matching real `strip_slots`'s own
-/// `x.slot_operator == "=" and x.slot is not None` guard. The slot
-/// expression is unique in an atom string (`::repo` uses `::`, use-deps
-/// live inside `[...]`), so a single leftmost replacement is safe.
+/// Portage `strip_slots` (`lib/portage/dep/_slot_operator.py:11`) for one atom:
+/// rewrites a "built" slot-operator atom (`cat/pkg:2=`, the concrete slot
+/// Portage records in the vdb) back to `cat/pkg:=`, so `deps_changed`'s
+/// vdb-vs-ebuild comparison doesn't flag every `:=` dep as changed. Only
+/// `slot_operator == "="` with an explicit slot; the slot expression is unique
+/// in an atom string, so a single leftmost replacement is safe.
 pub(crate) fn strip_slot_operator_one(tok: &str) -> String {
     let Some(atom) = portage_dep::parse_atom(tok) else {
         return tok.to_string();

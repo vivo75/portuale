@@ -3,12 +3,8 @@
 use crate::*;
 
 /// Whether `entry` (a `package.mask`/`.unmask`/`.accept_keywords` line)
-/// matches this specific candidate. Two-tier: try the real, already-
-/// verified `portage_dep::match_from_list` first (covers the vast
-/// majority of real entries: versioned, slotted, bare atoms), and only
-/// fall back to portage-dep's separate, bounded wildcard-atom matcher
-/// (`*/*`, `category/*`, `*/package`) if that fails to parse `entry` at
-/// all.
+/// matches this candidate: `match_from_list` first, the bounded wildcard-atom
+/// matcher (`*/*`, `category/*`, `*/package`) when it fails to parse.
 pub(crate) fn matches_config_entry(
     entry: &str,
     candidate_str: &str,
@@ -24,24 +20,17 @@ pub(crate) fn matches_config_entry(
     }
 }
 
-/// One `package.*` config list's atoms bucketed by `cat/pkg` -- portuale's
-/// stand-in for real portage's `ExtendedAtomDict`
-/// (`lib/portage/dep/__init__.py`), which every `UseManager` /
-/// `MaskManager` / `KeywordsManager` / `LicenseManager` builds once at
-/// config load. During a deep `emerge -pu` these lists are scanned per
-/// package per graph-walk visit -- tens of thousands of times -- but only
-/// the handful of entries whose atom names *this* `cp` (or a `*/*` /
-/// `cat/*` / `*/pkg` wildcard) can ever match. A flat `Vec` scan with a
-/// per-entry match was ~half of the post-`parse_atom`-cache run; this
-/// narrows it to a `HashMap` lookup plus the wildcard tail.
+/// One `package.*` config list's atoms bucketed by `cat/pkg` -- the stand-in
+/// for Portage's `ExtendedAtomDict` (`lib/portage/dep/__init__.py`). A flat
+/// scan was ~half of the post-`parse_atom`-cache run; this narrows it to a
+/// `HashMap` lookup plus the wildcard tail.
 #[derive(Default)]
 pub(crate) struct CpBucketIndex {
     /// `"cat/pkg"` -> positions (in original file/stacking order) of every
     /// plain-atom entry for that exact `cp`.
     pub(crate) by_cp: HashMap<String, Vec<u32>>,
-    /// Positions of every entry whose atom is a bounded wildcard (`*/*`,
-    /// `cat/*`, `*/pkg`) or didn't parse at all -- always re-checked, kept
-    /// in file order. Small on a real tree (a few `*/*` lines).
+    /// Positions of every entry whose atom is a bounded wildcard or didn't
+    /// parse -- always re-checked, in file order. Small on a Portage tree.
     pub(crate) other: Vec<u32>,
 }
 
@@ -76,10 +65,7 @@ impl CpBucketIndex {
     }
 }
 
-/// An entry in a `package.*` config list, exposing just its atom string --
-/// `(atom, tokens)` for the value-carrying lists (`package.use`,
-/// `package.accept_keywords`, ...) and a bare `atom` for
-/// `package.mask` / `package.unmask`.
+/// An entry in a `package.*` config list, exposing just its atom string.
 pub(crate) trait ConfigAtomEntry {
     fn config_atom(&self) -> &str;
 }
@@ -96,8 +82,7 @@ impl ConfigAtomEntry for String {
     }
 }
 
-/// One memoised [`CpBucketIndex`]: the built index plus the first/last
-/// atom strings of the list it was built from, kept as a fingerprint (see
+/// One memoised [`CpBucketIndex`] plus its first/last-atom fingerprint (see
 /// [`cp_bucket_index`]).
 pub(crate) struct CachedBucketIndex {
     pub(crate) first_atom: String,
@@ -106,14 +91,9 @@ pub(crate) struct CachedBucketIndex {
 }
 
 /// The [`CpBucketIndex`] for one config list, built once and memoised for
-/// the life of the process. Keyed by the list's backing-storage identity
-/// (`as_ptr`, `len`) with the first and last atom strings kept as a
-/// fingerprint so a freed-then-reused allocation can't hand back a stale
-/// index (in practice every bucketed list is a clone of stable
-/// profile/user data, so a `(ptr, len)` collision already implies
-/// identical content -- the fingerprint just makes that guaranteed).
-/// Thread-local so the lookup stays lock-free, like the `parse_atom`
-/// cache in `portage-dep`.
+/// the life of the process. Keyed by backing-storage identity with the first
+/// and last atoms as a fingerprint against freed-then-reused allocations.
+/// Thread-local so the lookup stays lock-free, like the `parse_atom` cache.
 pub(crate) fn cp_bucket_index<T: ConfigAtomEntry>(entries: &[T]) -> Rc<CpBucketIndex> {
     thread_local! {
         static EMPTY: Rc<CpBucketIndex> = Rc::new(CpBucketIndex::default());
@@ -146,11 +126,9 @@ pub(crate) fn cp_bucket_index<T: ConfigAtomEntry>(entries: &[T]) -> Rc<CpBucketI
     })
 }
 
-/// Every entry in `entries` that matches this candidate, in original file
-/// order -- the bucketed replacement for
-/// `entries.iter().filter(|e| matches_config_entry(...))`. Callers that
-/// then sort by [`atom_specificity`] get an identical result to the old
-/// flat scan (the sort is stable and file order is preserved here).
+/// Every entry in `entries` matching this candidate, in original file order.
+/// Callers sorting by [`atom_specificity`] get the old flat scan's result
+/// (the sort is stable and file order is preserved here).
 pub(crate) fn config_entries_matching<'a, T: ConfigAtomEntry>(
     entries: &'a [T],
     candidate_str: &str,
@@ -172,8 +150,7 @@ pub(crate) fn config_entries_matching<'a, T: ConfigAtomEntry>(
         .collect()
 }
 
-/// Whether any entry in `entries` matches -- the bucketed replacement for
-/// `entries.iter().any(|e| matches_config_entry(...))`.
+/// Whether any entry in `entries` matches this candidate.
 pub(crate) fn any_config_entry_matches<T: ConfigAtomEntry>(
     entries: &[T],
     candidate_str: &str,

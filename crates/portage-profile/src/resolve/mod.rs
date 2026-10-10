@@ -54,14 +54,10 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
             .chain(overlay_repos.iter().cloned())
             .collect();
 
-    // Real `layout.conf` `profile-formats = portage-2` gate on a profile
-    // `parent` line's own `reponame:path`/`:path` cross-repo syntax
-    // (real `_config/LocationsManager.py:47`/`259`): the set of repo
-    // names that declare it. Read here directly (a tiny dedicated
-    // layout.conf reader -- see `repo_profile_formats` -- rather than
-    // threading a param through every `resolve_config` call site) so
-    // `masters` resolution in `portage_repo::find_repos` and this gate
-    // stay independently minimal.
+    // `layout.conf` `profile-formats = portage-2` gate on a profile `parent`
+    // line's cross-repo syntax, read here directly so this gate and the
+    // `masters` resolution in `portage_repo::find_repos` stay minimal.
+    // Portage: _config/LocationsManager.py
     let parent_colon_repos: HashSet<String> = all_repos
         .iter()
         .filter(|(_, loc)| repo_profile_formats(loc).iter().any(|f| f == "portage-2"))
@@ -82,9 +78,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         parent_colon_repos: &parent_colon_repos,
     })?;
 
-    // Real `config.regenerate()`'s `env` `USE_ORDER` layer -- the process
-    // environment overrides / stacks on the profile chain + `make.conf`.
-    // See `apply_env_layer` / `ENV_*_VARS`.
+    // The process environment's `USE_ORDER` layer, over profile chain + make.conf.
     apply_env_layer(&mut scalars, &mut config);
 
     expand_use_vars(
@@ -126,19 +120,14 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
 
     fold_licenses_and_accepts(&all_repos, config_root, &mut config, &scalars)?;
 
-    // PKGDIR: last-level-wins scalar, real "/var/cache/binpkgs" default
-    // (see `pkgdir`'s own doc comment).
+    // PKGDIR: last-level-wins scalar, `/var/cache/binpkgs` default.
     config.pkgdir = scalars
         .get("PKGDIR")
         .cloned()
         .unwrap_or_else(|| "/var/cache/binpkgs".to_string());
 
-    // binrepos.conf + PORTAGE_BINHOST (see `binrepos`'s own doc comment).
-    // Real `BinRepoConfigLoader._parse` runs `_recursive_file_list` over
-    // the path, so `etc/portage/binrepos.conf` may be a **directory** of
-    // `*.conf` fragments (the standard portage "file or dir" pattern, and
-    // how the release profile ships it -- `gentoobinhost.conf`), not just
-    // a single file.
+    // binrepos.conf + PORTAGE_BINHOST. `etc/portage/binrepos.conf` may be
+    // a directory of `*.conf` fragments, not just a single file.
     config.binrepos = parse_binrepos(
         &read_config_lines(&config_root.join("etc/portage/binrepos.conf"))
             .unwrap_or_default()
@@ -149,10 +138,9 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
             .unwrap_or(""),
     );
 
-    // Real `config.py.__init__`: `PORTAGE_CONFIGROOT` is stamped into the
-    // settings, and `CBUILD` defaults to `CHOST` when unset anywhere
-    // (`config.py`'s own `if self.get("CBUILD") is None and
-    // self.get("CHOST")`). Both surface in `emerge --info`.
+    // `PORTAGE_CONFIGROOT` is stamped into the settings, and `CBUILD`
+    // defaults to `CHOST` when unset. Both surface in `emerge --info`.
+    // Portage: config.py `__init__`
     scalars
         .entry("PORTAGE_CONFIGROOT".to_string())
         .or_insert_with(|| {
@@ -171,11 +159,9 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
 
     config.other_vars = scalars;
 
-    // #105: freeze the immutable USE-context digest now that the config
-    // is complete. The `'backtrack` loop mutates only `autounmask_use`
-    // (on clones), which the memo keys hash against this base.
+    // Freeze the immutable USE-context and visibility digests now that the
+    // config is complete (the backtrack loop mutates only `autounmask_use`).
     config.use_context_base = Some(use_context_base_fingerprint(&config));
-    // #114: and the visibility base (masks + accept lists).
     config.is_visible_base = Some(is_visible_base_fingerprint(&config));
 
     Ok(config)

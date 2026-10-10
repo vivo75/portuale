@@ -1,67 +1,41 @@
 //! The crate's error type.
 
-/// Error from repo/config/metadata/resolver handling. Distinct variants
-/// mirror the real `lib/portage` error message shapes so `Display`
-/// reproduces them byte-for-byte (the contract suite pins the
-/// CLI-visible strings). `Detail` carries an already-fully-formatted
-/// message whose assembly spans multiple conditional appends upstream
-/// (real resolver conflict/`REQUIRED_USE`-violation reporting).
+/// Error from repo/config/metadata/resolver handling. Variants mirror
+/// Portage's `lib/portage` message shapes so `Display` reproduces the
+/// CLI-visible strings (pinned by the contract suite).
 #[derive(Debug)]
 pub enum Error {
-    /// `reading {path}: {source}` -- an `io::Error` on a repo/config file.
     ReadFile {
         path: String,
         source: std::io::Error,
     },
-    /// `{path}: stale metadata/md5-cache entry` -- an entry real's
-    /// `_pull_valid_cache` rejects (stale `_md5_`/`_eclasses_` or an
-    /// unsupported EAPI) that no provider could replace: a nested read
-    /// from inside the depend phase, or a provider whose phase failed.
+    /// `{path}: stale metadata/md5-cache entry` -- rejected like Portage's
+    /// `_pull_valid_cache` (stale `_md5_`/`_eclasses_`, unsupported EAPI).
     StaleMd5Cache { path: String },
-    /// `{path}: no usable pregenerated cache` -- the repo's first known
-    /// `cache-formats` entry is not `md5-dict` (#55 L1: no `pms` reader)
-    /// or `FEATURES` names `metadata-transfer` (#55 L2), and no
-    /// depend-phase provider could supply the metadata the pregen cache
-    /// would have. The pregen rung is skipped exactly like real
-    /// `_pull_valid_cache` falling through its rungs to the depcachedir
-    /// and `doebuild(mydo="depend")`.
+    /// `{path}: no usable pregenerated cache` -- falls through to the
+    /// depcachedir and `doebuild(mydo="depend")` like Portage.
     PregenCacheUnavailable { path: String },
-    /// `{source}` -- an `io::Error` reading a single directory entry.
     ReadEntry { source: std::io::Error },
-    /// `no repos.conf found at {path}`
     NoReposConf { path: String },
-    /// `no [DEFAULT] main-repo in repos.conf`
     NoMainRepo,
-    /// `no location for repo {repo:?} in repos.conf`
     NoRepoLocation { repo: String },
-    /// `invalid atom {atom:?}`
     InvalidAtom { atom: String },
-    /// `expected: dependency string, got: ')', token {token}`
     LicenseExpectedDepString { token: usize },
-    /// `expected: '(', got: ')', token {token}`
     LicenseExpectedOpen { token: usize },
-    /// `no matching '(' for ')', token {token}`
     LicenseNoMatchingOpen { token: usize },
-    /// `expected: '(', got: '||', token {token}`
     LicenseExpectedOpenGotOr { token: usize },
-    /// `expected: '(', got: '{token}', token {at}`
     LicenseExpectedOpenGotToken { token: String, at: usize },
-    /// `Missing ')' at end of string`
     LicenseMissingCloseParen,
-    /// `Missing '(' at end of string`
     LicenseMissingOpenParen,
-    /// `REQUIRED_USE for {package} is invalid: {source}` where `package`
-    /// is the `category/package-version` prefix and `source` the
-    /// `portage_required_use::Error` `Display`.
+    /// `REQUIRED_USE for {package} is invalid: {source}`.
     InvalidRequiredUse {
         package: String,
         source: portage_required_use::Error,
     },
     /// An already-fully-formatted, multi-line message (`Detail`).
     Detail(String),
-    /// An error bubbled up from `portage_use_reduce`.
+    /// Errors bubbled up from `portage_use_reduce` / `portage_fetch`.
     UseReduce(portage_use_reduce::Error),
-    /// An error bubbled up from `portage_fetch`.
     Fetch(portage_fetch::Error),
 }
 

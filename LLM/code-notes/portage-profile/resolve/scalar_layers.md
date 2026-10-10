@@ -1,0 +1,11 @@
+# crates/portage-profile/src/resolve/scalar_layers.rs
+The scalar layers in Portage's order: env.d, make.globals, the profile chain, make.conf.
+
+## fn load_scalar_layers
+- Layer order matches Portage `config.regenerate()`: `mydbs = self.configlist[:-1]` in `regenerate` (config.py:531), so the `const.INCREMENTALS` fold in `resolved_incremental` matches.
+- env.d details: `eroot`, not `config_root` (see `resolve_config`'s doc comment for the broot cut). Only its incremental entries (`CONFIG_PROTECT` / `CONFIG_PROTECT_MASK`, written by packages' `/etc/env.d/*` fragments) feed `emerge --info`; the rest is build-phase env portuale doesn't model. Portuale resolves eagerly where Portage expands lazily on access: forward references to later files stay literal and pick up values when those files are read (the eager approximation used throughout); `expand_map = env_d.copy()` seeding. The static half of Portage `_env_d_blacklist` (`_env_blacklist`, config.py:734-743; portuale's `ENV_BLACKLIST`) is popped at load; env.d is a scalar db too (Portage `configdict["env.d"]`): its `LANG` / `LEX` / ... surface in `emerge --info`. Lowest priority -- make.globals, the profile chain and make.conf all override.
+- The higher-layer recording sites below are `process_lines`, `process_make_conf_file`, `apply_env_layer`, and the USE_EXPAND env-value loop.
+- make.globals detail: Portage ships it at `portage.const.GLOBAL_CONFIG_PATH` (`/usr/share/portage/config`).
+- The make.defaults walk is Portage `regenerate()` over `configdict["defaults"]`; `use_tokens` accumulates every level's `USE=` flat too (fallback path + inspection). USE excluded from cross-level substitution: see the module doc comment.
+- The profile USE_EXPAND-defaults fold is Portage config.py "translate profile USE_EXPAND defaults into per-level USE flags" (2849-2889).
+- `PROFILE_ONLY_VARIABLES` detail: the profile's own fold, env.d's own assignment (source 0) excluded. A key the globals/profile chain also assigned keeps that value; one only env.d held is dropped from `scalars`.

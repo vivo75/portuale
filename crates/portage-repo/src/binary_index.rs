@@ -2,33 +2,10 @@
 
 use crate::*;
 
-/// Parses `<pkgdir>/Packages` (real `lib/portage/dbapi/bintree.py`'s own
-/// index file) into one `HashMap` per package entry -- NOT the same
-/// format `read_md5_cache` reads: real portage's own index format is
-/// `KEY: value` (colon-space, confirmed by reading `getbinpkg.py`'s own
-/// `PackageIndex` writer), blank-line-separated blocks, with the
-/// *first* block being a global header (`PROFILE`/`ACCEPT_KEYWORDS`/etc
-/// -- confirmed live against this machine's own real `/var/cache/
-/// binpkgs/Packages`) rather than a package entry at all, so it's
-/// always skipped here. Trusts the index outright -- no mtime/size
-/// revalidation against the real on-disk binpkg file at this layer
-/// (real portage's own default `FEATURES="pkgdir-index-trusted"`
-/// behavior -- real `make.globals` ships it in the default `FEATURES`,
-/// so `_populate_local` runs with `reindex=False` and verifies
-/// size/digest at merge via `BinpkgVerifier`, backlog #174). The
-/// reindex path's own mtime-staleness revalidation
-/// (`bintree.py:1108-1136`'s own "avoid reading the xpak if possible"
-/// fast path) lives one layer up, at the *local* `$PKGDIR`
-/// CLI boundary (`portuale::binpkg::populate_local_pkgdir`, which calls
-/// this function as its own fast-path cache and re-derives fresh
-/// metadata via `read_xpak_metadata`/`read_gpkg_metadata` for anything
-/// stale) -- this function alone is pub, format-parsing-only, with no
-/// opinion on trust; `build_local_binpkg_index`'s own remote-binhost callers
-/// still use it directly, unrevalidated, matching real (a synced remote
-/// index has no local file to revalidate against). A missing `Packages`
-/// file is an empty list, not an error -- same "PKGDIR simply has
-/// nothing yet" tolerance a missing/empty repo directory already gets
-/// in `list_candidates`.
+/// Parses `<pkgdir>/Packages` into one `HashMap` per package entry, skipping
+/// the first (global header) block. Trusts the index outright (Portage's
+/// default `FEATURES="pkgdir-index-trusted"`); revalidation lives one layer
+/// up. A missing file is an empty list.
 pub fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
     let path = pkgdir.join("Packages");
     let Ok(text) = fs::read_to_string(&path) else {
@@ -37,12 +14,8 @@ pub fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
     parse_packages_index(&text).1
 }
 
-/// Split a `Packages` index text into its global header block (the
-/// first `KEY: value` block -- real `getbinpkg.PackageIndex.header`,
-/// carrying `TIMESTAMP`/`TTL`/`DOWNLOAD_TIMESTAMP` for the remote-index
-/// freshness checks in `bintree._populate_remote_repo`) and one
-/// `HashMap` per package entry. [`read_packages_index`] is this same
-/// split with the header dropped.
+/// Splits index text into its global header block and one `HashMap` per
+/// package entry. [`read_packages_index`] drops the header.
 pub fn parse_packages_index(text: &str) -> (HashMap<String, String>, Vec<HashMap<String, String>>) {
     let mut blocks: Vec<HashMap<String, String>> = Vec::new();
     let mut current: HashMap<String, String> = HashMap::new();
@@ -60,8 +33,7 @@ pub fn parse_packages_index(text: &str) -> (HashMap<String, String>, Vec<HashMap
     if !current.is_empty() {
         blocks.push(current);
     }
-    // The first block is the index's own global header, never a real
-    // package entry -- see this function's own doc comment.
+    // The first block is the global header, never a package entry.
     if blocks.is_empty() {
         (HashMap::new(), Vec::new())
     } else {
@@ -70,21 +42,14 @@ pub fn parse_packages_index(text: &str) -> (HashMap<String, String>, Vec<HashMap
     }
 }
 
-/// A parsed binary-package index -- either the `KEY: value` blocks of a
-/// `<pkgdir>/Packages` file (real `bintree`'s own on-disk index), or the
-/// entries a `$PKGDIR` directory scan synthesized from each binpkg
-/// file's own embedded metadata when there is no `Packages` at all
-/// (real `bintree._populate_local`). Every downstream binary-candidate
-/// function takes `&BinaryIndex` rather than re-reading a path, so the
-/// "where did these entries come from" decision -- read the index file,
-/// or scan the files -- is made exactly once, at the CLI boundary.
+/// A parsed binary-package index: `Packages` blocks, or scan-synthesized
+/// entries when there is no `Packages`. The read-vs-scan decision is made
+/// once, at the CLI boundary.
 #[derive(Debug, Clone, Default)]
 pub struct BinaryIndex {
     pub(crate) entries: Vec<HashMap<String, String>>,
-    /// `(category, package)` -> the indices into `entries` for that cp,
-    /// built once. A remote binhost index has ~18 000 entries and is
-    /// consulted once per resolved atom, so a linear `CPV`-prefix scan
-    /// per lookup was quadratic on a big graph.
+    /// `(category, package)` -> indices into `entries`, built once: a remote
+    /// index has ~18 000 entries, so a linear scan per lookup was quadratic.
     pub(crate) by_cp: HashMap<(String, String), Vec<usize>>,
 }
 
@@ -97,18 +62,13 @@ impl PartialEq for BinaryIndex {
 impl Eq for BinaryIndex {}
 
 impl BinaryIndex {
-    /// Parse `<pkgdir>/Packages` (real `bintree`'s own index format --
-    /// `KEY: value`, blank-line-separated blocks, first block is the
-    /// global header and is skipped). A missing file is an empty index.
+    /// Parses `<pkgdir>/Packages`; a missing file is an empty index.
     pub fn from_pkgdir(pkgdir: &Path) -> Self {
         Self::from_entries(read_packages_index(pkgdir))
     }
 
-    /// Build from entries a caller assembled itself -- a `$PKGDIR`
-    /// directory scan (`portuale`'s `binpkg::scan_pkgdir`, which reads
-    /// each `.tbz2`/`.gpkg.tar`'s own embedded metadata). Each entry is a
-    /// synthesized `Packages`-style record (`CPV`, `SLOT`, `KEYWORDS`,
-    /// the dep strings, `SIZE`, `REPO`, …).
+    /// Builds from caller-assembled entries (a `$PKGDIR` scan of each
+    /// `.tbz2`/`.gpkg.tar`'s embedded metadata as `Packages`-style records).
     pub fn from_entries(entries: Vec<HashMap<String, String>>) -> Self {
         let mut by_cp: HashMap<(String, String), Vec<usize>> = HashMap::new();
         for (i, e) in entries.iter().enumerate() {
@@ -141,22 +101,10 @@ impl BinaryIndex {
     }
 }
 
-/// `BinaryIndex::from_pkgdir`, memoised by directory for the life of the
-/// process. A remote binhost's `Packages` index can be ~20 MB and is
-/// re-consulted once per resolved atom, so parsing it afresh every time
-/// made a large `emerge -p --getbinpkg` graph take minutes. `emerge` is
-/// a one-shot process and a synced index doesn't change mid-run, so a
-/// path-keyed global cache is safe.
-///
-/// A live binhost-index refresh (`portuale::emerge_getbinpkg`, real
-/// `bintree._populate_remote`) installs a per-directory override here
-/// *before* resolution, so the resolver uses the fetched index
-/// in memory even when the edb cache write failed (real ignores an
-/// unwritable cache dir, `bintree.py:1819-1823`, backlog #192) -- and,
-/// on a non-`--pretend` fetch failure, suppresses even a stale cached
-/// copy (real sets `pkgindex = None`, `bintree.py:1809`). `Some` is the
-/// index to use; `None` means "this binrepo contributes nothing this
-/// run". An override wins over both the memo below and the disk.
+/// `BinaryIndex::from_pkgdir`, memoised by directory: a ~20 MB index re-parsed
+/// per atom made big `--getbinpkg` graphs take minutes. A live refresh installs
+/// a per-directory override here *before* resolution (`Some` = use it, `None`
+/// = the binrepo contributes nothing); the override wins over memo and disk.
 pub(crate) fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
     if let Some(overridden) = remote_binary_index_override(pkgdir) {
         return overridden.unwrap_or_default();
@@ -174,22 +122,15 @@ pub(crate) fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> 
     idx
 }
 
-/// The live-refresh override table for [`cached_binary_index`], keyed by
-/// the same `packages_dir` the resolver reads. Set once per binrepo by
-/// the refresh, before any resolution. `emerge` is a one-shot process,
-/// but an in-process multi-run caller (or tests sharing an EROOT)
-/// must not inherit a previous run's indexes, so `pretend::run`
-/// calls [`clear_remote_binary_index_overrides`] where a run starts;
-/// unit tests use pid+nanos-unique temp dirs, so their keys never
-/// collide either way.
+/// The live-refresh override table for [`cached_binary_index`]. Cleared where a
+/// run starts; unit-test temp dirs never collide.
 pub(crate) static REMOTE_INDEX_OVERRIDE: OnceLock<
     RwLock<HashMap<PathBuf, Option<std::sync::Arc<BinaryIndex>>>>,
 > = OnceLock::new();
 
-/// Install (or replace) the in-memory index for `pkgdir` (real
-/// `bintree`'s fetched-then-maybe-cached `pkgindex` for the run):
-/// `Some(index)` resolves from it, `None` resolves nothing (a failed
-/// non-`--pretend` refresh drops even a stale cache, like real).
+/// Installs (or replaces) the in-memory index for `pkgdir` (Portage `bintree`'s
+/// fetched-then-maybe-cached `pkgindex`): `Some` resolves from it, `None`
+/// resolves nothing (a failed non-`--pretend` refresh drops even a stale cache).
 pub fn set_remote_binary_index_override(pkgdir: &Path, index: Option<std::sync::Arc<BinaryIndex>>) {
     REMOTE_INDEX_OVERRIDE
         .get_or_init(|| RwLock::new(HashMap::new()))
@@ -198,11 +139,8 @@ pub fn set_remote_binary_index_override(pkgdir: &Path, index: Option<std::sync::
         .insert(pkgdir.to_path_buf(), index);
 }
 
-/// Drop every live-refresh override installed by
-/// [`set_remote_binary_index_override`]. Called where a run starts
-/// (review M4), so a second in-process run resolves from its own
-/// refresh (or the disk) instead of inheriting the first run's
-/// in-memory indexes.
+/// Drops every live-refresh override. Called where a run starts (review M4),
+/// so a second in-process run resolves from its own refresh or the disk.
 pub fn clear_remote_binary_index_overrides() {
     if let Some(table) = REMOTE_INDEX_OVERRIDE.get() {
         table.write().unwrap().clear();
@@ -217,36 +155,22 @@ pub(crate) fn remote_binary_index_override(
         .and_then(|table| table.read().unwrap().get(pkgdir).cloned())
 }
 
-/// The local `$PKGDIR` binary index for this run: the CLI layer's own
-/// `$PKGDIR` directory scan (`config.scanned_binpkgs`) when it did one
-/// -- i.e. `<pkgdir>/Packages` was absent -- otherwise the parsed
-/// `<pkgdir>/Packages` file.
+/// The local `$PKGDIR` binary index for this run: the CLI layer's directory
+/// scan when `<pkgdir>/Packages` was absent, else the parsed `Packages` file.
 ///
-/// Backlog #123: built, not memoised. The old per-inputs memo keyed on
-/// the scanned `Vec`'s raw pointer (an ABA hazard the moment a second
-/// `scanned_binpkgs` assignment exists in one process), never re-read
-/// `<pkgdir>/Packages` once `None` was cached, and ignored the
-/// quickpkg-direct vdb entirely -- so the index is built once per
-/// resolution (`ResolveCtx::new`) and the resulting `Arc` is threaded
-/// to every consumer instead of being re-derived from `&Config` at each
-/// call site.
+/// Backlog #123: built, not memoised (the old per-inputs memo keyed on the
+/// scanned `Vec`'s raw pointer, never re-read once `None` was cached, and
+/// ignored the quickpkg-direct vdb). Built once per resolution and threaded
+/// to every consumer as an `Arc`.
 pub fn build_local_binpkg_index(config: &portage_profile::Config) -> std::sync::Arc<BinaryIndex> {
     let mut entries = match &config.scanned_binpkgs {
         Some(entries) => entries.clone(),
         None => read_packages_index(Path::new(&config.pkgdir)),
     };
-    // `--quickpkg-direct` (real `actions.py:150-164` + `bintree.
-    // _populate_additional`): every package installed in the quickpkg
-    // source root is injected into the binary-package pool as a candidate
-    // for the target-`ROOT` build, using that root's own vdb-recorded
-    // metadata. Real portage does `dbapi.cpv_inject` on each; portuale
-    // synthesizes the same `Packages`-style records and appends them
-    // here, so `list_binary_candidates` / `read_binary_metadata_any` /
-    // the dependency walk all pick them up transparently. A CPV the local
-    // `$PKGDIR` already carries wins (real `bintree.isremote` treats a
-    // local dup as already-present). Set once by the CLI layer -- the
-    // env-free process-global pattern `--package-moves` / `--useoldpkg-atoms`
-    // already use.
+    // `--quickpkg-direct` (Portage `actions.py:150-164` + `bintree.
+    // _populate_additional`): installed packages of the quickpkg source root
+    // join the binary pool as `Packages`-style records. A CPV the local
+    // `$PKGDIR` already carries wins. Set once by the CLI layer.
     if let Some(source_root) = quickpkg_direct_root() {
         let have: HashSet<String> = entries
             .iter()
@@ -261,16 +185,13 @@ pub fn build_local_binpkg_index(config: &portage_profile::Config) -> std::sync::
     std::sync::Arc::new(BinaryIndex::from_entries(entries))
 }
 
-/// `--quickpkg-direct-root` (real `actions.py:134-149`): the root whose
+/// `--quickpkg-direct-root` (Portage `actions.py:134-149`): the root whose
 /// installed packages `--quickpkg-direct` offers as binary candidates.
-/// `None` = not active (the default, or `--usepkg` absent, or the source
-/// root coincides with the target `ROOT` -- all resolved by the CLI
-/// layer). A process-global so it needn't thread through `resolve_pretend`'s
-/// / `build_local_binpkg_index`'s signatures.
+/// `None` = not active. A process-global so it needn't thread through
+/// resolution signatures.
 pub(crate) static QUICKPKG_DIRECT_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
 
-/// Set by `pretend.rs` from `--quickpkg-direct[-root]` before any
-/// resolution. Default (never called) is `None` -- a strict no-op.
+/// Set by `pretend.rs` from `--quickpkg-direct[-root]` before any resolution.
 pub fn set_quickpkg_direct_root(source_root: Option<PathBuf>) {
     *QUICKPKG_DIRECT_ROOT.write().unwrap() = source_root;
 }
@@ -279,14 +200,9 @@ pub(crate) fn quickpkg_direct_root() -> Option<PathBuf> {
     QUICKPKG_DIRECT_ROOT.read().unwrap().clone()
 }
 
-/// Every package recorded under `<source_root>/var/db/pkg`, as a
-/// `Packages`-style metadata record (real `bintree._populate_additional`'s
-/// `_pkg_str(cpv, metadata=dict(zip(aux_keys, repo.aux_get(cpv, aux_keys))))`
-/// -- the source is the vdb, so the deps/USE/keywords are that root's own
-/// installed-time snapshot). Keys mirror what `binary_candidates_from_index`
-/// / `read_binary_metadata` read: `CPV`, `SLOT` (with sub-slot),
-/// `KEYWORDS`, `USE`, `IUSE`, `LICENSE`, `PROPERTIES`, `RESTRICT`, the
-/// five `*DEPEND`, `REPO`.
+/// Every package under `<source_root>/var/db/pkg` as a `Packages`-style record
+/// (Portage `bintree._populate_additional` reads the vdb the same way). Keys
+/// mirror what `binary_candidates_from_index` / `read_binary_metadata` read.
 pub(crate) fn quickpkg_direct_index_entries(source_root: &Path) -> Vec<HashMap<String, String>> {
     let mut out = Vec::new();
     for pkg in all_installed_packages(source_root) {
@@ -332,25 +248,10 @@ pub(crate) fn quickpkg_direct_index_entries(source_root: &Path) -> Vec<HashMap<S
     out
 }
 
-/// Lists every binary-package build of `category/package` in `index`
-/// -- real portage's own `bindbapi`, the "binary"
-/// half of `_dynamic_depgraph_config`'s own candidate `dbs` list
-/// (`depgraph.py`'s own `if myopts.get("--usepkg") is True: dbs.append((
-/// bindb, "binary", ...))`, confirmed by reading it) -- added to the
-/// same candidate pool `list_candidates` already builds for ebuilds,
-/// only when `--usepkg`/`--usepkgonly` makes them eligible at all (see
-/// `resolve_pretend`'s own doc comment). A binary candidate's own
-/// `CPV` field (`category/package-version[-rN]`) is matched the exact
-/// same way an ebuild filename already is: filtered to this specific
-/// `category/package`, then `strip_version_prefix` peels the version
-/// off -- no general `pkgsplit` needed, since the target package name
-/// is already known here, same reasoning `list_candidates` itself
-/// already relies on. `repo_location`/`repo_priority`/`repo_name` are
-/// left as this candidate's own `PATH`/pseudo values (`""`/`0`/
-/// `"__binary__"`) -- a binary candidate is never re-read from a repo's
-/// own `metadata/md5-cache` the way an ebuild one is (`read_md5_cache`
-/// is never called for it anywhere), so those fields go unused for this
-/// source, not silently wrong.
+/// Binary-package builds of `category/package` -- Portage's `bindbapi`, added
+/// to the ebuild pool only when `--usepkg`/`--usepkgonly` makes them eligible.
+/// Matched off `CPV` like an ebuild filename; repo fields stay pseudo values.
+/// Portage: depgraph.py `_dynamic_depgraph_config`
 pub fn list_binary_candidates(
     index: &BinaryIndex,
     category: &str,
@@ -359,14 +260,8 @@ pub fn list_binary_candidates(
     binary_candidates_from_index(index, category, package, false)
 }
 
-/// Shared body of `list_binary_candidates` (local `$PKGDIR/Packages`,
-/// `remote = false`) and `list_remote_binary_candidates`'s per-binrepo
-/// scan (`remote = true`). `repo_name` comes from the index entry's own
-/// `REPO` field (real `Packages` records the source repo per package, so
-/// a `--getbinpkg` binary of `sys-fs/fuse` shows `::gentoo` at `-pv`),
-/// falling back to `portage.versions._unknown_repo` (`"__unknown__"`) --
-/// the same sentinel an installed package with no vdb `repository` file
-/// already uses.
+/// Shared body of `list_binary_candidates` and `list_remote_binary_candidates`.
+/// `repo_name` is the entry's `REPO`, else `"__unknown__"`.
 pub(crate) fn binary_candidates_from_index(
     index: &BinaryIndex,
     category: &str,
@@ -399,14 +294,8 @@ pub(crate) fn binary_candidates_from_index(
             slot,
             sub_slot,
             repo_location: PathBuf::new(),
-            // Deliberately lower than any real repo's own priority
-            // (main repo defaults to real portage's own -1000) -- so
-            // the existing, unmodified `vercmp` -> `repo_priority`
-            // tie-break every candidate-selection site already uses
-            // naturally prefers an identical-version ebuild over a
-            // binary candidate, matching real depgraph.py's own `dbs`
-            // list order (`"ebuild"` always checked before `"binary"`)
-            // with no special-casing needed anywhere else.
+            // Below any repo priority, so the `vercmp` -> `repo_priority`
+            // tie-break prefers an identical-version ebuild over a binary.
             repo_priority: i32::MIN,
             repo_name: entry
                 .get("REPO")
@@ -431,19 +320,11 @@ pub(crate) fn binary_candidates_from_index(
     candidates
 }
 
-/// Collapse binpkg-multi-instance duplicates: several `Packages` entries
-/// for one `cat/pkg-ver:slot/sub_slot::repo` (different `BUILD_ID`s).
-/// Real `_iter_match_pkgs` yields same-version instances newest-`BUILD_TIME`
-/// first (`dbapi._cmp_cpv`, reversed) and the selection loop `break`s on
-/// the first instance that passes every per-instance check -- visibility,
-/// the atom's own `[use]` deps, `--binpkg-respect-use`. `--binpkg-respect-use`
-/// has already run on `candidates`; this applies the atom-`[use]` check
-/// (`atom`/`config`) and, per `cpv:slot::repo` group, keeps the
-/// highest-`(BUILD_TIME, BUILD_ID)` instance that *satisfies* it -- or, if
-/// none in the group do, the newest one anyway (so the group still flows
-/// to the ordinary `NoVisibleCandidate` / ebuild-fallback path exactly as
-/// a lone candidate would). Ebuild candidates pass straight through; the
-/// kept instance takes the position of the group's first member.
+/// Collapses binpkg-multi-instance duplicates (several entries, different
+/// `BUILD_ID`s, per `cat/pkg-ver:slot/sub_slot::repo`): keeps the highest-
+/// `(BUILD_TIME, BUILD_ID)` instance satisfying the atom's `[use]` deps -- or
+/// the newest anyway, preserving the `NoVisibleCandidate`/ebuild-fallback path.
+/// Portage `_iter_match_pkgs` yields newest first and `break`s on the first pass.
 pub(crate) fn dedup_binary_instances(
     candidates: Vec<Candidate>,
     atom: &portage_dep::Atom,
@@ -463,8 +344,8 @@ pub(crate) fn dedup_binary_instances(
     // key -> index into `out` of the currently-kept instance.
     let mut kept: HashMap<(String, String, String, String), usize> = HashMap::new();
     let mut out: Vec<Candidate> = Vec::with_capacity(candidates.len());
-    // Ranks an instance: `(satisfies-atom-use, BUILD_TIME, BUILD_ID)` --
-    // a satisfying instance always outranks a non-satisfying one.
+    // Ranks an instance: satisfying the atom's use-deps outranks not, then
+    // `(BUILD_TIME, BUILD_ID)`.
     let rank = |x: &Candidate| {
         (
             use_ok(x),
@@ -501,24 +382,13 @@ pub(crate) fn dedup_binary_instances(
     out
 }
 
-/// `--getbinpkg`/`-g`: binary candidates for `category/package` from
-/// every `config.binrepos` binrepo's own `Packages` index -- the live
-/// refresh's in-memory copy when it ran (real `bintree._populate_remote`,
-/// backlog #192; `--pretend` refreshes exactly like a real merge), else
-/// the on-disk index (`BinRepo::packages_dir`: the edb cache for
-/// `http(s)`/`ssh`, the URI's own directory for `file://`).
-/// `root` is the `EROOT` under which the `http(s)://`/`ssh://` cache
-/// lives (`BinRepo::packages_dir`). A remote build of a cpv+version the
-/// local `$PKGDIR` (`local_pkgdir`) also carries is dropped -- real
-/// `bintree.isremote` returns `False` once a package is in
-/// `_additional_pkgs` (downloaded), and portuale treats "present in
-/// `$PKGDIR/Packages`" as exactly that. Binrepos are consulted in
-/// `config.binrepos` order (already `(priority, name)`-sorted); a later
-/// binrepo does not shadow an earlier one for the same version (both
-/// stay in the pool, resolved by the same `vercmp` -> `repo_priority`
-/// tie-break every other candidate goes through -- and every binary
-/// candidate shares `repo_priority = i32::MIN`, so ties fall to
-/// first-seen, matching real's binrepo-priority order).
+/// `--getbinpkg`/`-g`: binary candidates from every `config.binrepos` binrepo's
+/// `Packages` index -- the live refresh's in-memory copy when it ran (Portage
+/// `bintree._populate_remote`, backlog #192; `--pretend` refreshes like a
+/// merge), else the on-disk index. A remote instance the local `$PKGDIR` also
+/// carries is dropped (Portage `bintree.isremote`); binrepos resolve in order
+/// with the same `vercmp` -> `repo_priority` tie-break (all binaries share
+/// `repo_priority = i32::MIN`, so ties fall to first-seen).
 pub fn list_remote_binary_candidates(
     binrepos: &[portage_profile::BinRepo],
     root: &Path,
@@ -529,25 +399,19 @@ pub fn list_remote_binary_candidates(
     if binrepos.is_empty() {
         return Vec::new();
     }
-    // Instances are identified by `(version, BUILD_ID)`: under
-    // binpkg-multi-instance real `bintree.isremote` is per `cpv` +
-    // `build_id`, so a local build 6 must not hide a remote build 7
-    // (backlog #300). An entry with no `BUILD_ID` is its own `None` key,
-    // which keeps the pre-multi-instance version-level shadowing.
+    // Instances are `(version, BUILD_ID)`: under binpkg-multi-instance a local
+    // build 6 must not hide a remote build 7 (backlog #300). A `BUILD_ID`-less
+    // entry is its own `None` key, keeping the version-level shadowing.
     let local_instances: HashSet<(String, Option<String>)> =
         binary_candidates_from_index(local, category, package, false)
             .into_iter()
             .map(|c| (c.version, c.build_id))
             .collect();
 
-    // An instance already carried by the local `$PKGDIR` (real
-    // `bintree.isremote`), or by an *earlier*-priority binrepo, shadows
-    // a later binrepo's identical instance -- but binpkg-multi-instance
-    // means one binrepo can legitimately list several builds of one
-    // version, so the shadow set is only grown a whole binrepo at a time
-    // (all of that binrepo's instances stay; `dedup_binary_instances`
-    // collapses them later by `(cpv, slot, repo)` keeping the newest
-    // `BUILD_TIME`).
+    // An instance the local `$PKGDIR` or an earlier-priority binrepo carries
+    // shadows a later binrepo's identical instance -- but one binrepo can list
+    // several builds of one version, so the shadow set grows a whole binrepo
+    // at a time (`dedup_binary_instances` collapses them later).
     let mut out: Vec<Candidate> = Vec::new();
     let mut shadowed: HashSet<(String, Option<String>)> = local_instances;
     for binrepo in binrepos {
@@ -566,12 +430,10 @@ pub fn list_remote_binary_candidates(
     out
 }
 
-/// Picks one `Packages` entry of `cat/pkg-version` from `entries`
-/// (binpkg-multi-instance aware, backlog #299/#301). `Some(id)` selects
-/// the entry whose `BUILD_ID` is exactly `id` (the build the resolver
-/// planned); `None` selects the newest build -- highest `(BUILD_TIME,
-/// BUILD_ID)`, real `dbapi._cmp_cpv` order -- which for an index with a
-/// single (or `BUILD_ID`-less) entry is simply that entry.
+/// Picks one `Packages` entry of `cat/pkg-version` (binpkg-multi-instance
+/// aware, backlogs #299/#301). `Some(id)` selects exactly that `BUILD_ID`;
+/// `None` the newest build -- highest `(BUILD_TIME, BUILD_ID)`, Portage
+/// `dbapi._cmp_cpv` order.
 pub(crate) fn pick_binary_instance<'a>(
     entries: &'a [HashMap<String, String>],
     want_cpv: &str,
@@ -597,15 +459,12 @@ pub(crate) fn pick_binary_instance<'a>(
     }
 }
 
-/// The raw `Packages` index record for `category/package-version` from
-/// the first binrepo (in `binrepos` order) whose cached index carries
-/// it -- the repo itself (its `sync_uri` for the download, its
-/// `verify_signature` for real `gpkg.__init__`'s own per-binrepo
-/// signature policy, `gpkg.py:792-819`) plus the index record
-/// (`PATH`, `SIZE`, the `SHA*`/`MD5` digests). `None` if no configured
-/// binrepo lists that exact CPV. When the binrepo lists several builds
-/// of the version, the newest one is returned; use
-/// [`find_remote_binpkg_instance`] to ask for a specific `BUILD_ID`.
+/// The raw `Packages` record for `category/package-version` from the first
+/// binrepo (in order) listing that exact CPV: the repo (sync URI, signature
+/// policy) plus the record (`PATH`, `SIZE`, digests). `None` if no binrepo
+/// lists it. Newest build when several exist; use
+/// [`find_remote_binpkg_instance`] for a specific `BUILD_ID`.
+/// Portage: gpkg.py:792-819 per-binrepo signature policy
 pub fn find_remote_binpkg<'a>(
     binrepos: &'a [portage_profile::BinRepo],
     root: &Path,
@@ -634,11 +493,9 @@ pub struct FindRemoteBinpkgInstanceArgs<'a, 'b> {
     pub build_id: Option<&'b str>,
 }
 
-/// [`find_remote_binpkg`] for one specific build (backlog #301): with
-/// `Some(build_id)` the binrepos are scanned in order for the record
-/// carrying exactly that `BUILD_ID`; if no binrepo has it (or `None` was
-/// given) the newest build of the version from the first binrepo that
-/// lists the version is returned.
+/// [`find_remote_binpkg`] for one specific build (backlog #301): `Some(build_id)`
+/// scans the binrepos in order for exactly that `BUILD_ID`, falling back to
+/// the newest build of the version.
 pub fn find_remote_binpkg_instance<'a>(
     args: FindRemoteBinpkgInstanceArgs<'a, '_>,
 ) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
