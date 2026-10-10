@@ -1,51 +1,17 @@
 //! The standalone actions: --resume, --config, --search, --check-news, --info, --clean, --rage-clean, --unmerge, --depclean, --prune.
 
-use crate::ebuild_phases::ShellBackend;
 use crate::pretend::*;
 use portage_profile::Config;
 use portage_repo::RepoConfig;
 
 /// The values [`dispatch_standalone_actions`] reads from its caller.
 pub(crate) struct DispatchStandaloneActionsArgs<'a> {
-    pub(crate) resume: bool,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) config: &'a mut Config,
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
-    pub(crate) skipfirst: bool,
-    pub(crate) pretend: bool,
-    pub(crate) color_opt: Option<bool>,
-    pub(crate) jobs: usize,
-    pub(crate) load_average: Option<f64>,
-    pub(crate) shell: ShellBackend,
-    pub(crate) debug: bool,
-    pub(crate) quiet: bool,
-    pub(crate) ask: bool,
-    pub(crate) read_news: bool,
-    pub(crate) config_action: bool,
-    pub(crate) atom_args: &'a [&'a str],
     pub(crate) color: &'a Colorizer,
-    pub(crate) search_action: bool,
     pub(crate) repos: &'a [RepoConfig],
-    pub(crate) searchdesc: bool,
-    pub(crate) fuzzy_search: bool,
-    pub(crate) regex_search_auto: bool,
-    pub(crate) search_similarity: f64,
-    pub(crate) check_news: bool,
-    pub(crate) info_action: bool,
-    pub(crate) usepkg: bool,
-    pub(crate) usepkgonly: bool,
-    pub(crate) getbinpkg: bool,
-    pub(crate) getbinpkgonly: bool,
-    pub(crate) misspell_suggestions: bool,
-    pub(crate) clean_action: bool,
-    pub(crate) rage_clean: bool,
-    pub(crate) unmerge: bool,
-    pub(crate) depclean: bool,
-    pub(crate) verbose: bool,
-    pub(crate) lib_check: bool,
-    pub(crate) deselect_n: bool,
-    pub(crate) prune: bool,
-    pub(crate) nodeps: bool,
 }
 
 /// The standalone actions: --resume, --config, --search, --check-news, --info, --clean, --rage-clean, --unmerge, --depclean, --prune.
@@ -53,10 +19,15 @@ pub(crate) fn dispatch_standalone_actions(
     args: DispatchStandaloneActionsArgs<'_>,
 ) -> Option<ExitCode> {
     let DispatchStandaloneActionsArgs {
-        resume,
+        opts,
         config,
         root,
         config_root,
+        color,
+        repos,
+    } = args;
+    let &EmergeOpts {
+        resume,
         skipfirst,
         pretend,
         color_opt,
@@ -68,10 +39,8 @@ pub(crate) fn dispatch_standalone_actions(
         ask,
         read_news,
         config_action,
-        atom_args,
-        color,
+        ref atom_args,
         search_action,
-        repos,
         searchdesc,
         fuzzy_search,
         regex_search_auto,
@@ -92,7 +61,8 @@ pub(crate) fn dispatch_standalone_actions(
         deselect_n,
         prune,
         nodeps,
-    } = args;
+        ..
+    } = opts;
     // `--resume` / `-r`: a standalone action -- replay the saved
     // `mtimedb["resume"]` mergelist (real `_emerge/actions.py`). No atoms.
     // `--resume --pretend` prints the saved list and stops (see

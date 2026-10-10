@@ -4,10 +4,10 @@ use crate::pretend::*;
 use portage_profile::Config;
 use portage_repo::GraphResult;
 use portage_repo::RepoConfig;
-use std::path::PathBuf;
 
 /// The values [`show_merge_list_summary`] reads from its caller.
 pub(crate) struct ShowMergeListSummaryArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) circular_forced_display: bool,
     pub(crate) rendered_rows: &'a [(usize, bool)],
     pub(crate) display_entries: &'a [GraphEntry],
@@ -17,17 +17,15 @@ pub(crate) struct ShowMergeListSummaryArgs<'a> {
     pub(crate) display_list_suppressed: bool,
     pub(crate) root: &'a Path,
     pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
-    pub(crate) onlydeps: bool,
     pub(crate) color: &'a Colorizer,
     pub(crate) result: &'a GraphResult,
     pub(crate) disp_tree: bool,
-    pub(crate) pretend: bool,
-    pub(crate) ask: bool,
 }
 
 /// The counts and summary lines under the merge list, and the redisplay before a merge.
 pub(crate) fn show_merge_list_summary(args: ShowMergeListSummaryArgs<'_>) {
     let ShowMergeListSummaryArgs {
+        opts,
         circular_forced_display,
         rendered_rows,
         display_entries,
@@ -37,13 +35,16 @@ pub(crate) fn show_merge_list_summary(args: ShowMergeListSummaryArgs<'_>) {
         display_list_suppressed,
         root,
         top_level_pkgs,
-        onlydeps,
         color,
         result,
         disp_tree,
+    } = args;
+    let &EmergeOpts {
+        onlydeps,
         pretend,
         ask,
-    } = args;
+        ..
+    } = opts;
     // Real `output.py::display`: `if self.conf.verbosity == 3:
     // self.print_verbose(...)` -- the `Total: …` counters line, printed
     // after every entry (and blocker) line, only under `-v`, for the
@@ -117,6 +118,8 @@ pub(crate) fn show_merge_list_summary(args: ShowMergeListSummaryArgs<'_>) {
 
 /// The values [`render_merge_list`] reads from its caller.
 pub(crate) struct RenderMergeListArgs<'a> {
+    pub(crate) plan: &'a ResolvePlan,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) show_merge_list: bool,
     pub(crate) disp_tree: bool,
     pub(crate) circular_forced_display: bool,
@@ -124,36 +127,27 @@ pub(crate) struct RenderMergeListArgs<'a> {
     pub(crate) expanded_atoms: &'a [String],
     pub(crate) config: &'a Config,
     pub(crate) root: &'a Path,
-    pub(crate) implicit_system_deps: bool,
     pub(crate) repos: &'a [RepoConfig],
-    pub(crate) dynamic_deps: bool,
     pub(crate) result: &'a GraphResult,
     pub(crate) rendered_rows: &'a mut Vec<(usize, bool)>,
     pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
-    pub(crate) onlydeps: bool,
-    pub(crate) oneshot: bool,
-    pub(crate) unordered_display: bool,
     pub(crate) disp_verbose: bool,
     pub(crate) disp_quiet: bool,
-    pub(crate) alphabetical: bool,
-    pub(crate) root_deps_running_root: &'a Option<PathBuf>,
     pub(crate) color: &'a Colorizer,
     pub(crate) system_atoms: &'a Vec<String>,
     pub(crate) world_atoms: &'a [String],
     pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
     pub(crate) blocker_lines: &'a mut Vec<String>,
-    pub(crate) quiet: bool,
-    pub(crate) columns: bool,
     pub(crate) columnwidth: i64,
-    pub(crate) pretend: bool,
     pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
     pub(crate) deferred_abort_unsat: &'a mut Vec<usize>,
-    pub(crate) verbose: bool,
 }
 
 /// The merge list: one row per entry, plus blocker rows.
 pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
     let RenderMergeListArgs {
+        plan,
+        opts,
         show_merge_list,
         disp_tree,
         circular_forced_display,
@@ -161,32 +155,38 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
         expanded_atoms,
         config,
         root,
-        implicit_system_deps,
         repos,
-        dynamic_deps,
         result,
         rendered_rows,
         top_level_pkgs,
-        onlydeps,
-        oneshot,
-        unordered_display,
         disp_verbose,
         disp_quiet,
-        alphabetical,
-        root_deps_running_root,
         color,
         system_atoms,
         world_atoms,
         force_reinstall_cps,
         blocker_lines,
-        quiet,
-        columns,
         columnwidth,
-        pretend,
         gated_abort_partial,
         deferred_abort_unsat,
-        verbose,
     } = args;
+    let &ResolvePlan {
+        dynamic_deps,
+        ref root_deps_running_root,
+        ..
+    } = plan;
+    let &EmergeOpts {
+        implicit_system_deps,
+        onlydeps,
+        oneshot,
+        unordered_display,
+        alphabetical,
+        quiet,
+        columns,
+        pretend,
+        verbose,
+        ..
+    } = opts;
     if show_merge_list {
         if disp_tree {
             // #131 S1: the tree-mode serialization order for the display
@@ -422,40 +422,41 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
 
 /// The values [`print_json_result`] reads from its caller.
 pub(crate) struct PrintJsonResultArgs<'a> {
-    pub(crate) json: bool,
+    pub(crate) plan: &'a ResolvePlan,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) display_entries: &'a [GraphEntry],
     pub(crate) result: &'a GraphResult,
     pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
-    pub(crate) verbose: bool,
-    pub(crate) root_deps_running_root: &'a Option<PathBuf>,
     pub(crate) has_autounmask_changes: bool,
-    pub(crate) autounmask_only: bool,
-    pub(crate) pretend: bool,
-    pub(crate) autounmask_continue: Option<bool>,
-    pub(crate) backtrack_max: u32,
-    pub(crate) buildpkgonly: bool,
-    pub(crate) nodeps: bool,
     pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
 }
 
 /// The `--json` output, which replaces the merge list.
 pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCode> {
     let PrintJsonResultArgs {
-        json,
+        plan,
+        opts,
         display_entries,
         result,
         top_level_pkgs,
-        verbose,
-        root_deps_running_root,
         has_autounmask_changes,
+        gated_abort_partial,
+    } = args;
+    let ResolvePlan {
+        root_deps_running_root,
+        ..
+    } = plan;
+    let &EmergeOpts {
+        json,
+        verbose,
         autounmask_only,
         pretend,
         autounmask_continue,
         backtrack_max,
         buildpkgonly,
         nodeps,
-        gated_abort_partial,
-    } = args;
+        ..
+    } = opts;
     if json {
         print_json(
             display_entries,
@@ -548,22 +549,9 @@ pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
     }
 }
 
-/// The values [`show_resolution_header`] reads from its caller.
-pub(crate) struct ShowResolutionHeaderArgs<'a> {
-    pub(crate) pretend: bool,
-    pub(crate) quiet: bool,
-    pub(crate) ask: bool,
-    pub(crate) tree: bool,
-    pub(crate) verbose: bool,
-    pub(crate) buildpkgonly: bool,
-    pub(crate) unordered_display: bool,
-    pub(crate) nodeps: bool,
-    pub(crate) result: &'a GraphResult,
-}
-
 /// The header printed before the merge list of a real (non-pretend) run.
-pub(crate) fn show_resolution_header(args: ShowResolutionHeaderArgs<'_>) {
-    let ShowResolutionHeaderArgs {
+pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult) {
+    let &EmergeOpts {
         pretend,
         quiet,
         ask,
@@ -572,8 +560,8 @@ pub(crate) fn show_resolution_header(args: ShowResolutionHeaderArgs<'_>) {
         buildpkgonly,
         unordered_display,
         nodeps,
-        result,
-    } = args;
+        ..
+    } = opts;
     // Backlog #185 (fix round 1): real's resolution-phase display for
     // a non-`--pretend` run, printed whether or not the list itself is
     // shown -- and whether or not resolution succeeds. Real `depgraph.py::

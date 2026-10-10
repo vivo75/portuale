@@ -1,25 +1,18 @@
 //! Set the resolver's process-wide options from the parsed command line.
 
-/// The values [`apply_process_globals`] reads from its caller.
-pub(crate) struct ApplyProcessGlobalsArgs {
-    pub(crate) package_moves: bool,
-    pub(crate) useoldpkg_atoms: Vec<String>,
-    pub(crate) binpkg_changed_deps_override: Option<bool>,
-    pub(crate) use_ebuild_visibility: bool,
-    pub(crate) debug: bool,
-    pub(crate) pretend: bool,
-}
+use crate::pretend::*;
 
 /// Set the resolver's process-wide options from the parsed command line.
-pub(crate) fn apply_process_globals(args: ApplyProcessGlobalsArgs) -> Vec<String> {
-    let ApplyProcessGlobalsArgs {
+pub(crate) fn apply_process_globals(opts: &EmergeOpts<'_>) {
+    let &EmergeOpts {
         package_moves,
-        useoldpkg_atoms,
+        ref useoldpkg_atoms,
         binpkg_changed_deps_override,
         use_ebuild_visibility,
         debug,
         pretend,
-    } = args;
+        ..
+    } = opts;
     // `--package-moves` (real `y_or_n`, default "y"): must be applied
     // before anything reads `profiles/updates/` -- see
     // `portage_repo::set_package_moves_enabled`. Harmless for every
@@ -29,11 +22,10 @@ pub(crate) fn apply_process_globals(args: ApplyProcessGlobalsArgs) -> Vec<String
     // `--useoldpkg-atoms ATOMS`: a process-global read during candidate
     // selection (see `portage_repo::set_useoldpkg_atoms`). Set once here,
     // before any `resolve_pretend_graph` call; empty is a strict no-op.
-    // A clone is kept for the slot-collision `need_rebuild` trailer,
-    // which re-checks the same atoms at render time (real reads
+    // `opts.useoldpkg_atoms` stays for the slot-collision `need_rebuild`
+    // trailer, which re-checks the same atoms at render time (real reads
     // `frozen_config.useoldpkg_atoms` there too).
-    let useoldpkg_atoms_render = useoldpkg_atoms.clone();
-    portage_repo::set_useoldpkg_atoms(useoldpkg_atoms);
+    portage_repo::set_useoldpkg_atoms(useoldpkg_atoms.clone());
 
     // `--binpkg-changed-deps=y|n` / `--use-ebuild-visibility=y|n`:
     // resolver-time overrides of automatic defaults, applied as
@@ -50,5 +42,4 @@ pub(crate) fn apply_process_globals(args: ApplyProcessGlobalsArgs) -> Vec<String
     // the traced resolver the way real's does). Process-global, set once
     // before any `resolve_pretend_graph` call.
     portage_repo::set_resolver_debug(debug && pretend);
-    useoldpkg_atoms_render
 }

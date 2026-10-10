@@ -399,161 +399,21 @@ pub fn run(args: &[String]) -> ExitCode {
     let effective_args = args_with_emerge_defaults(&config, args);
     let args: &[String] = &effective_args;
 
-    let EmergeOpts {
-        atom_args,
-        mut pretend,
-        mut ask,
-        read_news,
-        resume,
-        skipfirst,
-        verbose,
-        quiet,
-        newuse,
-        changed_use,
-        nodeps,
-        onlydeps,
-        onlydeps_with_rdeps,
-        onlydeps_with_ideps,
-        oneshot,
-        tree,
-        unordered_display,
-        columns,
-        alphabetical,
-        color_opt,
-        lib_check,
-        update,
-        deep,
-        excluded,
-        reinstall_atoms,
-        useoldpkg_atoms,
-        rebuild_if_new_slot,
-        rebuild_if_unbuilt,
-        rebuild_if_new_rev,
-        rebuild_if_new_ver,
-        binpkg_changed_deps_override,
-        use_ebuild_visibility,
-        rebuild_exclude,
-        rebuild_ignore,
-        complete_graph,
-        ignore_world,
-        complete_if_new_use,
-        complete_if_new_ver,
-        dynamic_deps,
-        misspell_suggestions,
-        package_moves,
-        implicit_system_deps,
-        usepkg_exclude,
-        usepkg_include,
-        json,
-        deselect,
-        deselect_n,
-        unmerge,
-        depclean,
-        prune,
-        config_action,
-        list_sets,
-        search_action,
-        searchdesc,
-        fuzzy_search,
-        regex_search_auto,
-        search_similarity,
-        check_news,
-        regen_action,
-        metadata_action,
-        sync_action,
-        clean_action,
-        rage_clean,
-        info_action,
-        mut with_bdeps,
-        with_bdeps_given,
-        with_bdeps_auto,
-        changed_deps,
-        changed_slot,
-        newrepo,
-        emptytree,
-        buildpkgonly,
-        buildpkg_opt,
-        quiet_build,
-        buildpkg_exclude,
-        keep_going,
-        debug,
-        jobs,
-        load_average,
-        root_deps,
-        with_test_deps,
-        changed_deps_report,
-        verbose_slot_rebuilds,
-        ignore_built_slot_operator_deps,
-        backtrack_max,
-        solver,
-        verbose_conflicts,
-        autounmask,
-        autounmask_keep_keywords,
-        autounmask_use,
-        autounmask_license,
-        autounmask_keep_masks,
-        autounmask_only,
-        autounmask_continue,
-        autounmask_backtrack,
-        usepkg,
-        usepkgonly,
-        getbinpkg,
-        getbinpkgonly,
-        binpkg_respect_use,
-        quickpkg_direct,
-        quickpkg_direct_root,
-        rebuilt_binaries,
-        rebuilt_binaries_timestamp,
-        noreplace,
-        selective_flag,
-        shell,
-    } = match parse_emerge_args(args) {
+    let mut opts = match parse_emerge_args(args) {
         Ok(opts) => opts,
         Err(code) => return code,
     };
 
-    let useoldpkg_atoms_render = apply_process_globals(ApplyProcessGlobalsArgs {
-        package_moves,
-        useoldpkg_atoms,
-        binpkg_changed_deps_override,
-        use_ebuild_visibility,
-        debug,
-        pretend,
-    });
+    apply_process_globals(&opts);
 
-    if let Some(code) = validate_and_early_actions(ValidateAndEarlyActionsArgs {
-        tree,
-        columns,
-        pretend: &mut pretend,
-        ask: &mut ask,
-        sync_action,
-        search_action,
-        info_action,
-        list_sets,
-        check_news,
-        regen_action,
-        metadata_action,
-        color_opt,
-        debug,
-        deselect,
-        depclean,
-        prune,
-        unmerge,
-        atom_args: &atom_args,
-        jobs,
-        load_average,
-        config_action,
-        resume,
-        clean_action,
-        rage_clean,
-    }) {
+    if let Some(code) = validate_and_early_actions(&mut opts) {
         return code;
     }
 
     // Real `actions.py::adjust_configs` colour gate -- resolved once here
     // so every action path (the standalone cleanup actions below and the
     // ordinary resolve-graph path) shares one `Colorizer`.
-    let color = Colorizer::new(color::resolve_havecolor(color_opt));
+    let color = Colorizer::new(color::resolve_havecolor(opts.color_opt));
 
     // Real `_emerge/actions.py::apply_priorities` (called from
     // `run_action`, before any action): renice / ionice this process so
@@ -561,45 +421,12 @@ pub fn run(args: &[String]) -> ExitCode {
     apply_portage_scheduling_policy();
 
     if let Some(code) = dispatch_standalone_actions(DispatchStandaloneActionsArgs {
-        resume,
+        opts: &opts,
         config: &mut config,
         root: &root,
         config_root: &config_root,
-        skipfirst,
-        pretend,
-        color_opt,
-        jobs,
-        load_average,
-        shell,
-        debug,
-        quiet,
-        ask,
-        read_news,
-        config_action,
-        atom_args: &atom_args,
         color: &color,
-        search_action,
         repos: &repos,
-        searchdesc,
-        fuzzy_search,
-        regex_search_auto,
-        search_similarity,
-        check_news,
-        info_action,
-        usepkg,
-        usepkgonly,
-        getbinpkg,
-        getbinpkgonly,
-        misspell_suggestions,
-        clean_action,
-        rage_clean,
-        unmerge,
-        depclean,
-        verbose,
-        lib_check,
-        deselect_n,
-        prune,
-        nodeps,
     }) {
         return code;
     }
@@ -608,151 +435,38 @@ pub fn run(args: &[String]) -> ExitCode {
         selected_set_args,
         set_args,
     } = match expand_targets(ExpandTargetsArgs {
-        autounmask_continue,
-        autounmask,
+        opts: &opts,
         color: &color,
-        atom_args: &atom_args,
         config: &config,
         root: &root,
         config_root: &config_root,
         repos: &repos,
-        quiet,
     }) {
         Ok(out) => out,
         Err(code) => return code,
     };
 
-    let ResolvePlan {
-        selective,
-        autounmask_suggest_keywords,
-        autounmask_suggest_use,
-        autounmask_suggest_license,
-        autounmask_suggest_masks,
-        usepkgonly,
-        usepkg,
-        getbinpkg,
-        binpkg_respect_use,
-        rebuilt_binaries,
-        root_deps_running_root,
-        running_config,
-        distdir,
-        rebuild_if_unbuilt,
-        rebuild_if_new_rev,
-        rebuild_if_new_ver,
-        dynamic_deps,
-        complete_graph,
-        complete_if_new_use,
-        complete_if_new_ver,
-        complete_seed_atoms,
-    } = match plan_resolve(PlanResolveArgs {
-        with_bdeps_given,
-        with_bdeps: &mut with_bdeps,
-        with_bdeps_auto,
-        usepkg,
-        usepkgonly,
-        getbinpkg,
-        getbinpkgonly,
-        selective_flag,
-        update,
-        newuse,
-        changed_use,
-        changed_deps,
-        changed_slot,
-        noreplace,
-        newrepo,
-        autounmask,
-        autounmask_keep_keywords,
-        autounmask_use,
-        autounmask_license,
-        autounmask_keep_masks,
+    let plan = match plan_resolve(PlanResolveArgs {
+        opts: &mut opts,
         config: &mut config,
-        autounmask_backtrack,
-        autounmask_continue,
-        quickpkg_direct,
-        quickpkg_direct_root: &quickpkg_direct_root,
         root: &root,
-        binpkg_respect_use,
-        rebuilt_binaries,
-        deep,
-        root_deps,
         repos: &repos,
-        pretend,
-        rebuild_if_unbuilt,
-        rebuild_if_new_rev,
-        rebuild_if_new_ver,
-        dynamic_deps,
-        nodeps,
-        complete_graph,
-        complete_if_new_use,
-        complete_if_new_ver,
-        ignore_world,
         config_root: &config_root,
         color: &color,
-        ask,
-        read_news,
     }) {
         Ok(out) => out,
         Err(code) => return code,
     };
     let result = match run_resolve_phases(RunResolvePhasesArgs {
-        complete_seed_atoms: &complete_seed_atoms,
+        plan: &plan,
+        opts: &opts,
         config: &config,
         config_root: &config_root,
         root: &root,
         expanded_atoms: &expanded_atoms,
-        newuse,
-        changed_use,
-        nodeps,
-        onlydeps,
-        onlydeps_with_rdeps,
-        onlydeps_with_ideps,
-        update,
-        deep,
-        excluded: &excluded,
-        with_bdeps,
-        changed_deps,
-        changed_slot,
-        with_test_deps,
-        changed_deps_report,
-        selective,
-        autounmask_suggest_keywords,
-        autounmask_suggest_use,
-        autounmask_suggest_license,
-        autounmask_suggest_masks,
-        usepkg,
-        usepkgonly,
-        binpkg_respect_use,
-        usepkg_exclude: &usepkg_exclude,
-        usepkg_include: &usepkg_include,
-        rebuilt_binaries,
-        rebuilt_binaries_timestamp,
-        newrepo,
-        buildpkgonly,
-        root_deps_running_root: &root_deps_running_root,
-        distdir: &distdir,
-        emptytree,
-        getbinpkg,
-        ignore_built_slot_operator_deps,
-        backtrack_max,
-        reinstall_atoms: &reinstall_atoms,
-        rebuild_if_new_slot,
-        rebuild_if_unbuilt,
-        rebuild_if_new_rev,
-        rebuild_if_new_ver,
-        rebuild_exclude: &rebuild_exclude,
-        rebuild_ignore: &rebuild_ignore,
-        dynamic_deps,
-        implicit_system_deps,
         set_args: &set_args,
-        solver,
         repos: &repos,
-        misspell_suggestions,
-        pretend,
         color: &color,
-        complete_if_new_use,
-        complete_if_new_ver,
-        complete_graph,
-        running_config: &running_config,
     }) {
         Ok(out) => out,
         Err(code) => return code,
@@ -806,21 +520,15 @@ pub fn run(args: &[String]) -> ExitCode {
         || !result.autounmask_mask_changes.is_empty()
         || !result.autounmask_use_changes.is_empty()
         || !result.autounmask_license_changes.is_empty();
-    let show_merge_list = (!autounmask_only
-        && merge_list_shown(pretend, ask, tree, verbose, quiet)
-        && (pretend || gated_abort_partial.is_none()))
-        || autounmask_only_reshows_merge_list(pretend, autounmask_only, has_autounmask_changes);
-    show_resolution_header(ShowResolutionHeaderArgs {
-        pretend,
-        quiet,
-        ask,
-        tree,
-        verbose,
-        buildpkgonly,
-        unordered_display,
-        nodeps,
-        result: &result,
-    });
+    let show_merge_list = (!opts.autounmask_only
+        && merge_list_shown(opts.pretend, opts.ask, opts.tree, opts.verbose, opts.quiet)
+        && (opts.pretend || gated_abort_partial.is_none()))
+        || autounmask_only_reshows_merge_list(
+            opts.pretend,
+            opts.autounmask_only,
+            has_autounmask_changes,
+        );
+    show_resolution_header(&opts, &result);
 
     show_pprovided_notice(&result, &color);
 
@@ -837,19 +545,12 @@ pub fn run(args: &[String]) -> ExitCode {
         .collect();
 
     if let Some(code) = print_json_result(PrintJsonResultArgs {
-        json,
+        plan: &plan,
+        opts: &opts,
         display_entries,
         result: &result,
         top_level_pkgs: &top_level_pkgs,
-        verbose,
-        root_deps_running_root: &root_deps_running_root,
         has_autounmask_changes,
-        autounmask_only,
-        pretend,
-        autounmask_continue,
-        backtrack_max,
-        buildpkgonly,
-        nodeps,
         gated_abort_partial,
     }) {
         return code;
@@ -948,7 +649,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let (disp_tree, disp_verbose, disp_quiet) = if circular_forced_display {
         (true, true, false)
     } else {
-        (tree, verbose, quiet)
+        (opts.tree, opts.verbose, opts.quiet)
     };
     // Backlog #206 S2: the rendered entry rows of the tree walk, for the
     // circular `Total:` recount only (real counts displayed merge rows —
@@ -956,6 +657,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // the tree branch below runs.
     let mut rendered_rows: Vec<(usize, bool)> = Vec::new();
     render_merge_list(RenderMergeListArgs {
+        plan: &plan,
+        opts: &opts,
         show_merge_list,
         disp_tree,
         circular_forced_display,
@@ -963,34 +666,24 @@ pub fn run(args: &[String]) -> ExitCode {
         expanded_atoms: &expanded_atoms,
         config: &config,
         root: &root,
-        implicit_system_deps,
         repos: &repos,
-        dynamic_deps,
         result: &result,
         rendered_rows: &mut rendered_rows,
         top_level_pkgs: &top_level_pkgs,
-        onlydeps,
-        oneshot,
-        unordered_display,
         disp_verbose,
         disp_quiet,
-        alphabetical,
-        root_deps_running_root: &root_deps_running_root,
         color: &color,
         system_atoms,
         world_atoms: &world_atoms,
         force_reinstall_cps: &force_reinstall_cps,
         blocker_lines: &mut blocker_lines,
-        quiet,
-        columns,
         columnwidth,
-        pretend,
         gated_abort_partial,
         deferred_abort_unsat: &mut deferred_abort_unsat,
-        verbose,
     });
 
     show_merge_list_summary(ShowMergeListSummaryArgs {
+        opts: &opts,
         circular_forced_display,
         rendered_rows: &rendered_rows,
         display_entries,
@@ -1000,12 +693,9 @@ pub fn run(args: &[String]) -> ExitCode {
         display_list_suppressed,
         root: &root,
         top_level_pkgs: &top_level_pkgs,
-        onlydeps,
         color: &color,
         result: &result,
         disp_tree,
-        pretend,
-        ask,
     });
 
     // Real `_show_circular_deps`' cycle-only re-display
@@ -1037,20 +727,15 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         );
     show_cycle_redisplay(ShowCycleRedisplayArgs {
+        plan: &plan,
+        opts: &opts,
         show_merge_list,
         result: &result,
         skip_redisplay,
         display_entries,
         root: &root,
         top_level_pkgs: &top_level_pkgs,
-        onlydeps,
-        oneshot,
-        verbose,
-        quiet,
-        alphabetical,
-        columns,
         columnwidth,
-        root_deps_running_root: &root_deps_running_root,
         color: &color,
         system_atoms,
         world_atoms: &world_atoms,
@@ -1058,87 +743,66 @@ pub fn run(args: &[String]) -> ExitCode {
     });
 
     show_slot_conflicts(ShowSlotConflictsArgs {
+        plan: &plan,
+        opts: &opts,
         result: &result,
         root: &root,
         repos: &repos,
         config: &config,
-        verbose_conflicts,
-        excluded: &excluded,
-        useoldpkg_atoms_render: &useoldpkg_atoms_render,
-        usepkgonly,
+        useoldpkg_atoms_render: &opts.useoldpkg_atoms,
         color: &color,
-        backtrack_max,
     });
     show_deferred_unsat(ShowDeferredUnsatArgs {
+        plan: &plan,
+        opts: &opts,
         deferred_abort_unsat: &deferred_abort_unsat,
         result: &result,
         root: &root,
         top_level_pkgs: &top_level_pkgs,
-        onlydeps,
-        oneshot,
-        verbose,
-        quiet,
-        alphabetical,
-        columns,
         columnwidth,
-        root_deps_running_root: &root_deps_running_root,
         color: &color,
         system_atoms,
         world_atoms: &world_atoms,
         force_reinstall_cps: &force_reinstall_cps,
     });
 
-    show_skipped_updates(ShowSkippedUpdatesArgs {
-        quiet,
-        debug,
-        result: &result,
-        root: &root,
-        root_deps_running_root: &root_deps_running_root,
-        running_config: &running_config,
-        repos: &repos,
-    });
+    show_skipped_updates(&plan, &opts, &result, &root, &repos);
 
-    show_skipped_missing_deps(quiet, debug, &result);
+    show_skipped_missing_deps(opts.quiet, opts.debug, &result);
 
     show_missing_args_and_aborts(&result, &root, &color, &repos, &config);
 
     if let Some(code) = show_autounmask(ShowAutounmaskArgs {
+        opts: &opts,
         color: &color,
         result: &result,
-        autounmask_only,
-        pretend,
         repos: &repos,
         root: &root,
         config: &config,
-        autounmask_continue,
         has_autounmask_changes,
     }) {
         return code;
     }
 
     if let Some(code) = failure_gates(FailureGatesArgs {
+        opts: &opts,
         result: &result,
         show_merge_list,
         color: &color,
-        pretend,
         repos: &repos,
         root: &root,
         config: &config,
-        backtrack_max,
-        buildpkgonly,
-        nodeps,
     }) {
         return code;
     }
 
-    print_resolver_debug(&root, entries, &reinstall_atoms, &result);
+    print_resolver_debug(&root, entries, &opts.reinstall_atoms, &result);
 
     if let Some(code) = final_gates(FinalGatesArgs {
-        verbose_slot_rebuilds,
+        opts: &opts,
         result: &result,
         entries,
         root: &root,
-        pretend,
         repos: &repos,
         config: &config,
         color: &color,
@@ -1150,7 +814,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // the top of this function only ever lets through when `buildpkgonly`
     // is also `true` -- see `emerge_build.rs`'s own module doc comment
     // for what this actually does (and doesn't) build.
-    if !pretend {
+    if !opts.pretend {
         // Backlog #225 (real `_emerge/actions.py:496-521`): the merge
         // list has just been displayed (see `show_merge_list` above),
         // and when nothing in it is merge-bound real prints `Nothing to
@@ -1185,36 +849,31 @@ pub fn run(args: &[String]) -> ExitCode {
         // override -- see `usersets_world_candidate`). Built-in
         // `@world`/`@system`/`@profile` never count on either side.
         let deferred = selective_noop_deferred(
-            selective,
+            plan.selective,
             // Real's folded gate variable (`actions.py:257`): `--onlydeps`
             // keeps the deferral at bay exactly like `--oneshot`.
-            oneshot || onlydeps,
-            atom_args.iter().any(|a| !a.starts_with('@'))
+            opts.oneshot || opts.onlydeps,
+            opts.atom_args.iter().any(|a| !a.starts_with('@'))
                 || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()),
         );
         if let Some(code) = show_nothing_to_merge(ShowNothingToMergeArgs {
-            pretend,
+            opts: &opts,
             show_merge_list,
             mergecount,
             deferred,
             root: &root,
-            buildpkgonly,
             config_root: &config_root,
             selected_set_args: &selected_set_args,
-            atom_args: &atom_args,
             entries,
             system_atoms,
             repos: &repos,
-            ask,
             color,
-            oneshot,
-            onlydeps,
         }) {
             return code;
         }
         // Real `_emerge/actions.py:525-536`: `--ask` prompts once, after
         // the whole merge list is displayed, before anything is built.
-        if ask && !ask_confirm(&color, "Would you like to merge these packages?") {
+        if opts.ask && !ask_confirm(&color, "Would you like to merge these packages?") {
             return ExitCode::from(130);
         }
         let MergeSetupOut {
@@ -1222,23 +881,13 @@ pub fn run(args: &[String]) -> ExitCode {
             package_options,
             portage_tmpdir,
             merge_options,
-        } = merge_setup(MergeSetupArgs {
-            jobs,
-            quiet,
-            quiet_build,
-            entries,
-            verbose,
-            shell,
-            debug,
-            config: &config,
-            root: &root,
-        });
+        } = merge_setup(&opts, entries, &config, &root);
 
         // Real `FEATURES=buildpkg` / `--buildpkg`/`-b` (real
         // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
         // written into `$PKGDIR` as a side effect of the merge.
         // `--buildpkg=n` wins over the FEATURE.
-        let buildpkg_on = buildpkg_from_config(buildpkg_opt, &config);
+        let buildpkg_on = buildpkg_from_config(opts.buildpkg_opt, &config);
         let buildpkg = buildpkg_on.then_some(&package_options);
         // `emerge -k <atom>` (`--usepkg`, no `--getbinpkg`): the resolver
         // put a local-`$PKGDIR` binary on the plan. Real portage merges a
@@ -1252,7 +901,7 @@ pub fn run(args: &[String]) -> ExitCode {
         let has_binary_entry = entries
             .iter()
             .any(|e| e.source == portage_repo::CandidateSource::Binary);
-        if buildpkgonly {
+        if opts.buildpkgonly {
             if let Err(e) = emerge_build::run_buildpkgonly(
                 entries,
                 &config,
@@ -1260,48 +909,36 @@ pub fn run(args: &[String]) -> ExitCode {
                 &root,
                 &portage_tmpdir,
                 &package_options,
-                keep_going,
+                opts.keep_going,
                 status_mode,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
-        } else if getbinpkg || has_binary_entry {
+        } else if plan.getbinpkg || has_binary_entry {
             if let Some(code) = run_binary_merge_plan(RunBinaryMergePlanArgs {
+                opts: &opts,
                 entries,
                 config: &config,
                 repos: &repos,
                 root: &root,
                 portage_tmpdir: &portage_tmpdir,
-                keep_going,
-                oneshot,
-                onlydeps,
-                atom_args: &atom_args,
                 package_options: &package_options,
                 merge_options: &merge_options,
                 buildpkg,
-                buildpkg_exclude: &buildpkg_exclude,
                 status_mode,
                 color,
             }) {
                 return code;
             }
         } else if let Some(code) = run_source_merge_plan(RunSourceMergePlanArgs {
+            opts: &opts,
             entries,
-            oneshot,
-            onlydeps,
             root: &root,
-            atom_args: &atom_args,
             repos: &repos,
             portage_tmpdir: &portage_tmpdir,
             merge_options: &merge_options,
-            keep_going,
             buildpkg,
-            buildpkg_exclude: &buildpkg_exclude,
-            jobs,
-            load_average,
-            quiet_build,
-            quiet,
             status_mode,
             config: &config,
             color,
@@ -1310,14 +947,11 @@ pub fn run(args: &[String]) -> ExitCode {
         }
 
         if let Some(code) = record_world_after_merge(RecordWorldAfterMergeArgs {
-            buildpkgonly,
+            opts: &opts,
             root: &root,
-            atom_args: &atom_args,
             entries,
             system_atoms,
             repos: &repos,
-            oneshot,
-            onlydeps,
             config_root: &config_root,
             selected_set_args: &selected_set_args,
         }) {
@@ -1325,13 +959,11 @@ pub fn run(args: &[String]) -> ExitCode {
         }
 
         if let Some(code) = show_post_merge_notices(ShowPostMergeNoticesArgs {
-            buildpkgonly,
+            opts: &opts,
             entries,
             config: &config,
             root: &root,
             color,
-            quiet,
-            verbose,
             repos: &repos,
         }) {
             return code;
@@ -1342,7 +974,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--pretend` run prints the GLEP 42 notice at the end (the vdb
     // never changes under `--pretend`, so this arm is pretend-only;
     // the non-pretend path printed its post-merge notice above).
-    pretend_end_news_notice(pretend, &repos, &root, &config, &color);
+    pretend_end_news_notice(opts.pretend, &repos, &root, &config, &color);
 
     ExitCode::SUCCESS
 }

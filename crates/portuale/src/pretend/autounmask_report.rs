@@ -7,30 +7,32 @@ use portage_repo::RepoConfig;
 
 /// The values [`show_autounmask`] reads from its caller.
 pub(crate) struct ShowAutounmaskArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) color: &'a Colorizer,
     pub(crate) result: &'a GraphResult,
-    pub(crate) autounmask_only: bool,
-    pub(crate) pretend: bool,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a Config,
-    pub(crate) autounmask_continue: Option<bool>,
     pub(crate) has_autounmask_changes: bool,
 }
 
 /// The autounmask suggestion blocks and the --autounmask-only / --autounmask-continue exits.
 pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> {
     let ShowAutounmaskArgs {
+        opts,
         color,
         result,
-        autounmask_only,
-        pretend,
         repos,
         root,
         config,
-        autounmask_continue,
         has_autounmask_changes,
     } = args;
+    let &EmergeOpts {
+        autounmask_only,
+        pretend,
+        autounmask_continue,
+        ..
+    } = opts;
     // Real `depgraph.py::_display_autounmask` (`:10625`), the
     // `unstable_keyword_msg` half: `--autounmask` accepted a
     // `KEYWORDS`-alone mask to make the graph resolve, so the implicit

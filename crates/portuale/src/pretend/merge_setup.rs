@@ -2,7 +2,6 @@
 
 use crate::ebuild_merge::MergeOptions;
 use crate::ebuild_package::PackageOptions;
-use crate::ebuild_phases::ShellBackend;
 use crate::emerge_build::StatusMode;
 use crate::pretend::*;
 use portage_profile::Config;
@@ -17,33 +16,23 @@ pub(crate) struct MergeSetupOut {
     pub(crate) merge_options: MergeOptions,
 }
 
-/// The values [`merge_setup`] reads from its caller.
-pub(crate) struct MergeSetupArgs<'a> {
-    pub(crate) jobs: usize,
-    pub(crate) quiet: bool,
-    pub(crate) quiet_build: Option<bool>,
-    pub(crate) entries: &'a Vec<GraphEntry>,
-    pub(crate) verbose: bool,
-    pub(crate) shell: ShellBackend,
-    pub(crate) debug: bool,
-    pub(crate) config: &'a Config,
-    pub(crate) root: &'a Path,
-}
-
 /// The options every merge path shares: status mode, package and merge options, PORTAGE_TMPDIR.
 /// Also rotates the resume list to its backup, as Portage does before a merge.
-pub(crate) fn merge_setup(args: MergeSetupArgs<'_>) -> MergeSetupOut {
-    let MergeSetupArgs {
+pub(crate) fn merge_setup(
+    opts: &EmergeOpts<'_>,
+    entries: &[GraphEntry],
+    config: &Config,
+    root: &Path,
+) -> MergeSetupOut {
+    let &EmergeOpts {
         jobs,
         quiet,
         quiet_build,
-        entries,
         verbose,
         shell,
         debug,
-        config,
-        root,
-    } = args;
+        ..
+    } = opts;
     // Backlog #185/#197: real `Scheduler._status_msg`
     // (`Scheduler.py:2387-2397`) precedes every status line -- the
     // first `>>> Emerging ...` among them -- with a blank line,
@@ -126,44 +115,43 @@ pub(crate) fn merge_setup(args: MergeSetupArgs<'_>) -> MergeSetupOut {
 
 /// The values [`show_nothing_to_merge`] reads from its caller.
 pub(crate) struct ShowNothingToMergeArgs<'a> {
-    pub(crate) pretend: bool,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) show_merge_list: bool,
     pub(crate) mergecount: usize,
     pub(crate) deferred: bool,
     pub(crate) root: &'a Path,
-    pub(crate) buildpkgonly: bool,
     pub(crate) config_root: &'a Path,
     pub(crate) selected_set_args: &'a [String],
-    pub(crate) atom_args: &'a [&'a str],
     pub(crate) entries: &'a Vec<GraphEntry>,
     pub(crate) system_atoms: &'a Vec<String>,
     pub(crate) repos: &'a [RepoConfig],
-    pub(crate) ask: bool,
     pub(crate) color: Colorizer,
-    pub(crate) oneshot: bool,
-    pub(crate) onlydeps: bool,
 }
 
 /// An empty plan: Portage's "Nothing to merge" notices and exit.
 pub(crate) fn show_nothing_to_merge(args: ShowNothingToMergeArgs<'_>) -> Option<ExitCode> {
     let ShowNothingToMergeArgs {
-        pretend,
+        opts,
         show_merge_list,
         mergecount,
         deferred,
         root,
-        buildpkgonly,
         config_root,
         selected_set_args,
-        atom_args,
         entries,
         system_atoms,
         repos,
-        ask,
         color,
+    } = args;
+    let &EmergeOpts {
+        pretend,
+        buildpkgonly,
+        ref atom_args,
+        ask,
         oneshot,
         onlydeps,
-    } = args;
+        ..
+    } = opts;
     if nothing_to_merge(pretend, show_merge_list, mergecount) {
         if deferred {
             // Real `actions.py:526`: the blank line prints on the

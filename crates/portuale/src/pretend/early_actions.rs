@@ -2,43 +2,13 @@
 
 use crate::pretend::*;
 
-/// The values [`validate_and_early_actions`] reads from its caller.
-pub(crate) struct ValidateAndEarlyActionsArgs<'a> {
-    pub(crate) tree: bool,
-    pub(crate) columns: bool,
-    pub(crate) pretend: &'a mut bool,
-    pub(crate) ask: &'a mut bool,
-    pub(crate) sync_action: bool,
-    pub(crate) search_action: bool,
-    pub(crate) info_action: bool,
-    pub(crate) list_sets: bool,
-    pub(crate) check_news: bool,
-    pub(crate) regen_action: bool,
-    pub(crate) metadata_action: bool,
-    pub(crate) color_opt: Option<bool>,
-    pub(crate) debug: bool,
-    pub(crate) deselect: bool,
-    pub(crate) depclean: bool,
-    pub(crate) prune: bool,
-    pub(crate) unmerge: bool,
-    pub(crate) atom_args: &'a [&'a str],
-    pub(crate) jobs: usize,
-    pub(crate) load_average: Option<f64>,
-    pub(crate) config_action: bool,
-    pub(crate) resume: bool,
-    pub(crate) clean_action: bool,
-    pub(crate) rage_clean: bool,
-}
-
 /// Option checks that end the run early, and the actions that need no resolve.
-pub(crate) fn validate_and_early_actions(
-    args: ValidateAndEarlyActionsArgs<'_>,
-) -> Option<ExitCode> {
-    let ValidateAndEarlyActionsArgs {
+pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<ExitCode> {
+    let &mut EmergeOpts {
         tree,
         columns,
-        pretend: pretend_out,
-        ask: ask_out,
+        pretend: ref mut pretend_out,
+        ask: ref mut ask_out,
         sync_action,
         search_action,
         info_action,
@@ -52,14 +22,15 @@ pub(crate) fn validate_and_early_actions(
         depclean,
         prune,
         unmerge,
-        atom_args,
+        ref atom_args,
         jobs,
         load_average,
         config_action,
         resume,
         clean_action,
         rage_clean,
-    } = args;
+        ..
+    } = opts;
     let mut pretend = *pretend_out;
     let mut ask = *ask_out;
     // Real actions.py: "if '--tree' in emerge_config.opts and '--columns'

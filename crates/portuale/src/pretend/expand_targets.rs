@@ -13,30 +13,31 @@ pub(crate) struct ExpandTargetsOut {
 
 /// The values [`expand_targets`] reads from its caller.
 pub(crate) struct ExpandTargetsArgs<'a> {
-    pub(crate) autounmask_continue: Option<bool>,
-    pub(crate) autounmask: Option<bool>,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) color: &'a Colorizer,
-    pub(crate) atom_args: &'a [&'a str],
     pub(crate) config: &'a Config,
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) repos: &'a [RepoConfig],
-    pub(crate) quiet: bool,
 }
 
 /// Expanding the command-line arguments (sets, package moves, bare names) into the atoms to resolve.
 pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTargetsOut, ExitCode> {
     let ExpandTargetsArgs {
-        autounmask_continue,
-        autounmask,
+        opts,
         color,
-        atom_args,
         config,
         root,
         config_root,
         repos,
-        quiet,
     } = args;
+    let &EmergeOpts {
+        autounmask_continue,
+        autounmask,
+        ref atom_args,
+        quiet,
+        ..
+    } = opts;
 
     // Real `actions.py:3772`: `--autounmask-continue` + `--autounmask=n`
     // -> a WARNING that the former "has been disabled by" the latter,

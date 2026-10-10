@@ -2,7 +2,6 @@
 
 use crate::pretend::*;
 use portage_profile::Config;
-use portage_repo::Deep;
 use portage_repo::RepoConfig;
 use std::path::PathBuf;
 
@@ -32,59 +31,28 @@ pub(crate) struct ResolvePlan {
 }
 
 /// The values [`plan_resolve`] reads from its caller.
-pub(crate) struct PlanResolveArgs<'a> {
-    pub(crate) with_bdeps_given: bool,
-    pub(crate) with_bdeps: &'a mut bool,
-    pub(crate) with_bdeps_auto: bool,
-    pub(crate) usepkg: bool,
-    pub(crate) usepkgonly: bool,
-    pub(crate) getbinpkg: bool,
-    pub(crate) getbinpkgonly: bool,
-    pub(crate) selective_flag: Option<bool>,
-    pub(crate) update: bool,
-    pub(crate) newuse: bool,
-    pub(crate) changed_use: bool,
-    pub(crate) changed_deps: bool,
-    pub(crate) changed_slot: bool,
-    pub(crate) noreplace: bool,
-    pub(crate) newrepo: bool,
-    pub(crate) autounmask: Option<bool>,
-    pub(crate) autounmask_keep_keywords: Option<bool>,
-    pub(crate) autounmask_use: Option<bool>,
-    pub(crate) autounmask_license: Option<bool>,
-    pub(crate) autounmask_keep_masks: Option<bool>,
+pub(crate) struct PlanResolveArgs<'a, 'o> {
+    pub(crate) opts: &'a mut EmergeOpts<'o>,
     pub(crate) config: &'a mut Config,
-    pub(crate) autounmask_backtrack: Option<bool>,
-    pub(crate) autounmask_continue: Option<bool>,
-    pub(crate) quickpkg_direct: Option<bool>,
-    pub(crate) quickpkg_direct_root: &'a Option<String>,
     pub(crate) root: &'a Path,
-    pub(crate) binpkg_respect_use: Option<bool>,
-    pub(crate) rebuilt_binaries: Option<bool>,
-    pub(crate) deep: Deep,
-    pub(crate) root_deps: bool,
     pub(crate) repos: &'a [RepoConfig],
-    pub(crate) pretend: bool,
-    pub(crate) rebuild_if_unbuilt: Option<bool>,
-    pub(crate) rebuild_if_new_rev: Option<bool>,
-    pub(crate) rebuild_if_new_ver: Option<bool>,
-    pub(crate) dynamic_deps: bool,
-    pub(crate) nodeps: bool,
-    pub(crate) complete_graph: bool,
-    pub(crate) complete_if_new_use: Option<bool>,
-    pub(crate) complete_if_new_ver: Option<bool>,
-    pub(crate) ignore_world: bool,
     pub(crate) config_root: &'a Path,
     pub(crate) color: &'a Colorizer,
-    pub(crate) ask: bool,
-    pub(crate) read_news: bool,
 }
 
 /// The resolver parameters derived from the options: bdeps, selective, autounmask, binary packages, rebuild and complete-graph switches, seed atoms.
-pub(crate) fn plan_resolve(args: PlanResolveArgs<'_>) -> Result<ResolvePlan, ExitCode> {
+pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan, ExitCode> {
     let PlanResolveArgs {
+        opts,
+        config,
+        root,
+        repos,
+        config_root,
+        color,
+    } = args;
+    let &mut EmergeOpts {
         with_bdeps_given,
-        with_bdeps: with_bdeps_out,
+        with_bdeps: ref mut with_bdeps_out,
         with_bdeps_auto,
         usepkg,
         usepkgonly,
@@ -103,17 +71,14 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_>) -> Result<ResolvePlan, Exi
         autounmask_use,
         autounmask_license,
         autounmask_keep_masks,
-        config,
         autounmask_backtrack,
         autounmask_continue,
         quickpkg_direct,
-        quickpkg_direct_root,
-        root,
+        ref quickpkg_direct_root,
         binpkg_respect_use,
         rebuilt_binaries,
         deep,
         root_deps,
-        repos,
         pretend,
         rebuild_if_unbuilt,
         rebuild_if_new_rev,
@@ -124,11 +89,10 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_>) -> Result<ResolvePlan, Exi
         complete_if_new_use,
         complete_if_new_ver,
         ignore_world,
-        config_root,
-        color,
         ask,
         read_news,
-    } = args;
+        ..
+    } = opts;
     let mut with_bdeps = *with_bdeps_out;
     // Real create_depgraph_params.py:97-103's own precedence: an explicit
     // --with-bdeps always wins; absent it, `bdeps` is set to "auto" only

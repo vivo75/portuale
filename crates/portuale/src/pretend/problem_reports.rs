@@ -4,7 +4,6 @@ use crate::pretend::*;
 use portage_profile::Config;
 use portage_repo::GraphResult;
 use portage_repo::RepoConfig;
-use std::path::PathBuf;
 
 /// Missing arguments, and the abort reports for cycles and unsatisfied dependencies.
 pub(crate) fn show_missing_args_and_aborts(
@@ -174,28 +173,20 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
     }
 }
 
-/// The values [`show_skipped_updates`] reads from its caller.
-pub(crate) struct ShowSkippedUpdatesArgs<'a> {
-    pub(crate) quiet: bool,
-    pub(crate) debug: bool,
-    pub(crate) result: &'a GraphResult,
-    pub(crate) root: &'a Path,
-    pub(crate) root_deps_running_root: &'a Option<PathBuf>,
-    pub(crate) running_config: &'a Option<Config>,
-    pub(crate) repos: &'a [RepoConfig],
-}
-
 /// Updates skipped by slot conflicts or masks.
-pub(crate) fn show_skipped_updates(args: ShowSkippedUpdatesArgs<'_>) {
-    let ShowSkippedUpdatesArgs {
-        quiet,
-        debug,
-        result,
-        root,
+pub(crate) fn show_skipped_updates(
+    plan: &ResolvePlan,
+    opts: &EmergeOpts<'_>,
+    result: &GraphResult,
+    root: &Path,
+    repos: &[RepoConfig],
+) {
+    let ResolvePlan {
         root_deps_running_root,
         running_config,
-        repos,
-    } = args;
+        ..
+    } = plan;
+    let &EmergeOpts { quiet, debug, .. } = opts;
     // Backlog #90 (S2) + #92, #129 review round 2: real
     // `_conflict_missed_update["slot conflict"]`
     // (`depgraph.py:2063-2106`) -- `WARNING: One or more
@@ -386,18 +377,13 @@ pub(crate) fn show_skipped_updates(args: ShowSkippedUpdatesArgs<'_>) {
 
 /// The values [`show_deferred_unsat`] reads from its caller.
 pub(crate) struct ShowDeferredUnsatArgs<'a> {
+    pub(crate) plan: &'a ResolvePlan,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) deferred_abort_unsat: &'a [usize],
     pub(crate) result: &'a GraphResult,
     pub(crate) root: &'a Path,
     pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
-    pub(crate) onlydeps: bool,
-    pub(crate) oneshot: bool,
-    pub(crate) verbose: bool,
-    pub(crate) quiet: bool,
-    pub(crate) alphabetical: bool,
-    pub(crate) columns: bool,
     pub(crate) columnwidth: i64,
-    pub(crate) root_deps_running_root: &'a Option<PathBuf>,
     pub(crate) color: &'a Colorizer,
     pub(crate) system_atoms: &'a Vec<String>,
     pub(crate) world_atoms: &'a [String],
@@ -407,23 +393,31 @@ pub(crate) struct ShowDeferredUnsatArgs<'a> {
 /// Unsatisfied dependencies whose report waited for the merge list.
 pub(crate) fn show_deferred_unsat(args: ShowDeferredUnsatArgs<'_>) {
     let ShowDeferredUnsatArgs {
+        plan,
+        opts,
         deferred_abort_unsat,
         result,
         root,
         top_level_pkgs,
+        columnwidth,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+    } = args;
+    let ResolvePlan {
+        root_deps_running_root,
+        ..
+    } = plan;
+    let &EmergeOpts {
         onlydeps,
         oneshot,
         verbose,
         quiet,
         alphabetical,
         columns,
-        columnwidth,
-        root_deps_running_root,
-        color,
-        system_atoms,
-        world_atoms,
-        force_reinstall_cps,
-    } = args;
+        ..
+    } = opts;
     if !deferred_abort_unsat.is_empty() {
         let mut thrown_away: Vec<String> = Vec::new();
         for &i in deferred_abort_unsat {
@@ -459,32 +453,35 @@ pub(crate) fn show_deferred_unsat(args: ShowDeferredUnsatArgs<'_>) {
 
 /// The values [`show_slot_conflicts`] reads from its caller.
 pub(crate) struct ShowSlotConflictsArgs<'a> {
+    pub(crate) plan: &'a ResolvePlan,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) result: &'a GraphResult,
     pub(crate) root: &'a Path,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a Config,
-    pub(crate) verbose_conflicts: bool,
-    pub(crate) excluded: &'a [String],
     pub(crate) useoldpkg_atoms_render: &'a [String],
-    pub(crate) usepkgonly: bool,
     pub(crate) color: &'a Colorizer,
-    pub(crate) backtrack_max: u32,
 }
 
 /// The slot-conflict notice.
 pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
     let ShowSlotConflictsArgs {
+        plan,
+        opts,
         result,
         root,
         repos,
         config,
-        verbose_conflicts,
-        excluded,
         useoldpkg_atoms_render,
-        usepkgonly,
         color,
-        backtrack_max,
     } = args;
+    let &ResolvePlan { usepkgonly, .. } = plan;
+    let &EmergeOpts {
+        verbose_conflicts,
+        ref excluded,
+        backtrack_max,
+        ..
+    } = opts;
     // Real `depgraph._show_slot_collision_notice` -> `slot_conflict_handler.
     // get_conflict()` (`lib/_emerge/resolver/slot_collision.py`): the
     // `!!! Multiple package instances within a single package slot ...`
@@ -876,20 +873,15 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
 
 /// The values [`show_cycle_redisplay`] reads from its caller.
 pub(crate) struct ShowCycleRedisplayArgs<'a> {
+    pub(crate) plan: &'a ResolvePlan,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) show_merge_list: bool,
     pub(crate) result: &'a GraphResult,
     pub(crate) skip_redisplay: bool,
     pub(crate) display_entries: &'a [GraphEntry],
     pub(crate) root: &'a Path,
     pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
-    pub(crate) onlydeps: bool,
-    pub(crate) oneshot: bool,
-    pub(crate) verbose: bool,
-    pub(crate) quiet: bool,
-    pub(crate) alphabetical: bool,
-    pub(crate) columns: bool,
     pub(crate) columnwidth: i64,
-    pub(crate) root_deps_running_root: &'a Option<PathBuf>,
     pub(crate) color: &'a Colorizer,
     pub(crate) system_atoms: &'a Vec<String>,
     pub(crate) world_atoms: &'a [String],
@@ -899,25 +891,33 @@ pub(crate) struct ShowCycleRedisplayArgs<'a> {
 /// The circular-dependency block shown again after the merge list.
 pub(crate) fn show_cycle_redisplay(args: ShowCycleRedisplayArgs<'_>) {
     let ShowCycleRedisplayArgs {
+        plan,
+        opts,
         show_merge_list,
         result,
         skip_redisplay,
         display_entries,
         root,
         top_level_pkgs,
+        columnwidth,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+    } = args;
+    let ResolvePlan {
+        root_deps_running_root,
+        ..
+    } = plan;
+    let &EmergeOpts {
         onlydeps,
         oneshot,
         verbose,
         quiet,
         alphabetical,
         columns,
-        columnwidth,
-        root_deps_running_root,
-        color,
-        system_atoms,
-        world_atoms,
-        force_reinstall_cps,
-    } = args;
+        ..
+    } = opts;
     if show_merge_list && !result.cycle_display.is_empty() && !skip_redisplay {
         println!();
         let mut thrown_away: Vec<String> = Vec::new();

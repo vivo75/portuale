@@ -7,11 +7,10 @@ use portage_repo::RepoConfig;
 
 /// The values [`final_gates`] reads from its caller.
 pub(crate) struct FinalGatesArgs<'a> {
-    pub(crate) verbose_slot_rebuilds: bool,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) result: &'a GraphResult,
     pub(crate) entries: &'a Vec<GraphEntry>,
     pub(crate) root: &'a Path,
-    pub(crate) pretend: bool,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a Config,
     pub(crate) color: &'a Colorizer,
@@ -20,15 +19,19 @@ pub(crate) struct FinalGatesArgs<'a> {
 /// The last gates before execution: ABI rebuilds, changed-deps report, buildpkgonly deps, circular dependencies.
 pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
     let FinalGatesArgs {
-        verbose_slot_rebuilds,
+        opts,
         result,
         entries,
         root,
-        pretend,
         repos,
         config,
         color,
     } = args;
+    let &EmergeOpts {
+        verbose_slot_rebuilds,
+        pretend,
+        ..
+    } = opts;
     // Real `_show_abi_rebuild_info` (`depgraph.py:1210`), gated on
     // `--verbose-slot-rebuilds != "n"` (default on, NOT `--verbose`) and
     // rendered right after the merge list / autounmask blocks, before the
@@ -331,32 +334,33 @@ pub(crate) fn print_resolver_debug(
 
 /// The values [`failure_gates`] reads from its caller.
 pub(crate) struct FailureGatesArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) result: &'a GraphResult,
     pub(crate) show_merge_list: bool,
     pub(crate) color: &'a Colorizer,
-    pub(crate) pretend: bool,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a Config,
-    pub(crate) backtrack_max: u32,
-    pub(crate) buildpkgonly: bool,
-    pub(crate) nodeps: bool,
 }
 
 /// Unsolvable blockers, unresolved slot conflicts with backtracking off, and an unresolved --prune.
 pub(crate) fn failure_gates(args: FailureGatesArgs<'_>) -> Option<ExitCode> {
     let FailureGatesArgs {
+        opts,
         result,
         show_merge_list,
         color,
-        pretend,
         repos,
         root,
         config,
+    } = args;
+    let &EmergeOpts {
+        pretend,
         backtrack_max,
         buildpkgonly,
         nodeps,
-    } = args;
+        ..
+    } = opts;
     // Real `_serialize_tasks` -> `_show_unsatisfied_blockers` +
     // `show_blocker_docs_link` (`depgraph.py:10496`): a blocked installed
     // package the resolver could neither replace nor unmerge is an

@@ -6,28 +6,30 @@ use portage_repo::RepoConfig;
 
 /// The values [`show_post_merge_notices`] reads from its caller.
 pub(crate) struct ShowPostMergeNoticesArgs<'a> {
-    pub(crate) buildpkgonly: bool,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) entries: &'a Vec<GraphEntry>,
     pub(crate) config: &'a Config,
     pub(crate) root: &'a Path,
     pub(crate) color: Colorizer,
-    pub(crate) quiet: bool,
-    pub(crate) verbose: bool,
     pub(crate) repos: &'a [RepoConfig],
 }
 
 /// After a merge: the info-dir update, the preserved-libs and news notices.
 pub(crate) fn show_post_merge_notices(args: ShowPostMergeNoticesArgs<'_>) -> Option<ExitCode> {
     let ShowPostMergeNoticesArgs {
-        buildpkgonly,
+        opts,
         entries,
         config,
         root,
         color,
-        quiet,
-        verbose,
         repos,
     } = args;
+    let &EmergeOpts {
+        buildpkgonly,
+        quiet,
+        verbose,
+        ..
+    } = opts;
     // `elog_process` is no longer batched here: real runs it
     // per-package inside `dblink.merge()` (before the post-merge
     // `clean`, `vartree.py:6160-6198`), and backlog #42's clean now
@@ -78,14 +80,11 @@ pub(crate) fn show_post_merge_notices(args: ShowPostMergeNoticesArgs<'_>) -> Opt
 
 /// The values [`record_world_after_merge`] reads from its caller.
 pub(crate) struct RecordWorldAfterMergeArgs<'a> {
-    pub(crate) buildpkgonly: bool,
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) root: &'a Path,
-    pub(crate) atom_args: &'a [&'a str],
     pub(crate) entries: &'a Vec<GraphEntry>,
     pub(crate) system_atoms: &'a Vec<String>,
     pub(crate) repos: &'a [RepoConfig],
-    pub(crate) oneshot: bool,
-    pub(crate) onlydeps: bool,
     pub(crate) config_root: &'a Path,
     pub(crate) selected_set_args: &'a [String],
 }
@@ -93,17 +92,21 @@ pub(crate) struct RecordWorldAfterMergeArgs<'a> {
 /// Add the merged arguments to the world and world_sets files (not for --oneshot).
 pub(crate) fn record_world_after_merge(args: RecordWorldAfterMergeArgs<'_>) -> Option<ExitCode> {
     let RecordWorldAfterMergeArgs {
-        buildpkgonly,
+        opts,
         root,
-        atom_args,
         entries,
         system_atoms,
         repos,
-        oneshot,
-        onlydeps,
         config_root,
         selected_set_args,
     } = args;
+    let &EmergeOpts {
+        buildpkgonly,
+        ref atom_args,
+        oneshot,
+        onlydeps,
+        ..
+    } = opts;
     // Real `Scheduler._world_atom` / `saveNomergeFavorites`: record
     // each directly-requested plain target in the world file. Real's
     // own suppression set includes `--buildpkgonly` (which builds but

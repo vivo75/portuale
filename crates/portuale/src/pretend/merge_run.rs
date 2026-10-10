@@ -9,21 +9,13 @@ use portage_repo::RepoConfig;
 
 /// The values [`run_source_merge_plan`] reads from its caller.
 pub(crate) struct RunSourceMergePlanArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) entries: &'a Vec<GraphEntry>,
-    pub(crate) oneshot: bool,
-    pub(crate) onlydeps: bool,
     pub(crate) root: &'a Path,
-    pub(crate) atom_args: &'a [&'a str],
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) portage_tmpdir: &'a Path,
     pub(crate) merge_options: &'a MergeOptions,
-    pub(crate) keep_going: bool,
     pub(crate) buildpkg: Option<&'a PackageOptions>,
-    pub(crate) buildpkg_exclude: &'a [String],
-    pub(crate) jobs: usize,
-    pub(crate) load_average: Option<f64>,
-    pub(crate) quiet_build: Option<bool>,
-    pub(crate) quiet: bool,
     pub(crate) status_mode: StatusMode,
     pub(crate) config: &'a Config,
     pub(crate) color: Colorizer,
@@ -32,25 +24,29 @@ pub(crate) struct RunSourceMergePlanArgs<'a> {
 /// Build and merge the plan from source, after saving it as the resume list.
 pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<ExitCode> {
     let RunSourceMergePlanArgs {
+        opts,
         entries,
-        oneshot,
-        onlydeps,
         root,
-        atom_args,
         repos,
         portage_tmpdir,
         merge_options,
-        keep_going,
         buildpkg,
-        buildpkg_exclude,
-        jobs,
-        load_average,
-        quiet_build,
-        quiet,
         status_mode,
         config,
         color,
     } = args;
+    let &EmergeOpts {
+        oneshot,
+        onlydeps,
+        ref atom_args,
+        keep_going,
+        ref buildpkg_exclude,
+        jobs,
+        load_average,
+        quiet_build,
+        quiet,
+        ..
+    } = opts;
     // Plain `emerge <atom>`: real source build + merge (see
     // `emerge_build::run_source_merge`). The up-front resume save
     // is real `Scheduler.merge() -> _save_resume_list()` (#168),
@@ -113,19 +109,15 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
 
 /// The values [`run_binary_merge_plan`] reads from its caller.
 pub(crate) struct RunBinaryMergePlanArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) entries: &'a Vec<GraphEntry>,
     pub(crate) config: &'a Config,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) portage_tmpdir: &'a Path,
-    pub(crate) keep_going: bool,
-    pub(crate) oneshot: bool,
-    pub(crate) onlydeps: bool,
-    pub(crate) atom_args: &'a [&'a str],
     pub(crate) package_options: &'a PackageOptions,
     pub(crate) merge_options: &'a MergeOptions,
     pub(crate) buildpkg: Option<&'a PackageOptions>,
-    pub(crate) buildpkg_exclude: &'a [String],
     pub(crate) status_mode: StatusMode,
     pub(crate) color: Colorizer,
 }
@@ -133,22 +125,26 @@ pub(crate) struct RunBinaryMergePlanArgs<'a> {
 /// Merge a plan with binary packages: on a remote host, or here after saving the resume list.
 pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<ExitCode> {
     let RunBinaryMergePlanArgs {
+        opts,
         entries,
         config,
         repos,
         root,
         portage_tmpdir,
-        keep_going,
-        oneshot,
-        onlydeps,
-        atom_args,
         package_options,
         merge_options,
         buildpkg,
-        buildpkg_exclude,
         status_mode,
         color,
     } = args;
+    let &EmergeOpts {
+        keep_going,
+        oneshot,
+        onlydeps,
+        ref atom_args,
+        ref buildpkg_exclude,
+        ..
+    } = opts;
     // Remote execution (`mrg --remote-hostname` + `--getbinpkgonly`,
     // published via the `REMOTE_EXEC` handoff): the same resolved
     // entries run through the remote plan instead. Binary-only is
