@@ -1,0 +1,589 @@
+//! Finding, checking and installing portuale on the client.
+
+use crate::remote::*;
+
+// --- Client portuale binary (slice 8, #326 D5/Q1-Q3/Q5) ----------------------
+//
+// The server installs and verifies its own binary on the client: the file
+// it ships is `current_exe()`, or `--remote-portuale-binary=<path>` (e.g.
+// a static musl build when the server itself runs a dynamic dev build).
+// The client must hold a file with the same full SHA-256; whatever file
+// is found, the full digest is always what gets compared. `<hash>` in
+// `portuale-<hash>` is the first 16 hex digits of that digest (Q5).
+// Different server builds get different names, so they never overwrite
+// each other; a plain `portuale` whose digest differs is never touched
+// (it may be an operator's own install).
+
+/// Default client search directories, in D5 order.
+pub(crate) fn default_bin_dirs() -> Vec<String> {
+    vec!["/opt/bin".to_string(), "/usr/local/bin".to_string()]
+}
+
+/// Candidate directories: only the `--remote-portuale-dir=<abs>` pair
+/// when that option is given (Q1), else the default pair.
+pub(crate) fn bin_search_dirs(ctx: &RemoteContext) -> Vec<String> {
+    match &ctx.portuale_dir {
+        Some(dir) => vec![dir.clone()],
+        None => default_bin_dirs(),
+    }
+}
+
+/// Candidate files in D5 order: per directory, `portuale` then
+/// `portuale-<hash>`. The first file whose full digest matches is used.
+pub(crate) fn bin_candidates(dirs: &[String], short_hash: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for dir in dirs {
+        out.push(format!("{dir}/portuale"));
+        out.push(format!("{dir}/portuale-{short_hash}"));
+    }
+    out
+}
+
+/// The server-side identity of the binary to ship.
+pub(crate) struct ServerBinInfo {
+    /// The file to stream (`--remote-portuale-binary`, or `current_exe()`).
+    pub path: std::path::PathBuf,
+    /// Full SHA-256 hex of the file.
+    pub digest_hex: String,
+    /// First 16 hex digits of the digest (the `<hash>` in file names).
+    pub short_hash: String,
+    /// ELF `e_machine` of the file.
+    pub machine: u16,
+}
+
+/// Read the shipped binary's ELF `e_machine`: bytes 18-19, in the
+/// endianness byte 5 names. Header bytes are read directly; no new crate.
+pub(crate) fn elf_machine(bytes: &[u8]) -> Result<u16, String> {
+    if bytes.len() < 20 {
+        return Err("not an ELF binary (shorter than the 20-byte header prefix)".to_string());
+    }
+    if &bytes[0..4] != b"\x7fELF" {
+        return Err("not an ELF binary (bad magic)".to_string());
+    }
+    match bytes[5] {
+        1 => Ok(u16::from_le_bytes([bytes[18], bytes[19]])),
+        2 => Ok(u16::from_be_bytes([bytes[18], bytes[19]])),
+        other => Err(format!("unknown ELF data encoding {other}")),
+    }
+}
+
+/// Hash the binary the server will ship and read its ELF machine (Q3).
+/// Errors name `--remote-portuale-binary` when that option selected the
+/// file.
+pub(crate) fn server_bin_info(ctx: &RemoteContext) -> Result<ServerBinInfo, String> {
+    let (path, named) = match &ctx.portuale_binary {
+        Some(custom) => (std::path::PathBuf::from(custom), true),
+        None => (crate::self_exe::self_exe().to_path_buf(), false),
+    };
+    let bytes = std::fs::read(&path).map_err(|e| {
+        if named {
+            format!("mrg: --remote-portuale-binary {}: {e}", path.display())
+        } else {
+            format!(
+                "mrg: cannot read the running binary {} for the client install: {e}",
+                path.display()
+            )
+        }
+    })?;
+    use sha2::Digest as _;
+    let digest_hex = format!("{:x}", sha2::Sha256::digest(&bytes));
+    let machine = elf_machine(&bytes).map_err(|e| {
+        if named {
+            format!("mrg: --remote-portuale-binary {}: {e}", path.display())
+        } else {
+            format!("mrg: the running binary {}: {e}", path.display())
+        }
+    })?;
+    Ok(ServerBinInfo {
+        short_hash: digest_hex[..16].to_string(),
+        digest_hex,
+        machine,
+        path,
+    })
+}
+
+/// `e_machine` values the gate knows, with the `uname -m` names each
+/// maps to.
+pub(crate) fn machine_unames(machine: u16) -> Option<&'static [&'static str]> {
+    match machine {
+        // EM_386: the 32-bit x86 spellings `uname -m` prints.
+        3 => Some(&["i386", "i486", "i586", "i686"]),
+        // EM_PPC64: both endians run the same instruction set name here.
+        21 => Some(&["ppc64", "ppc64le"]),
+        // EM_S390.
+        22 => Some(&["s390x"]),
+        // EM_ARM.
+        40 => Some(&["armv5tel", "armv6l", "armv7l", "armv8l", "arm"]),
+        // EM_X86_64 (`amd64` is the FreeBSD `uname -m` spelling).
+        62 => Some(&["x86_64", "amd64"]),
+        // EM_AARCH64 (`arm64` is the macOS spelling).
+        183 => Some(&["aarch64", "arm64"]),
+        // EM_RISCV.
+        243 => Some(&["riscv64"]),
+        _ => None,
+    }
+}
+
+/// Human name for an `e_machine` in gate messages.
+pub(crate) fn machine_name(machine: u16) -> String {
+    match machine_unames(machine) {
+        Some(names) => names[0].to_string(),
+        None => format!("e_machine {machine}"),
+    }
+}
+
+/// Whether the shipped binary runs on the client (Q3): `Some(true)` when
+/// the client's `uname -m` is one of the machine's names, `Some(false)`
+/// on a definite mismatch, `None` when either side is unknown -- an
+/// unknown pair is a mismatch only when both are known.
+pub(crate) fn arch_matches(machine: u16, uname_m: &str) -> Option<bool> {
+    let names = machine_unames(machine)?;
+    if uname_m.is_empty() {
+        return None;
+    }
+    Some(names.contains(&uname_m))
+}
+
+/// Server-side preflight facts for the binary gates: what to look for
+/// and what to compare against. `None` for local transport without
+/// `--remote-portuale-dir`, which keeps `current_exe()` and installs
+/// nothing (D5).
+pub(crate) struct BinPreflight {
+    /// `bin_search_dirs(ctx)`.
+    pub dirs: Vec<String>,
+    /// `bin_candidates(&dirs, &short)`, in D5 order.
+    pub candidates: Vec<String>,
+    /// Full expected SHA-256 hex.
+    pub digest: String,
+    /// The file the digest (and bytes) come from, for messages.
+    pub bin_path: String,
+    /// ELF `e_machine` of that file.
+    pub machine: u16,
+}
+
+/// Compute the binary preflight facts, unless this run skips the gates
+/// by design (local transport without the override).
+pub(crate) fn bin_preflight(ctx: &RemoteContext) -> Result<Option<BinPreflight>, String> {
+    if ctx.transport == RemoteTransport::Local && ctx.portuale_dir.is_none() {
+        return Ok(None);
+    }
+    let info = server_bin_info(ctx)?;
+    let dirs = bin_search_dirs(ctx);
+    let candidates = bin_candidates(&dirs, &info.short_hash);
+    Ok(Some(BinPreflight {
+        dirs,
+        candidates,
+        digest: info.digest_hex,
+        bin_path: info.path.display().to_string(),
+        machine: info.machine,
+    }))
+}
+
+/// Whether `dir` (preflight index `j`) may receive the install: it must
+/// exist and be writable, and a world-writable directory without the
+/// sticky bit is refused (D5). `Err` names the reason for the report.
+pub(crate) fn dir_writable_for_install(
+    values: &HashMap<String, String>,
+    j: usize,
+    dir: &str,
+) -> Result<(), String> {
+    let yes = "yes".to_string();
+    if values.get(&format!("DIR_{j}_EXISTS")) != Some(&yes) {
+        return Err(format!("client directory {dir} does not exist"));
+    }
+    if values.get(&format!("DIR_{j}_WRITABLE")) != Some(&yes) {
+        return Err(format!("client directory {dir} is not writable"));
+    }
+    let mode_text = values
+        .get(&format!("DIR_{j}_MODE"))
+        .map(String::as_str)
+        .unwrap_or("");
+    let mode = u32::from_str_radix(mode_text.trim(), 8)
+        .map_err(|_| format!("client directory {dir}: cannot read its mode ({mode_text:?})"))?;
+    if mode & 0o002 != 0 && mode & 0o1000 == 0 {
+        return Err(format!(
+            "client directory {dir} is world-writable without the sticky bit (refused)"
+        ));
+    }
+    Ok(())
+}
+
+/// Evaluate the S8.1 gates over parsed preflight values: `(plan,
+/// failures, notes)`. The first digest match wins; no match plans an
+/// install as `<dir>/portuale-<hash>` in the first usable directory; a
+/// mismatched plain `portuale` is a note (reported, left alone); an
+/// arch mismatch or no usable directory fails.
+pub(crate) fn evaluate_bin_gates(
+    values: &HashMap<String, String>,
+    pre: &BinPreflight,
+    override_given: bool,
+) -> (ClientBinPlan, Vec<String>, Vec<String>) {
+    let mut failures = Vec::new();
+    let mut notes = Vec::new();
+    let uname_m = values.get("UNAME_M").map(String::as_str).unwrap_or("");
+    if arch_matches(pre.machine, uname_m) == Some(false) {
+        failures.push(format!(
+            "client architecture is {uname_m:?} but the shipped binary (--remote-portuale-binary {}) is built for {}: build the client architecture and pass it with --remote-portuale-binary",
+            pre.bin_path,
+            machine_name(pre.machine),
+        ));
+        return (ClientBinPlan::Unresolved, failures, notes);
+    }
+    let short: String = pre.digest.chars().take(16).collect();
+    let mut corrupted_hashed: Vec<String> = Vec::new();
+    for (i, path) in pre.candidates.iter().enumerate() {
+        let sha = values
+            .get(&format!("CAND_{i}_SHA"))
+            .map(String::as_str)
+            .unwrap_or("missing");
+        if sha == pre.digest {
+            return (ClientBinPlan::Use(path.clone()), failures, notes);
+        }
+        let plain = path.rsplit('/').next().unwrap_or(path) == "portuale";
+        if !plain && sha != "missing" && !sha.is_empty() {
+            corrupted_hashed.push(path.clone());
+        }
+        if plain && sha != "missing" && !sha.is_empty() {
+            notes.push(format!(
+                "client {path} has a different SHA-256 (an operator install?); left alone"
+            ));
+        }
+    }
+    // No match: the first usable directory takes `<dir>/portuale-<hash>`.
+    let mut reasons = Vec::new();
+    for (j, dir) in pre.dirs.iter().enumerate() {
+        match dir_writable_for_install(values, j, dir) {
+            Ok(()) => {
+                let target = format!("{dir}/portuale-{short}");
+                if corrupted_hashed.contains(&target) {
+                    notes.push(format!(
+                        "client {target} does not match its name (corrupted); planned for replacement"
+                    ));
+                }
+                return (ClientBinPlan::Install(target), failures, notes);
+            }
+            Err(reason) => reasons.push(reason),
+        }
+    }
+    if override_given {
+        failures.push(format!(
+            "mrg: --remote-portuale-dir {}: {}",
+            pre.dirs.first().map(String::as_str).unwrap_or("?"),
+            reasons
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "no usable directory".to_string()),
+        ));
+    } else {
+        failures.push(
+            "mrg: no writable client directory for the portuale binary (/opt/bin and /usr/local/bin are missing, unwritable, or world-writable without the sticky bit): pass --remote-portuale-dir=<abs dir> pointing at a directory the client login can write, or run as a root login".to_string(),
+        );
+    }
+    (ClientBinPlan::Unresolved, failures, notes)
+}
+
+/// Run the install stage when the plan says so (S8.2): `Use`/`Local`
+/// are no-ops (no status line -- a reuse prints nothing);
+/// `Unresolved` is an internal error (preflight never ran).
+pub(crate) fn ensure_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<(), String> {
+    match &ctx.bin_plan {
+        ClientBinPlan::Install(target) => {
+            let pre = bin_preflight(ctx)?.ok_or_else(|| {
+                "mrg: internal error: the client binary plan needs an install but preflight skipped the binary gates".to_string()
+            })?;
+            install_client_binary(ctx, control, target, &pre.digest, &pre.bin_path)
+        }
+        ClientBinPlan::Use(_) | ClientBinPlan::Local(_) => Ok(()),
+        ClientBinPlan::Unresolved => Err(
+            "mrg: internal error: the client binary was never resolved (preflight did not run)"
+                .to_string(),
+        ),
+    }
+}
+
+/// Digest of a client path, if it exists: `None` when missing. Only a
+/// transport failure is an `Err`; a missing file is not one.
+pub(crate) fn client_file_digest(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    path: &str,
+) -> Result<Option<String>, String> {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(format!("mrg: reading {path}: {e}")),
+            };
+            use sha2::Digest as _;
+            Ok(Some(format!("{:x}", sha2::Sha256::digest(&bytes))))
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &["sha256sum".to_string(), "--".to_string(), path.to_string()],
+            )?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                if is_transport_error(code, &stderr) {
+                    return Err(format!(
+                        "mrg: client {} unreachable:\n{stderr}",
+                        ctx.hostname
+                    ));
+                }
+                return Ok(None);
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(stdout
+                .split_whitespace()
+                .next()
+                .map(String::from)
+                .filter(|hex| hex.len() == 64))
+        }
+    }
+}
+
+/// Best-effort removal of a client temp path (the install's failure
+/// cleanup, S8.2).
+pub(crate) fn remove_client_path(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    path: &str,
+) {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            let _ = std::fs::remove_file(path);
+        }
+        RemoteTransport::Ssh => {
+            let _ = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "rm".to_string(),
+                    "-f".to_string(),
+                    "--".to_string(),
+                    path.to_string(),
+                ],
+            );
+        }
+    }
+}
+
+/// Run `"<abs>" __helper ping` on the client and require the D8 token on
+/// stdout: the installed binary really executes there.
+pub(crate) fn ping_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    abs: &str,
+) -> Result<(), String> {
+    let output = run_raw_command(
+        ctx,
+        control,
+        &[abs.to_string(), "__helper".to_string(), "ping".to_string()],
+    )
+    .map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local client binary ping failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        if ctx.transport == RemoteTransport::Ssh && is_transport_error(code, &stderr) {
+            return Err(format!(
+                "mrg: client {} unreachable:\n{stderr}",
+                ctx.hostname
+            ));
+        }
+        return Err(format!(
+            "mrg: client binary {abs} failed its __helper ping (exit {}):\n{stderr}",
+            code.unwrap_or(-1)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim() != crate::helpers::PING_TOKEN {
+        return Err(format!(
+            "mrg: client binary {abs} did not answer the __helper ping (no D8 token)"
+        ));
+    }
+    Ok(())
+}
+
+/// The S8.2 install: `mktemp <dir>/.portuale.XXXXXX`, stream the server
+/// binary over the existing connection (the way bundles stream), `chmod
+/// 0755`, re-check the digest, `mv` to `<dir>/portuale-<hash>`, then
+/// `"<abs>" __helper ping` (which must print the D8 token). On any
+/// failure the temp file is removed and the run fails before any unit
+/// is consumed. Prints the status line `portuale-remote: install-bin
+/// <rc>`.
+pub(crate) fn install_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    target: &str,
+    expected: &str,
+    bin_path: &str,
+) -> Result<(), String> {
+    // Idempotent: a matching target only needs its ping (a reuse, so no
+    // status line -- the second run reports no `install-bin` line).
+    match client_file_digest(ctx, control, target)? {
+        Some(digest) if digest == expected => {
+            ping_client_binary(ctx, control, target)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+    let bytes = std::fs::read(bin_path)
+        .map_err(|e| format!("mrg: reading the shipped binary {bin_path}: {e}"))?;
+    let dir = std::path::Path::new(target)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| format!("mrg: install target {target} has no parent directory"))?;
+    // `mktemp <dir>/.portuale.XXXXXX`.
+    let tmp: String = match ctx.transport {
+        RemoteTransport::Local => {
+            let mut attempt = 0;
+            loop {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|t| t.as_nanos())
+                    .unwrap_or(0);
+                let candidate = format!(
+                    "{dir}/.portuale.{}.{attempt}.{nanos}.tmp",
+                    std::process::id()
+                );
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&candidate)
+                {
+                    Ok(_) => break candidate,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 8 => {
+                        attempt += 1;
+                    }
+                    Err(e) => {
+                        return Err(format!("mrg: creating the client temp file: {e}"));
+                    }
+                }
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &["mktemp".to_string(), format!("{dir}/.portuale.XXXXXX")],
+            )?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                if is_transport_error(code, &stderr) {
+                    return Err(format!(
+                        "mrg: client {} unreachable:\n{stderr}",
+                        ctx.hostname
+                    ));
+                }
+                return Err(format!(
+                    "mrg: client mktemp in {dir} failed (exit {}):\n{stderr}",
+                    code.unwrap_or(-1)
+                ));
+            }
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if name.is_empty() || !name.starts_with(&dir) {
+                remove_client_path(ctx, control, &name);
+                return Err(format!(
+                    "mrg: client mktemp answered unexpectedly: {name:?}"
+                ));
+            }
+            name
+        }
+    };
+    let fail = |step: &str, detail: String| {
+        remove_client_path(ctx, control, &tmp);
+        format!("mrg: client binary install failed at {step}: {detail}")
+    };
+    // Write from stdin (streamed over the existing connection).
+    if let Err(message) = send_bytes(ctx, control, &bytes, &tmp) {
+        return Err(fail("stream", message));
+    }
+    // `chmod 0755`.
+    match ctx.transport {
+        RemoteTransport::Local => {
+            use std::os::unix::fs::PermissionsExt as _;
+            if let Err(e) = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)) {
+                return Err(fail("chmod", e.to_string()));
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "chmod".to_string(),
+                    "0755".to_string(),
+                    "--".to_string(),
+                    tmp.clone(),
+                ],
+            )
+            .map_err(|message| fail("chmod", message))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(fail(
+                    "chmod",
+                    format!("exit {}:\n{stderr}", output.status.code().unwrap_or(-1)),
+                ));
+            }
+        }
+    }
+    // Re-check the digest before the rename (never an in-place write).
+    match client_file_digest(ctx, control, &tmp)? {
+        Some(digest) if digest == expected => {}
+        other => {
+            return Err(fail(
+                "digest",
+                format!("the streamed bytes do not match (got {other:?})"),
+            ));
+        }
+    }
+    // `mv` to `<dir>/portuale-<hash>`.
+    match ctx.transport {
+        RemoteTransport::Local => {
+            if let Err(e) = std::fs::rename(&tmp, target) {
+                return Err(fail("mv", e.to_string()));
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "mv".to_string(),
+                    "--".to_string(),
+                    tmp.clone(),
+                    target.to_string(),
+                ],
+            )
+            .map_err(|message| fail("mv", message))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(fail(
+                    "mv",
+                    format!("exit {}:\n{stderr}", output.status.code().unwrap_or(-1)),
+                ));
+            }
+        }
+    }
+    // The install must execute: `"<abs>" __helper ping` prints D8's token.
+    if let Err(message) = ping_client_binary(ctx, control, target) {
+        remove_client_path(ctx, control, target);
+        return Err(message);
+    }
+    println!("portuale-remote: install-bin 0");
+    Ok(())
+}
