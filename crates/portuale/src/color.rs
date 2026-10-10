@@ -371,6 +371,7 @@ impl Colorizer {
     /// only (`pkg_info.merge` is always true for every bracket entry this
     /// portuale prints): pick the palette entry from `built` (binary) +
     /// `system` + `world`. `system` wins over `world`, exactly as real.
+    #[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
     pub fn pkgprint(&self, text: &str, binary: bool, system: bool, world: bool) -> String {
         let key = match (binary, system, world) {
             (true, true, _) => "PKG_BINARY_MERGE_SYSTEM",

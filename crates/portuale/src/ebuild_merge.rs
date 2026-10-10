@@ -958,7 +958,7 @@ fn replace_symlink_atomic(
 /// it can only match by being equal to `src_md5` too). Every other
 /// return path keeps `moveme` `true`, matching real `_protect()`'s own
 /// `move_me = True` initial default, never cleared on any other branch.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn protect_decision(
     root: &Path,
     category: &str,
@@ -1533,6 +1533,7 @@ fn remove_from_contents_into(
 /// overwrites the `cps` entry (real `_normalize_counter` is just a
 /// whitespace-trim, not integer parsing, so a plain trimmed-string
 /// comparison already matches real behavior exactly).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn register_preserved_libs(
     registry: &mut PlibRegistry,
     cpv: &str,
@@ -1719,6 +1720,7 @@ fn replacement_needed_entries(
 /// (real `include_file=needed`, backlog #229): without it a library
 /// owned by the replaced instance whose only consumer is the replacing
 /// package would not be preserved. Runs before `write_vdb_tmp_contents`.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn find_preserve_paths_for_merge(
     root: &Path,
     category: &str,
@@ -1826,6 +1828,7 @@ fn inject_preserved_libs_into_contents(
 /// the replace loop's unregistration of the old record as the final
 /// state. Keep #167's serialisation and write-only-on-change rules
 /// intact: `register_preserved_libs` + `write_plib_registry` do that.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn register_merge_preserved_libs(
     root: &Path,
     category: &str,
@@ -1856,6 +1859,7 @@ fn register_merge_preserved_libs(
 /// merging package's `register(...)`. Split out so a database backend can
 /// store it in the publishing transaction (feat#157 S4.1), reading the
 /// counter from the still-pending entry.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn merge_plib_registration(
     root: &Path,
     category: &str,
@@ -1927,6 +1931,7 @@ fn merge_plib_registration(
 /// wholesale moments later regardless, so there's no separate real
 /// `CONTENTS`-file rewrite to also perform here).
 #[cfg(test)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn preserve_libs_on_unmerge(
     root: &Path,
     category: &str,
@@ -1950,7 +1955,7 @@ pub(crate) fn preserve_libs_on_unmerge(
 
 /// [`preserve_libs_on_unmerge`], optionally keeping the registry in
 /// `retire` instead of writing it (feat#157 S4.2).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn preserve_libs_on_unmerge_into(
     root: &Path,
     category: &str,
@@ -2084,6 +2089,7 @@ pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> 
 /// directory-move path, and the collision-protect takeover
 /// (`unregister_preserved_libs`) already covers the same-path case.
 #[cfg(test)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn find_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
@@ -2105,6 +2111,7 @@ pub(crate) fn find_unused_preserved_libs(
 
 /// [`find_unused_preserved_libs`] over an explicit registry (the one an
 /// unmerge in progress holds in memory, feat#157 S4.2).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn find_unused_preserved_libs_in(
     root: &Path,
     registry: PlibRegistry,
@@ -2193,6 +2200,7 @@ fn find_unused_preserved_libs_in(
 /// through to `find_unused_preserved_libs` (see its own doc comment
 /// for the real grounding); every caller except the replace-loop
 /// unmerge passes `exclude_cpvs=&[]` and empty feeds.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn prune_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
@@ -2216,7 +2224,7 @@ pub(crate) fn prune_unused_preserved_libs(
 /// `retire` and leaving its writes (the registry, the W4 rewrites) there
 /// instead of committing them (feat#157 S4.2). The files it removes are
 /// removed at once either way.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn prune_unused_preserved_libs_into(
     root: &Path,
     unmerge_no_replacement: bool,
@@ -2382,7 +2390,7 @@ pub(crate) fn mtime_secs(metadata: &std::fs::Metadata) -> Result<i64, String> {
 /// read once by the caller before this runs and written back once after
 /// -- real `vardbapi._conf_mem_file` semantics (a single, whole-merge
 /// read/update/write, not a per-file one).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn merge_tree(
     d: &Path,
     root: &Path,
@@ -2890,6 +2898,7 @@ fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
 /// `counter_tick_core` since #306: under the VDB lock, the max of the
 /// `counter` file and every installed package's own `COUNTER`, plus one,
 /// written atomically).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn populate_vdb_tmp(
     root: &Path,
     category: &str,
@@ -3008,7 +3017,7 @@ fn publish_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> 
 ///   same value the published entry carries. Until this commit every
 ///   reader (`has_version` included) still sees the old instances; a
 ///   crash before it leaves them installed and the new row `merging`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn publish_merged_entry(
     root: &Path,
     category: &str,
@@ -3595,7 +3604,7 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
 type CollisionsResult =
     Result<(Vec<String>, Vec<String>, BTreeMap<String, BTreeSet<String>>), String>;
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn find_collisions(
     d: &Path,
     root: &Path,
@@ -3869,6 +3878,7 @@ pub fn run_merge(
 /// (real queues no merge for it), so callers that print the
 /// `Installing` line from the hook also regain that gating for free.
 /// `None` runs the fused build+merge exactly like [`run_merge`].
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn run_merge_with_hook(
     ebuild_path: &Path,
     root: &Path,
@@ -4451,7 +4461,7 @@ fn merge_after_install(
 /// replace) so the caller can fold it into its own `env_update` gate.
 /// Shared by `merge_after_install` (source `emerge <atom>` / `ebuild
 /// <file> merge`) and `merge_binpkg`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn unmerge_replaced_same_slot(
     root: &Path,
     category: &str,
@@ -4610,7 +4620,7 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// already unmerged, which are still installed in the database but must
 /// not count as `others_in_slot` (on `files` their directories are gone
 /// by now).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn unmerge_one_installed(
     root: &Path,
     category: &str,
@@ -4720,7 +4730,7 @@ pub(crate) fn unmerge_one_installed(
 /// real `doebuild(ebuildpath, "config", ...)`). Shared by
 /// `unmerge_one_installed`'s `pkg_prerm`/`pkg_postrm` and
 /// `pretend.rs::run_config_action`'s `pkg_config`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn run_vdb_saved_env_phase(
     root: &Path,
     category: &str,

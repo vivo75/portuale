@@ -70,6 +70,7 @@ pub fn get_close_matches(
 /// on the window, then recurse into the slice before it and the slice
 /// after it. Block *order* doesn't matter for the sum, so the explicit
 /// LIFO queue is just a recursion here.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn matching_char_count(
     a: &[char],
     b: &[char],
@@ -97,6 +98,7 @@ fn matching_char_count(
 /// `j2len` dynamic-programming scan for the longest common contiguous
 /// run, ties broken toward the earliest `i` (then earliest `j`), then
 /// extended maximally on both ends.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn find_longest_match(
     a: &[char],
     b: &[char],

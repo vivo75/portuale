@@ -638,6 +638,7 @@ fn block_termination_signals() -> libc::sigset_t {
 /// Mount `db` read-only at `mountpoint` and serve it until it is unmounted
 /// (`fusermount3 -u`) or SIGINT/SIGTERM/SIGHUP arrives (then it unmounts
 /// itself). `on_mounted` runs once the mount exists, before serving.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn serve(
     db: Arc<dyn InstalledDb>,
     mountpoint: &Path,

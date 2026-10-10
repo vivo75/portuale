@@ -505,6 +505,7 @@ enum Candidate {
 ///   unparseable file silently means "flat, nothing cached".
 /// - `now` is real `time.time()`, passed in so the day-long freshness
 ///   window is testable.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn mirror_url(
     mirror: &str,
     filename: &str,

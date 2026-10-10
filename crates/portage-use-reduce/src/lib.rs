@@ -369,6 +369,7 @@ fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, Error> {
 /// `is_active` -- `subset` only decides which already-active branch's
 /// atoms make it into the *output*, never which branches are active in
 /// the first place.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn select_subset(
     nodes: &[DepNode],
     disjunction: bool,
@@ -866,6 +867,7 @@ impl AltPreference {
 /// behaviour (first-listed-in-bin always wins).
 pub type TieBreak<'a> = dyn FnMut(&[Vec<String>]) -> usize + 'a;
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn use_reduce_flat_disjunctive(
     tokens: &[String],
     uselist: &HashSet<String>,
@@ -888,6 +890,7 @@ pub fn use_reduce_flat_disjunctive(
     use_reduce_flat(&reserialized, uselist, mode)
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn resolve_disjunctions(
     nodes: &[DepNode],
     uselist: &HashSet<String>,

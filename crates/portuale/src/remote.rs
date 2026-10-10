@@ -2062,7 +2062,7 @@ fn drop_dependents(
 /// combined failed+skipped report. `AlreadyInstalled` stays a silent
 /// no-op like the local plan. Anything else non-`Binary` cannot occur
 /// (`check_binary_plan` gates first) and fails loudly.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn run_remote_plan(
     entries: &[portage_repo::GraphEntry],
     config: &portage_profile::Config,
@@ -2255,7 +2255,7 @@ pub(crate) fn run_remote_plan(
 /// (bundle → unpack → phases → merge → postinst, shadow pre-check
 /// before anything ships), then record the server ledger. `Err` is the
 /// unit's failure; the caller decides abort vs. keep-going.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_one_remote_unit(
     entry: &portage_repo::GraphEntry,
     version: &str,
@@ -2901,7 +2901,7 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
 /// placed config (the merge-time `PORTAGE_BZIP2_COMMAND` the scrubbed
 /// vdb env records). Prints the
 /// stage report lines; `Ok(cpv)` is the merged `category/package-version`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_binpkg_flow(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -3263,7 +3263,7 @@ fn eapi_exports_merge_type(eapi: &str) -> bool {
 /// `/` (no checkout on the client), and `PORTAGE_IPC_DAEMON` is unset
 /// (no IPC daemon, #326 D6 -- this also scrubs a value inherited over
 /// the local transport).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn phase_exports(
     ebuild: &str,
     build_dir: &str,
@@ -3343,6 +3343,7 @@ fn phase_exports(
 /// `S` is deliberately *not* exported: ebuild.sh defaults it to
 /// `${WORKDIR}/${P}` with `P` from the saved env (exact local behavior).
 /// `PHASE_<phase>=<rc>` on stdout, phase log raw on stdout/stderr.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn phase_script(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
@@ -3555,7 +3556,7 @@ fn split_server_locale(locale: &[(String, String)], eapi: &str) -> Vec<(String, 
 /// and the forwarded locale arrives pre-split (see
 /// `split_server_locale`); the unset also kills any `LC_ALL` leaking
 /// in from the sourced build-time environment.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn postinst_regen_script(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
@@ -4013,7 +4014,7 @@ pub(crate) struct LedgerSpec {
     pub line: String,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn merge_script(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
@@ -4213,6 +4214,7 @@ struct RegenReport {
 /// own locale pairs for the client phase env (see
 /// `collect_server_locale`); the unit flow collects them from the
 /// process environment, tests inject them explicitly.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_postinst_regen_stage(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -4530,7 +4532,7 @@ fn old_hook_warn_message(cpv: &str, detail: &str) -> String {
 /// warns with both pull errors (and still hits the driver's own
 /// warn-and-skip). Best-effort throughout:
 /// every failure lands in `warnings` and the merge continues.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn ship_old_hook_envs(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,

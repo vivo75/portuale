@@ -866,7 +866,7 @@ fn type_error(prog: &str, names: &str, value: &str, func: &str) -> InstallOutcom
 /// Unknown shorts put the token (or, mid-cluster, the `-tail`) in
 /// `remaining`, as argparse's extras do (`-vp` stays whole, `-pv`
 /// leaves `-v`).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn parse_install_shorts(
     prog: &str,
     rest: &[u8],
@@ -1756,6 +1756,7 @@ impl Ctx {
     /// like Python's `open(dst, "wb")`), then attributes, xattrs,
     /// timestamps. Failures log the `Failed to copy file` first line
     /// plus the final line and return False.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn copy_and_set(
         &self,
         parsed: &InstallParsed,

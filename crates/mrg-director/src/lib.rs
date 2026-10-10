@@ -783,6 +783,7 @@ impl MemoryDb {
     /// CPVs that directly depend on it. Repeat calls for one
     /// `category/package` accumulate versions in call order — provide
     /// highest-first, real `dbapi.cp_list` order.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     pub fn add_package(
         &mut self,
         category: &str,
@@ -1506,6 +1507,7 @@ mod tests {
     /// Write one vdb entry: `<root>/var/db/pkg/<cat>/<pkg>-<ver>/` with
     /// the given `SLOT` plus `(filename, content)` files (`CONTENTS`,
     /// `USE`, `RDEPEND`, …).
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn write_vdb_entry(
         root: &Path,
         category: &str,

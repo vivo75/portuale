@@ -2072,7 +2072,7 @@ fn package_a(env: &Environment, use_flags: &str) -> Result<Vec<String>, String> 
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 async fn fetch_sources(
     env: &Environment,
     root: &Path,
@@ -3318,7 +3318,7 @@ fn portage_python_value(bin_dir: &Path) -> String {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn phase_env_vars(
     env: &Environment,
     root: &Path,
@@ -3696,7 +3696,7 @@ fn phase_path(helpers_dir: &Path, extra_env: &[(String, String)], features: &str
 /// text at all -- `phase_env_vars`'s own pairs are passed directly as
 /// real subprocess environment variables instead, see
 /// `run_one_phase_bash`/`run_misc_functions_bash`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn phase_setup_script(
     env: &Environment,
     root: &Path,
@@ -3776,7 +3776,7 @@ fn shell_single_quote(value: &str) -> String {
 /// run cheap to "re-run" from a fresh shell, exactly the way real
 /// `doebuild()` itself relies on across its own separate `spawnebuild()`
 /// calls -- this isn't a new mechanism invented for portuale.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 async fn run_one_phase(
     env: &Environment,
     root: &Path,
@@ -3911,7 +3911,7 @@ impl Drop for UmaskGuard {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 async fn run_one_phase_brush(
     env: &Environment,
     root: &Path,
@@ -4015,7 +4015,7 @@ async fn run_one_phase_brush(
 /// `tokio::process` one: matches `fetch.rs`'s own precedent for
 /// spawning a real subprocess (`wget`) from inside an `async fn`
 /// without pulling in tokio's own "process" feature.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_one_phase_bash(
     env: &Environment,
     root: &Path,
@@ -4489,7 +4489,7 @@ fn depcachedir() -> std::path::PathBuf {
 /// with `dyn_command` as a positional arg is enough to invoke it
 /// directly; no separate `invoke_function` call is needed the way
 /// `run_one_phase`'s own explicit `__ebuild_main` call is.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 async fn run_misc_functions(
     env: &Environment,
     root: &Path,
@@ -4552,7 +4552,7 @@ async fn run_misc_functions(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 async fn run_misc_functions_brush(
     env: &Environment,
     root: &Path,
@@ -4609,7 +4609,7 @@ async fn run_misc_functions_brush(
 /// `misc_sh = shlex.quote(misc_sh_binary) + " __dyn_%s"` invocation
 /// shape exactly. See `run_one_phase_bash`'s own doc comment for why a
 /// blocking `std::process::Command` here too.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_misc_functions_bash(
     env: &Environment,
     root: &Path,
@@ -4720,7 +4720,7 @@ fn shared_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
 
 /// Synchronous entry point mirroring `run_single_phase`'s own shape, for
 /// `ebuild_package`'s own real `__dyn_package` call.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn run_misc_function(
     ebuild_path: &Path,
     portage_tmpdir: &Path,
@@ -4779,7 +4779,7 @@ pub(crate) fn run_misc_function(
 /// a real fetched-and-verified distfile still made `unpack` report
 /// `"either does not exist or is not a regular file"` before this was
 /// added).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 async fn run_commands_async(
     ebuild_path: &Path,
     commands: &[&str],
@@ -4953,7 +4953,7 @@ async fn run_commands_async(
 /// once at the CLI boundary" shape `emerge`'s own `pretend.rs` already
 /// uses for `ROOT`/`PORTAGE_CONFIGROOT` via `root_from_env`/
 /// `config_root_from_env`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn run_commands(
     ebuild_path: &Path,
     commands: &[&str],
@@ -4985,7 +4985,7 @@ pub fn run_commands(
 /// `PORTAGE_LOG_FILE` (default `${T}/build.log`). `run_build_scheduler`
 /// passes it so a parallel `--jobs` build's output doesn't interleave;
 /// the scheduler dumps the file on a build failure.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn run_commands_logged(
     ebuild_path: &Path,
     commands: &[&str],
@@ -5206,7 +5206,7 @@ fn brush_phase_params(
 /// (`declare -F "$1" >/dev/null && __qa_call $1`) -- so this is safe to
 /// call even for a fixture ebuild that defines neither `pkg_preinst` nor
 /// `pkg_postinst` at all.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn run_single_phase(
     ebuild_path: &Path,
     phase: &str,
@@ -5275,7 +5275,7 @@ pub(crate) fn run_single_phase(
 /// phase through an `EbuildPhase`, i.e. `bin/ebuild.sh clean`), kept as
 /// its own named entry point so every call site below reads as the real
 /// mechanism.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn run_clean(
     ebuild_path: &Path,
     root: &Path,
@@ -5363,7 +5363,7 @@ fn binary_merge_env() -> Vec<(String, String)> {
 /// source merge, whose `${T}/environment` is still the install chain's.
 /// `build_env` is the resolved phase env (`FEATURES`,
 /// `PORTAGE_COMPRESS*`, ...) the gates read.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn run_instprep(
     ebuild_path: &Path,
     saved_env_bz2: Option<&Path>,
@@ -5452,7 +5452,7 @@ pub(crate) fn run_instprep(
 /// eclass's own `_ACCT_USER_*`) before the vdb env is regenerated.
 /// `unmerge` hooks use `true` (each old version seeds its own
 /// builddir).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn run_phase_from_saved_env(
     ebuild_path: &Path,
     saved_env_bz2: &Path,

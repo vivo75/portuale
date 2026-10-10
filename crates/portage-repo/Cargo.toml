@@ -51,3 +51,6 @@ portage-atom-resolvo = "=0.8.1"
 # Direct (not just transitive via `portage-atom-resolvo`): the resolvo
 # backend drives `resolvo::Problem`/`Solver` itself.
 resolvo = "=0.12.1"
+
+[lints]
+workspace = true

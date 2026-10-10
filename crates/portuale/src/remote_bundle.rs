@@ -335,6 +335,7 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
 /// `gpg` is the same merge-time signature policy `merge_binpkg` runs
 /// (see `crate::binpkg::GpgVerify`) -- the bundle stages exactly what
 /// the merge would see, verified the same way.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn build_bundle(
     binpkg_path: &Path,
     staging_tmp: &Path,

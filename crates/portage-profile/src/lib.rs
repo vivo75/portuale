@@ -1870,6 +1870,7 @@ fn repo_containing(dir: &Path, repos: &[(String, PathBuf)]) -> Option<(String, P
 /// is returned *unchanged*, matching real portage: the `:` then becomes
 /// a literal path component that fails to resolve downstream exactly as
 /// it would there.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn expand_parent_colon(
     parent: &str,
     current_repo: Option<&(String, PathBuf)>,
@@ -1952,6 +1953,7 @@ fn resolve_profile_chain(
     Ok(chain)
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn visit_profile(
     dir: &Path,
     repos: &[(String, PathBuf)],
@@ -2676,7 +2678,7 @@ fn parse_package_use_lines(
 /// `BROOT` (builds always run on the host), and reading the host's
 /// own `/etc/profile.env` would leak host state into
 /// fixture-deterministic resolution.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 /// An exact content fingerprint of every USE-context `Config` field the
 /// `portage-repo` memo keys read (see `use_context_fingerprint` there).
 /// `autounmask_use` is deliberately **excluded**: it is the one field the
@@ -2789,6 +2791,7 @@ pub fn is_visible_base_fingerprint(config: &Config) -> u64 {
     h.finish()
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn resolve_config(
     config_root: &Path,
     main_repo_location: &Path,

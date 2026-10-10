@@ -6,3 +6,6 @@ rust-version.workspace = true
 
 [dependencies]
 regex = "1"
+
+[lints]
+workspace = true

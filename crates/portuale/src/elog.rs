@@ -871,6 +871,7 @@ fn smtp_read_response(reader: &mut impl std::io::BufRead) -> Result<(u16, Vec<St
 /// `MAIL`/`RCPT`/`DATA` with dot-stuffing, `QUIT`. Response codes
 /// follow real's `SMTPException`-on-error shape; transport failures
 /// follow its `OSError` shape.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn smtp_send(
     host: &str,
     port: u16,
@@ -1220,6 +1221,7 @@ pub fn save_modules_process(
 /// `settings.features`' `split-elog` token: the `emerge` callers pass
 /// the resolved list (#37 S3), the standalone unmerge path the raw env
 /// fallback.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn process_batch(
     logdir: &Path,
     root_display: &str,

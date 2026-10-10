@@ -408,7 +408,7 @@ fn stn(s: &[u8], length: usize) -> Vec<u8> {
 }
 
 /// `TarInfo._create_header`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn create_header(
     info: &Info,
     mode: u32,
@@ -725,7 +725,7 @@ struct Streamed {
 /// which go through `container.addfile`): write the member header, stream `produce`'s tar through the compressor into
 /// the container (hashing and signing as it goes), then pad and rewrite
 /// the header with the final size.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn stream_member(
     container: &mut Container,
     settings: &Settings,

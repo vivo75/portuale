@@ -684,6 +684,7 @@ struct PlannedFetch {
     file_param_warning: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn plan_fetch_command(
     uri: &str,
     dest: &Path,
@@ -748,6 +749,7 @@ fn plan_fetch_command(
     })
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn download_with_commands(
     uri: &str,
     dest: &Path,
@@ -796,6 +798,7 @@ pub struct QuietFetchError {
 /// callers whose failure message is shaped from the transcript (real
 /// `bintree._populate_remote`'s `!!! [repo] Error fetching ...` shape),
 /// not printed raw.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn download_with_commands_quiet(
     uri: &str,
     dest: &Path,
@@ -1230,6 +1233,7 @@ mod tests {
     /// [`download_with_commands`] under the spawn lock, so no other test
     /// thread can fork while this one's contract is scanning the shared
     /// fd table — see `SPAWN_SERIAL`.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn download_serialized(
         uri: &str,
         dest: &std::path::Path,

@@ -877,6 +877,7 @@ fn require_signing_config(options: &PackageOptions) -> Result<(), String> {
 /// resolved config -- `phase_env_vars`' own curated base stands).
 /// `use_flags`: real `Package.use.enabled`, written to the `Packages`
 /// index `USE` field; `""` for standalone.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn run_package(
     ebuild_path: &Path,
     root: &Path,
@@ -949,6 +950,7 @@ pub fn run_package(
 /// logic. Run-wide single + per-entry token writes no `BUILD_ID`
 /// anywhere here, where real writes index `None` and vdb `-1` (S1
 /// D1): a documented `str(None)`-wart divergence, not mirrored.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn package_after_install(
     ebuild_path: &Path,
     root: &Path,
@@ -1330,6 +1332,7 @@ fn package_makeopts(ebuild_path: &Path, config_root: &Path, root: &Path) -> Opti
 /// fallback was silently doing the archive's job), and, if
 /// `FEATURES=packdebug` is also set, real `__generate_packdebug`
 /// (needs `BUILD_ID` for the debug tarball's own filename).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn invoke_dyn_package(
     ebuild_path: &Path,
     portage_tmpdir: &Path,
@@ -1505,7 +1508,7 @@ fn invoke_dyn_package(
 /// `_allocate_filename_multi`'s `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.
 /// <suffix>` (real `bin/quickpkg` -> `bintree.inject` -> `getname(...,
 /// allocate_new=True)`); otherwise the bare `<cat>/<pf>.<ext>`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn quickpkg_from_vdb(
     root: &Path,
     category: &str,

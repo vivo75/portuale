@@ -1975,6 +1975,7 @@ fn stanza_has_minimum_keys(stanza: &HashMap<String, String>) -> bool {
 /// file is `<pf>-<build_id>.{xpak,gpkg.tar}` with `PF` taken from the
 /// archive and `BUILD_ID` from the filename; when clear, it is
 /// `<pf>.{tbz2,gpkg.tar}`.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn scan_binpkg_file(
     file: &Path,
     basename: &str,

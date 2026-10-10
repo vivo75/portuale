@@ -16,3 +16,6 @@ portage-repo = { path = "../portage-repo" }
 portage-fetch = { path = "../portage-fetch" }
 portage-profile = { path = "../portage-profile" }
 portage-versions = { path = "../portage-versions" }
+
+[lints]
+workspace = true

@@ -168,3 +168,6 @@ vdb-fuse = ["dep:fuser"]
 # `bzip2-sys` backend is opt-in and NOT enabled): keep
 # `grep -c bzip2-sys Cargo.lock` at 0 after any bump.
 bzip2 = "0.6"
+
+[lints]
+workspace = true

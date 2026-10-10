@@ -1070,6 +1070,7 @@ impl LibGraph {
 /// `Err` for a real `KeyError` (matching portuale's own established
 /// error-string convention) -- `obj` itself not a real indexed object at
 /// all.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn find_consumers(
     root: &Path,
     map: &LinkageMap,
@@ -1195,6 +1196,7 @@ pub fn find_consumers(
 /// For each, real hardlink/soname-symlink classification decides what to
 /// actually preserve (skipping a candidate the *new* package already
 /// replaces both the real file *and* the soname symlink for).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn find_libs_to_preserve(
     root: &Path,
     map: &LinkageMap,

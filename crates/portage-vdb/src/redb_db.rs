@@ -710,6 +710,7 @@ impl Rd {
 
     /// Chunks `first..=last` of a file of `len` bytes, concatenated; every
     /// one must exist and have its exact size.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn chunks(&self, id: u64, name: &str, len: u64, first: u32, last: u32) -> R<Vec<u8>> {
         let mut out = Vec::new();
         let mut next = first;

@@ -641,7 +641,7 @@ fn http_or_summary(failures: &[portage_fetch::QuietFetchError]) -> String {
 ///
 /// `--getbinpkgonly` (binary-only resolve, `usepkgonly`) simply never
 /// yields a non-`Binary` entry, so the same function serves both.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn run_merge_plan(
     entries: &[GraphEntry],
     config: &Config,
@@ -758,7 +758,7 @@ pub fn run_merge_plan(
 /// is a silent no-op; `New`/`Upgrade`/`Downgrade`/`Reinstall` are
 /// fetched (remote) or located (`$PKGDIR`) and merged (`merge_binpkg`
 /// unmerges a replaced same-slot version itself).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn merge_one_binary_entry(
     entry: &GraphEntry,
     config: &Config,
@@ -1149,6 +1149,7 @@ pub(crate) fn is_binpkg_missing_failure(e: &str) -> bool {
 /// bytes). A record without `SIZE` still returns here -- real's
 /// "verifies nothing without one" (`BinpkgVerifier._start`'s early OK)
 /// lives in `verify_binpkg_against_index`, not in the lookup.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn local_index_record(
     pkgdir: &Path,
     category: &str,
@@ -1244,6 +1245,7 @@ pub(crate) fn resolve_local_binpkg(
 /// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into
 /// `$PKGDIR`, then verify it against the index `SIZE` and, if present,
 /// the `MD5` / `SHA1` fields. A mismatch removes the file and fails.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn download_and_verify(
     sync_uri: &str,
     record: &std::collections::HashMap<String, String>,

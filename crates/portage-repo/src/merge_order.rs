@@ -904,7 +904,7 @@ fn mo_sel_cpv(e: &GraphEntry, installed: bool) -> String {
 /// is the bracketed list of `asap_nodes` cpvs (a count was not enough:
 /// firefox's clang-runtime divergence is exactly one extra lingering
 /// asap node on portuale's side).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn mo_sel_trace_line(
     iter: usize,
     retlist: usize,
@@ -1112,7 +1112,7 @@ fn synthetic_installed_entry(
 /// (`dev-cpp/eigen`) via a premature `drop_satisfied`. The nodes real's
 /// own "Prune 'nomerge' root nodes" step then drops are removed again in
 /// `serialize_merge_order` right after `build_digraph`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn add_installed_dependency_closure(
     entries: &mut Vec<GraphEntry>,
     root: &Path,
@@ -1457,6 +1457,7 @@ impl DigraphPrelude<'_> {
     /// count and the bias flips the pair. Fully-redundant atom sets
     /// collapse to the highest version, exactly today's ranking, so only
     /// partially-overlapping shapes like this one move.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn select_dep_target(
         &self,
         entries: &[GraphEntry],
@@ -2483,6 +2484,7 @@ fn gather_deps(
 /// relaxed. "In the case of multiple runtime cycles, where some cycles
 /// may depend on smaller independent cycles, it's optimal to merge
 /// smaller independent cycles before other cycles that depend on them."
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn find_smallest_cycle(
     g: &Digraph,
     frontier: Option<&mut SerializeFrontier>,
@@ -3034,7 +3036,7 @@ fn weave_scheduled_leftovers(
 /// [`serialize_merge_order`] are the `not tree_mode` gate and the stuck
 /// branch, exactly like real. Returns empty without running the loop
 /// when no Replacement row is pending (the common case pays nothing).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn tree_solved_replacements(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
@@ -3088,7 +3090,7 @@ pub(crate) fn tree_solved_replacements(
 /// verdicts stay that function's sole source, so this never changes
 /// which rows solve. Unseen-by-the-scheduler entries rejoin through the
 /// same leftover weave-back as the flat path.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn tree_display_order(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
@@ -3786,7 +3788,7 @@ fn debug_dump_graph(g: &Digraph, entries: &[GraphEntry], top_level_atoms: &[Stri
 /// and weave-back are identical either way.
 ///
 /// Returns a permutation of `0..entries.len()` in merge order.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn serialize_merge_order(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
@@ -3857,7 +3859,7 @@ pub(crate) fn serialize_merge_order(
 /// Returns the extended entries, the biased graph, the real-entry count
 /// and the unbiased discovery rank. Diagnostics (`debug_dump_graph`,
 /// the `MO_ORDER` print) stay with the flat caller, not here.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn schedule_graph(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
@@ -4031,6 +4033,7 @@ pub(crate) struct WalkReplay {
 /// `cat/pkg` has a `NoVisibleCandidate` entry naming this parent, or
 /// when the USE rule above fails it; an edge with no entry to land on
 /// at all (deps portuale never walks) is skipped.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn replay_create_graph(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
@@ -4137,7 +4140,7 @@ pub(crate) fn replay_create_graph(
 /// unresolvable one (unresolvable atoms are yielded first, so nothing of
 /// the key is admitted then), else admit the targets in atom order.
 /// Returns `true` once a failure is recorded.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn replay_key(
     entries: &[GraphEntry],
     pre: &DigraphPrelude<'_>,

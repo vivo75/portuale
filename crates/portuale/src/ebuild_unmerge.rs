@@ -231,7 +231,7 @@ type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 /// this mirrors) -- filtered out of `entries` immediately, the same
 /// point real portage itself strips them from the CONTENTS dict, before
 /// the per-file removal loop below ever sees them at all.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn remove_contents(
     root: &Path,
     category: &str,
@@ -596,7 +596,7 @@ impl Default for UnmergeOptions {
 /// `ebuild_merge::unmerge_replaced_same_slot`): same threading, same
 /// empty-on-standalone rule.
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn unmerge_pkgfiles(
     root: &Path,
     category: &str,
@@ -626,7 +626,7 @@ pub(crate) fn unmerge_pkgfiles(
 /// config memory, W4 rewrites of other entries) collected into `retire`
 /// instead of committed one by one (feat#157 S4.2); the caller commits
 /// them with [`retire_entry`]. `None` is the S1.5 behaviour, call for call.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn unmerge_pkgfiles_into(
     root: &Path,
     category: &str,

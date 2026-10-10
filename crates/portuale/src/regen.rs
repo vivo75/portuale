@@ -405,7 +405,7 @@ fn run_work_item(
 /// come back as `(global index, outcome)` pairs, so the caller folds
 /// them into pass order deterministically regardless of completion
 /// order.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_parallel(
     work: &[RegenWorkItem],
     pass_indices: &[usize],
@@ -522,7 +522,7 @@ fn prune_stale_entries(repo_location: &Path, valid: Option<&HashSet<(String, Str
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn regen_one(
     ebuild_path: &Path,
     repo_location: &Path,

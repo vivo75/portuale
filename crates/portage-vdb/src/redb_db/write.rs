@@ -614,6 +614,7 @@ fn read_file(t: &WriteTransaction, id: u64, name: &str) -> Tx<Option<Vec<u8>>> {
 }
 
 /// Store (or replace) one file: its record and its 64 KiB chunks.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn put_file(
     t: &WriteTransaction,
     id: u64,

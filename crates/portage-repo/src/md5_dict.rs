@@ -152,6 +152,7 @@ pub fn eapi_has_idepend(eapi: &str) -> bool {
 /// Any I/O failure (no cache file, no ebuild, no eclass dir) is
 /// `false` -- the `depend` phase runs, exactly like real falling
 /// through to `EbuildMetadataPhase` when no auxdb hits.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn cache_entry_is_valid(
     ebuild_path: &Path,
     repo_location: &Path,

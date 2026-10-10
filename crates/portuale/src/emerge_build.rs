@@ -141,7 +141,7 @@ fn ebuild_path(candidate: &Candidate, category: &str, package: &str, version: &s
 /// invalidate for a later entry. Failures are collected and returned
 /// together at the end as a single combined error listing every one --
 /// `Ok(())` only once every entry has a real binary package on disk.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn run_buildpkgonly(
     entries: &[GraphEntry],
     config: &portage_profile::Config,
@@ -373,6 +373,7 @@ pub(crate) fn reloaded_config_protect(
 /// `USE_EXPAND` and `SLOT`/repo identity rows. A free function (not a
 /// closure in the loop) so it is directly unit-testable without a real
 /// build, the same way `entry_build_env` already is.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn buildpkgonly_entry_build_env(
     config: &portage_profile::Config,
     repos: &[RepoConfig],
@@ -455,7 +456,7 @@ fn buildpkgonly_entry_build_env(
 /// mixed path (`emerge_getbinpkg::run_merge_plan`). Failure handling
 /// (stop at the first, or `--keep-going` -> drop the failed package's
 /// dependents and continue) is `run_merge_loop`'s.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn run_source_merge(
     entries: &[GraphEntry],
     repos: &[RepoConfig],
@@ -777,7 +778,7 @@ where
 /// mixed source+binary merge). `AlreadyInstalled` is a silent no-op; a
 /// `Binary` entry is a hard error here (the mixed dispatcher routes
 /// those to `merge_binpkg` before ever calling this).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn merge_one_source_entry(
     entry: &GraphEntry,
     repos: &[RepoConfig],
@@ -1565,6 +1566,7 @@ impl StatusDisplay {
 /// arm stays because it is part of the shape. Real's `Load avg:`
 /// trailer is cut (see [`StatusDisplay::jobs_line`]); the padding that
 /// precedes it is kept, so the line keeps real's shape and column.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn jobs_line(
     color: &crate::color::Colorizer,
     curval: usize,
@@ -1750,6 +1752,7 @@ pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
 /// all: the caller keeps the ebuild-repo fallback (today's display; the
 /// merge itself then reports it cannot locate the entry, same as a
 /// non-resume run).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn resume_binary_repo(
     local: &portage_repo::BinaryIndex,
     binrepos: &[portage_profile::BinRepo],
@@ -1796,6 +1799,7 @@ pub(crate) fn resume_binary_repo(
 /// binary's own repository (`resume_binary_repo`, real's bintree
 /// re-resolution, backlog #186) in `binary_repo`, which wins over the
 /// ebuild lookup; `None` keeps the ebuild lookup as the fallback.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn resume_entry(
     category: &str,
     package: &str,
@@ -1957,7 +1961,7 @@ pub(crate) fn build_log_path(
 /// afterward -- so every phase of the same build (each its own fresh
 /// shell, `ebuild_phases::run_one_phase`'s own doc comment) and a
 /// resumed one all share one timestamp, matching real exactly.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn ensure_portage_logdir_symlink(
     tmpdir_log_path: &Path,
     builddir: &Path,
@@ -2054,7 +2058,7 @@ fn tail_of(path: &Path, n: usize) -> String {
 /// stdout+stderr go to `${T}/build.log` instead of the terminal (real
 /// `PORTAGE_LOG_FILE`); on a build failure the tail of that log is folded
 /// into the returned error so the scheduler can show it.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn build_one_source_entry(
     entry: &GraphEntry,
     repos: &[RepoConfig],
@@ -2217,7 +2221,7 @@ fn build_one_source_entry(
 /// `${PORTAGE_BUILDDIR}/.installed` marker `install` leaves behind and
 /// runs `merge_after_install`, including the same-slot replace of an
 /// upgraded/reinstalled version).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn merge_one_built_entry(
     entry: &GraphEntry,
     repos: &[RepoConfig],
@@ -2356,7 +2360,7 @@ pub(crate) fn system_loadavg_1min() -> f64 {
 /// still spins up its own tokio runtime; a non-`--keep-going` failure
 /// returns immediately but still waits for already-running builds to
 /// finish (`thread::scope` join), it does not kill them.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_build_scheduler(
     entries: &[GraphEntry],
     repos: &[RepoConfig],

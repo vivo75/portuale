@@ -203,7 +203,7 @@ fn fs_err(path: &Path, e: std::io::Error) -> String {
 /// buffers so the `--quiet` suppression itself is pinned, not just the
 /// memo side-effect). Eight params (real's three + quiet/color/binary +
 /// the two sinks) -- arity-lint noise, not a design smell.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn chk_updated_info_files(
     root: &Path,
     infodirs: &[String],

@@ -17,3 +17,6 @@ sha2 = "0.10"
 # both already in Cargo.lock via portuale.
 md-5 = "0.10"
 sha1 = "0.10"
+
+[lints]
+workspace = true

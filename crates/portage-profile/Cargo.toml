@@ -7,3 +7,6 @@ rust-version.workspace = true
 [dependencies]
 portage-util = { path = "../portage-util" }
 regex = "1"
+
+[lints]
+workspace = true

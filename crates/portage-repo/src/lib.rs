@@ -2816,6 +2816,7 @@ pub fn find_remote_binpkg<'a>(
 /// carrying exactly that `BUILD_ID`; if no binrepo has it (or `None` was
 /// given) the newest build of the version from the first binrepo that
 /// lists the version is returned.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn find_remote_binpkg_instance<'a>(
     binrepos: &'a [portage_profile::BinRepo],
     root: &Path,
@@ -2929,7 +2930,8 @@ pub fn find_remote_binpkg_instance<'a>(
 /// must still be forgiven: real keeps the binary (probed live against
 /// 3.0.82.2; `_reinstall_for_flags` returns `None`), so the presence
 /// term must lose it too.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn binpkg_respect_use_ok(
     candidate: &Candidate,
     ebuild_at_version: Option<&Candidate>,
@@ -3065,7 +3067,8 @@ fn binpkg_respect_use_ok_uncached_calls() -> u64 {
     BRU_UNCACHED_CALLS.with(std::cell::Cell::get)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn binpkg_respect_use_ok_uncached(
     candidate: &Candidate,
     ebuild_at_version: Option<&Candidate>,
@@ -3224,6 +3227,7 @@ pub fn read_binary_metadata_instance(
 /// own cached `Packages` index (`BinRepo::packages_dir`). Used once a
 /// binary candidate -- local *or* remote -- has been chosen and its own
 /// dependency strings / `SIZE` are needed.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn read_binary_metadata_any(
     config: &portage_profile::Config,
     root: &Path,
@@ -3240,6 +3244,7 @@ pub fn read_binary_metadata_any(
 /// binrepo) is searched for exactly that `BUILD_ID` before falling back
 /// to the newest build of the version, so a chosen instance never walks
 /// another instance's dependency strings.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn read_binary_metadata_any_instance(
     config: &portage_profile::Config,
     root: &Path,
@@ -3561,6 +3566,7 @@ fn any_config_entry_matches<T: ConfigAtomEntry>(
 /// (after `env`, before `use.force`/`use.mask`) so the `'backtrack`
 /// loop's in-progress `--autounmask-use` changes flow through -- see
 /// that field's doc comment.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn effective_use_flags(
     config: &portage_profile::Config,
     iuse: &str,
@@ -3655,6 +3661,7 @@ fn use_context_fingerprint(config: &portage_profile::Config) -> u64 {
     h.finish()
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn effective_use_flags_uncached(
     config: &portage_profile::Config,
     iuse: &str,
@@ -3922,6 +3929,7 @@ enum MaskOrForce {
 /// `use.stable.mask` (stable only), `package.use.mask` (atom-specificity
 /// ordered within the level via `specificity_ordered_flags`),
 /// `package.use.stable.mask` (stable only).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn resolved_use_mask_or_force(
     which: MaskOrForce,
     config: &portage_profile::Config,
@@ -3972,6 +3980,7 @@ fn resolved_use_mask_or_force(
     result
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn resolved_use_mask_or_force_uncached(
     which: MaskOrForce,
     config: &portage_profile::Config,
@@ -4018,6 +4027,7 @@ fn resolved_use_mask_or_force_uncached(
 /// is stable) layering `effective_use_flags` already applies -- reusing
 /// `specificity_ordered_flags` so a more-specific `-flag` cancels a
 /// less-specific force/mask identically.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn forced_or_masked_flags(
     iuse: &str,
     keywords: &[String],
@@ -4386,7 +4396,7 @@ fn has_masked_license(
 /// `?` at all -- real `use_reduce`'s own "if '?' in license_str"
 /// optimization, shared by every metadata key that needs this same
 /// "resolve USE, but only when it could possibly matter" treatment.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn use_flags_if_conditional(
     value_str: &str,
     candidate: &Candidate,
@@ -4425,6 +4435,7 @@ fn use_flags_if_conditional(
 /// `metadata_key_accepted` already documents. An unparsable value yields
 /// an empty set (the token simply won't be found), the "can't tell, so
 /// don't claim it" precedent this crate already sets elsewhere.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn evaluated_metadata_tokens(
     value_str: &str,
     candidate: &Candidate,
@@ -4462,6 +4473,7 @@ fn evaluated_metadata_tokens(
 /// satisfied -- the loud `F` column, same "can't tell, so don't claim
 /// it's fine" precedent as `evaluated_metadata_tokens` above. An empty
 /// `SRC_URI` (no distfiles at all) is trivially satisfied.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn fetch_restrict_files_all_present(
     src_uri: &str,
     use_flags: &HashSet<String>,
@@ -4515,6 +4527,7 @@ fn flatten_src_uri_with_use(
 /// distfile with no `Manifest` `DIST` line, yields an empty list -- real
 /// `getfetchsizes` returns `None` for an incomplete digest map and
 /// `_calc_size` then adds nothing (`"[empty/missing/bad digest]"`).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn fetch_bytes_to_download(
     src_uri: &str,
     use_flags: &HashSet<String>,
@@ -4714,7 +4727,7 @@ fn missing_licenses(
 /// groups" -- every flattened token individually needs to be accepted,
 /// so this reuses `use_reduce_flat` directly instead of the bespoke
 /// `LicenseNode` tree (no `||`-structure to lose in the first place).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn metadata_key_accepted(
     value_str: &str,
     candidate: &Candidate,
@@ -4825,7 +4838,7 @@ fn metadata_key_accepted_uncached_calls() -> u64 {
     MKA_UNCACHED_CALLS.with(std::cell::Cell::get)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn metadata_key_accepted_uncached(
     value_str: &str,
     candidate: &Candidate,
@@ -5059,6 +5072,8 @@ fn is_visible_uncached(
 /// sequence of these, re-scanning every version at each level, so a
 /// candidate blocked by *two* categories (e.g. `~arch` **and** `LICENSE`)
 /// still resolves once both relaxations are in play.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn visible_with_relax(
     candidate: &Candidate,
     category: &str,
@@ -5492,6 +5507,7 @@ fn use_masked_only(
 /// candidate appended and checks whether the result actually reflects
 /// `desired` -- if mask/force override it, the synthetic entry's own
 /// effect is silently discarded the same way a real one would be.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn flag_is_settable(
     candidate: &Candidate,
     category: &str,
@@ -5977,6 +5993,7 @@ fn violated_parent_flags(
 /// ([`suggested_parent_use_candidate`]) and the display twin
 /// ([`use_unsat_parent_row`]) both walk this list and take the first
 /// viable candidate, mirroring real's return-True-on-first-collect.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn viable_parent_flip_targets(
     repos: &[RepoConfig],
     unevaluated: &portage_dep::Atom,
@@ -6326,6 +6343,7 @@ fn visibility_provenance(
 /// `~arch` grant). `None` if even every matching entry together somehow
 /// isn't enough -- shouldn't happen for a candidate already confirmed
 /// `is_visible`, but a safe fallback rather than a panic.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn keyword_provenance(
     keywords: &[String],
     candidate_str: &str,
@@ -6479,6 +6497,7 @@ fn keyword_mask_marker(
 /// matching real `(hastesting and "~*" in pgroups) or (hasstable and
 /// "*" in pgroups)` exactly (the third real disjunct, `"**" in pgroups`,
 /// is the unconditional check already handled above).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn keywords_accepted(
     keywords: &[String],
     candidate_str: &str,
@@ -6538,6 +6557,7 @@ fn keywords_accepted(
 /// itself uses for its own KEYWORDS half) against that artificially-
 /// unstabilized list rather than reimplementing keyword matching a
 /// second time.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn is_stable(
     keywords: &[String],
     candidate_str: &str,
@@ -8219,6 +8239,7 @@ fn unresolved_runtime_deps(
     out
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn depclean_cleanlist(
     root: &Path,
     // `(atom, set_label)` -- the `@world` closure's seeds and which set
@@ -9136,6 +9157,7 @@ fn refresh_one_entry_display(
     e.use_flags_display = display;
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn build_use_expand_display(
     use_flags_display: &[(String, bool)],
     config: &portage_profile::Config,
@@ -9441,6 +9463,7 @@ fn canonical_dep_key(
 /// metadata can't be read, or whose deps parse but the ebuild's don't,
 /// stays "unchanged" (`false`); an unparsable binary dep string is
 /// "changed" (`true`), matching real's `except InvalidDependString`.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn binary_deps_changed(
     root: &Path,
     repos: &[RepoConfig],
@@ -9503,6 +9526,7 @@ fn binary_deps_changed(
     built_by_key != ebuild_by_key
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn deps_changed(
     root: &Path,
     repos: &[RepoConfig],
@@ -9718,6 +9742,7 @@ fn new_repo_changed(
 /// at all, and (see `resolve_pretend`'s own doc comment on `--usepkg`/
 /// `--usepkgonly`) *either* flag makes that true, matching real
 /// `depgraph.py`'s own `dbs` construction exactly.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn rebuilt_binary_changed(
     root: &Path,
     // The `BUILD_TIME` of the binary candidate that would be selected for
@@ -9803,7 +9828,7 @@ pub fn ebuild_visible_at(
 ///     still-visible ebuild, the installed instance is left alone.) The
 ///     `update`-less "bare top-level always replaces" case is a separate
 ///     mechanism (`is_top_level && !selective`), not this one.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn binary_reinstall_warranted(
     root: &Path,
     repos: &[RepoConfig],
@@ -9940,6 +9965,7 @@ fn candidate_iuse_and_use(
 /// contribute via the shared enablement term above, exactly like real
 /// portage): whether a flag exists in IUSE changed at all, regardless of
 /// whether it's even enabled.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn reinstall_flags_for_use_change(
     root: &Path,
     category: &str,
@@ -10362,6 +10388,7 @@ type CandidateUseProbe = (
 /// once backtracking masks the highest version this must probe the
 /// highest *unmasked* one instead. Empty `&[]` at every non-disjunctive
 /// call site, a strict no-op.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn highest_available_candidate_ignoring_use(
     repos: &[RepoConfig],
     atom_str: &str,
@@ -10874,6 +10901,7 @@ fn masked_candidates_for_atom(
 /// text is reproduced when it would). `None` when no child yields a
 /// viable flip, the parent's state can't be read, or a flip is pinned
 /// by `use.mask`/`use.force`.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn use_unsat_parent_row(
     repos: &[RepoConfig],
     root: &Path,
@@ -10974,6 +11002,7 @@ fn use_unsat_parent_row(
 /// [`use_unsat_parent_row`] documents; real's `Missing IUSE:` fallback can
 /// be suppressed by a *masked* candidate that has the flag
 /// (`:6897-6907`), which this visibility-filtered scan cannot express.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn use_unsat_candidates_for_atom(
     repos: &[RepoConfig],
     root: &Path,
@@ -11221,6 +11250,7 @@ fn all_masked_report(
 /// Mask/force for an installed node reuses the same-version repo
 /// candidate's keywords for the stability decision, falling back to no
 /// exclusion when no such candidate exists.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn chain_node_usedep_suffix(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -11439,7 +11469,7 @@ fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(String, Stri
 /// The affecting-USE suffix is real's own ([`chain_node_usedep_suffix`]
 /// documents its approximations); a node whose metadata can't be read
 /// keeps today's bare row.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn masked_dep_chain(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -11997,7 +12027,7 @@ fn downgrade_probe(
 ///     needs the update mode threaded to this depth and is left out.
 ///   - `replacing` (`will_replace_child`): an atom of the entry's own
 ///     `cat/pkg` (`self_cp`) is never demoted.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn alternative_downgrade_demoted(
     repos: &[RepoConfig],
     root: &Path,
@@ -12167,7 +12197,7 @@ fn alternative_downgrade_demoted(
 /// byte-identical candidate-listing work twice. This loop computes each
 /// atom's availability once and reuses it for both facts when there is no
 /// `[use]` block to strip.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn disjunction_preference(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -12496,6 +12526,7 @@ fn candidate_version(candidate_str: &str, category: &str, package: &str) -> Opti
 /// contains two atoms on the identical package where the higher version
 /// satisfies one atom but not the other, which the brief's own slice-2
 /// fixtures don't exercise -- documented in `scope-backlog.md`.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn promote_tied_alternative(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -13264,6 +13295,7 @@ pub struct InstalledInfo {
 /// graph node needed for an already-satisfied dep"). Degrades to an
 /// empty set on any flatten failure -- never a false negative that
 /// could silently drop a dep portuale actually needed to walk.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn root_deps_satisfied_atoms(
     metadata: &HashMap<String, String>,
     use_flags: &HashSet<String>,
@@ -13350,6 +13382,7 @@ fn root_deps_satisfied_atoms(
 /// work) rather than refactoring that already-shipped, already-tested
 /// function to return both halves at once -- deliberately additive/
 /// isolated, minimizing risk to it.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn unsatisfied_root_deps_atoms(
     metadata: &HashMap<String, String>,
     use_flags: &HashSet<String>,
@@ -13494,6 +13527,7 @@ fn resolved_version_meta_and_use(
 /// real's `[oldver]` bracket is an Upgrade-row concern and S0's capture
 /// shows none on this shape (`findings/l0.md` "## #141/#135/#138/#134/#136
 /// S0").
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn resolve_root_deps_build_entries(
     repos: &[RepoConfig],
     running_root: &Path,
@@ -13685,6 +13719,7 @@ fn resolve_root_deps_build_entries(
 /// once more from the ordinary `!update` shortcut further down (the
 /// only place this can still matter once `--exclude` is in play -- see
 /// that call site's own comment).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn dependency_avoid_update_candidate<'a>(
     root: &Path,
     atom: &portage_dep::Atom,
@@ -13754,7 +13789,8 @@ fn dependency_avoid_update_candidate<'a>(
 /// `changed_slot`/`rebuilt_binaries`/`newrepo` each independently able
 /// to trigger a reinstall even though no real version change is
 /// happening at all.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn already_installed_or_reinstall(
     root: &Path,
     repos: &[RepoConfig],
@@ -13937,7 +13973,8 @@ fn is_instance_only_mask(constraint: &str) -> bool {
 // and test) for a single-slice-sized addition of one more CLI flag
 // alongside six already threaded the same way -- not worth it, same
 // reasoning as resolve_pretend_graph's own identical allow below.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 pub fn resolve_pretend(
     repos: &[RepoConfig],
     root: &Path,
@@ -15414,7 +15451,7 @@ pub(crate) fn skipped_update_roots(
 /// iterates -- the cycle reporter threads it to `find_hard_cycles`).
 /// Short-circuited inputs (< 2 entries) never reach the scheduler, so
 /// their rank is plain array position.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn topological_merge_order(
     entries: Vec<GraphEntry>,
     top_level_atoms: &[String],
@@ -15649,6 +15686,7 @@ struct RevDepPin {
 /// a `cp` with no readable candidates at all, falls back to enforcing
 /// (today's behaviour) -- a drop happens only on proven joint
 /// unsatisfiability.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn rev_dep_pin_holdable(
     root: &Path,
     repos: &[RepoConfig],
@@ -15887,6 +15925,7 @@ fn merge_use_state(
 /// mode). `None` when the merge side is unreadable (no md5-cache
 /// entry); callers fall back to the entry's own `changed_flags`,
 /// today's behaviour.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn merge_use_changed_vs_installed(
     root: &Path,
     repos: &[RepoConfig],
@@ -15906,7 +15945,8 @@ fn merge_use_changed_vs_installed(
     Some(merge_enabled != inst_enabled)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn reverse_dependency_constraints(
     repos: &[RepoConfig],
     root: &Path,
@@ -16427,7 +16467,7 @@ struct ProbeParent {
 /// escape (no digraph here), and soname atoms (the parser rejects them,
 /// same direction as real's `continue`). `[use]` deps are not evaluated
 /// (the candidate carries no USE state -- allows, never blocks).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn collect_probe_parents(
     root: &Path,
     entries: &[GraphEntry],
@@ -16616,7 +16656,7 @@ fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, String, String
 /// Not gated on `rebuild_if_new_slot`: real's conflict path never is
 /// (the scan's call-site gate is the pre-existing narrowing for its own
 /// arms, not this one).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_conflict_abi_probe(
     root: &Path,
     repos: &[RepoConfig],
@@ -17148,6 +17188,7 @@ fn greedy_pin_survives_revision(
 /// `replacement_candidates`) or one that cannot be read stays accepted, the
 /// pre-#304 behaviour, because the bare-ebuild unit fixtures and any tree
 /// whose metadata is incomplete would otherwise lose the probe entirely.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn replacement_parent_accepts(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -17210,7 +17251,7 @@ fn replacement_parent_accepts(
 
 // Ten parameters like its siblings below; the arity is the port, not
 // accident (`#[allow]` matches `slot_operator_rebuild_entries` etc.).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_operator_rebuild_scan(
     root: &Path,
     repos: &[RepoConfig],
@@ -17734,7 +17775,7 @@ type SlotOpForceScan = (
 /// the atom is bound to, and a visible replacement ebuild exists. The
 /// `_select_atoms_probe` check (`||` choices) and `_too_deep` are not
 /// modelled; the consumer's atoms are flattened like the scan's.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_operator_update_force_scan(
     root: &Path,
     repos: &[RepoConfig],
@@ -17950,7 +17991,7 @@ fn slot_operator_update_force_scan(
 /// visibility gate (`_pkg_visibility_check` 2347, #243).
 /// The binary arm (`dep.child` a binary package scheduled for merge) is
 /// v2 `#24c`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_operator_slot_change_probe(
     root: &Path,
     repos: &[RepoConfig],
@@ -18207,7 +18248,7 @@ fn slot_operator_slot_change_probe(
 ///   available parent version the two coincide; a newer-version
 ///   replacement alongside the same-version reinstall is a filed cut.
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_operator_unsatisfied_probe(
     root: &Path,
     repos: &[RepoConfig],
@@ -18243,7 +18284,7 @@ type SlotOpUnsatProbe = (
 /// `[binary]`-marked `SlotOperatorBuilt` negative #212 uses. The firing
 /// gate is real's `dep.parent not in _runtime_pkg_mask` (`:3447-3448`)
 /// for that binary instance.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_operator_unsatisfied_probe_full(
     root: &Path,
     repos: &[RepoConfig],
@@ -18551,6 +18592,7 @@ fn built_equals_shifted_slot(
 /// sub-slotted update (mlocaml-4.02.1: the update IS the bound
 /// version's move, mllablgl rebuilds), which backtracking then masks
 /// into invisibility.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn built_equals_shift_unrebuildable(
     root: &Path,
     repos: &[RepoConfig],
@@ -18747,7 +18789,8 @@ fn apply_prune_rebuilds(params: &mut BacktrackParams) {
 /// Skipped entirely under `--emptytree` (real `"empty" in myparams`) and
 /// under any live slot conflict (`entries` cannot see the pass; the
 /// caller checks, real bug 922038).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn slot_operator_eliminate_rebuilds(
     root: &Path,
     repos: &[RepoConfig],
@@ -18916,7 +18959,7 @@ fn slot_operator_eliminate_rebuilds(
 /// enforces the mask through the backtrack-config restart,
 /// `depgraph.py:5703-5712`); recording one would be dead state. The
 /// bridge keeps its pre-#212 answers on stale-binary shapes.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_operator_rebuild_entries(
     root: &Path,
     repos: &[RepoConfig],
@@ -19165,6 +19208,8 @@ fn strip_revision(version: &str) -> &str {
 /// `slot_operator_rebuild_entries` above (same `all_installed_packages`
 /// scan, same `Reinstall` rebuild-entry shape) -- `--rebuild-if-new-slot`
 /// stays that function's job.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn rebuild_if_entries(
     root: &Path,
     entries: &[GraphEntry],
@@ -20587,6 +20632,7 @@ pub struct OrphanBlocker {
 /// holds the slot-0 instance a slot-1 update would otherwise uninstall.
 /// Cut: only the set atoms themselves; an installed *holder* in the set
 /// (a vdb edge of a package the walk never visited) is not modelled.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn set_seed_holds_instance(
     set_seed_atoms: &[String],
     entries: &[GraphEntry],
@@ -20655,7 +20701,7 @@ fn resolve_blockers(
 /// blocker owner itself. `DepEdge::atom` already carries the with-bdeps
 /// key choice the entry was built with, so a build-time-only edge is only
 /// present when build-time deps were walked.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn graph_has_parent(
     category: &str,
     package: &str,
@@ -20945,7 +20991,7 @@ fn file_blocker_conflicts(
 /// tell two slots apart here), and only the target root is scanned (real
 /// iterates every tree; portuale's running-root split is the separate
 /// `root_deps_running_root` concern).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn collect_unwalked_installed_blockers(
     repos: &[RepoConfig],
     root: &Path,
@@ -21114,6 +21160,7 @@ fn collect_unwalked_installed_blockers(
     }
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn resolve_blockers_with_seeds(
     root: &Path,
     pending: &[PendingBlocker],
@@ -21795,6 +21842,7 @@ pub fn skipped_update_use_display_for(
 /// `explicit` is the declared `IUSE` names (the disabled side),
 /// `force_mask` the unfiltered per-package force ∪ mask stack for the
 /// `( )` wraps.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn assemble_tree_pkg_use_display(
     cand: &Candidate,
     metadata: &std::sync::Arc<HashMap<String, String>>,
@@ -22158,7 +22206,7 @@ enum InstalledSide {
 /// uses) instead of from the repo candidate carrying the same version,
 /// and its instance renders `(… installed in '<root>')`. `None` for the
 /// merge-vs-merge conflicts this function has always built.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn build_slot_conflict(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -22361,6 +22409,7 @@ fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: SlotConflict
 /// pass through untouched; a merged record inherits the first
 /// record's `resolved_version`/`conflicting_atom` (render fields, only
 /// read when the conflict survives the solve).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn merge_same_slot_conflicts(
     conflicts: &[SlotConflict],
     pullers: &SlotPullers,
@@ -22513,7 +22562,7 @@ fn merge_same_slot_conflicts(
 /// -- all default to the plain-undecorated `New` shape. Each is a
 /// filed-later residue if a bed ever shows a twin that needs it, not
 /// silent scope growth here.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn synthesize_surviving_conflict_entries(
     entries: &mut Vec<GraphEntry>,
     conflicts: &[SlotConflict],
@@ -22624,6 +22673,7 @@ fn synthesize_surviving_conflict_entries(
 /// the merge (slots coexist; nothing breaks) yields no record. One
 /// record per `(package, merge version, installed version)`; parents
 /// unioned across pins. Sorted for determinism.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn build_residual_slot_conflicts(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -23835,6 +23885,7 @@ type SkippedUpdateKey = (
 ///   per-(version, parent) shape).
 /// - parents render merge-scheduled (`consumer_installed: false`), the
 ///   `build_slot_conflict` convention -- mask parents are graph pullers.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn backtrack_missed_updates(
     repos: &[RepoConfig],
     root: &Path,
@@ -24101,7 +24152,7 @@ pub(crate) fn backtrack_missed_updates(
 /// as queued. Returns `None` when no settled entry holds the slot
 /// (real's `any_selected` gate) or the masked version's tree metadata
 /// cannot name the skipped node.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn missing_dep_full_row(
     repos: &[RepoConfig],
     root: &Path,
@@ -24520,6 +24571,7 @@ pub fn abort_path_enabled() -> bool {
 /// `:3479-3483`, oracled by the `abort-au-plain` capture taken with
 /// `--autounmask-use` off). `nvc_dep_atoms` carries each such entry's
 /// unevaluated atom as queued.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn abort_outcome(
     entries: &[GraphEntry],
     masked_deps: &[MaskedDepReport],
@@ -25156,6 +25208,7 @@ fn required_use_dep_chain(
 /// `full_human` are already [`portage_required_use::human_readable`]-
 /// rewritten. Colorization is a documented no-op (matches `emerge -p`
 /// without `--color=y`).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn render_required_use_block(
     xinfo: &str,
     cpv_repo: &str,
@@ -25204,6 +25257,7 @@ fn render_required_use_block(
 /// genuinely-visible higher builds should widen the atom), `false` for
 /// **license** changes (real calls `check_if_latest(pkg)` there -- every
 /// higher build counts, visible or not).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn check_if_latest_atom_form(
     resolved: &Candidate,
     all_candidates: &[Candidate],
@@ -25519,7 +25573,7 @@ fn dep_running_tags(
 /// treated the same "can't tell, so pass it through as-is" way an
 /// unparseable-at-all token already silently falls through the
 /// `parse_atom` check below) is queued unevaluated rather than dropped.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn enqueue_flat_deps(
     flat_deps: Vec<String>,
     key: &(String, String),
@@ -25692,6 +25746,7 @@ fn enqueue_flat_deps(
 /// inside it), so the speculative resolution is side-effect free; and its
 /// inputs are all pass-fixed (`ctx`, `config`, `union_constraints`), so
 /// the verdict cannot drift between here and the pop.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn delta_atom_cleanly_reuses_resolved_slot(
     ctx: &ResolveCtx,
     config: &portage_profile::Config,
@@ -25933,7 +25988,7 @@ fn delta_atom_cleanly_reuses_resolved_slot(
 /// (a whole-flatten union over-constrained Kahn's walk and reordered
 /// unrelated packages on L0). A no-op unless the flip actually reveals
 /// new atoms, so every non-autounmask walk is untouched.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn expand_resolved_slot_with_flipped_use(
     ctx: &ResolveCtx,
     config: &portage_profile::Config,
@@ -26404,6 +26459,8 @@ fn expand_resolved_slot_with_flipped_use(
 /// already in force) re-resolves with `complete = true` -- see
 /// `pretend.rs`'s two-pass, which mirrors real portage's own "resolve,
 /// then `_complete_graph` re-walk" structure.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn complete_graph_auto_enable(
     entries: &[GraphEntry],
     if_new_use: bool,
@@ -27658,6 +27715,7 @@ struct SimilarMask {
 /// treated as masked, absent from fixtures), and not already a conflict
 /// party. The ebuild-only listing moots real's installed-skip and its
 /// built/binpkg-visibility branches (no counterpart, documented cut).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_conflict_mask_choices(
     repos: &[RepoConfig],
     excluded: &[String],
@@ -28458,6 +28516,7 @@ fn overlay_use_want(
 /// Extracted (rather than left as `run_pass`'s inline closure) so the
 /// adversarial-cache path stays pinned after the fixtures stopped
 /// carrying one.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn onlydeps_walk_dep_key(
     key: &str,
     eapi_has_idepend: bool,
@@ -28479,6 +28538,7 @@ fn onlydeps_walk_dep_key(
 /// merge-order edge). Mirrors `onlydeps_walk_dep_key` above: under
 /// `--onlydeps --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on
 /// EAPI 8, `IDEPEND` is still walked, so it still classifies.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn onlydeps_runtime_keys(
     onlydeps_blanks_runtime: bool,
     onlydeps_blanks_idepend: bool,
@@ -28728,7 +28788,7 @@ fn minimize_children(
 /// their own in-graph preference; `@world`/`@selected` members are not
 /// `ctx.atoms` and pin nothing here; cross-root atoms resolve against
 /// the dep's own root.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn arg_pinned_installed_reuse(
     ctx: &ResolveCtx,
     config: &portage_profile::Config,
@@ -35687,7 +35747,7 @@ fn built_slot_operator_atoms(raw_depstr: &str, use_flags: &HashSet<String>) -> V
 /// - otherwise the vdb's own built `:=` atoms for this key are appended
 ///   to the live string (`:175-180`); when the live EAPI itself lacks
 ///   `:=` support the whole overlay is void (`:176-178`, raw fallback).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn installed_dep_string(
     root: &Path,
     dynamic_deps: bool,
@@ -35819,7 +35879,8 @@ pub(crate) fn installed_dep_string(
 /// `root_deps_satisfied_atoms` reports as running-root-satisfied is
 /// dropped from the queue entirely (real portage's own "no separate
 /// graph node needed for an already-satisfied dep").
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn enqueue_dependencies(
     repos: &[RepoConfig],
     root: &Path,
@@ -41199,6 +41260,7 @@ mod tests {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn s2_input<'a>(
         conflicts: &'a [SlotConflict],
         entries: &'a [GraphEntry],
@@ -43629,7 +43691,8 @@ mod tests {
 
     /// `resolve_pretend_graph` for one atom with the `--rebuild-if-*`
     /// flags set (and `--update` on, so `rebuildtrigger` upgrades).
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+    #[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
     fn graph_rebuild_if(
         atom_str: &str,
         unbuilt: bool,
@@ -44403,7 +44466,7 @@ mod tests {
         // accounted-for but unmerged. The low-level `complete=true` with
         // no locked set is the pre-2-pass fallback: a plain deep walk.
         let root = fixtures_root();
-        #[allow(clippy::too_many_arguments)]
+        #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
         let resolve_cfg = |atom: &str,
                            update: bool,
                            deep: Deep,
@@ -49703,6 +49766,7 @@ mod tests {
     }
 
     #[track_caller]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn assert_one_conflict(
         result: &GraphResult,
         category: &str,
@@ -52472,7 +52536,7 @@ mod tests {
     /// `abiforce-1` (`>=abiprov-2`). `with_consumer` controls whether
     /// the consumer's same-version ebuild (the reinstall real forces)
     /// is visible in the tree.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig>) {
         use md5::Digest as _;
         use std::fmt::Write as _;
@@ -55679,7 +55743,7 @@ mod tests {
     /// Backlog #161 S5: `direct_solve` legs over the
     /// `slotconflict*` fixtures. `s2_input` fixes `excluded` to empty;
     /// legs needing an `--exclude` entry build the input literally.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn ds_input_161<'a>(
         conflicts: &'a [SlotConflict],
         entries: &'a [GraphEntry],
@@ -56451,7 +56515,8 @@ mod tests {
     /// tree. `run_pass` takes the request atoms from the context; each
     /// leg below resolves a different installed/tree shape and pins the
     /// pass entries it settles.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+    #[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
     fn run_161(
         dir: &Path,
         atoms: &[String],
@@ -57074,6 +57139,7 @@ mod tests {
     /// blocker legs. `blockerparent-1.0` merges `victim-1.0` through
     /// `RDEPEND` while its own `RDEPEND` softly blocks it (a runtime
     /// key, always walked; `DEPEND` would need `--with-bdeps`).
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn blocker_161_write_pkg(
         repo: &Path,
         cp: &str,
@@ -57089,6 +57155,7 @@ mod tests {
     /// (the plain helper can only express `DEPEND`/`RDEPEND`, which
     /// is why the first `with_bdeps` binary leg below walked an
     /// ebuild instead of a binary -- see its doc comment).
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn blocker_161_write_pkg_full(
         repo: &Path,
         cp: &str,
@@ -57165,6 +57232,7 @@ mod tests {
 
     /// One scratch package in its own repo: for legs needing tree
     /// versions the fixtures do not carry.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn blocker_161_scratch_repo(
         base: &Path,
         cp: &str,
@@ -59913,6 +59981,7 @@ mod tests {
     }
 
     /// recordered `USE`.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn slotundo_vdb(
         dir: &Path,
         name: &str,
@@ -61408,7 +61477,7 @@ mod tests {
     /// about per-layer `package.use` ordering keep calling this; the
     /// `package_use` arg lands in the profile (`defaults`) tier. Tests
     /// that exercise the split call `effective_use_flags` directly.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn euf_flat(
         iuse: &str,
         use_tokens: &[String],
@@ -62416,6 +62485,7 @@ mod tests {
 
         /// Backlog #164 S4: minimal `GraphEntry` for the dep-chain legs
         /// (merge-bound unless stated otherwise).
+        #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
         fn entry_164(
             category: &str,
             package: &str,
@@ -63753,7 +63823,7 @@ mod tests {
     /// full split signature; the args after `iuse` are
     /// `use_tokens` (profile make.defaults), `conf_use_tokens` (make.conf),
     /// `package_use_repo`, `package_use` (profile), `package_use_user`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn euf_layers(
         iuse: &str,
         use_tokens: &[String],
@@ -66743,6 +66813,7 @@ mod tests_162 {
     // `Installed`). `self_cp` is a non-tree consumer everywhere except
     // the circular legs. ----
 
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn disj_162(
         repos: &[RepoConfig],
         config: &portage_profile::Config,
@@ -66767,7 +66838,7 @@ mod tests_162 {
     /// `disj_162` with an explicit `circular_dependency` map (backlogs
     /// #216/#221) -- owner cp → circular-child records, like the
     /// `'backtrack` loop carries.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn disj_162_circ(
         repos: &[RepoConfig],
         config: &portage_profile::Config,
@@ -67346,7 +67417,7 @@ mod tests_162 {
     // 705986): on the restart after a stranded walk, an alternative with
     // an atom matching a recorded in-cycle child of the resolving parent
     // ranks `Other`, so the re-walk takes the cycle-breaking branch. ----
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn disj_circ_162(
         repos: &[RepoConfig],
         config: &portage_profile::Config,
@@ -67540,6 +67611,7 @@ mod tests_162 {
         )
     }
 
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn promote_162(
         repos: &[RepoConfig],
         config: &portage_profile::Config,
@@ -67878,7 +67950,7 @@ mod tests_162 {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn demote_162(
         repos: &[RepoConfig],
         config: &portage_profile::Config,
@@ -68431,6 +68503,7 @@ mod tests_163 {
 
     /// Same shape with a `REQUIRED_USE` line instead of `RDEPEND`
     /// (the S2 parent-flip legs' writer).
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn write_pkg_163_ru(
         repo: &Path,
         cp: &str,
@@ -68879,6 +68952,7 @@ mod tests_163 {
     /// validation guard fails otherwise), in the #161/#162 shape:
     /// `SLOT`, `KEYWORDS`, `IUSE`, `RDEPEND` lines in both the ebuild
     /// and the cache entry.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn write_pkg_163(
         repo: &Path,
         cp: &str,
@@ -70731,7 +70805,8 @@ mod tests_163 {
     /// Literal `ResolveCtx` in the #161 `ctx_161` shape (same field
     /// list, so it tracks production), with the knobs each leg needs
     /// as parameters.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+    #[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
     fn ctx_163<'a>(
         root: &'a Path,
         config: &'a portage_profile::Config,
@@ -72008,7 +72083,7 @@ mod tests_165 {
 
     /// One scratch ebuild plus its real md5-cache entry (the md5-cache
     /// validation guard fails otherwise), with optional dependency keys.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn write_pkg_165(
         repo: &Path,
         cp: &str,
@@ -72654,7 +72729,8 @@ mod tests_165 {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+    #[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
     fn pending_165(
         atom: &str,
         strong: bool,
@@ -73097,6 +73173,7 @@ mod tests_165 {
     // all-installed-packages scan for blockers the walk never
     // reached). ----
 
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn filed_165(
         owner: (&str, &str),
         owner_version: &str,
@@ -73492,7 +73569,7 @@ mod tests_165 {
     // directly with `dynamic_deps = false`, so dep strings come from
     // the vdb snapshot and only the version lookup needs the tree. ----
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn enqueue_165(
         repos: &[RepoConfig],
         root: &Path,
@@ -74017,7 +74094,7 @@ mod tests_166 {
     }
 
     /// Eight-arg input builder (same shape as #161's `ds_input_161`).
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn arg_input_166<'a>(
         conflicts: &'a [SlotConflict],
         top_level: &'a HashSet<(String, String)>,
@@ -74123,6 +74200,7 @@ mod tests_166 {
     /// validation guard fails otherwise), in the #162
     /// `write_pkg_162` shape extended with `DEPEND`/`REQUIRED_USE`
     /// lines for the circular legs below.
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn write_pkg_166(
         repo: &Path,
         cp: &str,
@@ -74920,6 +74998,7 @@ mod tests_195d {
     /// (e.g. `"foo(+)?"`), `valid` whether `foo` is in child IUSE, `p` /
     /// `c` the parent/child USE bits. `hit` is the oracle `arm` column
     /// (`true` = `[foo]`, `false` = `[]`).
+    #[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
     fn cell_195d(token: &str, valid: bool, p: bool, c: bool, hit: bool) {
         let atom = portage_dep::parse_atom(&format!("dev-libs/child[{token}]"))
             .expect("oracle token parses");
@@ -75026,6 +75105,7 @@ mod tests_195d {
     /// a valid parent-active conditional plus one unconditional token.
     /// `bar_valid` / `bar_use` mirror the oracle's columns; `hit` is
     /// the oracle `arm` column.
+    #[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
     fn gate_195d(cond_tok: &str, uncond_tok: &str, bar_valid: bool, bar_use: bool, hit: bool) {
         let atom = portage_dep::parse_atom(&format!("dev-libs/child[{cond_tok},{uncond_tok}]"))
             .expect("oracle gate atom parses");

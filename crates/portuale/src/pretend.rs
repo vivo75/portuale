@@ -291,7 +291,8 @@ fn columnwidth_from_env() -> i64 {
 /// skipped once the line's already past the target width, exactly like
 /// real portage's own `if (newlp - nc_len(myprint)) > 0` guard -- never
 /// truncates, just doesn't pad further.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn columns_line(
     bracket_word: &str,
     field: &str,
@@ -363,7 +364,8 @@ fn columns_line(
 /// every call returns the bare char, so the field is exactly 7 visible
 /// columns either way (`color::nc_len` recovers that width for
 /// `--columns` padding).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn attr_display_field(
     interactive: bool,
     new: bool,
@@ -486,6 +488,7 @@ fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
 /// `oldbest` refs) has a slot/sub-slot other than `0/0`. Real portage
 /// omits `::repo` only under `--quiet-repo-display` (not modelled here --
 /// its default is off, so `::repo` is always shown at `-pv`).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn decorate_version(
     version: &str,
     slot: &str,
@@ -523,6 +526,7 @@ fn decorate_version(
 /// everything) the `-p` list equals the `-pv` list, and for a
 /// `Reinstall`/`Upgrade`/`Downgrade` only the changed flags
 /// (`flag%*`/`flag*`/`-flag%`/`-flag*`) show, often none.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn use_suffix(
     entry: &GraphEntry,
     verbose: bool,
@@ -590,6 +594,7 @@ fn use_suffix(
 /// The bracket pad is real's `"nomerge".ljust(13)` plus
 /// `empty_space_in_brackets()`; the `--quiet` narrowing is portuale's
 /// established quiet rendering, pinned by the quiet contract tests.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn nomerge_row(
     category: &str,
     package: &str,
@@ -683,7 +688,7 @@ fn localized_size(bytes: u64) -> String {
 /// comment (portage-repo) explains. A top-level package suppressed by
 /// `--onlydeps` isn't in real's merge list at all (`pkg_info.ordered`),
 /// so it isn't counted here either.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn package_counters_summary(
     entries: &[GraphEntry],
     root: &Path,
@@ -1190,6 +1195,7 @@ fn format_blocker_row(
 /// ones are dropped under `--columns` (real `output.py:120`, `_blockers`
 /// appends a satisfied line to `print_msg` only when `not
 /// self.conf.columns`). Unresolved lines are never column-suppressed.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn trailing_blocker_lines(
     entries: &[GraphEntry],
     root: &Path,
@@ -1239,6 +1245,7 @@ fn trailing_blocker_lines(
 /// (satisfied lines are suppressed; the counters still count them -- real
 /// counts every `Blocker` node in the merge list, `get_display_list`
 /// `output.py:575-584`).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn collect_inline_blocker_lines(
     entries: &[GraphEntry],
     root: &Path,
@@ -1349,7 +1356,8 @@ fn count_blocker_rows(
 /// needs (see `blocker_row_disposition`): the entry's own trailing
 /// blocker rows are filtered here, the inline ones are printed by the
 /// caller right after this line.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn print_entry_line(
     entries: &[GraphEntry],
     root: &Path,
@@ -2024,7 +2032,8 @@ fn print_entry_line(
 /// consumer of the return is backlog #206 S2's `Total:` recount (real
 /// counts displayed merge *rows*, repeats included, `nomerge` excluded);
 /// every other caller ignores it.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn print_tree(
     entries: &[GraphEntry],
     display_order: &[usize],
@@ -2257,7 +2266,7 @@ fn print_tree(
     // it, otherwise `add_parents` fills the ancestor chain in first. The
     // `ordered` flag is `False` for every ancestor-walk occurrence
     // (`:453`), which is what renders a merge node as `nomerge`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
     fn add_parents(
         current: TreeNode,
         ordered: bool,
@@ -2864,6 +2873,7 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
 /// keep their own local closures (their unknown-member fallbacks differ
 /// from each other and carry no colour, so sharing this helper would move
 /// their pins).
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn circular_node_text(
     cpv: &str,
     slot: &str,
@@ -2903,7 +2913,7 @@ fn circular_node_text(
 /// `entries` the message renders -- `labels[i]` is the edge
 /// `cycle[i] -> cycle[(i + 1) % len]`). All-buildtime cycles (every
 /// pin before #228) still render `(buildtime)` on every line.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn print_circular_block(
     cycle: &[String],
     edge_labels: &[String],
@@ -3039,7 +3049,7 @@ fn print_circular_block(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn print_json(
     entries: &[GraphEntry],
     // #59 S2 (K1 option (a)): the deterministic `(backtrack: N/M)` count
@@ -3541,6 +3551,7 @@ fn world_file_additions(
 /// left alone; when anything is added the file is rewritten sorted +
 /// deduplicated (real `WorldSelectedPackagesSet.write`). Prints the real
 /// `>>> Recording <atom> in "world" favorites file...` line per addition.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn update_world_file(
     root: &Path,
     target_atoms: &[&str],
@@ -4390,7 +4401,8 @@ fn still_listed_parents<'a>(
     parents
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_unmerge_pretend(
     targets: &[&str],
     // Real `unmerge_action` -- `"unmerge"`, `"rage-clean"` (both remove
@@ -5566,7 +5578,8 @@ fn entries_not_merged(
 /// the same suppression the original run would have applied is
 /// honoured. On another failure the still-unmerged tail is re-saved
 /// with the same `myopts`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_resume(
     root: &Path,
     config_root: &Path,
@@ -5902,7 +5915,8 @@ fn feature_enabled(token: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn execute_unmerge(
     removal_list: &[(String, String, String)],
     root: &Path,
@@ -6227,7 +6241,8 @@ fn resolve_cleanup_args(
 /// removes the cleanlist (`execute_unmerge`). See
 /// `portage_repo::prune_cleanlist`'s own doc comment for the removal-set
 /// semantics.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_prune_pretend(
     targets: &[&str],
     root: &Path,
@@ -6336,7 +6351,8 @@ fn run_prune_pretend(
 /// exit 0). Without `--pretend`, `execute_unmerge` removes the selected
 /// versions after the display -- real `actions.py:2684` routes `prune
 /// --nodeps` through the very same `unmerge()` `-C` uses.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_prune_nodeps_pretend(
     targets: &[&str],
     root: &Path,
@@ -6380,7 +6396,8 @@ fn run_prune_nodeps_pretend(
 /// names `clean`. Individual ebuild-path args are rejected (real
 /// `unmerge.py:131`); `resolve_cleanup_args` already only produces
 /// `cat/pkg` atoms here.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_clean_pretend(
     targets: &[&str],
     root: &Path,
@@ -6416,7 +6433,8 @@ fn run_clean_pretend(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_prune_nodeps_or_clean(
     targets: &[&str],
     root: &Path,
@@ -6799,7 +6817,8 @@ fn depclean_unresolved_halt(
 /// else needs -- see `depclean_cleanlist`'s own doc comment. Real
 /// `action_depclean` only shows the `* ` advisory block with no args, so
 /// this doesn't either.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_depclean_pretend(
     targets: &[&str],
     root: &Path,
@@ -7134,7 +7153,8 @@ fn defined_set_names(config_root: &Path) -> Vec<String> {
 /// (the highest version is used, flagged `[ Masked ]` only when its
 /// `KEYWORDS` carry no stable/testing token for the profile arch);
 /// `Size of files`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_search(
     terms: &[&str],
     repos: &[portage_repo::RepoConfig],
@@ -7772,6 +7792,7 @@ fn display_news_notice_if_any(
 /// first), matching real `actions.py:3917-3926`; under `--pretend`
 /// `ask` is already false, matching real's `--pretend` gate around the
 /// whole block.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn offer_news_reading(ask: bool, read_news: bool, notice_printed: bool, color: &Colorizer) -> bool {
     if !(ask && read_news && notice_printed) {
         return false;
@@ -7839,6 +7860,7 @@ fn merge_failure_news_notice(
     }
 }
 
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_check_news(
     repos: &[portage_repo::RepoConfig],
     root: &Path,
@@ -7887,6 +7909,7 @@ fn grab_news_state_file(path: &Path) -> Vec<String> {
 /// read on top of the umask mode (a root run lands `0664 root:portage`,
 /// backlog #258). The state directory itself was already prepared by
 /// [`ensure_news_state_dir`].
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn write_news_state_if_changed(
     news_state_dir: &Path,
     repo_name: &str,
@@ -8689,7 +8712,8 @@ fn info_profile_version(config_root: &Path, main_repo_loc: &Path) -> String {
     "unavailable".to_string()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn run_info(
     config: &portage_profile::Config,
     repos: &[portage_repo::RepoConfig],
@@ -9181,6 +9205,7 @@ fn run_info(
 /// **v1 cuts:** `--ask` (the interactive package picker / "Ready to
 /// configure?" prompt) -- portuale is non-interactive, matching real
 /// portage's own non-`--ask` branch; `elog` processing.
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn run_config_action(
     atom_args: &[&str],
     root: &Path,
@@ -9695,7 +9720,7 @@ fn colorize_marked_spans(
 /// masked/unavailable (real `_equiv_ebuild_visible`). Under
 /// `--usepkgonly` real stays quiet to avoid false positives. Returns the
 /// reason, if any. `installed` holds every vdb `(cat, pkg, ver)`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn slot_conflict_need_rebuild(
     parent_cpv: &str,
     atom: &Atom,
@@ -9975,6 +10000,7 @@ fn load_running_config(
 /// stay unit-pinned without spawning a merge; the abort-path and
 /// `--autounmask-only` carve-outs live at the `show_merge_list` call
 /// site, not here.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: bool) -> bool {
     pretend || ((ask || tree || verbose) && !(quiet && !ask))
 }
@@ -9992,6 +10018,7 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
 /// unprobed this slice. Pure predicate so the matrix stays unit-pinned;
 /// the empty-changes arm (a plain package prints nothing, rc 0) falls
 /// out of `has_changes=false`, exactly like real's empty change loops.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn autounmask_only_reshows_merge_list(
     pretend: bool,
     autounmask_only: bool,
@@ -10047,6 +10074,7 @@ fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> 
 /// since real never marks them world candidates). Pure predicate so the gate
 /// matrix stays unit-pinned; the rotation half is pinned end to end in
 /// pmtest (`test_portuale.py`, backlog #232).
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn selective_noop_deferred(
     selective: bool,
     oneshot_or_onlydeps: bool,
@@ -10062,6 +10090,7 @@ fn selective_noop_deferred(
 /// `--nodeps` is NOT consulted (the `spinner.mode = QUIET` assignment
 /// at `depgraph.py:12129-12130` comes after the header block). Pure
 /// predicate so the `--nodeps` + display-flag shapes stay unit-pinned.
+#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn resolution_header_shown(ask: bool, tree: bool, verbose: bool, quiet: bool) -> bool {
     !quiet && (ask || tree || verbose)
 }
