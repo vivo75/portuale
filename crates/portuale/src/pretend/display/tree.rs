@@ -23,60 +23,23 @@ pub(crate) struct PrintTreeArgs<'a> {
     pub(crate) masked_deps: &'a [portage_repo::MaskedDepReport],
     pub(crate) use_unsat_deps: &'a [portage_repo::UseUnsatDepReport],
     pub(crate) plain_miss_deps: &'a [portage_repo::PlainMissDepReport],
-    /// Backlog #206 S2: forwarded to `print_entry_line` (see its
-    /// `force_sizes`).
+    /// Forwarded to `print_entry_line` (see its `force_sizes`).
     pub(crate) force_sizes: bool,
-    /// Backlog #221: the resolve's recorded cycle edges (see
-    /// `kept_alt_for_display`): the `--tree` walk keeps the
-    /// cycle-breaking branch the walk took.
+    /// The resolve's recorded cycle edges (see `kept_alt_for_display`).
     pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 }
 
-/// `--tree`/`-t` and `--unordered-display`: real's tree display
-/// (`output.py:585-586` routes tree mode through
-/// `output_helpers.py::_tree_display`, `:341-407`, then
-/// `_ordered_tree_display` `:434-495` / `_unordered_tree_display`
-/// `:410-431`, pruned by `_prune_tree_display` `:497-535`). This is a
-/// display-only port: *which* rows exist is still the flat predicate's
-/// call (`blocker_row_disposition`), so a row the flat predicate hides
-/// stays hidden here too -- C2 owns the tree-mode serializer that can
-/// schedule extra uninstalls (`TEST/findings/l0.md` "#75 C0", p2b).
-///
-/// Real's graph rewrite (`:341-407`) is modelled on top of portuale's
-/// entries and their blocker rows:
-///
-/// - `Package -> Blocker -> Uninstall` (`:377-390`): a satisfied row
-///   resolved by a removal hangs the blocker under the row's owner and
-///   the removal entry under the blocker. For the absent-owner scan arm
-///   (#77 A1) the row already lives on the removal entry, so it has no
-///   separate parent -- exactly real's "the vardb owner is not a graph
-///   node" shape (`[blocks b]`, then `[uninstall]`, then the merge).
-/// - `upgrade_node -> blocker` (`:392-398`): a satisfied `Replacement`
-///   row (the uninstall was not executed) hangs the blocker under the
-///   replacement; the blocker keeps the owner as its parent.
-///
-/// Dependency edges come from `portage_repo::resolved_dep_targets`, i.e.
-/// from `build_digraph`'s own `_select_pkg_highest_available` narrowing
-/// (#82) -- so `dep_zapdeps`' branch selection is honoured (a suppressed
-/// `||` alternative contributes no tree edge) and the scheduling graph
-/// and the tree can no longer disagree about which instance an atom
-/// resolves to.
-/// `ordered` is real's `set_pkg_info` flag (`output.py:612-614`): a node
-/// first met as an ancestor is rendered `nomerge` with no attr columns.
-/// The indent is real's own: `depth + 1` spaces for depth >= 1, none at
-/// depth 0 (B0b's p2c-t capture has depth 2 at three spaces).
-///
-/// `--onlydeps`: real's retlist excludes the suppressed root but the
-/// graph still holds it, so ordered mode prints it as a `nomerge`
-/// ancestor occurrence; portuale excludes it from the ordered node list
-/// for the same effect.
-///
-/// Renders the tree walk and reports it back: one `(entry index,
-/// `ordered`) pair per rendered entry row, in render order — real
-/// `_ordered_tree_display`'s own walk product, before printing. The only
-/// consumer of the return is backlog #206 S2's `Total:` recount (real
-/// counts displayed merge *rows*, repeats included, `nomerge` excluded);
-/// every other caller ignores it.
+/// `--tree`/`-t` and `--unordered-display`: a display-only port of Portage's
+/// tree display. *Which* rows exist is still the flat predicate's call, so
+/// a row hidden there stays hidden here. Blocker rows hang under their
+/// owner (or the replacement, for a satisfied `Replacement` row); the
+/// absent-owner row already lives on its removal entry. Dependency edges
+/// come from `build_digraph`'s own narrowing, so `dep_zapdeps`' branch
+/// selection is honoured. `ordered = false` (a node first met as an
+/// ancestor) renders `nomerge` with no attr columns. Returns one
+/// `(entry index, ordered)` pair per rendered row, in render order, for
+/// the `Total:` recount (displayed merge rows, repeats included).
+/// Portage: output_helpers.py, _tree_display
 pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
     let PrintTreeArgs {
         entries,
@@ -109,10 +72,8 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         Blocker { owner: usize, index: usize },
     }
 
-    // Real `_tree_display`'s rewritten graph: `children` = real's
-    // `child_nodes` (dependencies / blocker-uninstall), `parents` = real's
-    // `parent_nodes`. Insertion order of each Vec is real's edge order
-    // (dep-key/atom order), which `--unordered-display` preserves.
+    // `children` = Portage's `child_nodes`, `parents` = its `parent_nodes`.
+    // Insertion order is edge order, which `--unordered-display` preserves.
     let mut node_order: Vec<TreeNode> = Vec::new();
     let mut children: HashMap<TreeNode, Vec<TreeNode>> = HashMap::new();
     let mut parents: HashMap<TreeNode, Vec<TreeNode>> = HashMap::new();
@@ -125,34 +86,21 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         }
     };
 
-    // Real `_create_graph` resolves each dep atom to one package. #82:
-    // that narrowing is `build_digraph`'s own, reused verbatim through
-    // `portage_repo::resolved_dep_targets` (merge-bound targets only --
-    // portuale renders no line for an installed entry, so an edge to one
-    // would open a hole in the tree) instead of the private copy this
-    // function used to carry, whose tie-break had drifted to a string
-    // version compare. Suppressed `|| ( … )` alternatives are already
-    // `None` there, so no separate `kept_alt_branches` pass is needed.
+    // That narrowing is `build_digraph`'s own, reused through
+    // `portage_repo::resolved_dep_targets` (merge-bound targets only).
+    // Suppressed `|| ( … )` alternatives are already `None` there, so no
+    // separate `kept_alt_branches` pass is needed.
     let dep_targets = portage_repo::resolved_dep_targets(entries, root, circular);
-    // #131 S1: the walk consumes the tree-mode serialization order
-    // (merge direction; the ordered walk below iterates it reversed),
-    // exactly like real's `_ordered_tree_display` consumes the reversed
-    // tree-mode retlist (`depgraph.py:10618-10619`) -- not the flat merge
-    // order. `display_order` is a permutation of the entry indices
-    // (`merge_order::tree_display_order`, same leftover weave-back as the
-    // flat path, so every entry keeps its node even when the scheduler
-    // never saw it).
+    // The walk consumes the tree-mode serialization order (merge direction;
+    // the ordered walk below iterates it reversed) -- not the flat merge
+    // order. `display_order` is a permutation of the entry indices, so every
+    // entry keeps its node even when the scheduler never saw it.
     for &i in display_order {
         node_order.push(TreeNode::Entry(i));
     }
-    // Backlog #155 S1: display edges in resolver-discovery order, not
-    // merge-sorted array position. Real's digraph parent lists follow
-    // edge-insertion order (resolution order), and the walk below picks
-    // the first untraversed parent -- enumerating over merge order lets
-    // a later-discovered dependent precede the earlier puller in every
-    // parent list they share (`mgfb` before `mgfa` for `mgfc-1`, hiding
-    // the real `[nomerge] mgfa` parent). Stable sort, so fabricated
-    // entries (all `discovery: 0`, e.g. unit tests) keep array order.
+    // Display edges in resolver-discovery order, not merge-sorted array
+    // position: the walk below picks the first untraversed parent. Stable
+    // sort, so fabricated entries (all `discovery: 0`) keep array order.
     let mut by_discovery: Vec<usize> = (0..entries.len()).collect();
     by_discovery.sort_by_key(|&i| entries[i].discovery);
     for &i in &by_discovery {
@@ -162,19 +110,12 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
     }
     // `required_by` fallback edges for a deps-less synthetic entry
     // (`--root-deps` build entries and their recursion): the resolver
-    // records owners but no `deps`, and real's digraph still nests the
-    // entry under them. Deliberately *not* applied to an entry with
-    // `deps`: the forward walk already narrowed those edges and a second
-    // cp-keyed pass would over-connect (multi-slot cps, `||` branches).
+    // records owners but no `deps`. Not applied to an entry with `deps`:
+    // the forward walk already narrowed those edges and a second cp-keyed
+    // pass would over-connect (multi-slot cps, `||` branches).
     //
-    // #82: `required_by` is cp-keyed, so the *same* over-connection
-    // reaches a deps-less entry too -- every scheduled slot of a cp
-    // lists every owner that pulled any of them. An owner whose own atom
-    // already resolved to one instance of this cp has no edge to the
-    // others in real's digraph (`_select_pkg_highest_available` returned
-    // exactly one package), so the fallback must not invent one: with
-    // `treeslotparent` pulling only `dev-libs/treeslotpkg:1`, real nests
-    // `1.10` under it and `1.9` elsewhere (`TEST/findings/l0.md` "#82").
+    // `required_by` is cp-keyed, so an owner whose own atom already resolved
+    // to one instance of this cp must not gain an edge to the others.
     for (i, e) in entries.iter().enumerate() {
         if !e.deps.is_empty() {
             continue;
@@ -196,17 +137,14 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
     }
     // Blocker nodes: a satisfied row hangs its removal/replacement under
     // the blocker, and the blocker under the row's owner (unless the row
-    // already lives on that same removal entry -- the #77 absent-owner
-    // arm, whose owner is real's non-node vardb `Package`).
-    // #84: one kept-branch derivation for the whole node walk.
+    // already lives on that same removal entry).
+    // One kept-branch derivation for the whole node walk.
     let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
     for (owner, entry) in entries.iter().enumerate() {
         for (index, b) in entry.blockers.iter().enumerate() {
-            // Backlog #81: a flat-Hidden Replacement row the tree-mode
-            // simulation solves hangs under the same replacement real's
-            // solved-blocker append follows (C0 p2b). Flat display never
-            // reaches this arm (disposition is Hidden there); it only
-            // changes which rows become tree Blocker nodes.
+            // A flat-Hidden row the tree-mode simulation solves hangs under
+            // the same replacement Portage's solved-blocker append follows.
+            // Flat display never reaches this arm (disposition is Hidden).
             let stuck_after = if b.tree_scheduled_uninstall
                 && matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. }))
                 && blocker_row_disposition(entries, root, owner, b, &kept_alt)
@@ -224,15 +162,10 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
                 continue;
             };
             let node = TreeNode::Blocker { owner, index };
-            // Real appends a solved blocker to the retlist right after
-            // the blocked package that solved it, and the display walk
-            // consumes the reversed retlist -- so the walk meets the
-            // Blocker immediately before its `after` entry and nests the
-            // replacement under it. Appending every Blocker node last
-            // instead breaks that adjacency (the walk reaches the
-            // replacement through another chain first) and the prune
-            // then drops the Blocker for exceeding the merge depth set
-            // by shallower later merges (C0 p2b). Insert after `after`.
+            // Insert after `after`: the walk meets the Blocker immediately
+            // before its `after` entry and nests the replacement under it.
+            // Appending every Blocker node last instead breaks that adjacency
+            // and the prune then drops the Blocker.
             if let Some(pos) = node_order.iter().position(|&n| n == TreeNode::Entry(after)) {
                 node_order.insert(pos + 1, node);
             } else {
@@ -245,8 +178,7 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         }
     }
 
-    // `--onlydeps`: real's retlist omits the suppressed root while the
-    // graph keeps it (ordered mode re-prints it as a nomerge ancestor).
+    // Ordered mode re-prints the suppressed root as a nomerge ancestor.
     let node_order: Vec<TreeNode> = node_order
         .into_iter()
         .filter(|n| {
@@ -272,8 +204,8 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         parents.get(&n).map_or(&[][..], Vec::as_slice)
     }
 
-    // `_unordered_tree_display` (`output_helpers.py:410-431`): DFS from
-    // every root (no parents) in graph insertion order, each node once.
+    // Portage's `_unordered_tree_display`: DFS from every root (no parents)
+    // in graph insertion order, each node once.
     fn unordered_walk(
         roots: &[TreeNode],
         children: &HashMap<TreeNode, Vec<TreeNode>>,
@@ -300,11 +232,10 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         }
     }
 
-    // `_ordered_tree_display` (`output_helpers.py:434-495`): walk the
-    // reversed list; a node that is a child of the current chain continues
-    // it, otherwise `add_parents` fills the ancestor chain in first. The
-    // `ordered` flag is `False` for every ancestor-walk occurrence
-    // (`:453`), which is what renders a merge node as `nomerge`.    /// Arguments of [`add_parents`].
+    // Portage's `_ordered_tree_display`: walk the reversed list; a node that
+    // is a child of the current chain continues it, otherwise `add_parents`
+    // fills the ancestor chain in first (`ordered = false` renders `nomerge`).
+    /// Arguments of [`add_parents`].
     struct AddParentsArgs<'a> {
         current: TreeNode,
         ordered: bool,
@@ -391,7 +322,7 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
             .collect();
         unordered_walk(&roots, &children, &mut seen, &mut display);
         // Any node the DFS never reached (e.g. a cycle's remainder) is
-        // appended flat, real's own "never silently lose information".
+        // appended flat, so nothing is silently lost.
         for &n in &node_order {
             if !seen.contains(&n) {
                 display.push((n, 0, true));
@@ -429,7 +360,7 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         }
     }
 
-    // `_prune_tree_display` (`output_helpers.py:497-535`).
+    // Portage's `_prune_tree_display`.
     let mut last_merge_depth = 0usize;
     let mut i = display.len();
     while i > 0 {
@@ -456,10 +387,8 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
 
     let mut rendered: Vec<(usize, bool)> = Vec::new();
     for (node, depth, ordered) in display {
-        // Real `output_helpers.py`'s `self.indent` is exactly `depth`
-        // spaces (`_ordered_tree_display`'s depth is passed straight to
-        // `_display_tree`); every real format string already carries the
-        // one literal space after `]`, so portuale's formats do too.
+        // The indent is exactly `depth` spaces; every format string already
+        // carries the one literal space after `]`.
         let indent = " ".repeat(depth);
         match node {
             TreeNode::Entry(i) => {

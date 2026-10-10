@@ -12,22 +12,16 @@ pub(crate) struct RunConfigActionArgs<'a> {
     pub(crate) color: &'a Colorizer,
 }
 
-/// Real `_emerge/actions.py::action_config` (`emerge --config <atom>`):
-/// run `pkg_config` for a single installed package. Exactly one atom
-/// (real `if len(myfiles) != 1`), matched against the vdb the same way
-/// `--unmerge` matches (bare name → null-category vdb lookup, ambiguous
-/// is a hard error; `cat/pkg` via `installed_candidates` +
-/// `match_from_list`). Zero matches → `No packages found.` exit 0; more
-/// than one → `The following packages available:` list + exit 1; exactly
-/// one → `Configuring pkg...` then `pkg_config` from that version's own
-/// vdb-stored `environment.bz2` + `<pf>.ebuild`
-/// (`ebuild_merge::run_vdb_saved_env_phase`, ungated -- real
-/// `doebuild(ebuildpath, "config", ...)` runs it unconditionally), then
-/// a best-effort builddir clean on success (real `doebuild(..., "clean")`).
+/// Portage's `_emerge/actions.py::action_config` (`emerge --config <atom>`):
+/// run `pkg_config` for a single installed package. Exactly one atom,
+/// matched against the vdb the same way `--unmerge` matches. Zero matches
+/// print `No packages found.` (exit 0); more than one lists them (exit 1);
+/// exactly one runs `pkg_config` from that version's own vdb-stored
+/// environment, then a best-effort builddir clean on success.
+/// Portage: actions.py, action_config
 ///
-/// **v1 cuts:** `--ask` (the interactive package picker / "Ready to
-/// configure?" prompt) -- portuale is non-interactive, matching real
-/// portage's own non-`--ask` branch; `elog` processing.
+/// `--ask` shows the numbered menu and the `Ready to configure?` confirm.
+/// Cuts: `elog` processing.
 pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
     let RunConfigActionArgs {
         atom_args,
@@ -38,8 +32,8 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
         color,
     } = args;
     if atom_args.len() != 1 {
-        // Real `action_config`: `print(red("!!! ...\n"))` -- stdout, with
-        // the string's own trailing newline plus `print`'s.
+        // Stdout, with the string's own trailing newline plus `print`'s.
+        // Portage: actions.py, action_config
         println!(
             "{}",
             color.c(
@@ -102,8 +96,7 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
     });
     let chosen: &(String, String, String) = if sorted_matches.len() > 1 {
         if !ask {
-            // Real `action_config`: without `--ask`, list the matches and
-            // bail (`Please use a specific atom or the --ask option.`).
+            // Without `--ask`, list the matches and bail.
             println!("The following packages available:");
             for (c, p, v) in &sorted_matches {
                 println!("* {c}/{p}-{v}");
@@ -111,9 +104,7 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
             println!("\nPlease use a specific atom or the --ask option.");
             return ExitCode::from(1);
         }
-        // Real `action_config`'s `--ask` branch: a numbered menu +
-        // `X) Cancel`, `uq.query("Selection?", responses=[1..N, X])`.
-        // `X` -> exit `128 + SIGINT`.
+        // Numbered menu + `X) Cancel` (`X` -> exit `128 + SIGINT`).
         println!("Please select a package to configure:");
         for (idx, (c, p, v)) in sorted_matches.iter().enumerate() {
             println!("{}) {c}/{p}-{v}", idx + 1);
@@ -130,8 +121,6 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
     let (category, package, version) = chosen;
     let pf = format!("{package}-{version}");
     println!();
-    // Real `action_config`: with `--ask`, prompt `Ready to configure
-    // <cpv>?` (No -> exit 130); without it, print `Configuring pkg...`.
     if ask {
         if !ask_confirm(color, &format!("Ready to configure {category}/{pf}?")) {
             return ExitCode::from(130);
@@ -160,8 +149,7 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    // Real `action_config`: `doebuild(ebuildpath, "clean", ...)` on
-    // success -- drop the per-package builddir.
+    // Drop the per-package builddir on success.
     if rc == 0 {
         let _ = std::fs::remove_dir_all(portage_tmpdir.join("portage").join(category).join(&pf));
     }
@@ -173,16 +161,11 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
     }
 }
 
-/// Real `depgraph.py:7034-7066` + `dbapi/_similar_name_search.py`
-/// (`--misspell-suggestions`, default on): when `resolve_pretend_graph`
-/// aborts a top-level atom with `there are no ebuilds to satisfy
-/// "<atom>".` **and** that atom's `cat/pkg` genuinely doesn't exist in
-/// any repo (real `not cp_exists` -- a `cat/pkg` that exists but is only
-/// masked gets the autounmask notes instead, never this), print
-/// `difflib.get_close_matches` suggestions over every `cat/pkg` in the
-/// tree. Returns the block to append to the already-printed
-/// `emerge: <message>` (no trailing newline -- the caller adds one), or
-/// `None` when it doesn't apply.
+/// `--misspell-suggestions` (default on): when `resolve_pretend_graph`
+/// aborts a top-level atom whose `cat/pkg` genuinely doesn't exist in any
+/// repo, print close `cat/pkg` matches. Returns the block to append to the
+/// already-printed `emerge: <message>`, or `None` when it doesn't apply.
+/// Portage: depgraph.py, _similar_name_search
 pub(crate) fn misspell_suggestion_block(
     message: &str,
     repos: &[portage_repo::RepoConfig],
@@ -191,14 +174,12 @@ pub(crate) fn misspell_suggestion_block(
     if !enabled {
         return None;
     }
-    // The message's first line is exactly `there are no ebuilds to
-    // satisfy "<atom-debug>".` -- pull the quoted atom out.
+    // The message's first line quotes the atom; pull it back out.
     let first = message.lines().next()?;
     let rest = first.strip_prefix("there are no ebuilds to satisfy \"")?;
     let atom_str = rest.strip_suffix("\".")?;
     let atom = parse_atom(atom_str)?;
-    // Real `not cp_exists`: only when the `cat/pkg` directory has no
-    // ebuilds anywhere.
+    // Only when the `cat/pkg` directory has no ebuilds anywhere.
     if !portage_repo::list_candidates(repos, &atom.category, &atom.package)
         .map(|c| c.is_empty())
         .unwrap_or(true)

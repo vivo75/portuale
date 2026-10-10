@@ -3,40 +3,10 @@
 use crate::color::PkgprintArgs;
 use crate::pretend::*;
 
-/// Prints one `[blocks]` line per conflict recorded on `entry` (see
-/// `portage_repo::BlockerConflict`), right after its own `[ebuild ...]`
-/// line -- purely informational, matching real `--pretend`'s "show what
-/// would happen" spirit: v1 neither refuses nor changes the exit code for
-/// a blocker match, strong or weak (see resolve_pretend_graph's doc
-/// comment).
-/// `  USE="flag1 -flag2" VIDEO_CARDS="-amdgpu nvidia"` (two leading
-/// spaces, matching real `--pretend -v`'s own line format), or an empty
-/// string when `--verbose` wasn't given or this entry has no displayable
-/// flags at all. The `USE_EXPAND` grouping (plain `USE` group, then one
-/// `VAR="…"` per non-hidden `USE_EXPAND` variable, empty groups omitted)
-/// is real -- `output.py::_display_use`, computed in
-/// `portage_repo::build_use_expand_display` and carried on
-/// `GraphEntry::use_expand_display`. Still not shown: real portage's own
-/// ANSI colorization and its installed-vs-new `*`/`%` diff markers
-/// (a separate documented cut -- this shows the plain enabled/disabled
-/// set, `_alnum_sort_key`-ordered within each group).
-/// Real `output_helpers.py`'s own `columnwidth` resolution
-/// (`MergeListItem.__init__`): 130 by default, overridden by a
-/// `COLUMNWIDTH` setting -- portuale only ever reads it as a plain
-/// environment variable (real portage's own `frozen_config.settings` is
-/// env + `make.conf` + profile merged together; parsing `COLUMNWIDTH`
-/// out of `make.conf` too would need a new generic scalar-lookup path
-/// through `portage_profile::Config`, which nothing else in portuale
-/// needs yet -- a deliberate v1 narrowing, same spirit as every other
-/// scope cut in this codebase). An unparsable value warns and falls back
-/// to the default, exactly like real portage's own `except ValueError`
-/// branch, rather than treating it as a hard error. Real portage's own
-/// warning has a first line echoing the raw exception text
-/// (`f"!!! {e!s}\n"`) -- omitted here, same as every other parse-error
-/// message in portuale (see `--deep`'s own invalid-value handling):
-/// Rust's `ParseIntError` and Python's `ValueError` never stringify
-/// identically, so echoing either verbatim would make this the one
-/// message the two implementations could never agree on byte-for-byte.
+/// `COLUMNWIDTH` from the environment (default 130); an unparsable value
+/// warns and falls back to the default. Only the environment is read, not
+/// `make.conf`.
+/// Portage: output_helpers.py, MergeListItem
 pub(crate) fn columnwidth_from_env() -> i64 {
     match std::env::var("COLUMNWIDTH") {
         Ok(value) => match value.parse::<i64>() {
@@ -66,24 +36,11 @@ pub(crate) struct ColumnsLineArgs<'a> {
     pub(crate) world: bool,
 }
 
-/// One `--columns` line: real `_set_root_columns`'s own layout algorithm
-/// (the `pkg_info.merge == True` branch only -- see this function's own
-/// call sites' doc comments for why the "not merging" branch never
-/// applies to any outcome portuale prints in brackets at all), with
-/// color stripped for increment 1 (real's `nc_len`/plain `len()`
-/// distinction collapses to just `len()` until increment 2 adds ANSI
-/// color). `bracket`/`field` reproduce the exact same `"[{bracket}
-/// {field}]"` segment the non-columns format prints -- `field` is the
-/// full fixed-width `attr_display_field` -- only what comes after it
-/// differs: `category/package` (no version -- that's the whole point of
-/// `--columns`) padded out to `columnwidth - 60` (`newlp`), then
-/// `[version]` right-padded to `columnwidth - 30` (`oldlp`), then
-/// `oldbest` (`"[from]"` for an `Upgrade`/`Downgrade`, empty otherwise --
-/// real `pkg_info.oldbest_list`, mirrored here via data portuale
-/// already has rather than a new installed-candidate lookup). Padding is
-/// skipped once the line's already past the target width, exactly like
-/// real portage's own `if (newlp - nc_len(myprint)) > 0` guard -- never
-/// truncates, just doesn't pad further.
+/// One `--columns` line: Portage's `_set_root_columns` merge-branch layout.
+/// `category/package` (no version) pads to `columnwidth - 60`, `[version]`
+/// to `columnwidth - 30`, then `oldbest`. Padding is skipped past the target
+/// width, never truncating.
+/// Portage: output.py, _set_root_columns
 pub(crate) fn columns_line(args: ColumnsLineArgs<'_>) -> String {
     let ColumnsLineArgs {
         bracket_word,
@@ -101,7 +58,7 @@ pub(crate) fn columns_line(args: ColumnsLineArgs<'_>) -> String {
     } = args;
     let newlp = (columnwidth - 60).max(0) as usize;
     let oldlp = (columnwidth - 30).max(0) as usize;
-    // Real `_set_root_columns` merge branch: the type word and `pkg.cp`
+    // Portage's `_set_root_columns` merge branch: the type word and `pkg.cp`
     // both go through `pkgprint`; the version column is `green("[ver]")`;
     // `oldbest` arrives already `blue("[from]")` from `convert_myoldbest`.
     // Padding measures visible width (`color::nc_len`), never raw bytes.
@@ -150,39 +107,14 @@ pub(crate) struct AttrDisplayFieldArgs<'a> {
     pub(crate) color: &'a Colorizer,
 }
 
-/// Real `PkgAttrDisplay.__str__` (`_emerge/resolver/output_helpers.py`):
-/// the fixed-width status field rendered inside the `[ebuild …]` bracket,
-/// exactly `[{pkg.type_name} {attr_display}]`. One column per attribute,
-/// a literal space where the attribute is absent, in this exact order:
-///
-/// 0. `I` -- `interactive` (`GraphEntry::interactive`).
-/// 1. `N` -- `new`; `r` instead when `force_reinstall`. Portuale has no
-///    `--emptytree`/`arg.force_reinstall` concept, so always `N` or space
-///    here -- a plain reinstall shows `R` at col 2, see real
-///    `_get_installed_best`: `replace=True` is set only when the exact cpv
-///    is already installed.
-/// 2. `S` -- `new_slot`; `R` instead when `replace` (the cpv is already
-///    installed -- every one of portuale's `Reinstall` outcomes).
-/// 3. `f`/`F`/`g` -- fetch-restrict satisfied / unsatisfied / remote binary
-///    (`g` is out of scope, needs `--getbinpkg`).
-/// 4. `U` -- `new_version` (an in-slot version change -- `Upgrade`/`Downgrade`).
-/// 5. `D` -- `downgrade`.
-/// 6. the mask column -- the `#`/`~`/`*` char from `gen_mask_str`
-///    (`GraphEntry::keyword_mask`) or a space. Real `set_pkg_info` fills
-///    it in only `if self.include_mask_str()` (`verbosity > 1`), and real
-///    default `emerge -p` verbosity is *2* (`_DisplayConfig.__init__`:
-///    `--quiet and 1 or --verbose and 3 or 2`) -- so the column is
-///    present at plain `-p` *and* `-pv`, and absent (the field is 6 chars,
-///    not 7) only under `--quiet` (verbosity 1). `include_mask` carries
-///    that gate.
-///
-/// Each present letter is ANSI-coloured per real `PkgAttrDisplay.__str__`
-/// (`green("N")`, `yellow("R")`, `turquoise("U")`, `blue("D")`,
-/// `colorize("WARN", "I")`, the `#`/`*`/`~` mask via `BAD`/`WARN`, …)
-/// when `color.enabled`; a space is never coloured. When colour is off
-/// every call returns the bare char, so the field is exactly 7 visible
-/// columns either way (`color::nc_len` recovers that width for
-/// `--columns` padding).
+/// Portage's `PkgAttrDisplay.__str__`: the fixed-width status field inside
+/// the `[ebuild …]` bracket. One column per attribute, a space where absent:
+/// `I`nteractive, `N`ew (`r` for force-reinstall), new `S`lot (`R` for
+/// replace), `f`etch-restrict/`F`/remote-binary `g`, `U`pdate, `D`owngrade,
+/// mask char (`#`/`~`/`*`). The mask column shows at `-p`/`-pv`, not under
+/// `--quiet` (`include_mask`). Present letters are coloured; the field is 7
+/// visible columns either way.
+/// Portage: resolver/output_helpers.py, PkgAttrDisplay.__str__
 pub(crate) fn attr_display_field(args: AttrDisplayFieldArgs<'_>) -> String {
     let AttrDisplayFieldArgs {
         interactive,
@@ -239,12 +171,7 @@ pub(crate) fn attr_display_field(args: AttrDisplayFieldArgs<'_>) -> String {
     } else {
         " ".to_string()
     });
-    // Real `__str__` appends `self.mask` only `if self.mask is not None`,
-    // and `set_pkg_info` sets it only `if self.include_mask_str()`
-    // (`verbosity > 1`) -- true at real portage's default `emerge -p`
-    // verbosity of 2, absent under `--quiet` (verbosity 1). Real
-    // `gen_mask_str`: `#`/`*` -> `BAD` (red), `~` -> `WARN` (yellow), no
-    // mark -> a space.
+    // The mask column shows only above verbosity 1 (`-p`/`-pv`, not `--quiet`).
     if include_mask {
         f.push_str(&match mask {
             Some(c @ ('#' | '*')) => col("BAD", c),
@@ -264,17 +191,11 @@ pub(crate) fn use_flag_sort_key(tok: &str) -> &str {
         .trim_end_matches([')', '*', '%'])
 }
 
-/// Real `_create_use_string`'s per-flag colour (`output_helpers.py:262-334`),
-/// re-derived from an already-rendered token's shape -- the marker suffix
-/// and sign fully determine it: a plain enabled `flag` is `red`, a plain
-/// disabled `-flag` is `blue`, a `%`/`%*` marker means `yellow` (newly in
-/// IUSE), a lone `*` means `green` (polarity flipped). Only the
-/// `flag`/`-flag` core is coloured -- the `*`/`%` markers and any `( )`
-/// forced/removed wrap stay plain, exactly as real (`yellow(flag) + "%*"`
-/// etc). Known imperfection (no fixture reaches it, and it matches the
-/// portuale's own `render_flag` `%`-collapse for forced flags): a forced
-/// *disabled* flag newly added to IUSE on an Upgrade renders `(-flag)`
-/// and is coloured `blue` here, where real portage would `yellow` it.
+/// Portage's `_create_use_string` per-flag colour, re-derived from an
+/// already-rendered token's shape: plain `flag` is red, `-flag` blue,
+/// `%`/`%*` yellow (newly in IUSE), lone `*` green (polarity flipped).
+/// Only the core is coloured; markers and `( )` wrap stay plain.
+/// Portage: output_helpers.py, _create_use_string
 pub(crate) fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
     let (open, inner, close) = match tok.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
         Some(i) => ("(", i, ")"),
@@ -308,14 +229,10 @@ pub(crate) struct DecorateVersionArgs<'a> {
     pub(crate) force_sub_slot: bool,
 }
 
-/// Real `output.py::_append_slot` + `_append_repository`, which decorate
-/// the bracket-line version *only at `emerge -pv`* (`verbosity == 3`):
-/// `:slot` (plus `/sub_slot` when it differs from `slot`) and `::repo`.
-/// `show_slot` carries real `_append_slot`'s own gate -- `new_slot`, or
-/// any package involved in this line (the entry or one of its
-/// `oldbest` refs) has a slot/sub-slot other than `0/0`. Real portage
-/// omits `::repo` only under `--quiet-repo-display` (not modelled here --
-/// its default is off, so `::repo` is always shown at `-pv`).
+/// Portage's `_append_slot` + `_append_repository`: the bracket-line version
+/// decorated with `:slot` (`/sub_slot` when it differs) and `::repo`,
+/// at `-pv` only. `::repo` always shows at `-pv`.
+/// Portage: output.py
 pub(crate) fn decorate_version(args: DecorateVersionArgs<'_>) -> String {
     let DecorateVersionArgs {
         version,
@@ -349,20 +266,9 @@ pub(crate) struct UseSuffixArgs<'a> {
 }
 
 /// Renders the ` USE="…"` (and `VAR="…"` per USE_EXPAND group) suffix.
-///
-/// Real `_DisplayConfig`: `print_use_string = verbosity != 1 or
-/// "--verbose"`, and real default `emerge -p` verbosity is 2 -- so the
-/// USE line is *not* `-v`-gated, but `--quiet` (verbosity 1) *does*
-/// suppress it entirely unless `-v` is also given (`-pvq`). What `-v`
-/// (verbosity 3) *or* `--quiet` changes is `all_flags` (`= verbosity ==
-/// 3 or quiet`), i.e. *which* flags render: `emerge -pv` / `-pq` / `-pvq`
-/// use `GraphEntry::use_expand_display` (every flag, unchanged ones
-/// plain, plus the `(-flag%)` removed-from-IUSE list); plain `emerge -p`
-/// uses `use_expand_display_p`, where `_create_use_string` leaves an
-/// *unchanged* flag omitted -- so for a `New` package (`is_new` renders
-/// everything) the `-p` list equals the `-pv` list, and for a
-/// `Reinstall`/`Upgrade`/`Downgrade` only the changed flags
-/// (`flag%*`/`flag*`/`-flag%`/`-flag*`) show, often none.
+/// Shown unless `--quiet` without `-v`. At `-pv`/`-pq` every flag renders;
+/// at plain `-p` only changed flags render (for `New`, both are equal).
+/// Portage: output.py, _display_use
 pub(crate) fn use_suffix(args: UseSuffixArgs<'_>) -> String {
     let UseSuffixArgs {
         entry,
@@ -371,11 +277,11 @@ pub(crate) fn use_suffix(args: UseSuffixArgs<'_>) -> String {
         alphabetical,
         color,
     } = args;
-    // Real `print_use_string = verbosity != 1 or "--verbose"`.
+    // `print_use_string = verbosity != 1 or "--verbose"`.
     if quiet && !verbose {
         return String::new();
     }
-    // Real `all_flags = verbosity == 3 or quiet`.
+    // `all_flags = verbosity == 3 or quiet`.
     let display = if verbose || quiet {
         &entry.use_expand_display
     } else {
@@ -384,30 +290,18 @@ pub(crate) fn use_suffix(args: UseSuffixArgs<'_>) -> String {
     if display.is_empty() {
         return String::new();
     }
-    // Real `output.py:_display_use`: `USE="…"` first, then one `VAR="…"`
-    // per non-hidden USE_EXPAND group, each already rendered and ordered
-    // (enabled flags first, then disabled) by
-    // `portage_repo::build_use_expand_display`. With `--alphabetical`,
-    // real `_create_use_string` instead joins one combined list sorted
-    // by bare flag name -- reproduced here by re-sorting each group's
-    // already-rendered tokens. Colour (real `_create_use_string`'s own
-    // `red`/`green`/`blue`/`yellow`) is applied per token *after* the
-    // sort, so the `--alphabetical` sort key still sees plain tokens.
+    // `USE="…"` first, then one `VAR="…"` per non-hidden USE_EXPAND group.
+    // Colour is applied per token *after* the sort, so `--alphabetical`
+    // still sees plain tokens.
     //
-    // Backlog #272: real `_create_use_string`
-    // (`output_helpers.py:336-338`) returns `f'{name}="{ret}" '` -- one
-    // trailing space per non-empty group, concatenated directly -- and
-    // `print_messages` (`output.py:542-544`) joins the whole display
-    // with a single leading space. Each group is therefore rendered
-    // with its own trailing space below.
+    // Each group renders with its own trailing space; a single leading
+    // space joins the display to the line.
     let groups: Vec<String> = display
         .iter()
         .map(|(name, rendered)| {
             let mut toks: Vec<&str> = rendered.split(' ').collect();
             if alphabetical {
-                // Real `_create_use_string`'s combined-list sort is
-                // `_alnum_sort_key` (natural), same as the non-alphabetical
-                // within-group sort.
+                // Portage's combined-list sort is natural (`_alnum_sort_key`).
                 toks.sort_by_key(|t| portage_repo::alnum_sort_key(use_flag_sort_key(t)));
             }
             let body = toks
@@ -418,8 +312,7 @@ pub(crate) fn use_suffix(args: UseSuffixArgs<'_>) -> String {
             format!("{name}=\"{body}\" ")
         })
         .collect();
-    // Real `print_messages`: `myprint += " " + self.verboseadd` -- a
-    // single space joins the USE display to the line, which already ends
+    // A single space joins the USE display to the line, which already ends
     // with the (possibly empty) `oldbest` slot's own trailing space.
     format!(" {}", groups.concat())
 }
@@ -434,13 +327,9 @@ pub(crate) struct NomergeRowArgs<'a> {
     pub(crate) tail: &'a str,
 }
 
-/// Pure constructor for the `[nomerge …]` row, so the ancestor arm's
-/// exact rendering contract is unit-pinned below (#154). `tail` carries
-/// the oldbest / running-root / USE pieces (each empty when absent --
-/// a USE-less nomerge row is byte-identical to the pre-#154 rendering).
-/// The bracket pad is real's `"nomerge".ljust(13)` plus
-/// `empty_space_in_brackets()`; the `--quiet` narrowing is portuale's
-/// established quiet rendering, pinned by the quiet contract tests.
+/// Pure constructor for the `[nomerge …]` row. `tail` carries the oldbest /
+/// running-root / USE pieces (each empty when absent). The bracket pad is
+/// `"nomerge".ljust(13)` plus `empty_space_in_brackets()`.
 pub(crate) fn nomerge_row(args: NomergeRowArgs<'_>) -> String {
     let NomergeRowArgs {
         category,
@@ -454,23 +343,11 @@ pub(crate) fn nomerge_row(args: NomergeRowArgs<'_>) -> String {
     format!("[nomerge{pad}] {indent}{category}/{package}-{disp_ver}{tail}")
 }
 
-/// Real `lib/_emerge/resolver/output.py:841-862`'s own `darkgreen("to " +
-/// pkg.root)` suffix, per merge row: an entry whose OWN root is not `/`
-/// is annotated with where it actually installs — exactly as real portage
-/// annotates any row whose own `pkg.root_config.settings["ROOT"] != "/"`
-/// (backlog #242 Slice D S0 map
-/// `LLM/evidence/2026-10-02-242-display-sites.md` §1a; the #206 cut
-/// reopened per display site). Under a staged target `ROOT` every
-/// target-rooted row carries `to <target>` and every running-rooted row
-/// `to <running>`; a `/`-rooted row stays bare on both sides (real's
-/// blk0x/cyc0y rows). Under `ROOT=/` everything is bare (L0). Empty
-/// (defensively) when a running-rooted entry arrives with no running-root
-/// path in hand.
-/// Returned bare (`"to /"`, no leading space) -- real `output.py:856-861`
-/// places it right after the always-present space that follows the
-/// package string, with `oldbest` (when non-empty) getting its own
-/// trailing space before it; `print_entry_line`'s own `emit` reproduces
-/// that spacing.
+/// Portage's `darkgreen("to " + pkg.root)` suffix, per merge row: an entry
+/// whose own root is not `/` is annotated with where it installs; a
+/// `/`-rooted row stays bare. Returned bare (no leading space); the call
+/// site reproduces Portage's spacing.
+/// Portage: resolver/output.py
 pub(crate) fn root_suffix(
     entry: &GraphEntry,
     target_root: &Path,
@@ -487,15 +364,9 @@ pub(crate) fn root_suffix(
     }
 }
 
-/// Real `math.ceil(num_bytes / 1024)` KiB (`portage.localization.
-/// localized_size`) -- "always round up, so that small files don't end
-/// up as '0 KiB'". Real portage additionally applies `LC_NUMERIC`
-/// thousands grouping to the KiB count; portuale doesn't -- only
-/// observable above 999 KiB of downloads, which no fixture reaches, and
-/// a locale-dependent separator would break the contract suite's
-/// byte-exact determinism. Always `KiB`, never `MiB`/`GiB` (real
-/// `localized_size` is the same -- its docstring: "The output will be in
-/// kibibytes").
+/// `math.ceil(num_bytes / 1024)` KiB -- always round up, so small files never
+/// show `0 KiB`. Always `KiB`, never `MiB`/`GiB`. No `LC_NUMERIC` grouping.
+/// Portage: portage.localization, localized_size
 pub(crate) fn localized_size(bytes: u64) -> String {
     format!("{} KiB", bytes.div_ceil(1024))
 }
@@ -509,22 +380,21 @@ pub(crate) fn merge_bound_version(entry: &GraphEntry) -> Option<&str> {
             Some(version)
         }
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
-        // #72 B3: a removal is not a merge target.
+        // A removal is not a merge target.
         PretendOutcome::AlreadyInstalled { .. }
         | PretendOutcome::NoVisibleCandidate
         | PretendOutcome::Uninstall { .. } => None,
     }
 }
 
-/// The version the blocker parents text uses -- real `_blockers`'
-/// `pnode.cpv`, the version the owner's own package line shows (for an
-/// installed, nomerge owner: the installed version).
+/// The version the blocker parents text uses -- the version the owner's own
+/// package line shows (for an installed, nomerge owner: the installed
+/// version; for an absent-owner row: the removal's own cpv).
+/// Portage: output.py, _blockers
 pub(crate) fn entry_display_version(entry: &GraphEntry) -> &str {
     merge_bound_version(entry).unwrap_or(match &entry.outcome {
         PretendOutcome::AlreadyInstalled { version } => version,
-        // #77 A1: an absent-owner nomerge row rides its own removal entry
-        // (the removal target **is** the owner), so the parents text is
-        // the removal's own cpv.
+        // An absent-owner nomerge row rides its own removal entry.
         PretendOutcome::Uninstall { version } => version,
         _ => "",
     })

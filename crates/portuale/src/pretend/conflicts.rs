@@ -2,26 +2,19 @@
 
 use crate::pretend::*;
 
-/// One classified reason a slot-conflicted parent atom rejects the
-/// *other* instance's version, mirroring real
-/// `_slot_conflict_handler._prepare_conflict_msg_and_check_for_specificity`'s
-/// `collision_reasons` keys -- `version` with a `ge`/`eq`/`le` sub-type,
-/// `slot` with the `:slot[/sub]` text (for the caret span), and `use`
-/// with the violated flag. Documented cuts vs. real: the `soname` reason
-/// key (no soname atom can reach this renderer -- `portage-dep` cannot
-/// parse soname atoms and dep flattening drops unparseable tokens, so
-/// the key is unreachable, not merely unimplemented), an `=*` operator's
-/// `("version", None)` key (portuale files it under `"eq"`),
-/// operator/USE colorization, and the `need_rebuild` "cannot be rebuilt"
-/// trailer (wired below, not cut).
+/// One classified reason a slot-conflicted parent atom rejects the *other*
+/// instance's version (`version`/`slot`/`use`). Cuts: the `soname` key
+/// (unreachable here), `=*`'s `("version", None)` key (filed under `"eq"`),
+/// operator/USE colorization.
+/// Portage: dep/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum SlotConflictReason {
     Version(&'static str), // "ge" | "eq" | "le"
     Slot(String),          // the ":slot[/sub]" text, for the caret span
     Use(String),           // the violated flag, for the caret span
-    /// Real `slot_collision.py`'s `("AtomArg", None)` key: a bare
-    /// command-line parent whose atom is satisfied by every other
-    /// instance, shown when some other instance is installed.
+    /// Portage's `("AtomArg", None)` key: a bare command-line parent whose
+    /// atom is satisfied by every other instance, shown when some other
+    /// instance is installed.
     Argument,
 }
 
@@ -33,19 +26,18 @@ pub(crate) struct ClassifiedParent<'a> {
     pub(crate) atom_str: &'a str,
     pub(crate) atom: Atom,
     pub(crate) reasons: Vec<SlotConflictReason>,
-    /// Real `unconditional_use_deps`: at least one `("use", flag)` reason
-    /// came from a flag missing from the other instance's IUSE (rather
-    /// than contradicted by its USE) -- such parents render before the
-    /// rest of the selected set.
+    /// Portage's `unconditional_use_deps`: at least one `("use", flag)`
+    /// reason came from a flag missing from the other's IUSE -- such
+    /// parents render before the rest.
     pub(crate) use_unconditional: bool,
-    /// Real `pkg_use_display(parent, ...)` pairs for this parent package.
+    /// Portage's `pkg_use_display(parent, ...)` pairs for this parent.
     pub(crate) use_display: &'a [(String, String)],
 }
 
 /// `atom` rendered back to `{op}{cat}/{pkg}-{ver}[-rN][*]`, optionally with
-/// its `:slot[/sub]` -- the two forms real portage builds as
-/// `atom.without_use.without_slot` and `atom.without_use` for its
-/// `findAtomForPackage` collision-reason probes.
+/// its `:slot[/sub]` -- the two forms Portage builds as
+/// `atom.without_use.without_slot` and `atom.without_use`.
+/// Portage: dep/slot_collision.py, findAtomForPackage
 pub(crate) fn slot_conflict_atom_string(atom: &Atom, include_slot: bool) -> String {
     let mut s = String::new();
     s.push_str(match &atom.operator {
@@ -78,8 +70,8 @@ pub(crate) fn slot_conflict_atom_string(atom: &Atom, include_slot: bool) -> Stri
 }
 
 /// One conflicting instance as seen by the collision-reason probes: the
-/// `match_from_list` candidate string plus the flag sets real matches
-/// USE-deps against (`other_pkg.iuse`, `_pkg_use_enabled(other_pkg)`).
+/// `match_from_list` candidate string plus the flag sets USE-deps match
+/// against (`other_pkg.iuse`, `_pkg_use_enabled(other_pkg)`).
 pub(crate) struct ConflictOther {
     pub(crate) cpv: String,
     pub(crate) iuse: HashSet<String>,
@@ -87,12 +79,10 @@ pub(crate) struct ConflictOther {
     pub(crate) installed: bool,
 }
 
-/// Real `_prepare_conflict_msg_and_check_for_specificity`'s per-parent
-/// `collision_reasons` classification: why `atom` (with USE and slot
-/// stripped in turn) fails to match each `other` conflicting instance.
-/// Version mismatch wins over slot mismatch wins over USE mismatch,
-/// matching real's `elif` ordering. Returns the reasons plus whether any
-/// USE reason was unconditional (missing from the other's IUSE).
+/// Per-parent `collision_reasons` classification: why `atom` (with USE and
+/// slot stripped in turn) fails to match each `other` conflicting instance.
+/// Version mismatch wins over slot mismatch wins over USE mismatch.
+/// Portage: dep/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
 pub(crate) fn slot_conflict_reasons(
     atom: &Atom,
     others: &[ConflictOther],
@@ -117,10 +107,8 @@ pub(crate) fn slot_conflict_reasons(
                     reasons.push(r);
                 }
             }
-            // Real's `elif` chain (`slot_collision.py:307-397`): a
-            // version-mismatched pair skips the slot and USE checks
-            // below -- even when the operator is `None` and nothing is
-            // recorded for this pair.
+            // A version-mismatched pair skips the slot and USE checks below,
+            // even when the operator is `None` and nothing is recorded.
             continue;
         } else if atom.slot.is_some() {
             let matches_no_use =
@@ -139,21 +127,14 @@ pub(crate) fn slot_conflict_reasons(
                 if !reasons.contains(&r) {
                     reasons.push(r);
                 }
-                // Real's `elif` chain (`slot_collision.py`): the USE
-                // check below runs only when the slot half matched --
-                // otherwise the slot reason already explains this
-                // parent against this other instance.
+                // The USE check below runs only when the slot half matched.
                 continue;
             }
         }
         if let Some(use_deps) = &atom.use_deps {
             // `match_from_list` skips USE evaluation against plain-string
-            // candidates (real's own `hasattr(x, "use")` guard), so a
-            // version+slot match always "matches" here -- the USE verdict
-            // comes from `use_mismatch_flags` alone, exactly partitioning
-            // the cases where real's full-atom `findAtomForPackage` fails.
-            // (Soname atoms never reach this renderer -- see the
-            // `SlotConflictReason` doc comment.)
+            // candidates, so the USE verdict comes from `use_mismatch_flags`
+            // alone. (Soname atoms never reach this renderer.)
             let (missing, violated) = use_mismatch_flags(use_deps, &other.use_flags, &other.iuse);
             if !missing.is_empty() {
                 use_unconditional = true;
@@ -171,14 +152,10 @@ pub(crate) fn slot_conflict_reasons(
     (reasons, use_unconditional)
 }
 
-/// Real `highlight_violations`' `colored_idx`: the character positions in
+/// Portage's `highlight_violations` `colored_idx`: the character positions in
 /// `atom_str` under the violated operator, version, `:slot`, and/or USE
 /// tokens -- the `^` marker line printed beneath a displayed parent atom.
-/// The render site wraps these spans in `BAD` red (`colorize_marked_spans`)
-/// and shifts the markers onto the displayed string; real marks the
-/// pre-color indices and drifts (upstream bug -- and real's own red
-/// varies by terminal colormap, so byte-parity with the drift is
-/// unachievable anyway).
+/// Portage: dep/slot_collision.py, highlight_violations
 pub(crate) fn slot_conflict_caret_idx(
     atom_str: &str,
     atom: &Atom,
@@ -258,14 +235,9 @@ pub(crate) fn slot_conflict_caret_idx(
         && let Some(close) = chars.iter().position(|&c| c == ']')
         && close > bracket
     {
-        // Real `highlight_violations`' USE-token branch: mark every
-        // `[...]` token whose flag is violated. Real walks its own
-        // re-rendered tokens with a running cursor (no spaces assumed);
-        // portuale locates each comma-separated piece from the cursor
-        // instead, so spaced atoms (`[x, y]`) still mark correctly. The
-        // strip rule is real's own (`lstrip("-!")` / `rstrip("=?")`) --
-        // including its quirk that `(+)`/`(-)`-suffixed tokens never
-        // match.
+        // Portage's USE-token branch: mark every `[...]` token whose flag is
+        // violated. Each comma-separated piece is located from the cursor,
+        // so spaced atoms (`[x, y]`) still mark correctly.
         let inner: String = chars[bracket + 1..close].iter().collect();
         let mut cursor = bracket + 1;
         for piece in inner.split(',') {
@@ -289,13 +261,9 @@ pub(crate) fn slot_conflict_caret_idx(
     idx
 }
 
-/// Wrap every `idx`-marked char of `text` in `BAD` red (a no-op when
-/// color is off) and return the wrapped string plus the marked
-/// positions shifted onto it. The marked char's displayed position is
-/// recorded after the ANSI open codes are pushed, so carets land on
-/// visible text, never inside an escape. See the render site for why
-/// markers track the displayed string rather than real's pre-color
-/// indices.
+/// Wrap every `idx`-marked char of `text` in `BAD` red (a no-op when color
+/// is off) and return the wrapped string plus the marked positions shifted
+/// onto it, so carets land on visible text, never inside an escape.
 pub(crate) fn colorize_marked_spans(
     text: &str,
     idx: &std::collections::HashSet<usize>,
@@ -329,15 +297,12 @@ pub(crate) struct SlotConflictNeedRebuildArgs<'a> {
     pub(crate) installed: &'a std::collections::HashSet<(String, String, String)>,
 }
 
-/// Real `slot_collision.py`'s `need_rebuild` scan (lines 407-458) for one
-/// shown parent in a `slot` group: when the parent package is installed
-/// and its atom is a *built* slot-operator atom (`cat/pkg:S/SS=` -- real
-/// `Atom.slot_operator_built`; soname atoms can't reach this renderer,
-/// see the `SlotConflictReason` doc comment), report why it cannot be
-/// rebuilt -- `--exclude` / `--useoldpkg-atoms` match, or its ebuild
-/// masked/unavailable (real `_equiv_ebuild_visible`). Under
-/// `--usepkgonly` real stays quiet to avoid false positives. Returns the
-/// reason, if any. `installed` holds every vdb `(cat, pkg, ver)`.
+/// Portage's `need_rebuild` scan for one shown parent in a `slot` group: when
+/// the parent is installed and its atom is a built `cat/pkg:S/SS=` atom,
+/// report why it cannot be rebuilt -- `--exclude` / `--useoldpkg-atoms`
+/// match, or its ebuild masked/unavailable. Quiet under `--usepkgonly`.
+/// `installed` holds every vdb `(cat, pkg, ver)`.
+/// Portage: dep/slot_collision.py, need_rebuild
 pub(crate) fn slot_conflict_need_rebuild(args: SlotConflictNeedRebuildArgs<'_>) -> Option<String> {
     let SlotConflictNeedRebuildArgs {
         parent_cpv,
@@ -384,15 +349,10 @@ pub(crate) fn slot_conflict_need_rebuild(args: SlotConflictNeedRebuildArgs<'_>) 
     None
 }
 
-/// Real `pkg_use_display(pkg, ...)`'s own return string -- `USE="…"`
-/// followed by one ` VAR="…"` per non-hidden `USE_EXPAND` group (the
-/// pairs `portage_repo::pkg_use_display_for` produced). Real always
-/// renders a `USE=` field even when the package declares no flags
-/// (`var_order.insert(0, "USE")` + the unconditional
-/// `flag_displays.append`), so an empty slice still yields `USE=""`.
-/// Colorization of the flag tokens (real `UseFlagDisplay.__str__`'s
-/// `red`/`blue`) is a documented cut here -- it is a no-op under
-/// `emerge -p` without `--color=y` anyway.
+/// Portage's `pkg_use_display(pkg, ...)` return string -- `USE="…"` followed
+/// by one ` VAR="…"` per non-hidden `USE_EXPAND` group. Always renders a
+/// `USE=` field, even with no flags. Flag colorization is cut.
+/// Portage: dep/slot_collision.py, pkg_use_display
 pub(crate) fn render_pkg_use_display(disp: &[(String, String)]) -> String {
     let use_body = disp
         .iter()
@@ -408,13 +368,10 @@ pub(crate) fn render_pkg_use_display(disp: &[(String, String)]) -> String {
     out
 }
 
-/// Backlog #242 Slice D: real `Package.__str__`'s own quoted destination
-/// (`Package.py:568-608`) for a scheduled-for-merge skipped-block node
-/// whose OWN root is not `/` — ` to '<ROOT>'`, inside the paren, or empty
-/// when that root is `/` (real's bare `/`-rooted missed line). `running`
-/// is the row's `missed_targets_running_root` /
-/// `consumer_targets_running_root`; the path comes from the display
-/// roots (target `root`, `running_root` when the row rides it).
+/// Portage's `Package.__str__` quoted destination for a skipped-block node
+/// whose own root is not `/` -- ` to '<ROOT>'`, inside the paren, or empty
+/// when that root is `/`. `running` selects which display root applies.
+/// Portage: _emerge/Package.py, Package.__str__
 pub(crate) fn skipped_node_suffix(
     running: bool,
     root: &Path,
@@ -427,27 +384,18 @@ pub(crate) fn skipped_node_suffix(
     }
 }
 
-/// Backlog #90 (S2), extended by #230: the `^` marker line under a
-/// skip-conflict pin -- real `format_unmatched_atom`
-/// (`_emerge/resolver/output.py:892`) marks the leading operator chars
-/// plus the version token (`~` + `1.0` in `~dev-libs/whblocker-1.0`,
-/// staged oracle), plus a `:slot[/sub-slot][op]` span when the atom
-/// carries one that mismatches the missed package (`:967-975`). The
-/// spans are computed on the raw atom text (no color realignment --
-/// same deliberate divergence as the slot block's own markers).
-/// USE-token spans stay a documented cut (no grounded case carries
-/// USE-deps on a skipped row). `highlight_version` is real's
-/// `highlight_version` (#270): the operator and version spans are only
-/// marked when the missed package fails the atom's version part.
+/// The `^` marker line under a skip-conflict pin: operator chars plus version,
+/// plus a `:slot[/sub-slot][op]` span when the atom carries one the missed
+/// package lacks. USE-token spans are cut.
+/// Portage: resolver/output.py, format_unmatched_atom
 pub(crate) fn skip_conflict_caret_line(
     atom: &str,
     pkg_slot: &str,
     pkg_sub_slot: &str,
     highlight_version: bool,
 ) -> String {
-    // Collect real's highlight spans first, then render once: spans may
-    // abut (a version end meets its `:slot` start), so incremental
-    // push-`^`-or-pad rendering would misplace the later one.
+    // Collect spans first, then render once: spans may abut, so incremental
+    // rendering would misplace the later one.
     let mut spans: Vec<(usize, usize)> = Vec::new();
     let op_len: usize = atom
         .chars()
@@ -459,18 +407,12 @@ pub(crate) fn skip_conflict_caret_line(
     }
     let parsed = portage_dep::parse_atom(atom);
     if highlight_version && let Some(ver) = parsed.as_ref().and_then(|a| a.version.clone()) {
-        // Last occurrence: a package name itself may contain digits
-        // (`foo-2-bar-1.0`), so anchoring on the first would mark the
-        // wrong span. A trailing `-rN` revision is left out of the
-        // span (no oracle covers it).
+        // Last occurrence: a package name itself may hold digits (`foo-2-bar-1.0`).
         if let Some(start) = atom.rfind(ver.as_str()) {
             spans.push((start, start + ver.len()));
         }
     }
-    // Real's `highlight_slot`: the atom names a slot (or sub-slot) the
-    // missed package does not have. The span covers `:slot`, the
-    // `/sub-slot` half when present, and the trailing slot operator
-    // (`=`/`*`), anchored on its occurrence in the raw atom text.
+    // The span covers `:slot`, the `/sub-slot` half, and a trailing operator.
     if let Some(a) = parsed.as_ref() {
         let slot_mismatch = a.slot.as_deref().is_some_and(|s| s != pkg_slot);
         let sub_mismatch = a.sub_slot.as_deref().is_some_and(|s| s != pkg_sub_slot);

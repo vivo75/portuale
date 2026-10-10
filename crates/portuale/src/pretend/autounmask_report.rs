@@ -33,18 +33,10 @@ pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> 
         autounmask_continue,
         ..
     } = opts;
-    // Real `depgraph.py::_display_autounmask` (`:10625`), the
-    // `unstable_keyword_msg` half: `--autounmask` accepted a
+    // The `unstable_keyword_msg` half: `--autounmask` accepted a
     // `KEYWORDS`-alone mask to make the graph resolve, so the implicit
     // `package.accept_keywords` change is reported after the merge list.
-    // Real `_writemsg`: `\nThe following <BAD>keyword changes</BAD> are
-    // necessary to proceed:\n (see "package.accept_keywords" in the
-    // portage(5) man page for more details)\n`; then `format_msg`
-    // (`#`-prefixed dep-chain comment lines stay plain, the `=<cpv>
-    // <kw>` line is `INFORM`-coloured). One header covers every change.
-    // Real portage does NOT print the "Use --autounmask-write" hint
-    // under `--pretend` (`:11084` `not pretend`), and `emerge --pretend`
-    // still exits 0 (real `actions.py:563` `return os.EX_OK`).
+    // Portage: depgraph.py, _display_autounmask
     let print_autounmask_block =
         |reason: &str, file: &str, changes: &[portage_repo::AutounmaskChange]| {
             if changes.is_empty() {
@@ -67,9 +59,7 @@ pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> 
                 eprintln!("{}", color.c("INFORM", &line));
             }
         };
-    // Real `_display_autounmask` `_writemsg` order: keyword, mask, USE,
-    // license. The `atom` field already carries its own op prefix (`=`
-    // for keywords/masks, `>=`/`>=…:slot`/`=` for USE/license).
+    // Block order: keyword, mask, USE, license.
     print_autounmask_block(
         "keyword changes",
         "package.accept_keywords",
@@ -87,50 +77,23 @@ pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> 
         &result.autounmask_license_changes,
     );
 
-    // `--autounmask-only`: real `actions.py:456` returns 0 right after
-    // `display_problems()` -- nothing below (the abi-rebuild info, the
-    // changed-deps report, and any real merge) runs. Real still calls
-    // `post_emerge` after (`run_action`'s unconditional tail), so a
-    // `--pretend` run prints the end notice here too.
+    // `--autounmask-only` returns 0 right after the problem display;
+    // nothing below runs, but the end notice still prints.
+    // Portage: actions.py, action_build
     if autounmask_only {
         pretend_end_news_notice(pretend, repos, root, config, color);
         return Some(ExitCode::SUCCESS);
     }
 
-    // Real `action_build`: `backtrack_depgraph` returns `success=False`
-    // whenever `_have_autounmask_changes()` (i.e. autounmask had to
-    // touch `package.use`/`.accept_keywords`/`.unmask`/`.license` to make
-    // the graph resolve), and then `if not success:
-    // mydepgraph.display_problems(); return 1` -- BEFORE any merge, and
-    // under `--pretend` too (`--pretend` does not exempt it). The merge
-    // list and the change blocks just printed ARE `display_problems()`'s
-    // output; the run then fails so a caller's `$?` check sees that the
-    // config still needs editing. The one exception is a real (non-
-    // `--pretend`) `--autounmask-continue`, which writes the changes and
-    // proceeds (real `_resolve`'s own `'--pretend' not in myopts` guard).
-    // (`has_autounmask_changes` is bound once, above, next to the
-    // `--autounmask-only` re-show gate -- backlog #271.)
+    // With autounmask changes pending, the run fails (exit 1) after the
+    // problem display -- under `--pretend` too -- unless a non-pretend
+    // `--autounmask-continue` writes the changes and proceeds.
+    // Portage: actions.py, action_build
     let autounmask_continue_active = !pretend && autounmask_continue == Some(true);
 
-    // Real `_display_autounmask`'s tail (`depgraph.py:11093`, gated on
-    // `_dynamic_config._autounmask_backtrack_disabled`): with
-    // `--autounmask-backtrack` off (the default), the resolver stops
-    // after the first autounmask batch instead of re-driving, and says
-    // so -- `--pretend` included. `--autounmask-continue` implies
-    // backtrack=y, so the notice is suppressed there. Backlog #217:
-    // the flag is set at exactly one site (`need_config_change:11752`),
-    // reached only when the early return (`:11713-11717`) did NOT fire
-    // -- i.e. NOT when `_success_without_autounmask` holds (the
-    // `_resolve` tail `:5793`, "reserved for cases where there are
-    // *zero* other problems": the resolve succeeds once the autounmask
-    // changes are applied, no other failure). A lone autounmask change
-    // (oracle: `abort-au-plain`, `fixtures/abort-captures/`) therefore
-    // prints the change block with NO notice; the notice stays exactly
-    // when another failure coincides (a cycle: `abort-au-cycle`; a
-    // restart-worthy flip on an already-graphed package: `aucasctop`;
-    // a post-failure parent rescue). `GraphResult::
-    // autounmask_backtrack_disabled` ports the flag, including real's
-    // `_allow_backtracking` conjunct (`--backtrack=0` never prints it).
+    // With `--autounmask-backtrack` off (the default), the resolver stops
+    // after the first autounmask batch instead of re-driving, and says so.
+    // Portage: depgraph.py, _display_autounmask
     if result.autounmask_backtrack_disabled(config.autounmask_backtrack) {
         eprintln!();
         for line in [
