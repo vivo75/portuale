@@ -111,6 +111,16 @@ the sibling checkout to be present.
 Full pre-slice verification also runs `cargo fmt --check` and
 `cargo clippy --release --all-targets` (zero warnings).
 
+## Run
+
+Live-verified per-slice examples are in
+[`LLM/what-this-proves.md`](LLM/what-this-proves.md). Quick taste:
+
+```sh
+target/release/portuale emerge --pretend sys-apps/portage
+target/release/versions-harness vercmp 1.0-r1 1.0
+```
+
 ## Documentation
 
 | Doc | What it is |
