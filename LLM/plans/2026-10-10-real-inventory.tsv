@@ -1,0 +1,271 @@
+ident	class	new	defined_at	reason
+PORTUALE_REAL_PORTAGEQ	PORTAGE	PORTUALE_COMPARE_PORTAGEQ	use-only (label/comment fragment)	owner-away decision: clearer than PORTUALE_PORTAGE_PORTAGEQ
+REAL_CHECKSUM_KEYS	PORTAGE	PORTAGE_CHECKSUM_KEYS	crates/portage-fetch/src/layout.rs:110	real = Portage / its behaviour or source
+REAL_LOCALE_CATEGORIES	PORTAGE	PORTAGE_LOCALE_CATEGORIES	crates/portuale/src/remote.rs:3457	real = Portage / its behaviour or source
+a_valid_stamp_is_rewritten_to_the_mtime_shown_and_the_real_reader_accepts_it	PORTAGE	a_valid_stamp_is_rewritten_to_the_mtime_shown_and_the_portage_reader_accepts_it	crates/portuale/src/vdb_view.rs:1135	real = Portage / its behaviour or source
+argparse_error_exits_2_with_reals_usage_text	PORTAGE	argparse_error_exits_2_with_portages_usage_text	crates/portuale/src/helpers/doins.rs:2155	real = Portage / its behaviour or source
+argv_errors_are_reals	PORTAGE	argv_errors_are_portages	crates/portuale/src/helpers/gpkg.rs:2332	real = Portage / its behaviour or source
+ask_config_select_sigint_prints_interrupted_and_exits_130_like_real	PORTAGE	ask_config_select_sigint_prints_interrupted_and_exits_130_like_portage	crates/portuale/src/pretend.rs:17516	real = Portage / its behaviour or source
+ask_merge_eof_prints_interrupted_without_quitting_like_real	PORTAGE	ask_merge_eof_prints_interrupted_without_quitting_like_portage	crates/portuale/src/pretend.rs:17645	real = Portage / its behaviour or source
+ask_merge_sigint_prints_interrupted_and_exits_130_like_real	PORTAGE	ask_merge_sigint_prints_interrupted_and_exits_130_like_portage	crates/portuale/src/pretend.rs:17373	real = Portage / its behaviour or source
+ask_pretend_offer_no_exits_130_like_real	PORTAGE	ask_pretend_offer_no_exits_130_like_portage	crates/portuale/src/pretend.rs:17784	real = Portage / its behaviour or source
+ask_pretend_offer_yes_continues_as_pretend_like_real	PORTAGE	ask_pretend_offer_yes_continues_as_pretend_like_portage	crates/portuale/src/pretend.rs:17842	real = Portage / its behaviour or source
+ask_read_news_eof_exits_before_resolve_like_real	PORTAGE	ask_read_news_eof_exits_before_resolve_like_portage	crates/portuale/src/pretend.rs:17177	real = Portage / its behaviour or source
+ask_read_news_sigint_exits_before_resolve_like_real	PORTAGE	ask_read_news_sigint_exits_before_resolve_like_portage	crates/portuale/src/pretend.rs:17442	real = Portage / its behaviour or source
+ask_read_news_true_spellings_prompt_like_real	PORTAGE	ask_read_news_true_spellings_prompt_like_portage	crates/portuale/src/pretend.rs:17898	real = Portage / its behaviour or source
+ask_read_news_without_eselect_prints_real_hint	PORTAGE	ask_read_news_without_eselect_prints_portages_hint	crates/portuale/src/pretend.rs:18167	real = Portage / its behaviour or source
+ask_true_spelling_hits_the_tty_gate_like_real	PORTAGE	ask_true_spelling_hits_the_tty_gate_like_portage	crates/portuale/src/pretend.rs:17966	real = Portage / its behaviour or source
+assemble_candidates_groups_a_files_uris_like_real_listonly	PORTAGE	assemble_candidates_groups_a_files_uris_like_portage_listonly	crates/portuale/src/fetch.rs:2356	real = Portage / its behaviour or source
+autounmask_use_parent_flip_fails_like_real_when_the_child_flag_is_masked	PORTAGE	autounmask_use_parent_flip_fails_like_portage_when_the_child_flag_is_masked	crates/portage-repo/src/lib.rs:52057	real = Portage / its behaviour or source
+autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_real	PORTAGE	autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_portage	crates/portage-repo/src/lib.rs:52163	real = Portage / its behaviour or source
+backtrack_default_matches_real_portage_twenty	PORTAGE	backtrack_default_matches_portage_twenty	crates/portuale/src/pretend.rs:20595	real = Portage / its behaviour or source
+binhost_fetch_warning_matches_reals_two_line_shape	PORTAGE	binhost_fetch_warning_matches_portages_two_line_shape	crates/portuale/src/emerge_getbinpkg.rs:2673	real = Portage / its behaviour or source
+binpkg_error_classes_mirror_reals_caller	PORTAGE	binpkg_error_classes_mirror_portages_caller	crates/portuale/src/binpkg.rs:2889	real = Portage / its behaviour or source
+binpkg_respect_use_subtracts_forced_and_masked_flags_like_real	PORTAGE	binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage	crates/portage-repo/src/lib.rs:37192	real = Portage / its behaviour or source
+binrepo_packages_dir_maps_scheme_to_the_real_edb_cache_layout	PORTAGE	binrepo_packages_dir_maps_scheme_to_the_portage_edb_cache_layout	crates/portage-profile/src/lib.rs:4214	real = Portage / its behaviour or source
+broken_hardlink_gets_the_creation_mode_like_real	PORTAGE	broken_hardlink_gets_the_creation_mode_like_portage	crates/portuale/src/helpers/xpak.rs:551	real = Portage / its behaviour or source
+checksum_failure_max_tries_parses_like_real	PORTAGE	checksum_failure_max_tries_parses_like_portage	crates/portuale/src/fetch.rs:2480	real = Portage / its behaviour or source
+chmod_lite_matches_the_real_helper_on_every_fixture_case	PORTAGE	chmod_lite_matches_the_portage_helper_on_every_fixture_case	crates/portuale/src/helpers/chmod_lite.rs:400	real = Portage / its behaviour or source
+circular_node_text_matches_real_package_str	PORTAGE	circular_node_text_matches_portage_package_str	crates/portuale/src/pretend.rs:20317	real = Portage / its behaviour or source
+classify_inner_member_matches_real_extract_filename_compression	PORTAGE	classify_inner_member_matches_portage_extract_filename_compression	crates/portuale/src/binpkg.rs:2638	real = Portage / its behaviour or source
+classify_output_matches_real_three_way_split	PORTAGE	classify_output_matches_portage_three_way_split	crates/portuale/src/info_files.rs:741	real = Portage / its behaviour or source
+colorize_matches_real_portage_escape_codes	PORTAGE	colorize_matches_portage_escape_codes	crates/portuale/src/color.rs:392	real = Portage / its behaviour or source
+combine_logentries_matches_real_combine_shape	PORTAGE	combine_logentries_matches_portage_combine_shape	crates/portuale/src/elog.rs:1434	real = Portage / its behaviour or source
+debug_flag_exports_real_portage_debug	PORTAGE	debug_flag_exports_portage_debug	crates/portuale/src/ebuild_phases.rs:8333	real = Portage / its behaviour or source
+digests_variable_formats_like_real_and_skips_size	PORTAGE	digests_variable_formats_like_portage_and_skips_size	crates/portage-fetch/src/lib.rs:1302	real = Portage / its behaviour or source
+eapi_empty_groups_matches_real	PORTAGE	eapi_empty_groups_matches_portage	crates/portage-repo/src/md5_dict.rs:573	real = Portage / its behaviour or source
+eapi_idepend_matches_real	PORTAGE	eapi_idepend_matches_portage	crates/portage-repo/src/md5_dict.rs:560	real = Portage / its behaviour or source
+eapi_slot_operator_matches_real	PORTAGE	eapi_slot_operator_matches_portage	crates/portage-repo/src/md5_dict.rs:548	real = Portage / its behaviour or source
+eapi_support_matches_real	PORTAGE	eapi_support_matches_portage	crates/portage-repo/src/md5_dict.rs:538	real = Portage / its behaviour or source
+ebuild_visible_at_and_binary_reinstall_warranted_match_real_identical_binary	PORTAGE	ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_binary	crates/portage-repo/src/lib.rs:37416	real = Portage / its behaviour or source
+echo_summary_renders_the_real_message_block_shape	PORTAGE	echo_summary_renders_the_portage_message_block_shape	crates/portuale/src/elog.rs:1389	real = Portage / its behaviour or source
+elementary_cycles_counts_rotations_like_real	PORTAGE	elementary_cycles_counts_rotations_like_portage	crates/portage-repo/src/merge_order.rs:4653	real = Portage / its behaviour or source
+exec_real_chmod_lite	ACTUAL		crates/portuale/src/helpers/chmod_lite.rs:61	real-mode family of frozen PORTUALE_PYTHON_HELPERS=real
+expand_and_split_matches_real_varexpand_on_fetchcommand_ssh	PORTAGE	expand_and_split_matches_portage_varexpand_on_fetchcommand_ssh	crates/portage-fetch/src/lib.rs:1238	real = Portage / its behaviour or source
+expand_and_split_varexpand_unknown_vars_and_escapes_match_real	PORTAGE	expand_and_split_varexpand_unknown_vars_and_escapes_match_portage	crates/portage-fetch/src/lib.rs:1283	real = Portage / its behaviour or source
+extract_binpkg_writes_xpak_members_verbatim_like_real_unpackinfo	PORTAGE	extract_binpkg_writes_xpak_members_verbatim_like_portage_unpackinfo	crates/portuale/src/binpkg.rs:3013	real = Portage / its behaviour or source
+failed_pkg_msg_matches_real_failed_pkg_msg_bytes	PORTAGE	failed_pkg_msg_matches_portage_failed_pkg_msg_bytes	crates/portuale/src/emerge_getbinpkg.rs:1756	real = Portage / its behaviour or source
+fake_distdir_is_prepared_only_when_real_prepares_it	PORTAGE	fake_distdir_is_prepared_only_when_portage_prepares_it	crates/portuale/src/ebuild_phases.rs:8523	real = Portage / its behaviour or source
+filename_hash_paths_match_real_portage	PORTAGE	filename_hash_paths_match_portage	crates/portage-fetch/src/layout.rs:289	real = Portage / its behaviour or source
+find_hard_cycles_slot_op_gate_requires_the_child_slot_like_real	PORTAGE	find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage	crates/portage-repo/src/lib.rs:48233	real = Portage / its behaviour or source
+find_hard_cycles_starts_where_reals_get_cycles_starts	PORTAGE	find_hard_cycles_starts_where_portages_get_cycles_starts	crates/portage-repo/src/lib.rs:47965	real = Portage / its behaviour or source
+fixture_eula_style_license_is_masked_by_the_real_default_accept_license	PORTAGE	fixture_eula_style_license_is_masked_by_the_portage_default_accept_license	crates/portage-repo/src/lib.rs:42997	real = Portage / its behaviour or source
+flat_field_on_dedups_and_sorts_like_real_flatten	PORTAGE	flat_field_on_dedups_and_sorts_like_portage_flatten	crates/portuale/src/ebuild_phases.rs:6469	real = Portage / its behaviour or source
+format_contents_line_matches_real_dblink_format	PORTAGE	format_contents_line_matches_portage_dblink_format	crates/portuale/src/ebuild_merge.rs:5413	real = Portage / its behaviour or source
+generate_soname_deps_matches_the_real_soname_deps_processor	PORTAGE	generate_soname_deps_matches_the_portage_soname_deps_processor	crates/portuale/src/needed_elf.rs:2019	real = Portage / its behaviour or source
+getlibpaths_reads_ld_so_conf_and_appends_the_real_defaults	ACTUAL		crates/portuale/src/needed_elf.rs:1704	ambiguous: kept
+gpg_policy_for_features_matches_real_gpkg_init_precedence	PORTAGE	gpg_policy_for_features_matches_portage_gpkg_init_precedence	crates/portuale/src/binpkg.rs:3694	real = Portage / its behaviour or source
+gpg_verify_from_binrepo_matches_real_gpkg_init_with_an_explicit_verify_signature	PORTAGE	gpg_verify_from_binrepo_matches_portage_gpkg_init_with_an_explicit_verify_signature	crates/portuale/src/binpkg.rs:3722	real = Portage / its behaviour or source
+install_dies_like_real_when_s_is_missing	PORTAGE	install_dies_like_portage_when_s_is_missing	crates/portuale/src/ebuild_phases.rs:6817	real = Portage / its behaviour or source
+install_option_forms_match_real	PORTAGE	install_option_forms_match_portage	crates/portuale/src/helpers/doins.rs:2292	real = Portage / its behaviour or source
+install_option_help_matches_real_byte_for_byte	PORTAGE	install_option_help_matches_portage_byte_for_byte	crates/portuale/src/helpers/doins.rs:2217	real = Portage / its behaviour or source
+install_option_type_error_exits_2_with_reals_text	PORTAGE	install_option_type_error_exits_2_with_portages_text	crates/portuale/src/helpers/doins.rs:2242	real = Portage / its behaviour or source
+install_parse_args_matches_reals	PORTAGE	install_parse_args_matches_portages	crates/portuale/src/helpers/xattr.rs:830	real = Portage / its behaviour or source
+install_runs_the_real_post_install_qa_check	PORTAGE	install_runs_the_portage_post_install_qa_check	use-only (label/comment fragment)	real = Portage / its behaviour or source
+install_runs_the_real_post_install_qa_check_and_strips_a_genuinely_empty_dir	PORTAGE	install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_dir	crates/portuale/src/ebuild_phases.rs:7153	real = Portage / its behaviour or source
+invalid_use_conditional_mask_matches_real_on_all_three_fixture_cases	PORTAGE	invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases	crates/portage-repo/src/lib.rs:48874	real = Portage / its behaviour or source
+is_env_d_filename_matches_real_filter	PORTAGE	is_env_d_filename_matches_portage_filter	crates/portuale/src/env_update.rs:397	real = Portage / its behaviour or source
+jobs_line_matches_reals_display_status_shape	PORTAGE	jobs_line_matches_portages_display_status_shape	crates/portuale/src/emerge_build.rs:4937	real = Portage / its behaviour or source
+make_globals_fetch_commands_match_real_varexpand	PORTAGE	make_globals_fetch_commands_match_portage_varexpand	crates/portage-profile/src/lib.rs:7198	real = Portage / its behaviour or source
+makeopts_to_job_count_matches_the_real_greedy_regex	PORTAGE	makeopts_to_job_count_matches_the_portage_greedy_regex	crates/portuale/src/ebuild_package.rs:1988	real = Portage / its behaviour or source
+matches_real_portageq_on_the_fixture_root	PORTAGE	matches_portageq_on_the_fixture_root	crates/portuale/src/portageq.rs:1082	real = Portage / its behaviour or source
+matches_real_portages_test_corpus	PORTAGE	matches_portages_test_corpus	crates/portage-dep/src/lib.rs:2166	real = Portage / its behaviour or source
+merge_one_binary_entry_aborts_a_stale_index_binary_like_real	PORTAGE	merge_one_binary_entry_aborts_a_stale_index_binary_like_portage	crates/portuale/src/emerge_getbinpkg.rs:1634	real = Portage / its behaviour or source
+merge_progress_lines_match_real_exact_text	PORTAGE	merge_progress_lines_match_portage_exact_text	crates/portuale/src/emerge_build.rs:3800	real = Portage / its behaviour or source
+merge_tree_carries_xattrs_like_real_movefile	PORTAGE	merge_tree_carries_xattrs_like_portage_movefile	crates/portuale/src/ebuild_merge.rs:5455	real = Portage / its behaviour or source
+metadata_file_fields_match_reals_literal_set	PORTAGE	metadata_file_fields_match_portages_literal_set	crates/portage-repo/src/lib.rs:38541	real = Portage / its behaviour or source
+minimize_children_collapses_like_real	PORTAGE	minimize_children_collapses_like_portage	crates/portage-repo/src/lib.rs:53246	real = Portage / its behaviour or source
+network_sandbox_exempt_matches_real_doebuild_spawns_own_formula	PORTAGE	network_sandbox_exempt_matches_portage_doebuild_spawns_own_formula	crates/portuale/src/ebuild_phases.rs:6374	real = Portage / its behaviour or source
+news_counts_follow_real_count_unread_news_gates	PORTAGE	news_counts_follow_portage_count_unread_news_gates	crates/portuale/src/pretend.rs:16586	real = Portage / its behaviour or source
+news_profile_and_keyword_restrictions_match_like_real	PORTAGE	news_profile_and_keyword_restrictions_match_like_portage	crates/portuale/src/pretend.rs:16473	real = Portage / its behaviour or source
+news_state_files_get_the_group_write_bit_like_real	PORTAGE	news_state_files_get_the_group_write_bit_like_portage	crates/portuale/src/pretend.rs:16657	real = Portage / its behaviour or source
+non_utf8_names_are_packed_like_real_surrogateescape	PORTAGE	non_utf8_names_are_packed_like_portage_surrogateescape	crates/portuale/src/helpers/xpak.rs:519	real = Portage / its behaviour or source
+nonpretend_merge_list_shown_only_when_real_shows_it	PORTAGE	nonpretend_merge_list_shown_only_when_portage_shows_it	crates/portuale/src/pretend.rs:18896	real = Portage / its behaviour or source
+ordinary_collision_aborts_by_real_default_via_protect_owned	PORTAGE	ordinary_collision_aborts_by_portage_default_via_protect_owned	crates/portuale/src/ebuild_merge.rs:7536	real = Portage / its behaviour or source
+outer_help_matches_real_byte_for_byte	PORTAGE	outer_help_matches_portage_byte_for_byte	crates/portuale/src/helpers/doins.rs:2172	real = Portage / its behaviour or source
+package_records_binpkgmd5_and_build_id_in_build_info_like_real	PORTAGE	package_records_binpkgmd5_and_build_id_in_build_info_like_portage	crates/portuale/src/ebuild_package.rs:3079	real = Portage / its behaviour or source
+parse_env_assignments_matches_real_aux_env_search_forms	PORTAGE	parse_env_assignments_matches_portage_aux_env_search_forms	crates/portage-repo/src/lib.rs:38325	real = Portage / its behaviour or source
+postinst_regen_script_matches_real_shell_shape	PORTAGE	postinst_regen_script_matches_portage_shell_shape	crates/portuale/src/remote.rs:6802	real = Portage / its behaviour or source
+prepare_fake_distdir_prunes_and_relinks_like_real	PORTAGE	prepare_fake_distdir_prunes_and_relinks_like_portage	crates/portuale/src/ebuild_phases.rs:8477	real = Portage / its behaviour or source
+quickpkg_from_vdb_writes_real_ordered_stanza_with_eapi_and_repo_revisions	PORTAGE	quickpkg_from_vdb_writes_portage_ordered_stanza_with_eapi_and_repo_revisions	crates/portuale/src/ebuild_package.rs:2465	real = Portage / its behaviour or source
+read_vdb_string_decodes_invalid_utf8_lossy_like_real	PORTAGE	read_vdb_string_decodes_invalid_utf8_lossy_like_portage	crates/portage-repo/src/lib.rs:38500	real = Portage / its behaviour or source
+real_discovery_order	PORTAGE	portage_discovery_order	crates/portage-repo/src/lib.rs:45428 (comment-only, no definition)	real = Portage / its behaviour or source
+real_order_keys	PORTAGE	portage_order_keys	crates/portage-repo/src/lib.rs:25991	real = Portage / its behaviour or source
+real_reader_accepts	PORTAGE	portage_reader_accepts	crates/portuale/src/vdb_view.rs:1014	real = Portage / its behaviour or source
+real_test_suite_vector_foo_and_bar_both_required_neither_declares_bar	PORTAGE	portage_test_suite_vector_foo_and_bar_both_required_neither_declares_bar	crates/portage-dep/src/lib.rs:1647	real = Portage / its behaviour or source
+real_test_suite_vector_foo_and_bar_both_required_one_satisfies	PORTAGE	portage_test_suite_vector_foo_and_bar_both_required_one_satisfies	crates/portage-dep/src/lib.rs:1663	real = Portage / its behaviour or source
+real_test_suite_vector_minus_bar_default_combines_with_a_plain_required_flag	PORTAGE	portage_test_suite_vector_minus_bar_default_combines_with_a_plain_required_flag	crates/portage-dep/src/lib.rs:1719	real = Portage / its behaviour or source
+real_test_suite_vector_minus_default_on_a_required_enabled_flag_is_a_contradiction	PORTAGE	portage_test_suite_vector_minus_default_on_a_required_enabled_flag_is_a_contradiction	crates/portage-dep/src/lib.rs:1700	real = Portage / its behaviour or source
+real_test_suite_vector_plus_default_rescues_an_undeclared_flag_only	PORTAGE	portage_test_suite_vector_plus_default_rescues_an_undeclared_flag_only	crates/portage-dep/src/lib.rs:1681	real = Portage / its behaviour or source
+recursive_config_files_matches_reals_traversal_and_filters	PORTAGE	recursive_config_files_matches_portages_traversal_and_filters	crates/portage-util/src/lib.rs:211	real = Portage / its behaviour or source
+regen_matches_real_o_shell_and_locale	PORTAGE	regen_matches_portage_o_shell_and_locale	crates/portuale/src/remote.rs:6852	real = Portage / its behaviour or source
+regen_splits_lc_all_like_real	PORTAGE	regen_splits_lc_all_like_portage	crates/portuale/src/remote.rs:6990	real = Portage / its behaviour or source
+remote_success_prints_no_post_merge_notice_like_real	PORTAGE	remote_success_prints_no_post_merge_notice_like_portage	crates/portuale/src/pretend.rs:18218	real = Portage / its behaviour or source
+resolve_folds_no_star_features_in_real_order	PORTAGE	resolve_folds_no_star_features_in_portage_order	crates/portuale/src/install_mask.rs:233	real = Portage / its behaviour or source
+resume_pretend_end_notice_prints_once_like_real	PORTAGE	resume_pretend_end_notice_prints_once_like_portage	crates/portuale/src/pretend.rs:16947	real = Portage / its behaviour or source
+resume_skipfirst_empty_list_prints_only_the_pre_notice_like_real	PORTAGE	resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage	crates/portuale/src/pretend.rs:16984	real = Portage / its behaviour or source
+retry_decision_matches_real_task_exit	PORTAGE	retry_decision_matches_portage_task_exit	crates/portuale/src/regen.rs:778	real = Portage / its behaviour or source
+sandbox_wrapped_command_configures_the_real_addrconfig_workaround_addresses	ACTUAL		crates/portuale/src/ebuild_phases.rs:5620	ambiguous: kept
+scheduler_status_mode_matches_reals_background_gates	PORTAGE	scheduler_status_mode_matches_portages_background_gates	crates/portuale/src/emerge_build.rs:4832	real = Portage / its behaviour or source
+select_dep_target_narrows_and_ranks_like_real	PORTAGE	select_dep_target_narrows_and_ranks_like_portage	crates/portage-repo/src/merge_order.rs:6015	real = Portage / its behaviour or source
+shlex_and_varexpand_escape_handling_matches_real_getconfig	PORTAGE	shlex_and_varexpand_escape_handling_matches_portage_getconfig	crates/portage-profile/src/lib.rs:7261	real = Portage / its behaviour or source
+split_server_locale_fans_lc_all_out_like_real	PORTAGE	split_server_locale_fans_lc_all_out_like_portage	crates/portuale/src/remote.rs:6913	real = Portage / its behaviour or source
+stamp_state_follows_the_real_rule	PORTAGE	stamp_state_follows_the_portage_rule	crates/portuale/src/vdb_rw.rs:1628	real = Portage / its behaviour or source
+stanza_field_sort_matches_real_keys_sort_with_mtime_repo_last	PORTAGE	stanza_field_sort_matches_portage_keys_sort_with_mtime_repo_last	crates/portuale/src/ebuild_package.rs:2428	real = Portage / its behaviour or source
+structured_matches_real_use_reduce_normalization	PORTAGE	structured_matches_portage_use_reduce_normalization	crates/portage-use-reduce/src/lib.rs:1433	real = Portage / its behaviour or source
+symlink_failure_names_target_and_dest_like_real	PORTAGE	symlink_failure_names_target_and_dest_like_portage	crates/portuale/src/helpers/doins.rs:3431	real = Portage / its behaviour or source
+syslog_line_matches_real_key_phase_line_shape	PORTAGE	syslog_line_matches_portage_key_phase_line_shape	crates/portuale/src/elog.rs:1574	real = Portage / its behaviour or source
+syslog_priority_matches_real_mod_syslogs_own_pri_map	PORTAGE	syslog_priority_matches_portage_mod_syslogs_own_pri_map	crates/portuale/src/elog.rs:1565	real = Portage / its behaviour or source
+to_needed_line_writes_the_real_rewrite_format_not_the_scanelf_read_format	PORTAGE	to_needed_line_writes_the_portage_rewrite_format_not_the_scanelf_read_format	crates/portuale/src/needed_elf.rs:1500	real = Portage / its behaviour or source
+tree_display_order_sequences_the_p2b_tree_like_real	PORTAGE	tree_display_order_sequences_the_p2b_tree_like_portage	crates/portage-repo/src/lib.rs:43546	real = Portage / its behaviour or source
+unknown_compression_fails_after_gpkg_1_like_real	PORTAGE	unknown_compression_fails_after_gpkg_1_like_portage	crates/portuale/src/helpers/gpkg.rs:2373	real = Portage / its behaviour or source
+unterminated_insoptions_quote_is_reals_value_error	PORTAGE	unterminated_insoptions_quote_is_portages_value_error	crates/portuale/src/helpers/doins.rs:2492	real = Portage / its behaviour or source
+use_suffix_renders_reals_trailing_space_after_each_use_group	PORTAGE	use_suffix_renders_portages_trailing_space_after_each_use_group	crates/portuale/src/pretend.rs:20488	real = Portage / its behaviour or source
+validate_structure_matches_real_portage	PORTAGE	validate_structure_matches_portage	crates/portage-fetch/src/layout.rs:333	real = Portage / its behaviour or source
+verify_binpkg_against_index_reports_size_then_digest_like_real	PORTAGE	verify_binpkg_against_index_reports_size_then_digest_like_portage	crates/portuale/src/binpkg.rs:4402	real = Portage / its behaviour or source
+violated_parent_flags_concrete_gate_matches_real	PORTAGE	violated_parent_flags_concrete_gate_matches_portage	crates/portage-repo/src/lib.rs:77203	real = Portage / its behaviour or source
+violated_parent_flags_matches_real_across_the_oracle_matrix	PORTAGE	violated_parent_flags_matches_portage_across_the_oracle_matrix	crates/portage-repo/src/lib.rs:77107	real = Portage / its behaviour or source
+virtual_cycle_aborts_like_real_on_the_upstream_fixtures	PORTAGE	virtual_cycle_aborts_like_portage_on_the_upstream_fixtures	crates/portage-repo/src/lib.rs:48470	real = Portage / its behaviour or source
+xattr_excluder_matches_real	PORTAGE	xattr_excluder_matches_portage	crates/portuale/src/helpers/doins.rs:2423	real = Portage / its behaviour or source
+xpak_xattr_tar_options_match_reals_extractor	PORTAGE	xpak_xattr_tar_options_match_portages_extractor	crates/portuale/src/binpkg.rs:2744	real = Portage / its behaviour or source
+real_unmerge_deletes_a_locally_modified_file_by_real_default	MIXED	real_unmerge_deletes_a_locally_modified_file_by_portage_default	crates/portuale/src/ebuild_unmerge.rs:1599	real = Portage / its behaviour or source
+PORTUALE_REAL_PYTHON	ACTUAL		use-only (label/comment fragment)	env var, set only by tests to hide the real python3 (not the shim); no external reader
+REAL_CACHE	ACTUAL		crates/portage-fetch/src/mirror_cache.rs:388	genuine captured sample cache file (doubt: Portage-written)
+RealBinaryEngine	ACTUAL		use-only (label/comment fragment)	stale doc-table name, no such type in code
+RealSourceEngine	ACTUAL		use-only (label/comment fragment)	stale doc-table name, no such type in code; real = executing vs seam
+Realistically	ACTUAL		use-only (label/comment fragment)	English word in a comment, not an identifier
+_real_n	ACTUAL		crates/portage-repo/src/merge_order.rs:3052	unused binding of real_n
+a_real_portage_cache_round_trips_byte_for_byte	ACTUAL		crates/portage-fetch/src/mirror_cache.rs:391	genuine Portage-written sample (doubt)
+accepts_a_real_boolean_option	ACTUAL		crates/portuale/src/ebuild.rs:581	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+accepts_a_real_command_and_	ACTUAL		use-only (label/comment fragment)	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+accepts_a_real_command_and_still_prints_the_stub_marker	ACTUAL		crates/portuale/src/ebuild.rs:564	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+accepts_a_real_value_option_without_misreading_its_value	ACTUAL		crates/portuale/src/ebuild.rs:587	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+accepts_multiple_real_commands	ACTUAL		crates/portuale/src/ebuild.rs:575	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+cleanup_info_dir_leaves_a_real_remaining_file_alone	ACTUAL		crates/portuale/src/ebuild_unmerge.rs:1454	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+compress_template_covers_exactly_the_real_six_compressors	ACTUAL		crates/portuale/src/ebuild_package.rs:1931	genuine vs made-up codec (doubt)
+compute_multilib_category_classifies_real_elf_headers	ACTUAL		crates/portuale/src/needed_elf.rs:1975	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+custom_process_runs_the_real_command_with_logfile_and_package_substituted	ACTUAL		crates/portuale/src/elog.rs:1587	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+depend_phase_standalone_base_env_stays_empty_with_a_real_repo	ACTUAL		crates/portuale/src/ebuild_phases.rs:7436	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up	ACTUAL		crates/portuale/src/ebuild_merge.rs:7674	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+distfile_lock_creates_a_real_sibling_lockfile	ACTUAL		crates/portuale/src/fetch.rs:1090	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+ensure_portage_logdir_symlink_points_t_build_log_at_the_real_logdir	ACTUAL		crates/portuale/src/emerge_build.rs:2661	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+entry_is_live_reads_a_real_properties_live_fixture	ACTUAL		crates/portuale/src/emerge_build.rs:2857	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+extract_binpkg_unpacks_a_real_gpkg_image_and_build_info	ACTUAL		crates/portuale/src/binpkg.rs:3060	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+fetch_src_uri_really_downloads_via_a_real_wget_subprocess_and_verifies_it	ACTUAL		crates/portuale/src/fetch.rs:1421	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+fetch_src_uri_rejects_a_real_download_that_fails_digest_verification	ACTUAL		crates/portuale/src/fetch.rs:1527	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+fetch_src_uri_resolves_a_real_mirror_uri_via_custommirrors	ACTUAL		crates/portuale/src/fetch.rs:1616	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+fetch_src_uri_resolves_a_real_mirror_uri_via_thirdpartymirrors	ACTUAL		crates/portuale/src/fetch.rs:1568	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+fetch_src_uri_skips_a_real_already_verified_file_without_touching_the_network	ACTUAL		crates/portuale/src/fetch.rs:1171	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+find_binary_finds_a_real_path_entry_and_rejects_a_bogus_name	ACTUAL		crates/portuale/src/ebuild_package.rs:1942	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+find_libs_to_preserve_preserves_nothing_when_there_are_no_real_consumers	ACTUAL		crates/portuale/src/needed_elf.rs:1952	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+graph_entries_real	ACTUAL		crates/portage-repo/src/lib.rs:51632	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_real	ACTUAL		crates/portage-repo/src/lib.rs:49608	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_real_changed_use	ACTUAL		crates/portage-repo/src/lib.rs:49930	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_real_err	ACTUAL		crates/portage-repo/src/lib.rs:49799	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_real_newuse	ACTUAL		crates/portage-repo/src/lib.rs:49864	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_real_nodeps	ACTUAL		crates/portage-repo/src/lib.rs:49996	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_real_with_test_deps	ACTUAL		crates/portage-repo/src/lib.rs:49674	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_result_real	ACTUAL		crates/portage-repo/src/lib.rs:50914	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_result_real_atoms	ACTUAL		crates/portage-repo/src/lib.rs:51570	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+graph_result_real_backtrack	ACTUAL		crates/portage-repo/src/lib.rs:51563	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+info_dirs_inodes_resolves_real_infopath_and_infodir_entries	ACTUAL		crates/portuale/src/env_update.rs:427	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset	ACTUAL		crates/portuale/src/ebuild_phases.rs:7379	actually computed A (doubt)
+install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_repo	ACTUAL		crates/portuale/src/ebuild_phases.rs:8227	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+install_lands_a_real_file_	ACTUAL		use-only (label/comment fragment)	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+install_lands_a_real_file_under_a_real_d	ACTUAL		crates/portuale/src/ebuild_phases.rs:6722	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+install_lands_a_real_file_under_a_real_d_via_real_bash	ACTUAL		crates/portuale/src/ebuild_phases.rs:7332	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+install_really_inherits_a_real_eclass_and_calls_its_own_function	ACTUAL		crates/portuale/src/ebuild_phases.rs:7677	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+install_writes_the_real_build_time_file	ACTUAL		crates/portuale/src/ebuild_phases.rs:6865	the actual BUILD_TIME file (doubt: could mean Portage's)
+is_protected_matches_only_under_a_real_protected_directory	ACTUAL		crates/portuale/src/ebuild_merge.rs:5926	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+list_candidates_reads_the_real_sub_slot_not_just_the_main_slot	ACTUAL		crates/portage-repo/src/lib.rs:40687	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+locate_candidate_finds_the_real_fixture_ebuild_file	ACTUAL		crates/portuale/src/emerge_build.rs:2805	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+merge_binpkg_installs_a_real_tbz2_into_the_vdb	ACTUAL		crates/portuale/src/emerge_getbinpkg.rs:1926	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+mergeblockerpkg_excludes_the_collision_via_a_real_blocker_atom	ACTUAL		crates/portuale/src/ebuild_merge.rs:9816	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+obj_key_uses_the_real_inode_when_the_object_exists	ACTUAL		crates/portuale/src/needed_elf.rs:1694	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+package_env_accepts_real_scalars_and_rejects_non_user_variables	ACTUAL		crates/portuale/src/ebuild_phases.rs:8722	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+packages_db_vdb_reader_reads_a_real_vdb_tree	ACTUAL		crates/mrg-director/src/lib.rs:1623	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+parse_eapi_defaults_to_0_when_the_first_real_line_is_not_an_assignment	ACTUAL		crates/portuale/src/ebuild_phases.rs:6599	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+parse_eapi_reads_the_first_real_lines_own_assignment	ACTUAL		crates/portuale/src/ebuild_phases.rs:6590	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+parse_manifest_reads_a_real_dist_line_with_both_hashes	ACTUAL		crates/portage-fetch/src/lib.rs:1531	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+parse_reads_a_real_minimal_five_field_line	ACTUAL		crates/portuale/src/needed_elf.rs:1412	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+parse_reads_the_real_gentoo_layout_conf	ACTUAL		crates/portage-fetch/src/layout.rs:420	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+parse_thirdpartymirrors_reads_a_real_grabdict_style_file	ACTUAL		crates/portage-fetch/src/lib.rs:1765	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+parse_treats_the_real_dash_sentinel_rpath_as_empty	ACTUAL		crates/portuale/src/needed_elf.rs:1445	genuine scanelf '-' sentinel (doubt)
+portage_python_is_the_shim_unless_real_mode	ACTUAL		crates/portuale/src/ebuild_phases.rs:6178	`real` = frozen env mode value PORTUALE_PYTHON_HELPERS=real
+read_xpak_metadata_reads_a_real_ebuild_package_tbz2	ACTUAL		crates/portuale/src/binpkg.rs:2944	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_bash_path	ACTUAL		crates/portuale/src/ebuild_phases.rs:3842	real bash vs embedded brush
+real_buildpkgonly_builds_a_real_binary_package_end_to_end	ACTUAL		crates/portuale/src/emerge_build.rs:3215	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry	ACTUAL		crates/portuale/src/emerge_build.rs:5576	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_buildpkgonly_with_keep_going_builds_past_a_failure	ACTUAL		crates/portuale/src/emerge_build.rs:5733	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_buildpkgonly_without_keep_going_stops_at_the_first_failure	ACTUAL		crates/portuale/src/emerge_build.rs:5689	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_filesdir	ACTUAL		crates/portuale/src/ebuild_phases.rs:486	real files dir vs fake link
+real_helpers	ACTUAL		crates/portuale/src/ebuild_phases.rs:865	local bool for PORTUALE_PYTHON_HELPERS=real mode value (frozen mode name)
+real_in_place_upgrade_via_ebuild_merge_replaces_the_old_slot_mate	ACTUAL		crates/portuale/src/ebuild_unmerge.rs:1727	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_log	ACTUAL		crates/portuale/src/emerge_build.rs:1994	actual (resolved) log dir
+real_merge_copies_a_real_needed_elf2_	ACTUAL		crates/portuale/src/needed_elf.rs:1415 (line-wrapped comment ref of real_merge_copies_a_real_needed_elf2_into_the_vdb)	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_merge_copies_a_real_needed_elf2_into_the_vdb	ACTUAL		crates/portuale/src/ebuild_merge.rs:9515	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_merge_creates_a_real_fifo_and_records_a_fif_contents_line	ACTUAL		crates/portuale/src/ebuild_merge.rs:9284	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_merge_invokes_a_real_root_scoped_ldconfig_when_one_is_present	ACTUAL		crates/portuale/src/ebuild_merge.rs:9467	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_merge_lands_files_and_a_symlink_and_writes_a_real_vdb_entry	ACTUAL		crates/portuale/src/ebuild_merge.rs:6674	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_merge_protects_a_locally_modified_etc_file_via_the_full_cli_path	ACTUAL		crates/portuale/src/ebuild_merge.rs:7302	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_merge_protects_a_locally_modified_etc_symlink_via_the_full_cli_path	ACTUAL		crates/portuale/src/ebuild_merge.rs:7353	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_merge_regenerates_env_update_outputs_from_its_own_env_d_entry	ACTUAL		crates/portuale/src/ebuild_merge.rs:9412	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_merge_writes_the_full_build_info_into_the_vdb_entry	ACTUAL		crates/portuale/src/ebuild_merge.rs:6842	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_mtime	ACTUAL		crates/portuale/src/binpkg.rs:3998	actual file mtime
+real_multi_instance_gpkg_works_without_the_checkout	ACTUAL		crates/portuale/src/helpers/gpkg.rs:2648	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_multi_instance_xpak_uses_the_dot_xpak_extension_and_scans_back	ACTUAL		crates/portuale/src/ebuild_package.rs:3132	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_multi_instance_xpak_works_without_the_checkout	ACTUAL		crates/portuale/src/helpers/xpak.rs:604	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_n	ACTUAL		crates/portage-repo/src/merge_order.rs:3871	count of real graph entries (not a Portage reference)
+real_package_builds_a_real_xpak_tbz2_and_a_real_packages_entry	ACTUAL		crates/portuale/src/ebuild_package.rs:2595	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_package_gpkg_works_without_the_checkout	ACTUAL		crates/portuale/src/helpers/gpkg.rs:2641	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_package_with_binpkg_multi_instance_writes_the_cat_pn_subdir_layout	ACTUAL		crates/portuale/src/ebuild_package.rs:2972	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_package_with_gpkg_format_builds_a_real_gpkg_tar_this_pilots_reader_round_trips	ACTUAL		crates/portuale/src/ebuild_package.rs:2890	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_package_xpak_works_without_the_checkout	ACTUAL		crates/portuale/src/helpers/xpak.rs:597	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_pf	ACTUAL		crates/portuale/src/binpkg.rs:2078	actual embedded PF
+real_resolved_use_flags_drive_dependency_recursion	ACTUAL		crates/portage-repo/src/lib.rs:49394	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_size	ACTUAL		crates/portuale/src/binpkg.rs:3997	actual file size
+real_tbz2	ACTUAL		crates/portuale/src/binpkg.rs:3993	actual fixture tbz2
+real_unmerge_drops_a_stale_conf_mem_entry_but_keeps_an_unrelated_one	ACTUAL		crates/portuale/src/ebuild_unmerge.rs:1674	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_unmerge_preserves_a_still_needed_shared_library	ACTUAL		crates/portuale/src/ebuild_merge.rs:9611	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+real_unmerge_removes_a_previously_real_merged_package	ACTUAL		crates/portuale/src/ebuild_unmerge.rs:1637	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+rebuild_dedups_the_same_real_object_reached_via_two_recorded_paths	ACTUAL		crates/portuale/src/needed_elf.rs:1658	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+recognizes_real_commands	ACTUAL		crates/portuale/src/ebuild_options.rs:143	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+refresh_real_merge_drops_a_remote_index_with_an_unparseable_timestamp	ACTUAL		crates/portuale/src/emerge_getbinpkg.rs:3106	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+refresh_real_merge_drops_a_remote_index_with_an_unsupported_version	ACTUAL		crates/portuale/src/emerge_getbinpkg.rs:3124	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+refresh_real_merge_drops_a_remote_index_without_a_timestamp	ACTUAL		crates/portuale/src/emerge_getbinpkg.rs:3088	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+refresh_real_merge_drops_a_remote_index_without_a_version	ACTUAL		crates/portuale/src/emerge_getbinpkg.rs:3142	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+refresh_real_merge_failure_drops_the_stale_cache	ACTUAL		crates/portuale/src/emerge_getbinpkg.rs:2873	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+refresh_real_merge_reads_a_file_binhost_with_an_unwritable_edb_cache	ACTUAL		crates/portuale/src/emerge_getbinpkg.rs:2746	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+remove_contents_removes_a_real_env_d_sourced_infopath_directory_not_named_info	ACTUAL		crates/portuale/src/ebuild_unmerge.rs:1540	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+resolve_pretend_matches_a_sub_slot_restricted_atom_against_the_real_sub_slot	ACTUAL		crates/portage-repo/src/lib.rs:40701	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+resolve_real	ACTUAL		crates/portage-repo/src/lib.rs:39901	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+resolve_real_changed_deps	ACTUAL		crates/portage-repo/src/lib.rs:40113	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+resolve_real_changed_slot	ACTUAL		crates/portage-repo/src/lib.rs:40444	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+resolve_real_changed_use	ACTUAL		crates/portage-repo/src/lib.rs:40000	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+resolve_real_newrepo	ACTUAL		crates/portage-repo/src/lib.rs:40511	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+resolve_real_newuse	ACTUAL		crates/portage-repo/src/lib.rs:39951	test helper: uses fixture's real resolved config vs synthetic test_config()/graph_empty
+restrict_and_properties_reads_and_use_reduces_the_real_md5_cache_entry	ACTUAL		crates/portuale/src/ebuild_phases.rs:6400	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+restrict_and_properties_reads_real_md5_cache	ACTUAL		crates/portuale/src/ebuild_phases.rs:6403 (TempDir label)	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+root_deps_adds_a_real_build_entry_for_an_unsatisfied_bdepend_with_a_visible_ebuild	ACTUAL		crates/portage-repo/src/lib.rs:45737	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+run_env_update_invokes_a_real_ldconfig_when_present_and_executable	ACTUAL		crates/portuale/src/env_update.rs:516	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+running_root_satisfies_atom_checks_the_given_roots_own_real_vdb	ACTUAL		crates/portage-repo/src/lib.rs:45489	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+under_a_real_d	ACTUAL		crates/portuale/src/ebuild_phases.rs:6722 (substring of test name)	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+verify_digests_accepts_a_real_matching_file	ACTUAL		crates/portage-fetch/src/lib.rs:1677	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+verify_gpkg_manifest_accepts_a_real_signed_container	ACTUAL		crates/portuale/src/binpkg.rs:3771	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+verify_gpkg_manifest_accepts_the_real_fixture	ACTUAL		crates/portuale/src/binpkg.rs:3242	real = actual/genuine (real file, real merge, fixture, pretend-vs-real)
+is_real_merge_command	ACTUAL-RENAME	is_merge_command	crates/portuale/src/ebuild_merge.rs:229	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_merge_command_covers_exactly_merge	ACTUAL-RENAME	is_merge_command_covers_exactly_merge	crates/portuale/src/ebuild_merge.rs:5268	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_package_command	ACTUAL-RENAME	is_package_command	crates/portuale/src/ebuild_package.rs:107	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_package_command_covers_exactly_package	ACTUAL-RENAME	is_package_command_covers_exactly_package	crates/portuale/src/ebuild_package.rs:1923	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_phase_command	ACTUAL-RENAME	is_phase_command	crates/portuale/src/ebuild_phases.rs:340	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_phase_command_covers_exactly_the_actionmap_deps_chain	ACTUAL-RENAME	is_phase_command_covers_exactly_the_actionmap_deps_chain	crates/portuale/src/ebuild_phases.rs:6641	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_qmerge_command	ACTUAL-RENAME	is_qmerge_command	crates/portuale/src/ebuild_merge.rs:237	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_qmerge_command_covers_exactly_qmerge	ACTUAL-RENAME	is_qmerge_command_covers_exactly_qmerge	crates/portuale/src/ebuild_merge.rs:5276	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_standalone_phase_command	ACTUAL-RENAME	is_standalone_phase_command	crates/portuale/src/ebuild_phases.rs:373	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_standalone_phase_command_covers_exactly_config_info_prerm_postrm	ACTUAL-RENAME	is_standalone_phase_command_covers_exactly_config_info_prerm_postrm	crates/portuale/src/ebuild_phases.rs:6668	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_unmerge_command	ACTUAL-RENAME	is_unmerge_command	crates/portuale/src/ebuild_unmerge.rs:161	real = real command vs stub/dry-run; ambiguous next to Portage
+is_real_unmerge_command_covers_exactly_unmerge	ACTUAL-RENAME	is_unmerge_command_covers_exactly_unmerge	crates/portuale/src/ebuild_unmerge.rs:920	real = real command vs stub/dry-run; ambiguous next to Portage
+REAL_INSTALL	FROZEN		external (shell var, comment at ebuild_phases.rs:3659)	shell var of Portage install-xattr wrapper (doc comment)
+Real	FROZEN		external	external enum variant PortagePackage::Real (non-virtual)
+dest_real	FROZEN		external (Portage vartree.py name, comments at ebuild_merge.rs:913)	Portage vartree.py Python variable named in doc comments
+real_quick_ratio	FROZEN		external (Python difflib, comment at difflib.rs:4)	Python difflib API name (comment only)
