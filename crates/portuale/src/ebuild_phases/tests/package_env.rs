@@ -1,10 +1,7 @@
 use super::*;
 
-/// Real `_grab_pkg_env`'s acceptance gate (`config.py:2269-2300`):
-/// every non-`USE` key is accepted unless it is in `env_blacklist`,
-/// `environ_filter`, the profile's dynamic `PROFILE_ONLY_VARIABLES`,
-/// or portuale's own `PORTUALE_COMPUTED` set. The live host capture
-/// behind this matrix is pmtest's `findings/l2.md` "#95 S0".
+/// Every non-`USE` key is accepted unless blacklisted, filtered,
+/// profile-only, or portuale-computed; see notes for the matrix source.
 #[test]
 fn package_env_accepts_real_scalars_and_rejects_non_user_variables() {
     let profile_only = vec![
@@ -29,29 +26,21 @@ fn package_env_accepts_real_scalars_and_rejects_non_user_variables() {
         ("INSTALL_MASK", "/usr/share/mask"),
         ("PORTAGE_NICENESS", "7"),
         ("__PROBE_LOCAL", "secret"),
-        // rejected: env_blacklist
         ("SLOT", "bogus"),
         ("DEPEND", "dev-libs/bogus"),
         ("RDEPEND", "dev-libs/bogus"),
         ("EAPI", "8"),
         ("ROOT", "/"),
         ("PKGUSE", "x"),
-        // rejected: global_only_vars + environ_filter
         ("CONFIG_PROTECT", "/protect"),
-        // rejected: environ_filter (accepted into real's config,
-        // never exported to a phase)
         ("ACCEPT_KEYWORDS", "~amd64"),
         ("CONFIG_PROTECT_MASK", "/mask"),
         ("USE_ORDER", "env"),
-        // rejected: `USE` has its own `package_env_use` path
         ("USE", "lto"),
-        // rejected: the profile's dynamic PROFILE_ONLY_VARIABLES
         ("ARCH", "x86"),
         ("ELIBC", "musl"),
         ("IUSE_IMPLICIT", "x"),
         ("USE_EXPAND", "VIDEO_CARDS"),
-        // rejected: PORTUALE_COMPUTED (FEATURES/PORTAGE_TMPDIR are
-        // residues #98/#99; the rest are portuale-owned)
         ("FEATURES", "probe-feature"),
         ("PORTAGE_TMPDIR", "/tmp/probe"),
         ("DISTDIR", "/d"),
@@ -95,14 +84,8 @@ fn package_env_accepts_real_scalars_and_rejects_non_user_variables() {
     );
 }
 
-/// Real's three-layer incremental semantics: `_grab_pkg_env` appends
-/// within the container (`container[k] += " " + v`), then
-/// `regenerate()` folds `[lower layers, pkg, calling-env]` with
-/// `-*`/`-tok` pruning and a sorted union (`config.py:2735`,
-/// `:2778-2825`) — the calling env folds last, so its `-tok` prunes
-/// a package.env token (S0 cell B) but not vice versa. The three
-/// host captures in pmtest's `findings/l2.md` "#95 S0" are the
-/// expected values for the first three arms (empty calling env).
+/// Incrementals fold `[lower layers, pkg, calling-env]` with `-tok`
+/// pruning and a sorted union; the calling env folds last.
 #[test]
 fn package_env_incrementals_fold_onto_the_base_like_regenerate() {
     let cpv = "dev-libs/penvccpkg-1.0:0/0";
@@ -116,16 +99,13 @@ fn package_env_incrementals_fold_onto_the_base_like_regenerate() {
             vec![("ENV_UNSET".to_string(), v.to_string())],
         )]
     };
-    // pkg prunes a base token, then the union is sorted.
     let out = match_package_env_vars(&one_file("-PROFILE_UNSET PKG_UNSET"), cpv, &[], &base, &[]);
     assert_eq!(
         out,
         vec![("ENV_UNSET".to_string(), "BASE_UNSET PKG_UNSET".to_string())]
     );
-    // `-*` clears every base token.
     let out = match_package_env_vars(&one_file("-* ONLY"), cpv, &[], &base, &[]);
     assert_eq!(out, vec![("ENV_UNSET".to_string(), "ONLY".to_string())]);
-    // Several matching files of one entry append in order.
     let two_files = vec![(
         "dev-libs/penvccpkg".to_string(),
         vec![
@@ -135,8 +115,6 @@ fn package_env_incrementals_fold_onto_the_base_like_regenerate() {
     )];
     let out = match_package_env_vars(&two_files, cpv, &[], &[], &[]);
     assert_eq!(out, vec![("ENV_UNSET".to_string(), "ONE TWO".to_string())]);
-    // A `-tok` in the calling-env layer prunes a pkg-layer token
-    // (S0 cell B: `FEATURES="-probe-feature"` beats the env file).
     let calling = vec![("ENV_UNSET".to_string(), "-PKG_UNSET".to_string())];
     let out = match_package_env_vars(&one_file("PKG_UNSET"), cpv, &[], &base, &calling);
     assert_eq!(
@@ -146,8 +124,6 @@ fn package_env_incrementals_fold_onto_the_base_like_regenerate() {
             "BASE_UNSET PROFILE_UNSET".to_string()
         )]
     );
-    // A pkg-layer `-tok` does NOT prune a calling-env token: the
-    // calling env folds last and re-adds it (S0 cell B's mirror).
     let calling = vec![("ENV_UNSET".to_string(), "KEEP".to_string())];
     let out = match_package_env_vars(&one_file("-KEEP PKG_UNSET"), cpv, &[], &base, &calling);
     assert_eq!(
@@ -159,10 +135,8 @@ fn package_env_incrementals_fold_onto_the_base_like_regenerate() {
     );
 }
 
-/// Scalars are set, not appended: a later file replaces, and an empty
-/// value blanks the variable (real `CC=""` in an env file leaves the
-/// phase's `CC` empty, S0 capture). A non-matching atom contributes
-/// nothing.
+/// Scalars are set, not appended: a later file replaces, an empty
+/// value blanks the variable, and a non-matching atom adds nothing.
 #[test]
 fn package_env_scalars_last_wins_and_empty_blanks() {
     let cpv = "dev-libs/penvccpkg-1.0:0/0";
@@ -190,11 +164,8 @@ fn package_env_scalars_last_wins_and_empty_blanks() {
     );
 }
 
-/// Real's `env`-over-`pkg` scalar precedence (`USE_ORDER`,
-/// `config.py:1031-1035`): a package.env scalar is dropped when the
-/// calling environment carries the same key, so the process value
-/// the caller already layered wins (backlog #101, S0 cell A). Keys
-/// the calling env does not carry still arrive.
+/// A package.env scalar is dropped when the calling environment
+/// carries the same key, so the caller-layered value wins.
 #[test]
 fn package_env_scalar_loses_to_the_calling_environment() {
     let cpv = "dev-libs/penvccpkg-1.0:0/0";
@@ -211,10 +182,7 @@ fn package_env_scalar_loses_to_the_calling_environment() {
 }
 
 /// The raw single-key matchers behind the `PORTUALE_COMPUTED`
-/// recomputes (#98/#99): scalars replace (last matching file wins),
-/// incrementals append across matching files in order, non-matching
-/// atoms and other keys contribute nothing — real `_grab_pkg_env`'s
-/// container behaviour without the acceptance gate or the fold.
+/// recomputes: scalars replace, incrementals append, other keys add nothing.
 #[test]
 fn package_env_raw_matchers_follow_the_container_semantics() {
     let cpv = "dev-libs/penvccpkg-1.0:0/0";

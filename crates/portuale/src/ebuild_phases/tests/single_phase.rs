@@ -1,11 +1,7 @@
 use super::*;
 
-/// Backlog #42: the real `clean` phase (`bin/ebuild.sh clean` ->
-/// `__dyn_clean`) is what real `_emerge/EbuildBuild._start_pre_clean`
-/// runs before every build. Given a stale `.installed` marker and a
-/// populated `image/` + `${T}`, it must remove all three -- exactly
-/// the state that made a rebuild silently skip `install` and
-/// repackage an already-`instprep`ped image (#38 S4).
+/// `clean` removes a stale `.installed` marker, a populated image,
+/// and `${T}`.
 #[test]
 fn run_clean_removes_a_stale_installed_marker_image_and_temp() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -51,9 +47,8 @@ fn run_clean_removes_a_stale_installed_marker_image_and_temp() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// `FEATURES=keepwork` (real `__dyn_clean`'s own guard): `clean`
-/// still drops the stale `.installed`/`image`, but keeps `${T}` and
-/// `WORKDIR` -- the documented real way to inspect a build.
+/// With `FEATURES=keepwork` `clean` still drops the stale
+/// `.installed`/`image` but keeps `${T}` and `WORKDIR`.
 #[test]
 fn run_clean_with_keepwork_keeps_temp_and_workdir_but_still_drops_the_marker() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -89,14 +84,8 @@ fn run_clean_with_keepwork_keeps_temp_and_workdir_but_still_drops_the_marker() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Real, end-to-end proof that standalone `config`/`info` (real
-/// `ebuild.rs`'s own routing to `run_single_phase`, see
-/// `is_standalone_phase_command`'s own doc comment) actually
-/// runs the real `pkg_config`/`pkg_info` phase functions -- not just
-/// that `run_single_phase` returns successfully. No `install` chain
-/// involved at all, matching real standalone usage (a real admin
-/// runs `ebuild <file> config` directly against an ebuild, with no
-/// merge/vdb step in the same invocation).
+/// Standalone `config`/`info` actually run the `pkg_config`/`pkg_info`
+/// phase functions, with no `install` chain involved.
 #[test]
 fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -148,16 +137,8 @@ fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Real, end-to-end proof that standalone `prerm`/`postrm` actually
-/// run the real `pkg_prerm`/`pkg_postrm` phase functions -- same
-/// shape as `run_single_phase_actually_runs_pkg_config_and_pkg_info`
-/// above, but for the two standalone commands that also have a real,
-/// separate internal use (`ebuild_unmerge::run_unmerge`, see
-/// `is_standalone_phase_command`'s own doc comment for why
-/// that internal use and this new standalone path are simply two
-/// independent ways to reach the same real phase function). No
-/// `unmerge`/vdb step involved at all here, matching real standalone
-/// usage.
+/// Standalone `prerm`/`postrm` actually run the `pkg_prerm`/`pkg_postrm`
+/// phase functions, with no `unmerge`/vdb step involved.
 #[test]
 fn run_single_phase_actually_runs_pkg_prerm_and_pkg_postrm() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))

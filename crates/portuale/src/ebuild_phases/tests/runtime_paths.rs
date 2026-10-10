@@ -2,10 +2,7 @@ use super::*;
 
 #[test]
 fn remove_bin_overlay_dir_is_idempotent() {
-    // Backlog #88: the `atexit` handler's contract -- removes a
-    // populated overlay, then silently tolerates the missing dir
-    // (double exit paths, or an overlay a previous run already
-    // reclaimed, must never fail).
+    // Double exit paths must never fail: remove, then tolerate missing.
     let dir = TempDir::new("portuale-bin-overlay-test").keep();
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
@@ -16,9 +13,8 @@ fn remove_bin_overlay_dir_is_idempotent() {
     assert!(!dir.exists());
 }
 
-/// Backlog #322, `resolve_bin_dir`'s order: a set override wins over
-/// the build tree; an override that is wrong is an error naming the
-/// variable and never falls through; an empty one is unset.
+/// A set override wins over the build tree; a wrong override errors
+/// naming the variable and never falls through; an empty one is unset.
 #[test]
 fn resolve_bin_dir_override_beats_the_build_tree_and_never_falls_through() {
     let tmp = TempDir::new("resolve-bin-dir-order");
@@ -42,27 +38,22 @@ fn resolve_bin_dir_override_beats_the_build_tree_and_never_falls_through() {
         );
     }
 
-    // A wrong override is refused even though the build tree is fine,
-    // and even though an embedded copy could stand in.
     let err = resolve_bin_dir(Some(none.to_str().unwrap()), &tree, true).unwrap_err();
     assert!(
         err.contains(BIN_DIR_VAR) && err.contains("ebuild.sh"),
         "{err}"
     );
     assert!(err.contains(none.to_str().unwrap()), "{err}");
-    // A directory without ebuild.sh is wrong too.
     std::fs::create_dir_all(tmp.join("empty")).unwrap();
     assert!(resolve_bin_dir(Some(tmp.join("empty").to_str().unwrap()), &tree, true).is_err());
 }
 
-/// Backlog #322: neither source present is a message with the three
-/// facts the user needs (what, where it looked, how to fix it) and no
-/// program prefix (callers add their own).
+/// With neither source present the error carries what was sought,
+/// where it looked, and how to fix it, with no program prefix.
 #[test]
 fn resolve_bin_dir_with_nothing_found_explains_itself() {
     let tmp = TempDir::new("resolve-bin-dir-missing");
     let gone = tmp.join("gone");
-    // No embedded copy: nothing on disk is an error that explains itself.
     let err = resolve_bin_dir(None, &gone, false).unwrap_err();
     assert!(err.contains("bin/ebuild.sh"), "{err}");
     assert!(err.contains(gone.to_str().unwrap()), "{err}");
@@ -74,9 +65,8 @@ fn resolve_bin_dir_with_nothing_found_explains_itself() {
     assert!(!err.contains('\n'), "one line: {err}");
 }
 
-/// Backlog #322 S2.3: with no override and no build tree, the embedded
-/// copy is the answer (never an error); a build tree that has the
-/// runtime still wins over it.
+/// With no override and no build tree the embedded copy is the
+/// answer; a build tree that has the runtime still wins over it.
 #[test]
 fn resolve_bin_dir_falls_back_to_the_embedded_copy_only_when_nothing_is_on_disk() {
     let tmp = TempDir::new("resolve-bin-dir-embedded");
@@ -96,11 +86,8 @@ fn resolve_bin_dir_falls_back_to_the_embedded_copy_only_when_nothing_is_on_disk(
     );
 }
 
-/// Backlog #322, end to end: a run that needs the phase runtime but
-/// is pointed at a directory without one exits 1 with one message --
-/// no panic, no abort (the release profile aborts on panic, which is
-/// what produced the core dump) -- and `mrg --remote-binpkg` does so
-/// before touching the client (here the local-transport ROOT).
+/// The scratch base skips noexec directories; with nothing usable
+/// the first candidate is returned so the caller's error names it.
 #[test]
 fn the_scratch_base_skips_noexec_directories() {
     let c = [
@@ -113,50 +100,37 @@ fn the_scratch_base_skips_noexec_directories() {
         PathBuf::from("/b")
     );
     assert_eq!(pick_scratch_base(&c, |_| true), PathBuf::from("/a"));
-    // Nothing usable: the first candidate, so the caller's error names it.
     assert_eq!(pick_scratch_base(&c, |_| false), PathBuf::from("/a"));
-    // The real probe treats a directory it cannot inspect as unusable.
+    // A directory that cannot be inspected counts as unusable.
     assert!(is_noexec(Path::new("/nonexistent-dir-xyz")));
 }
 
-/// Backlog #326 S1: the `PORTAGE_PYM_PATH` / `PORTAGE_PYTHONPATH`
-/// decision factored out of `phase_env_vars` / `invoke_dyn_package` --
-/// a checkout whose `lib/portage` is a dir yields that `lib`, anything
-/// else yields the `/` fallback (resp. no `PORTAGE_PYTHONPATH`). No
-/// process-env mutation: the checkout path is passed in directly.
+/// A checkout whose `lib/portage` is a dir yields that `lib`, anything
+/// else yields the `/` fallback (resp. no `PORTAGE_PYTHONPATH`).
 #[test]
 fn pym_path_and_pythonpath_values_follow_the_checkout() {
     let tmp = TempDir::new("ebuild-phases-test-pym-path-values");
-    // A checkout with `lib/portage/` -> both return the lib path.
     let with = tmp.join("with");
     std::fs::create_dir_all(with.join("lib/portage")).unwrap();
     let lib = with.join("lib").display().to_string();
     assert_eq!(pym_path_value(&with), lib);
     assert_eq!(pythonpath_value(&with), Some(lib));
-    // A temp dir without it -> "/" and None.
     let without = tmp.join("without");
     std::fs::create_dir_all(&without).unwrap();
     assert_eq!(pym_path_value(&without), "/");
     assert_eq!(pythonpath_value(&without), None);
-    // A dir with `lib/` but no `lib/portage` -> "/" and None.
     let bare_lib = tmp.join("bare-lib");
     std::fs::create_dir_all(bare_lib.join("lib")).unwrap();
     assert_eq!(pym_path_value(&bare_lib), "/");
     assert_eq!(pythonpath_value(&bare_lib), None);
-    // A nonexistent path -> "/" and None.
     let gone = tmp.join("gone");
     assert!(!gone.exists());
     assert_eq!(pym_path_value(&gone), "/");
     assert_eq!(pythonpath_value(&gone), None);
 }
 
-/// #37 S2 step 2: `extra_env` carries the resolved `FEATURES` and is
-/// appended last, so it must win over `phase_env_vars`' own
-/// `phase_features_value()` base (the raw process env). Verified as
-/// brush *script composition* here; the real-phase execution proof
-/// is `emerge_build::tests::source_merge_with_resolved_config_
-/// threads_use_and_slot_into_the_phase` (which asserts the
-/// `FEATURES=` marker under both backends).
+/// `extra_env` `FEATURES` is exported last so it wins over the
+/// process-env base.
 #[test]
 fn phase_setup_script_exports_extra_env_features_last() {
     let ebuild = Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -2,11 +2,9 @@ use super::*;
 
 #[test]
 fn sandbox_wrapped_command_configures_the_real_addrconfig_workaround_addresses() {
-    // Real `_configure_loopback_interface` (`process.py:838-871`,
-    // bug #690758): `ip link set lo up` plus a real, non-loopback-
-    // looking address per family, so glibc's `getaddrinfo()` with
-    // `AI_ADDRCONFIG` set doesn't return spuriously empty results
-    // for a build that only ever talks to `localhost`.
+    // Portage: process.py, _configure_loopback_interface.
+    // Non-loopback-looking addresses so getaddrinfo with AI_ADDRCONFIG
+    // still resolves a build that only talks to localhost.
     let iso = Isolation {
         net: true,
         ipc: false,
@@ -27,35 +25,26 @@ fn sandbox_wrapped_command_configures_the_real_addrconfig_workaround_addresses()
 
 #[test]
 fn network_sandbox_exempt_matches_portage_doebuild_spawns_own_formula() {
-    // PROPERTIES=live only exempts the unpack phase.
     assert!(network_sandbox_exempt("unpack", "", "live"));
     assert!(!network_sandbox_exempt("compile", "", "live"));
     assert!(!network_sandbox_exempt("test", "", "live"));
 
-    // PROPERTIES=test_network only exempts the test phase.
     assert!(network_sandbox_exempt("test", "", "test_network"));
     assert!(!network_sandbox_exempt("unpack", "", "test_network"));
 
-    // RESTRICT=network-sandbox exempts every phase.
     assert!(network_sandbox_exempt("unpack", "network-sandbox", ""));
     assert!(network_sandbox_exempt("compile", "network-sandbox", ""));
     assert!(network_sandbox_exempt("test", "network-sandbox", ""));
 
-    // None of the three -> not exempt.
     assert!(!network_sandbox_exempt("unpack", "", ""));
     assert!(!network_sandbox_exempt("test", "", ""));
 
-    // USE-conditional groups already dropped by the time these
-    // strings arrive (restrict_and_properties's own job) -- a raw
-    // conditional token string is simply never matched.
+    // USE-conditional groups are already reduced away upstream.
     assert!(!network_sandbox_exempt("unpack", "", "foo? ( live )"));
 }
 
-/// #37 S3: the phase-execution gates read the **resolved** `FEATURES`
-/// threaded on `extra_env` (`features_string`), never the raw process
-/// env -- a `make.conf` `-sandbox` disables the sandbox even when the
-/// calling env exports `sandbox`. The helpers take the features string
-/// as a parameter precisely so this is directly testable.
+/// The phase-execution gates read the resolved `FEATURES` from
+/// `extra_env`, never the raw process env.
 #[test]
 fn feature_gates_use_the_resolved_features_string() {
     assert!(!feature_token_present("buildpkg", "sandbox"));
@@ -64,8 +53,6 @@ fn feature_gates_use_the_resolved_features_string() {
     assert!(network_sandbox_requested("network-sandbox"));
     assert!(!fs_sandbox_requested(""));
     assert!(fs_sandbox_requested("usersandbox"));
-    // The extra_env pair wins over the process env (here: whatever the
-    // test runner exported); an absent pair falls back to it.
     assert_eq!(
         features_string(&[("FEATURES".to_string(), "".to_string())]),
         ""

@@ -30,12 +30,8 @@ fn restrict_and_properties_is_empty_outside_any_repo_checkout() {
     );
 }
 
-/// `compute_environment` reads `INHERITED` from the ebuild's own
-/// `metadata/md5-cache` entry (real `porttree.py:872`) so
-/// `phase_env_vars` can export it and `bin/ebuild.sh` can snapshot it
-/// into `__INHERITED_QA_CACHE` -- suppressing the spurious
-/// `Eclass '…' inherited illegally` QA notice on a phase re-source.
-/// `dev-libs/eclasspkg`'s fixture cache carries `INHERITED=pilotcheck`.
+/// Reads `INHERITED` from the md5-cache entry so phase re-sourcing
+/// skips the spurious `Eclass inherited illegally` QA notice.
 #[test]
 fn compute_environment_reads_inherited_from_the_md5_cache() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -43,7 +39,6 @@ fn compute_environment_reads_inherited_from_the_md5_cache() {
     let env = compute_environment(&ebuild_path, Path::new("/var/tmp/portage")).unwrap();
     assert_eq!(env.inherited.as_deref(), Some("pilotcheck"));
 
-    // A standalone ebuild outside any repo -> no md5-cache -> None.
     let tmp = TempDir::new("ebuild-phases-test-inherited-none").keep();
     let pkg_dir = tmp.join("dev-libs/standalone");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -56,9 +51,8 @@ fn compute_environment_reads_inherited_from_the_md5_cache() {
 
 #[test]
 fn compute_environment_links_builddir_files_to_the_repo_filesdir() {
-    // Real `_prepare_fake_filesdir`: FILESDIR is builddir/files, a
-    // symlink to the ebuild's own repo `files/`. Without it every
-    // ebuild patch via `eapply` dies (L2 S5).
+    // Portage: _prepare_fake_filesdir. Without the link every
+    // ebuild patch via `eapply` dies.
     let tmp = TempDir::new("ebuild-phases-test-filesdir").keep();
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("repo/dev-libs/patchpkg");
@@ -71,7 +65,7 @@ fn compute_environment_links_builddir_files_to_the_repo_filesdir() {
     assert_eq!(std::fs::read_link(env.filesdir()).unwrap(), expected);
     assert!(env.filesdir().join("fix.patch").is_file());
 
-    // Re-running must be idempotent (real unlinks a stale target).
+    // Re-running must be idempotent (Portage unlinks a stale target).
     let env2 = compute_environment(&pkg_dir.join("patchpkg-1.0.ebuild"), &portage_tmp).unwrap();
     assert_eq!(std::fs::read_link(env2.filesdir()).unwrap(), expected);
     let _ = std::fs::remove_dir_all(&tmp);
@@ -79,12 +73,8 @@ fn compute_environment_links_builddir_files_to_the_repo_filesdir() {
 
 #[test]
 fn compute_environment_links_builddir_files_even_without_a_repo_filesdir() {
-    // Backlog #94: real `_prepare_fake_filesdir` links
-    // unconditionally -- a missing repo `files/` must yield a
-    // dangling symlink, never a plain directory (whose `rm -f` in
-    // `__dyn_clean` fails with "Is a directory" and aborts the
-    // rest of the cleanup under `set -e`, leaving `/var/tmp`
-    // residue -- host `emerge -1 sys-libs/timezone-data`).
+    // A missing repo `files/` yields a dangling symlink, never a
+    // plain directory (whose cleanup aborts under `set -e`).
     let tmp = TempDir::new("ebuild-phases-test-filesdir-missing").keep();
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("repo/sys-libs/notimezonefiles");
@@ -108,8 +98,6 @@ fn compute_environment_links_builddir_files_even_without_a_repo_filesdir() {
             .file_type()
             .is_symlink()
     );
-    // ... and `create_directories` must leave the dangling link
-    // alone instead of failing on it (or materialising the target).
     create_directories(&env).unwrap();
     assert!(
         std::fs::symlink_metadata(env.filesdir())
@@ -123,16 +111,13 @@ fn compute_environment_links_builddir_files_even_without_a_repo_filesdir() {
 
 #[test]
 fn compute_environment_replaces_a_stale_plain_filesdir_with_the_link() {
-    // Migration path for pre-fix residue: a plain directory left at
-    // builddir/files (the shape `__dyn_clean` choked on) becomes the
-    // symlink again instead of erroring.
+    // A stale plain dir left at builddir/files becomes the symlink again.
     let tmp = TempDir::new("ebuild-phases-test-filesdir-stale-dir").keep();
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("repo/dev-libs/dirpkg");
     std::fs::create_dir_all(pkg_dir.join("files")).unwrap();
     std::fs::write(pkg_dir.join("dirpkg-1.0.ebuild"), "EAPI=8\nSLOT=0\n").unwrap();
     let portage_tmp = tmp.join("ptmp");
-    // Pre-seed the stale plain dir where the builddir will be.
     let builddir = portage_tmp.join("portage/dev-libs/dirpkg-1.0");
     std::fs::create_dir_all(builddir.join("files")).unwrap();
     let env = compute_environment(&pkg_dir.join("dirpkg-1.0.ebuild"), &portage_tmp).unwrap();
@@ -143,10 +128,8 @@ fn compute_environment_replaces_a_stale_plain_filesdir_with_the_link() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Real `_prepare_fake_distdir` (`prepare_build_dirs.py:518-549`):
-/// entries that are not a symlink named in `A` (a stale symlink, a
-/// stray directory, a plain file) are removed, a symlink with the wrong
-/// target is recreated, a correct one is kept.
+/// Ports Portage's `_prepare_fake_distdir`: entries that are not a
+/// symlink named in `A` are removed and wrong-target symlinks recreated.
 #[test]
 fn prepare_fake_distdir_prunes_and_relinks_like_portage() {
     use std::os::unix::fs::symlink;
@@ -181,7 +164,6 @@ fn prepare_fake_distdir_prunes_and_relinks_like_portage() {
             Path::new("/real").join(x)
         );
     }
-    // The correct link was left alone, not recreated.
     use std::os::unix::fs::MetadataExt;
     let after = std::fs::symlink_metadata(fake.join("keep")).unwrap();
     assert_eq!(before.ino(), after.ino());
@@ -189,10 +171,8 @@ fn prepare_fake_distdir_prunes_and_relinks_like_portage() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// `compute_environment` derives `PORTAGE_BUILDDIR` as
-/// `<tmpdir>/portage/<cat>/<pf>`, so a matched per-package tmpdir
-/// puts the whole build tree under it (S0 cell D's
-/// `PORTAGE_BUILDDIR` half).
+/// `PORTAGE_BUILDDIR` derives from the given tmpdir, so a matched
+/// per-package tmpdir moves the whole build tree under it.
 #[test]
 fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
     let probe = TempDir::new("ebuild-phases-test-compute_environment_builddir").keep();

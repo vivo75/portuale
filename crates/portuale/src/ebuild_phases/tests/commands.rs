@@ -1,14 +1,9 @@
 use super::*;
 
-/// End-to-end proof: a real `install` run against the real fixture
-/// ebuild (`fixtures/repo/dev-libs/phasepkg`, whose own
-/// `src_install` calls real `insinto`/`doins`) actually lands a real
-/// file under a real `${D}`, via the real, unmodified `bin/*.sh`
-/// this module drives -- not a mock of any kind. A fresh, uniquely
-/// named `PORTAGE_TMPDIR` per test run (passed directly to
-/// `run_commands`, never via the environment -- see its own doc
-/// comment for why) keeps this safe to run alongside other tests in
-/// the same process.
+/// End-to-end proof: a real `install` run against the fixture ebuild
+/// lands a file under `${D}` via the unmodified `bin/*.sh`, not a mock.
+/// A fresh `PORTAGE_TMPDIR` per run (passed directly, never via the
+/// environment) keeps this safe alongside parallel tests.
 #[test]
 fn install_lands_a_real_file_under_a_real_d() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -43,12 +38,8 @@ fn install_lands_a_real_file_under_a_real_d() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// #308: an in-process `Brush` phase must not leave its umask behind.
-/// `bin/ebuild.sh` runs `umask 022` and brush's builtin is the
-/// process-wide `umask(2)`; real runs each phase in its own process.
-/// The test moves the umask, which would itself race every parallel
-/// test's file modes, so the body runs in a re-executed child of this
-/// test binary (`PORTUALE_UMASK_CHILD`) and the parent only checks it.
+/// An in-process `Brush` phase must not leak its umask into the host
+/// process; the body runs in a re-executed child (`PORTUALE_UMASK_CHILD`).
 #[test]
 fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
     if std::env::var_os("PORTUALE_UMASK_CHILD").is_none() {
@@ -93,17 +84,9 @@ fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Backlog #190 (S0 repro): real `bin/phase-functions.sh`'s
-/// `__dyn_install` -- like its `prepare`/`configure`/`compile`/
-/// `test` twins (`phase-functions.sh:444,480,512,546,638`) -- dies
-/// with `The source directory '${S}' doesn't exist` when `S` is not
-/// a directory. The default is `S=${WORKDIR}/${P}`
-/// (`bin/ebuild.sh:500`); EAPI 8 has no `${WORKDIR}` fallback
-/// (`bin/eapi.sh:8`: `___eapi_has_S_WORKDIR_fallback` is EAPI 0-3
-/// only), and with `A` empty but `src_install` defined,
-/// `__has_phase_defined_up_to install` is true, so neither
-/// fallback fires and the phase dies. A source-less ebuild with no
-/// `S` must therefore fail the `install` run with real's message.
+/// A source-less ebuild with no `S` fails `install` with Portage's
+/// `The source directory '${S}' doesn't exist`.
+/// Portage: phase-functions.sh, __dyn_install.
 #[test]
 fn install_dies_like_portage_when_s_is_missing() {
     let tmp = TempDir::new(&format!(
@@ -147,11 +130,8 @@ fn install_dies_like_portage_when_s_is_missing() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #47: real `_post_src_install_write_metadata`
-/// (`doebuild.py:2727-2732`) writes `build-info/BUILD_TIME` (epoch
-/// seconds) before any metadata key, and the vdb copy +
-/// `_consolidate_to_metadata_file` carry it. The install chain must
-/// leave that file behind for the merge to copy.
+/// The install chain writes `build-info/BUILD_TIME` before any metadata
+/// key, for the merge to copy (Portage: doebuild.py, _post_src_install_write_metadata).
 #[test]
 fn install_writes_the_real_build_time_file() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -188,16 +168,10 @@ fn install_writes_the_real_build_time_file() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Real, end-to-end proof of the `binpkg-docompress` transform path
-/// (#38 S1): with `PORTAGE_COMPRESS=bzip2` and `FEATURES=binpkg-
-/// docompress` in the phase env, real, unmodified `install_qa_check`
-/// (`misc-functions.sh:147-152`) runs real `bin/ecompress` over
-/// `${D}` -- the >128 B doc (the `PORTAGE_DOCOMPRESS_SIZE_LIMIT`)
-/// becomes `BIG.txt.bz2`, the smaller one is untouched, and the
-/// dangling link into the now-compressed doc is repaired (and
-/// suffixed) by `ecompress`'s own `fix_symlinks`. Uses the default
-/// `bash` backend (`ShellBackend::Bash`), the same one a live
-/// `emerge` runs.
+/// End-to-end proof of the `binpkg-docompress` path: with
+/// `PORTAGE_COMPRESS=bzip2` and `FEATURES=binpkg-docompress`, big docs
+/// compress, small ones don't, and dangling links are repaired.
+/// Uses the `bash` backend, like a live `emerge`.
 #[test]
 fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
     if std::process::Command::new("bzip2")
@@ -254,12 +228,8 @@ fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// #38 S4: the merge-time `instprep` phase (`misc-functions.sh:
-/// 265-308`) is the complement of the `install_qa_check` gate. With
-/// `binpkg-docompress` absent the install chain leaves `BIG.txt`
-/// plain; `run_instprep` with the token present is a no-op (real's
-/// `! contains_word` gate), and without it compresses the doc and
-/// repairs the link, then marks `.instprepped` so a re-run skips.
+/// The merge-time `instprep` phase complements the `install_qa_check`
+/// gate and is idempotent through `.instprepped`.
 #[test]
 fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
     if std::process::Command::new("bzip2")
@@ -340,17 +310,9 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Real, end-to-end proof that `_post_phase_cmds["install"]`
-/// (`EbuildPhase.py:424`/`442-461`) actually runs now: real,
-/// unmodified `bin/misc-functions.sh install_qa_check`'s own real
-/// `95empty-dirs` QA check (`bin/install-qa-check.d/95empty-dirs`)
-/// strips a genuinely empty directory from the install image for
-/// any EAPI 8+ ebuild (real `___eapi_has_strict_keepdir`,
-/// unconditional, not gated on any `FEATURES` flag) -- a bare
-/// `dodir` with nothing ever installed into it must be gone from
-/// `${D}` by the time `install` finishes, while a `keepdir`'d one
-/// (the real ebuild-author idiom this QA check's own message
-/// recommends) survives untouched.
+/// End-to-end proof that the `install` post-phase QA runs: the
+/// `95empty-dirs` check strips a genuinely empty dir for EAPI 8+
+/// while a `keepdir`'d one survives.
 #[test]
 fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_dir() {
     let tmp =
@@ -405,11 +367,8 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// `ShellBackend::Bash` counterpart of `install_lands_a_real_file_
-/// under_a_real_d` above -- same fixture, same assertions, proving
-/// the real `bash <bin_dir>/ebuild.sh <phase>` subprocess backend
-/// (`run_one_phase_bash`) produces an identical real result to the
-/// embedded-brush backend, not just that it runs without erroring.
+/// `ShellBackend::Bash` counterpart of the brush proof above: same
+/// fixture, same assertions, identical result.
 #[test]
 fn install_lands_a_real_file_under_a_real_d_via_real_bash() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -444,19 +403,9 @@ fn install_lands_a_real_file_under_a_real_d_via_real_bash() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Real, end-to-end proof of `fetch_sources`'s own `A`/`AA`
-/// computation through the real CLI path, deterministic and
-/// offline: `dev-libs/verifiedfetchpkg`'s own real, checked-in
-/// `Manifest` entry matches a payload file this test pre-seeds into
-/// `DISTDIR` (the real, valid BLAKE2b-512/SHA-512 digests of the
-/// literal bytes `"hello from verifiedfetchpkg\n"`, confirmed via
-/// the real `b2sum`/`sha512sum` system tools) -- so the "already
-/// verified" skip-fetch path fires and no real network access is
-/// attempted at all, while still exercising the full real SRC_URI
-/// grammar: an arrow-rename (`-> verifiedfetchpkg-1.0.tar.gz`) and a
-/// `test?` USE-conditional group that must stay excluded from `A`
-/// (portuale's own always-empty USE set) but still appear in
-/// `AA` (real PMS's own "every file regardless of USE" definition).
+/// End-to-end proof of `fetch_sources`' `A`/`AA` through the CLI path,
+/// offline: a pre-seeded verified distfile takes the skip-fetch path.
+/// `A` excludes the `test?` group; `AA` keeps every file regardless of USE.
 #[test]
 fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -497,25 +446,19 @@ fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
     let marker = portage_tmpdir.join("portage/dev-libs/verifiedfetchpkg-1.0/temp/fetch-vars.txt");
     let observed = std::fs::read_to_string(&marker)
         .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
-    // `AA` is unset: real `config.environ()` pops it for every
-    // EAPI >= 4 (`config.py:3331-3333`); the EAPI floor here is 5+.
+    // `AA` is unset: Portage's `config.environ()` pops it for EAPI >= 4,
+    // and the floor here is 5+.
     // The ebuild's own `echo "AA=${AA}"` therefore writes an empty
-    // value, matching a real EAPI-8 phase.
+    // value, matching an EAPI-8 phase.
     assert_eq!(observed, "A=verifiedfetchpkg-1.0.tar.gz\nAA=\n");
 
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
     let _ = std::fs::remove_dir_all(&distdir);
 }
 
-/// #329 end to end in a phase: under `FEATURES=xattr` a phase's
-/// `doexe` and plain `install` reach `ebuild-helpers/xattr/install`
-/// first, and with `PORTAGE_INSTALL_XATTR_IMPLEMENTATION=python` (set
-/// by the ebuild; real does not whitelist it) the wrapper runs
-/// `install.py` through `portuale-python`, portuale's native one. The
-/// image files keep the source's `user.*` xattr; without `xattr`
-/// they lose it. Real Portage does the same in the bed image (pmtest
-/// `differential-test-bed/scripts/329-xattr.sh`, both with and
-/// without `-xattr`).
+/// End to end in a phase: under `FEATURES=xattr` installs reach
+/// `ebuild-helpers/xattr/install` first and keep `user.*` xattr;
+/// without `xattr` they lose it.
 #[test]
 fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
     use std::os::unix::ffi::OsStrExt;
@@ -582,15 +525,9 @@ fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Real, end-to-end proof of `eclass_locations_value`: `dev-libs/
-/// eclasspkg` really `inherit`s a real (if fixture-only) eclass,
-/// `pilotcheck.eclass`, via real, unmodified `bin/ebuild.sh`'s own
-/// `inherit()` function -- previously portuale never populated
-/// `PORTAGE_ECLASS_LOCATIONS` at all, so this would have `die`d
-/// immediately with `"pilotcheck.eclass could not be found by
-/// inherit()"`. `src_install` calls a real function the eclass
-/// defines (`pilotcheck_hello`), proving the eclass's own content
-/// -- not just its own existence -- is really usable afterward.
+/// End-to-end proof of `eclass_locations_value`: the fixture ebuild
+/// inherits `pilotcheck.eclass` via `bin/ebuild.sh`'s `inherit()` and
+/// calls a function it defines.
 #[test]
 fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -624,14 +561,9 @@ fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// B2: a saved `${T}/environment` that does not parse must fail the
-/// next phase loudly -- real `bin/ebuild.sh:580`'s own `source
-/// "${T}"/environment || die "error sourcing environment"` -- never
-/// silently continue and run the `default` phase function against a
-/// half-loaded environment (the #38 G3 smoke's empty image with rc 0).
-/// `run_single_phase` runs exactly one phase, with no `actionmap_deps`
-/// chain that would re-save a fresh environment first: the same shape
-/// a real builddir resume has when portage starts the next phase.
+/// A saved `${T}/environment` that does not parse fails the next phase
+/// loudly instead of running `default` against a half-loaded env.
+/// Portage: bin/ebuild.sh, ebuild environment sourcing.
 #[test]
 fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -698,15 +630,8 @@ fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// B3: real `bin/phase-functions.sh`'s `__filter_readonly_variables`
-/// lists bash's special variables by running `env -i -- "${BASH}" -c
-/// …`, so the embedded brush shell must carry a real `$BASH` -- and
-/// brush's own brace expansion must produce that list's fields even
-/// under the function's own `local IFS` (the two brush-side fixes are
-/// both `brush-pin.md`'s tracked work). When either is missing, the
-/// saved `${T}/environment` carries `BASHOPTS`/`EUID`/`PPID`/
-/// `SHELLOPTS`/`UID`, and re-sourcing it prints `cannot mutate
-/// readonly variable` (plus `env: ''` when `$BASH` itself is empty).
+/// The saved `${T}/environment` carries no bash special variables, so
+/// re-sourcing it prints no `cannot mutate readonly variable`.
 #[test]
 fn brush_phase_env_is_filtered_of_bash_special_variables() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -760,12 +685,8 @@ fn brush_phase_env_is_filtered_of_bash_special_variables() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// B4: declaration builtins must assignment-expand an expanded name
-/// (brush fix 06, backlog #94). `export ${var}=value` silently
-/// no-op'd under brush, so `_tc-getPROG`-shaped code saw empty
-/// variables; the fixture's `src_install` dies unless the expanded
-/// export arrived. Both backends must install it and agree on the
-/// installed file set, not merely on the exit code.
+/// Declaration builtins assignment-expand an expanded name in both
+/// backends; the fixture dies unless the expanded export arrived.
 #[test]
 fn expanded_name_export_assigns_in_both_backends() {
     fn image_file_set(image: &Path) -> Vec<String> {
@@ -848,12 +769,8 @@ fn expanded_name_export_assigns_in_both_backends() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Real, end-to-end proof that the masters-chain fix actually
-/// unblocks a real `inherit()` call real `PORTAGE_ECLASS_LOCATIONS`
-/// resolution alone couldn't reach before: an overlay ebuild
-/// inheriting an eclass that only exists in its own master repo,
-/// never redeclared locally -- exactly the real gap this module's
-/// own doc comment (before this slice) named as out of scope.
+/// End-to-end proof that the masters chain unblocks an `inherit()` of
+/// an eclass existing only in the overlay's master repo.
 #[test]
 fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_repo() {
     let tmp = TempDir::new("ebuild-phases-test-eclass_masters_e2e").keep();
@@ -925,18 +842,8 @@ fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_re
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Real, not simulated (task #56): passing `debug: true` really
-/// exports `PORTAGE_DEBUG=1` into the phase's own environment (see
-/// `run_one_phase`'s own setup block) -- proven here by having the
-/// fixture's own `src_install` record the value it actually observed,
-/// rather than asserting on captured `set -x` trace output (which
-/// would need redirecting the whole test process's stdout/stderr, a
-/// much heavier and flakier mechanism for the same underlying claim).
-/// Real `bin/ebuild.sh:479`'s own `[[ ${PORTAGE_DEBUG} == 1 ]]` guard
-/// is what turns this exported value into the real `set -x` xtrace a
-/// human running `ebuild <file> install --debug` directly would see;
-/// that guard itself is real, unmodified bash portuale doesn't
-/// reimplement, so proving the export is correct is sufficient here.
+/// Passing `debug: true` exports `PORTAGE_DEBUG=1` into the phase's
+/// environment, proven via the value the fixture observed.
 #[test]
 fn debug_flag_exports_portage_debug() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -974,14 +881,9 @@ fn debug_flag_exports_portage_debug() {
     }
 }
 
-/// Real `config.environ()` (`lib/portage/package/ebuild/config.py:3403-3409`)
-/// exports `PORTAGE_ACTUAL_DISTDIR` as the real `DISTDIR`, and
-/// `bin/ebuild-helpers/doins:80-82` passes it as `doins.py --distdir`.
-/// Without it `--distdir` defaults to `""`, which `_parse_args` turns
-/// into `b"/"`, so `doins -r` dereferences every absolute symlink.
-/// A dangling one (porttest/helper-doins's `abs-link`, found by the
-/// #326 Z nopy leg) then fails with `FileNotFoundError`, while real
-/// Portage installs the link as a link.
+/// Phases export `PORTAGE_ACTUAL_DISTDIR` as `DISTDIR` for `doins.py
+/// --distdir`; without it absolute symlinks dereference and fail.
+/// Portage: config.py, config.environ.
 #[test]
 fn phases_export_portage_actual_distdir_so_doins_keeps_absolute_symlinks() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1020,14 +922,8 @@ fn phases_export_portage_actual_distdir_so_doins_keeps_absolute_symlinks() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Real gives every phase `DISTDIR=${PORTAGE_BUILDDIR}/distdir` -- one
-/// symlink per file of the package's own `A` (`_prepare_fake_distdir`,
-/// `prepare_build_dirs.py:518-549`) -- and the real directory in
-/// `PORTAGE_ACTUAL_DISTDIR` (`config.py:3403-3409`). A distfile that is
-/// in the real distdir but not in this package's `A` is not visible
-/// through `DISTDIR`. Expected values: real Portage's source above, and
-/// real `ebuild --skip-manifest <fixture> install` (Portage 3.0.82.2 on
-/// the dev host, same two distfiles) writing the same four lines.
+/// Every phase sees `DISTDIR` as symlinks of its own `A` only, with the
+/// directory itself in `PORTAGE_ACTUAL_DISTDIR`; foreign distfiles hide.
 #[test]
 fn phases_see_the_per_package_fake_distdir() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1043,7 +939,7 @@ fn phases_see_the_per_package_fake_distdir() {
         b"hello from fakedistdirpkg\n",
     )
     .unwrap();
-    // In the real distdir, not in this package's SRC_URI.
+    // Present in the distdir but not in this package's SRC_URI.
     std::fs::write(distdir.join("frs-1.0.tar.gz"), b"unrelated\n").unwrap();
 
     let status = run_commands(RunCommandsArgs {
@@ -1077,10 +973,8 @@ fn phases_see_the_per_package_fake_distdir() {
     let _ = std::fs::remove_dir_all(&distdir);
 }
 
-/// Real `doebuild.py:1463-1469`: the fake distdir is prepared for a
-/// command other than `setup` unless `FEATURES=noauto`; a
-/// `setup`-only chain, or any chain under `noauto` that has no
-/// `install`/`unpack`, creates none.
+/// The fake distdir is prepared for a command other than `setup`
+/// unless `FEATURES=noauto`.
 #[test]
 fn fake_distdir_is_prepared_only_when_portage_prepares_it() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1122,14 +1016,8 @@ fn fake_distdir_is_prepared_only_when_portage_prepares_it() {
     }
 }
 
-/// `pretend` alone (the shortest real prerequisite chain -- see
-/// `phase_prerequisites`) still exercises the full real
-/// environment-setup + `bin/ebuild.sh`-sourcing + `__ebuild_main`
-/// path without needing `src_install` at all, proving the slice
-/// works even for an ebuild with no explicitly defined phases (every
-/// phase function `phasepkg` doesn't define comes from real EAPI
-/// defaults, ported here for free -- see this module's own doc
-/// comment).
+/// `pretend` alone still runs environment setup + `bin/ebuild.sh`
+/// sourcing, even for an ebuild with no explicitly defined phases.
 #[test]
 fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1158,12 +1046,9 @@ fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// `FEATURES=compress-build-logs` pump round-trip (real
-/// `EbuildPhase._open_log`'s `gzip.GzipFile(mode="ab")`): bytes
-/// written to the sink's two handles land gzip-encoded in the
-/// `.gz` file -- one member per `open_log_file` call, so a second
-/// call appends a second member -- and decode back losslessly. A
-/// plain path still writes through unencoded.
+/// `FEATURES=compress-build-logs` pump round-trip: bytes land
+/// gzip-encoded (one member per call, appended) and decode losslessly.
+/// Portage: EbuildPhase, _open_log.
 #[test]
 fn open_log_file_gzip_pump_round_trips() {
     use std::io::{Read, Write};
@@ -1194,7 +1079,7 @@ fn open_log_file_gzip_pump_round_trips() {
         .read_to_string(&mut decoded)
         .expect("gz log decodes");
     // Both members, both streams -- stdout/stderr chunk order
-    // across the two pipes was never deterministic (real appends
+    // across the two pipes was never deterministic (Portage appends
     // both fds to one gzip stream too), so compare unordered.
     let mut lines: Vec<&str> = decoded.lines().collect();
     lines.sort_unstable();

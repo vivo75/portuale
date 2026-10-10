@@ -1,151 +1,12 @@
-// Real package removal (task #55's own natural complement): `ebuild
-// <file> unmerge` mirrors real `dblink.unmerge()` plus the top-level
-// `unmerge()` function's own success-gated `dblink.delete()` call
-// (`lib/portage/dbapi/vartree.py`): runs `pkg_prerm`, deletes every
-// file/dir/symlink the vdb entry's own `CONTENTS` lists from `${ROOT}`
-// (in real `_unmerge_pkgfiles()`'s own reverse-sorted order -- deepest
-// paths first, so a directory always empties out before its own removal
-// is attempted -- `mykeys.sort(); mykeys.reverse()`), runs `pkg_postrm`,
-// and -- only if every step above succeeded -- removes the vdb entry
-// itself (real `dblink.delete()`: `shutil.rmtree(self.dbdir)` plus an
-// `rmdir` of the parent `<category>` directory if it's now empty).
-// `pkg_prerm`/`pkg_postrm` run via `ebuild_phases::run_single_phase`, the
-// same way `ebuild_merge::run_merge`'s own `pkg_preinst`/`pkg_postinst`
-// do -- real `unmerge()` invokes them directly
-// (`EbuildPhase(phase="prerm"/"postrm")`), not through `doebuild()`'s own
-// `actionmap_deps` chain.
-//
-// Without this, `merge` alone can never be exercised through a real
-// install/reinstall/removal cycle -- every merge would just accumulate
-// vdb entries and files forever.
-//
-// Locally-modified files are protected on removal too, real `_unmerge_
-// pkgfiles()`'s own actual mechanism for it: an `obj`/`sym` entry whose
-// live, on-disk mtime no longer matches what `CONTENTS` recorded at
-// merge time is left in place instead of deleted (real `!mtime` skip --
-// broader than `CONFIG_PROTECT` alone, since it applies to *every*
-// unmerge regardless of path, and it's what actually protects a
-// CONFIG_PROTECT'd file on removal too: real `dblink._protect()`
-// diverts a changed write to a `._cfgNNNN_` sibling while `CONTENTS`
-// still records the *original* file's own now-stale mtime, so the real
-// `/etc/foo.conf` a user edited never matches and is never touched).
-//
-// `others_in_slot` reverse-dependency checking is real too: real
-// `_unmerge_pkgfiles()`'s own `is_owned` check (`vartree.py:2893-2916`,
-// via `dblink.isowner()` == `bool(self._match_contents(filename))`) --
-// before a `CONTENTS` entry is even considered for the mtime check,
-// every *other* installed version of the same `category/PN` in the same
-// `SLOT` (excluding self) is asked whether its own `CONTENTS` also
-// claims that exact path; if so, the entry is left alone entirely
-// (real `"replaced"` skip) regardless of node type. This is what makes
-// an in-place upgrade not delete files the new version also owns --
-// without it, `merge`-then-`merge` (a reinstall/upgrade) followed by
-// `unmerge`ing the *old* vdb entry would have deleted files the new
-// installation still depends on. Reuses `ebuild_merge::owns_path_pf`
-// (already built for real blocker exclusion's own `CONTENTS`-ownership
-// check) and `ebuild_merge::read_installed_slot`, both promoted to
-// `pub(crate)` for this. Real `isowner`'s own path-ambiguity-via-
-// symlinked-directories inode-cache mechanism isn't reproduced --
-// portuale's own `owns_path_pf` is a plain string scan, matching the
-// same simplification `find_owners`/blocker exclusion already made.
-//
-// The real "symlink orphan" refinement (bug #326685) is real too: when
-// a live symlink-to-directory this package's own CONTENTS recorded as
-// `sym` or `dir` is `is_owned` by another same-slot instance that
-// itself now records that exact path as a literal `dir` entry (the
-// directory the symlink pointed to got "promoted" to a real directory
-// across the upgrade), the symlink is genuinely orphaned: neither this
-// package's own removal pass nor the survivor's own files actually
-// still need it as a symlink. Real `_unmerge_pkgfiles()`
-// (`vartree.py:2895-2926`) detects this and defers the decision --
-// `protected_symlinks`, keyed by the symlink's own *target* directory's
-// `(dev, ino)` -- to a second pass over this package's own literal
-// `dir` entries (real `_unmerge_dirs()`, `vartree.py:3209-3332`,
-// `remove_dirs` below): when that target directory is later actually
-// removed (because nothing else needs it as a real directory either),
-// the now-truly-orphaned symlink is deleted too, and its own
-// newly-emptied parent directories are recursively revisited (real bug
-// #640058) in case removing the symlink itself finally empties them.
-// Real `_unmerge_protected_symlinks()` (`vartree.py:3114-3207`, called
-// on whatever `protected_symlinks` entries *don't* get resolved by
-// `_unmerge_dirs()`) is deliberately NOT ported: its own first loop
-// re-checks the exact same `others_in_slot`/`isowner` condition already
-// required to populate `protected_symlinks` in the first place -- since
-// that fact cannot change between the two passes within one real
-// `unmerge()` call, its own `return` fires unconditionally, making the
-// real system-wide `get_owners()`-gated delete-or-elog-warn logic after
-// it genuinely unreachable dead code in current portage (confirmed by
-// tracing the exact call graph, not a simplification -- there is no
-// real behavior there to be unfaithful to). The real elog warning text
-// for symlinks that *do* survive (`vartree.py:3085-3103`) is also not
-// reproduced: this module has no message-printing output anywhere else
-// either, only the behavioral effect (leave the symlink in place) --
-// see the "Failure handling is coarser" gap below for the same
-// no-message-output pattern elsewhere in this module.
-//
-// `FEATURES=unmerge-orphans` is real too (`vartree.py:2934-2950`):
-// despite the name, not untracked-orphan scanning -- for a
-// non-`CONFIG_PROTECT`'d `obj`/`sym` entry (excluding a symlink whose
-// live target itself resolves to a directory, real comment: "Don't
-// unlink symlinks to directories here since that can remove /lib and
-// /usr/lib symlinks"), it bypasses the ordinary `!mtime` staleness
-// check entirely and deletes the entry unconditionally, even if
-// locally modified. Reuses `ebuild_merge::is_protected` (promoted to
-// `pub(crate)` for this), the exact same real `ConfigProtect.
-// isprotected()` check `ebuild_merge`'s own `CONFIG_PROTECT` handling
-// already established -- `UnmergeOptions`'s own `config_protect`/
-// `config_protect_mask` fields mirror `MergeOptions`'s exactly, same
-// env-var-sourced defaults.
-//
-// Real `INFOPATH` cleanup is real too (`vartree.py:3226-3251`, inside
-// `_unmerge_dirs()`/`remove_dirs` below): a directory literally named
-// `"info"` (real comment: "since it might have been in INFOPATH
-// previously even though it may not be there now") whose only
-// remaining content is a subset of `{"dir", "dir.old"}` (real
-// `_infodir_cleanup`, GNU `install-info`'s own auto-generated index
-// files) has those removed first, before the ordinary `rmdir` attempt
-// -- without this, a stray leftover index file would keep such a
-// directory from ever emptying out and being removed at all. The other
-// real trigger for this same cleanup, `inode_key in infodirs_inodes`
-// (a real, `INFOPATH`/`INFODIR` env-var-driven inode set, covering an
-// info directory that *isn't* literally named `"info"`) is threaded
-// through too now: `env_update::info_dirs_inodes` collates real
-// `INFOPATH`/`INFODIR` values from `/etc/env.d/*` the same way
-// `env_update::run_env_update` collates every other real
-// `COLON_SEPARATED` key, and `run_unmerge` below computes that set once
-// and threads it down through `remove_contents`/`remove_dirs` into
-// `cleanup_info_dir`.
-//
-// Real `stale_confmem` cleanup is real too (`vartree.py:2747`/
-// `2931-2932`/`3106-3109`): `cfgfiledict`, the real `_conf_mem_file`
-// "already offered this MD5" memory `ebuild_merge` writes on merge
-// (`ebuild_merge::read_cfgfiledict`/`write_cfgfiledict`, promoted
-// `pub(crate)` for this), is read once up front by `run_unmerge` below;
-// any path `remove_contents` actually removes -- not `is_owned` by
-// another same-slot instance -- that `cfgfiledict` still remembers is
-// collected into `stale_confmem` and dropped from the persisted memory
-// afterward, matching real ordering exactly (the elif is off the same
-// `is_owned` check as the "replaced" skip).
-//
-// KNOWN, DOCUMENTED GAPS (v1 scope, matching `ebuild_merge`'s own
-// "narrow v1, document the cut" pattern):
-//   - No `bsd_chflags` handling -- confirmed dead code on Linux, not a
-//     real gap: `lib/portage/__init__.py:311` sets `bsd_chflags = None`
-//     unconditionally on non-BSD, and portuale's own hard goal is
-//     Linux-only/musl-static.
-//   - Failure handling is coarser: real `_unmerge_pkgfiles()` counts
-//     per-file failures and keeps going regardless (overall success is
-//     governed by the `prerm`/`postrm` phase exit codes, not by
-//     individual file-removal failures); portuale's own removal loop
-//     tolerates "already gone" (`NotFound`, matching real
-//     `_ignored_unlink_errnos`/`_ignored_rmdir_errnos`) and "directory
-//     not empty" (matching real `!empty` tolerance) but treats any
-//     other I/O error as a hard failure.
-//   - `${T}`/`${D}`/etc. are recomputed fresh via `ebuild_phases::
-//     compute_environment` for every `unmerge` call, the same as
-//     `merge` -- real `unmerge()` reuses whatever `PORTAGE_BUILDDIR` a
-//     prior merge left behind when present; portuale doesn't attempt
-//     that distinction.
+//! Package removal: `ebuild <file> unmerge`.
+//!
+//! Runs `pkg_prerm`, deletes every `CONTENTS`-listed entry deepest-first,
+//! runs `pkg_postrm`, then removes the vdb entry itself on success.
+//! Portage: dbapi/vartree.py, dblink.unmerge.
+//!
+//! Gaps: no `bsd_chflags` handling (dead code on Linux); other I/O errors
+//! fail hard where Portage counts per-file failures; the builddir is
+//! recomputed fresh instead of reusing a prior merge's.
 
 use crate::ebuild_merge;
 use crate::ebuild_phases;
@@ -154,10 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-/// Whether `command` is the one real unmerge command this module
-/// implements -- `ebuild.rs` checks this alongside `ebuild_phases::
-/// is_phase_command`/`ebuild_merge::is_merge_command` before
-/// routing to real execution.
+/// Whether `command` is the unmerge command this module implements --
+/// `ebuild.rs` checks this before routing to execution.
 pub fn is_unmerge_command(command: &str) -> bool {
     command == "unmerge"
 }
@@ -165,16 +24,11 @@ pub fn is_unmerge_command(command: &str) -> bool {
 struct ContentsEntry {
     node_type: String,
     abs_path: String,
-    /// Present for `obj`/`sym` lines (real `ebuild_merge::
-    /// format_contents_line`'s own trailing field) -- `None` for `dir`
-    /// (which has no trailing field at all: its own last
-    /// whitespace-separated token is `abs_path` itself, non-numeric, so
-    /// parsing it as an mtime naturally fails into `None`).
+    /// Present for `obj`/`sym` lines; `None` for `dir` (no trailing field).
     mtime: Option<i64>,
 }
 
-/// Parses a real `CONTENTS` file's own lines (see `ebuild_merge::
-/// format_contents_line` for the exact format written).
+/// Parses a `CONTENTS` file's lines (see `ebuild_merge::format_contents_line`).
 fn parse_contents(text: &str) -> Vec<ContentsEntry> {
     text.lines()
         .filter_map(|line| {
@@ -191,11 +45,9 @@ fn parse_contents(text: &str) -> Vec<ContentsEntry> {
         .collect()
 }
 
-/// Real `protected_symlinks`: the live target directory's own `(dev,
-/// ino)` a bug-#326685 orphaned symlink points to -> every such
-/// symlink's own `abs_path`. Grouped by target inode (not by symlink
-/// path) because that's how `remove_dirs` below looks entries up --
-/// real `_unmerge_dirs()`'s own `protected_symlinks.pop(inode_key)`.
+/// Orphaned symlinks by live target directory `(dev, ino)`; grouped so
+/// `remove_dirs` can look them up by inode.
+/// Portage: dbapi/vartree.py, _unmerge_dirs.
 type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 
 /// Arguments of [`remove_contents`].
@@ -213,39 +65,12 @@ struct RemoveContentsArgs<'a> {
     contents_text: &'a str,
 }
 
-/// Deletes every `CONTENTS`-listed entry from `root`, deepest paths
-/// first (see this module's own doc comment for why, and for the v1
-/// failure-tolerance simplification) -- except: an entry another
-/// same-`category/PN`-and-`SLOT` installed package (`others_in_slot`,
-/// bare `PF` strings) also owns, real `is_owned`/`"replaced"` skip (see
-/// this module's own doc comment); or an `obj`/`sym` entry whose live
-/// mtime no longer matches what `CONTENTS` recorded, left in place
-/// instead (real `!mtime` skip -- see this module's own doc comment for
-/// why this is also what protects a CONFIG_PROTECT'd file on removal) --
-/// unless `unmerge_orphans` is set, real `FEATURES=unmerge-orphans`
-/// (see this module's own doc comment), which bypasses that `!mtime`
-/// check entirely for a non-`CONFIG_PROTECT`'d `obj`/`sym` entry (a
-/// symlink whose live target is itself a directory excluded, real
-/// comment: "Don't unlink symlinks to directories here since that can
-/// remove /lib and /usr/lib symlinks"). This package's own literal
-/// `dir` entries are deferred to a second pass (`remove_dirs`, real
-/// `_unmerge_dirs()`) instead of removed inline here (real `mydirs`) --
-/// see this module's own doc comment on bug #326685 for why the
-/// deferral matters. `cfgfiledict`/`stale_confmem`: real `_unmerge_
-/// pkgfiles()`'s own `stale_confmem` cleanup (`vartree.py:2931-2932`) --
-/// a removed, not-`is_owned` entry that `cfgfiledict` (the real
-/// `_conf_mem_file` "already offered this MD5" memory `ebuild_merge`
-/// writes on merge) still remembers has its own path collected into
-/// `stale_confmem`, so `run_unmerge` can drop it from the persisted
-/// memory afterward -- otherwise a future merge could wrongly treat a
-/// long-gone package's own previously-offered update as "already
-/// offered" for a path nothing installs anymore. `preserved_paths`: real
-/// "remove the preserved files from our contents so that they won't be
-/// unmerged" (`vartree.py:2293-2294`, see `ebuild_merge::preserve_libs_
-/// on_unmerge`'s own doc comment for the real preserve-libs registration
-/// this mirrors) -- filtered out of `entries` immediately, the same
-/// point real portage itself strips them from the CONTENTS dict, before
-/// the per-file removal loop below ever sees them at all.
+/// Deletes every `CONTENTS`-listed entry from `root`, deepest paths first.
+/// Skips entries another same-slot instance owns, `obj`/`sym` entries whose
+/// live mtime changed (unless `unmerge_orphans`), and defers literal `dir`
+/// entries to `remove_dirs`. Removed paths still remembered by `cfgfiledict`
+/// are collected into `stale_confmem`; `preserved_paths` are filtered first.
+/// Portage: dbapi/vartree.py, _unmerge_pkgfiles.
 fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
     let RemoveContentsArgs {
         root,
@@ -275,11 +100,8 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
         let relative = entry.abs_path.trim_start_matches('/');
         let dest = root.join(relative);
 
-        // Real bug #326685 detection (`vartree.py:2898-2926`): a live
-        // symlink-to-directory this package's own CONTENTS recorded as
-        // `sym` or `dir`, whose exact path another same-slot instance
-        // now claims *as a literal `dir` entry* (not `sym`) -- see this
-        // module's own doc comment for the full real grounding.
+        // A live symlink-to-directory claimed as a literal `dir` entry
+        // elsewhere defers to `remove_dirs` (Portage: _unmerge_pkgfiles).
         if is_owned
             && (entry.node_type == "sym" || entry.node_type == "dir")
             && let Ok(link_meta) = std::fs::symlink_metadata(&dest)
@@ -301,29 +123,17 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
         }
 
         if is_owned {
-            // Real "replaced" skip: another still-installed version of
-            // this same cp:slot also claims this path -- most commonly
-            // an in-place upgrade sharing files with the version being
-            // unmerged. Checked before the mtime check, matching real
-            // `_unmerge_pkgfiles()`'s own ordering.
+            // Another same-slot instance claims this path: skip before
+            // the mtime check (most often an in-place upgrade).
             continue;
         } else if cfgfiledict.contains_key(&entry.abs_path) {
-            // Real `stale_confmem` (`vartree.py:2931-2932`): this path
-            // is actually going away and nothing else owns it, so its
-            // `_conf_mem_file` memory entry is now stale too.
+            // Going away and still remembered: its config-memory entry is stale too.
             stale_confmem.push(entry.abs_path.clone());
         }
 
-        // Real `FEATURES=unmerge-orphans` (`vartree.py:2934-2950`):
-        // deletes a non-`CONFIG_PROTECT`'d `obj`/`sym` entry
-        // unconditionally, bypassing the `!mtime` staleness check below
-        // entirely -- even a locally-modified file is deleted. Excludes
-        // a symlink whose live target itself resolves to a directory
-        // (real comment: "Don't unlink symlinks to directories here
-        // since that can remove /lib and /usr/lib symlinks"), which
-        // falls through to the ordinary mtime-checked removal below
-        // instead. Checked before the mtime check, matching real
-        // ordering exactly.
+        // `FEATURES=unmerge-orphans`: delete a non-protected `obj`/`sym`
+        // entry unconditionally, except a symlink to a directory (which
+        // falls through to the mtime-checked removal instead).
         if unmerge_orphans
             && matches!(entry.node_type.as_str(), "obj" | "sym")
             && !ebuild_merge::is_protected(root, config_protect, config_protect_mask, &dest)
@@ -366,49 +176,23 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
                 }
             }
             _ => {
-                // Real `_unmerge_pkgfiles()`'s own `"fif"`/`"dev"` branches
-                // (`vartree.py:3062-3068`) never call `unlink()` at all --
-                // both just report `show_unmerge("---", "", ...)` (real
-                // portage's own conservative "leave a device/fifo node in
-                // place" behavior, unlike `obj`/`sym`/`dir` above). This
-                // matches that exactly: a real no-op, not merely "nothing
-                // to remove yet" (see `ebuild_merge::merge_tree`'s own
-                // `fif`/`dev` branch for the merge-time counterpart that
-                // creates these nodes in the first place).
+                // `fif`/`dev` entries are never unlinked, matching Portage.
             }
         }
     }
     remove_dirs(root, dirs, &mut protected_symlinks, infodirs_inodes);
-    // Real trailing `if protected_symlinks:` elog warning
-    // (`vartree.py:3085-3103`) for whatever entries `remove_dirs`
-    // didn't resolve is deliberately not reproduced -- see this
-    // module's own doc comment (no message-printing output anywhere
-    // else in this module either). The behavioral effect -- those
-    // symlinks are left in place -- already holds: `remove_dirs` only
-    // ever deletes a `protected_symlinks` entry's own symlinks when it
-    // actually removes their target directory.
+    // Entries `remove_dirs` didn't resolve stay in place with no warning.
     Ok(())
 }
 
-/// Real `_infodir_cleanup` (`vartree.py:1794`): the only filenames GNU
-/// `install-info`'s own auto-generated index is ever known to leave
-/// behind.
+/// Filenames the install-info index leaves behind.
+/// Portage: dbapi/vartree.py, _infodir_cleanup.
 const INFODIR_CLEANUP: [&str; 2] = ["dir", "dir.old"];
 
-/// Real `_unmerge_dirs()`'s own INFOPATH cleanup (`vartree.py:3226-
-/// 3251`): real `inode_key in infodirs_inodes or os.path.basename(obj)
-/// == "info"` -- a directory whose own `(dev, ino)` matches a real,
-/// live `INFOPATH`/`INFODIR` entry (`env_update::info_dirs_inodes`,
-/// covering an info directory reached via a different path than the
-/// literal `"info"` name, e.g. a symlink or a non-standard install
-/// location) *or* is literally named `"info"` (the more common case,
-/// shipped separately first). If its only remaining content is a
-/// non-empty subset of `INFODIR_CLEANUP` (real `remaining and
-/// len(remaining) <= len(infodir_cleanup) and not
-/// set(remaining).difference(infodir_cleanup)`), those files are
-/// deleted -- real regular-file-only (`stat.S_ISREG`), so a same-named
-/// symlink or subdirectory is left alone -- clearing the way for the
-/// caller's own subsequent `rmdir` attempt to actually succeed.
+/// Removes leftover install-info index files so the `rmdir` can succeed.
+/// Fires for a literal `info` name or an `INFOPATH`/`INFODIR` inode match;
+/// only regular files are deleted.
+/// Portage: dbapi/vartree.py, _unmerge_dirs.
 fn cleanup_info_dir(dest: &Path, inode_key: (u64, u64), infodirs_inodes: &BTreeSet<(u64, u64)>) {
     let is_info_dir = infodirs_inodes.contains(&inode_key)
         || dest.file_name().and_then(|n| n.to_str()) == Some("info");
@@ -436,38 +220,19 @@ fn cleanup_info_dir(dest: &Path, inode_key: (u64, u64), infodirs_inodes: &BTreeS
     }
 }
 
-/// Real `_unmerge_dirs()` (`vartree.py:3209-3332`): removes this
-/// package's own literal `dir` entries (`dirs`, real `mydirs`),
-/// tolerating "already gone" and "not empty" the same way the main
-/// per-entry loop above does for everything else. The one added
-/// wrinkle over a plain removal loop: when removing one of these
-/// directories actually succeeds, and its own `(dev, ino)` matches a
-/// `protected_symlinks` entry (a bug-#326685 orphaned symlink pointing
-/// at exactly this directory -- see `remove_contents`'s own doc
-/// comment), that symlink is now genuinely safe to delete too (nothing
-/// needs it as a real directory after all) -- deleted here, with its
-/// own newly-emptied parent directories recursively re-queued for
-/// another removal attempt (real bug #640058), since a directory that
-/// failed to rmdir earlier only because this exact symlink still
-/// occupied it deserves a second chance. Uses `dirs` as a LIFO stack,
-/// mirroring real `_unmerge_dirs()`'s own `dirs.pop()`/`dirs.append()`
-/// usage of a plain Python list -- removal order itself has no real
-/// semantic meaning (this module's own doc comment), but the stack
-/// shape (a directory can be pushed back after being popped) is
-/// load-bearing for the bug-#640058 revisit to work at all.
+/// Removes this package's literal `dir` entries, tolerating "already gone"
+/// and "not empty". Deleting a directory also deletes orphaned symlinks
+/// pointing at it and re-queues newly-emptied parents. `dirs` is a LIFO
+/// stack so a directory can be pushed back after popping.
+/// Portage: dbapi/vartree.py, _unmerge_dirs.
 fn remove_dirs(
     root: &Path,
     dirs: Vec<(PathBuf, (u64, u64))>,
     protected_symlinks: &mut ProtectedSymlinks,
     infodirs_inodes: &BTreeSet<(u64, u64)>,
 ) {
-    // Real `_unmerge_dirs()`'s own `dirs = sorted(dirs)`: `mydirs` is
-    // built as a Python *set* during the caller's own traversal (order
-    // not guaranteed), so real code always re-sorts ascending before
-    // relying on `pop()` (removes-from-the-end) to visit deepest paths
-    // first -- sorted ascending, a path is always lexicographically
-    // greater than its own ancestor (`/usr` < `/usr/share`), so the
-    // last element is always the deepest.
+    // Sorted ascending so `pop()` visits deepest paths first (a path
+    // sorts after its own ancestor).
     let mut stack = dirs;
     stack.sort_by(|a, b| a.0.cmp(&b.0));
     let mut revisit: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
@@ -488,11 +253,8 @@ fn remove_dirs(
                         parents.insert(parent.to_path_buf());
                     }
                 }
-                // Real bug #640058: walk each newly-emptied symlink's
-                // own ancestor chain while each successive ancestor is
-                // itself a directory that previously failed to rmdir
-                // (`revisit`), re-queuing all of them for another
-                // removal attempt now that this symlink is gone.
+                // Walk each newly-emptied ancestor chain, re-queuing failed
+                // rmdirs now that the symlink is gone.
                 let mut recursive_parents: BTreeSet<PathBuf> = BTreeSet::new();
                 for parent in parents {
                     let mut cur = parent;
@@ -511,59 +273,36 @@ fn remove_dirs(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Already gone -- tolerate, no revisit needed (real:
-                // `errno == ENOENT` is excluded from revisit tracking).
+                // Already gone: tolerate, no revisit needed.
             }
             Err(_) => {
-                // Real: any other tolerated rmdir failure (chiefly
-                // "not empty") is tracked for a possible later revisit.
+                // Any other tolerated failure (chiefly "not empty") is
+                // tracked for a possible later revisit.
                 revisit.insert(dest, inode_key);
             }
         }
     }
 }
 
-/// Options for `run_unmerge`, bundled into a struct rather than more
-/// positional parameters -- portuale already relearned the
-/// "positional-parameter pain" lesson once, in `--newrepo`'s own
-/// bulk-fix saga (see `ebuild_merge::MergeOptions`'s own doc comment,
-/// the precedent this mirrors). `config_protect`/`config_protect_mask`
-/// are only consulted by `FEATURES=unmerge-orphans`
-/// (`unmerge_orphans`) -- `Default` matches real `make.globals`'s own
-/// values exactly, the same defaults `MergeOptions::default()` uses.
+/// Options for `run_unmerge`. `config_protect`/`config_protect_mask`
+/// are only consulted by `FEATURES=unmerge-orphans`; defaults match
+/// `make.globals`, like `MergeOptions::default()`.
 pub struct UnmergeOptions {
     pub debug: bool,
     pub shell: ebuild_phases::ShellBackend,
     pub config_protect: String,
     pub config_protect_mask: String,
-    /// Real `"unmerge-orphans" in self.settings.features`. Real
-    /// `unmerge-orphans` *is* one of real `make.globals`'s own default
-    /// `FEATURES` tokens (`cnf/make.globals:77-84`) -- confirmed by
-    /// reading it directly (a real, previously-undiscovered mismatch:
-    /// this field's own `Default` used to be `false` with a doc comment
-    /// incorrectly claiming "not in FEATURES by default", the same
-    /// mistake `ebuild_merge::MergeOptions::protect_owned` had). `Default`
-    /// is now `true`, matching real portage's own actual out-of-the-box
-    /// behavior. Portuale's own env-var read still only checks
-    /// whether the literal `FEATURES` value (when set at all) contains
-    /// the `"unmerge-orphans"` token -- it doesn't *accumulate* onto the
-    /// real default set the way real portage's own `+`/`-`-prefixed
-    /// `make.conf` `FEATURES` merging does, so setting `FEATURES` to any
-    /// *other* token still reads as `unmerge_orphans: false` here, unlike
-    /// real portage -- a pre-existing simplification this fix doesn't
-    /// attempt to also resolve.
+    /// `unmerge-orphans` is a default-on `FEATURES` token, so `Default`
+    /// is `true`. The env-var read only checks the literal value, not the
+    /// accumulated default set -- setting `FEATURES` to any other token
+    /// reads as `false` here, unlike Portage.
     pub unmerge_orphans: bool,
-    /// Real `PORTAGE_CONFIGROOT` -- see `ebuild_merge::MergeOptions::
-    /// config_root`'s own doc comment for the exact real default/`Default`
-    /// split this mirrors (only consulted by `ebuild_phases::
-    /// eclass_locations_value`'s own masters-chain resolution, reached
-    /// via `prerm`/`postrm`'s own `run_single_phase` call below).
+    /// Portage's `PORTAGE_CONFIGROOT`; only consulted by the masters-chain
+    /// resolution reached via the `prerm`/`postrm` phase calls below.
     pub config_root: PathBuf,
-    /// feat#157 S4.1: `pf`s of the same category that the merge's replace
-    /// loop already unmerged but whose entries a database backend keeps
-    /// installed until the publishing commit. They are left out of
-    /// `others_in_slot`, as on `files`, where their directories are
-    /// already gone. Empty everywhere else.
+    /// `pf`s of the same category the merge's replace loop already unmerged
+    /// but a database backend keeps installed until the publishing commit.
+    /// Left out of `others_in_slot`; empty everywhere else.
     pub already_unmerged: Vec<String>,
 }
 
@@ -595,35 +334,14 @@ pub(crate) struct UnmergePkgfilesArgs<'a> {
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
 
-/// File-removal core of `dblink.unmerge()` -- everything real
-/// `_unmerge_pkgfiles()` does (delete every `CONTENTS` entry deepest-
-/// path-first, honoring the same-slot "replaced" skip, the `!mtime`
-/// CONFIG_PROTECT skip, `FEATURES=unmerge-orphans`, bug #326685's
-/// orphaned-symlink handling, `stale_confmem` pruning and preserve-
-/// libs) -- but *not* the `prerm`/`postrm` phase hooks and *not* the
-/// final vdb-directory removal (`delete_vdb_dir`). Split out of
-/// `run_unmerge` (which brackets it with the two phase calls) so
-/// `ebuild_merge::merge_binpkg`'s own replace-an-installed-version
-/// path can reuse it: a binpkg carries no ebuild to source a phase
-/// from, so its replace runs the file removal phase-free (a documented
-/// v1 cut -- see `merge_binpkg`'s own doc comment). `also_keep`, when
-/// non-empty, is folded into the real `others_in_slot` set so a path
-/// the replacing version now owns is left in place exactly as a path
-/// owned by a genuine other same-slot instance would be.
-/// `is_replacement` is real `unmerge_with_replacement`: `treewalk()`'s
-/// own replace loop sets it (the preserved set was computed merge-side
-/// and injected into the replacing package's `CONTENTS`, so the files
-/// survive through ownership and no old-cpv registration happens --
-/// see `ebuild_merge::preserve_libs_on_unmerge`); a standalone
-/// `emerge -C` clears it. `replacement_preserved` is real
-/// `preserve_paths` (owner -> paths just preserved merge-side, not yet
-/// registered): non-empty only on the replace-loop path, where the
-/// merge caller threads its own set through `unmerge_replaced_same_slot`
-/// and `unmerge_one_installed`; empty everywhere else.
-/// `replacement_needed` is real `include_file` (the replacing
-/// package's own `NEEDED.ELF.2` lines -- see
-/// `ebuild_merge::unmerge_replaced_same_slot`): same threading, same
-/// empty-on-standalone rule.
+/// File-removal core of the unmerge: deletes every `CONTENTS` entry
+/// deepest-first with the same skips as `remove_contents`, but no
+/// `prerm`/`postrm` hooks and no vdb-directory removal. Split out so the
+/// binpkg replace path can reuse it phase-free (a binpkg carries no
+/// ebuild to source a phase from). `also_keep` folds into `others_in_slot`;
+/// the `is_replacement`/`replacement_*` triple threads the replace-loop
+/// preserved-libs state (empty on a standalone `emerge -C`).
+/// Portage: dbapi/vartree.py, _unmerge_pkgfiles.
 #[cfg(test)]
 pub(crate) fn unmerge_pkgfiles(args: UnmergePkgfilesArgs<'_>) -> Result<(), String> {
     let UnmergePkgfilesArgs {
@@ -665,10 +383,9 @@ pub(crate) struct UnmergePkgfilesIntoArgs<'a> {
     pub(crate) retire: Option<&'a mut ebuild_merge::RetireWrites>,
 }
 
-/// [`unmerge_pkgfiles`] with the D4 writes (preserved-libs registry,
-/// config memory, W4 rewrites of other entries) collected into `retire`
-/// instead of committed one by one (feat#157 S4.2); the caller commits
-/// them with [`retire_entry`]. `None` is the S1.5 behaviour, call for call.
+/// [`unmerge_pkgfiles`] collecting the registry/config-memory/other-entry
+/// writes into `retire` instead of committing one by one; `None` commits
+/// directly. See [`retire_entry`].
 pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result<(), String> {
     let UnmergePkgfilesIntoArgs {
         root,
@@ -683,9 +400,8 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
         mut retire,
     } = args;
     // Through the root's installed-database backend. The error keeps the
-    // text `read_to_string` gave: the io error for a read that failed,
-    // `ENOENT` for a missing entry or file, the std UTF-8 text for a
-    // `CONTENTS` that is not UTF-8.
+    // underlying text: the io error, `ENOENT` for a missing entry, the
+    // UTF-8 text for a non-UTF-8 `CONTENTS`.
     let key = portage_vdb::EntryKey::new(category, pf);
     let db = portage_vdb::for_root(root);
     let not_installed = |e: &dyn std::fmt::Display| {
@@ -706,9 +422,8 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
         Err(e) => return Err(not_installed(&e)),
     };
 
-    // Real `others_in_slot`: every other installed version of this same
-    // category/PN in the same SLOT, excluding self -- see this module's
-    // own doc comment.
+    // Every other installed version of this same category/PN in the same
+    // SLOT, excluding self.
     let version = &pf[pn.len() + 1..];
     let own_slot = ebuild_merge::read_installed_slot(root, category, pn, version);
     let mut others_in_slot: Vec<String> = match &own_slot {
@@ -730,30 +445,18 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
         }
     }
 
-    // Real `infodirs`/`infodirs_inodes` (`vartree.py:2830-2846`): real
-    // `INFOPATH`/`INFODIR`, collated from `/etc/env.d/*` the same way
-    // `env_update::run_env_update` collates every other real
-    // `COLON_SEPARATED` key -- see `env_update::info_dirs_inodes`'s own
-    // doc comment for why this is a separate, narrower computation
-    // rather than a refactor of that already-tested function.
+    // `INFOPATH`/`INFODIR`, collated from `/etc/env.d/*`; see
+    // `env_update::info_dirs_inodes` for why this stays a separate computation.
     let infodirs_inodes = env_update::info_dirs_inodes(root);
 
-    // Real `cfgfiledict`/`stale_confmem` (`vartree.py:2747`/`2931-2932`/
-    // `3106-3109`): the real `_conf_mem_file` memory `ebuild_merge`
-    // writes on merge, read once up front the same way real
-    // `_unmerge_pkgfiles()` does, then pruned of every path this
-    // unmerge actually removes and rewritten -- see `remove_contents`'s
-    // own doc comment.
+    // The `_conf_mem_file` memory `ebuild_merge` writes on merge, read once
+    // up front, then pruned of every path this unmerge removes and rewritten.
     let cfgfiledict = ebuild_merge::read_cfgfiledict(root);
     let mut stale_confmem: Vec<String> = Vec::new();
 
-    // Real `_prune_plib_registry(unmerge=True, ...)`
-    // (confirmed by reading the real call site, not just the method
-    // itself -- see `ebuild_merge::preserve_libs_on_unmerge`'s own doc
-    // comment for the full real grounding). `own_slot` defaults to `"0"` the same way
-    // `parse_slot`'s own real fallback already does, matching real
-    // `_pkg_str`'s own `settings["SLOT"]` fallback for a package with no
-    // recorded slot at all.
+    // Portage: _prune_plib_registry with unmerge=True (see
+    // `ebuild_merge::preserve_libs_on_unmerge`). `own_slot` defaults to
+    // `"0"` like the installed-slot fallback for a package with no slot.
     let preserved_paths =
         ebuild_merge::preserve_libs_on_unmerge_into(ebuild_merge::PreserveLibsOnUnmergeIntoArgs {
             root,
@@ -790,26 +493,20 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
         }
     }
 
-    // Real `_prune_plib_registry`'s own tail, which runs on unmerge
-    // too, not only on merge: a preserved library whose last surviving
-    // consumer is the package now being removed is orphaned -- delete it
-    // and drop it from the registry. Real `unmerge_no_replacement =
-    // unmerge and not unmerge_with_replacement`: in replacement mode a
-    // consumer owned by the old instance still counts (it survives
-    // through the replacing package), the old instance's own linkmap
-    // data is excluded, the merge-side just-preserved set is scanned
-    // in, and the replacing package's own `NEEDED` lines are fed
-    // explicitly (real `include_file` -- the new entry is still
-    // `-MERGING-`; see `ebuild_merge::find_unused_preserved_libs`).
+    // A preserved library whose last surviving consumer is the package now
+    // being removed is orphaned: delete it and drop it from the registry.
+    // In replacement mode a consumer owned by the old instance still counts,
+    // the old instance's linkmap data is excluded, and the replacing
+    // package's `NEEDED` lines feed explicitly (see
+    // `ebuild_merge::find_unused_preserved_libs`).
     let being_unmerged: std::collections::BTreeSet<String> = contents_text
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
         .collect();
-    // Real `exclude_pkgs`: the unmerged instance itself, plus (database
-    // backends, #310) the same-slot instances this replace loop already
-    // unmerged -- their entries stay installed until the publishing
-    // commit, where `files` has already removed their directories, so
-    // they must not feed the linkage map of the later instances' prune.
+    // The unmerged instance itself, plus (database backends) the same-slot
+    // instances this replace loop already unmerged: their entries stay
+    // installed until the publishing commit, so they must not feed the
+    // linkage map of the later instances' prune.
     let exclude_cpvs: Vec<String> = if is_replacement {
         std::iter::once(format!("{category}/{pf}"))
             .chain(
@@ -837,15 +534,12 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
     Ok(())
 }
 
-/// Real `dblink.delete()`: remove the vdb entry directory itself, then
-/// a best-effort `os.rmdir` of its now-maybe-empty parent category
-/// directory -- ignored on failure (another installed package in the
-/// same category is the common case). Split out of `run_unmerge` so
-/// `ebuild_merge::merge_binpkg`'s replace path can drop an old
-/// version's vdb entry without going through the phase machinery.
+/// Removes the vdb entry directory itself, then best-effort `rmdir`s its
+/// now-maybe-empty parent category directory (ignored on failure). Split
+/// out so the binpkg replace path can drop an old entry phaselessly.
+/// Portage: dbapi/vartree.py, dblink.delete.
 pub(crate) fn delete_vdb_dir(root: &Path, category: &str, pf: &str) -> Result<(), String> {
-    // `WriteTxn::delete_entry` is the old body, unchanged: `remove_dir_all`
-    // of the entry, then the best-effort category `rmdir` (N14).
+    // Deletes the entry, then best-effort category `rmdir`.
     let db = portage_vdb::for_root(root);
     let mut txn = db.begin_write().map_err(|e| e.to_string())?;
     txn.delete_entry(&portage_vdb::EntryKey::new(category, pf))
@@ -853,10 +547,9 @@ pub(crate) fn delete_vdb_dir(root: &Path, category: &str, pf: &str) -> Result<()
     txn.commit().map_err(|e| e.to_string())
 }
 
-/// The last step of a standalone unmerge: `retire` is `Some` on a database
-/// backend (feat#157 S4.2), and one transaction then holds the row's
-/// deletion together with the D4 writes the unmerge collected (registry,
-/// config memory, W4 rewrites); `None` is [`delete_vdb_dir`], the S1.5 call.
+/// The last step of a standalone unmerge: with `retire` one transaction
+/// holds the row deletion with the collected writes; without it the entry
+/// directory is removed directly (see [`delete_vdb_dir`]).
 pub(crate) fn retire_entry(
     root: &Path,
     category: &str,
@@ -869,18 +562,17 @@ pub(crate) fn retire_entry(
     }
 }
 
-/// The directory of the installed entry `category/pf` as the old messages
-/// printed it (`<root>/var/db/pkg/<category>/<pf>`); on a backend with no
-/// such directory, the bare `category/pf`.
+/// The directory of the installed entry `category/pf` as messages print
+/// it; the bare `category/pf` on a backend with no such directory.
 pub(crate) fn entry_path_for_message(root: &Path, category: &str, pf: &str) -> std::path::PathBuf {
     portage_vdb::for_root(root)
         .entry_path(&portage_vdb::EntryKey::new(category, pf))
         .unwrap_or_else(|| std::path::PathBuf::from(format!("{category}/{pf}")))
 }
 
-/// Real top-level `unmerge()`: `dblink.unmerge()` (`prerm` -> delete
-/// files -> `postrm`), then -- only on success -- `dblink.delete()`
-/// (remove the vdb entry itself).
+/// `prerm` -> delete files -> `postrm`, then the vdb entry itself, but
+/// only on success.
+/// Portage: top-level `unmerge()`.
 pub fn run_unmerge(
     ebuild_path: &Path,
     root: &Path,
@@ -888,8 +580,7 @@ pub fn run_unmerge(
     options: &UnmergeOptions,
 ) -> Result<i32, String> {
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
-    // `exists()` of old: one `stat` that follows symlinks, any error is
-    // "not there".
+    // One `stat` that follows symlinks; any error is "not there".
     let installed = portage_vdb::for_root(root)
         .file_meta(
             &portage_vdb::EntryKey::new(env.category.as_str(), env.split.pf.as_str()),
@@ -927,8 +618,7 @@ pub fn run_unmerge(
         also_keep: &[],
         options,
         is_replacement: false,
-        replacement_preserved: &BTreeMap::new(), // Standalone `emerge -C`: no replacing package, so no include
-        // feed (backlog #224).
+        replacement_preserved: &BTreeMap::new(), // Standalone `emerge -C`: no replacing package.
         replacement_needed: &[],
         retire: retire.as_mut(),
     })?;
@@ -1034,12 +724,8 @@ mod tests {
 
     #[test]
     fn remove_contents_leaves_a_locally_modified_file_in_place() {
-        // Real "!mtime" staleness check (see this module's own doc
-        // comment): a file whose live mtime no longer matches what
-        // CONTENTS recorded is treated as locally modified and left
-        // alone -- the same real mechanism that also protects a
-        // CONFIG_PROTECT'd file on removal (its own recorded mtime
-        // reflects the ._cfg-diverted write, never the real file's own).
+        // Changed mtime reads as locally modified and stays (this also
+        // protects CONFIG_PROTECT'd files).
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
@@ -1071,10 +757,8 @@ mod tests {
 
     #[test]
     fn remove_contents_with_unmerge_orphans_deletes_a_locally_modified_file() {
-        // Real `FEATURES=unmerge-orphans` (see this module's own doc
-        // comment): unlike the default (previous test), a locally-
-        // modified `obj`/`sym` entry is deleted anyway -- the `!mtime`
-        // staleness check is bypassed entirely.
+        // Unlike the default (previous test), a locally-modified entry
+        // is deleted anyway.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
@@ -1104,10 +788,8 @@ mod tests {
 
     #[test]
     fn remove_contents_with_unmerge_orphans_still_respects_config_protect() {
-        // Real `FEATURES=unmerge-orphans` explicitly excludes a
-        // CONFIG_PROTECT'd path (real `not self.isprotected(obj)`) --
-        // it isn't a blanket override of CONFIG_PROTECT, just of the
-        // ordinary `!mtime` check.
+        // Excludes a CONFIG_PROTECT'd path: only the `!mtime` check is
+        // overridden, not CONFIG_PROTECT itself.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("etc")).unwrap();
@@ -1137,12 +819,8 @@ mod tests {
 
     #[test]
     fn remove_contents_with_unmerge_orphans_leaves_a_symlink_to_a_directory_alone() {
-        // Real `FEATURES=unmerge-orphans` explicitly excludes a symlink
-        // whose live target is itself a directory (real comment: "Don't
-        // unlink symlinks to directories here since that can remove
-        // /lib and /usr/lib symlinks") -- falls through to the ordinary
-        // mtime-checked removal instead, which also leaves it alone
-        // here (a deliberately stale recorded mtime).
+        // Excludes a symlink to a directory; the mtime-checked removal
+        // leaves it alone here too.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("real-lib")).unwrap();
@@ -1223,19 +901,15 @@ mod tests {
 
     #[test]
     fn remove_contents_skips_a_path_another_same_slot_package_still_owns() {
-        // Real `is_owned`/"replaced" skip (see this module's own doc
-        // comment): a path is left alone entirely -- not even reaching
-        // the mtime check -- whenever some `others_in_slot` entry's own
-        // real vdb `CONTENTS` also claims it.
+        // A path another same-slot entry's `CONTENTS` claims is left alone
+        // before the mtime check.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("usr/share")).unwrap();
         std::fs::write(root.join("usr/share/shared.txt"), b"shared").unwrap();
         std::fs::write(root.join("usr/share/only-mine.txt"), b"mine").unwrap();
 
-        // Real, matching mtimes for both files -- so the "shared.txt"
-        // skip below can only be explained by the `is_owned` check
-        // itself, not incidentally by an `!mtime` mismatch.
+        // Matching mtimes, so only the ownership check can explain the skip.
         let shared_mtime = ebuild_merge::mtime_secs(
             &std::fs::metadata(root.join("usr/share/shared.txt")).unwrap(),
         )
@@ -1284,11 +958,8 @@ mod tests {
 
     #[test]
     fn remove_contents_collects_a_removed_cfgfiledict_path_into_stale_confmem() {
-        // Real `stale_confmem` (`vartree.py:2931-2932`): a removed,
-        // not-`is_owned` path that `cfgfiledict` (the real
-        // `_conf_mem_file` "already offered this MD5" memory) still
-        // remembers is collected so the caller can drop it from that
-        // persisted memory afterward.
+        // A removed path the config memory still remembers is collected
+        // for the caller to drop.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
@@ -1322,11 +993,7 @@ mod tests {
 
     #[test]
     fn remove_contents_does_not_mark_an_owned_path_stale_even_if_cfgfiledict_remembers_it() {
-        // Real ordering (`vartree.py:2928-2932`): `stale_confmem` is an
-        // `elif` off the same `is_owned` check as the "replaced" skip --
-        // a path another same-slot instance still owns is never
-        // considered stale, since the memory is still meaningful for
-        // that surviving instance.
+        // An owned path is never stale: the memory still serves the survivor.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("usr/share")).unwrap();
@@ -1369,15 +1036,8 @@ mod tests {
 
     #[test]
     fn remove_contents_leaves_an_orphaned_symlink_alone_while_its_target_is_still_needed() {
-        // Real bug #326685 (see this module's own doc comment): a live
-        // symlink-to-directory this package's own CONTENTS recorded,
-        // whose exact path another same-slot instance now claims as a
-        // literal `dir` entry, is never deleted directly (the ordinary
-        // `is_owned` skip already protects it) -- but here its own
-        // target directory is never part of *this* package's own `dir`
-        // entries at all (owned/populated by something else entirely),
-        // so `remove_dirs` never gets a chance to resolve it either: the
-        // symlink and its target must both survive untouched.
+        // The orphaned symlink's target is not this package's `dir` entry,
+        // so both survive untouched.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("keep/target")).unwrap();
@@ -1417,13 +1077,8 @@ mod tests {
     #[test]
     fn remove_contents_deletes_an_orphaned_symlink_once_its_target_directory_empties_and_revisits_the_freed_parent()
      {
-        // Real bug #326685 + bug #640058 (see this module's own doc
-        // comment): this time the symlink's own target directory *is*
-        // one of this package's own `dir` entries -- once it's actually
-        // removed (nothing else needs it as a real directory), the
-        // now-truly-orphaned symlink is deleted too, and its own parent
-        // directory (which could only fail to rmdir because the symlink
-        // was still occupying it) gets a revisit and is removed as well.
+        // This time the target is this package's `dir` entry: both go,
+        // and the parent gets a revisit.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("zzz-parent")).unwrap();
@@ -1497,10 +1152,8 @@ mod tests {
 
     #[test]
     fn cleanup_info_dir_leaves_a_real_remaining_file_alone() {
-        // Real condition: cleanup only fires when the *entire* remaining
-        // content is a subset of {"dir","dir.old"} -- any other file
-        // present means the directory genuinely still has real content,
-        // so nothing is removed at all (not even "dir" itself).
+        // Cleanup fires only when everything remaining is the index subset;
+        // any other file keeps it all.
         let tmp = tempdir();
         let info = tmp.join("info");
         std::fs::create_dir_all(&info).unwrap();
@@ -1527,10 +1180,8 @@ mod tests {
 
     #[test]
     fn cleanup_info_dir_fires_on_an_infodirs_inodes_match_even_when_not_named_info() {
-        // Real `_unmerge_dirs()`'s own second trigger half (`vartree.py`
-        // ~3226): `inode_key in infodirs_inodes` fires independently of
-        // the literal `basename == "info"` check -- a real `INFOPATH`/
-        // `INFODIR` entry can name any directory at all.
+        // The inode match fires independently of the `info` name: an
+        // `INFOPATH` entry can name any directory.
         let tmp = tempdir();
         let other = tmp.join("not-info-at-all");
         std::fs::create_dir_all(&other).unwrap();
@@ -1547,12 +1198,8 @@ mod tests {
 
     #[test]
     fn remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file() {
-        // Real `_unmerge_dirs()`'s own INFOPATH cleanup (see this
-        // module's own doc comment): without it, `usr/share/info` would
-        // never empty out at all -- `dir` isn't one of this package's
-        // own CONTENTS entries (real `install-info` writes it outside
-        // any package's own tracked content), so it would otherwise sit
-        // there forever, blocking the directory's own removal.
+        // Without the cleanup the info dir would never empty out (`dir`
+        // is untracked).
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("usr/share/info")).unwrap();
@@ -1583,14 +1230,8 @@ mod tests {
 
     #[test]
     fn remove_contents_removes_a_real_env_d_sourced_infopath_directory_not_named_info() {
-        // End-to-end proof that `env_update::info_dirs_inodes`'s own
-        // real `/etc/env.d` collation and `remove_contents`'s own
-        // `infodirs_inodes` threading actually connect: a real
-        // `INFOPATH` entry can name any directory at all, not just one
-        // literally called "info" (see `cleanup_info_dir_fires_on_an_
-        // infodirs_inodes_match_even_when_not_named_info` above for the
-        // narrower, `cleanup_info_dir`-only version of this same real
-        // condition).
+        // End to end: the env.d collation and the `infodirs_inodes`
+        // threading connect.
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
@@ -1630,16 +1271,8 @@ mod tests {
         );
     }
 
-    /// `UnmergeOptions::default()`, no overrides at all: a locally-
-    /// modified file is deleted anyway, matching real portage's own
-    /// real out-of-the-box behavior (real `unmerge-orphans` is a
-    /// default-on `FEATURES` token, see `UnmergeOptions::
-    /// unmerge_orphans`'s own doc comment). Complements
-    /// `remove_contents_with_unmerge_orphans_deletes_a_locally_
-    /// modified_file` above, which proves the same real logic via an
-    /// explicit `true` argument to `remove_contents` directly rather
-    /// than relying on the real default through the full `run_merge`/
-    /// `run_unmerge` chain.
+    /// With defaults a locally-modified file is deleted anyway
+    /// (`unmerge-orphans` is default-on).
     #[test]
     fn real_unmerge_deletes_a_locally_modified_file_by_portage_default() {
         let tmp = tempdir();
@@ -1711,16 +1344,13 @@ mod tests {
         assert!(!root.join("usr/share/mergepkg/hello-link.txt").exists());
         assert!(!root.join("usr/share/mergepkg").exists());
         assert!(!vdb_dir.exists());
-        // The category dir itself is now empty too.
         assert!(!root.join("var/db/pkg/dev-libs").exists());
     }
 
     #[test]
     fn real_unmerge_drops_a_stale_conf_mem_entry_but_keeps_an_unrelated_one() {
-        // End-to-end proof that `ebuild_merge::read_cfgfiledict`/
-        // `write_cfgfiledict` and `remove_contents`'s own `stale_confmem`
-        // collection actually connect through `run_unmerge` (real
-        // `vartree.py:2747`/`2931-2932`/`3106-3109`).
+        // End to end: the config-memory read, stale collection, and
+        // rewrite connect through `run_unmerge`.
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -1740,9 +1370,7 @@ mod tests {
         .expect("run_merge succeeds");
         assert_eq!(merge_status, 0);
 
-        // A real `_conf_mem_file`: one entry for a path this package
-        // actually owns and is about to remove, one entry for a wholly
-        // unrelated path nothing here touches.
+        // One entry for a path about to be removed, one for an untouched path.
         let mut cfgfiledict = BTreeMap::new();
         cfgfiledict.insert(
             "/usr/share/mergepkg/hello.txt".to_string(),
@@ -1770,14 +1398,8 @@ mod tests {
 
     #[test]
     fn real_in_place_upgrade_via_ebuild_merge_replaces_the_old_slot_mate() {
-        // Real, end-to-end `others_in_slot` proof: `ebuild <file> merge`
-        // othersinslotpkg-1.0, then -2.0 (same SLOT, both writing the
-        // same real shared path). Merging 2.0 is a real in-place upgrade
-        // -- `merge_after_install`'s own replace loop
-        // (`unmerge_replaced_same_slot`, real `dblink.treewalk()`) removes
-        // 1.0 automatically: the shared file survives (2.0 owns it), the
-        // 1.0-only file goes, 1.0's vdb entry is dropped. Then unmerging
-        // 2.0 -- now the sole owner -- finally removes the shared file.
+        // End-to-end in-place upgrade: merging 2.0 removes 1.0 but keeps
+        // the shared file; unmerging 2.0 removes it.
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -1802,7 +1424,6 @@ mod tests {
         let vdb_v1 = root.join("var/db/pkg/dev-libs/othersinslotpkg-1.0");
         let vdb_v2 = root.join("var/db/pkg/dev-libs/othersinslotpkg-2.0");
 
-        // Merging 2.0 replaced 1.0 in place.
         assert!(
             root.join("usr/share/othersinslotpkg/shared.txt").is_file(),
             "2.0 owns shared.txt -- replacing 1.0 must not delete it"
@@ -1823,8 +1444,6 @@ mod tests {
         );
         assert!(vdb_v2.is_dir());
 
-        // Now unmerge the remaining 2.0 entry too: sole owner gone, the
-        // shared file finally goes.
         let unmerge_v2_status = run_unmerge(
             &ebuild_v2,
             &root,
