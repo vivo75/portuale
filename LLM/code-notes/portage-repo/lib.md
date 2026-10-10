@@ -1,0 +1,15 @@
+# crates/portage-repo/src/lib.rs
+Repo/metadata/vdb access for the `emerge --pretend` port.
+
+## module
+- Overlays: every `[reponame]` section in `repos.conf` with a `location` (not just `[DEFAULT] main-repo`) is a candidate source (see `find_repos`). Candidates for a category/package are gathered from ALL configured repos, mirroring Portage's `portdbapi.cp_list`: an overlay isn't "consulted only if the main repo has nothing", every repo's ebuilds are candidates. Sorted ascending by `(priority, name)` exactly like Portage's `prepos_order`, so a tie between two repos providing the identical version breaks in favor of the higher-priority one (see `resolve_pretend`'s final `max_by`). A repo's `priority` is its explicit `repos.conf` value if present, else `-1000` for the main repo (Portage's default, `lib/portage/repository/config.py`) or `0` for anything else.
+- Scope cuts for v1 (all confirmed with the user before implementing): no per-repo `package.mask`/`.unmask`/`profiles/`, no `masters` (eclass inheritance across repos), no `::repo`-constrained atoms (out of `portage-dep`'s v1 grammar already) -- overlays only widen *which ebuilds are candidates*, nothing about how they're evaluated once found.
+- Ebuild metadata comes from `metadata/md5-cache/<cat>/<pf>` (plain `KEY=value` text, confirmed against a vendored tree), never from executing the ebuild in bash. Deliberate: `--pretend` works without the bash dependency that ebuild phase execution eventually requires (see `LLM/agent-context.md` "Deferred: ebuild phase execution").
+- No virtuals, no backtracking (v1 scope cuts).
+- USE/ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use are computed by `portage_profile::resolve_config` (profile chain + make.conf + package.*, with its own documented scope cuts) and threaded through `resolve_pretend`/`resolve_pretend_graph` as a `&portage_profile::Config`. `package.use` is applied per package, not globally (see `effective_use_flags`): matching a `package.use` entry against a specific candidate (to support slotted/versioned entries, not just bare atoms) needs that candidate's resolved SLOT, which only exists at this repo-aware layer.
+- Dependency recursion (see `resolve_pretend_graph`) walks DEPEND and RDEPEND only, with its own documented scope cuts.
+- Config/target roots are read from Portage's own `PORTAGE_CONFIGROOT` and `ROOT` environment variables (the mechanism for relocating `/etc/portage` and the install target, `lib/portage/const.py`), defaulting to `/` when unset. Not a portuale-only convention: it lets tests point at a fixture tree without anything portuale-specific.
+- Full scope writeup: `LLM/what-this-proves.md`; slice origin: `LLM/agent-context.md`'s depgraph/config-resolution follow-up work.
+
+## re-export METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, in_metadata_file
+- One copy only: the `metadata` format (the 23-field set, the format version, `_in_metadata_file`) lives in `portage-vdb`, next to the code that reads it (feat#157 S1.2).

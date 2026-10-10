@@ -2,27 +2,18 @@
 
 use crate::*;
 
-/// One row of `emerge --info`'s `info_pkgs` version table (real
-/// `action_info`'s second `myvars` loop): a resolved `cat/pkg` and its
-/// installed versions, each already rendered `<ver>::<repo>` with the
-/// ` (virtual/foo)` suffix appended when the row was reached by
-/// expanding a `virtual/*` atom.
+/// One row of `emerge --info`'s `info_pkgs` version table: a resolved `cat/pkg` and its
+/// installed versions, each `<ver>::<repo>` (` (virtual/foo)` suffix when virtual-expanded).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoPkgRow {
     pub cp: String,
     pub versions: Vec<String>,
 }
 
-/// One level of real `expand_new_virt` (`portage.dbapi._expand_new_virt`):
-/// a non-`virtual/*` `(cat, pkg)` yields itself (with no provide-suffix);
-/// a `virtual/*` yields the `(cat, pkg)` of every atom in its highest
-/// installed version's vdb `RDEPEND`, flattened against that version's
-/// own installed `USE`, that is itself installed -- each tagged with the
-/// originating `virtual/foo` string. A `virtual/*` that isn't installed,
-/// or whose `RDEPEND` names nothing installed, yields itself unexpanded.
-/// Real recurses into a second virtual reached this way; portuale does
-/// not (real's standard `info` list only ever hits `virtual/os-headers`,
-/// which resolves in one hop).
+/// One level of `expand_new_virt`: a non-`virtual/*` yields itself; a `virtual/*` yields the
+/// installed `(cat, pkg)` of every atom in its highest installed version's vdb `RDEPEND`,
+/// tagged with the originating `virtual/foo`. Uninstalled/empty yields itself; no recursion.
+// Portage: portage.dbapi._expand_new_virt
 pub(crate) fn expand_new_virt(
     root: &Path,
     category: &str,
@@ -61,14 +52,11 @@ pub(crate) fn expand_new_virt(
     }
 }
 
-/// The `info_pkgs` version table `emerge --info` prints (real
-/// `action_info`, `actions.py:2109-2165`): the six hardcoded atoms plus
-/// `<main_repo>/profiles/info_pkgs`, each `expand_new_virt`'d, then one
-/// row per resolved `cat/pkg` that has an installed version -- versions
-/// `vercmp`-sorted, `<ver>::<repo>` (real `_unknown_repo` ->
-/// `<unknown repository>`), with ` (virtual/foo)` on a virtual-provided
-/// row. Rows are returned `cat/pkg`-sorted; the caller pads `cp` to the
-/// widest one.
+/// The `info_pkgs` version table `emerge --info` prints: the six hardcoded atoms
+/// plus `<main_repo>/profiles/info_pkgs`, each `expand_new_virt`'d, then one
+/// `cat/pkg`-sorted row per resolved `cat/pkg` with an installed version --
+/// versions `vercmp`-sorted, `<ver>::<repo>`. The caller pads `cp` to the widest.
+// Portage: action_info, actions.py
 pub fn info_pkgs_table(root: &Path, main_repo_location: &Path) -> Vec<InfoPkgRow> {
     let mut atoms: Vec<String> = [
         "dev-build/autoconf",
@@ -92,8 +80,7 @@ pub fn info_pkgs_table(root: &Path, main_repo_location: &Path) -> Vec<InfoPkgRow
     // (orig cp string, resolved cat, resolved pkg, provide_suffix)
     let mut resolved: Vec<(String, String, String, Option<String>)> = Vec::new();
     for a in &atoms {
-        // Strip an operator / version / slot / use-dep down to `cat/pkg`
-        // (real builds an `Atom`, then only uses `atom.cp` + `vardb.match`).
+        // Only `atom.cp` is used, so strip any operator/version/slot/use-dep first.
         let Some(atom) = portage_dep::parse_atom(a) else {
             continue;
         };
@@ -122,8 +109,7 @@ pub fn info_pkgs_table(root: &Path, main_repo_location: &Path) -> Vec<InfoPkgRow
                 String::new()
             };
             let entry = cp_map.entry(matched_cp.clone()).or_default();
-            // Prefer a duplicate match that carries provider info (real
-            // `if prev_match.provide_suffix: continue`).
+            // Prefer a duplicate match carrying provider info.
             if let Some(existing) = entry.get(&r.version)
                 && existing.contains(" (")
             {
@@ -149,20 +135,11 @@ pub fn info_pkgs_table(root: &Path, main_repo_location: &Path) -> Vec<InfoPkgRow
         .collect()
 }
 
-/// The best visible candidate for `atom_str` plus its `-pv`-style USE
-/// display -- what `emerge --info <atom>` shows in real `action_info`'s
-/// per-package "`<cpv>::<repo> would be built with the following:`"
-/// block (`actions.py:2321` + `pkg_use_display`). `None` when the atom
-/// resolves to no visible ebuild candidate (real `action_info` skips it
-/// with a `- <atom>` "no matches" note -- rendered by the caller).
-///
-/// Deliberately narrow vs real `action_info`: **ebuild candidates only**
-/// (no installed-package `was built with` + `CHOST`/`CFLAGS` vdb
-/// `_aux_env_search` diff, no `(non-installed binary)` line), and no
-/// `pkg_info()` phase execution. The USE display is built exactly the
-/// way a `New` `GraphEntry`'s `use_expand_display` is (all flags, real
-/// `pkg_use_display` for a non-installed package), so it matches the
-/// `emerge -pv` `USE="…"` column verbatim.
+/// The best visible candidate for `atom_str` plus its `-pv`-style USE display. `None`
+/// when the atom resolves to no visible ebuild candidate (the caller renders "no matches").
+/// Deliberately narrow: ebuild candidates only (no installed `was built with` diff, no
+/// binary line) and no `pkg_info()` execution. The USE display matches `emerge -pv` verbatim.
+// Portage: action_info, actions.py, pkg_use_display
 pub fn resolve_info_candidate(
     repos: &[RepoConfig],
     atom_str: &str,
@@ -194,7 +171,7 @@ pub fn resolve_info_candidate(
     };
     let by_str: HashMap<&str, &Candidate> =
         refs.iter().copied().zip(visible.iter().copied()).collect();
-    // USE-dep post-filter (`dev-libs/foo[bar]`), same as `resolve_pretend`.
+    // USE-dep post-filter, same as `resolve_pretend`.
     let matched: Vec<&&Candidate> = matched
         .iter()
         .filter_map(|m| by_str.get(m))
@@ -222,8 +199,7 @@ pub fn resolve_info_candidate(
     else {
         return Ok(None);
     };
-    // Dedup a flag `IUSE` names twice (eclass + ebuild) -- real renders
-    // `sorted(pkg.iuse.all)`, a frozenset. See `refresh_entry_use_display`.
+    // Dedup a flag `IUSE` names twice (eclass + ebuild); Portage renders a set.
     let mut disp_seen: HashSet<String> = HashSet::new();
     let mut disp: Vec<(String, bool)> = best
         .iuse
@@ -249,8 +225,7 @@ pub fn resolve_info_candidate(
         package: &atom.package,
         config,
     });
-    // `all_flags = true` (real `pkg_use_display` for a non-installed
-    // package renders every flag), no installed diff, no reinstall flags.
+    // Renders every flag, like `pkg_use_display` for a non-installed package.
     let use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
         use_flags_display: &disp,
         config,
@@ -259,16 +234,14 @@ pub fn resolve_info_candidate(
         all_flags: true,
         reinst_flags: &HashSet::new(),
     });
-    // Real `action_info`'s `mypkgs` gate (`actions.py:1896-1900`): a
-    // candidate is only listed in the per-package block when its EAPI is
-    // 4+ and its `DEFINED_PHASES` names `info` (so `pkg_info()` can run).
+    // Only listed when its EAPI is 4+ and `DEFINED_PHASES` names `info`, so
+    // `pkg_info()` can run.
     let pf = format!("{}-{}", atom.package, best.version);
     let defines_pkg_info = repo_aux_metadata(&best.repo_location, &atom.category, &pf)
         .ok()
         .and_then(|md| md.get("DEFINED_PHASES").cloned())
         .is_some_and(|dp| dp.split_whitespace().any(|p| p == "info"));
-    // Real `action_info`'s own `portdb.findname(pkg.cpv, myrepo=pkg.repo)`
-    // for the `pkg_info()` run -- `<repo>/<cat>/<pkg>/<pf>.ebuild`.
+    // `<repo>/<cat>/<pkg>/<pf>.ebuild`, for the `pkg_info()` phase run.
     let ebuild_path = best
         .repo_location
         .join(&atom.category)
@@ -283,26 +256,19 @@ pub fn resolve_info_candidate(
     }))
 }
 
-/// One `emerge --info <atom>` per-package result -- see
-/// `resolve_info_candidate`.
+/// One `emerge --info <atom>` per-package result -- see `resolve_info_candidate`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoCandidate {
     /// `category/package-version` of the best visible ebuild candidate.
     pub cpv: String,
     pub repo_name: String,
-    /// Real `_display_use`'s `USE="…"` + one `VAR="…"` per non-hidden
-    /// `USE_EXPAND` group -- each value already enabled-first/disabled-
-    /// last ordered, exactly the pairs `pretend.rs::use_suffix` renders
-    /// for a `New` entry under `-pv`.
+    /// `USE="…"` + one `VAR="…"` per non-hidden `USE_EXPAND` group, same pairs `pretend.rs`
+    /// renders for a `New` entry under `-pv`.
     pub use_expand_display: Vec<(String, String)>,
-    /// Whether this candidate's ebuild defines `pkg_info()` (EAPI 4+ +
-    /// `info` in `DEFINED_PHASES`) -- real `action_info` only prints the
-    /// `<cpv> would be built with the following:` block for such
-    /// packages (`actions.py:1896`).
+    /// Whether this candidate defines `pkg_info()` (EAPI 4+ + `info` in
+    /// `DEFINED_PHASES`); only then is the per-package block printed.
     pub defines_pkg_info: bool,
-    /// `<repo>/<cat>/<pkg>/<pf>.ebuild` -- real `action_info`'s own
-    /// `portdb.findname(pkg.cpv, myrepo=pkg.repo)` for the `pkg_info()`
-    /// phase run (`actions.py:2360`).
+    /// `<repo>/<cat>/<pkg>/<pf>.ebuild`, for the `pkg_info()` phase run.
     pub ebuild_path: PathBuf,
 }
 
@@ -313,32 +279,24 @@ pub struct InfoBinaryCandidate {
     /// `category/package-version` of the chosen binary build.
     pub cpv: String,
     pub repo_name: String,
-    /// Real `pkg_use_display` for a `built=True` package -- the binary's
-    /// own recorded `USE`/`IUSE`, `( )`-wrapped for the current profile's
-    /// forced/masked flags (same as `InstalledInfo`).
+    /// The binary's recorded `USE`/`IUSE`, `( )`-wrapped for the profile's
+    /// forced/masked flags (same shape as `InstalledInfo`).
     pub use_expand_display: Vec<(String, String)>,
-    /// `$PKGDIR/<PATH>` -- the archive itself, for extracting its
-    /// embedded `<pf>.ebuild` to run `pkg_info()` (real `action_info`'s
-    /// `bindb.bintree.getname(cpv)` + `xpak.tbz2(...).getfile` / `gpkg
-    /// (...).get_metadata`, `actions.py:2362-2384`).
+    /// `$PKGDIR/<PATH>` -- the archive itself, for extracting its embedded
+    /// `<pf>.ebuild` to run `pkg_info()`.
     pub archive_path: PathBuf,
-    /// `category`, `package`, `pf` of the chosen build -- the caller lays
-    /// the extracted ebuild out as `<scratch>/<category>/<package>/
-    /// <pf>.ebuild` so the phase driver can derive `CATEGORY`/`PN` from
-    /// the path the way real `doebuild(tree="bintree")` derives them from
-    /// the binpkg metadata.
+    /// `category`, `package`, `pf` of the chosen build -- the caller lays the
+    /// extracted ebuild out as `<scratch>/<category>/<package>/<pf>.ebuild` so
+    /// the phase driver derives `CATEGORY`/`PN` from the path.
     pub category: String,
     pub package: String,
     pub pf: String,
 }
 
-/// Whether `atom_str`'s `cat/pkg` has *any* local binary build -- real
-/// `action_info`'s own `bindb.match(x.cp)` `cp_exists` probe
-/// (`actions.py:1883`), which (unlike `resolve_info_binary_candidate`)
-/// does not gate on `pkg_info()`: a binary-only package still isn't a
-/// "no ebuilds to satisfy" error even if it can't be `pkg_info()`'d.
-/// Takes the run's already-built index (backlog #123) instead of
-/// re-deriving it from `&Config`.
+/// Whether `atom_str`'s `cat/pkg` has *any* local binary build. Unlike
+/// `resolve_info_binary_candidate` this does not gate on `pkg_info()`: a
+/// binary-only package still isn't a "no ebuilds to satisfy" error.
+// Portage: action_info, bindb.match(x.cp)
 pub fn has_local_binary_candidate(
     local_binpkg: &std::sync::Arc<BinaryIndex>,
     atom_str: &str,
@@ -349,16 +307,10 @@ pub fn has_local_binary_candidate(
     !list_binary_candidates(local_binpkg, &atom.category, &atom.package).is_empty()
 }
 
-/// Real `action_info`'s `(portdb, "ebuild"), (bindb, "binary")` search
-/// loop for the **binary** half (`actions.py:1876-1900`), reached only
-/// when the atom has no installed vdb match and no visible ebuild
-/// candidate, and only when `--usepkg`/`--usepkgonly` is on. A binary
-/// build is chosen (highest version) *only* if its EAPI is 4+ **and**
-/// its `DEFINED_PHASES` names `info` -- real never lists a binary
-/// candidate it couldn't run `pkg_info()` for, so unlike the ebuild
-/// path there is no separate "list but don't run" state. `None` when no
-/// such build exists. Takes the run's already-built index (backlog #123)
-/// instead of re-deriving it from `&Config`.
+/// The **binary** half of the search: only with no installed match and no visible ebuild
+/// candidate, and only under `--usepkg`/`--usepkgonly`. The highest-version build whose
+/// EAPI is 4+ with `info` in `DEFINED_PHASES` wins; `None` when no such build exists.
+// Portage: action_info, actions.py
 pub fn resolve_info_binary_candidate(
     config: &portage_profile::Config,
     atom_str: &str,
@@ -386,8 +338,7 @@ pub fn resolve_info_binary_candidate(
         return Ok(None);
     };
     let by_str: HashMap<&str, &Candidate> = refs.iter().copied().zip(candidates.iter()).collect();
-    // Highest version first, then take the first that defines pkg_info()
-    // -- real `matches.reverse()` + `break` on the first that passes.
+    // Highest version first, then the first defining `pkg_info()`.
     let mut ranked: Vec<&Candidate> = matched
         .iter()
         .filter_map(|m| by_str.get(m).copied())
@@ -464,25 +415,17 @@ pub fn resolve_info_binary_candidate(
     Ok(None)
 }
 
-/// Real `mydesiredvars` -- the `action_info` per-package block for an
-/// **installed** package prints each of these whose vdb-recorded value
-/// differs from the current config, and an `Unset: …` line for the ones
-/// with no recorded value (`actions.py:2333-2344`).
+/// The `mydesiredvars` the per-package block prints for an installed package:
+/// each `CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS` whose recorded value
+/// differs from the current config, plus an `Unset:` line for unrecorded ones.
+// Portage: action_info, actions.py
 pub(crate) const INFO_INSTALLED_VARS: &[&str] =
     &["CHOST", "CFLAGS", "CXXFLAGS", "FEATURES", "LDFLAGS"];
 
-/// Real `vartree._aux_env_search` (`dbapi/vartree.py:1059-1126`): the
-/// saved build-time environment of an installed package, read from its
-/// vdb `environment.bz2` -- a bzip2-compressed bash `set`-style env
-/// dump. Real decompresses by spawning `bzip2 -d -c` (or
-/// `PORTAGE_BUNZIP2_COMMAND -c`); this crate is subprocess-free, so it
-/// decompresses in-process with the pure-Rust `bzip2` backend instead
-/// (see this crate's `Cargo.toml` -- zero C linkage, musl story
-/// untouched). Returns the present `wanted` vars only; a missing or
-/// unreadable `environment.bz2` yields an empty map (real's own
-/// `if not os.path.isfile(env_file): return {}` -- and a corrupt
-/// archive breaks real's pipe the same effective way), which the caller
-/// reports as all-`Unset:`, exactly like real.
+/// An installed package's saved build-time environment from its vdb `environment.bz2`
+/// (a bzip2-compressed bash env dump), decompressed in-process. Returns the present
+/// `wanted` vars only; a missing, unreadable or corrupt archive yields an empty map.
+// Portage: vartree._aux_env_search
 pub fn read_vdb_env_vars(
     root: &Path,
     category: &str,
@@ -504,26 +447,13 @@ pub fn read_vdb_env_vars(
     parse_env_assignments(&text, wanted)
 }
 
-/// Real `_aux_env_search`'s own assignment scanner
-/// (`vartree.py:1082-1123`, "borrowed from
-/// `filter-bash-environment.py`"): `var_assign_re =
-/// (^|^declare\s+-\S+\s+|^declare\s+|^export\s+)([^=\s]+)=("|\')?(.*)$`
-/// with `close_quote_re = (\\"|"|\')\s*$`. A quoted value whose closer
-/// is not on the same line consumes following lines verbatim until the
-/// closer (or EOF); the value is then right-stripped with the closing
-/// quote dropped -- even at EOF without a closer, real still drops the
-/// last char. Later assignments overwrite earlier ones. Only `wanted`
-/// keys are returned, but continuation lines are consumed regardless
-/// (real builds the value before its `if key in variables` check, so a
-/// skipped multi-line value must not leak its body lines as fresh
-/// assignments).
+/// The `environment.bz2` assignment scanner: `declare`/`export`-prefixed or plain `KEY=value`
+/// lines, with `"`/`'` quoting and multi-line quoted values (later assignments win). Only
+/// `wanted` keys are returned, but continuation lines are consumed regardless.
+// Portage: vartree.py, _aux_env_search (borrowed from filter-bash-environment.py)
 pub(crate) fn parse_env_assignments(text: &str, wanted: &[&str]) -> HashMap<String, String> {
     fn strip_prefix(line: &str) -> &str {
-        // Real alternation order, longest first (regex backtracking
-        // reaches the same): `declare -FLAGS<ws>`, `declare<ws>`,
-        // `export<ws>`, plain. `<ws>` is any whitespace run (real
-        // `\s+`), and a failed dash-form backtracks to the plain
-        // `declare<ws>` form.
+        // Longest-first: `declare -FLAGS<ws>`, `declare<ws>`, `export<ws>`, plain.
         for word in ["declare", "export"] {
             if let Some(rest) = line.strip_prefix(word)
                 && rest.starts_with(|c: char| c.is_whitespace())
@@ -549,9 +479,7 @@ pub(crate) fn parse_env_assignments(text: &str, wanted: &[&str]) -> HashMap<Stri
         line
     }
     fn closer_at_end(s: &str, quote: char) -> bool {
-        // Real `have_end_quote`: one leftmost `close_quote_re` search;
-        // an escaped `\"` (backslash + quote) at the very end does NOT
-        // close, a bare trailing quote does.
+        // A bare trailing quote closes; an escaped `\"` at the very end does not.
         let t = s.trim_end();
         let mut chars = t.chars().rev();
         if chars.next() != Some(quote) {
@@ -562,8 +490,7 @@ pub(crate) fn parse_env_assignments(text: &str, wanted: &[&str]) -> HashMap<Stri
     let mut out = HashMap::new();
     let mut lines = text.lines();
     while let Some(line) = lines.next() {
-        // `([^=\s]+)=`: non-empty key of non-`=`/non-whitespace,
-        // immediately followed by `=`.
+        // Key: non-empty run of non-`=`/non-whitespace, immediately followed by `=`.
         let body = strip_prefix(line);
         let eq = body
             .bytes()
@@ -584,10 +511,7 @@ pub(crate) fn parse_env_assignments(text: &str, wanted: &[&str]) -> HashMap<Stri
                     let t = rest.trim_end();
                     t[..t.len() - 1].to_string()
                 } else {
-                    // Real appends each raw stdout line *with* its
-                    // `\n` (only the first fragment, real's regex
-                    // group, has none) -- `lines()` stripped them, so
-                    // the non-closing ones are restored.
+                    // `lines()` stripped newlines; restore the non-closing ones.
                     let mut joined = rest.to_string();
                     for next in lines.by_ref() {
                         joined.push_str(next);
@@ -608,27 +532,13 @@ pub(crate) fn parse_env_assignments(text: &str, wanted: &[&str]) -> HashMap<Stri
     out
 }
 
-/// Every installed vdb entry `atom_str` matches, with the data real
-/// `action_info` prints for an installed package: `<cpv>::<repo> was
-/// built with the following:` + its `USE="…"` line (from the vdb `USE`/
-/// `IUSE` files) + the `mydesiredvars` (`INFO_INSTALLED_VARS`) whose
-/// stored value differs from the current config, plus the ones with no
-/// stored value. Real `action_info` checks the vdb **first**: any
-/// installed match short-circuits the ebuild/binary lookup
-/// (`actions.py:1869-1875`).
-///
-/// The `mydesiredvars` values come from the package's vdb
-/// `environment.bz2` via [`read_vdb_env_vars`] -- real
-/// `_aux_env_search`, and *only* from there (real never consults the
-/// individual `build-info` files for these five). A var absent from the
-/// saved env -- including a vdb entry with no `environment.bz2` at
-/// all -- is `Unset:`, even if a same-named individual file exists; a
-/// present-but-empty value that matches the (empty) current config
-/// prints nowhere at all (real's own `None` vs `split()`-equal
-/// branches, `actions.py:2336-2342`). The `USE` line's `( )`
-/// force/mask wrap (real `pkg_use_display`) is shipped, via the same
-/// `forced_or_masked_flags` the ebuild-candidate side
-/// (`resolve_info_candidate`) already uses.
+/// Every installed vdb entry `atom_str` matches, with its `<cpv>::<repo> was built with`
+/// USE display plus the differing/`Unset:` `mydesiredvars`. The vdb is checked first: any
+/// installed match short-circuits the ebuild/binary lookup. The `mydesiredvars` values come
+/// from the package's vdb `environment.bz2` via [`read_vdb_env_vars`] *only*: an absent var
+/// is `Unset:` even if a same-named file exists; a present-but-empty value matching the
+/// (empty) current config prints nowhere.
+// Portage: action_info, actions.py, vartree._aux_env_search
 pub fn resolve_installed_info(
     root: &Path,
     atom_str: &str,
@@ -674,10 +584,7 @@ pub fn resolve_installed_info(
             .collect();
         disp.sort_by_key(|p| alnum_sort_key(&p.0));
         disp.dedup();
-        // Real `pkg_use_display`'s `( )` force/mask wrap: same
-        // `forced_or_masked_flags` the ebuild-candidate side already
-        // uses (`resolve_info_candidate`), fed from the vdb's own
-        // recorded `IUSE`/`KEYWORDS` instead of a tree candidate's.
+        // `( )` force/mask wrap from the vdb's own recorded `IUSE`/`KEYWORDS`.
         let vdb_keywords: Vec<String> =
             read_vdb_string(root, &atom.category, &atom.package, version, "KEYWORDS")
                 .split_whitespace()
@@ -700,11 +607,7 @@ pub fn resolve_installed_info(
             reinst_flags: &HashSet::new(),
         });
 
-        // Real `mydesiredvars` sourcing (`actions.py:2335-2342` over
-        // `_aux_env_search`): the saved env, or nothing -- a var the
-        // env lacks is `Unset:`, and a present value that matches the
-        // current config (including empty-equals-empty) prints nowhere.
-        // The printed value is real's raw `myval`, untrimmed.
+        // The printed value is the raw saved value, untrimmed.
         let env_vars = read_vdb_env_vars(
             root,
             &atom.category,
@@ -725,9 +628,7 @@ pub fn resolve_installed_info(
             }
         }
 
-        // Real `action_info`'s `if metadata["DEFINED_PHASES"]: if "info"
-        // not in ...: continue` -- names `info`, OR is entirely empty
-        // (falsy-check quirk).
+        // Fires when `DEFINED_PHASES` names `info`, or is entirely empty.
         let vdb_defined_phases = read_vdb_string(
             root,
             &atom.category,
@@ -768,22 +669,13 @@ pub struct InstalledInfo {
     pub differing_vars: Vec<(String, String)>,
     /// `INFO_INSTALLED_VARS` with no vdb value -- the `Unset: …` line.
     pub unset_vars: Vec<String>,
-    /// Whether `action_info` attempts `>>> Attempting to run pkg_info()`
-    /// for this installed match (`actions.py:2350-2356`). Unlike the
-    /// ebuild-candidate path, an installed package is listed in `mypkgs`
-    /// regardless; the phase step is gated on real's own
-    /// `if metadata["DEFINED_PHASES"]: if "info" not in ...split(): continue`
-    /// -- so it fires when `DEFINED_PHASES` *names* `info`, **and also**
-    /// when `DEFINED_PHASES` is entirely empty (real's falsy-check quirk
-    /// -- an old / hand-written vdb entry with no `DEFINED_PHASES` file at
-    /// all). A `DEFINED_PHASES` of `"-"` (the modern "no phases" marker)
-    /// is truthy and does not name `info`, so it does *not* fire.
+    /// Whether `pkg_info()` is attempted for this match: fires when `DEFINED_PHASES` names
+    /// `info`, **and also** when it is entirely empty (falsy-check quirk). `"-"` does *not* fire.
+    // Portage: action_info, actions.py
     pub defines_pkg_info: bool,
-    /// `category`, `package`, `version` of this vdb entry -- real
-    /// `vardb.findname(pkg.cpv)` locates `<pf>.ebuild`; portuale runs the
-    /// `pkg_info()` phase from the vdb-saved `environment.bz2` +
-    /// `<pf>.ebuild` (`ebuild_merge::run_vdb_saved_env_phase`), the same
-    /// path `--config` uses.
+    /// `category`, `package`, `version` of this vdb entry -- the `pkg_info()`
+    /// phase runs from the vdb-saved `environment.bz2` + `<pf>.ebuild`, the
+    /// same path `--config` uses.
     pub category: String,
     pub package: String,
     pub version: String,

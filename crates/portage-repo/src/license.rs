@@ -2,26 +2,11 @@
 
 use crate::*;
 
-/// LICENSE's own PMS 7.3.2 grammar structure -- plain license tokens,
-/// `||` any-of groups, and (once a `flag?` USE-conditional has already
-/// been resolved) the *bundle* a conditional or plain sub-group
-/// contributes when it sits directly inside a `||` group's own
-/// alternative list (`AllOf`) -- verified directly against real
-/// `portage.dep.use_reduce(..., opconvert=True)`: a `||` group's own
-/// members are flat (`['||', 'MIT', 'BSD']`, not double-nested), but a
-/// *plain* sub-group (or a conditional's own resolved contents) sitting
-/// directly inside that same `||`'s member list stays a genuine nested
-/// unit (`['||', ['GPL-2', 'MIT'], 'BSD']` for `|| ( ( GPL-2 MIT ) BSD
-/// )` -- "GPL-2 AND MIT" is one whole alternative, not two independent
-/// ones) -- while the identical sub-group anywhere *else* (top level, or
-/// inside another plain/conditional group) flattens directly into its
-/// parent instead (opconvert's own "AND of AND is just AND" collapse).
-/// This distinction is why `use_reduce_flat` (which discards *all* group
-/// boundaries, a deliberate, already-documented simplification real
-/// DEPEND/RDEPEND recursion in portuale relies on) can't be reused for
-/// LICENSE at all -- the same reasoning that already made
-/// `portage_required_use` its own separate algorithm rather than a mode
-/// of this same function.
+/// LICENSE's PMS 7.3.2 structure: plain tokens, `||` any-of groups, and the
+/// bundle a conditional or plain sub-group contributes inside a `||` alternative
+/// list (`AllOf`). A flat `use_reduce` can't be reused here: group boundaries
+/// decide masking, unlike DEPEND/RDEPEND recursion.
+// Portage: portage.dep.use_reduce with opconvert=True
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LicenseNode {
     License(String),
@@ -29,23 +14,18 @@ pub(crate) enum LicenseNode {
     AllOf(Vec<LicenseNode>),
 }
 
-/// What opened the bracket currently being collected -- mirrors
-/// `use_reduce_flat`'s own `need_bracket`/conditional-pop dance, just
-/// carried explicitly here since this parser's own stack holds
-/// `LicenseNode`s (which can't carry a pending "flag?" or "||" marker
-/// the way a flat `Vec<String>` stack can).
+/// What opened the bracket being collected; carried explicitly since the stack
+/// holds `LicenseNode`s, which can't carry a pending marker like a flat token stack.
 pub(crate) enum PendingBracket {
     None,
     Conditional(String),
     AnyOf,
 }
 
-/// Parses `tokens` (a `LICENSE` string, pre-split on whitespace) into
-/// its own real `||`/USE-conditional tree structure -- see
-/// `LicenseNode`'s own doc comment for the exact real-structure ground
-/// truth this mirrors, and why. Bracket/`need_bracket` handling is
-/// otherwise a direct structural port of `use_reduce_flat`'s own
-/// (`portage-use-reduce`), just building a tree instead of flattening.
+/// Parses pre-split `LICENSE` tokens into their `||`/USE-conditional tree (see
+/// `LicenseNode`). Bracket handling structurally mirrors `use_reduce_flat`,
+/// building a tree instead of flattening.
+// Portage: portage.dep.use_reduce with opconvert=True
 pub(crate) fn parse_license_tree(
     tokens: &[String],
     use_flags: &HashSet<String>,
@@ -74,10 +54,8 @@ pub(crate) fn parse_license_tree(
                 }
                 let collected = stack.pop().unwrap();
                 let opened_by = bracket_stack.pop().unwrap();
-                // Whether the group we just closed sits directly inside
-                // a `||`'s own alternative list -- decides flatten
-                // (`extend`) vs. nest (`AllOf`) for a plain/conditional
-                // group; see `LicenseNode`'s own doc comment.
+                // A group closed directly inside a `||` alternative list nests
+                // (`AllOf`); anywhere else it flattens into its parent.
                 let parent_is_any_of = matches!(bracket_stack.last(), Some(PendingBracket::AnyOf));
                 match opened_by {
                     PendingBracket::AnyOf => {
@@ -150,12 +128,10 @@ pub(crate) fn parse_license_tree(
     Ok(stack.pop().unwrap())
 }
 
-/// Whether `nodes` (implicit AND -- the top level, or an `AllOf` bundle)
-/// has at least one license that isn't in `acceptable`. Mirrors real
-/// `LicenseManager._getMaskedLicenses`'s own non-`||` branch, as a bool
-/// rather than the full "list every masked license" diagnostic (this
-/// portuale has no mask-reason display to feed it -- same simplification
-/// `check_required_use` already makes for REQUIRED_USE).
+/// Whether `nodes` (implicit AND) has a license missing from `acceptable`.
+/// A bool rather than the full masked-license list (there is no mask-reason
+/// display to feed it).
+// Portage: LicenseManager._getMaskedLicenses, non-|| branch
 pub(crate) fn tree_has_masked_license(nodes: &[LicenseNode], acceptable: &HashSet<String>) -> bool {
     nodes.iter().any(|n| node_has_masked_license(n, acceptable))
 }
@@ -164,23 +140,17 @@ pub(crate) fn node_has_masked_license(node: &LicenseNode, acceptable: &HashSet<S
     match node {
         LicenseNode::License(name) => !acceptable.contains(name),
         LicenseNode::AllOf(members) => tree_has_masked_license(members, acceptable),
-        // Satisfied (not masked) once at least one alternative is fully
-        // unmasked -- mirrors real _getMaskedLicenses's own "||" branch:
-        // "if not tmp: return []" the moment one alternative comes back
-        // clean.
+        // A `||` group is satisfied once one alternative is fully unmasked.
         LicenseNode::AnyOf(members) => !members
             .iter()
             .any(|m| !node_has_masked_license(m, acceptable)),
     }
 }
 
-/// The list form of `tree_has_masked_license` -- real
-/// `LicenseManager._getMaskedLicenses`'s own return value: every license
-/// name that isn't in `acceptable`. For a `||` group, `[]` the moment
-/// one alternative is fully clean; otherwise every masked name across
-/// every alternative ("we don't know which combination the user will
-/// unmask"). Order-preserving (real appends as it walks); the caller
-/// sorts + dedups.
+/// The list form of `tree_has_masked_license`: every unaccepted license name.
+/// For a `||` group, empty once one alternative is fully clean; otherwise every
+/// masked name across every alternative. Order-preserving; the caller sorts.
+// Portage: LicenseManager._getMaskedLicenses
 pub(crate) fn tree_masked_license_names(
     nodes: &[LicenseNode],
     acceptable: &HashSet<String>,
@@ -220,15 +190,10 @@ pub(crate) fn node_masked_license_names(
     }
 }
 
-/// Whether `license_str` (a candidate's own real `LICENSE` metadata,
-/// PMS 7.3.2) has at least one required-but-unaccepted license, given
-/// `use_flags` (this candidate's own resolved USE, only ever consulted
-/// if `license_str` actually contains a `?`) and `acceptable` (the
-/// fully-resolved, concrete set of accepted license names for this
-/// specific candidate -- see `license_accepted`). Mirrors real
-/// `LicenseManager.getMissingLicenses` (via `_getMaskedLicenses`), ported
-/// as a bool. An empty `license_str` is never masked, matching real
-/// `use_reduce("")`'s own empty result.
+/// Whether `license_str` (PMS 7.3.2) has a required-but-unaccepted license, given
+/// this candidate's resolved USE and its concrete acceptable set (see
+/// `license_accepted`). An empty string is never masked.
+// Portage: LicenseManager.getMissingLicenses via _getMaskedLicenses
 pub(crate) fn has_masked_license(
     license_str: &str,
     use_flags: &HashSet<String>,
@@ -242,18 +207,11 @@ pub(crate) fn has_masked_license(
     Ok(tree_has_masked_license(&tree, acceptable))
 }
 
-/// This candidate's own effective `ACCEPT_LICENSE`/`ACCEPT_PROPERTIES`/
-/// `ACCEPT_RESTRICT`-style symbolic token list: `global_accept`, with
-/// every matching `package_accept` entry's own tokens layered on top,
-/// in atom-specificity order -- real `_getPkgAcceptLicense`'s own
-/// `accept_license.extend(x)` loop over `ordered_by_atom_specificity`
-/// matches (and its `_getMissingProperties`/`_getMissingRestrict`
-/// siblings, which do the identical thing for their own accept lists).
-/// These accept lists only ever *extend* (no `-token` cancellation
-/// across sources), so a global atom-specificity sort here is harmless --
-/// unlike `package.use.mask`/`.force` (see `specificity_ordered_flags`),
-/// which must stay in profile-chain order so a child `-flag` can cancel
-/// a parent mask.
+/// This candidate's effective symbolic accept list: `global_accept` layered with
+/// every matching `package_accept` entry's tokens, in atom-specificity order.
+/// Accept lists only ever extend, so unlike `package.use.mask`/`.force` no
+/// profile-chain ordering is needed.
+// Portage: _getPkgAcceptLicense, _getMissingProperties, _getMissingRestrict
 pub(crate) fn resolve_accept_tokens(
     global_accept: &[String],
     package_accept: &[(String, Vec<String>)],
@@ -271,14 +229,10 @@ pub(crate) fn resolve_accept_tokens(
     accept_tokens
 }
 
-/// Every token `value_str` (a `LICENSE`/`PROPERTIES`/`RESTRICT` string)
-/// could possibly mention, USE-conditionals included -- real
-/// `matchall=1` semantics (every conditional forced active), needed to
-/// resolve a `"*"` token in an accept-list into something concrete.
-/// Reuses `portage_use_reduce::use_reduce_flat` with `MatchMode::All`
-/// directly: group boundaries (`||`) don't matter for this flat "what
-/// token names exist at all" question, unlike the real masking check
-/// itself for `LICENSE` (see `has_masked_license`'s own doc comment).
+/// Every token `value_str` could mention, USE-conditionals included (every
+/// conditional forced active). Needed to resolve a `"*"` accept-list token into
+/// something concrete. Group boundaries don't matter for this flat question.
+// Portage: matchall=1 semantics
 pub(crate) fn all_mentioned_tokens(value_str: &str) -> Result<HashSet<String>, Error> {
     let tokens: Vec<String> = value_str.split_whitespace().map(String::from).collect();
     let flat = portage_use_reduce::use_reduce_flat(
@@ -289,12 +243,10 @@ pub(crate) fn all_mentioned_tokens(value_str: &str) -> Result<HashSet<String>, E
     Ok(flat.into_iter().filter(|t| t != "||").collect())
 }
 
-/// Resolves `accept_tokens` (symbolic -- `"*"`/`"-*"`/`"-token"`/
-/// `"token"`) into a concrete acceptable-token set, given
-/// `all_mentioned` (see `all_mentioned_tokens`). Shared by
-/// `license_accepted`/`metadata_key_accepted` -- real
-/// `getMissingLicenses`/`_getMissingProperties`/`_getMissingRestrict`
-/// all use this identical algorithm, just for a different metadata key.
+/// Resolves symbolic accept tokens (`"*"`/`"-*"`/`"-token"`/`"token"`) into a
+/// concrete acceptable set, given everything the value could mention.
+/// Shared by `license_accepted`/`metadata_key_accepted`.
+// Portage: getMissingLicenses, _getMissingProperties, _getMissingRestrict
 pub(crate) fn resolve_acceptable_tokens(
     accept_tokens: &[String],
     all_mentioned: &HashSet<String>,
@@ -350,12 +302,9 @@ pub(crate) fn license_accepted(
     }
 }
 
-/// The exact license names `candidate`'s own `LICENSE` needs accepting --
-/// real `LicenseManager.getMissingLicenses` in its list form (via
-/// `_getMaskedLicenses`). Empty when the LICENSE is fully accepted (or
-/// empty, or unparseable). Sorted + deduped, the form
-/// `_display_autounmask`'s `license_msg` prints (`' '.join(sorted(
-/// missing_licenses))`). Shares every step with `license_accepted`.
+/// The license names `candidate`'s `LICENSE` still needs accepting -- empty when
+/// fully accepted (or empty, or unparseable). Sorted + deduped for display.
+// Portage: LicenseManager.getMissingLicenses in list form
 pub(crate) fn missing_licenses(
     candidate: &Candidate,
     category: &str,

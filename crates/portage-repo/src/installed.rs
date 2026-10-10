@@ -2,45 +2,25 @@
 
 use crate::*;
 
-/// Lists every installed `(version, slot, sub_slot)` triple for
-/// `category/package` found in the vdb under `root`
-/// (`<root>/var/db/pkg/<category>/<package>-<version>/`), reading each
-/// entry's `SLOT` file via `split_slot` (defaulting to `("0", "0")` if
-/// missing, same fallback as `list_candidates`). Used for blocker
-/// matching, which needs slots (sub-slot included, same "closes a real
-/// gap" reasoning as `Candidate::sub_slot`'s own doc comment) to support
-/// slotted blocker atoms -- `installed_versions` below doesn't need this
-/// and stays a plain version list for its existing callers. `pub`
-/// (unlike most of this crate's own internal helpers) so
-/// `portuale/src/pretend.rs`'s own `--deselect`/`-W` implementation can
-/// reuse it directly -- real `action_deselect` (`lib/_emerge/actions.py`)
-/// only ever consults `vardb`/the world file, never repos/config at
-/// all, so this is the one real feature in portuale with no need for
-/// `portage-repo`'s own repo/config-resolution machinery. `run_deselect`
-/// itself only ever uses `version`/`slot` from this (real
-/// `Atom(f"{pkg.cp}:{pkg.slot}")` never includes sub-slot either), so
-/// adding `sub_slot` here doesn't change its behavior at all.
+/// Every installed `(version, slot, sub_slot)` triple for `category/package` in the vdb
+/// under `root` (`SLOT` via `split_slot`, `("0", "0")` when missing). `pub` so `pretend.rs`'s
+/// `--deselect` implementation reuses it directly. Only `version`/`slot` feed deselect.
+// Portage: lib/_emerge/actions.py, action_deselect; Atom(f"{pkg.cp}:{pkg.slot}")
 pub fn installed_candidates(
     root: &Path,
     category: &str,
     package: &str,
 ) -> Vec<(String, String, String)> {
-    // Per-`(root, cat, pkg)` memo of the scan below: a deep `emerge -pu`
-    // asks for the same few thousand cps over and over (12,684 calls on
-    // the reference workload), and every miss re-reads a whole category
-    // directory plus one `SLOT` file per entry. Validated by the mtime of
-    // each scanned category dir (1–2 `statx`, not ~80); negative results
-    // are cached too. Thread-local so the lookup stays lock-free.
+    // Memoized per `(root, cat, pkg)`, validated by category-dir mtime (negative
+    // results cached too). Thread-local to stay lock-free.
     type CandidatesCache =
         HashMap<(PathBuf, String, String), (Vec<(String, u64)>, Vec<(String, String, String)>)>;
     thread_local! {
         static CANDIDATES_CACHE: RefCell<CandidatesCache> = RefCell::new(HashMap::new());
     }
     let sources = installed_cp_sources(category, package);
-    // feat#157 S1.2: the validity signal is the category directory's
-    // generation (`st_mtime` in nanos, 0 when missing: every portuale vdb
-    // mutation replaces or removes a package dir, so the *category* dir
-    // mtime catches all of them), read through the registered backend.
+    // Validity signal: the category directory's generation (0 when missing), read
+    // through the registered backend.
     let db = portage_vdb::for_root(root);
     let mut fps: Vec<(String, u64)> = Vec::with_capacity(sources.len());
     for (src_cat, _) in &sources {
@@ -54,9 +34,7 @@ pub fn installed_candidates(
         category.to_string(),
         package.to_string(),
     );
-    // Backlog #124 E1: compare inside the borrow and clone only the hit
-    // -- the old `.get(&key).cloned()` deep-cloned `Vec<(PathBuf, u64)>`
-    // solely to compare it and drop it, on every one of the 12,684 hits.
+    // Compare inside the borrow; clone only on a hit.
     if let Some(out) = CANDIDATES_CACHE.with(|c| {
         c.borrow()
             .get(&key)
@@ -78,16 +56,13 @@ pub(crate) fn installed_candidates_uncached(
     category: &str,
     package: &str,
 ) -> Vec<(String, String, String)> {
-    // Real `profiles/updates/` package moves: `<category>/<package>` may
-    // be the *post*-`move` name while the vdb still holds the package
-    // under its pre-`move` `cat/pkg` dir. Scan every source name that
-    // maps onto this one (`installed_cp_sources`); `slotmove` then
-    // rewrites each hit's `(slot, sub_slot)`.
+    // `<category>/<package>` may be the post-`move` name while the vdb still holds
+    // the pre-`move` dir: scan every source name mapping onto this one, then apply
+    // `slotmove` to each hit's `(slot, sub_slot)`.
     let db = portage_vdb::for_root(root);
     let mut out = Vec::new();
     for (src_cat, src_pkg) in sources {
-        // Live entries only (directories, no in-progress `-MERGING-<pf>`
-        // entry -- real `vardbapi._excluded_dirs`), in listing order.
+        // Live entries only (directories, no in-progress `-MERGING-<pf>` entries).
         let Ok(names) = db.category_entries(&src_cat) else {
             continue;
         };
@@ -96,12 +71,8 @@ pub(crate) fn installed_candidates_uncached(
                 continue;
             };
             let version = version.to_string();
-            // #109 S3: the same `vdb_aux_get` seam the other vdb readers
-            // use, so a validated consolidated snapshot serves `SLOT`
-            // too. `resolve_vdb_entry` resolves this same entry back from
-            // `(src_cat, src_pkg, version)`, so the value is unchanged on
-            // the fallback path (the old read `.trim()`ed, the helper
-            // normalises).
+            // Through the shared `vdb_aux_get` seam, so a validated snapshot serves
+            // `SLOT` too.
             let (slot, sub_slot) =
                 split_slot(&vdb_aux_get(root, &src_cat, &src_pkg, &version, "SLOT"));
             let (slot, sub_slot) = apply_updates_to_slot(category, package, &slot, &sub_slot);
@@ -111,9 +82,9 @@ pub(crate) fn installed_candidates_uncached(
     out
 }
 
-/// The repo an installed `category/package-version` was merged from --
-/// its vdb `repository` file's first line, or `"__unknown__"` (real
-/// `portage.versions._unknown_repo`) when that file is absent or empty.
+/// The repo an installed `category/package-version` was merged from: its vdb
+/// `repository` file's first line, or `"__unknown__"` when absent or empty.
+// Portage: portage.versions._unknown_repo
 pub fn installed_pkg_repo(root: &Path, category: &str, package: &str, version: &str) -> String {
     let repo = read_vdb_string(root, category, package, version, "repository");
     if repo.is_empty() {
@@ -124,7 +95,7 @@ pub fn installed_pkg_repo(root: &Path, category: &str, package: &str, version: &
 }
 
 /// Every installed version of `category/package` as an `InstalledRef`
-/// (version + slot/sub_slot from `SLOT`, repo from `installed_pkg_repo`).
+/// (version + slot/sub_slot + repo).
 pub fn installed_refs(root: &Path, category: &str, package: &str) -> Vec<InstalledRef> {
     installed_candidates(root, category, package)
         .into_iter()
@@ -137,15 +108,10 @@ pub fn installed_refs(root: &Path, category: &str, package: &str) -> Vec<Install
         .collect()
 }
 
-/// The `SLOT` of the vdb entry named by its directory name `pf`
-/// (`foo-bar-1.2.3-r1`), read through the same [`vdb_aux_get`] seam
-/// every other installed-metadata consumer uses: the normalised
-/// `"slot/sub_slot"` string, multi-line values collapsed to one
-/// space-separated line, a present-but-invalid value translated to
-/// `"0"` (real `aux_get`'s `_get_slot_re` rule, #115 S1), `""` for an
-/// entry with no `SLOT` file or a `pf` [`split_pf`] cannot split. No
-/// further splitting -- callers keep their own main-slot projection
-/// and their own empty-case defaulting (#126 O5).
+/// The `SLOT` of the vdb entry named by its directory name `pf`, through the shared
+/// [`vdb_aux_get`] seam: normalised `"slot/sub_slot"`, present-but-invalid reads as `"0"`,
+/// `""` with no `SLOT` file or an unsplittable `pf`. Callers keep their own defaulting.
+// Portage: aux_get, _get_slot_re
 pub fn vdb_entry_slot(root: &Path, category: &str, pf: &str) -> String {
     let Some((package, version)) = split_pf(pf) else {
         return String::new();
@@ -153,8 +119,7 @@ pub fn vdb_entry_slot(root: &Path, category: &str, pf: &str) -> String {
     vdb_aux_get(root, category, &package, &version, "SLOT")
 }
 
-/// Lists every installed version of `category/package` found in the vdb
-/// under `root` (`<root>/var/db/pkg/<category>/<package>-<version>/`).
+/// Every installed version of `category/package` under `root`.
 pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
     installed_candidates(root, category, package)
         .into_iter()
@@ -162,17 +127,10 @@ pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<Str
         .collect()
 }
 
-/// The ROOT-relative paths one installed `category/package-version`
-/// owns, read from its vdb `CONTENTS` file (real `vartree`/`dblink`
-/// shape: `obj <path> <md5> <mtime>`, `sym <path> -> <target> <mtime>`,
-/// `dir <path>`; `dev`/`fif`/`bin` device-node lines the same way).
-/// Only the path field is returned (the second whitespace token, with
-/// one leading `/` stripped -- the vdb records `${ROOT}`-absolute
-/// paths, the seam speaks `${ROOT}`-relative ones, matching the
-/// `mrg-director` `MemoryDb` convention); other line kinds are skipped,
-/// a missing/unreadable `CONTENTS` reads as empty -- the same tolerance
-/// `read_vdb_string` gives a missing key. File order is preserved
-/// (merge order), not sorted.
+/// The `${ROOT}`-relative paths one installed `category/package-version` owns, from its
+/// vdb `CONTENTS` file. Only the path field is returned; other line kinds are skipped, a
+/// missing/unreadable `CONTENTS` reads as empty, and file order is preserved (merge order).
+// Portage: vartree, dblink CONTENTS shape
 pub fn installed_contents_files(
     root: &Path,
     category: &str,
@@ -180,8 +138,7 @@ pub fn installed_contents_files(
     version: &str,
 ) -> Vec<String> {
     let key = resolve_vdb_entry(root, category, package, version);
-    // `read_to_string` of old: invalid UTF-8 reads as empty, like a
-    // missing file.
+    // Invalid UTF-8 reads as empty, like a missing file.
     let text = portage_vdb::for_root(root)
         .read_file(&key, "CONTENTS")
         .ok()
@@ -206,16 +163,10 @@ pub fn installed_contents_files(
         .collect()
 }
 
-/// Every installed `category/package-version` whose vdb-recorded
-/// `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND` (each flattened against that
-/// package's own vdb `USE`) names an atom the installed
-/// `consumer_category/consumer_package-consumer_version` satisfies --
-/// real `vardb.match(atom)` direction, via `portage_dep::match_from_list`
-/// against a `cat/pkg-ver:slot/sub_slot` candidate built from the
-/// consumer's own installed slot (the same candidate shape
-/// `best_installed_for_atom` matches against). Blocker atoms (`!`/`!!`)
-/// never count (real `match` on a blocker is a conflict query, not a
-/// dependency). Sorted, deduplicated; empty when nothing depends on it.
+/// Every installed `category/package-version` whose recorded `DEPEND`/`RDEPEND`/`BDEPEND`/
+/// `PDEPEND` (each flattened against its own vdb `USE`) names an atom the installed consumer
+/// satisfies. Blocker atoms never count. Sorted, deduplicated; empty when nothing depends on it.
+// Portage: vardb.match(atom)
 pub fn installed_reverse_dependents(
     root: &Path,
     consumer_category: &str,
@@ -227,10 +178,9 @@ pub fn installed_reverse_dependents(
     let candidate =
         format!("{consumer_category}/{consumer_package}-{consumer_version}:{slot}/{sub_slot}");
     let db = portage_vdb::for_root(root);
-    // S8.1: a database backend narrows the entries with its dependency
-    // index and hands over their raw records; the reduction and the match
-    // below are the same code as the scan's. `files` (and a backend that
-    // cannot answer) keeps the scan, with its exact syscall pattern.
+    // A database backend narrows the entries via its dependency index; the
+    // reduction and match below are the same code as the scan's. `files` (and a
+    // backend that cannot answer) keeps the scan.
     if db.kind() != portage_vdb::BackendKind::Files
         && let Some(found) = indexed_reverse_dependents(
             db.as_ref(),
@@ -267,10 +217,9 @@ pub fn installed_reverse_dependents(
     out.into_iter().collect()
 }
 
-/// Whether the (non-empty) dependency string `depstr`, flattened against
-/// `use_flags`, has a non-blocker atom for the consumer that `candidate`
-/// (`cat/pkg-ver:slot/subslot`) satisfies. The reduction and match shared
-/// by both ways of [`installed_reverse_dependents`].
+/// Whether `depstr`, flattened against `use_flags`, has a non-blocker atom that
+/// `candidate` (`cat/pkg-ver:slot/subslot`) satisfies. Shared by both halves of
+/// [`installed_reverse_dependents`].
 pub(crate) fn depstr_names_consumer(
     depstr: &str,
     use_flags: &HashSet<String>,
@@ -295,13 +244,10 @@ pub(crate) fn depstr_names_consumer(
     })
 }
 
-/// The database-backend half of [`installed_reverse_dependents`]: the raw
-/// records `InstalledDb::reverse_dependents` returns for the consumer's
-/// `category/package` (a superset: the backend's index drops only entries
-/// that cannot name it), put through the same per-entry steps as the scan
-/// (`split_pf`, the package-move identity, skip the consumer itself, the
-/// entry's own `USE`, the four `*DEPEND` keys). `None` when the backend
-/// cannot answer, so the caller falls back to the scan.
+/// The database-backend half of [`installed_reverse_dependents`]: the backend's
+/// raw records for the consumer's `category/package` (a superset), put through
+/// the same per-entry steps as the scan. `None` when the backend cannot answer,
+/// so the caller falls back to the scan.
 pub(crate) fn indexed_reverse_dependents(
     db: &dyn portage_vdb::InstalledDb,
     consumer_category: &str,
@@ -354,11 +300,10 @@ pub(crate) fn indexed_reverse_dependents(
     Some(out.into_iter().collect())
 }
 
-/// The highest installed version of `category/package` that satisfies
-/// `atom_str`, or `None`. Real `_select_pkg_from_installed`
-/// (`depgraph.py:8518`) -- the graph-or-installed fallback complete mode
-/// uses so its deep re-walk of the required sets never merges a new
-/// package.
+/// The highest installed version of `category/package` satisfying `atom_str`, or
+/// `None`. The graph-or-installed fallback complete mode uses this so its deep
+/// re-walk of the required sets never merges a new package.
+// Portage: depgraph.py, _select_pkg_from_installed
 pub(crate) fn best_installed_for_atom(
     root: &Path,
     atom_str: &str,
@@ -380,17 +325,10 @@ pub(crate) fn best_installed_for_atom(
         .max_by(|a, b| vercmp_ordering(a, b))
 }
 
-/// Backlog #210: the installed version a complete-mode withhold keeps.
-///
-/// Real `_complete_graph` swaps package selection to
-/// `_select_pkg_from_graph` (`depgraph.py:8662`) -- graph-or-installed,
-/// never a new merge -- so a phase-1 merge an enforced parent-atom pin
-/// (or a slot-conflict reconciliation) leaves with no mergeable
-/// candidate stays installed when the installed instance satisfies the
-/// requesting atom and every positive pin: real keeps it (nomerge) and
-/// reports the skipped update, it does not fail the run. Returns the
-/// highest such installed version, `None` when no installed instance
-/// satisfies everything (a genuine absence -- the abort stands).
+/// The installed version a complete-mode withhold keeps: the highest installed
+/// version satisfying the requesting atom and every positive pin, or `None`
+/// when no installed instance satisfies everything (a genuine absence).
+// Portage: depgraph.py, _complete_graph via _select_pkg_from_graph
 pub(crate) fn complete_mode_withheld_version(
     root: &Path,
     category: &str,
@@ -416,38 +354,13 @@ pub(crate) fn complete_mode_withheld_version(
         .max_by(|a, b| vercmp_ordering(a, b))
 }
 
-/// `--root-deps`'s own real `ESYSROOT`-vs-`ROOT` distinction, narrowed to
-/// an "is it already there" existence check (see `enqueue_dependencies`'s
-/// own doc comment for the full real grounding and why a fuller,
-/// recursive second-root graph isn't attempted). Whether `atom_str` is
-/// satisfied by anything installed under `running_root`'s own real vdb --
-/// `installed_candidates`, keyed directly off the atom's own parsed
-/// `category`/`package` (no wildcard-atom support needed: portuale's
-/// own atom grammar never has an atom without an explicit category/
-/// package, see `portage_dep::parse_atom`'s own doc comment), matched via
-/// `portage_dep::match_from_list` the same way every other real
-/// installed-package match in portuale works. Deliberately generic on
-/// `running_root` (just like `installed_versions`/`owns_path_pf`
-/// elsewhere): this function has no idea whether it's being pointed at a
-/// real host `/` or a fixture's own fake vdb tree, and every automated
-/// test in portuale uses the latter -- only `pretend.rs`'s own real CLI
-/// boundary ever points this at real `/`, matching real portage's own
-/// actual default (`SYSROOT` unset).
-///
-/// A version match alone is not enough: the matched instance's recorded
-/// `USE` must also satisfy the atom's use-deps
-/// (`portage_dep::use_deps_satisfied`, the same idiom
-/// `best_installed_matching`'s own USE filter uses for the target root).
-/// The version-only match is USE-blind by construction (the candidate
-/// strings carry no USE at all), so without this an evaluated `[-flip]`
-/// still "matched" an installed `+flip` instance and the dep was wrongly
-/// dropped as running-root-satisfied (#133: real rebuilds it instead).
-/// Conditional forms (`=`/`?`) stay vacuous here exactly as in
-/// `match_from_list` -- they are the caller's to evaluate first (both
-/// `root_deps_*` producers do, against the parent's own USE); what this
-/// enforces is whatever unconditional form the atom already carries,
-/// which is also what makes the `||`-closure call sites real-faithful
-/// (real `dep_zapdeps` matches installed alternatives with USE).
+/// Whether `atom_str` is satisfied by anything installed under `running_root`'s vdb --
+/// `--root-deps`'s `ESYSROOT`-vs-`ROOT` distinction, narrowed to an "is it already there"
+/// existence check. Generic over `running_root`: only the CLI boundary points it at `/`.
+/// A version match alone is not enough: the matched instance's recorded `USE` must also
+/// satisfy the atom's use-deps (the version-only match is USE-blind). Conditional forms
+/// (`=`/`?`) stay vacuous here as in `match_from_list` -- the caller evaluates those first.
+// Portage: dep_zapdeps matching installed alternatives with USE
 pub(crate) fn running_root_satisfies_atom(
     atom_str: &str,
     running_root: &Path,
@@ -495,27 +408,11 @@ pub(crate) fn running_root_satisfies_atom(
     })
 }
 
-/// One field of one installed entry, served by [`portage_vdb`]'s
-/// `FilesDb::aux_get` (feat#157 S1.2; the code that used to live here --
-/// the `stat` of the package dir, the consolidated `metadata` snapshot
-/// check, the dir-mtime-keyed memo, the whitespace normalisation and the
-/// invalid-`SLOT` -> `"0"` translation -- moved there unchanged).
-///
-/// What stays here is the package-move fallback (real global-updates
-/// renames a moved package's vdb dir; portuale never writes, so when the
-/// direct path is absent every `installed_cp_sources` name -- the
-/// pre-`move` locations that map onto this `cat/pkg` -- is tried in
-/// order, one `statx` each, the first real directory wins), and the two
-/// behaviours audited at the seam:
-///
-/// - **No `KeyError`.** A missing or non-directory entry is `""`, today's
-///   `unwrap_or_default()` behaviour; portuale has no caller that wants a
-///   raise.
-/// - **No `environment.bz2` search** (real bug 395463) for a key outside
-///   the 23-set. Backlog #125: an out-of-set key (`CONTENTS`, `NEEDED.*`)
-///   structurally bypasses the snapshot and the cache and reads the raw
-///   file with no normalisation at all (real never `" ".join()`s a
-///   line-oriented key), invalid UTF-8 decoded lossy.
+/// One field of one installed entry, served by [`portage_vdb`]'s `FilesDb::aux_get`. What
+/// stays here is the package-move fallback (every `installed_cp_sources` name tried in order,
+/// first existing directory wins), plus: a missing entry reads as `""`, and a key outside the
+/// 23-set bypasses snapshot/cache/normalisation (raw read, lossy UTF-8).
+// Portage: global-updates renaming the vdb dir; bug 395463
 pub(crate) fn vdb_aux_get(
     root: &Path,
     category: &str,
@@ -526,9 +423,7 @@ pub(crate) fn vdb_aux_get(
     let db = portage_vdb::for_root(root);
     let pf = format!("{package}-{version}");
     if !in_metadata_file(key) {
-        // Resolve the entry like `resolve_vdb_entry` (one `statx` per
-        // candidate, the unresolved direct name when none is a
-        // directory), then one `open` of the raw file.
+        // Resolve like `resolve_vdb_entry`, then one `open` of the raw file.
         let direct = portage_vdb::EntryKey::new(category, pf.as_str());
         let mut found: Option<portage_vdb::EntryKey> = None;
         if db.has_entry(&direct).unwrap_or(false) {
@@ -565,17 +460,9 @@ pub(crate) fn vdb_aux_get(
     String::new()
 }
 
-/// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
-/// (a vdb aux file, e.g. `USE` or `IUSE` -- same directory `SLOT`/
-/// `CATEGORY` already come from) as a set of flag names, one per
-/// whitespace-separated token, with any `+`/`-` IUSE default-marker
-/// prefix stripped (irrelevant here: a reinstall check only cares which
-/// flags exist/are enabled, not their declared defaults). A missing file
-/// (e.g. an older vdb entry from before portuale's fixtures modeled
-/// USE/IUSE at all) is an empty set, not an error -- same "absence is a
-/// real, valid state" precedent `read_world_atoms` (pretend.rs) already
-/// established. The value comes from [`vdb_aux_get`], so a validated
-/// consolidated snapshot serves it without an `open()`.
+/// Reads a vdb aux file (e.g. `USE`/`IUSE`) as a flag-name set, one per
+/// whitespace-separated token, `+`/`-` IUSE default markers stripped. A missing
+/// file is an empty set, not an error. Served from [`vdb_aux_get`].
 pub(crate) fn read_vdb_flag_set(
     root: &Path,
     category: &str,
@@ -589,13 +476,10 @@ pub(crate) fn read_vdb_flag_set(
         .collect()
 }
 
-/// `(IUSE, USE)` bare-name flag sets from an installed package's vdb --
-/// its declared flags and its recorded enabled set. For a use-dep check
-/// against an already-merged package (real `vardb.match` honouring a
-/// `cat/pkg[flag]` atom): the recorded `USE` is already the final
-/// resolved state, so `[flag]` is satisfied iff `flag ∈ USE`,
-/// `[flag(+)]`/`[flag(-)]` fall back to the default only when
-/// `flag ∉ IUSE`.
+/// `(IUSE, USE)` bare-name flag sets from an installed package's vdb, for a use-dep check
+/// against an already-merged package. The recorded `USE` is final: `[flag]` holds iff
+/// `flag ∈ USE`; `[flag(+)]`/`[flag(-)]` fall back to the default only when `flag ∉ IUSE`.
+// Portage: vardb.match honouring a cat/pkg[flag] atom
 pub fn installed_pkg_iuse_and_use(
     root: &Path,
     category: &str,
@@ -608,21 +492,11 @@ pub fn installed_pkg_iuse_and_use(
     )
 }
 
-/// The `GraphEntry::use_flags_display` list (`(iuse_flag, enabled)`
-/// pairs, `_alnum_sort_key`-sorted) for a tree ebuild
-/// `<category>/<package>-<version>` -- the same per-flag resolution
-/// `resolve_pretend_graph`'s own display loop does
-/// (`effective_use_flags` over the candidate's `IUSE`).
-///
-/// Pulled out so `emerge --resume` can populate it on each reconstructed
-/// source `GraphEntry`: the `mtimedb` resume list records only
-/// `cat/pkg-ver`, so the resolver-loop population is skipped -- and
-/// without it `emerge_build::build_use_env` produces an empty `USE=`,
-/// which makes a `python-r1` / `distutils-r1` (or any USE-conditional)
-/// ebuild `die` in `src_compile`. Empty when the candidate can't be
-/// located or declares no `IUSE`. The `USE_EXPAND` re-grouping
-/// (`use_expand_display`) is deliberately not recomputed -- `--resume
-/// --pretend`'s bracket/USE line is already a documented divergence.
+/// The `(iuse_flag, enabled)` display list for a tree ebuild -- the resolver's own per-flag
+/// resolution (`effective_use_flags` over the candidate's `IUSE`). Lets `emerge --resume`
+/// populate reconstructed entries (which record only `cat/pkg-ver`); without it the build env
+/// gets an empty `USE=` and USE-conditional ebuilds `die`. Empty when unlocatable or IUSE-less.
+// Portage: pkg_use_display
 pub fn candidate_use_flags_display(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -669,20 +543,10 @@ pub fn candidate_use_flags_display(
     display
 }
 
-/// The package's **full** effective `USE` set -- everything
-/// `effective_use_flags` resolved enabled, not just the declared-IUSE
-/// subset `candidate_use_flags_display` exposes. `bin/ebuild.sh`'s own
-/// `use()` and the build-info `USE` file real `__dyn_install` writes
-/// need the implicit profile flags (`abi_x86_64 amd64 elibc_glibc
-/// kernel_linux`) too, which no package declares in `IUSE` (#37; the S0
-/// recon's `metadata/USE` row, `TEST/findings/l2.md`).
-///
-/// The caller filters this through `portage_profile::portage_use` (real
-/// `config.py:2261`'s own IUSE ∪ `IUSE_EFFECTIVE` narrowing) -- this
-/// function deliberately returns the resolver's raw answer, the same set
-/// `candidate_use_flags_display`'s `enabled` column is derived from.
-/// Empty when the candidate or its md5-cache is unavailable, matching
-/// every other resolver helper's degraded case.
+/// The package's **full** effective `USE` set -- everything `effective_use_flags` resolved
+/// enabled, including implicit profile flags no package declares in `IUSE`. The caller narrows
+/// it through `portage_profile::portage_use`. Empty when the candidate/md5-cache is unavailable.
+// Portage: bin/ebuild.sh use(), config.py; __dyn_install USE file
 pub fn candidate_effective_use_flags(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -700,12 +564,8 @@ pub fn candidate_effective_use_flags(
     let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf) else {
         return Vec::new();
     };
-    // A missing `IUSE` key is an empty `IUSE`, not missing metadata: the
-    // real md5-cache writer omits empty fields (`porttest/emptydirs`
-    // has no `IUSE=` line at all), and real portage still computes the
-    // package's full effective USE -- the implicit profile flags -- for
-    // it. Bailing here would leave `USE=""` on exactly the empty-IUSE
-    // packages (`TEST/findings/l2.md` "S0 recon").
+    // A missing `IUSE` key is an empty `IUSE`, not missing metadata: the md5-cache
+    // writer omits empty fields, but the package still gets its implicit USE.
     let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or("");
     let candidate_str = format!(
         "{category}/{package}-{version}:{}/{}::{}",
@@ -724,15 +584,10 @@ pub fn candidate_effective_use_flags(
     sorted
 }
 
-/// The vdb entry for `<category>/<package>-<version>`. Real
-/// global-updates renames a moved package's vdb dir; portuale never
-/// writes, so when the direct entry is absent it falls back to every
-/// `installed_cp_sources` name (the pre-`move` locations that map onto
-/// this `cat/pkg`), one `has_entry` (`statx`) per candidate, the first
-/// real directory wins. Returns the direct key unchanged when nothing
-/// matches, so a genuinely-missing entry still reads as empty/absent.
-/// (feat#157 S1.3: was `vdb_pkg_dir`/`vdb_pkg_dir_meta`, which returned
-/// the path; the disk access is `FilesDb::has_entry` now, same `statx`.)
+/// The vdb entry for `<category>/<package>-<version>`. Portuale never writes, so when the
+/// direct entry is absent (a package move renamed it) every `installed_cp_sources` name is
+/// tried, first existing directory wins. A missing entry returns the direct key (reads absent).
+// Portage: global-updates renaming the vdb dir
 pub(crate) fn resolve_vdb_entry(
     root: &Path,
     category: &str,
@@ -753,37 +608,17 @@ pub(crate) fn resolve_vdb_entry(
     direct
 }
 
-/// `vdb_pkg_dir(..).is_dir()` of old: resolve the entry, then test the
-/// resolved entry again (two `statx` when the direct entry exists, as
-/// before).
+/// Whether the resolved vdb entry exists (tests the resolved entry again).
 pub(crate) fn vdb_entry_is_dir(root: &Path, category: &str, package: &str, version: &str) -> bool {
     let key = resolve_vdb_entry(root, category, package, version);
     portage_vdb::for_root(root).has_entry(&key).unwrap_or(false)
 }
 
-/// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
-/// as a raw string (e.g. `DEPEND`/`RDEPEND`), unlike `read_vdb_flag_set`
-/// which splits into a flag-name set -- a dependency string needs to
-/// stay intact for `portage_use_reduce::use_reduce_flat` to parse
-/// (`||`/USE-conditional groups, not just bare tokens). A missing file
-/// is an empty string, not an error -- same "absence is a real, valid
-/// state" precedent `read_vdb_flag_set` already established (a vdb
-/// entry with nothing recorded for this key, e.g. `DEPEND=""` at merge
-/// time, is indistinguishable from -- and handled the same as -- one
-/// that's simply missing the file).
-///
-/// The value is whitespace-normalised exactly like real `_aux_get`
-/// (`vartree.py:1044-1046`): `" ".join(myd.split())`, i.e.
-/// `split_whitespace().join(" ")` here. Real applies this on the
-/// individual-file path too, so the bytes are the same whether the
-/// consolidated `metadata` snapshot validated or not. A line-oriented
-/// key (`CONTENTS`, `NEEDED.*`) bypasses the normalisation structurally
-/// -- [`vdb_aux_get`] routes anything outside real's 23-field
-/// `_METADATA_FILE_FIELDS` to the raw, un-normalised read (backlog #125).
-///
-/// Since #109 S3 the value comes from [`vdb_aux_get`]: a validated
-/// consolidated `metadata` snapshot serves it with no per-key `open()`,
-/// falling back to the individual file otherwise.
+/// Reads a vdb aux file as a raw string (e.g. `DEPEND`/`RDEPEND`) -- unlike `read_vdb_flag_set`,
+/// the value stays intact for `use_reduce_flat`. A missing file is an empty string.
+/// Whitespace-normalised like `_aux_get`; line-oriented keys (`CONTENTS`, `NEEDED.*`) bypass
+/// normalisation via [`vdb_aux_get`], whose validated snapshot also avoids per-key opens.
+// Portage: vartree._aux_get
 pub(crate) fn read_vdb_string(
     root: &Path,
     category: &str,
@@ -794,10 +629,8 @@ pub(crate) fn read_vdb_string(
     vdb_aux_get(root, category, package, version, filename)
 }
 
-/// Flattens `depstr` (one or more concatenated dependency-string keys)
-/// against `use_flags`, into a `HashSet` of dependency-atom tokens
-/// (`||` markers dropped) suitable for order-independent equality
-/// comparison. `None` if `depstr` doesn't parse at all.
+/// Flattens `depstr` against `use_flags` into dependency-atom tokens (`||`
+/// dropped) for order-independent comparison. `None` if `depstr` doesn't parse.
 pub(crate) fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<String>> {
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
     let flat = portage_use_reduce::use_reduce_flat(
@@ -809,25 +642,10 @@ pub(crate) fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Optio
     Some(flat.into_iter().filter(|t| t != "||").collect())
 }
 
-/// Real `find_libc_deps(vardb, realized=False)` (`portage.dep.libc`): the
-/// `(category, package)` identity of every atom `virtual/libc`'s own
-/// installed (vdb) `RDEPEND` names, once flattened against its own
-/// installed `USE` -- empty if `virtual/libc` isn't installed at all,
-/// same as real `vardb.match("virtual/libc")` finding nothing. A
-/// simplified, one-level port of real `expand_new_virt`: real Gentoo's
-/// own `virtual/libc` `RDEPEND` is always a flat `|| ( sys-libs/glibc
-/// sys-libs/musl ... )` of real (non-virtual) packages, so this doesn't
-/// replicate `expand_new_virt`'s own further case of recursing into a
-/// *second* virtual reached this way, which real `virtual/libc` never
-/// actually needs. Used by `deps_changed` to strip libc atoms out of
-/// both sides of its own comparison before comparing -- real
-/// `strip_libc_deps`'s whole purpose: practically every ebuild silently
-/// gains/loses an implicit libc dependency across revisions, and that's
-/// noise, not a real dependency change worth reporting.
-///
-/// `pub`: also the first half of real `_inject_libc_dep` (`doebuild.py:
-/// 3026-3067`, backlog #39), which needs the realized provider versions
-/// on top -- see `ebuild_phases::inject_libc_dep`.
+/// The `(category, package)` of every atom `virtual/libc`'s installed `RDEPEND` names
+/// (flattened against its installed `USE`) -- empty when `virtual/libc` isn't installed. One
+/// level only. Used by `deps_changed` to strip libc noise, and by `inject_libc_dep` for providers.
+// Portage: portage.dep.libc.find_libc_deps, strip_libc_deps, doebuild._inject_libc_dep
 pub fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
     let mut result = HashSet::new();
     for version in installed_versions(root, "virtual", "libc") {
@@ -845,8 +663,9 @@ pub fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
     result
 }
 
-/// One installed package in the vdb, `category/package-version` plus its
-/// own recorded main `SLOT` -- real `vartree.dbapi.cpv_all()` / `_pkg_str`.
+/// One installed package in the vdb, `category/package-version` plus its recorded
+/// main `SLOT`.
+// Portage: vartree.dbapi.cpv_all, _pkg_str
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledPackage {
     pub category: String,
@@ -856,35 +675,22 @@ pub struct InstalledPackage {
 }
 
 impl InstalledPackage {
-    /// `category/package-version` -- the vdb cpv.
+    /// `category/package-version`.
     pub fn cpv(&self) -> String {
         format!("{}/{}-{}", self.category, self.package, self.version)
     }
 }
 
-/// Every package recorded under `<root>/var/db/pkg` (real
-/// `vartree.dbapi.cpv_all()`), each with its own main slot. Directory
-/// names are split into `package`/`version` by finding the last
-/// `-`-separated boundary whose right half `ververify`s -- the same
-/// "a version always starts like a version, a package-name word may
-/// not" disambiguation `strip_version_prefix` already makes, generalised
-/// to a name whose own package isn't known ahead of time.
-///
-/// Memoised per `root`: a deep `emerge -pu` reads the whole installed set
-/// (~2000 `SLOT` files) at ~10 resolver call sites, several inside loops,
-/// and the vdb never changes mid-resolve. Keyed by `root` + a
-/// `generation` so a merge/unmerge earlier in the same process
-/// (test suites do this) is picked up -- real `vardbapi` invalidates its
-/// own `cp_all` cache on category-dir mtime the same way.
+/// Every package recorded under `<root>/var/db/pkg`, each with its main slot. Directory names
+/// split into `package`/`version` at the last `-` boundary whose right half verifies as a version.
+/// Memoised per `root`, keyed by the vdb generation so a same-process merge/unmerge is picked up.
+// Portage: vartree.dbapi.cpv_all
 pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
     // root -> (vdb fingerprint at scan time, scanned set)
     type InstalledCache = HashMap<PathBuf, (u64, std::sync::Arc<Vec<InstalledPackage>>)>;
     static CACHE: OnceLock<RwLock<InstalledCache>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-    // The cheap fingerprint of the vdb's directory structure (the vdb
-    // dir's mtime plus every category dir's mtime, folded): `FilesDb::
-    // generation` (feat#157 S1.2; was `vdb_fingerprint` here). ~30
-    // `stat`s vs the ~2000 `SLOT` file reads a full scan does.
+    // ~30 `stat`s vs the ~2000 `SLOT` file reads a full scan does.
     let fingerprint = portage_vdb::for_root(root).generation().unwrap_or(0);
     if let Ok(guard) = cache.read()
         && let Some((fp, packages)) = guard.get(root)
@@ -904,8 +710,7 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
 
 pub(crate) fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {
     let mut out = Vec::new();
-    // `FilesDb::entries` (feat#157 S1.3): the category/package directory
-    // walk that used to be here, `-MERGING-` entries already skipped.
+    // `-MERGING-` entries already skipped.
     let Ok(keys) = portage_vdb::for_root(root).entries() else {
         return out;
     };
@@ -916,15 +721,11 @@ pub(crate) fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPacka
             let Some((name, version)) = split_pf(&dirname) else {
                 continue;
             };
-            // #109 S3: through the shared `vdb_aux_get` seam, so a valid
-            // consolidated snapshot serves `SLOT` without the per-entry
-            // `open()`. `resolve_vdb_entry` resolves the entry being scanned
-            // back from `(category, name, version)`.
+            // Through the shared `vdb_aux_get` seam, so a validated snapshot serves
+            // `SLOT` without per-entry opens.
             let (slot, sub) = split_slot(&vdb_aux_get(root, &category, &name, &version, "SLOT"));
-            // Real `profiles/updates/` package moves: present each vdb
-            // entry under its post-`move`/`slotmove` identity, the way
-            // real global-updates rewrites the vdb on sync (portuale
-            // never writes -- see `resolve_vdb_entry` for the read-back side).
+            // Present each vdb entry under its post-`move`/`slotmove` identity, the
+            // way global-updates rewrites the vdb on sync.
             let (category, name) = apply_updates_to_cp(&category, &name);
             let (slot, _sub) = apply_updates_to_slot(&category, &name, &slot, &sub);
             out.push(InstalledPackage {
@@ -938,10 +739,10 @@ pub(crate) fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPacka
     out
 }
 
-/// Every `category/package` present in any of `repos` -- real
-/// `portdbapi.cp_all()` (`porttree.py`), used by `emerge --search`.
-/// Sorted, deduplicated; a directory is a `cp` when it has at least one
+/// Every `category/package` present in any of `repos`, for `emerge --search`.
+/// Sorted, deduplicated; a directory counts when it holds at least one
 /// `<package>-<version>.ebuild`.
+// Portage: portdbapi.cp_all, porttree.py
 pub fn all_cp(repos: &[RepoConfig]) -> Vec<String> {
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for repo in repos {
