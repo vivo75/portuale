@@ -2,7 +2,7 @@
 Per-package index over `package.*` config atoms.
 
 ## fn matches_config_entry
-- Two-tier: the already-verified `portage_dep::match_from_list` covers the vast majority of entries (versioned, slotted, bare atoms); the bounded wildcard-atom matcher is only the parse-failure fallback.
+- Two-tier: the already-verified `portage_dep::match_from_list` covers the vast majority of entries (versioned, slotted, bare atoms); fall back to portage-dep's separate, bounded wildcard-atom matcher (`*/*`, `category/*`, `*/package`) if that fails to parse `entry` at all.
 
 ## struct CpBucketIndex
 - Portage's `ExtendedAtomDict` is built once at config load by every `UseManager` / `MaskManager` / `KeywordsManager` / `LicenseManager`. During a deep `emerge -pu` these lists are scanned per package per graph-walk visit -- tens of thousands of times -- but only the handful of entries whose atom names this `cp` (or a `*/*` / `cat/*` / `*/pkg` wildcard) can ever match.
@@ -14,4 +14,4 @@ Per-package index over `package.*` config atoms.
 - `(atom, tokens)` for the value-carrying lists (`package.use`, `package.accept_keywords`, ...) and a bare `atom` for `package.mask` / `package.unmask`.
 
 ## fn config_entries_matching / any_config_entry_matches
-- The bucketed replacements for `entries.iter().filter(|e| matches_config_entry(...))` / `.any(...)`.
+- The bucketed replacements for `entries.iter().filter(|e| matches_config_entry(...))` / `entries.iter().any(|e| matches_config_entry(...))`.

@@ -158,7 +158,7 @@ pub(crate) fn remote_binary_index_override(
 /// The local `$PKGDIR` binary index for this run: the CLI layer's directory
 /// scan when `<pkgdir>/Packages` was absent, else the parsed `Packages` file.
 ///
-/// Backlog #123: built, not memoised (the old per-inputs memo keyed on the
+/// Built, not memoised (the old per-inputs memo keyed on the
 /// scanned `Vec`'s raw pointer, never re-read once `None` was cached, and
 /// ignored the quickpkg-direct vdb). Built once per resolution and threaded
 /// to every consumer as an `Arc`.
@@ -167,7 +167,7 @@ pub fn build_local_binpkg_index(config: &portage_profile::Config) -> std::sync::
         Some(entries) => entries.clone(),
         None => read_packages_index(Path::new(&config.pkgdir)),
     };
-    // `--quickpkg-direct` (Portage `actions.py:150-164` + `bintree.
+    // `--quickpkg-direct` (Portage actions + `bintree.
     // _populate_additional`): installed packages of the quickpkg source root
     // join the binary pool as `Packages`-style records. A CPV the local
     // `$PKGDIR` already carries wins. Set once by the CLI layer.
@@ -185,7 +185,7 @@ pub fn build_local_binpkg_index(config: &portage_profile::Config) -> std::sync::
     std::sync::Arc::new(BinaryIndex::from_entries(entries))
 }
 
-/// `--quickpkg-direct-root` (Portage `actions.py:134-149`): the root whose
+/// `--quickpkg-direct-root` (Portage actions): the root whose
 /// installed packages `--quickpkg-direct` offers as binary candidates.
 /// `None` = not active. A process-global so it needn't thread through
 /// resolution signatures.
@@ -384,7 +384,7 @@ pub(crate) fn dedup_binary_instances(
 
 /// `--getbinpkg`/`-g`: binary candidates from every `config.binrepos` binrepo's
 /// `Packages` index -- the live refresh's in-memory copy when it ran (Portage
-/// `bintree._populate_remote`, backlog #192; `--pretend` refreshes like a
+/// `bintree._populate_remote`; `--pretend` refreshes like a
 /// merge), else the on-disk index. A remote instance the local `$PKGDIR` also
 /// carries is dropped (Portage `bintree.isremote`); binrepos resolve in order
 /// with the same `vercmp` -> `repo_priority` tie-break (all binaries share
@@ -400,7 +400,7 @@ pub fn list_remote_binary_candidates(
         return Vec::new();
     }
     // Instances are `(version, BUILD_ID)`: under binpkg-multi-instance a local
-    // build 6 must not hide a remote build 7 (backlog #300). A `BUILD_ID`-less
+    // build 6 must not hide a remote build 7. A `BUILD_ID`-less
     // entry is its own `None` key, keeping the version-level shadowing.
     let local_instances: HashSet<(String, Option<String>)> =
         binary_candidates_from_index(local, category, package, false)
@@ -431,7 +431,7 @@ pub fn list_remote_binary_candidates(
 }
 
 /// Picks one `Packages` entry of `cat/pkg-version` (binpkg-multi-instance
-/// aware, backlogs #299/#301). `Some(id)` selects exactly that `BUILD_ID`;
+/// aware). `Some(id)` selects exactly that `BUILD_ID`;
 /// `None` the newest build -- highest `(BUILD_TIME, BUILD_ID)`, Portage
 /// `dbapi._cmp_cpv` order.
 pub(crate) fn pick_binary_instance<'a>(
@@ -464,7 +464,7 @@ pub(crate) fn pick_binary_instance<'a>(
 /// policy) plus the record (`PATH`, `SIZE`, digests). `None` if no binrepo
 /// lists it. Newest build when several exist; use
 /// [`find_remote_binpkg_instance`] for a specific `BUILD_ID`.
-/// Portage: gpkg.py:792-819 per-binrepo signature policy
+/// Portage: gpkg per-binrepo signature policy
 pub fn find_remote_binpkg<'a>(
     binrepos: &'a [portage_profile::BinRepo],
     root: &Path,
@@ -493,7 +493,7 @@ pub struct FindRemoteBinpkgInstanceArgs<'a, 'b> {
     pub build_id: Option<&'b str>,
 }
 
-/// [`find_remote_binpkg`] for one specific build (backlog #301): `Some(build_id)`
+/// [`find_remote_binpkg`] for one specific build: `Some(build_id)`
 /// scans the binrepos in order for exactly that `BUILD_ID`, falling back to
 /// the newest build of the version.
 pub fn find_remote_binpkg_instance<'a>(

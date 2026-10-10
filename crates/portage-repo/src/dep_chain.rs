@@ -14,7 +14,7 @@ pub(crate) struct ChainNodeUsedepSuffixArgs<'a> {
 }
 
 /// Portage `_get_dep_chain`'s affecting-USE `pkg[flag]` suffix for one chain
-/// node (depgraph.py:6257+ via `portage.dep.extract_affecting_use`): flags in
+/// node (Portage depgraph._get_dep_chain via `portage.dep.extract_affecting_use`): flags in
 /// the node's dep strings whose `flag?` conditionals gate the edge to `child`,
 /// `[flag]` when enabled in the node's USE, `[-flag]` when disabled, minus
 /// use.mask/use.force. `""` when nothing gates the edge or metadata can't be
@@ -180,7 +180,7 @@ pub(crate) fn chain_node_line(
         }
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
         PretendOutcome::AlreadyInstalled { version } => version.clone(),
-        // #72 B3: a removal is not a dependency-chain node.
+        // A removal is not a dependency-chain node.
         PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => return None,
     };
     let (installed, repo, ty) = match &entry.outcome {
@@ -242,18 +242,18 @@ pub(crate) struct MaskedDepChainArgs<'a> {
     pub(crate) package: &'a str,
     pub(crate) atoms: &'a [String],
     pub(crate) root: &'a Path,
-    /// Backlog #286: the disclosed miss atom. Direct parents are restricted to
+    /// The disclosed miss atom. Direct parents are restricted to
     /// those pulling this atom (Portage starts from the one failing parent
     /// edge); the restriction is vacuous when no direct parent matches.
     pub(crate) atom: &'a str,
 }
 
 /// Portage `_get_dep_chain` for one masked-dependency disclosure
-/// (depgraph.py:6257+): `(node, type)` pairs from the failed dependency's
+/// (Portage depgraph): `(node, type)` pairs from the failed dependency's
 /// direct parents up to the top-level argument(s), innermost first.
 /// Narrowings: every matching top-level atom is shown (Portage shows the
 /// pulling one -- untracked here); one sub-chain per direct parent (Portage
-/// shows only its DFS-first abandon; #19 parked); the affecting-USE suffix
+/// shows only its DFS-first abandon); the affecting-USE suffix
 /// is Portage's own ([`chain_node_usedep_suffix`] has the approximations).
 pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, String)> {
     let MaskedDepChainArgs {
@@ -301,7 +301,7 @@ pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, Str
     let mut visited: HashSet<(String, String)> = HashSet::new();
     let direct_all: Vec<(String, String)> =
         start.map(|e| e.required_by.clone()).unwrap_or_default();
-    // Backlog #286: keep only the direct parents pulling the disclosed atom;
+    // Keep only the direct parents pulling the disclosed atom;
     // vacuous when none match.
     let direct: Vec<(String, String)> = {
         let pulling: Vec<(String, String)> = direct_all

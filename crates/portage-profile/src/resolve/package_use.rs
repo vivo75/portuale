@@ -76,7 +76,7 @@ pub(crate) fn fold_package_use(args: FoldPackageUseArgs<'_>) -> Result<(), Error
     config.package_use_user = parse_package_use_lines(&user_use_lines, true);
 
     // The user `package.use` `*/*` entry pops into the global USE (like make.conf
-    // USE=) and leaves the per-package dict. Portage: config.py:832
+    // USE=) and leaves the per-package dict. Portage: UseManager extract_global_USE_changes
     let global_user_use: String = {
         let mut toks: Vec<String> = Vec::new();
         config.package_use_user.retain(|(atom, tokens)| {

@@ -59,9 +59,9 @@ fn apply_incremental_is_reusable_for_per_package_use_overrides() {
 
 #[test]
 fn apply_use_incremental_removes_a_prefix_wildcard() {
-    // Portage config.py:2925: `-video_cards_*` drops every accumulated
-    // `video_cards_` flag. Tokens arrive already prefixed by the USE_EXPAND
-    // fold, so the positive token here is the full flag name.
+    // `-video_cards_*` drops every accumulated `video_cards_` flag (Portage
+    // config.py prefix-wildcard removal). Tokens arrive already prefixed by the
+    // USE_EXPAND fold, so the positive token here is the full flag name.
     let mut set = HashSet::from([
         "X".to_string(),
         "video_cards_dummy".to_string(),

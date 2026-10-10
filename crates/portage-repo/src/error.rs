@@ -11,20 +11,43 @@ pub enum Error {
     },
     /// `{path}: stale metadata/md5-cache entry` -- rejected like Portage's
     /// `_pull_valid_cache` (stale `_md5_`/`_eclasses_`, unsupported EAPI).
-    StaleMd5Cache { path: String },
+    StaleMd5Cache {
+        path: String,
+    },
     /// `{path}: no usable pregenerated cache` -- falls through to the
     /// depcachedir and `doebuild(mydo="depend")` like Portage.
-    PregenCacheUnavailable { path: String },
-    ReadEntry { source: std::io::Error },
-    NoReposConf { path: String },
+    PregenCacheUnavailable {
+        path: String,
+    },
+    ReadEntry {
+        source: std::io::Error,
+    },
+    NoReposConf {
+        path: String,
+    },
     NoMainRepo,
-    NoRepoLocation { repo: String },
-    InvalidAtom { atom: String },
-    LicenseExpectedDepString { token: usize },
-    LicenseExpectedOpen { token: usize },
-    LicenseNoMatchingOpen { token: usize },
-    LicenseExpectedOpenGotOr { token: usize },
-    LicenseExpectedOpenGotToken { token: String, at: usize },
+    NoRepoLocation {
+        repo: String,
+    },
+    InvalidAtom {
+        atom: String,
+    },
+    LicenseExpectedDepString {
+        token: usize,
+    },
+    LicenseExpectedOpen {
+        token: usize,
+    },
+    LicenseNoMatchingOpen {
+        token: usize,
+    },
+    LicenseExpectedOpenGotOr {
+        token: usize,
+    },
+    LicenseExpectedOpenGotToken {
+        token: String,
+        at: usize,
+    },
     LicenseMissingCloseParen,
     LicenseMissingOpenParen,
     /// `REQUIRED_USE for {package} is invalid: {source}`.

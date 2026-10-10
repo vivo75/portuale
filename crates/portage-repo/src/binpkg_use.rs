@@ -22,7 +22,7 @@ pub(crate) struct BinpkgRespectUseOkArgs<'a> {
 /// Portage's gate; Portage compares the baked `IUSE`/`USE` against the
 /// **same-version ebuild's** profile-computed sets.
 /// Without an ebuild at that version the `cur_*` side is Portage's own
-/// `else` arm (`depgraph.py:8265-8271`):
+/// `else` arm (Portage depgraph no-ebuild arm):
 ///
 /// ```python
 ///             if myeb:
@@ -46,7 +46,7 @@ pub(crate) struct BinpkgRespectUseOkArgs<'a> {
 /// neither (non-`changed-use` `--reinstall` only) compares nothing.
 ///
 /// `forced_flags` (via [`forced_or_masked_flags_unfiltered`]) leaves only the
-/// IUSE difference (`depgraph.py:3149-3150`): forced/masked flags never reject
+/// IUSE difference (Portage depgraph): forced/masked flags never reject
 /// by *presence*, but can via the enabled term. Not intersected with the
 /// ebuild's IUSE (audit D1): a dropped masked flag stays forgiven.
 pub(crate) fn binpkg_respect_use_ok(args: BinpkgRespectUseOkArgs<'_>) -> bool {
@@ -64,7 +64,7 @@ pub(crate) fn binpkg_respect_use_ok(args: BinpkgRespectUseOkArgs<'_>) -> bool {
         return true;
     };
     // Memoised per (config USE context, both candidates' metadata, the three
-    // flags): the top named cost after #105, pure in its arguments.
+    // flags): the top named cost, pure in its arguments.
     // Thread-local so the lookup stays lock-free (`EUF_CACHE`'s shape).
     type BruCache = HashMap<(u64, String, Option<String>, bool, bool, bool), bool>;
     thread_local! {
@@ -92,7 +92,7 @@ pub(crate) fn binpkg_respect_use_ok(args: BinpkgRespectUseOkArgs<'_>) -> bool {
         candidate.repo_name.hash(&mut h);
         candidate.iuse.hash(&mut h);
         candidate.keywords.hash(&mut h);
-        // The baked USE set (backlog #124 E3): a `Some(BUILD_ID)` names the
+        // The baked USE set: a `Some(BUILD_ID)` names the
         // build, so the id is an exact O(1) stand-in for the set. A `None`
         // `build_id` names no build, so those keep the order-independent
         // xor-fold (same cost as before, never a wrong key).
@@ -210,7 +210,7 @@ pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArg
                 .unwrap_or_else(|| (old_iuse.clone(), Rc::new(binary_use.clone())));
             (iuse, use_flags, forced)
         }
-        // Portage's no-`myeb` arm (`depgraph.py:8265-8271`): the profile's
+        // Portage's no-`myeb` arm (Portage depgraph): the profile's
         // selection for the binary's own cpv over its own IUSE, never the
         // baked USE; `forced_flags` likewise. See the fn doc comment.
         _ => {
@@ -240,7 +240,7 @@ pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArg
     let cur_enabled: HashSet<String> = cur_iuse.intersection(&cur_use).cloned().collect();
     let mut flags: HashSet<String> = HashSet::new();
     if newuse || (respect_use && !changed_use) {
-        // Portage's `flags -= forced_flags` (`depgraph.py:3149-3150`): between
+        // Portage's `flags -= forced_flags` (Portage depgraph): between
         // the IUSE difference and the enabled-set union. Not intersected
         // with the ebuild's IUSE (audit D1): a dropped masked flag stays
         // forgiven.
@@ -299,7 +299,7 @@ pub fn read_binary_metadata(
     read_binary_metadata_instance(index, category, package, version, None)
 }
 
-/// [`read_binary_metadata`] for one specific build (backlog #299):
+/// [`read_binary_metadata`] for one specific build:
 /// `Some(build_id)` returns exactly that `BUILD_ID`; `None` the newest build
 /// (see [`pick_binary_instance`]) -- never merely the first entry, which is
 /// usually the oldest under binpkg-multi-instance.
@@ -360,9 +360,9 @@ pub struct ReadBinaryMetadataAnyInstanceArgs<'a> {
     pub build_id: Option<&'a str>,
 }
 
-/// [`read_binary_metadata_any`] for the build the resolver selected
-/// (backlog #299): `Some(build_id)` searches every index for exactly that
-/// build first, so a chosen instance never walks another's dep strings.
+/// [`read_binary_metadata_any`] for the build the resolver selected:
+/// `Some(build_id)` searches every index for exactly that build first,
+/// so a chosen instance never walks another's dep strings.
 pub fn read_binary_metadata_any_instance(
     args: ReadBinaryMetadataAnyInstanceArgs<'_>,
 ) -> Option<HashMap<String, String>> {

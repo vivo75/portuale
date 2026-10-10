@@ -65,7 +65,7 @@ pub(crate) fn strip_version_prefix<'a>(dir_name: &'a str, package: &str) -> Opti
 
 /// Splits `package-version` into `(PN, PVR)` like Portage `_pkgsplit`: longest
 /// trailing `-`-suffix that `ververify` accepts. Inverse of
-/// [`strip_version_prefix`]; single copy since #127.
+/// [`strip_version_prefix`]; the single copy.
 pub fn split_pf(pf: &str) -> Option<(String, String)> {
     let words: Vec<&str> = pf.split('-').collect();
     for i in 1..words.len() {

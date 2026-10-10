@@ -7,4 +7,4 @@
 - PKGDIR default `/var/cache/binpkgs`; see `pkgdir`'s doc comment.
 - `etc/portage/binrepos.conf` may be a directory of `*.conf` fragments: Portage `BinRepoConfigLoader._parse` runs `_recursive_file_list` over the path (the standard Portage "file or dir" pattern; how the release profile ships `gentoobinhost.conf`). See `binrepos`'s doc comment.
 - `PORTAGE_CONFIGROOT` stamping and the `CBUILD`-defaults-to-`CHOST` fallback: Portage `config.py.__init__` (`if self.get("CBUILD") is None and self.get("CHOST")`).
-- The two frozen digests: #105 (USE-context base; the backtrack loop mutates only `autounmask_use` on clones, which the memo keys hash against this base) and #114 (visibility base: masks + accept lists).
+- The two frozen digests: #105 (USE-context base; the `'backtrack` loop mutates only `autounmask_use` on clones, which the memo keys hash against this base) and #114 (visibility base: masks + accept lists).

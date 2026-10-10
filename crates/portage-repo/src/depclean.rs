@@ -30,7 +30,7 @@ pub struct DepcleanResult {
     pub unresolved: Vec<(String, String)>,
 }
 
-/// Portage `_calc_depclean`'s unmerge-order pass (`actions.py:1591-1731`):
+/// Portage `_calc_depclean`'s unmerge-order pass (Portage actions):
 /// topologically sorts the cleanlist digraph so each package unmerges *before*
 /// what it depends on. Returns `(ordered, cleanlist)`: with no edges `ordered`
 /// is `false` and the input order stands; otherwise the order is Portage's
@@ -171,7 +171,7 @@ pub(crate) fn topological_removal_order(
     (true, result)
 }
 
-/// Portage `show_parents`' per-package rendering (`actions.py:1274-1291`): one
+/// Portage `show_parents`' per-package rendering (Portage actions): one
 /// `"<parent> requires <atom>, <atom>"` line per parent (atoms sorted by atom
 /// package-name descending), then the lines sorted. Shared by both cleanlists.
 pub(crate) fn render_show_parents(edges: &[(String, String)]) -> Vec<String> {
@@ -205,7 +205,7 @@ pub(crate) fn render_show_parents(edges: &[(String, String)]) -> Vec<String> {
 /// `cat/pkg` is listed and its constraint matches one of that cp's provided
 /// CPVs (Portage `match_from_list(atom, pprovided)`). Same check the main
 /// resolver's `pprovided_refs` logic performs.
-/// Portage: depgraph.py:5497-5503, dep_check.py:1052
+/// Portage: depgraph, dep_check
 pub(crate) fn pprovided_matches(atom_str: &str, package_provided: &[String]) -> bool {
     !package_provided.is_empty()
         && portage_dep::match_from_list(
@@ -218,7 +218,7 @@ pub(crate) fn pprovided_matches(atom_str: &str, package_provided: &[String]) -> 
         .is_some_and(|m| !m.is_empty())
 }
 
-/// Portage `_calc_depclean`'s `unresolved_deps()` check (`actions.py:1137-1245`),
+/// Portage `_calc_depclean`'s `unresolved_deps()` check (Portage actions),
 /// narrowed: a *kept* package's hard runtime dependency (`RDEPEND`/`PDEPEND` --
 /// Portage `dep.priority > UnmergeDepPriority.SOFT`) that no *installed*
 /// package satisfies. Non-empty halts with the unresolvable-dependencies block.
@@ -227,7 +227,7 @@ pub(crate) fn pprovided_matches(atom_str: &str, package_provided: &[String]) -> 
 /// reachability walk already keeps every alternative); libc-provider atoms are
 /// never flagged (`strip_libc_deps` treats implicit libc deps as noise); the
 /// "show the unevaluated atom" readability case is not reproduced.
-/// Portage: actions.py:1196, `find_libc_deps`
+/// Portage: actions, `find_libc_deps`
 pub(crate) fn unresolved_runtime_deps(
     root: &Path,
     kept: &[&InstalledPackage],
@@ -331,7 +331,7 @@ pub struct DepcleanCleanlistArgs<'a> {
     pub system_atoms: &'a [String],
     pub args: &'a [String],
     /// Portage `action_depclean`'s `deselect` (default `true`): in `args` mode
-    /// the `@selected`/`world` set is emptied (`actions.py:1037`), so a named
+    /// the `@selected`/`world` set is emptied (Portage actions), so a named
     /// package also in `world` is still removed. `--deselect=n` keeps `world`
     /// as a protection root instead. No effect without `args`.
     pub deselect: bool,
@@ -451,7 +451,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
             };
             for atom_str in atoms {
                 // `package.provided`: satisfied without adding a graph edge to the
-                // installed provider (Portage `dep_check.py:1052` intercept).
+                // installed provider (Portage dep_check intercept).
                 if pprovided_matches(&atom_str, package_provided) {
                     continue;
                 }
@@ -538,7 +538,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
 ///
 /// **Deliberately out**: `--prune --nodeps`, the `--deselect` world-file
 /// rewrite, and slot-operator rebuild edges.
-/// Portage: actions.py:1059-1110, unmerge.py `_unmerge_display` prune branch
+/// Portage: actions, unmerge `_unmerge_display` prune branch
 pub fn prune_cleanlist(
     root: &Path,
     args: &[String],
@@ -569,7 +569,7 @@ pub fn prune_cleanlist(
     };
 
     // `args_set`: the given atoms, or every multi-version cp with none
-    // (Portage `actions.py:1071-1075`).
+    // (Portage actions).
     let multi_version: HashSet<(String, String)> = {
         let mut counts: HashMap<(String, String), usize> = HashMap::new();
         for p in &installed {
@@ -737,7 +737,7 @@ pub struct PruneNodepsCp {
     pub other_versions: Vec<String>,
 }
 
-/// Portage `emerge --prune --nodeps` (`unmerge.py:245-272`, routed *instead of*
+/// Portage `emerge --prune --nodeps` (Portage unmerge, routed *instead of*
 /// `_calc_depclean`): no dependency check -- per matched cp, protect the "best"
 /// version (highest; highest `COUNTER` on a same-slot collision, never hit in
 /// fixtures), select the rest. With `args` the split is over each atom's match
@@ -788,11 +788,11 @@ pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp
     out
 }
 
-/// Portage `emerge --clean`'s selection (`unmerge.py:274-293`): like
+/// Portage `emerge --clean`'s selection (Portage unmerge): like
 /// `--prune --nodeps` but **per slot** -- for every `(cp, slot)` keep only the
 /// highest version. Same `COUNTER`-tiebreak narrowing as
 /// [`prune_nodeps_selection`], and no `sys-apps/portage` self-skip (Portage
-/// `unmerge.py:368` explicitly skips it for `--clean`).
+/// `unmerge` explicitly skips it for `--clean`).
 pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
     let installed = all_installed_packages(root);
     let matched: Vec<&InstalledPackage> = if args.is_empty() {
@@ -854,7 +854,7 @@ pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
     out
 }
 
-/// Portage `strip_slots` (`lib/portage/dep/_slot_operator.py:11`) for one atom:
+/// Portage `strip_slots` (Portage dep) for one atom:
 /// rewrites a "built" slot-operator atom (`cat/pkg:2=`, the concrete slot
 /// Portage records in the vdb) back to `cat/pkg:=`, so `deps_changed`'s
 /// vdb-vs-ebuild comparison doesn't flag every `:=` dep as changed. Only

@@ -29,7 +29,7 @@ fn envd_use_tokens_follow_eroot_not_config_root() {
     let _ = fs::remove_dir_all(&bare);
 }
 
-/// Backlog #332: `Config::reload_env_d` re-reads the eroot-only `profile.env`,
+/// `Config::reload_env_d` re-reads the eroot-only `profile.env`,
 /// replacing the env.d scalar and incremental layers without touching higher
 /// layers. Expected behavior from Portage's per-package `config.reload()`.
 #[test]
@@ -71,7 +71,7 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
         })
     };
     let mut config = resolve();
-    // The first load applies the env blacklist too (Portage config.py:724-743):
+    // The first load applies the env blacklist too (Portage config.py):
     // `EAPI` (in `ENV_BLACKLIST`) never enters `other_vars`.
     assert_eq!(config.other_vars.get("EAPI"), None);
     assert_eq!(
@@ -133,9 +133,9 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// Backlog #332: the profile half of the env.d blacklist drops env.d keys the
+/// The profile half of the env.d blacklist drops env.d keys the
 /// profile's `PROFILE_ONLY_VARIABLES` names, on first load and every reload.
-/// Expected behavior from Portage config.py:734-743.
+/// Expected behavior from Portage config.py blacklist.
 #[test]
 fn reload_env_d_never_admits_a_profile_only_variable() {
     let root = TempDir::new("portage-profile-test-envd-profile-only").keep();
@@ -1268,7 +1268,7 @@ fn use_expand_variable_value_expands_with_negation_and_plus_stripped() {
 fn profile_make_defaults_use_expand_is_folded_per_level_before_package_use() {
     // A profile USE_EXPAND value folds into that level's make_defaults_use
     // (prepended, so package.use can cancel it), never into the conf tier.
-    // Portage config.py:2849-2889; the neovim REQUIRED_USE case in miniature.
+    // Portage config.py per-level fold; the neovim REQUIRED_USE case in miniature.
     let root = TempDir::new("portage-profile-test-use-expand-per-level-fold").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1330,7 +1330,7 @@ fn profile_make_defaults_use_expand_is_folded_per_level_before_package_use() {
 fn use_expand_value_set_at_two_profile_levels_stacks_incrementally() {
     // Each level's value folds into that level's USE (USE is incremental), so
     // the later level never wipes the earlier; a `-video_cards_*` still cancels.
-    // Portage config.py:2853-2866; mirrors Gentoo's default/linux + arch/amd64.
+    // Portage config.py per-level fold; mirrors Gentoo's default/linux + arch/amd64.
     let root = TempDir::new("portage-profile-test-use-expand-two-level-stack").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1377,8 +1377,8 @@ fn use_expand_value_set_at_two_profile_levels_stacks_incrementally() {
 
 #[test]
 fn use_expand_prefix_wildcard_cancels_parent_level_values() {
-    // #67 S2 regression pin: the leaf's `VIDEO_CARDS="-* intel"` cancels the
-    // parents' `video_cards_*` flags (Portage config.py:2925) keeping `intel`.
+    // Regression pin: the leaf's `VIDEO_CARDS="-* intel"` cancels the
+    // parents' `video_cards_*` flags keeping `intel`.
     let root = TempDir::new("portage-profile-test-use-expand-prefix-wildcard").keep();
     let repo = root.join("repo");
     let base = repo.join("profiles/base");
@@ -1744,7 +1744,7 @@ fn env_layer_overrides_config_vars() {
 
 #[test]
 fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
-    // Backlog #219: CONFIG_PROTECT/_MASK and ENV_UNSET are in Portage
+    // CONFIG_PROTECT/_MASK and ENV_UNSET are in Portage
     // const.INCREMENTALS, so the calling env stacks as the final source.
     let root = TempDir::new("portage-profile-test-info-incrementals").keep();
     let repo = root.join("repo");

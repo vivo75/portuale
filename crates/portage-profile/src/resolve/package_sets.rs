@@ -42,7 +42,7 @@ pub(crate) fn fold_package_sets(
         .collect();
 
     // package.provided: every level's file plus the user-level one, same
-    // `-atom` stacking. Portage: config.py:970-1027
+    // `-atom` stacking. Portage: config.py package.provided
     let mut pprovided_sources: Vec<Vec<String>> = Vec::new();
     for level in chain {
         pprovided_sources.push(read_config_lines(&level.join("package.provided"))?);

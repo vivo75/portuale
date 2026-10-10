@@ -30,7 +30,7 @@ pub(crate) fn expand_use_vars(
         }
     }
 
-    // Per-level USE_EXPAND fold (Portage config.py:2849-2889): each level's
+    // Per-level USE_EXPAND fold (Portage config.py regenerate): each level's
     // value becomes USE flags *prepended* before that level's USE=, so a
     // sub-profile or that level's package.use can still cancel them.
     {

@@ -34,7 +34,7 @@ pub(crate) fn load_scalar_layers(
         parent_colon_repos,
     } = args;
     // Layers in Portage `regenerate()` order: env.d, globals, the profile
-    // chain (`defaults`), make.conf (`conf`). Portage: config.py:531
+    // chain (`defaults`), make.conf (`conf`). Portage: config.py `regenerate`
     // `env.d` is `<eroot>/etc/profile.env` (compiled `env-update` output).
     // Values substitute eagerly here (matching Portage's on-access result
     // for backward references) and seed `scalars` for every later file.
@@ -76,7 +76,7 @@ pub(crate) fn load_scalar_layers(
     // the same key joins `envd_higher_keys` and `reload_env_d` keeps it.
 
     // `globals`: `cnf/make.globals`, always sourced as the base layer
-    // (Portage: config.py:532, `portage.const.GLOBAL_CONFIG_PATH`).
+    // (Portage: config.py, `portage.const.GLOBAL_CONFIG_PATH`).
     // Read `config_root`-relative: the live path under `/`, absent under tests.
     let globals_path = config_root.join("usr/share/portage/config/make.globals");
     if globals_path.is_file() {
@@ -136,7 +136,7 @@ pub(crate) fn load_scalar_layers(
     // `scalars` as the profile chain left it, before make.conf/env: a
     // USE_EXPAND variable still at this value folded per-level, not again
     // in the global conf-tier loop (Portage skips the `defaults` re-fold).
-    // Profile half of the env.d blacklist (`config.py:734-743`): keys the
+    // Profile half of the env.d blacklist: keys the
     // profile's `PROFILE_ONLY_VARIABLES` names are dropped unless a higher
     // layer also assigned them.
     if !config.envd_vars.is_empty() {
