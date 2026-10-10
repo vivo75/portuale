@@ -13,13 +13,13 @@ from the committed valid `.gpkg.tar`, decompresses its inner
 the outer container with a **recomputed** `Manifest` (DATA size + digests
 for the new member bytes) -- so every #56 outer check passes and the
 crafted inner member is the only deviation. Rebuilt inner tars drop
-directory members to match what real's writer emits (`_add_metadata` adds
+directory members to match what Portage's writer emits (`_add_metadata` adds
 only `metadata/<KEY>` files); the untouched committed fixture (cell `i0`)
 keeps its directory member, which is itself an S0 evidence row.
 
   --mode build        write `<out>/<cell>-<slug>.gpkg.tar` for every cell
                       (plus `<out>/inner/<cell>.tar` for inner cells)
-  --mode real         run real Portage's reader over the built archives
+  --mode real         run Portage's reader over the built archives
   --mode extract      run GNU `tar` the way portuale currently does, into a
                       throwaway directory, and report the exit status +
                       extracted entry types
@@ -162,7 +162,7 @@ def write_tar_entries(entries: list) -> bytes:
 
 
 def ti(name, kind=tarfile.REGTYPE, data=None, linkname="", mode=0o644):
-    """A hand-set inner-tar header (real's own writer emits regular files
+    """A hand-set inner-tar header (Portage's own writer emits regular files
     only; the crafted cells need the raw header type)."""
     info = tarfile.TarInfo(name)
     info.type = kind
@@ -214,7 +214,7 @@ def add_entry(tar, name, data=None, kind=tarfile.REGTYPE, linkname="", mode=0o64
 
 
 def member_order(prefix: str, files: dict) -> list:
-    """Real gpkg write order: `gpkg-1`, metadata, image, Manifest."""
+    """Portage's gpkg write order: `gpkg-1`, metadata, image, Manifest."""
     return [
         (f"{prefix}/{base}", files[base])
         for base in ("gpkg-1", "metadata.tar.zst", "image.tar.zst", "Manifest")
@@ -237,7 +237,7 @@ def build_cell(cell: str, prefix: str, files: dict, dest: Path) -> None:
                 else:
                     add_entry(tar, name, data=data)
         elif cell == "c":
-            # The prefix name -- a member real never writes -- is a symlink
+            # The prefix name -- a member Portage never writes -- is a symlink
             # to /etc; the valid members sit under a sibling prefix, so GNU
             # tar can unpack the archive and a naive walk lists /etc *and*
             # still finds a usable gpkg.
@@ -310,7 +310,7 @@ def slug(cell: str) -> str:
 def craft_metadata(cell: str, base: list, victim: Path) -> list:
     """Rebuild the inner metadata tar with the cell's one crafted member.
 
-    Directory members are dropped to mirror real's writer (`_add_metadata`
+    Directory members are dropped to mirror Portage's writer (`_add_metadata`
     emits `metadata/<KEY>` regular files only); the untouched fixture keeps
     its `metadata/` directory member (cell i0), which is evidence in its
     own right.
@@ -339,7 +339,7 @@ def craft_metadata(cell: str, base: list, victim: Path) -> list:
         return [(copy.copy(info), data) for info, data in base]
     if cell == "i19":
         # Valid archive: only the directory members are dropped so the
-        # inner shape matches real's writer (the image side carries the
+        # inner shape matches Portage's writer (the image side carries the
         # legitimate symlink/hardlink/sparse/xattr members).
         return entries
     if cell == "i1":
@@ -433,7 +433,7 @@ def build_i19_image(out: Path) -> bytes:
     """A legitimately-shaped image tar: a real directory tree with a
     relative symlink, a hardlink to an earlier member, a sparse file and
     a user xattr, packed by GNU tar (`--sparse --xattrs`) exactly the way
-    real's writer's `tar.add(..., recursive=True)` would shape it."""
+    Portage's writer's `tar.add(..., recursive=True)` would shape it."""
     stage = out / "i19-stage"
     if stage.exists():
         shutil.rmtree(stage)
@@ -516,12 +516,12 @@ def build(src: Path, out: Path, cells: list) -> dict:
     return built
 
 
-# --------------------------------------------------------------- real reader
+# --------------------------------------------------------------- Portage reader
 
 
 class timeout:
     """Raise `TimeoutError` from a `signal.alarm`, for probe calls that must
-    not hang the matrix (real's reader is in-process)."""
+    not hang the matrix (Portage's reader is in-process)."""
 
     def __init__(self, seconds):
         self.seconds = seconds

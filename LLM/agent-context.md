@@ -19,7 +19,7 @@ a **working package manager** — it resolves, builds, merges, and unmerges
 real Gentoo packages — and the aim is a **drop-in, same-behaviour
 replacement** (and then some), reached one reviewed, contract-tested
 slice at a time. `scope-backlog.md` Part 2 is the honest list of what
-real portage still does that portuale doesn't.
+Portage still does that portuale doesn't.
 
 **EAPI floor**: EAPI 0, 1, 2, 3, 4, and 6 are deprecated and removed in
 this repo/fork — no ebuild uses them, and all profiles are EAPI 5 or
@@ -132,7 +132,7 @@ at really is the fixture tree.
 
 `3rdparty/` is the one thing that stays here (pmtest keeps a separate
 `3rdparty/` of its own for its harness checkouts) — it is where the
-pinned real-Portage checkout lives (the `PORTUALE_PYTHON_HELPERS=real`
+pinned Portage checkout lives (the `PORTUALE_PYTHON_HELPERS=real`
 oracle and the fixture-generator / re-sync source since #326 S2–S7; the
 gpg test keyring the signing tests use is vendored in pmtest's own
 fixture tree, `fixtures/helpers/gpg-keyring/`). The two repos therefore
@@ -158,7 +158,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   `emerge --pretend` slice and the contract suite asserted Rust == Python;
   it proved agreement with a portuale-authored copy, not with Portage,
   and was removed (`history/second_python_copy_removal.md`, in git history).
-  Expected `emerge` output now comes from real Portage (the differential
+  Expected `emerge` output now comes from Portage (the differential
   beds, this host's `emerge`, upstream `lib/portage/tests/resolver/`
   cases). In its place: expectation-free output invariants and cross-mode
   checks (`pmtest/pytests-contract-suite/test_output_invariants.py`, also
@@ -170,7 +170,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   (`pmtest/scripts/portage_repin_review.py`), and the corpus harvested
   from the last Rust/Python agreement
   (`pmtest/pytests-contract-suite/corpus/`, drift is a warning). The primitive harnesses above
-  stay: they wrap real `portage.versions`/`portage.dep`.
+  stay: they wrap Portage's `portage.versions`/`portage.dep`.
 - The harness needs **two modes**:
   - *Correctness mode*: one operation per process invocation, pytest-driven,
     exhaustive edge cases.
@@ -179,7 +179,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
 - Benchmark data: a **real, vendored Gentoo tree snapshot** (not purely
   synthetic stress data) — realistic scale and distribution of versions/
   atoms/deps. `pmtest/bench/extract_snapshot.py` refreshes
-  `gentoo_snapshot.json` against a live tree using real
+  `gentoo_snapshot.json` against a live tree using Portage's
   `portage.versions.pkgsplit` as the authority.
 - CI gates on both: correctness suite must pass on both implementations;
   benchmark suite must show Rust ahead of Python and must not regress
@@ -189,7 +189,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
 - **Container-based real-system differential test bed**
   (`pmtest/differential-test-bed/`, see its own `README.md` and
   `history/real-world-testing.md` (git history)): runs portuale
-  *and* the real `emerge` against a pinned real Gentoo tree inside
+  *and* Portage's `emerge` against a pinned real Gentoo tree inside
   throwaway `podman` containers and diffs the results. **L0**
   (`differential-test-bed/run/l0-resolver.sh`) — `emerge -pv` for ~120 real atoms
   (firefox, plasma-meta, `@world`, …), comparing merge lists / USE /
@@ -200,7 +200,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   that catches resolver / merge-path regressions at real-tree scale (the
   fixture-based pytest contract suite cannot). The fixture-oracle bed
   (`differential-test-bed/run/l0-fixture-oracle-all.sh`) covers the same
-  ground per-fixture with real-Portage oracles — it caught backlog #54. Needs the
+  ground per-fixture with Portage oracles — it caught backlog #54. Needs the
   `localhost/test-portuale:latest` image
   (`sudo differential-test-bed/create-container.bash`, run from pmtest).
   It is **slower and heavier** than the pytest/`cargo test` pass, so it
@@ -231,7 +231,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
 portuale is a **working package manager**, used on real systems. It
 resolves, builds, merges, unmerges, and manages the world file for real
 Gentoo packages, with real ebuild-phase execution and real filesystem
-mutation. The `--pretend` resolver is validated against real `emerge`
+mutation. The `--pretend` resolver is validated against Portage's `emerge`
 at real-tree scale (pmtest's differential bed, L0: ~120 real atoms,
 96/120 byte-identical plans; L1: filesystem+VDB merge parity, clean).
 
@@ -270,10 +270,10 @@ and #38 (packaging transforms: `dostrip`/`splitdebug`/`docompress`) are
 phase with the resolved config env (`portage_profile::phase_environ`:
 implicit USE, resolved `FEATURES`/`PORTAGE_FEATURES`, multilib vars,
 `SLOT`/`PORTAGE_REPO_*`, `SOURCE_DATE_EPOCH`), and the Rust execution
-gates read the resolved `FEATURES`. #38: the real `install_qa_check`
+gates read the resolved `FEATURES`. #38: Portage's `install_qa_check`
 gates fire on every source path, the transform output matches the
 portage-built sibling (including the oracle's own `.build-id`/`.debug`
-bytes; the only residue is real's own `setuid` link nondeterminism), and
+bytes; the only residue is Portage's own `setuid` link nondeterminism), and
 `ebuild_phases::run_instprep` runs the merge-time complement on every
 source and binary merge. L2 porttest is green from a
 clean run with the `l2-bpkgonly-env`, `l2-gpkg-dostrip-splitdebug` and
@@ -286,16 +286,16 @@ install-time `*DEPEND` rewrite) and the test-bed GPG check
 Backlog #42 (`emerge` never pre-cleans `PORTAGE_BUILDDIR`, found in #38
 S4) is **closed too**: `ebuild_phases::run_clean` runs the real `clean`
 phase before every source build, after a `--buildpkgonly` package, and
-after a merge unless `FEATURES=noclean` (real `EbuildBuild.
+after a merge unless `FEATURES=noclean` (Portage's `EbuildBuild.
 _start_pre_clean` + `dblink.merge()`'s tail); `run_qmerge` stays
-clean-free like real `doebuild qmerge` (evidence: `TEST/findings/l2.md`
+clean-free like Portage's `doebuild qmerge` (evidence: `TEST/findings/l2.md`
 "#42").
 
 **2026-09-13 (later):** #43 (binrepo `verify-signature` + the bed's
 gentoo binrepo) and #39/#40 (gpkg metadata completeness; the archive's
 `IUSE`/`IUSE_EFFECTIVE`/`SIZE`/`PROVIDES`/`REQUIRES`/6-field
 `NEEDED.ELF.2`/rewritten `*DEPEND`/`Packages` `EAPI`+`REPO` now match
-real) are **closed** — the L2 porttest track is `strict hard=0 soft=0`
+Portage) are **closed** — the L2 porttest track is `strict hard=0 soft=0`
 on every archive pair with all `l2-gpkg-*` allowlists deleted
 (`l2-20260913T232955Z`, `TEST/findings/l2.md` "#39 / #40"). **#29 is
 closed 2026-09-14**: the L2 real set (`l1-merge.txt`,
@@ -318,12 +318,12 @@ two are fixed.
 
 **2026-09-15 memory note:** backlog #46 (md5-cache validation) is
 **closed**. The read path now validates a present `metadata/md5-cache`
-entry the way real `_pull_valid_cache` does (`portage-repo::md5_dict`:
+entry the way Portage's `_pull_valid_cache` does (`portage-repo::md5_dict`:
 `_md5_`, EAPI, `_eclasses_` -- pairs for the pregen cache, triples for
 the depcachedir) and falls through to the depcachedir/depend-phase
 rungs on a reject; no provider returns it as-is, an ebuild-less entry is
 trusted, and a provider failure never falls back to stale data. All 565
-committed fixture entries were regenerated with real `egencache` first
+committed fixture entries were regenerated with Portage's `egencache` first
 (byte-identical to `portuale emerge --regen`), the 21 deliberately
 cache-less ebuilds stay cache-less, and the guard
 `test_committed_fixture_md5_cache_entries_match_their_ebuilds` keeps
@@ -334,23 +334,23 @@ image audit (gentoo 0 stale) and L1 porttest are green. Detail:
 
 **2026-09-15 (later) memory note:** backlog #55 (GLEP 82
 `layout.conf` `cache-formats`) is **closed**. The key is resolved on
-`RepoConfig` with real's rule (lowercase + split; empty -> auto-detect
+`RepoConfig` with Portage's rule (lowercase + split; empty -> auto-detect
 `md5-dict` then `pms`), and the read path honours it: the pregen
 `metadata/md5-cache` rung is used only when the first **known** format is
-`md5-dict` and `FEATURES=metadata-transfer` is absent (real
+`md5-dict` and `FEATURES=metadata-transfer` is absent (Portage's
 `porttree.py:322`); otherwise `repo_aux_metadata` goes straight to the
 depcachedir/depend provider, and `mrg-director`'s `Md5Cache::category`
 lists `*.ebuild`. `--regen` follows `egencache`'s writer targets -- it
 skips a `pms`-only repo with a message and exit 1 instead of writing the
 wrong directory. The one narrowing: no `pms` reader exists, so a
-`pms`-first repo takes the depend-phase fallback (same metadata as real
+`pms`-first repo takes the depend-phase fallback (same metadata as Portage
 reads from a valid `pms` cache; slower, not different). Container oracle:
 `TEST/findings/l2.md` "## #55 S0" (cells a-h, run
 `c55-20260915T172758Z`); L0 after the change is byte-identical to the
 pre-change baseline (clean 100 / parity 0.833). Detail and decisions:
 `history/07.55-layout_conf_cache_formats.opus.md` (git history).
 
-For what is **genuinely still open** — real portage behaviour not ported
+For what is **genuinely still open** — Portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see
 **[`scope-backlog.md`](scope-backlog.md)** (Part 2 = remaining work,
 Part 3 = non-goals). Keep that file current when a slice closes an entry.
@@ -434,7 +434,7 @@ aborts), but an mmap'd *shared library* opens for write fine — so
 portuale's `sys-libs/readline` merge rewrote `libreadline.so.8.3`
 underneath every running `bash` and all of them segfaulted
 (`_rl_forward_char_internal`), while a `glibc` merge would have taken
-down every process. Real `movefile` never touches the old inode
+down every process. Portage's `movefile` never touches the old inode
 (`os.rename` same-device, copy-to-`#new`-then-rename cross-device); the
 fix ports exactly that (see the #96 entry for the full evidence chain and
 the regression tests). When adding a new file type to `merge_tree` (or a
@@ -443,7 +443,7 @@ old inode is never written to.
 
 ### What "install a package into the filesystem" actually is
 
-Splits into two separable pieces, grounded in real Python source (still
+Splits into two separable pieces, grounded in Portage's Python source (still
 useful orientation even though both are now shipped):
 
 1. **Phase execution** — shelling into a bash interpreter to run the real
@@ -460,7 +460,7 @@ useful orientation even though both are now shipped):
    etc.) used inside those phases.
 
 2. **The vdb merge** — copying `${D}` into `${ROOT}` and recording
-   `CONTENTS` under `/var/db/pkg/...`. Real implementation:
+   `CONTENTS` under `/var/db/pkg/...`. Portage's implementation:
    `dblink.merge()`/`treewalk()`/`mergeme()` in
    `lib/portage/dbapi/vartree.py` (~6500 lines). Module-level `merge()`
    (`vartree.py:6231`) forks a `MergeProcess` that calls `dblink.merge()`

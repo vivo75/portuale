@@ -2,8 +2,8 @@
 """Capture upstream resolver tests as data for portuale fixture translation
 (backlog #50 / `docs/history/second_python_copy_removal.md` §7).
 
-Loads an upstream `lib/portage/tests/resolver/test_*.py` module, runs its
-real `ResolverPlayground` against the vendored portage (pinned in
+Loads an upstream `lib/portage/tests/resolver/test_*.py` module, runs the
+Portage's `ResolverPlayground` against the vendored portage (pinned in
 `3rdparty/repos.toml`), and records, per resolution:
 
 * the playground's inputs (`ebuilds`, `installed`, `world`,

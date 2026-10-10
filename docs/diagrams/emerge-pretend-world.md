@@ -56,7 +56,7 @@ flowchart TD
   family it resolves against whatever binhost index is already cached
   (the `!pretend && getbinpkg` refresh guard in `pretend::run`).
 - `@world` = sorted `@profile` + `@selected` + sorted `@system`
-  (real `_sets/__init__.py:97-98`): the world file's atoms plus the
+  (Portage's `_sets/__init__.py:97-98`): the world file's atoms plus the
   sets named in `var/lib/portage/world_sets`, expanded recursively,
   plus the profile's unstarred `packages` lines and the system's
   starred ones.

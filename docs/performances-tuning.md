@@ -1,6 +1,6 @@
 # Performance tuning
 
-> Why `portuale emerge -puD` was several times slower than real `emerge` on a
+> Why `portuale emerge -puD` was several times slower than Portage's `emerge` on a
 > live tree, where the time actually goes, and what to change. Written from a
 > `perf` + call-counter investigation of
 > `portuale emerge -puD --getbinpkg net-libs/rest` on a real amd64 desktop
@@ -12,7 +12,7 @@
 
 | build | `-puD --getbinpkg net-libs/rest` | vs before |
 |---|---|---|
-| real `emerge` | ~16 s | — |
+| Portage's `emerge` | ~16 s | — |
 | portuale, original | **~77 s** | 1.0× |
 | + `parse_atom` / `parse_candidate` memoised | **~20.6 s** | 3.7× |
 | + `package.*` config bucketed by `cp` | **~9.5 s** | 8.1× |
@@ -30,8 +30,8 @@
 All twelve changes are **shipped** and keep byte-identical output with
 the full suite green (`portage-dep` / `portage-repo` / `portuale` unit
 tests + contract tests). portuale is now ~2.01 s wall / ~1.5 s user /
-~0.5 s sys on this workload, against real's last measured 4.50–5.11 s
-(real aborts there today, backlog #111). None of them alters the
+~0.5 s sys on this workload, against Portage's last measured 4.50–5.11 s
+(Portage aborts there today, backlog #111). None of them alters the
 resolver algorithm — they remove redundant work the algorithm was doing.
 
 1. **`parse_atom` / `parse_candidate` memo cache** (`rust/portage-dep/src/
@@ -40,7 +40,7 @@ resolver algorithm — they remove redundant work the algorithm was doing.
    instead of 34 M times. 77 s → 20.6 s.
 2. **cp-bucketed `package.*` config** (`rust/portage-repo/src/lib.rs`,
    `CpBucketIndex` + `config_entries_matching` / `any_config_entry_matches`):
-   portuale's stand-in for real portage's `ExtendedAtomDict`. Each config
+   portuale's stand-in for Portage's `ExtendedAtomDict`. Each config
    list is bucketed by `cat/pkg` once (memoised), so a per-package lookup
    visits the ~0–5 entries that name that `cp` (plus the wildcard tail)
    instead of linearly scanning all ~1,900. 20.6 s → 9.5 s.
@@ -49,7 +49,7 @@ resolver algorithm — they remove redundant work the algorithm was doing.
    `apply_updates_to_slot` replayed all ~530 `profiles/updates/` `move`
    commands on every call (once per installed package × ~10 resolver call
    sites). Now a single `HashMap` lookup against the fully-resolved chain,
-   built once — real portage's model, which bakes moves into the vdb/cache at
+   built once — Portage's model, which bakes moves into the vdb/cache at
    sync. `all_installed_packages` is also memoised per `root` (fingerprinted
    by vdb dir mtimes) so the ~2,000-`SLOT`-file scan runs once, not ~10×.
    9.5 s → 6.9 s (`apply_updates_to_cp` 15 % → 1.4 % of the run).
@@ -58,7 +58,7 @@ resolver algorithm — they remove redundant work the algorithm was doing.
    `emerge -pu` (`list_candidates`, then every visibility / USE / slot-op /
    changed-deps check for the candidate), each doing a file open + line parse
    + `apply_updates_to_dep_string` over 5 keys. The tree's md5-cache is
-   immutable for the process (real `portdbapi` keeps the same entries in its
+   immutable for the process (Portage's `portdbapi` keeps the same entries in its
    `_aux_cache`); `--regen`, portuale's only writer, is a separate process.
    `OnceLock<RwLock<HashMap<PathBuf, Arc<…>>>>` keyed by full path.
    6.9 s → 5.9 s.
@@ -98,7 +98,7 @@ overhead.
 
 ## The symptom (original, 77 s)
 
-| command | real `emerge` | `portuale emerge` |
+| command | Portage's `emerge` | `portuale emerge` |
 |---|---|---|
 | `-puD --getbinpkg net-libs/rest` | ~16 s | ~77 s |
 | `-puD --getbinpkg sys-devel/gcc` | similar gap | similar gap |
@@ -107,12 +107,12 @@ overhead.
 `portuale` is **CPU-bound and single-threaded** for the whole run: 75 s user /
 2 s system, 99 % of one core, 101 MB RSS, negligible I/O (11 k fs inputs). The
 merge list it produces is only **15 packages**. So ~75 s of CPU is spent
-*deciding* on 15 packages while walking a ~2000-package deep graph — real
-portage does the same walk in ~16 s.
+*deciding* on 15 packages while walking a ~2000-package deep graph — Portage
+does the same walk in ~16 s.
 
 This is not a constant-factor Rust-vs-Python problem. Rust starts ~10–50×
 ahead per primitive operation. Being 5× *behind* means portuale is doing
-roughly two orders of magnitude more work than real portage. The algorithm is
+roughly two orders of magnitude more work than Portage. The algorithm is
 fundamentally different — it just turned out that a memo cache papers over
 most of the difference.
 
@@ -190,7 +190,7 @@ The candidate string (`cat/pkg-ver:slot::repo`) is *identical* across all
 ~1,600 iterations of a single call and is re-parsed every time. Each config
 atom is re-parsed on every call for every package, forever.
 
-**Real portage does not do this.** It parses each `package.use` /
+**Portage does not do this.** It parses each `package.use` /
 `package.mask` / … line **once** at config load into an `Atom`, and its
 `UseManager` / `_MaskManager` (`lib/portage/package/ebuild/_config/`) store
 them in an `ExtendedAtomDict` (`lib/portage/dep/__init__.py`) keyed by `cp`,
@@ -216,7 +216,7 @@ cache**. Every visit re-reads directories, re-reads and re-parses md5-cache
 files, and re-applies profile `updates/` to every `*DEPEND` string
 (`apply_updates_to_dep_string`, `:614`, 100 k calls) from scratch.
 
-Real portage reads `metadata/md5-cache` through `portdbapi` with an in-process
+Portage reads `metadata/md5-cache` through `portdbapi` with an in-process
 LRU (`self._aux_cache`), builds each `Package` once, and the depgraph keeps a
 single `Package` instance per cpv for the life of the resolve.
 
@@ -281,9 +281,9 @@ reference workload (the host has drifted ±0.05 s across the day; paired
 comparisons only):
 
 1. **`#107` — the second `run_pass` (parked 2026-09-21).** `run_pass` is
-   75.46 % with children and the loop still restarts where real reports
+   75.46 % with children and the loop still restarts where Portage reports
    `backtrack: 0/20`. Diagnosed: the restart is the reverse-dependency
-   pin feedback, and removing it needs real's complete-graph
+   pin feedback, and removing it needs Portage's complete-graph
    parent-atom model (a prototype that applied the reachable consumers'
    atoms at selection lost an update and the withheld-update warning —
    see the #107 backlog entry). Algorithmic/parity; do not win it by
@@ -299,9 +299,9 @@ comparisons only):
    ~3.2 k cold md5-cache misses (parse + `entry_is_valid`'s ebuild md5 +
    the rewrite) and two `PathBuf` builds plus lock lookups per hit, not
    the rewrite any more.
-4. **`#111` — the real-abort tree divergence** (parity, not performance):
-   real aborts `-uD --getbinpkg` where portuale resolves on the
-   2026-09-21 tree; blocks the interleaved real comparison until fixed.
+4. **`#111` — the Portage-abort tree divergence** (parity, not performance):
+   Portage aborts `-uD --getbinpkg` where portuale resolves on the
+   2026-09-21 tree; blocks the interleaved Portage comparison until fixed.
    **Unblocked 2026-09-22 by #132** (Phase 3b S0–S7): portuale now
    evaluates installed parents' conditional use-deps and aborts the
    unfixable deep miss, rc 0 → rc 1 on the two probe commands.
@@ -344,7 +344,7 @@ profile, shipped) is kept below as history.
 
 The `'backtrack` loop re-ran the entire BFS for a case that produced no
 backtracking-relevant change on pass 2. Confirm each pass is genuinely needed
-(real portage's `_backtrack_depgraph` only re-runs `_create_graph`, reusing
+(Portage's `_backtrack_depgraph` only re-runs `_create_graph`, reusing
 already-resolved state); a wasted pass doubles everything above.
 
 #### Release-profile `lto` + `codegen-units`
@@ -390,7 +390,7 @@ counts.
 
 ## Target
 
-The six shipped fixes reached ~4.5 s — about 3.5× faster than real `emerge`
+The six shipped fixes reached ~4.5 s — about 3.5× faster than Portage's `emerge`
 (~16 s) on this workload. The per-node recomputation that made portuale a
 different, slower algorithm is now all memoised; what's left is ordinary
 allocation overhead with no hot loop, so further work is incremental
@@ -404,11 +404,11 @@ Same workload, same host (now 2088 installed packages):
 | command | wall | user | sys | RSS |
 |---|---|---|---|---|
 | `portuale emerge -puD --getbinpkg net-libs/rest` (×2, identical) | **6.75 s** | 4.95 s | 1.79 s | ~158 MB |
-| real `emerge -puD --getbinpkg net-libs/rest` (×2) | **5.2–5.5 s** | ~4.7 s | ~0.25 s | ~183 MB |
+| Portage's `emerge -puD --getbinpkg net-libs/rest` (×2) | **5.2–5.5 s** | ~4.7 s | ~0.25 s | ~183 MB |
 
 Honest delta vs the 4.5 s / 3.5× days: user time is now at parity
 (4.95 vs ~4.7 s) and the wall gap is almost entirely sys time plus a
-faster real (5.5 s today vs 16 s then — tree, host and real-Portage
+faster Portage (5.5 s today vs 16 s then — tree, host and Portage
 drift cut both ways). Since the 4.5 s run the resolver gained real
 work: the all-installed blocker scan (#77), kept-branch derivation
 (#76/#84), live-metadata reads (#86), the respect-use repair (#69 R1),
@@ -431,7 +431,7 @@ after any resolver-shape change, not just perf work.
 
 Re-profiled 2026-09-20 (release `ce68f77`, same workload, now 2088
 installed packages): portuale 7.71–7.92 s wall / 5.79–6.00 s user /
-1.83–1.92 s sys vs real 3.0.82.2 5.70–5.89 s / 4.97–5.00 s /
+1.83–1.92 s sys vs Portage 3.0.82.2 5.70–5.89 s / 4.97–5.00 s /
 0.19–0.24 s — portuale behind again, on per-visit recomputation rather
 than the graph walk. Shipped the same day on `backlog/102-108`
 (plan [`08.102-108-perf-memoisation.md`](08.102-108-perf-memoisation.md)),
@@ -452,10 +452,10 @@ diff was bisected to the environment, not the change — the lesson is to
 benchmark before/after back-to-back and always re-verify identity on the
 same tree.)
 
-Final, interleaved with real: portuale **4.01–4.18 s** wall /
-2.93–3.09 s user / ~1.0 s sys vs real **4.50–5.11 s** / 4.07–4.16 s /
-~0.2 s sys — portuale is faster than real `emerge` on this workload
-again, with user time at ~0.7× real's. The remaining sys gap (~0.8 s) is
+Final, interleaved with Portage: portuale **4.01–4.18 s** wall /
+2.93–3.09 s user / ~1.0 s sys vs Portage **4.50–5.11 s** / 4.07–4.16 s /
+~0.2 s sys — portuale is faster than Portage's `emerge` on this workload
+again, with user time at ~0.7× Portage's. The remaining sys gap (~0.8 s) is
 ordinary file reads (md5-cache, config, repo scans), not re-scanning:
 `statx` went 1,202,010 → 297,382 per run. The call counts and the
 temporary-counter recipe (`PORTUALE_PERF_COUNT`, reverted after
@@ -471,7 +471,7 @@ reuse it before inventing a new one.
 
 Re-profiled after the `#102`–`#108` batch (release `662b15d`): 3.88–3.90 s
 wall / 2.85–2.90 s user / 0.99–1.03 s sys, 174 MB RSS — portuale ahead
-of real, and the ~1.0 s sys was the largest identified remaining cost,
+of Portage, and the ~1.0 s sys was the largest identified remaining cost,
 all of it vdb reads (`strace`: 160,351 `openat` with **40,651 ENOENT**
 and 202,281 `read`; the top successful-open paths are per-key
 `/var/db/pkg/CAT/PF/{USE,RDEPEND,repository,SLOT,BDEPEND,...}`). Shipped
@@ -482,7 +482,7 @@ each slice re-measured and byte-identical over the full contract suite:
 | slice | change | wall (best of 3 warm) |
 |---|---|---|
 | baseline (#102–#108) | — | 3.93–3.98 s |
-| #109 S1 | normalise `read_vdb_string` like real `_aux_get` | 4.06–4.08 s (no change) |
+| #109 S1 | normalise `read_vdb_string` like Portage's `_aux_get` | 4.06–4.08 s (no change) |
 | #109 S2 | move the field set/version to `portage-repo` | 4.06 s (no change) |
 | #109 S3 | `vdb_aux_get` reads the snapshot | 4.33–4.35 s (**regression**) |
 | #109 S4 | per-instance aux memo keyed on the dir mtime | 3.48 s |
@@ -505,7 +505,7 @@ it replaced — the ENOENT probes vanish (40,651 → 105) but opens stay
 follows immediately. The plan's S3 expectation (~0.3–0.5 s sys) did not
 materialise; the pair is what ships.
 
-**Real comparison was blocked by #111 — unblocked 2026-09-23 (#111 DONE).** Real `emerge -puD
+**Portage comparison was blocked by #111 — unblocked 2026-09-23 (#111 DONE).** Portage's `emerge -puD
 --getbinpkg net-libs/rest` exits 1 on this tree
 (`~dev-qt/qtbase-6.11.2:6[...]` USE conflict through the installed
 qtdeclarative chain) while portuale used to resolve the same 27-package plan
@@ -513,7 +513,7 @@ rc 0; `-pv --getbinpkg dev-qt/qtbase` resolves on both. This was a
 tree-state change, not a #109/#110 effect (the pre-batch baseline binary
 resolved too). #132 fixed portuale's side, and the #111 close-out re-probe
 confirms both sides now exit 1 with the identical abort line — so the
-interleaved real wall-time comparison is available again (of two aborts).
+interleaved Portage wall-time comparison is available again (of two aborts).
 
 Next, in order: #105 (`use_context_fingerprint`, 23.77 % with children),
 then #107 (`run_pass`, 85.44 %, still the algorithmic item), then #112

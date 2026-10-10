@@ -79,6 +79,6 @@ flowchart TD
   continues; the file-removal core failing is a hard error.
 - `--rage-clean` is the same path with `action = "rage-clean"`: it skips
   the `CLEAN_DELAY` countdown and the prerm/postrm hooks.
-- v1 cuts on the real removal loop: no `--ask` prompt inside
+- v1 cuts on Portage's removal loop: no `--ask` prompt inside
   `execute_unmerge` itself (handled by the caller), `CLEAN_DELAY` is
   the env value (default 5, `0` skips).

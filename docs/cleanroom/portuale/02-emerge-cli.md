@@ -9,7 +9,7 @@ All line references are to `rust/portuale/src/emerge_options.rs`
 
 1. `--help`/`-h`/`help` anywhere → print `HELP_TEXT` and exit 0, before
    any config load (`pretend.rs:2879` `wants_help`, `:2892` `print_help`,
-   `:8390-8393`). This mirrors real `emerge`'s early `myaction == "help"`
+   `:8390-8393`). This mirrors Portage `emerge`'s early `myaction == "help"`
    return.
 2. Config is resolved (`find_repos` + `resolve_config`), then
    `EMERGE_DEFAULT_OPTS` from the resolved config is **prepended** to
@@ -34,7 +34,7 @@ All line references are to `rust/portuale/src/emerge_options.rs`
 4. After parsing: `--tree` + `--columns` together is an error ("can't
    specify both"); `--nodeps` forces off complete-graph and
    dynamic-deps; `--rebuild-if-unbuilt` clears rev+ver, `--rebuild-if-new-rev`
-   clears ver (real `main.py:958-975` precedence, `pretend.rs:8562-8568`).
+   clears ver (Portage's `main.py:958-975` precedence, `pretend.rs:8562-8568`).
 
 `emerge_options::lookup` (`emerge_options.rs:416`) classifies a token
 into `Category::{Boolean, Value, Action}` (`:220`) with its canonical
@@ -66,7 +66,7 @@ From `ACTIONS` (`emerge_options.rs:387-404`); each maps to a flow in
 | `--regen` | — | regenerate `metadata/md5-cache` (`regen.rs:175` `run`) |
 | `--metadata` | — | transfer metadata (`--regen`-adjacent cache action) |
 | `--version` | `-V` | print version and exit 0 |
-| `--moo`, `--status`, `--rage-clean` | — | recognized actions with real-portage joke/legacy behaviour |
+| `--moo`, `--status`, `--rage-clean` | — | recognized actions with Portage joke/legacy behaviour |
 
 ## 2.3 Target-atom forms (`atom_args`)
 
@@ -79,7 +79,7 @@ From `ACTIONS` (`emerge_options.rs:387-404`); each maps to a flow in
   named sets (`@set`), custom set files (`resolve_custom_set` `:3369`,
   `expand_selected` `:3058`), VDB paths
   (`resolve_vdb_path_arg` `:3862`).
-- A lone `-` reads targets from stdin (real-portage convention).
+- A lone `-` reads targets from stdin (Portage convention).
 
 ## 2.4 Modifier options (selection of the complete surface)
 

@@ -17,7 +17,7 @@ Builds the `Environment` struct (`:379`) for a package:
   (`split_package` `:276`, `PackageSplit` `:261`).
 - Reads EAPI (`parse_eapi` `:218`, first-assignment scan, default `0`).
 - Phase chain prerequisites (`phase_prerequisites` `:316`,
-  `is_real_phase_command` `:337`, standalone set `:370`).
+  `is_phase_command` `:337`, standalone set `:370`).
 - Directory layout (`D`, `S`, `WORKDIR`, `T`, `FILESDIR`,
   `PORTAGE_BUILDDIR`; `create_directories` `:616`,
   fake-filesdir symlink `:592`).
@@ -111,7 +111,7 @@ flowchart TD
 ## 5.3 Package (`ebuild_package.rs`, 1968 lines)
 
 `run_package` (`:528`, `PackageOptions` `:110` default `:200`,
-`is_real_package_command` `:101`): runs the install chain then packs
+`is_package_command` `:101`): runs the install chain then packs
 `${D}` + build-info into a binary package; `package_after_install`
 (`:569`) finalises metadata (resolved USE into the `Packages` index).
 
@@ -196,7 +196,7 @@ also prunes `NEEDED.ELF.2`); `preserve_libs_on_unmerge` (`:1215`);
 ## 5.5 Unmerge (`ebuild_unmerge.rs`, 1669 lines)
 
 `run_unmerge` (`:702`, `UnmergeOptions` `:519` default `:549`,
-`is_real_unmerge_command` `:161`):
+`is_unmerge_command` `:161`):
 
 1. Read `CONTENTS` (`parse_contents` `:178`, `ContentsEntry` `:165`).
 2. `remove_contents` (`:235`): delete files/symlinks; keep

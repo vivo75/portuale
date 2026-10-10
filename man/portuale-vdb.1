@@ -78,18 +78,18 @@ if the mount process died.
 .LP
 \fBmount\fR serves the database read\-only at \fIMOUNTPOINT\fR, an existing
 directory, as the historic tree \fICAT\fR/\fIPF\fR/\fIfiles\fR, so tools
-that read \fB/var/db/pkg\fR (eix, qlist, equery, real \fBportageq\fR and
+that read \fB/var/db/pkg\fR (eix, qlist, equery, Portage's \fBportageq\fR and
 \fBemerge \-p\fR) can use a database backend.  It uses FUSE through
 \fBfusermount3\fR and needs \fB/dev/fuse\fR; no libfuse is linked, and it
 exists only when portuale is built with the \fBvdb\-fuse\fR feature.
 The database is opened read\-only.  Every operation that would change the
 tree (create, write, unlink, rename, mkdir, symlink, link, chmod, truncate,
 extended attributes) fails with \fBEROFS\fR.  File modes, sizes and mtimes
-are the stored ones.  Directory mtimes follow real Portage (bug #290428):
+are the stored ones.  Directory mtimes follow Portage (bug #290428):
 an entry directory shows its stored mtime, a category directory the latest
 mtime of its entries, and the root the latest of its categories.  The
 consolidated \fBmetadata\fR file is served with its \fB#dir_mtime=\fR
-stamp equal to the entry directory mtime shown, so real Portage accepts it;
+stamp equal to the entry directory mtime shown, so Portage accepts it;
 a stamp that was stale when stored stays stale, and an entry stored without
 a \fBmetadata\fR file has none.  Each directory listing and each open file
 serves the generation it was opened on: a tool never sees half a merge, and
@@ -105,20 +105,20 @@ unmounted.  A
 \fBfiles:\fR source is passed through unchanged, which is useful for
 testing.
 .LP
-With \fB\-\-rw\fR (\fBsqlite\fR and \fBredb\fR only) real \fBemerge\fR and
+With \fB\-\-rw\fR (\fBsqlite\fR and \fBredb\fR only) Portage's \fBemerge\fR and
 \fBebuild\fR can merge, replace and unmerge packages with the mount as their
 \fIROOT\fR\fB/var/db/pkg\fR, and the changes go to the database.  A new
 \fIcat\fR\fB/\-MERGING\-\fR\fIpf\fR directory is staged on scratch disk
 (\fB$TMPDIR/portuale\-vdb\-rw\-*\fR, cleared by the next mount of the same
 database) and stored in one transaction when it is renamed to
-\fIcat\fR\fB/\fR\fIpf\fR; the \fBmetadata\fR stamp real wrote stays valid and
+\fIcat\fR\fB/\fR\fIpf\fR; the \fBmetadata\fR stamp Portage wrote stays valid and
 the database counter is raised to the entry's \fBCOUNTER\fR.  A rewrite of a
 file in a live entry (the \fBenvironment.bz2\fR update of \fBpkg_postinst\fR,
 an atomic rewrite of \fBCONTENTS\fR) is stored when it is closed or renamed
-into place.  An entry is deleted in one transaction when real has removed
+into place.  An entry is deleted in one transaction when Portage has removed
 its files and its directory; a mount that stops in between leaves it
 installed.  Slot lock files exist in memory only.  Every other write is
-\fBEPERM\fR.  Real \fBemerge\fR keeps writing world, the counter and the
+\fBEPERM\fR.  Portage's \fBemerge\fR keeps writing world, the counter and the
 other stores under \fIROOT\fR (\fB\-\-root\fR, default \fB/\fR); they are
 imported when the mount is unmounted.  A failed database write is reported
 as \fBEIO\fR to the writing process.  Over \fBredb\fR a \fB\-\-rw\fR mount

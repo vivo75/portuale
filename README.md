@@ -31,7 +31,7 @@ merged, and unmerged `app-arch/unzip`, `sys-fs/fuse`, and
 `app-arch/xz-utils` end to end against an actual Gentoo tree. Shipped:
 full `emerge --pretend` dependency resolution (atoms, slots, USE deps,
 blockers, slot conflicts, `USE_EXPAND`, `REQUIRED_USE`, autounmask,
-profile/`make.conf` config, overlays, the real `resolver/output.py`
+profile/`make.conf` config, overlays, Portage's `resolver/output.py`
 layout with ANSI colour); real ebuild phase execution via an embedded
 `brush` (Rust-native bash) driving unmodified `bin/*.sh`; real `SRC_URI`
 fetch; real filesystem merge/unmerge with `CONFIG_PROTECT`,
@@ -67,7 +67,7 @@ crates/                    the workspace crates
   portage-repo/            multi-repo/metadata/vdb access + resolution + dep-graph walk
   portage-fetch/           shared lib: SRC_URI fetch (Manifest digests, mirrors)
   *-harness/               neutral CLI harnesses (contract + benchmark testing)
-  portuale/                the real emerge / ebuild multicall binary
+  portuale/                the actual emerge / ebuild multicall binary
 fixtures/                  -> ../pmtest/fixtures (symlink): the one fixture tree,
                            read by the Rust tests here and by the contract suite there
 musl/                      musl static-build smoke test (minimal-Linux CI gate)
@@ -127,8 +127,8 @@ target/release/versions-harness vercmp 1.0-r1 1.0
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | **Start here for agent work.** The "next slice" workflow and the verification / commit rules. |
 | [`LLM/agent-context.md`](LLM/agent-context.md) | The full context: goals, hard constraints, architecture decisions, the bash-backend investigation, current state, and the open backlog. |
-| [`LLM/what-this-proves.md`](LLM/what-this-proves.md) | The living, append-only per-slice record — every feature, with its real-portage source grounding. |
-| [`LLM/scope-backlog.md`](LLM/scope-backlog.md) | What real portage behaviour is *not* yet ported (either side), the standing non-goals, and the distance to a drop-in replacement. |
+| [`LLM/what-this-proves.md`](LLM/what-this-proves.md) | The living, append-only per-slice record — every feature, with its Portage source grounding. |
+| [`LLM/scope-backlog.md`](LLM/scope-backlog.md) | What Portage behaviour is *not* yet ported (either side), the standing non-goals, and the distance to a drop-in replacement. |
 | [`LLM/lessons-of-backlog-ops-2026-10-03.md`](LLM/lessons-of-backlog-ops-2026-10-03.md), [`LLM/recap-of-backlog-ops-2026-10-03.md`](LLM/recap-of-backlog-ops-2026-10-03.md) | How to work on backlog items (condensed lessons) and the per-item status/residue/cut index for the closed batches. |
 | [`docs/brush-pin.md`](docs/brush-pin.md) | The `brush` (embedded bash) dependency pin and its re-pin checklist. |
 | [`docs/diagrams/operation-diagrams.md`](docs/diagrams/operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code. |

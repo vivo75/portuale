@@ -212,7 +212,7 @@ spaces, so `EOF` no longer terminates the heredoc.
 function between phases. `toolchain-funcs.eclass`'s `_tc-has-openmp`
 (and others) trips this → the written `${T}/environment` is unparseable
 → the next phase's `source "${T}/environment" || die` aborts. Breaks a
-real `emerge <atom>` for essentially every compiled package.
+Portage's `emerge <atom>` for essentially every compiled package.
 
 **Response (2026-09-01):** the phase-execution default flipped from the
 embedded `brush` backend to a real `bash` subprocess (`ShellBackend::
@@ -263,7 +263,7 @@ carried forward into every later pin, see "Current pin" above).
 5. **brace expansion vs IFS** — brace expansion built one space-joined
    string and relied on field splitting to separate its alternatives, so
    under `IFS=`/`IFS=:` (e.g. after `local IFS`) `{A..C}` stayed a single
-   word. Real `__filter_readonly_variables` builds bash's special-variable
+   word. Portage's `__filter_readonly_variables` builds bash's special-variable
    list with `printf '${!%s*} ' {A..Z} {a..z} _` *after* `local IFS`, so
    the list came back malformed and nothing was filtered — `BASHOPTS`,
    `EUID`, `PPID`, `SHELLOPTS`, `UID` were saved into `${T}/environment`

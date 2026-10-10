@@ -176,3 +176,5 @@ ident	is_real_standalone_phase_command	is_standalone_phase_command	3
 ident	is_real_standalone_phase_command_covers_exactly_config_info_prerm_postrm	is_standalone_phase_command_covers_exactly_config_info_prerm_postrm	3
 ident	is_real_unmerge_command	is_unmerge_command	3
 ident	is_real_unmerge_command_covers_exactly_unmerge	is_unmerge_command_covers_exactly_unmerge	3
+path	.claude/agents/real-portage-oracle.md	.claude/agents/portage-oracle.md	3
+name	agent real-portage-oracle	agent portage-oracle	3

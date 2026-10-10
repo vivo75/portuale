@@ -67,7 +67,7 @@ root-scoped `ldconfig` when present+executable (`:206`);
 
 ## 6.5 Install mask (`install_mask.rs`, 296 lines)
 
-`resolve` (`:28`) folds `INSTALL_MASK` + `no*` FEATURES in real order;
+`resolve` (`:28`) folds `INSTALL_MASK` + `no*` FEATURES in Portage's order;
 `InstallMask` (`:49`, patterns `:40`, anchored/unanchored/exclusion
 semantics); `install_mask_dir` (`:115`) deletes matched paths and
 records the mask; `fnmatch` (`:164`,→regex `:178`).
@@ -248,8 +248,8 @@ unmerge (`run_unmerge_pretend` :3950 · `execute_unmerge` :5054 ·
 
 **`ebuild_phases.rs`** (6424): `parse_eapi` :218 ·
 `split_package` :276 · `phase_prerequisites` :316 ·
-`is_real_phase_command` :337 ·
-`is_real_standalone_phase_command` :370 · `compute_environment` :398
+`is_phase_command` :337 ·
+`is_standalone_phase_command` :370 · `compute_environment` :398
 (+ `Environment` accessors :511-531) · `repo_root` :652 ·
 `portage_checkout` :670 · `bin_dir` :698 · `repo_root_for` :779 ·
 `restrict_*` :810-828 · `phase_standalone_base_env` :926 ·
@@ -268,8 +268,8 @@ scheduler registry :3058-3109 · `run_depend_phase` :3152 ·
 `run_misc_function` :3634 · `run_commands` :3839 ·
 `run_commands_logged` :3871 · `brush_phase_params` :4055.
 
-**`ebuild_merge.rs`** (6973): `is_real_merge_command` :212 ·
-`is_real_qmerge_command` :220 · `MergeOptions::from_env` :427 ·
+**`ebuild_merge.rs`** (6973): `is_merge_command` :212 ·
+`is_qmerge_command` :220 · `MergeOptions::from_env` :427 ·
 `set_resolved_features` :492 · `is_protected` :510 ·
 `new_protect_filename` :561 · `new_backup_path` :614 ·
 `protect_decision` :694 · cfgfiledict :766-787 · plib registry
@@ -294,12 +294,12 @@ scheduler registry :3058-3109 · `run_depend_phase` :3152 ·
 `unmerge_one_installed` :3505 · `run_vdb_saved_env_phase` :3600 ·
 `merge_binpkg` :3684.
 
-**`ebuild_unmerge.rs`** (1669): `is_real_unmerge_command` :161 ·
+**`ebuild_unmerge.rs`** (1669): `is_unmerge_command` :161 ·
 `parse_contents` :178 · `remove_contents` :235 ·
 `cleanup_info_dir` :397 · `remove_dirs` :443 · `unmerge_pkgfiles`
 :577 · `delete_vdb_dir` :690 · `run_unmerge` :702.
 
-**`ebuild_package.rs`** (1968): `is_real_package_command` :101 ·
+**`ebuild_package.rs`** (1968): `is_package_command` :101 ·
 `compress_template` :231 · `find_binary` :246 ·
 `resolve_compression_command` :281 · `makeopts_to_job_count` :299 ·
 `phase_compression_command` :342 ·

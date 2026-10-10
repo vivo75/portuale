@@ -7,7 +7,7 @@ already decided run on a cheap one, and the executing ones are safe to fan out.
 
 | agent | model | slice shape it covers | parallel-safe |
 |---|---|---|---|
-| `real-portage-oracle` | opus | "Oracle before code": what does real 3.0.82.2 do, with `file:line` + a live probe | yes, one per question |
+| `portage-oracle` | opus | "Oracle before code": what does Portage 3.0.82.2 do, with `file:line` + a live probe | yes, one per question |
 | `plan-reviewer` | opus | plan audits and post-phase reviews (the `D`/`G`/`P` doc) | yes, one per plan or range |
 | `probe-capture` | sonnet | the `S0`/`D0` capture slices, host re-diffs — run it, transcribe it, no diagnosis | yes |
 | `fixture-smith` | sonnet | the "the fixture (no product code)" slices | yes, if the fixtures don't share names |
@@ -27,7 +27,7 @@ commits can be split by hand.
 
 1. `plan-reviewer` on the plan, before any code. Correct the plan first — the
    2026-09-18 Tier 2 review found a false claim at the centre of its own §2.
-2. `real-portage-oracle` in parallel for each open "what does real do" question
+2. `portage-oracle` in parallel for each open "what does Portage do" question
    the review surfaced.
 3. Main session codes the slice.
 4. `fixture-smith` and `probe-capture` in parallel for that slice's evidence.

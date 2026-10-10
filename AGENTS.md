@@ -13,7 +13,7 @@ the next slice") and expects the same rhythm every time:
 
 1. **Ground candidates in real code, not guesses.** Grep for the actual
    scope-cut / TODO / "deferred" doc comment, or read the corresponding
-   real `lib/portage` / `lib/_emerge` source. Many slices come from
+   Portage's `lib/portage` / `lib/_emerge` source. Many slices come from
    noticing a doc comment's own "still out of scope" wording is now
    stale — or the backlog claiming something is open that `git log`
    shows shipped.
@@ -23,12 +23,12 @@ the next slice") and expects the same rhythm every time:
 3. **Re-open judgment calls that surface during implementation** rather
    than silently picking a default. If a slice conflicts with a hard
    constraint (e.g. contract-suite determinism), stop and surface it.
-4. **Ground expected output in real Portage, not in a second copy.**
+4. **Ground expected output in Portage, not in a second copy.**
    There is no Python mirror any more
    (`docs/history/second_python_copy_removal.md`, deleted 2026-10-03 — in git history; the rule here is its conclusion).
-   A slice that changes `emerge` output takes its expected value from real
+   A slice that changes `emerge` output takes its expected value from
    Portage — the container test bed (`../pmtest/differential-test-bed/`),
-   this host's real `emerge`, or an upstream
+   this host's Portage `emerge`, or an upstream
    `lib/portage/tests/resolver/` case — and says which in the test's
    docstring. Real-execution features
    (merge/unmerge/package/fetch/phases) are checked the same way (L1–L3).
@@ -68,7 +68,7 @@ the next slice") and expects the same rhythm every time:
    also run the container differential test bed**
    (`differential-test-bed/run/l0-resolver.sh`, plus
    `differential-test-bed/run/l1-merge-from-binpkg.sh` if merge behaviour
-   changed, both from pmtest). It compares portuale against the real
+   changed, both from pmtest). It compares portuale against Portage's
    `emerge` on a real Gentoo tree and is the only thing that catches
    regressions the fixture suite can't; it's heavier, so it's not part of
    every slice. See pmtest's `USAGE.AGENTS.md` and
@@ -80,7 +80,7 @@ the next slice") and expects the same rhythm every time:
  9. **Only `git commit` / `git push` when explicitly asked** — separate,
     later requests each time, never implied by finishing a slice. Commit
     title `<what changed>: <short description>`; wrapped body explaining
-    the *why* and the real-source grounding; trailer
+    the *why* and the Portage-source grounding; trailer
     `Co-Authored-By: …` replace `…` with actual model name. Commits and
     pushes are paired across the two repos — see "Two repos, one
     project" below; one ask covers both repos unless stated otherwise.

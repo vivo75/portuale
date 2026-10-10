@@ -11,7 +11,7 @@ Mermaid.
 
 ## 1. Summary
 
-portuale stores installed packages today exactly like real Portage: one
+portuale stores installed packages today exactly like Portage: one
 directory per `category/package-version` under `/var/db/pkg`, about 35
 small files per entry, plus several separate state files elsewhere
 (`world`, `preserved_libs_registry`, config memory, `counter`).
@@ -21,7 +21,7 @@ interchangeable implementations**:
 
 | Backend | Storage | Role |
 |---|---|---|
-| `files` | the historic on-disk VDB, unchanged | compatibility with real Portage and outside tools; the test beds |
+| `files` | the historic on-disk VDB, unchanged | compatibility with Portage and outside tools; the test beds |
 | `sqlite` | one SQLite file, WAL mode | **preferred** alternative |
 | `redb` | one redb file (pure-Rust key-value store) | alternative with no C code |
 
@@ -126,12 +126,12 @@ Three properties drive the design:
 | Reads at an offset (FUSE) | ✓ native | ✓ `sqlite3_blob_read` | whole value → store blobs in 64 KiB chunks |
 | Outside tools can read it | ✓ (they read `/var/db/pkg`) | ✓ schema + `sqlite3` CLI | ✗ need FUSE or an export |
 | Build | no dependency | `rusqlite` + `bundled` (C, static musl OK) | pure Rust |
-| Real Portage parity | byte-identical today | through export | through export |
+| Portage parity | byte-identical today | through export | through export |
 
 Consequences of redb's one-process rule (§9, §11):
 
 - The `portageq` helper cannot open the redb file while `mrg` holds it.
-  It asks the parent over a pipe instead, which is real Portage's own
+  It asks the parent over a pipe instead, which is Portage's own
   `ebuild-ipc` pattern.
 - The FUSE bridge over redb works only when nothing else has the file
   open, which makes it an offline view.
@@ -220,7 +220,7 @@ pub trait WriteTxn {
 - **`FilesDb`** is today's code, moved behind the interface with no
   change in behaviour. Its `WriteTxn` does the steps one by one (the
   `-MERGING-<pf>` directory, then rename; `counter` file; `world`
-  file), so it stays byte-identical to real Portage. Its `generation()`
+  file), so it stays byte-identical to Portage. Its `generation()`
   is today's directory-mtime fingerprint.
 - **`SqliteDb` / `RedbDb`** make `commit` a real transaction.
 - **One conformance test suite** runs against all three backends, plus
@@ -272,11 +272,11 @@ supports backends" is only the selection box above. It needs no engine
 work, so doing it later costs nothing extra. Doing it now has real
 costs:
 
-- `emerge`'s option set must stay identical to real `emerge`, so it
+- `emerge`'s option set must stay identical to Portage's `emerge`, so it
   can't take `--vdb-backend`. It would need a `make.conf` variable
   instead.
 - `emerge` is the applet the L0–L3 beds grade byte for byte against
-  real Portage.
+  Portage.
 
 Keeping `emerge` on `files` keeps every existing test honest while
 `mrg` exercises the database backends.
@@ -431,7 +431,7 @@ sequenceDiagram
   M->>B: begin_entry(image) + commit  (state = merging)
   Note over B: files: -MERGING-PF dir<br/>db: row with state = merging
   M->>FS: pkg_preinst, land files (atomic rename per file)
-  Note over M: has_version still sees the OLD instance (as real does)
+  Note over M: has_version still sees the OLD instance (as Portage does)
   M->>FS: unmerge replaced same-slot files, prerm/postrm from its stored env
   M->>B: finish_entry · delete_entry(old) · set_world · set_preserved_libs · set_config_memory
   M->>B: commit
@@ -458,7 +458,7 @@ stateDiagram-v2
   installed --> [*]: unmerge commit removes it
 ```
 
-Same outcome as real Portage's leftover `-MERGING-` directory (and the
+Same outcome as Portage's leftover `-MERGING-` directory (and the
 `files` backend keeps exactly that), but on the database backends it
 can be queried and swept.
 
@@ -485,8 +485,8 @@ sequenceDiagram
   P-->>H: rc 0 match / 1 none / 2 invalid atom / 3 bad args<br/>best_version prints the best cpv (empty line when none)
 ```
 
-This behaviour is taken from real `bin/portageq:80-198`, and a slice
-pins it against real `portageq` output. It also removes the L1 gate's
+This behaviour is taken from Portage's `bin/portageq:80-198`, and a slice
+pins it against Portage's `portageq` output. It also removes the L1 gate's
 dependency on the gitignored `3rdparty/portage` checkout, which #151
 only checks for up front.
 
@@ -512,15 +512,15 @@ portuale vdb convert --from sqlite:…          --to files:/tmp/vdb-export
 portuale vdb verify  --against files:/var/db/pkg sqlite:…
 ```
 
-- **Counters are preserved,** not renumbered: real autoclean ordering
+- **Counters are preserved,** not renumbered: Portage's autoclean ordering
   depends on `COUNTER`.
-- **The `metadata` stamp needs care** when writing to `files`. Real's
+- **The `metadata` stamp needs care** when writing to `files`. Portage's
   reader accepts the consolidated `metadata` file only if its
   `#dir_mtime=` equals the directory's `st_mtime_ns`. `FilesDb`
   therefore writes the body, stats the directory, and appends the stamp
-  last, in real `vartree.py:188-229` order. A stored stamp is never
+  last, in Portage's `vartree.py:188-229` order. A stored stamp is never
   copied.
-- **Directory mtimes** are applied last, for eix and real `vardbapi`
+- **Directory mtimes** are applied last, for eix and Portage's `vardbapi`
   caches.
 
 ## 12. Read-only FUSE bridge (D2)
@@ -543,14 +543,14 @@ flowchart TB
   generation, so a tool never sees half a merge.
 - **Offset reads** use `read_file_at` (SQLite incremental blob I/O,
   redb 64 KiB chunks).
-- **mtimes follow real `_bump_mtime` rules** (bug #290428).
-- **What works:** eix, qlist, equery, real `portageq`, real
+- **mtimes follow Portage's `_bump_mtime` rules** (bug #290428).
+- **What works:** eix, qlist, equery, Portage's `portageq`, Portage's
   `emerge -p`.
-- **What does not, by design:** real `emerge` / `ebuild` merges. Real
+- **What does not, by design:** Portage's `emerge` / `ebuild` merges. Portage's
   `vardbapi.lock()` and `_slot_lock` must create lock files
   (`<cat>/.<pn>:<slot>.portage_lockfile`) inside the tree. Until
   read-write FUSE exists, the route is convert to `files` → merge with
-  real Portage → convert back.
+  Portage → convert back.
 
 ## 13. Migration path
 
@@ -584,9 +584,9 @@ flowchart LR
 2. **`mrg` default backend.** The proposal is explicit selection only:
    `--vdb-backend` > `PORTUALE_VDB_BACKEND` > `files`. Should `mrg`
    instead pick `sqlite` automatically when the file exists?
-3. **Real Portage on the same host.** Detect an on-disk VDB newer than
+3. **Portage on the same host.** Detect an on-disk VDB newer than
    the selected database and refuse or warn, or document "convert
-   again after a real `emerge`"?
+   again after Portage's `emerge`"?
 4. **Versioning.** Tie the database schema version to
    `METADATA_FILE_FORMAT_VERSION` (`portage-repo`), or keep them
    independent?
@@ -598,7 +598,7 @@ flowchart LR
 
 ## 15. Sources
 
-- Real Portage: `lib/portage/dbapi/vartree.py` (`_aux_get`,
+- Portage: `lib/portage/dbapi/vartree.py` (`_aux_get`,
   `_owners_db`, `lock`, `_slot_lock`, `_bump_mtime`,
   `counter_tick_core`, metadata write/stamp), `bin/portageq`,
   `bin/phase-helpers.sh`.

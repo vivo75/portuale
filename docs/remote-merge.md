@@ -68,7 +68,7 @@ integrity boundary -- see §9).
 - **unit**: one resolved `Binary` `GraphEntry` = one tarball + one
   client-side merge, executed in the resolver's merge order.
 
-## 3. Grounding in real code
+## 3. Grounding in Portage code
 
 Local binpkg merge today (`rust/portuale/src/emerge_getbinpkg.rs`,
 `rust/portuale/src/ebuild_merge.rs::merge_binpkg`):
@@ -80,7 +80,7 @@ Local binpkg merge today (`rust/portuale/src/emerge_getbinpkg.rs`,
    `repository`), extracts image + `build-info/` into
    `${PORTAGE_TMPDIR}/portage/<cat>/<pf>` (`image/` = `${D}`,
    `build-info/` carries `CONTENTS`, the ebuild, `environment.bz2`,
-   `DEFINED_PHASES`, per-class `*DEPEND`), then in real
+   `DEFINED_PHASES`, per-class `*DEPEND`), then in Portage's
    `_emerge/Binpkg` + `treewalk()` order: `pkg_setup` →
    collision/protect-owned check → `pkg_preinst` → copy image→`${ROOT}`
    (`merge_tree`, CONFIG_PROTECT-aware) → vdb write
@@ -233,7 +233,7 @@ lines on a dedicated fd (stderr stays the human log):
    kept), `env_update` equivalent (`ldconfig -r` + `env-update`
    if present; best-effort, logged). The vdb entry initially carries
    the binpkg's build-time `environment.bz2` (never a plain
-   `environment` file -- real's vdb has `environment.bz2` only); the
+   `environment` file -- Portage's vdb has `environment.bz2` only); the
    regen run below then overwrites it with the merge-time env, so a
    regen failure still leaves a usable (if build-time) hook env.
 4. **Report**: per-unit `STATUS=merged|failed|skipped:<reason>` trailer
@@ -254,7 +254,7 @@ revisit wire compression (e.g. zstd) only if bundle sizes ever justify
 a new client tool. That plain file is only the hook runtime's
 pre-image, never vdb content (backlog #171): after the merge the
 client re-saves the env from the live postinst phase to a unit-local
-`environment.regen` (still plain text -- real's `phase-functions.sh`
+`environment.regen` (still plain text -- Portage's `phase-functions.sh`
 `PORTAGE_UPDATE_ENV` block always compresses, so the run points
 `${PORTAGE_BZIP2_COMMAND}` at a pass-through shipped in the bundle's
 `bin/` that ignores `-c -f9` and copies stdin to stdout), and the
@@ -476,12 +476,12 @@ disables -- only for labs with no NTP).
   validation; contract-suite untouched (`--pretend` output identical
   with or without the flags present).
 - **Differential bed (L4, backlog #31)**: `pmtest`'s
-  `differential-test-bed/findings/l4.md` holds the real-Portage oracle —
-  a `porttest/setuid` gpkg merged by real Portage vs. `mrg` remote over
+  `differential-test-bed/findings/l4.md` holds the Portage oracle —
+  a `porttest/setuid` gpkg merged by Portage vs. `mrg` remote over
   the loopback-sshd far end, recording bytes/modes/owners, the vdb entry
   and the actual per-stage ssh command sequence. The #31 S0 capture
   (`l31-s0-20260925T213346Z`) found `mrg` remote drops the
-  setuid/setgid/sticky bits (merged `711/755/750` vs. real
+  setuid/setgid/sticky bits (merged `711/755/750` vs. Portage's
   `4711/2755/1750`; the receive stage's `tar -xf` lacks `-p`). S1/S2
   cells are the pmtest atomlist `l31-s0.txt`.
 
@@ -526,7 +526,7 @@ disables -- only for labs with no NTP).
    slice-5 re-scope: vdb shadow + stateless degrade. (shipped 2026-09-08:
    `STATUS=merged|failed:<step>` driver trailers gated server-side,
    `>>> Remote …: failed/skipped` loop trailers + `>>> Remote summary`
-   line, real `--keep-going` with the `run_merge_loop` dependent-drop
+   line, Portage's `--keep-going` with the `run_merge_loop` dependent-drop
    policy, `--remote-vdb`/`--remote-edb`/`--remote-ledger-dir`,
    CONFIG_PROTECT derivation from the placed config, the vdb shadow with
    a pre-ship foreign-owner gate, and the stateless degrade -- files
@@ -547,7 +547,7 @@ disables -- only for labs with no NTP).
    far future with a very different portage version and
    environment"*): the bundle's plain `environment` is only the hook
    runtime's pre-image, never vdb content. Every merge runs the
-   postinst phase -- defined or not, since real's
+   postinst phase -- defined or not, since Portage's
    `phase-functions.sh` `PORTAGE_UPDATE_ENV` block runs regardless --
    with `PORTAGE_UPDATE_ENV` pointed at a unit-local plain file and
    `PORTAGE_BZIP2_COMMAND` at the bundle's pass-through; the server
