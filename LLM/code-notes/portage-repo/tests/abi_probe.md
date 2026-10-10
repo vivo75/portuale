@@ -16,6 +16,7 @@ ABI conflict probe tests: rebuild-vs-report gates and display continuity.
 - Backlog #214 (v2 `#24e`): settle-time display continuity.
 - #254: the rebuilt consumer's own walk pulls the provider; Portage pairs only a child of the replacement.
 - #254: the rebuilt consumer does not pull the provider when its new build dropped the `:=` (e.g. a USE conditional now off): Portage's `_compute_abi_rebuild_info` finds no child, so no pair.
+- Settle-time display continuity: a `slot_operator_rebuild` reinstall re-derives its `(provider-cpv, consumer-cpv)` pair from the recorded built atom and the merged provider, so the `causing rebuilds` block renders even though the firing pass restarted.
 
 ## fn argument_probe_parents_veto_a_candidate_the_argument_does_not_match
 - Backlog #288: an argument atom is a probe parent of its own cp (Portage `_slot_operator_check_reverse_dependencies` over `_parent_atoms`); a blocker argument is not a parent.

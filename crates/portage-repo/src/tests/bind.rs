@@ -60,8 +60,8 @@ fn slot_operator_prune_rebuilds_clears_replace_and_built_masks() {
     );
 }
 
-/// One token of the S4 binder: another package never binds, graph entries beat
-/// the installed fallback, and the greatest same-cp version wins.
+/// One token of the binder: another package never binds, graph entries beat the
+/// installed fallback, and the greatest same-cp version wins.
 #[test]
 fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
     let dir = slotundo_temp_dir("161-bind");

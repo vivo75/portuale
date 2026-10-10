@@ -8,6 +8,7 @@ Backtracker unit tests: `--backtrack=0` shape, mask predicate, circular retry.
 ## fn check_runtime_pkg_mask_discards_fully_masked_parent_sets
 - Portage `Backtracker._check_runtime_pkg_mask` (bug 375573); C3 oracle for the discard predicate itself (no fixture can reach it end to end yet; needs a 3-pass parent-masking chain, see `docs/history/023-oracle.md`).
 - Masks with no parents are Portage's 692746 arm; missing-dependency entries are skipped entirely.
+- `c-1.0`'s parent `d` is unmasked, but `a`'s parent `b-2.0` is still fully masked -- still discarded; unmasking `b-2.0` by dropping its entry frees `a`'s parent.
 
 ## fn virtual_or_choice_is_demoted_through_its_pullers_circular_record
 - #249: Portage `dep_zapdeps` chains `circular_dependency.get(parent)` and `.get(virt_parent)` (`portage/dep/dep_check.py:673-678`); a virtual's `||` is expanded inline under the package that pulled it, so the puller's circular record demotes the cycle-closing branch.

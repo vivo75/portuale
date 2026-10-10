@@ -12,6 +12,7 @@ Cycle detector and suggestion tests: restart/hard/virtual cycles, per-edge label
 
 ## fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles
 - Backlog #221 (I3): `sbrA` BDEPENDs+RDEPENDs on `sbrB` while `sbrB` BDEPENDs back. The `(true, true)` map entry keeps `find_hard_cycles` empty but still strands the walk; `assemble_result`'s persisting-ring leg (not the hard leg) renders the failure.
+- A build-time edge softened by a parallel run-time route is breakable for the hard reporter (`(true, true)` in the walk's `EdgeKindMap`, so `find_hard_cycles` stays empty) but still strands the walk, so `find_restart_cycles` reports it. The emptiness/non-emptiness flips fail here. Owner `sbr-b` reaches `sbr-a` hard only -- but one directed edge is no cycle.
 
 ## fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one
 - Pure hard cycle reported starting where Portage's `shortest_cycle[0]` starts (backlog #278): hca earliest-inserted, so the cycle closes through its child hcb (`[hcb, hca]`). Fake root: the #228 slot-op arm never fires and no vdb is consulted.
@@ -33,19 +34,23 @@ Cycle detector and suggestion tests: restart/hard/virtual cycles, per-edge label
 ## fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage
 - Backlog #228 fix round 1 (review Important-2), expected value from Portage: Portage filters `inst_pkgs` to the child's slot and sub-slot for `slot_operator == "="` (Portage `depgraph.py::_add_pkg_dep_string`).
 - Rotation starts at `sdep` since backlog #278 (Portage's `shortest_cycle[0]`).
+- An installed same-cp different-slot instance does NOT satisfy a `:=` edge: owner `dev-libs/sown -RDEPEND:=-> dev-libs/sdep` (child slot `1`) with `dev-libs/sdep-1.0:0` installed: the edge stays hard and the two-cycle reports. With `dev-libs/sdep-1.0:1/0` installed the edge is satisfied and breakable: no cycle.
 
 ## fn find_virtual_cycles_reports_self_loop_ring_and_lollipop
 - Backlog #193, expected value from Portage `_virt_deps_visible` (`depgraph.py:6208`): upstream `test_virtual_cycle.py` (bug 965570).
 - Three-ring members report sorted (Portage sorts the probe-stack packages, `Package.py:830`). Lollipop: Portage reports the whole recursion set (`list(_virt_deps_visible_recursion)`), not just the loop.
+- Portage `_virt_deps_visible` fails a virtual that (transitively) requires itself through selected virtual providers: `virtual/gzip-1` (self-`RDEPEND`) and the `virtual/A-1 → B-1 → C-1 → A-1` ring. Lollipop: `X` pulls self-looping `Y` -- Portage reports the whole recursion set.
 
 ## fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes
 - Portage's stack holds virtuals only and the imp expands `RDEPEND` alone (`depgraph.py:6224-6256`): a `virtual/ → non-virtual → virtual/` ring probes clean (an ordinary merge), a `DEPEND` (`key: 3`) loop is never expanded, and an `AlreadyInstalled` virtual is never a start node (not merge-bound). A ring with no virtual at all is ordinary circular handling's shape.
 
 ## fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch
 - `O` (virtual, merge-bound): RDEPEND `|| ( virtual/plain virtual/D )`, both merge-bound; the walk keeps the first written branch (Portage `dep_zapdeps` choice_bins, the same `kept_alt_branches` set `build_digraph` collapses to). Without the kept check this walk would follow `O → D → O` and report both. Portage's `dep_check` may probe the suppressed branch during choice evaluation and fail here instead (a documented cut in `find_virtual_cycles`).
+- `O → D` is suppressed; `D` is still merged (pulled by `P`), and `D → O` is selected -- but the `D → O → D` loop never closes through the suppressed edge, so nothing reports.
 
 ## fn circular_dep_solutions_suggests_disabling_the_gating_flag
 - Fixture `dev-libs/usecyclea` (IUSE +x) build-depends on `dev-libs/usecycleb` only under `x`; `usecycleb` build-depends back unconditionally.
+- `_find_suggestions` should offer exactly "disable x on usecyclea".
 
 ## fn circular_dep_solutions_applies_the_autounmask_use_overlay
 - Backlog #208(b): `=dev-libs/cyc0w-3` needs `dev-libs/cyc0z[bar]`, so the resolve autounmasks `bar` on `cyc0z-3` (IUSE `+foo bar`, full DEPEND in the test). Portage `_pkg_use_enabled` (`_emerge/depgraph.py:7669`) evaluates the suggestion on the autounmasked `USE="bar foo"` while `bar` stays untouchable (`resolver/circular_dependency.py:104-114`), so the only assignment dropping `dev-libs/cyc0y` is `foo` off: `cyc0z-3 (Change USE: -foo)`. Without the overlay `bar` reads off and no assignment drops the atom (the generic "temporarily disabling USE flags" advisory).
@@ -55,6 +60,8 @@ Cycle detector and suggestion tests: restart/hard/virtual cycles, per-edge label
 
 ## fn mixed_priority_cycle_reports_per_edge_labels
 - Backlog #228, expected value from Portage: `dev-libs/slopcyca -RDEPEND:=-> dev-libs/slopcycb -DEPEND-> dev-libs/slopcyca`. The pre-#228 detector saw only a soft run-time edge and merged silently. Grounded in the n228 probe (Portage 3.0.81.3 rc 1 with `(buildtime)` on the back edge and `(runtime_slot_op)` on the slot-op edge) and a fresh 3.0.82.2 probe printing `slopcycb depends on / slopcyca (buildtime) / slopcycb (runtime_slot_op)`.
+- The `RDEPEND` `:=` edge is an unsatisfied `runtime_slot_op` priority -- unbreakable at every `ignore_priority` rung, so Portage aborts (n228 probe). Since backlog #278 the rotation starts where Portage's `shortest_cycle[0]` starts (`slopcycb`), so the labels read `buildtime` into the second line, `runtime_slot_op` closing. The all-buildtime fixtures keep the old rendering: every edge labels `(buildtime)`.
 
 ## fn circular_dep_solutions_is_empty_for_a_cycle_with_no_conditional_edge
 - `extract_affecting_use` finds nothing on unconditional DEPENDs, so there is no suggestion (Portage hits the generic-advisory else).
+- `hardcyclea` <-> `hardcycleb`, both with an unconditional `DEPEND` and no IUSE.

@@ -13,6 +13,7 @@ Skipped-update and slot-conflict USE display tests: vdb sourcing, expand groups.
 ## fn skipped_use_display_masks_to_the_valid_domain_and_groups_expands
 - Backlog #230, expected value from Portage: EAPI 8 selects the `IUSE_EFFECTIVE` domain (profile-global `foo` and forced-but-undeclared `globalforceflag` mask out; implicit `elibc_glibc` kept and grouped). Pre-EAPI-5 instead keeps-then-discards ARCH (`other_vars["ARCH"]` is the profile ARCH scalar), hides hidden-expand groups, and lets per-package force/mask keep an undeclared flag (wrapped).
 - Pure-function level: masking plus assembly, no repos needed. The assembled shape matches Portage's `emerge --info dev-libs/pkginfopkg` output.
+- The skipped-update block renders Portage's full `pkg_use_display`, not the IUSE-only approximation -- the effective USE masked to the valid-IUSE domain, one group per non-hidden `USE_EXPAND` var, `( )`-wrapped force/mask flags.
 
 ## fn skipped_use_display_orders_enabled_first_then_byte_sorted
 - Backlog #230: Portage's default `sort_separated` (plain string order); groups USE-first then byte-sorted var names.
@@ -23,3 +24,4 @@ Skipped-update and slot-conflict USE display tests: vdb sourcing, expand groups.
 ## fn slot_conflict_use_display_renders_use_expand_groups
 - Backlog #264, expected value from Portage: Portage's `slot_collision.py` header/parent lines go through the same `pkg_use_display` (`_emerge/UseFlagDisplay.py:55`) as the skipped-update block.
 - Grounded in Portage `/usr/sbin/emerge` 3.0.82.2 `--pretend --ignore-default-opts --autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c` on the staged fixture: headers `USE="foo" ELIBC="glibc"` (aub0d-0) / `USE="-bar" ELIBC="glibc"` (aub0d-1, `bar` incrementally removed by `profiles/default/make.defaults`), parents `USE="" ELIBC="glibc"`.
+- The slot-conflict `USE="…"` display carries Portage's USE_EXPAND groups: the slot-conflict producers must render the same groups as the skipped-update block.

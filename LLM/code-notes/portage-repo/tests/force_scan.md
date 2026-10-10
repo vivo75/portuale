@@ -6,6 +6,9 @@ Slot-change probe and update force-scan tests: moved children, stale binaries.
 - Portage's `dep.child.built`: a merge-bound resolution (an upgrade) does not fire the probe. The S4 undo latch suppresses a re-add.
 - The `souneedslot` fixture (`dev-libs/souprov:=`, installed `souprov-1.0` vdb 0/1, tree `SLOT="0/1"`) is the unmoved control.
 
+- The #161 S4 undo latch suppresses a re-add (second leg of the test).
+- Bug 456208 shape, from the fixtures: `kde-base/ark`'s tree `RDEPEND=app-arch/libarchive:=` (an *unbuilt* slot operator) against the installed `libarchive-3.1.1`, whose vdb `SLOT` is `0` while the tree ebuild at the same cpv says `0/13` -- a slot move without a revbump.
+
 ## fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
 - Backlog #161 S1: bug 456208 is not `Reinstall`-only. Installed child moved (vdb 0/9 vs tree 0/1).
 

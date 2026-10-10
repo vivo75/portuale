@@ -87,7 +87,7 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     });
     assert!(scheduled.is_empty());
 
-    // The S4 undo latch suppresses a re-add.
+    // The undo latch suppresses a re-add.
     let mut scheduled = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &dir,

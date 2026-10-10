@@ -35,11 +35,11 @@
 ## fn stale_trigger_falls_back_to_the_first_requirer
 - Backlog #205 R4, stale-trigger leg: when the recorded trigger is no longer a requirer (masking retry, parent-flip rescue), the fill falls back to the legacy first-requirer start.
 - Direct `fill_use_change_chains` shape: `abk0c` is required by `abk0a` (which ascends to the `abk0d` argument), while the recorded trigger names an `abk0d` that requires nothing here (stale).
+- The stale-trigger leg: when the recorded trigger is no longer a requirer (masking retry, parent-flip rescue), the fill falls back to the legacy first-requirer start. `abk0c` is required by `abk0a` (which ascends to the `abk0d` argument), while the recorded trigger names a `abk0d` that requires nothing here -- stale.
 
 ## fn use_change_on_an_argument_package_yields_only_the_argument_row
 - Backlog #248, expected value from Portage: a USE change on an argument package (no requirers) yields exactly the `(argument)` row; Portage's `_get_dep_chain` never prints the start node.
-- Grounded in a fresh-host 3.0.82.2 staged-fixture probe 2026-09-29: `emerge --pretend dev-libs/useflagpkg[-foo]` prints only `# required by dev-libs/useflagpkg[-foo] (argument)`.
-- Direct `fill_use_change_chains` shape: the `useflagpkg` entry requires nothing, so there is no forcing parent to start from.
+- Grounded in a fresh-host 3.0.82.2 staged-fixture probe 2026-09-29 (`emerge --pretend dev-libs/useflagpkg[-foo]` prints only `# required by dev-libs/useflagpkg[-foo] (argument)`). Direct `fill_use_change_chains` shape: the `useflagpkg` entry requires nothing, so there is no forcing parent to start from.
 
 ## fn keyword_change_on_an_argument_package_yields_only_the_argument_row
 - Backlog #248, expected value from Portage: keyword twin of the above (same fresh-host probe family as the contract pin: `emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg` prints only `# required by dev-libs/autounmaskkeywordpkg (argument)`).

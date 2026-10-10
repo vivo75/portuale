@@ -175,9 +175,9 @@ fn autounmask_keep_masks_n_unmasks_a_package_mask() {
 
 #[test]
 fn abort_outcome_membership_and_order() {
-    // Slice 3 pins, expected value from Portage (spec §6, live captures in
-    // fixtures/abort-captures/): the outcome is produced on the settled graph
-    // while `entries` stays the full graph.
+    // Expected value from Portage (live captures in fixtures/abort-captures/):
+    // the outcome is produced on the settled graph while `entries` stays the
+    // full graph.
     //
     // Masked-only dep (§4a): empty partial, the report's display atom, the top
     // as the first merge-bound requirer.
@@ -574,7 +574,7 @@ fn autounmask_levels_unmask_two_categories_at_once_on_the_same_version() {
 #[test]
 fn autounmask_keywords_top_level_dep_chain_is_the_argument_line() {
     // The change sits on the argument package: just the `(argument)` line
-    // (Portage never prints the start node; live probe 2026-09-29).
+    // (Portage never prints the start node).
     let result = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");
     assert_eq!(result.autounmask_keyword_changes.len(), 1);
     assert_eq!(
@@ -586,8 +586,7 @@ fn autounmask_keywords_top_level_dep_chain_is_the_argument_line() {
 #[test]
 fn autounmask_use_resolves_a_use_dep_mismatch_and_applies_the_flip_to_the_display() {
     // The flip resolves the entry as `New` with `foo` disabled, recorded in the
-    // `>=<cpv>` atom form; the dep chain is just the `(argument)` line (live
-    // probe 2026-09-29).
+    // `>=<cpv>` atom form; the dep chain is just the `(argument)` line.
     let result = graph_result_autounmask("dev-libs/useflagpkg[-foo]");
     let entry = result
         .entries
@@ -793,7 +792,7 @@ fn autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_portage() {
 #[test]
 fn existing_slot_use_change_chain_starts_at_the_requester() {
     // The change chain starts at the requester whose atom needed the change, not
-    // at the package that pulled it in first (live probe 2026-09-28).
+    // at the package that pulled it in first.
     let result = graph_result_autounmask("dev-libs/aubreaktop");
     let change = result
         .autounmask_use_changes

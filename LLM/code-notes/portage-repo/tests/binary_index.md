@@ -25,6 +25,7 @@ Binary candidate tests: local/remote indexes, multi-instance dedup, slot trigger
 
 ## fn changed_deps_and_changed_slot_combine_in_one_reinstall_outcome
 - Fixture `dev-libs/changedslotpkg`: vdb has both a stale RDEPEND (samepkg vs the ebuild's newpkg) and a stale SLOT ("0" vs "0/2").
+- `dev-libs/changedslotpkg`'s own vdb has BOTH a stale RDEPEND (samepkg, vs. the current ebuild's newpkg) and a stale SLOT ("0" vs. the current ebuild's "0/2") -- Portage treats --changed-deps and --changed-slot as independent, freely combinable triggers, so giving both must set both fields on the same Reinstall outcome, not just whichever fires first.
 
 ## fn fixture_repo_constrained_atom_finds_the_named_repo_only
 - Fixture `dev-libs/overlayonlypkg` exists only in the overlay repo: proves portage-repo's candidate strings carry `::reponame` end to end, not just that portage-dep parses and matches it in isolation.

@@ -13,10 +13,12 @@ Blocker resolution tests: seed holds, buildpkgonly gate, per-cell classification
 ## fn resolve_blockers_drops_a_use_dep_blocker_the_target_does_not_satisfy
 - `!!dev-libs/target[wantblock]` against a graphed target whose `use_flags_display` has `wantblock` off is a satisfied no-op, dropped (Portage omits the `[blocks]` line).
 - `(+)` default: `gone` is absent from the target's IUSE, so it stands in as enabled and `-gone` is unmet.
+- A plain (no `[use]`) blocker still fires, and a use-dep the target DOES satisfy fires too.
 
 ## fn resolve_blockers_buildpkgonly_gate
 - #143 S1, expected value from Portage (upstream `test_blocker.py::testBlockerBuildpkgonly`, oracle `differential-test-bed/logs/fx-b1-blocker.json` cases 6-11): `depgraph.py::_add_pkg_dep_string` blanks RDEPEND/PDEPEND/IDEPEND for a non-built package, and `_validate_blockers` clears `depends_on_order` for every blocker that is not a hard (`!!`) buildtime one.
 - Under `buildpkgonly` only a strong buildtime blocker files (resolved by uninstall, the abort's rows; the exit itself is `buildpkgonly_deps_unsatisfied`'s); soft and runtime-keyed blockers are satisfied silently. A hard RDEPEND blocker is never even walked (the RDEPEND blanking).
+- #143 S1: Portage's `--buildpkgonly` blocker gate (upstream `test_blocker.py::testBlockerBuildpkgonly`, oracle `differential-test-bed/logs/fx-b1-blocker.json` cases 6-11); Portage never even walks a hard RDEPEND blocker (the RDEPEND blanking); a hard DEPEND blocker is kept under buildpkgonly and resolved by uninstalling the installed match.
 
 ## fn resolve_blockers_drops_a_blocker_from_a_superseded_walk_candidate
 - #142 S2 F2 (upstream `test_blocker.py::testBlocker`, oracle `differential-test-bed/logs/fx-b1-blocker.json` cases 0-5): every pg0 order walks several X candidates but merges one, and Portage only ever sees blockers of graph nodes (`_validate_blockers` iterates the digraph). This is what made the uninstall target follow walk order (Y-2/Y-3) instead of the merged candidate (Y-1).
@@ -24,6 +26,7 @@ Blocker resolution tests: seed holds, buildpkgonly gate, per-cell classification
 ## fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied
 - #68 S1 / #72 B1 (cell a): the row is kept, tagged `Replacement`; the renderer hides it until B2 models Portage's scheduling predicate.
 - Cell a': Portage's same-slot replacement rule; a different-slot installed match is removed (#72 B3).
+- Cell a: installed `blocked-1.0:0` is replaced by the merge-bound `blocked-2.0:0`, so Portage's tracker no longer holds it and the block resolves to the replacement merge.
 
 ## fn resolve_blockers_uninstalls_a_settled_block_when_the_cp_moves_slot
 - #284 (`app-misc/bdprov` shape), expected value from Portage: the provider upgrades 2 -> 3 into a new slot while its own `!blocked:0` soft-blocks the old installed instance. Portage uninstalls the old slot (`[uninstall]` + `[blocks b]`, rc 0); the request parents the merge, not the old instance, so the cp-keyed retry closure must not hold it once the run re-resolves the cp elsewhere.

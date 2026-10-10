@@ -11,6 +11,7 @@ Depclean and prune selection tests: cleanlist, removal order, nodeps split.
 
 ## fn depclean_unresolved_halt_does_not_fire_for_a_dep_satisfied_only_by_package_provided
 - `uk` (kept, reachable from world) RDEPENDs `dev-libs/uprovided`, which has no literal vdb entry, only a `package_provided` listing. Without the fix this spuriously halted with "not being installed" (Portage behaviour: it doesn't).
+- Portage dependency resolution treats a `package.provided`-matched atom as already satisfied (`dep_check.py:1052`), so `unresolved_deps()` must not flag it.
 
 ## fn depclean_cleanlist_is_returned_in_topological_removal_order
 - Portage `_calc_depclean` removes a package before the ones it depends on; each level's ready set emits cpv-descending (Portage `nodes.sort(reverse=True)`). Fixture: zztop RDEPENDs aabase, mmid RDEPENDs zztop, plus edgeless loner; order is mmid, loner, zztop, aabase.
@@ -25,3 +26,10 @@ Depclean and prune selection tests: cleanlist, removal order, nodeps split.
 - Topological order: level 0 ready {zz-1.0, mm-1.0} cpv-desc, then aa-1.0. mm-3.0/aa-2.0/zz-2.0 are highest, single is single-version, keeper is protected.
 - `--prune --verbose`: the highest versions are pulled in only by the internal protected-set seed, which `show_parents` filters out.
 - `--prune --nodeps` keeps nothing for `keeper` (unlike `--prune`); `<dev-libs/mm-3.0` keeps mm-2.0 and prunes mm-1.0.
+- `--prune --nodeps`: NO dependency check -- every non-highest version of every multi-version cp is selected, mm-2.0 included (unlike `--prune`, which keeps it for `keeper`). `--prune --nodeps <atom>`: best/rest split over the atom's own match set. `--prune dev-libs/mm`: only mm's old versions are candidates.
+
+## fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg
+- `-c dev-libs/dw` (deselect default true): the world seed is dropped in args mode -> dw is unreachable -> removed. `-c dev-libs/dw --deselect=n`: the world seed is kept -> @selected still reaches dw -> nothing to remove.
+
+## fn depclean_cleanlist_a_use_conditional_dep_that_is_off_does_not_keep_its_target
+- dcw's `off? ( ... )` group is inactive -> dchidden is orphan.
