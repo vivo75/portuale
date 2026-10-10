@@ -1,0 +1,9 @@
+# #336 Phase 6: crates/portuale/src/binpkg/mod.rs split spec (split_module.py).
+fn trusted_outer_member_name(	outer	The gpkg outer tar and its members.
+const MAX_INNER_METADATA_BYTES	inner	The gpkg inner metadata tar: limits, members, links.
+pub fn read_gpkg_metadata(	metadata	Reading gpkg and xpak metadata.
+pub(crate) fn verify_gpkg_manifest(	manifest	Verifying a gpkg Manifest.
+pub fn extract_binpkg(	extract	Extracting a binary package's image and metadata.
+struct IndexVouch	local_index	The local PKGDIR index (`Packages`).
+pub(crate) fn file_mtime(	digest	Digest checks against the index and checksum-failure renames.
+pub struct GpgVerify	gpg	GPG signature verification.
