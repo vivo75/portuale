@@ -1301,3 +1301,139 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
     assert!(far_sched.is_empty(), "unreachable consumers never schedule");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Backlog #269: the new-slot arm ranges over every *available*
+/// package, not just the scheduled entries. The `mmprov`/`mmcons`
+/// shape from the #253 recipe with only `mmcons` requested: installed
+/// `mmprov-1` (`0/1`) + `mmprov-2` (`1/1`) + `mmcons-1` bound
+/// `mmprov:0/1=`, tree `mmprov-3` (`1/2`). Real 3.0.82.2 (container
+/// probe 2026-10-01, `emerge --ignore-default-opts --pretend --color=n
+/// --backtrack=20 --update --deep app-misc/mmcons
+/// `dev-libs/slotconflictoldconsumer`
+/// `dev-libs/slotconflictnewconsumer`) merges `mmprov-3` bare plus
+/// the `mmcons-1` rebuild (`rR`) with no `causing rebuilds` block:
+/// the update probe (`_slot_operator_update_probe` with
+/// `new_child_slot=True`, `depgraph.py:3121-3126`) finds `mmprov-3`
+/// among the *available* packages (`_iter_similar_available`) even
+/// though no pass scheduled it, and the backtrack
+/// (`_slot_operator_update_backtrack`, `depgraph.py:2442`) records
+/// the consumer alone. The pre-#269 scan only ranged over the
+/// scheduled `New`/`Upgrade` entries, so with no provider entry it
+/// scheduled nothing at all here.
+#[test]
+fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = TempDir::new("portage-repo-slotop-269").keep();
+    // vdb: provider instances in both slots, consumer bound to slot 0.
+    for (name, slot, rdepend) in [
+        ("mmprov-1", "0/1", ""),
+        ("mmprov-2", "1/1", ""),
+        ("mmcons-1", "0", "app-misc/mmprov:0/1="),
+    ] {
+        let d = base.join("var/db/pkg/app-misc").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "app-misc\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    // Tree: `mmprov-3` at slot 1/2, plus the consumer's own ebuild
+    // (the replacement parent must exist).
+    let repo = base.join("repo");
+    let write_pkg = |pkg: &str, pv: &str, slot: &str| {
+        let dir = repo.join("app-misc").join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let body =
+            format!("EAPI=8\nDESCRIPTION=\"269 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=269 probe\nEAPI=8\n".to_string();
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache/app-misc");
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    };
+    write_pkg("mmprov", "3", "1/2");
+    write_pkg("mmcons", "1", "0");
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo.clone(),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    // No provider entry at all (real's pass 0 schedules none either):
+    // the consumer sits in the graph as walked/AlreadyInstalled.
+    let consumer = GraphEntry {
+        outcome: PretendOutcome::AlreadyInstalled {
+            version: "1".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        ..graph_entry("app-misc", "mmcons", "1")
+    };
+    let entries = vec![consumer.clone()];
+    let empty: BTreeSet<(String, String)> = BTreeSet::new();
+    let mmcons = ("app-misc".to_string(), "mmcons".to_string());
+    let mmprov = ("app-misc".to_string(), "mmprov".to_string());
+    // Only `mmcons` requested (never the provider): the #252 greedy
+    // pin stays out, and `want_update` rides on `--update`.
+    let top = HashSet::from([mmcons.clone()]);
+    let top_atoms = HashSet::from(["app-misc/mmcons".to_string()]);
+    let (scheduled, abi, ..) = slot_operator_rebuild_scan(
+        &base,
+        &repos,
+        &entries,
+        &HashSet::new(),
+        &empty,
+        &empty,
+        true,
+        true,
+        &top,
+        &top_atoms,
+        &[],
+        &test_config(),
+    );
+    assert_eq!(
+        scheduled,
+        BTreeSet::from([mmcons.clone()]),
+        "the available slot move rebuilds the consumer"
+    );
+    assert!(
+        abi.is_empty(),
+        "the new-slot arm records the consumer alone: {abi:?}"
+    );
+    // The #252 shape (provider requested too) still probes nothing.
+    let mut both = top.clone();
+    both.insert(mmprov.clone());
+    let both_atoms = HashSet::from(["app-misc/mmcons".to_string(), "app-misc/mmprov".to_string()]);
+    let (greedy_pinned, ..) = slot_operator_rebuild_scan(
+        &base,
+        &repos,
+        &entries,
+        &HashSet::new(),
+        &empty,
+        &empty,
+        true,
+        true,
+        &both,
+        &both_atoms,
+        &[],
+        &test_config(),
+    );
+    assert!(
+        greedy_pinned.is_empty(),
+        "a requested provider below the highest slot probes nothing"
+    );
+    let _ = fs::remove_dir_all(&base);
+}

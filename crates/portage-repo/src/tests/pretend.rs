@@ -217,3 +217,57 @@ fn slot_operator_binary_masked_version_reads_only_marked_negatives() {
     assert!(!is_binary_only_mask("!=dev-libs/maskchild-1.0"));
     assert!(!is_binary_only_mask("=dev-libs/maskchild-1.0[binary]"));
 }
+
+/// Backlog #233: a dependency atom no ebuild satisfies but an
+/// installed instance does settles `AlreadyInstalled` -- real
+/// `_wrapped_select_pkg_highest_available_imp`
+/// (`depgraph.py:7799-7840`) iterates the installed db for every
+/// resolve (no `--usepkg` gate; the old gate here was the L1-a
+/// narrowing). The live shape is an installed world member's stale
+/// recorded built slot-operator atom:
+/// `dev-libs/reinstslottarget:0/1=` (installed 1.0 at `SLOT="0/1"`,
+/// only the `0/2` ebuild left in the tree) -- the `@world` walk
+/// aborted `NoVisibleCandidate` on it (rc 1) before the #210
+/// reverse-dependency scan could withhold the reinstall, while real
+/// 3.0.82.2 merges the unrelated world updates and withholds
+/// silently (rc 0; S0 probe `probe.log`, offline comparator
+/// simulation clean). Flags mirror that cell (`--changed-slot
+/// --update --deep --newuse`, no `--usepkg`). A top-level atom with
+/// the same shape still reports (real needs something mergeable for
+/// a package named on the command line).
+#[test]
+fn stale_built_slot_operator_dep_with_no_ebuild_reports_at_this_level() {
+    // At `resolve_pretend` level the L1-a gate stands (see the
+    // fallback's own comment): without `--usepkg`/`--usepkgonly` a
+    // dependency with no usable ebuild candidate reports
+    // `NoVisibleCandidate` even when the vdb could satisfy it --
+    // the runtime-keyed installed hearing lives one layer up (the
+    // queue loop's #233 rewrite), and the build-time-keyed pins
+    // below depend on this level reporting.
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let call = |is_top_level: bool| {
+        resolve_pretend(
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
+            "dev-libs/reinstslottarget:0/1=",
+            &SelectOptions {
+                newuse: true,
+                update: true,
+                with_bdeps: false,
+                changed_slot: true,
+                // selective (real sets it with --update)
+                is_top_level,
+                ..SelectOptions::default()
+            },
+        )
+        .expect("resolve_pretend(dev-libs/reinstslottarget:0/1=) failed")
+    };
+    // Both levels report here; the walk rewrites the dependency one.
+    assert_eq!(call(false), PretendOutcome::NoVisibleCandidate);
+    assert_eq!(call(true), PretendOutcome::NoVisibleCandidate);
+}

@@ -4456,3 +4456,166 @@ fn fixture_unrelated_packages_report_no_blockers() {
     let entries = graph_entries_real("dev-libs/diamond");
     assert!(entries.iter().all(|e| e.blockers.is_empty()));
 }
+
+/// Backlog #285: an exact-version top-level request keeps its named
+/// installed instance under `--update`. Same installed/tree shape as
+/// the #268 pin (`mmprov-1` `0/1` + `mmprov-2` `1/1` + `mmcons-1`
+/// bound `mmprov:0/1=`, tree `mmprov-1/-2/-3` with `mmprov-3` at
+/// `1/2`), but the tree here is the shared fixture repo (resolved
+/// through `config_root`) while the vdb is ad-hoc under `root` --
+/// the `_b1_root` split. Full `--update --deep` walks, real 3.0.82.2
+/// bytes from the R3 S0 capture (host staged-fixture probe
+/// 2026-10-02, `--ignore-default-opts --pretend --color=n
+/// --backtrack=3 --update --deep <atoms>`, rc 0 throughout):
+/// - `=app-misc/mmprov-2 app-misc/mmcons` -> `[ebuild rR]
+///   app-misc/mmcons-1` alone (`backtrack: 1/3`): the argument pins
+///   installed `mmprov-2` in the graph and the rebuilt consumer's
+///   `app-misc/mmprov:=` reuses it (real
+///   `_wrapped_select_pkg_highest_available_imp`'s
+///   `find_existing_node` pass) instead of upgrading to `mmprov-3`.
+/// - `~app-misc/mmprov-2 app-misc/mmcons` -> the same single row.
+/// - Control `app-misc/mmprov:1/2 app-misc/mmcons` -> `[ebuild U]
+///   app-misc/mmprov-3 [2]` + `[ebuild rR] app-misc/mmcons-1`: the
+///   slot atom's own pick is the upgrade, so the dep binds that.
+#[test]
+fn exact_version_update_keeps_arg_pinned_provider() {
+    let base = TempDir::new("portage-repo-285-exact-update").keep();
+    for (name, slot, rdepend) in [
+        ("mmprov-1", "0/1", ""),
+        ("mmprov-2", "1/1", ""),
+        ("mmcons-1", "0", "app-misc/mmprov:0/1="),
+    ] {
+        let d = base.join("var/db/pkg/app-misc").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "app-misc\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        fs::write(d.join("EAPI"), "8\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    fs::create_dir_all(base.join("var/lib/portage")).unwrap();
+    fs::write(base.join("var/lib/portage/world"), "").unwrap();
+    fs::create_dir_all(base.join("distfiles")).unwrap();
+    let root = fixtures_root();
+    let resolve = |atoms: &[&str]| {
+        let req = ResolveRequest {
+            config_root: root.clone(),
+            root: base.clone(),
+            atoms: atoms.iter().map(|a| a.to_string()).collect(),
+            config: test_config(),
+            newuse: false,
+            changed_use: false,
+            nodeps: false,
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
+            update: true,
+            deep: Deep::Unlimited,
+            excluded: Vec::new(),
+            with_bdeps: true,
+            changed_deps: false,
+            changed_slot: false,
+            with_test_deps: false,
+            changed_deps_report: false,
+            selective: true,
+            autounmask_suggest_keywords: false,
+            autounmask_suggest_use: false,
+            autounmask_suggest_license: false,
+            autounmask_suggest_masks: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: Vec::new(),
+            usepkg_include: Vec::new(),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            buildpkgonly: false,
+            root_deps_running_root: None,
+            distdir: base.join("distfiles"),
+            empty: false,
+            getbinpkg: false,
+            ignore_built_slot_operator_deps: false,
+            backtrack_max: 3,
+            reinstall_atoms: Vec::new(),
+            rebuild_if_new_slot: true,
+            rebuild_if_unbuilt: false,
+            rebuild_if_new_rev: false,
+            rebuild_if_new_ver: false,
+            rebuild_exclude: Vec::new(),
+            rebuild_ignore: Vec::new(),
+            dynamic_deps: true,
+            implicit_system_deps: true,
+            complete: false,
+            set_args: std::collections::HashSet::new(),
+            solver: SolverKind::Portage,
+        };
+        active_resolver()
+            .resolve(&req)
+            .unwrap_or_else(|e| panic!("resolve({atoms:?}) failed: {e}"))
+    };
+    // Merge-bound `(cat/pkg, version)` pairs, for the row-level
+    // assertion below (an `AlreadyInstalled` provider merges
+    // nothing and renders no row).
+    let merges = |result: &GraphResult| {
+        result
+            .entries
+            .iter()
+            .filter_map(|e| match &e.outcome {
+                PretendOutcome::New { version } => {
+                    Some((format!("{}/{}", e.category, e.package), version.clone()))
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    Some((format!("{}/{}", e.category, e.package), to.clone()))
+                }
+                PretendOutcome::Reinstall { version, .. } => {
+                    Some((format!("{}/{}", e.category, e.package), version.clone()))
+                }
+                PretendOutcome::AlreadyInstalled { .. }
+                | PretendOutcome::NoVisibleCandidate
+                | PretendOutcome::Uninstall { .. } => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for atoms in [
+        ["=app-misc/mmprov-2", "app-misc/mmcons"],
+        ["~app-misc/mmprov-2", "app-misc/mmcons"],
+    ] {
+        let result = resolve(&atoms);
+        assert_eq!(
+            merges(&result),
+            vec![("app-misc/mmcons".to_string(), "1".to_string())],
+            "exact-version pin keeps mmprov-2, only the consumer rebuilds: {atoms:?}"
+        );
+        let consumer = result
+            .entries
+            .iter()
+            .find(|e| e.package == "mmcons")
+            .expect("mmcons entry");
+        assert!(
+            matches!(
+                consumer.outcome,
+                PretendOutcome::Reinstall {
+                    slot_operator_rebuild: true,
+                    ..
+                }
+            ),
+            "the consumer rebuilds through the slot-operator path: {:?}",
+            consumer.outcome
+        );
+    }
+    // Control: the slot atom upgrades the provider itself, so the
+    // rebuilt consumer binds the upgrade.
+    let result = resolve(&["app-misc/mmprov:1/2", "app-misc/mmcons"]);
+    assert_eq!(
+        merges(&result),
+        vec![
+            ("app-misc/mmprov".to_string(), "3".to_string()),
+            ("app-misc/mmcons".to_string(), "1".to_string()),
+        ],
+        "slot-atom control still upgrades the provider"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
