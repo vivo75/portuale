@@ -20,17 +20,17 @@ fn install_lands_a_real_file_under_a_real_d() {
     ));
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -75,17 +75,17 @@ fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
     // SAFETY: `umask(2)` cannot fail; this is the single-test child.
     unsafe { libc::umask(0o027) };
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0);
     let after = unsafe { libc::umask(0o027) };
@@ -123,18 +123,18 @@ fn install_dies_like_portage_when_s_is_missing() {
     let portage_tmpdir = tmp.join("tmp");
     let log_file = tmp.join("build.log");
 
-    let status = run_commands_logged(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::default(),
-        Some(&log_file),
-        &[],
-    )
+    let status = run_commands_logged(RunCommandsLoggedArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::default(),
+        log_file: Some(&log_file),
+        build_env: &[],
+    })
     .expect("run_commands_logged should not itself error");
     assert_ne!(status, 0, "install must fail when ${{S}} does not exist");
     let log = std::fs::read_to_string(&log_file)
@@ -163,17 +163,17 @@ fn install_writes_the_real_build_time_file() {
     ));
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -217,17 +217,17 @@ fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
         ("PORTAGE_COMPRESS".to_string(), "bzip2".to_string()),
         ("FEATURES".to_string(), "binpkg-docompress".to_string()),
     ];
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Bash,
-        &extra_env,
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Bash,
+        build_env: &extra_env,
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -283,17 +283,17 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
         ]
     };
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        no_root,
-        ShellBackend::Bash,
-        &env_with("-binpkg-docompress"),
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: no_root,
+        shell: ShellBackend::Bash,
+        build_env: &env_with("-binpkg-docompress"),
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
     let builddir = portage_tmpdir.join("portage/dev-libs/doccompresspkg-1.0");
@@ -304,18 +304,18 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
     );
 
     let instprep = |features: &str| {
-        run_instprep(
-            &ebuild_path,
-            None,
-            false,
-            Path::new("/"),
-            &portage_tmpdir,
-            &env_with(features),
-            false,
-            no_root,
-            ShellBackend::Bash,
-            None,
-        )
+        run_instprep(RunInstprepArgs {
+            ebuild_path: &ebuild_path,
+            saved_env_bz2: None,
+            seed: false,
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            build_env: &env_with(features),
+            debug: false,
+            config_root: no_root,
+            shell: ShellBackend::Bash,
+            log_file: None,
+        })
         .expect("run_instprep should not itself error")
     };
 
@@ -378,17 +378,17 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
     let ebuild_path = pkg_dir.join("qacheckpkg-1.0.ebuild");
     let portage_tmpdir = tmp.join("portage_tmpdir");
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -421,17 +421,17 @@ fn install_lands_a_real_file_under_a_real_d_via_real_bash() {
     ));
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Bash,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Bash,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -480,17 +480,17 @@ fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
     )
     .unwrap();
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &distdir,
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &distdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -557,17 +557,17 @@ fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
     for (i, (features, expect)) in [("xattr", true), ("", false)].into_iter().enumerate() {
         let portage_tmpdir = tmp.join(format!("tmp{i}"));
         std::fs::create_dir_all(&portage_tmpdir).unwrap();
-        let status = run_commands(
-            &ebuild,
-            &["install"],
-            Path::new("/"),
-            &portage_tmpdir,
-            &tmp.join("distfiles"),
-            false,
-            Path::new("/dev/null/no-config-root"),
-            ShellBackend::Brush,
-            &[("FEATURES".to_string(), features.to_string())],
-        )
+        let status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild,
+            commands: &["install"],
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &tmp.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell: ShellBackend::Brush,
+            build_env: &[("FEATURES".to_string(), features.to_string())],
+        })
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should succeed (FEATURES={features:?})");
         let image = portage_tmpdir.join("portage/dev-libs/xattrinstpkg-1.0/image");
@@ -602,17 +602,17 @@ fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
     ));
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -645,17 +645,17 @@ fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
 
     for (shell, name) in [(ShellBackend::Bash, "bash"), (ShellBackend::Brush, "brush")] {
         let portage_tmpdir = tmp.join(name);
-        let unpack_status = run_commands(
-            &ebuild_path,
-            &["unpack"],
-            Path::new("/"),
-            &portage_tmpdir,
-            &portage_tmpdir.join("distfiles"),
-            false,
-            Path::new("/dev/null/no-config-root"),
+        let unpack_status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild_path,
+            commands: &["unpack"],
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
             shell,
-            &[],
-        )
+            build_env: &[],
+        })
         .expect("run_commands should not itself error");
         assert_eq!(unpack_status, 0, "{name}: unpack should exit successfully");
 
@@ -671,17 +671,17 @@ fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
         std::fs::write(&environment, "f() { echo \"unterminated\n").unwrap();
 
         let log = tmp.join(format!("{name}.log"));
-        let compile_status = run_single_phase(
-            &ebuild_path,
-            "compile",
-            Path::new("/"),
-            &portage_tmpdir,
-            false,
-            Path::new("/dev/null/no-config-root"),
+        let compile_status = run_single_phase(RunSinglePhaseArgs {
+            ebuild_path: &ebuild_path,
+            phase: "compile",
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
             shell,
-            &[],
-            Some(&log),
-        )
+            build_env: &[],
+            log_file: Some(&log),
+        })
         .expect("run_single_phase should not itself error");
         assert_ne!(
             compile_status, 0,
@@ -719,18 +719,18 @@ fn brush_phase_env_is_filtered_of_bash_special_variables() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
     let log = portage_tmpdir.join("brush.log");
 
-    let status = run_commands_logged(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        Some(&log),
-        &[],
-    )
+    let status = run_commands_logged(RunCommandsLoggedArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        log_file: Some(&log),
+        build_env: &[],
+    })
     .expect("run_commands_logged should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -806,17 +806,17 @@ fn expanded_name_export_assigns_in_both_backends() {
     let mut file_sets = Vec::new();
     for (shell, name) in [(ShellBackend::Bash, "bash"), (ShellBackend::Brush, "brush")] {
         let portage_tmpdir = tmp.join(name);
-        let status = run_commands(
-            &ebuild_path,
-            &["install"],
-            Path::new("/"),
-            &portage_tmpdir,
-            &portage_tmpdir.join("distfiles"),
-            false,
-            Path::new("/dev/null/no-config-root"),
+        let status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild_path,
+            commands: &["install"],
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
             shell,
-            &[],
-        )
+            build_env: &[],
+        })
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "{name}: install should exit successfully");
 
@@ -903,17 +903,17 @@ fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_re
     let ebuild_path = pkg_dir.join("overlaypkg-1.0.ebuild");
     let portage_tmpdir = tmp.join("portage_tmpdir");
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        &tmp,
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: &tmp,
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -950,17 +950,17 @@ fn debug_flag_exports_portage_debug() {
         ));
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-        let status = run_commands(
-            &ebuild_path,
-            &["install"],
-            Path::new("/"),
-            &portage_tmpdir,
-            &portage_tmpdir.join("distfiles"),
+        let status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild_path,
+            commands: &["install"],
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &portage_tmpdir.join("distfiles"),
             debug,
-            Path::new("/dev/null/no-config-root"),
-            ShellBackend::Brush,
-            &[],
-        )
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell: ShellBackend::Brush,
+            build_env: &[],
+        })
         .expect("run_commands should not itself error");
         assert_eq!(status, 0);
 
@@ -993,17 +993,17 @@ fn phases_export_portage_actual_distdir_so_doins_keeps_absolute_symlinks() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
     let distdir = portage_tmpdir.join("distfiles");
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &distdir,
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &distdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0);
 
@@ -1046,17 +1046,17 @@ fn phases_see_the_per_package_fake_distdir() {
     // In the real distdir, not in this package's SRC_URI.
     std::fs::write(distdir.join("frs-1.0.tar.gz"), b"unrelated\n").unwrap();
 
-    let status = run_commands(
-        &ebuild_path,
-        &["install"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &distdir,
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &distdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0, "install should exit successfully");
 
@@ -1099,17 +1099,17 @@ fn fake_distdir_is_prepared_only_when_portage_prepares_it() {
             expect_distdir
         ));
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
-        let status = run_commands(
-            &ebuild_path,
-            &commands,
-            Path::new("/"),
-            &portage_tmpdir,
-            &portage_tmpdir.join("distfiles"),
-            false,
-            Path::new("/dev/null/no-config-root"),
-            ShellBackend::Brush,
-            &build_env,
-        )
+        let status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild_path,
+            commands: &commands,
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell: ShellBackend::Brush,
+            build_env: &build_env,
+        })
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "{commands:?} {build_env:?}");
         let distdir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0/distdir");
@@ -1141,17 +1141,17 @@ fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
     ));
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-    let status = run_commands(
-        &ebuild_path,
-        &["pretend"],
-        Path::new("/"),
-        &portage_tmpdir,
-        &portage_tmpdir.join("distfiles"),
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-    )
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["pretend"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
     .expect("run_commands should not itself error");
     assert_eq!(status, 0);
 

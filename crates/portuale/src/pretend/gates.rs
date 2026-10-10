@@ -1,5 +1,14 @@
 //! Small predicates deciding what a run shows.
 
+/// Arguments of [`merge_list_shown`].
+pub(crate) struct MergeListShownArgs {
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) tree: bool,
+    pub(crate) verbose: bool,
+    pub(crate) quiet: bool,
+}
+
 /// Backlog #185: real's merge-list gating (real
 /// `_emerge/actions.py:464-469`, the `mergelist_shown` branch): a
 /// non-`--pretend` run displays the list before merging only when
@@ -9,15 +18,22 @@
 /// stay unit-pinned without spawning a merge; the abort-path and
 /// `--autounmask-only` carve-outs live at the `show_merge_list` call
 /// site, not here.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn merge_list_shown(
-    pretend: bool,
-    ask: bool,
-    tree: bool,
-    verbose: bool,
-    quiet: bool,
-) -> bool {
+pub(crate) fn merge_list_shown(args: MergeListShownArgs) -> bool {
+    let MergeListShownArgs {
+        pretend,
+        ask,
+        tree,
+        verbose,
+        quiet,
+    } = args;
     pretend || ((ask || tree || verbose) && !(quiet && !ask))
+}
+
+/// Arguments of [`autounmask_only_reshows_merge_list`].
+pub(crate) struct AutounmaskOnlyReshowsMergeListArgs {
+    pub(crate) pretend: bool,
+    pub(crate) autounmask_only: bool,
+    pub(crate) has_changes: bool,
 }
 
 /// Backlog #271: real's `--autounmask-only` re-show (real
@@ -33,12 +49,12 @@ pub(crate) fn merge_list_shown(
 /// unprobed this slice. Pure predicate so the matrix stays unit-pinned;
 /// the empty-changes arm (a plain package prints nothing, rc 0) falls
 /// out of `has_changes=false`, exactly like real's empty change loops.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn autounmask_only_reshows_merge_list(
-    pretend: bool,
-    autounmask_only: bool,
-    has_changes: bool,
-) -> bool {
+pub(crate) fn autounmask_only_reshows_merge_list(args: AutounmaskOnlyReshowsMergeListArgs) -> bool {
+    let AutounmaskOnlyReshowsMergeListArgs {
+        pretend,
+        autounmask_only,
+        has_changes,
+    } = args;
     pretend && autounmask_only && has_changes
 }
 
@@ -61,6 +77,13 @@ pub(crate) fn autounmask_only_reshows_merge_list(
 /// (`test_portuale.py`, backlog #225).
 pub(crate) fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> bool {
     !pretend && show_merge_list && mergecount == 0
+}
+
+/// Arguments of [`selective_noop_deferred`].
+pub(crate) struct SelectiveNoopDeferredArgs {
+    pub(crate) selective: bool,
+    pub(crate) oneshot_or_onlydeps: bool,
+    pub(crate) has_world_candidates: bool,
 }
 
 /// Backlog #232: real `_emerge/actions.py:496-521` (`action_build`),
@@ -89,13 +112,21 @@ pub(crate) fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount:
 /// since real never marks them world candidates). Pure predicate so the gate
 /// matrix stays unit-pinned; the rotation half is pinned end to end in
 /// pmtest (`test_portuale.py`, backlog #232).
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn selective_noop_deferred(
-    selective: bool,
-    oneshot_or_onlydeps: bool,
-    has_world_candidates: bool,
-) -> bool {
+pub(crate) fn selective_noop_deferred(args: SelectiveNoopDeferredArgs) -> bool {
+    let SelectiveNoopDeferredArgs {
+        selective,
+        oneshot_or_onlydeps,
+        has_world_candidates,
+    } = args;
     selective && !oneshot_or_onlydeps && has_world_candidates
+}
+
+/// Arguments of [`resolution_header_shown`].
+pub(crate) struct ResolutionHeaderShownArgs {
+    pub(crate) ask: bool,
+    pub(crate) tree: bool,
+    pub(crate) verbose: bool,
+    pub(crate) quiet: bool,
 }
 
 /// Backlog #185 fix round 1: real's resolution-phase header gating
@@ -105,8 +136,13 @@ pub(crate) fn selective_noop_deferred(
 /// `--nodeps` is NOT consulted (the `spinner.mode = QUIET` assignment
 /// at `depgraph.py:12129-12130` comes after the header block). Pure
 /// predicate so the `--nodeps` + display-flag shapes stay unit-pinned.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn resolution_header_shown(ask: bool, tree: bool, verbose: bool, quiet: bool) -> bool {
+pub(crate) fn resolution_header_shown(args: ResolutionHeaderShownArgs) -> bool {
+    let ResolutionHeaderShownArgs {
+        ask,
+        tree,
+        verbose,
+        quiet,
+    } = args;
     !quiet && (ask || tree || verbose)
 }
 

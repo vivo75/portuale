@@ -164,6 +164,17 @@ pub(crate) struct RevDepPin {
     pub(crate) consumer: (String, String, String),
 }
 
+/// Arguments of [`rev_dep_pin_holdable`].
+pub(crate) struct RevDepPinHoldableArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) cp: &'a (String, String),
+    pub(crate) pin: &'a str,
+    pub(crate) pin_slot: Option<&'a str>,
+    pub(crate) upgraded_slots: &'a std::collections::HashSet<String>,
+    pub(crate) hard_atoms: &'a [String],
+}
+
 /// Whether `pin` (a consumer atom on `cp`) can still hold alongside
 /// every hard requirement pulling `cp` this pass -- real's
 /// `_select_pkg_highest_available` seeing "the whole atom set for a
@@ -188,16 +199,16 @@ pub(crate) struct RevDepPin {
 /// a `cp` with no readable candidates at all, falls back to enforcing
 /// (today's behaviour) -- a drop happens only on proven joint
 /// unsatisfiability.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn rev_dep_pin_holdable(
-    root: &Path,
-    repos: &[RepoConfig],
-    cp: &(String, String),
-    pin: &str,
-    pin_slot: Option<&str>,
-    upgraded_slots: &std::collections::HashSet<String>,
-    hard_atoms: &[String],
-) -> bool {
+pub(crate) fn rev_dep_pin_holdable(args: RevDepPinHoldableArgs<'_>) -> bool {
+    let RevDepPinHoldableArgs {
+        root,
+        repos,
+        cp,
+        pin,
+        pin_slot,
+        upgraded_slots,
+        hard_atoms,
+    } = args;
     if portage_dep::parse_atom(pin).is_none() {
         return true;
     }
@@ -419,6 +430,16 @@ pub(crate) fn merge_use_state(
     Some(((*use_flags).clone(), iuse))
 }
 
+/// Arguments of [`merge_use_changed_vs_installed`].
+pub(crate) struct MergeUseChangedVsInstalledArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+}
+
 /// Real `_complete_graph`'s own USE-change trigger
 /// (`depgraph.py:8620-8637`): the merge node's IUSE, or its enabled USE
 /// intersected with IUSE, differs from the installed instance's. This is
@@ -429,15 +450,17 @@ pub(crate) fn merge_use_state(
 /// mode). `None` when the merge side is unreadable (no md5-cache
 /// entry); callers fall back to the entry's own `changed_flags`,
 /// today's behaviour.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn merge_use_changed_vs_installed(
-    root: &Path,
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    category: &str,
-    package: &str,
-    version: &str,
+    args: MergeUseChangedVsInstalledArgs<'_>,
 ) -> Option<bool> {
+    let MergeUseChangedVsInstalledArgs {
+        root,
+        repos,
+        config,
+        category,
+        package,
+        version,
+    } = args;
     let (merge_use, merge_iuse) = merge_use_state(repos, config, category, package, version)?;
     let inst_use = read_vdb_flag_set(root, category, package, version, "USE");
     let inst_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");
@@ -448,24 +471,41 @@ pub(crate) fn merge_use_changed_vs_installed(
     let inst_enabled: HashSet<&String> = inst_use.intersection(&inst_iuse).collect();
     Some(merge_enabled != inst_enabled)
 }
+/// Arguments of [`reverse_dependency_constraints`].
+pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) with_bdeps: bool,
+    pub(crate) excluded: &'a [String],
+    pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+    pub(crate) top_level_cps: &'a HashSet<(String, String)>,
+    pub(crate) world_reachable: &'a HashSet<(String, String)>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) complete: bool,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 pub(crate) fn reverse_dependency_constraints(
-    repos: &[RepoConfig],
-    root: &Path,
-    entries: &[GraphEntry],
-    with_bdeps: bool,
-    excluded: &[String],
-    hard_want: &HashMap<(String, String), Vec<String>>,
-    reachable: &HashSet<(String, String)>,
-    dynamic_deps: bool,
-    ignore_built_slot_operator_deps: bool,
-    top_level_cps: &HashSet<(String, String)>,
-    world_reachable: &HashSet<(String, String)>,
-    config: &portage_profile::Config,
-    complete: bool,
+    args: ReverseDependencyConstraintsArgs<'_>,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
+    let ReverseDependencyConstraintsArgs {
+        repos,
+        root,
+        entries,
+        with_bdeps,
+        excluded,
+        hard_want,
+        reachable,
+        dynamic_deps,
+        ignore_built_slot_operator_deps,
+        top_level_cps,
+        world_reachable,
+        config,
+        complete,
+    } = args;
     // (`cat/pkg`, slot) -> (the candidate string this run would install,
     // whether it comes from a same-version slot-change reinstall) for
     // every entry that replaces an installed version in its own slot.
@@ -527,8 +567,15 @@ pub(crate) fn reverse_dependency_constraints(
             } = &e.outcome
             && let Some((merge_use, merge_iuse)) =
                 merge_use_state(repos, config, &e.category, &e.package, version)
-            && merge_use_changed_vs_installed(root, repos, config, &e.category, &e.package, version)
-                .unwrap_or(false)
+            && merge_use_changed_vs_installed(MergeUseChangedVsInstalledArgs {
+                root,
+                repos,
+                config,
+                category: &e.category,
+                package: &e.package,
+                version,
+            })
+            .unwrap_or(false)
         {
             let slot = e.slot.clone().unwrap_or_else(|| "0".to_string());
             use_breaks.insert(
@@ -654,18 +701,18 @@ pub(crate) fn reverse_dependency_constraints(
             } else {
                 InstalledMetaLayer::Raw
             };
-            let depstr = installed_dep_string(
+            let depstr = installed_dep_string(InstalledDepStringArgs {
                 root,
                 dynamic_deps,
                 ignore_built_slot_operator_deps,
-                &consumer.category,
-                &consumer.package,
-                &consumer.version,
-                live.as_deref(),
-                dep_key,
+                category: &consumer.category,
+                package: &consumer.package,
+                version: &consumer.version,
+                live: live.as_deref(),
+                key: dep_key,
                 layer,
-                &mut meta_memo,
-            );
+                memo: &mut meta_memo,
+            });
             if depstr.trim().is_empty() {
                 continue;
             }
@@ -856,7 +903,15 @@ pub(crate) fn reverse_dependency_constraints(
                 let holds = failing.iter().any(|(slot, _)| {
                     let mut slots = std::collections::HashSet::new();
                     slots.insert(slot.clone());
-                    rev_dep_pin_holdable(root, repos, &cp, &pin.atom, pin_slot, &slots, hard)
+                    rev_dep_pin_holdable(RevDepPinHoldableArgs {
+                        root,
+                        repos,
+                        cp: &cp,
+                        pin: &pin.atom,
+                        pin_slot,
+                        upgraded_slots: &slots,
+                        hard_atoms: hard,
+                    })
                 });
                 // Backlog #79 (D0 + the shared S0 with #78): real only
                 // ever consults such a pin from the slot-operator update

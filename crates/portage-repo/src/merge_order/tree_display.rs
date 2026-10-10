@@ -240,7 +240,7 @@ pub(crate) fn tree_solved_replacements(
     if pending.is_empty() {
         return Vec::new();
     }
-    let (ext, mut g, _real_n, _discovery_rank) = schedule_graph(
+    let (ext, mut g, _real_n, _discovery_rank) = schedule_graph(ScheduleGraphArgs {
         entries,
         top_level_atoms,
         config,
@@ -249,7 +249,7 @@ pub(crate) fn tree_solved_replacements(
         repos,
         dynamic_deps,
         circular,
-    );
+    });
     // NOTE: `ext` may append synthetic closure entries; `pending`
     // addresses resolver indexing, which is a prefix of `ext` (the
     // closure only appends), so indices stay valid.
@@ -291,7 +291,7 @@ pub fn tree_display_order(
     circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> Vec<usize> {
     let pending = tree_stuck_pending(entries);
-    let (ext, mut g, real_n, discovery_rank) = schedule_graph(
+    let (ext, mut g, real_n, discovery_rank) = schedule_graph(ScheduleGraphArgs {
         entries,
         top_level_atoms,
         config,
@@ -300,7 +300,7 @@ pub fn tree_display_order(
         repos,
         dynamic_deps,
         circular,
-    );
+    });
     // NOTE: `ext` may append synthetic closure entries; `pending`
     // addresses resolver indexing, which is a prefix of `ext` (the
     // closure only appends), so indices stay valid.

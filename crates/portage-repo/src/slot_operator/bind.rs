@@ -63,6 +63,17 @@ pub(crate) fn built_equals_shifted_slot(
         .is_some_and(|(_, bound_sub)| bound_sub != existing_sub)
 }
 
+/// Arguments of [`built_equals_shift_unrebuildable`].
+pub(crate) struct BuiltEqualsShiftUnrebuildableArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) existing_sub: &'a str,
+    pub(crate) pullers: &'a SlotPullers,
+    pub(crate) excluded: &'a [String],
+}
+
 /// Backlog #90 (S1), second half: a `:=` shift is only a *conflict* when
 /// the bound consumer cannot be rebuilt -- real rebuilds a rebuildable
 /// consumer in place (`R`, no conflict, no trailer) and only the
@@ -73,16 +84,18 @@ pub(crate) fn built_equals_shifted_slot(
 /// sub-slotted update (mlocaml-4.02.1: the update IS the bound
 /// version's move, mllablgl rebuilds), which backtracking then masks
 /// into invisibility.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn built_equals_shift_unrebuildable(
-    root: &Path,
-    repos: &[RepoConfig],
-    category: &str,
-    package: &str,
-    existing_sub: &str,
-    pullers: &SlotPullers,
-    excluded: &[String],
+    args: BuiltEqualsShiftUnrebuildableArgs<'_>,
 ) -> bool {
+    let BuiltEqualsShiftUnrebuildableArgs {
+        root,
+        repos,
+        category,
+        package,
+        existing_sub,
+        pullers,
+        excluded,
+    } = args;
     if !built_equals_shifted_slot(root, repos, category, package, existing_sub) {
         return false;
     }

@@ -63,6 +63,19 @@ pub(crate) fn defined_set_names(config_root: &Path) -> Vec<String> {
     names
 }
 
+/// Arguments of [`run_search`].
+pub(crate) struct RunSearchArgs<'a> {
+    pub(crate) terms: &'a [&'a str],
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) searchdesc: bool,
+    pub(crate) verbose: bool,
+    pub(crate) fuzzy: bool,
+    pub(crate) regex_auto: bool,
+    pub(crate) search_similarity: f64,
+    pub(crate) color: &'a Colorizer,
+}
+
 /// Real `emerge --search`/`-s` (`_emerge/actions.py::action_search` ->
 /// `_emerge/search.py`): a case-insensitive substring search of every
 /// `category/package` in the configured repos (the package-name half
@@ -92,19 +105,18 @@ pub(crate) fn defined_set_names(config_root: &Path) -> Vec<String> {
 /// (the highest version is used, flagged `[ Masked ]` only when its
 /// `KEYWORDS` carry no stable/testing token for the profile arch);
 /// `Size of files`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_search(
-    terms: &[&str],
-    repos: &[portage_repo::RepoConfig],
-    root: &Path,
-    searchdesc: bool,
-    verbose: bool,
-    fuzzy: bool,
-    regex_auto: bool,
-    search_similarity: f64,
-    color: &Colorizer,
-) -> ExitCode {
+pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
+    let RunSearchArgs {
+        terms,
+        repos,
+        root,
+        searchdesc,
+        verbose,
+        fuzzy,
+        regex_auto,
+        search_similarity,
+        color,
+    } = args;
     if terms.is_empty() {
         println!("emerge: no search terms provided.");
         return ExitCode::SUCCESS;

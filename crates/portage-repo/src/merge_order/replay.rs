@@ -50,6 +50,16 @@ pub(crate) struct WalkReplay {
     pub needed: HashMap<(String, String), HashMap<String, bool>>,
 }
 
+/// Arguments of [`replay_create_graph`].
+pub(crate) struct ReplayCreateGraphArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) top_level_atoms: &'a [String],
+    pub(crate) root: &'a Path,
+    pub(crate) allow_flips: bool,
+    pub(crate) needed_init: &'a HashMap<(String, String), HashMap<String, bool>>,
+    pub(crate) use_of: &'a dyn Fn(usize) -> Option<ReplayUse>,
+}
+
 /// Backlog #244: real `_create_graph`'s walk replayed over a settled
 /// graph, stopping at the first dependency that fails -- the fail-fast
 /// half portuale's BFS pass (which walks everything and classifies
@@ -76,15 +86,15 @@ pub(crate) struct WalkReplay {
 /// `cat/pkg` has a `NoVisibleCandidate` entry naming this parent, or
 /// when the USE rule above fails it; an edge with no entry to land on
 /// at all (deps portuale never walks) is skipped.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn replay_create_graph(
-    entries: &[GraphEntry],
-    top_level_atoms: &[String],
-    root: &Path,
-    allow_flips: bool,
-    needed_init: &HashMap<(String, String), HashMap<String, bool>>,
-    use_of: &dyn Fn(usize) -> Option<ReplayUse>,
-) -> WalkReplay {
+pub(crate) fn replay_create_graph(args: ReplayCreateGraphArgs<'_>) -> WalkReplay {
+    let ReplayCreateGraphArgs {
+        entries,
+        top_level_atoms,
+        root,
+        allow_flips,
+        needed_init,
+        use_of,
+    } = args;
     let n = entries.len();
     let pre = digraph_prelude(entries, root);
     let alt_suppressed = suppressed_alt_edges(entries, &pre, root, &HashMap::new());
@@ -139,19 +149,19 @@ pub(crate) fn replay_create_graph(
                 .collect();
             inline_keys.dedup();
             for k in inline_keys {
-                if replay_key(
+                if replay_key(ReplayKeyArgs {
                     entries,
-                    &pre,
-                    &alt_suppressed,
+                    pre: &pre,
+                    alt_suppressed: &alt_suppressed,
                     i,
-                    false,
-                    k,
+                    disjunctive: false,
+                    key: k,
                     allow_flips,
                     use_of,
-                    &mut discovered,
-                    &mut stack,
-                    &mut out,
-                ) {
+                    discovered: &mut discovered,
+                    stack: &mut stack,
+                    out: &mut out,
+                }) {
                     return out;
                 }
             }
@@ -159,23 +169,38 @@ pub(crate) fn replay_create_graph(
         let Some((i, k)) = disjunctive_stack.pop() else {
             break;
         };
-        if replay_key(
+        if replay_key(ReplayKeyArgs {
             entries,
-            &pre,
-            &alt_suppressed,
+            pre: &pre,
+            alt_suppressed: &alt_suppressed,
             i,
-            true,
-            k,
+            disjunctive: true,
+            key: k,
             allow_flips,
             use_of,
-            &mut discovered,
-            &mut stack,
-            &mut out,
-        ) {
+            discovered: &mut discovered,
+            stack: &mut stack,
+            out: &mut out,
+        }) {
             return out;
         }
     }
     out
+}
+
+/// Arguments of [`replay_key`].
+pub(crate) struct ReplayKeyArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) pre: &'a DigraphPrelude<'a>,
+    pub(crate) alt_suppressed: &'a [HashSet<usize>],
+    pub(crate) i: usize,
+    pub(crate) disjunctive: bool,
+    pub(crate) key: u8,
+    pub(crate) allow_flips: bool,
+    pub(crate) use_of: &'a dyn Fn(usize) -> Option<ReplayUse>,
+    pub(crate) discovered: &'a mut [bool],
+    pub(crate) stack: &'a mut Vec<usize>,
+    pub(crate) out: &'a mut WalkReplay,
 }
 
 /// One `_add_pkg_dep_string` call of `replay_create_graph`: resolve every
@@ -183,20 +208,20 @@ pub(crate) fn replay_create_graph(
 /// unresolvable one (unresolvable atoms are yielded first, so nothing of
 /// the key is admitted then), else admit the targets in atom order.
 /// Returns `true` once a failure is recorded.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn replay_key(
-    entries: &[GraphEntry],
-    pre: &DigraphPrelude<'_>,
-    alt_suppressed: &[HashSet<usize>],
-    i: usize,
-    disjunctive: bool,
-    key: u8,
-    allow_flips: bool,
-    use_of: &dyn Fn(usize) -> Option<ReplayUse>,
-    discovered: &mut [bool],
-    stack: &mut Vec<usize>,
-    out: &mut WalkReplay,
-) -> bool {
+pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
+    let ReplayKeyArgs {
+        entries,
+        pre,
+        alt_suppressed,
+        i,
+        disjunctive,
+        key,
+        allow_flips,
+        use_of,
+        discovered,
+        stack,
+        out,
+    } = args;
     let parent_cp = (entries[i].category.as_str(), entries[i].package.as_str());
     // Pass 1: pick every atom's target and settle its USE; a failure
     // stops the key before anything is admitted.

@@ -285,8 +285,14 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         && !best.slot_operator_replace_installed.is_empty()
         && pass.slot_conflicts.is_empty()
         && {
-            let (skipped, missing, full) =
-                backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, &best, &[]);
+            let (skipped, missing, full) = backtrack_missed_updates(BacktrackMissedUpdatesArgs {
+                repos: &ctx.repos,
+                root: ctx.root,
+                config,
+                entries: &pass.entries,
+                params: &best,
+                missing_args: &[],
+            });
             !skipped.is_empty()
                 || !missing.is_empty()
                 || !full.is_empty()

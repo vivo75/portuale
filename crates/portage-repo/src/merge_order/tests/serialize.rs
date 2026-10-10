@@ -14,16 +14,16 @@ fn serialize_merge_order_returns_a_permutation_in_dependency_order() {
         new_entry("dev-libs", "dep", "1.0", Vec::new()),
         new_entry("dev-libs", "isolated", "1.0", Vec::new()),
     ];
-    let (order, _) = serialize_merge_order(
-        &entries,
-        &["dev-libs/top".to_string()],
-        &config,
+    let (order, _) = serialize_merge_order(SerializeMergeOrderArgs {
+        entries: &entries,
+        top_level_atoms: &["dev-libs/top".to_string()],
+        config: &config,
         root,
-        true,
-        &[],
-        true,
-        &HashMap::new(),
-    );
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     assert_eq!(
         order.len(),
         3,
@@ -63,16 +63,16 @@ fn schedule_graph_prunes_rootless_synthetic_nodes_and_gates_complete_mode() {
     };
     // An all-New resolve is virtuals_only: no installed closure.
     let entries = vec![new_entry("dev-libs", "top", "1.0", Vec::new())];
-    let (ext, g, real_n, _) = schedule_graph(
-        &entries,
-        &["dev-libs/top".to_string()],
-        &config,
-        &root,
-        true,
+    let (ext, g, real_n, _) = schedule_graph(ScheduleGraphArgs {
+        entries: &entries,
+        top_level_atoms: &["dev-libs/top".to_string()],
+        config: &config,
+        root: &root,
+        implicit_system_deps: true,
         repos,
-        true,
-        &HashMap::new(),
-    );
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     assert_eq!(
         ext.len(),
         1,
@@ -97,16 +97,16 @@ fn schedule_graph_prunes_rootless_synthetic_nodes_and_gates_complete_mode() {
         system_packages: vec!["dev-libs/sysseed".to_string()],
         ..portage_profile::Config::default()
     };
-    let (ext, g, real_n, _) = schedule_graph(
-        &entries,
-        &["dev-libs/top".to_string()],
-        &config,
-        &root,
-        true,
+    let (ext, g, real_n, _) = schedule_graph(ScheduleGraphArgs {
+        entries: &entries,
+        top_level_atoms: &["dev-libs/top".to_string()],
+        config: &config,
+        root: &root,
+        implicit_system_deps: true,
         repos,
-        true,
-        &HashMap::new(),
-    );
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
     assert_eq!(real_n, 1);
     let seed = ext
         .iter()

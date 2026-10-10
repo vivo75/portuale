@@ -683,16 +683,25 @@ struct PlannedFetch {
     /// transport, the captured stream for the quiet one.
     file_param_warning: Option<String>,
 }
-
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn plan_fetch_command(
-    uri: &str,
-    dest: &Path,
+/// Arguments of [`plan_fetch_command`].
+struct PlanFetchCommandArgs<'a> {
+    uri: &'a str,
+    dest: &'a Path,
     resume: bool,
-    distdir: &Path,
-    vars: FetchCommandVars<'_>,
-    commands: &FetchCommands,
-) -> Result<PlannedFetch, String> {
+    distdir: &'a Path,
+    vars: FetchCommandVars<'a>,
+    commands: &'a FetchCommands,
+}
+
+fn plan_fetch_command(args: PlanFetchCommandArgs<'_>) -> Result<PlannedFetch, String> {
+    let PlanFetchCommandArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    } = args;
     let proto = uri
         .split_once("://")
         .map(|(p, _)| p.to_ascii_uppercase())
@@ -748,17 +757,33 @@ fn plan_fetch_command(
         file_param_warning,
     })
 }
+/// Arguments of [`download_with_commands`].
+pub struct DownloadWithCommandsArgs<'a> {
+    pub uri: &'a str,
+    pub dest: &'a Path,
+    pub resume: bool,
+    pub distdir: &'a Path,
+    pub vars: FetchCommandVars<'a>,
+    pub commands: &'a FetchCommands,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn download_with_commands(
-    uri: &str,
-    dest: &Path,
-    resume: bool,
-    distdir: &Path,
-    vars: FetchCommandVars<'_>,
-    commands: &FetchCommands,
-) -> Result<(), String> {
-    let planned = plan_fetch_command(uri, dest, resume, distdir, vars, commands)?;
+pub fn download_with_commands(args: DownloadWithCommandsArgs<'_>) -> Result<(), String> {
+    let DownloadWithCommandsArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    } = args;
+    let planned = plan_fetch_command(PlanFetchCommandArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    })?;
     if let Some(warning) = planned.file_param_warning {
         // Names match: real still prints the warning before running the
         // command; there is no `Err` to carry it here, so it goes to
@@ -792,28 +817,45 @@ pub struct QuietFetchError {
     pub stderr: String,
 }
 
+/// Arguments of [`download_with_commands_quiet`].
+pub struct DownloadWithCommandsQuietArgs<'a> {
+    pub uri: &'a str,
+    pub dest: &'a Path,
+    pub resume: bool,
+    pub distdir: &'a Path,
+    pub vars: FetchCommandVars<'a>,
+    pub commands: &'a FetchCommands,
+}
+
 /// The capturing sibling of [`download_with_commands`]: the same
 /// command selection, `${FILE}` check, and substitution, but the child's
 /// stdout is dropped and its stderr captured -- never inherited. For
 /// callers whose failure message is shaped from the transcript (real
 /// `bintree._populate_remote`'s `!!! [repo] Error fetching ...` shape),
 /// not printed raw.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn download_with_commands_quiet(
-    uri: &str,
-    dest: &Path,
-    resume: bool,
-    distdir: &Path,
-    vars: FetchCommandVars<'_>,
-    commands: &FetchCommands,
+    args: DownloadWithCommandsQuietArgs<'_>,
 ) -> Result<(), QuietFetchError> {
-    let planned =
-        plan_fetch_command(uri, dest, resume, distdir, vars, commands).map_err(|summary| {
-            QuietFetchError {
-                summary,
-                stderr: String::new(),
-            }
-        })?;
+    let DownloadWithCommandsQuietArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    } = args;
+    let planned = plan_fetch_command(PlanFetchCommandArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    })
+    .map_err(|summary| QuietFetchError {
+        summary,
+        stderr: String::new(),
+    })?;
     let output = std::process::Command::new(&planned.prog)
         .args(&planned.args)
         .stdout(std::process::Stdio::null())
@@ -849,14 +891,14 @@ pub fn download_with_commands_quiet(
 /// the transport is shared, not duplicated per caller.
 pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
     let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
-    download_with_commands(
+    download_with_commands(DownloadWithCommandsArgs {
         uri,
         dest,
         resume,
         distdir,
-        FetchCommandVars::default(),
-        &FetchCommands::default(),
-    )
+        vars: FetchCommandVars::default(),
+        commands: &FetchCommands::default(),
+    })
 }
 
 /// The quiet `make.globals` default transport: [`download_via_wget`]'s
@@ -866,14 +908,14 @@ pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), Str
 /// transcript).
 pub fn download_via_wget_quiet(uri: &str, dest: &Path) -> Result<(), QuietFetchError> {
     let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
-    download_with_commands_quiet(
+    download_with_commands_quiet(DownloadWithCommandsQuietArgs {
         uri,
         dest,
-        false,
+        resume: false,
         distdir,
-        FetchCommandVars::default(),
-        &FetchCommands::default(),
-    )
+        vars: FetchCommandVars::default(),
+        commands: &FetchCommands::default(),
+    })
 }
 
 /// Real digest verification: file size (a cheap, real `_check_distfile`
@@ -1229,21 +1271,38 @@ mod tests {
         path
     }
 
+    /// Arguments of [`download_serialized`].
+    struct DownloadSerializedArgs<'a> {
+        uri: &'a str,
+        dest: &'a std::path::Path,
+        resume: bool,
+        distdir: &'a std::path::Path,
+        vars: FetchCommandVars<'a>,
+        commands: &'a FetchCommands,
+    }
+
     /// The only way these tests spawn a stub: the real
     /// [`download_with_commands`] under the spawn lock, so no other test
     /// thread can fork while this one's contract is scanning the shared
     /// fd table — see `SPAWN_SERIAL`.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn download_serialized(
-        uri: &str,
-        dest: &std::path::Path,
-        resume: bool,
-        distdir: &std::path::Path,
-        vars: FetchCommandVars<'_>,
-        commands: &FetchCommands,
-    ) -> Result<(), String> {
+    fn download_serialized(args: DownloadSerializedArgs<'_>) -> Result<(), String> {
+        let DownloadSerializedArgs {
+            uri,
+            dest,
+            resume,
+            distdir,
+            vars,
+            commands,
+        } = args;
         let _guard = spawn_guard();
-        download_with_commands(uri, dest, resume, distdir, vars, commands)
+        download_with_commands(DownloadWithCommandsArgs {
+            uri,
+            dest,
+            resume,
+            distdir,
+            vars,
+            commands,
+        })
     }
 
     #[test]
@@ -1261,28 +1320,28 @@ mod tests {
             ..FetchCommands::default()
         };
         let uri = format!("file://{}", source.display());
-        download_serialized(
-            &uri,
-            &dest,
-            false,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"payload");
 
         // A command without ${FILE} is refused with real's message and
         // never spawned.
         commands.fetchcommand = Some(format!("{} \"${{URI}}\"", script.display()));
-        let err = download_serialized(
-            &uri,
-            &dest,
-            false,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(
             err.contains("does not contain the required ${FILE} parameter"),
@@ -1299,14 +1358,14 @@ mod tests {
         );
         commands.fetchcommand = Some("false".to_string());
         let dest2 = dir.join("dest2.tar.gz");
-        download_serialized(
-            &uri,
-            &dest2,
-            false,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest2,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap();
         assert!(dest2.exists());
     }
@@ -1340,14 +1399,14 @@ mod tests {
             fetchcommand: Some(no_file.clone()),
             ..FetchCommands::default()
         };
-        download_serialized(
-            &uri,
-            &dest,
-            false,
-            &dldir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap();
         assert!(marker.is_file(), "the ${{FILE}}-less command ran");
         assert_eq!(fs::read(&dest).unwrap(), b"payload");
@@ -1356,14 +1415,14 @@ mod tests {
         // (b) a renamed distfile differs from the URL basename: real
         // aborts before spawning.
         let renamed = dldir.join("renamed.tar.gz");
-        let err = download_serialized(
-            &uri,
-            &renamed,
-            false,
-            &dldir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &renamed,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(
             err.contains("FETCHCOMMAND does not contain the required ${FILE} parameter"),
@@ -1380,14 +1439,14 @@ mod tests {
             resumecommand: Some(no_file),
             ..FetchCommands::default()
         };
-        let err = download_serialized(
-            &uri,
-            &renamed,
-            false,
-            &dldir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &renamed,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(
             err.contains("RESUMECOMMAND does not contain the required ${FILE} parameter"),
@@ -1409,24 +1468,24 @@ mod tests {
             ..FetchCommands::default()
         };
         commands.resumecommand = commands.fetchcommand.clone();
-        download_serialized(
-            "file:///nonexistent",
-            &dest,
-            false,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: "file:///nonexistent",
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(!dest.exists(), "a failed fresh fetch removes the partial");
-        download_serialized(
-            "file:///nonexistent",
-            &dest,
-            true,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: "file:///nonexistent",
+            dest: &dest,
+            resume: true,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(
             dest.exists(),

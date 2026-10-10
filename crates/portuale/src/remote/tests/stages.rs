@@ -273,9 +273,15 @@ fn regen_postinst_rewrites_vdb_env_from_merge_time_env() {
     );
     assert!(before.contains("buildpkg"), "pre-regen env:\n{before}");
 
-    let report =
-        run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox merge-time"), &[])
-            .expect("regen phase runs");
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some("sandbox merge-time"),
+        locale: &[],
+    })
+    .expect("regen phase runs");
     assert_eq!(report.phase_rc, 0);
     assert!(report.regen_present);
     assert!(!report.skipped_no_hooks);
@@ -340,8 +346,15 @@ fn regen_runs_without_pkg_postinst() {
     assert!(!staged.postinst_defined);
     let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
     run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
-    let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &[])
-        .expect("regen phase runs");
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some("sandbox"),
+        locale: &[],
+    })
+    .expect("regen phase runs");
     assert_eq!(report.phase_rc, 0, "undefined pkg_postinst is a no-op");
     assert!(report.regen_present);
     let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
@@ -387,8 +400,15 @@ fn regen_matches_portage_o_shell_and_locale() {
         ("LANG".to_string(), "C.UTF-8".to_string()),
         ("LC_MESSAGES".to_string(), "C.UTF-8".to_string()),
     ];
-    let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &locale)
-        .expect("regen phase runs");
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some("sandbox"),
+        locale: &locale,
+    })
+    .expect("regen phase runs");
     assert_eq!(report.phase_rc, 0);
     assert!(report.regen_present);
     let regen = std::fs::read_to_string(format!("{unit}/environment.regen")).expect("regen file");
@@ -442,8 +462,15 @@ fn regen_splits_lc_all_like_portage() {
     );
     let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
     let locale = vec![("LC_ALL".to_string(), "C.UTF-8".to_string())];
-    let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &locale)
-        .expect("regen phase runs");
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some("sandbox"),
+        locale: &locale,
+    })
+    .expect("regen phase runs");
     assert_eq!(report.phase_rc, 0);
     assert!(report.regen_present);
     let regen = std::fs::read_to_string(format!("{unit}/environment.regen")).expect("regen file");
@@ -573,8 +600,15 @@ fn remote_client_config_stacks_server_make_globals() {
     );
     let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
     run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
-    let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some(&resolved), &[])
-        .expect("regen phase runs");
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some(&resolved),
+        locale: &[],
+    })
+    .expect("regen phase runs");
     assert_eq!(report.phase_rc, 0);
     assert!(report.regen_present);
     let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
@@ -759,16 +793,16 @@ fn ship_old_hook_envs_warns_when_both_pulls_fail() {
     let unit = work.join("oldhook-2.0");
     std::fs::create_dir_all(&unit).unwrap();
     let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
-    let shipment = ship_old_hook_envs(
-        &ctx,
-        None,
-        unit.to_str().unwrap(),
-        root.join("var/db/pkg").to_str().unwrap(),
-        "dev-libs",
-        "oldhook",
-        "oldhook-2.0",
-        "0",
-    );
+    let shipment = ship_old_hook_envs(ShipOldHookEnvsArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: unit.to_str().unwrap(),
+        vdb: root.join("var/db/pkg").to_str().unwrap(),
+        category: "dev-libs",
+        pn: "oldhook",
+        new_pf: "oldhook-2.0",
+        new_mainslot: "0",
+    });
     assert!(shipment.shipped.is_empty(), "{:?}", shipment.shipped);
     assert_eq!(shipment.warnings.len(), 1, "{:?}", shipment.warnings);
     assert!(
@@ -821,16 +855,16 @@ fn old_hook_uses_server_decompressed_env_without_client_bzip2() {
     // Server stages the decompressed env (local transport = same
     // paths the client sees).
     let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
-    let shipment = ship_old_hook_envs(
-        &ctx,
-        None,
-        unit.to_str().unwrap(),
-        root.join("var/db/pkg").to_str().unwrap(),
-        "dev-libs",
-        "oldhook",
-        "oldhook-2.0",
-        "0",
-    );
+    let shipment = ship_old_hook_envs(ShipOldHookEnvsArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: unit.to_str().unwrap(),
+        vdb: root.join("var/db/pkg").to_str().unwrap(),
+        category: "dev-libs",
+        pn: "oldhook",
+        new_pf: "oldhook-2.0",
+        new_mainslot: "0",
+    });
     assert!(shipment.warnings.is_empty(), "{:?}", shipment.warnings);
     assert_eq!(shipment.shipped, vec!["oldhook-1.0".to_string()]);
     assert_eq!(

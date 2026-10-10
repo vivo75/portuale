@@ -67,18 +67,18 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     let entries = [fresh, consumer];
     // With `--update` the bridge synthesises the consumer rebuild,
     // exactly like the default path's scan-then-seed.
-    let (out, _) = slot_operator_rebuild_entries(
-        &dir,
-        &repos,
-        &entries,
-        &HashSet::new(),
-        true,
-        &[],
-        true,
-        &HashSet::new(),
-        &HashSet::new(),
-        &test_config(),
-    );
+    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+        update: true,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        config: &test_config(),
+    });
     let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["massc"]);
     assert!(matches!(
@@ -89,18 +89,18 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
         }
     ));
     // Without `--update` (and no arg-chain) the arm stays off.
-    let (off, _) = slot_operator_rebuild_entries(
-        &dir,
-        &repos,
-        &entries,
-        &HashSet::new(),
-        true,
-        &[],
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &test_config(),
-    );
+    let (off, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+        update: false,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        config: &test_config(),
+    });
     assert!(off.is_empty(), "no want_update, no schedule");
     let _ = fs::remove_dir_all(&dir);
 }
@@ -143,18 +143,18 @@ fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
             "9.9".to_string(),
         ),
     };
-    let demoted = slot_operator_eliminate_rebuilds(
-        &dir,
-        &repos,
-        &[provider, entry],
-        &BTreeSet::from([sounneed.clone()]),
-        &HashMap::from([(sounneed.clone(), vec!["dev-libs/sounneed".to_string()])]),
-        &[other_pin],
-        false,
-        false,
-        &HashSet::new(),
-        false,
-    );
+    let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &[provider, entry],
+        replace: &BTreeSet::from([sounneed.clone()]),
+        slot_want: &HashMap::from([(sounneed.clone(), vec!["dev-libs/sounneed".to_string()])]),
+        reverse_pins: &[other_pin],
+        selective: false,
+        changed_slot: false,
+        top_level_cps: &HashSet::new(),
+        empty: false,
+    });
     assert_eq!(
         demoted,
         BTreeSet::from([sounneed]),
@@ -191,18 +191,18 @@ fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
     };
     let reach: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
-    let (out, _) = slot_operator_rebuild_entries(
-        &dir,
-        &repos,
-        std::slice::from_ref(&bar_upgrade),
-        &reach,
-        true,
-        &[],
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &test_config(),
-    );
+    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        root: &dir,
+        repos: &repos,
+        entries: std::slice::from_ref(&bar_upgrade),
+        reachable: &reach,
+        with_bdeps: true,
+        excluded: &[],
+        update: false,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        config: &test_config(),
+    });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].slot.as_deref(), Some("0"));
     assert_eq!(out[0].sub_slot.as_deref(), Some("1"));
@@ -241,18 +241,18 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
     };
     let reach: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
-    let (out, _) = slot_operator_rebuild_entries(
-        &dir,
-        &repos,
-        std::slice::from_ref(&bar_upgrade),
-        &reach,
-        true,
-        &[],
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &test_config(),
-    );
+    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        root: &dir,
+        repos: &repos,
+        entries: std::slice::from_ref(&bar_upgrade),
+        reachable: &reach,
+        with_bdeps: true,
+        excluded: &[],
+        update: false,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        config: &test_config(),
+    });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].slot.as_deref(), Some("0"));
     assert_eq!(out[0].sub_slot.as_deref(), Some("1"));
@@ -298,18 +298,18 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
                 changed_slot: bool,
                 top: &HashSet<(String, String)>,
                 empty: bool| {
-        slot_operator_eliminate_rebuilds(
-            &dir,
-            &repos,
+        slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+            root: &dir,
+            repos: &repos,
             entries,
-            &replace,
-            &slot_want,
-            &no_pins,
+            replace: &replace,
+            slot_want: &slot_want,
+            reverse_pins: &no_pins,
             selective,
             changed_slot,
-            top,
+            top_level_cps: top,
             empty,
-        )
+        })
     };
 
     // Rule 8 flip: both sides use-reduce the `soflag?` group away.
@@ -356,18 +356,18 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
     )]);
     let replace_slotmove = BTreeSet::from([("dev-libs".to_string(), "souneedslot".to_string())]);
     let rule3 = |changed_slot: bool| {
-        slot_operator_eliminate_rebuilds(
-            &dir,
-            &repos,
-            &[provider.clone(), entry_slotmove.clone()],
-            &replace_slotmove,
-            &want_slotmove,
-            &no_pins,
-            false,
+        slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+            root: &dir,
+            repos: &repos,
+            entries: &[provider.clone(), entry_slotmove.clone()],
+            replace: &replace_slotmove,
+            slot_want: &want_slotmove,
+            reverse_pins: &no_pins,
+            selective: false,
             changed_slot,
-            &no_top,
-            false,
-        )
+            top_level_cps: &no_top,
+            empty: false,
+        })
     };
     assert!(
         rule3(true).is_empty() && rule3(false).is_empty(),
@@ -402,18 +402,18 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
 
     // Rule 4: a parent atom that doesn't match the installed instance.
     let bad_want = HashMap::from([(sounneed.clone(), vec!["=dev-libs/sounneed-2.0".to_string()])]);
-    let demoted = slot_operator_eliminate_rebuilds(
-        &dir,
-        &repos,
-        &[provider.clone(), entry.clone()],
-        &replace,
-        &bad_want,
-        &no_pins,
-        false,
-        false,
-        &no_top,
-        false,
-    );
+    let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &[provider.clone(), entry.clone()],
+        replace: &replace,
+        slot_want: &bad_want,
+        reverse_pins: &no_pins,
+        selective: false,
+        changed_slot: false,
+        top_level_cps: &no_top,
+        empty: false,
+    });
     assert!(demoted.is_empty());
 
     // Rule 5: non-selective keeps a user-requested package.

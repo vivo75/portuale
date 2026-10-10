@@ -59,18 +59,18 @@ fn merge_tree_carries_xattrs_like_portage_movefile() {
     };
     let merge = |d: &Path, root: &Path, policy: &XattrPolicy| {
         std::fs::create_dir_all(root).unwrap();
-        merge_tree(
+        merge_tree(MergeTreeArgs {
             d,
             root,
-            "dev-libs",
-            None,
-            false,
-            "/etc",
-            "/etc/env.d",
-            false,
-            &mut BTreeMap::new(),
-            policy,
-        )
+            category: "dev-libs",
+            installed_instance_pf: None,
+            protect_if_modified: false,
+            config_protect: "/etc",
+            config_protect_mask: "/etc/env.d",
+            noconfmem: false,
+            cfgfiledict: &mut BTreeMap::new(),
+            xattrs: policy,
+        })
         .expect("merge_tree succeeds");
     };
     let on = XattrPolicy {
@@ -145,18 +145,18 @@ fn merge_tree_copies_files_dirs_and_symlinks_and_writes_matching_contents() {
     std::fs::create_dir_all(&root).unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    let contents = merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "/etc/env.d",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    let contents = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     assert!(root.join("usr/share/x/hello.txt").is_file());
@@ -207,18 +207,18 @@ fn merge_tree_never_writes_the_existing_inode() {
     let mut old_fd = std::fs::File::open(root.join("lib/libx.so.1")).unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "sys-libs",
-        None,
-        false,
-        "/etc",
-        "/etc/env.d",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "sys-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     let mut still_open = Vec::new();
@@ -303,18 +303,18 @@ fn merge_tree_replaces_a_running_executable_atomically() {
     );
 
     let mut cfgfiledict = BTreeMap::new();
-    let outcome = merge_tree(
-        &d,
-        &root,
-        "app-shells",
-        None,
-        false,
-        "/etc",
-        "/etc/env.d",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    );
+    let outcome = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "app-shells",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    });
 
     let alive = child.try_wait().expect("try_wait").is_none();
     let _ = child.kill();
@@ -359,18 +359,18 @@ fn merge_tree_replaces_a_symlink_without_temporaries() {
     std::os::unix::fs::symlink("libx.so.1", d.join("usr/lib/libx.so")).unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "sys-libs",
-        None,
-        false,
-        "/etc",
-        "/etc/env.d",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "sys-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     assert_eq!(
@@ -434,18 +434,18 @@ fn merge_tree_preserves_ownership_from_the_source_when_root() {
     raw_chown(&d.join("usr/share/x/link.txt"), uid, gid, true);
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "/etc/env.d",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     for p in [
@@ -466,18 +466,18 @@ fn merge_tree_preserves_ownership_from_the_source_when_root() {
     // usr/share/x's now-installed ownership.
     raw_chown(&d.join("usr/share/x"), 0, 0, false);
     let mut cfgfiledict2 = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "/etc/env.d",
-        false,
-        &mut cfgfiledict2,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict2,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
     let meta = std::fs::symlink_metadata(root.join("usr/share/x")).unwrap();
     assert_eq!(meta.uid(), uid, "existing dir must keep its ownership");
@@ -494,18 +494,18 @@ fn merge_tree_does_not_protect_a_brand_new_file() {
     std::fs::create_dir_all(&root).unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     assert_eq!(
@@ -526,18 +526,18 @@ fn merge_tree_leaves_an_unchanged_protected_file_alone() {
     std::fs::write(root.join("etc/foo.conf"), b"same content").unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     assert_eq!(
@@ -558,18 +558,18 @@ fn merge_tree_protects_a_changed_file_under_a_protected_path() {
     std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    let contents = merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    let contents = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     // The real, logical path is untouched...
@@ -624,18 +624,18 @@ fn merge_tree_protect_if_modified_applies_directly_when_dest_still_matches_the_i
     std::fs::write(vdb_dir.join("COUNTER"), "5").unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    let contents = merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        Some("foopkg-1.0"),
-        true,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    let contents = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: Some("foopkg-1.0"),
+        protect_if_modified: true,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     assert_eq!(
@@ -677,18 +677,18 @@ fn merge_tree_still_protects_a_locally_modified_file_despite_protect_if_modified
     std::fs::write(vdb_dir.join("COUNTER"), "5").unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        Some("foopkg-1.0"),
-        true,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: Some("foopkg-1.0"),
+        protect_if_modified: true,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     assert_eq!(
@@ -729,18 +729,18 @@ fn merge_tree_force_protects_a_path_the_installed_instance_recorded_but_the_admi
     std::fs::write(vdb_dir.join("COUNTER"), "5").unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        Some("foopkg-1.0"),
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: Some("foopkg-1.0"),
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     assert!(
@@ -771,18 +771,18 @@ fn merge_tree_remembers_an_already_offered_update_and_leaves_the_live_file_untou
     std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("first merge_tree succeeds");
     assert!(root.join("etc/._cfg0000_foo.conf").exists());
 
@@ -790,18 +790,18 @@ fn merge_tree_remembers_an_already_offered_update_and_leaves_the_live_file_untou
     // remembered in cfgfiledict, so real portage leaves the live
     // destination completely untouched this time -- no second
     // ._cfg0001_ file spawned either.
-    let contents = merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    let contents = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("second merge_tree succeeds");
     assert_eq!(
         std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
@@ -834,18 +834,18 @@ fn merge_tree_noconfmem_reprotects_an_already_offered_update() {
     std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("first merge_tree succeeds");
     assert!(root.join("etc/._cfg0000_foo.conf").exists());
 
@@ -860,18 +860,18 @@ fn merge_tree_noconfmem_reprotects_an_already_offered_update() {
     // ._cfg0001_ with identical content, so the *visible* difference
     // from the default isn't a new numbered file -- it's that the
     // logical path itself is protected instead of overwritten.
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        true,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: true,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("second merge_tree succeeds");
     assert!(!root.join("etc/._cfg0001_foo.conf").exists());
     assert_eq!(
@@ -895,18 +895,18 @@ fn merge_tree_protects_a_changed_symlink_under_a_protected_path() {
     std::os::unix::fs::symlink("users-own-target", root.join("etc/link.conf")).unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    let contents = merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    let contents = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     // The real, logical path is untouched...
@@ -938,18 +938,18 @@ fn merge_tree_does_not_protect_an_unchanged_symlink() {
     std::os::unix::fs::symlink("same-target", root.join("etc/link.conf")).unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     assert_eq!(
@@ -976,18 +976,18 @@ fn merge_tree_protects_a_symlink_source_replacing_a_regular_file_dest() {
     std::fs::write(root.join("etc/thing.conf"), b"the admin's own regular file").unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    let contents = merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    let contents = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     // The admin's own regular file at the logical path is untouched...
@@ -1021,18 +1021,18 @@ fn merge_tree_protects_a_regular_file_source_replacing_a_symlink_dest() {
     std::os::unix::fs::symlink("admins-own-target", root.join("etc/thing.conf")).unwrap();
 
     let mut cfgfiledict = BTreeMap::new();
-    let contents = merge_tree(
-        &d,
-        &root,
-        "dev-libs",
-        None,
-        false,
-        "/etc",
-        "",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    let contents = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     // The admin's own symlink at the logical path is untouched...

@@ -624,6 +624,32 @@ fn http_or_summary(failures: &[portage_fetch::QuietFetchError]) -> String {
         })
 }
 
+/// Arguments of [`run_merge_plan`].
+pub struct RunMergePlanArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub config: &'a Config,
+    pub repos: &'a [RepoConfig],
+    pub root: &'a Path,
+    pub pkgdir: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub merge_options: &'a MergeOptions,
+    pub keep_going: bool,
+    pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
+    pub buildpkg_exclude: &'a [String],
+    /// Backlog #197: the scheduler-display mode (background + Jobs
+    /// visibility), computed once by the caller. The mixed plan runs
+    /// serially, so no `>>> Jobs:` events fire -- the mode only carries
+    /// the blank/`>>>` rule (a `--quiet` binary merge prints no leading
+    /// blanks, exactly like real's background scheduler). Stated cut:
+    /// real drives binary tasks through the same display (real
+    /// `Scheduler._merge_exit` / `_do_merge_exit`,
+    /// `Scheduler.py:1532-1560`), so a real `--quiet --verbose` (or
+    /// `-jN`) binary merge shows `>>> Jobs:` lines while portuale shows
+    /// none here -- unprobed against real, Jobs events for the mixed
+    /// plan are a later slice.
+    pub mode: crate::emerge_build::StatusMode,
+}
+
 /// Real `emerge --getbinpkg <atom>` / `--getbinpkgonly <atom>` (no
 /// `--pretend`): merge every resolved entry (already in real dependency-
 /// first merge order), dispatching **per entry** on `entry.source` --
@@ -641,31 +667,20 @@ fn http_or_summary(failures: &[portage_fetch::QuietFetchError]) -> String {
 ///
 /// `--getbinpkgonly` (binary-only resolve, `usepkgonly`) simply never
 /// yields a non-`Binary` entry, so the same function serves both.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn run_merge_plan(
-    entries: &[GraphEntry],
-    config: &Config,
-    repos: &[RepoConfig],
-    root: &Path,
-    pkgdir: &Path,
-    portage_tmpdir: &Path,
-    merge_options: &MergeOptions,
-    keep_going: bool,
-    buildpkg: Option<&crate::ebuild_package::PackageOptions>,
-    buildpkg_exclude: &[String],
-    // Backlog #197: the scheduler-display mode (background + Jobs
-    // visibility), computed once by the caller. The mixed plan runs
-    // serially, so no `>>> Jobs:` events fire -- the mode only carries
-    // the blank/`>>>` rule (a `--quiet` binary merge prints no leading
-    // blanks, exactly like real's background scheduler). Stated cut:
-    // real drives binary tasks through the same display (real
-    // `Scheduler._merge_exit` / `_do_merge_exit`,
-    // `Scheduler.py:1532-1560`), so a real `--quiet --verbose` (or
-    // `-jN`) binary merge shows `>>> Jobs:` lines while portuale shows
-    // none here -- unprobed against real, Jobs events for the mixed
-    // plan are a later slice.
-    mode: crate::emerge_build::StatusMode,
-) -> Result<(), String> {
+pub fn run_merge_plan(args: RunMergePlanArgs<'_>) -> Result<(), String> {
+    let RunMergePlanArgs {
+        entries,
+        config,
+        repos,
+        root,
+        pkgdir,
+        portage_tmpdir,
+        merge_options,
+        keep_going,
+        buildpkg,
+        buildpkg_exclude,
+        mode,
+    } = args;
     // Backlog #322: a source build always runs ebuild phases, so a binary
     // that cannot find the vendored runtime says so before anything is
     // fetched. Binary merges are not gated here: a hookless gpkg never
@@ -754,21 +769,33 @@ pub fn run_merge_plan(
     })
 }
 
+/// Arguments of [`merge_one_binary_entry`].
+pub(crate) struct MergeOneBinaryEntryArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) pkgdir: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) merge_options: &'a MergeOptions,
+    pub(crate) progress: mrg_director::MergeProgress,
+    pub(crate) display: &'a crate::emerge_build::StatusDisplay,
+}
+
 /// One `Binary` entry of `run_merge_plan`'s own loop: `AlreadyInstalled`
 /// is a silent no-op; `New`/`Upgrade`/`Downgrade`/`Reinstall` are
 /// fetched (remote) or located (`$PKGDIR`) and merged (`merge_binpkg`
 /// unmerges a replaced same-slot version itself).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn merge_one_binary_entry(
-    entry: &GraphEntry,
-    config: &Config,
-    root: &Path,
-    pkgdir: &Path,
-    portage_tmpdir: &Path,
-    merge_options: &MergeOptions,
-    progress: mrg_director::MergeProgress,
-    display: &crate::emerge_build::StatusDisplay,
-) -> Result<(), String> {
+pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Result<(), String> {
+    let MergeOneBinaryEntryArgs {
+        entry,
+        config,
+        root,
+        pkgdir,
+        portage_tmpdir,
+        merge_options,
+        progress,
+        display,
+    } = args;
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
         // #72 B3: a removal installs no binary (execution is a non-goal).
@@ -852,14 +879,14 @@ pub(crate) fn merge_one_binary_entry(
                 .ok_or_else(|| {
                     format!("{cp}-{version}: binhost record names unknown repo {binrepo_name:?}")
                 })?;
-            let path = download_and_verify(
-                &binrepo.sync_uri,
-                &record,
-                &entry.category,
-                &entry.package,
-                &version,
+            let path = download_and_verify(DownloadAndVerifyArgs {
+                sync_uri: &binrepo.sync_uri,
+                record: &record,
+                category: &entry.category,
+                package: &entry.package,
+                version: &version,
                 pkgdir,
-            )?;
+            })?;
             let features = if merge_options.features.is_empty() {
                 std::env::var("FEATURES").unwrap_or_default()
             } else {
@@ -950,14 +977,14 @@ pub(crate) fn merge_one_binary_entry(
     // is a `binpkg_digest_failure` sentinel the CLI boundary drops
     // silently (exit 1).
     if !entry.remote_binary
-        && let Some(record) = local_index_record(
+        && let Some(record) = local_index_record(LocalIndexRecordArgs {
             pkgdir,
-            &entry.category,
-            &entry.package,
-            &version,
-            entry.build_id.as_deref(),
-            &binpkg_path,
-        )
+            category: &entry.category,
+            package: &entry.package,
+            version: &version,
+            build_id: entry.build_id.as_deref(),
+            binpkg_path: &binpkg_path,
+        })
         && let Err(mismatch) = crate::binpkg::verify_binpkg_against_index(&binpkg_path, &record)
     {
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
@@ -1139,6 +1166,16 @@ pub(crate) fn is_binpkg_missing_failure(e: &str) -> bool {
     !e.contains('\n') && e.ends_with(": non-existent binary package")
 }
 
+/// Arguments of [`local_index_record`].
+struct LocalIndexRecordArgs<'a> {
+    pkgdir: &'a Path,
+    category: &'a str,
+    package: &'a str,
+    version: &'a str,
+    build_id: Option<&'a str>,
+    binpkg_path: &'a Path,
+}
+
 /// The `<pkgdir>/Packages` index record vouching for a local binpkg
 /// merge (real `bintree._get_digests`' own index read, backlog #174):
 /// the stanza whose `CPV` is `<category>/<package>-<version>`. With
@@ -1149,15 +1186,17 @@ pub(crate) fn is_binpkg_missing_failure(e: &str) -> bool {
 /// bytes). A record without `SIZE` still returns here -- real's
 /// "verifies nothing without one" (`BinpkgVerifier._start`'s early OK)
 /// lives in `verify_binpkg_against_index`, not in the lookup.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 fn local_index_record(
-    pkgdir: &Path,
-    category: &str,
-    package: &str,
-    version: &str,
-    build_id: Option<&str>,
-    binpkg_path: &Path,
+    args: LocalIndexRecordArgs<'_>,
 ) -> Option<std::collections::HashMap<String, String>> {
+    let LocalIndexRecordArgs {
+        pkgdir,
+        category,
+        package,
+        version,
+        build_id,
+        binpkg_path,
+    } = args;
     let cpv = format!("{category}/{package}-{version}");
     let basename = binpkg_path.file_name()?.to_str()?;
     let mut candidates: Vec<std::collections::HashMap<String, String>> =
@@ -1242,18 +1281,30 @@ pub(crate) fn resolve_local_binpkg(
     candidates.into_iter().map(|(_, p)| p).next()
 }
 
+/// Arguments of [`download_and_verify`].
+pub(crate) struct DownloadAndVerifyArgs<'a> {
+    pub(crate) sync_uri: &'a str,
+    pub(crate) record: &'a std::collections::HashMap<String, String>,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) pkgdir: &'a Path,
+}
+
 /// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into
 /// `$PKGDIR`, then verify it against the index `SIZE` and, if present,
 /// the `MD5` / `SHA1` fields. A mismatch removes the file and fails.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn download_and_verify(
-    sync_uri: &str,
-    record: &std::collections::HashMap<String, String>,
-    category: &str,
-    package: &str,
-    version: &str,
-    pkgdir: &Path,
+    args: DownloadAndVerifyArgs<'_>,
 ) -> Result<std::path::PathBuf, String> {
+    let DownloadAndVerifyArgs {
+        sync_uri,
+        record,
+        category,
+        package,
+        version,
+        pkgdir,
+    } = args;
     let rel = record
         .get("PATH")
         .filter(|s| !s.is_empty())
@@ -1509,16 +1560,16 @@ mod tests {
         let mut entry = graph_entry("gpkgreadpkg", CandidateSource::Binary, "1.0");
         entry.build_id = Some("1".into());
 
-        merge_one_binary_entry(
-            &entry,
-            &Config::default(),
-            &root,
-            &pkgdir,
-            &tmp.join("pt"),
-            &MergeOptions::default(),
-            mrg_director::MergeProgress::single(),
-            &crate::emerge_build::StatusDisplay::for_tests(),
-        )
+        merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("pt"),
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
         .expect("multi-instance local gpkg merges");
 
         assert!(
@@ -1576,16 +1627,16 @@ mod tests {
 
         let pt = tmp.join("pt");
         let entry = graph_entry("gpkgreadpkg", CandidateSource::Binary, "1.0");
-        let err = merge_one_binary_entry(
-            &entry,
-            &Config::default(),
-            &root,
-            &pkgdir,
-            &pt,
-            &MergeOptions::default(),
-            mrg_director::MergeProgress::single(),
-            &crate::emerge_build::StatusDisplay::for_tests(),
-        )
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &pt,
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
         .expect_err("a truncated vouched binpkg must fail at merge");
         assert_eq!(
             err, "dev-libs/gpkgreadpkg-1.0: binpkg digest verification failed",
@@ -1675,16 +1726,16 @@ mod tests {
 
         let pt = tmp.join("pt");
         let entry = graph_entry("packagepkg", CandidateSource::Binary, "1.0");
-        let err = merge_one_binary_entry(
-            &entry,
-            &Config::default(),
-            &root,
-            &pkgdir,
-            &pt,
-            &MergeOptions::default(),
-            mrg_director::MergeProgress::single(),
-            &crate::emerge_build::StatusDisplay::for_tests(),
-        )
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &pt,
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
         .expect_err("a stale-index binary must fail at merge, not fall back");
         assert_eq!(
             err, "dev-libs/packagepkg-1.0: non-existent binary package",
@@ -1728,16 +1779,16 @@ mod tests {
 
         let pt = tmp.join("pt");
         let entry = graph_entry("packagepkg", CandidateSource::Binary, "1.0");
-        let err = merge_one_binary_entry(
-            &entry,
-            &Config::default(),
-            &root,
-            &pkgdir,
-            &pt,
-            &MergeOptions::default(),
-            mrg_director::MergeProgress::single(),
-            &crate::emerge_build::StatusDisplay::for_tests(),
-        )
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &pt,
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
         .expect_err("a stanza-less missing binary must fail at merge");
         assert_eq!(
             err, "dev-libs/packagepkg-1.0: non-existent binary package",
@@ -2441,15 +2492,29 @@ mod tests {
             ("SHA1", FIXTURE_SHA1),
             ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
         ]);
-        let got =
-            download_and_verify(&base, &ok, "dev-libs", "packagepkg", "1.0", &pkgdir).unwrap();
+        let got = download_and_verify(DownloadAndVerifyArgs {
+            sync_uri: &base,
+            record: &ok,
+            category: "dev-libs",
+            package: "packagepkg",
+            version: "1.0",
+            pkgdir: &pkgdir,
+        })
+        .unwrap();
         assert_eq!(got, pkgdir.join("dev-libs/packagepkg-1.0.tbz2"));
         assert_eq!(std::fs::metadata(&got).unwrap().len(), 4618);
 
         // Wrong SIZE -> rejected, file removed.
         let bad_size = record(&[("SIZE", "9999"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]);
-        let err = download_and_verify(&base, &bad_size, "dev-libs", "packagepkg", "1.0", &pkgdir)
-            .unwrap_err();
+        let err = download_and_verify(DownloadAndVerifyArgs {
+            sync_uri: &base,
+            record: &bad_size,
+            category: "dev-libs",
+            package: "packagepkg",
+            version: "1.0",
+            pkgdir: &pkgdir,
+        })
+        .unwrap_err();
         assert!(err.contains("!= index SIZE 9999"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
 
@@ -2459,8 +2524,15 @@ mod tests {
             ("MD5", "00000000000000000000000000000000"),
             ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
         ]);
-        let err = download_and_verify(&base, &bad_md5, "dev-libs", "packagepkg", "1.0", &pkgdir)
-            .unwrap_err();
+        let err = download_and_verify(DownloadAndVerifyArgs {
+            sync_uri: &base,
+            record: &bad_md5,
+            category: "dev-libs",
+            package: "packagepkg",
+            version: "1.0",
+            pkgdir: &pkgdir,
+        })
+        .unwrap_err();
         assert!(err.contains("MD5 mismatch"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
 
@@ -2472,8 +2544,15 @@ mod tests {
             ("SHA1", "0000000000000000000000000000000000000000"),
             ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
         ]);
-        let err = download_and_verify(&base, &bad_sha1, "dev-libs", "packagepkg", "1.0", &pkgdir)
-            .unwrap_err();
+        let err = download_and_verify(DownloadAndVerifyArgs {
+            sync_uri: &base,
+            record: &bad_sha1,
+            category: "dev-libs",
+            package: "packagepkg",
+            version: "1.0",
+            pkgdir: &pkgdir,
+        })
+        .unwrap_err();
         assert!(err.contains("SHA1 mismatch"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
         let _ = std::fs::remove_dir_all(&tmp);
@@ -3279,19 +3358,19 @@ mod tests {
             deps: Vec::new(),
         };
 
-        run_merge_plan(
-            &[entry],
-            &config,
-            &[],
-            &root,
-            &pkgdir,
-            &tmp.join("portage_tmpdir"),
-            &MergeOptions::default(),
-            false,
-            None,
-            &[],
-            crate::emerge_build::StatusMode::for_tests(),
-        )
+        run_merge_plan(RunMergePlanArgs {
+            entries: &[entry],
+            config: &config,
+            repos: &[],
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            merge_options: &MergeOptions::default(),
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            mode: crate::emerge_build::StatusMode::for_tests(),
+        })
         .expect("getbinpkg merge succeeds");
 
         assert!(
@@ -3395,19 +3474,19 @@ mod tests {
             deps: Vec::new(),
         };
 
-        run_merge_plan(
-            &[entry],
-            &config,
-            &[],
-            &root,
-            &pkgdir,
-            &tmp.join("portage_tmpdir"),
-            &MergeOptions::default(),
-            false,
-            None,
-            &[],
-            crate::emerge_build::StatusMode::for_tests(),
-        )
+        run_merge_plan(RunMergePlanArgs {
+            entries: &[entry],
+            config: &config,
+            repos: &[],
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            merge_options: &MergeOptions::default(),
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            mode: crate::emerge_build::StatusMode::for_tests(),
+        })
         .expect("getbinpkg merge succeeds");
 
         assert!(
@@ -3453,22 +3532,22 @@ mod tests {
             ..MergeOptions::default()
         };
 
-        run_merge_plan(
-            &[
+        run_merge_plan(RunMergePlanArgs {
+            entries: &[
                 graph_entry("packagepkg", CandidateSource::Binary, "1.0"),
                 graph_entry("binpkgphasepkg", CandidateSource::Ebuild, "1.0"),
             ],
-            &Config::default(),
-            &repos,
-            &root,
-            &pkgdir,
-            &tmp.join("portage_tmpdir"),
-            &options,
-            false,
-            None,
-            &[],
-            crate::emerge_build::StatusMode::for_tests(),
-        )
+            config: &Config::default(),
+            repos: &repos,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            merge_options: &options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            mode: crate::emerge_build::StatusMode::for_tests(),
+        })
         .expect("mixed merge plan succeeds");
 
         // The Binary entry: merged from the local .tbz2.
@@ -3549,16 +3628,16 @@ mod tests {
         // failure is real's `!!! Fetching Binary failed` arm
         // (`BinpkgVerifier.py:57`, backlog #187) -- never a refetch,
         // and never portuale's old `no binpkg file under ...` text.
-        let err = merge_one_binary_entry(
-            &entry,
-            &config,
-            &root,
-            &pkgdir,
-            &tmp.join("pt"),
-            &MergeOptions::default(),
-            mrg_director::MergeProgress::single(),
-            &crate::emerge_build::StatusDisplay::for_tests(),
-        )
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &config,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("pt"),
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
         .expect_err("a resumed binary with no local file must fail, not refetch");
         assert!(
             is_binpkg_missing_failure(&err),

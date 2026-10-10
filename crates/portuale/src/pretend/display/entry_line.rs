@@ -149,21 +149,21 @@ pub(crate) fn print_entry_line(
             }
         );
     let field = |new: bool, new_slot: bool, replace: bool, new_version: bool, downgrade: bool| {
-        attr_display_field(
-            entry.interactive,
+        attr_display_field(AttrDisplayFieldArgs {
+            interactive: entry.interactive,
             new,
             force_reinstall,
             new_slot,
             replace,
-            entry.fetch_restrict && !entry.fetch_restrict_satisfied,
-            entry.fetch_restrict_satisfied,
-            entry.remote_binary,
+            fetch_restrict: entry.fetch_restrict && !entry.fetch_restrict_satisfied,
+            fetch_restrict_satisfied: entry.fetch_restrict_satisfied,
+            remote_binary: entry.remote_binary,
             new_version,
             downgrade,
-            entry.keyword_mask,
-            !quiet,
+            mask: entry.keyword_mask,
+            include_mask: !quiet,
             color,
-        )
+        })
     };
     // `emerge -pv` (verbosity 3) decorates the bracket cpv *and* every
     // `[old-ver]` with `:slot`/`::repo` (real `_append_slot` /
@@ -188,7 +188,14 @@ pub(crate) fn print_entry_line(
             None => v.to_string(),
         };
         if v3 {
-            decorate_version(&v, entry_slot, entry_sub, entry_repo, show_slot, false)
+            decorate_version(DecorateVersionArgs {
+                version: &v,
+                slot: entry_slot,
+                sub_slot: entry_sub,
+                repo: entry_repo,
+                show_slot,
+                force_sub_slot: false,
+            })
         } else {
             v
         }
@@ -218,7 +225,14 @@ pub(crate) fn print_entry_line(
                     // (#24 S3 made `Reinstall` carry an `oldbest` at all).
                     let force_sub =
                         !entry.new_slot && r.slot == entry_slot && r.sub_slot != entry_sub;
-                    decorate_version(v, &r.slot, &r.sub_slot, &r.repo, show_slot, force_sub)
+                    decorate_version(DecorateVersionArgs {
+                        version: v,
+                        slot: &r.slot,
+                        sub_slot: &r.sub_slot,
+                        repo: &r.repo,
+                        show_slot,
+                        force_sub_slot: force_sub,
+                    })
                 } else {
                     v.to_string()
                 }
@@ -249,7 +263,13 @@ pub(crate) fn print_entry_line(
         let (system, world) = classify(version);
         let disp_ver = disp_version(version);
         let oldbest = oldbest_str();
-        let use_str = use_suffix(entry, verbose, quiet, alphabetical, color);
+        let use_str = use_suffix(UseSuffixArgs {
+            entry,
+            verbose,
+            quiet,
+            alphabetical,
+            color,
+        });
         // Real `output.py::verbose_size` (`conf.verbosity == 3` only):
         // `verboseadd += localized_size(mysize)` -- the bytes still to
         // fetch, appended after the USE string. Portuale renders it
@@ -286,20 +306,20 @@ pub(crate) fn print_entry_line(
             };
             println!(
                 "{}{root_str}{use_str}{size_suffix}",
-                columns_line(
-                    bracket,
-                    f,
+                columns_line(ColumnsLineArgs {
+                    bracket_word: bracket,
+                    field: f,
                     indent,
-                    &entry.category,
-                    &entry.package,
-                    &disp_ver,
-                    &oldbest,
+                    category: &entry.category,
+                    package: &entry.package,
+                    version: &disp_ver,
+                    oldbest: &oldbest,
                     columnwidth,
                     color,
                     binary,
                     system,
-                    world,
-                )
+                    world
+                })
             );
             return;
         }
@@ -353,18 +373,24 @@ pub(crate) fn print_entry_line(
         // #154: the nomerge arm carries the same USE suffix as a merge
         // row (empty string when the package has no USE display, so
         // USE-less nomerge rows are byte-unchanged).
-        tail.push_str(&use_suffix(entry, verbose, quiet, alphabetical, color));
+        tail.push_str(&use_suffix(UseSuffixArgs {
+            entry,
+            verbose,
+            quiet,
+            alphabetical,
+            color,
+        }));
         // `"nomerge".ljust(13)` + `empty_space_in_brackets()`.
         println!(
             "{}",
-            nomerge_row(
-                &entry.category,
-                &entry.package,
-                &disp_version(version),
+            nomerge_row(NomergeRowArgs {
+                category: &entry.category,
+                package: &entry.package,
+                disp_ver: &disp_version(version),
                 indent,
                 quiet,
-                &tail,
-            )
+                tail: &tail
+            })
         );
     };
     match &entry.outcome {
@@ -382,9 +408,15 @@ pub(crate) fn print_entry_line(
                 return;
             }
             emit(&field(true, entry.new_slot, false, false, false), version);
-            blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color, circular,
-            ));
+            blocker_lines.extend(trailing_blocker_lines(TrailingBlockerLinesArgs {
+                entries,
+                root,
+                owner_index: index,
+                include_mask: !quiet,
+                columns,
+                color,
+                circular,
+            }));
         }
         PretendOutcome::Upgrade { from: _, to } => {
             // Real: an in-slot version bump -> `attr.new_version` only
@@ -396,9 +428,15 @@ pub(crate) fn print_entry_line(
                 return;
             }
             emit(&field(false, false, false, true, false), to);
-            blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color, circular,
-            ));
+            blocker_lines.extend(trailing_blocker_lines(TrailingBlockerLinesArgs {
+                entries,
+                root,
+                owner_index: index,
+                include_mask: !quiet,
+                columns,
+                color,
+                circular,
+            }));
         }
         PretendOutcome::Downgrade { from: _, to } => {
             // Real: in-slot downgrade -> `attr.new_version` *and*
@@ -408,9 +446,15 @@ pub(crate) fn print_entry_line(
                 return;
             }
             emit(&field(false, false, false, true, true), to);
-            blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color, circular,
-            ));
+            blocker_lines.extend(trailing_blocker_lines(TrailingBlockerLinesArgs {
+                entries,
+                root,
+                owner_index: index,
+                include_mask: !quiet,
+                columns,
+                color,
+                circular,
+            }));
         }
         PretendOutcome::Reinstall {
             version,
@@ -435,9 +479,15 @@ pub(crate) fn print_entry_line(
                 return;
             }
             emit(&field(false, false, true, false, false), version);
-            blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color, circular,
-            ));
+            blocker_lines.extend(trailing_blocker_lines(TrailingBlockerLinesArgs {
+                entries,
+                root,
+                owner_index: index,
+                include_mask: !quiet,
+                columns,
+                color,
+                circular,
+            }));
         }
         PretendOutcome::AlreadyInstalled { .. } => {
             // Nothing on stdout: real `emerge -p` / `-pu` simply omits an

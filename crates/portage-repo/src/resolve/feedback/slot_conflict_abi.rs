@@ -53,29 +53,29 @@ pub(crate) fn step_slot_conflict_abi(
                 in_graph.insert((e.category.clone(), e.package.clone()));
             }
         }
-        let probe_parents = collect_probe_parents(
-            ctx.root,
-            &pass.entries,
-            &ctx.slot_op_reachable,
-            &walked,
-            &in_graph,
-            &grown.slot_operator_replace_installed,
-            ctx.with_bdeps,
-            ctx.excluded,
-        );
-        let fresh = slot_conflict_abi_probe(
-            ctx.root,
-            &ctx.repos,
-            &pass.entries,
-            &pass.slot_conflicts,
-            &grown.slot_operator_replace_installed,
-            &grown.slot_operator_undone,
-            ctx.with_bdeps,
-            &walked,
-            ctx.excluded,
-            &probe_parents,
+        let probe_parents = collect_probe_parents(CollectProbeParentsArgs {
+            root: ctx.root,
+            entries: &pass.entries,
+            reachable: &ctx.slot_op_reachable,
+            walked: &walked,
+            in_graph: &in_graph,
+            already: &grown.slot_operator_replace_installed,
+            with_bdeps: ctx.with_bdeps,
+            excluded: ctx.excluded,
+        });
+        let fresh = slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+            root: ctx.root,
+            repos: &ctx.repos,
+            entries: &pass.entries,
+            conflicts: &pass.slot_conflicts,
+            already: &grown.slot_operator_replace_installed,
+            undone: &grown.slot_operator_undone,
+            with_bdeps: ctx.with_bdeps,
+            walked: &walked,
+            excluded: ctx.excluded,
+            probe_parents: &probe_parents,
             config,
-        );
+        });
         if !fresh.is_empty() {
             grown.slot_operator_replace_installed.extend(fresh);
             return Some(PassDecision::Feedback(BacktrackFeedback::Config {

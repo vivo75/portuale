@@ -2,6 +2,16 @@
 
 use crate::*;
 
+/// Arguments of [`use_unsat_parent_row`].
+pub(crate) struct UseUnsatParentRowArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) display_atom: &'a str,
+    pub(crate) owner: Option<&'a (String, String)>,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Real `_show_unsatisfied_dep`'s parent-conditional row (`depgraph.py:
 /// 6768-6858`): when a `[use]`-dep is `opt?`-conditional on the requirer
 /// and the child's violation is entirely conditional, real appends the
@@ -16,15 +26,17 @@ use crate::*;
 /// text is reproduced when it would). `None` when no child yields a
 /// viable flip, the parent's state can't be read, or a flip is pinned
 /// by `use.mask`/`use.force`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn use_unsat_parent_row(
-    repos: &[RepoConfig],
-    root: &Path,
-    entries: &[GraphEntry],
-    display_atom: &str,
-    owner: Option<&(String, String)>,
-    config: &portage_profile::Config,
+    args: UseUnsatParentRowArgs<'_>,
 ) -> Option<(String, Vec<String>)> {
+    let UseUnsatParentRowArgs {
+        repos,
+        root,
+        entries,
+        display_atom,
+        owner,
+        config,
+    } = args;
     let owner = owner?;
     let unevaluated = portage_dep::parse_atom(display_atom)?;
     // Merge-bound parents resolve through `parent_use_state`; installed
@@ -36,14 +48,14 @@ pub(crate) fn use_unsat_parent_row(
             .or_else(|| installed_parent_use_state(repos, root, entries, owner, config))?;
     let evaluated_atom = portage_dep::evaluate_atom_conditionals(display_atom, &parent_use)?;
     let evaluated = portage_dep::parse_atom(&evaluated_atom)?;
-    let (_child, involved) = viable_parent_flip_targets(
+    let (_child, involved) = viable_parent_flip_targets(ViableParentFlipTargetsArgs {
         repos,
-        &unevaluated,
-        &evaluated,
-        display_atom,
-        &parent_use,
+        unevaluated: &unevaluated,
+        evaluated: &evaluated,
+        unevaluated_atom: display_atom,
+        parent_use: &parent_use,
         config,
-    )
+    })
     .into_iter()
     .next()?;
     if involved.iter().any(|f| !parent_iuse.contains(f)) {
@@ -53,7 +65,14 @@ pub(crate) fn use_unsat_parent_row(
     let mut changes: Vec<String> = Vec::new();
     for flag in &involved {
         let desired = !parent_use.contains(flag);
-        if !flag_is_settable(&parent_candidate, &owner.0, &owner.1, flag, desired, config) {
+        if !flag_is_settable(FlagIsSettableArgs {
+            candidate: &parent_candidate,
+            category: &owner.0,
+            package: &owner.1,
+            flag,
+            desired,
+            config,
+        }) {
             return None;
         }
         if desired {
@@ -93,6 +112,17 @@ pub(crate) fn use_unsat_parent_row(
     ))
 }
 
+/// Arguments of [`use_unsat_candidates_for_atom`].
+pub(crate) struct UseUnsatCandidatesForAtomArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) display_atom: &'a str,
+    pub(crate) evaluated_atom: &'a str,
+    pub(crate) owner: Option<&'a (String, String)>,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Real `_show_unsatisfied_dep`'s "no ebuilds built with USE flags to
 /// satisfy" candidate scan (`depgraph.py:6619` collects `missing_use`,
 /// `:6714-6873` turns it into `unmasked_use_reasons` /
@@ -117,16 +147,18 @@ pub(crate) fn use_unsat_parent_row(
 /// [`use_unsat_parent_row`] documents; real's `Missing IUSE:` fallback can
 /// be suppressed by a *masked* candidate that has the flag
 /// (`:6897-6907`), which this visibility-filtered scan cannot express.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn use_unsat_candidates_for_atom(
-    repos: &[RepoConfig],
-    root: &Path,
-    entries: &[GraphEntry],
-    display_atom: &str,
-    evaluated_atom: &str,
-    owner: Option<&(String, String)>,
-    config: &portage_profile::Config,
+    args: UseUnsatCandidatesForAtomArgs<'_>,
 ) -> Option<Vec<(String, Vec<String>)>> {
+    let UseUnsatCandidatesForAtomArgs {
+        repos,
+        root,
+        entries,
+        display_atom,
+        evaluated_atom,
+        owner,
+        config,
+    } = args;
     let display = portage_dep::parse_atom(display_atom)?;
     display.use_deps.as_deref().filter(|d| !d.is_empty())?;
     let evaluated = portage_dep::parse_atom(evaluated_atom)?;
@@ -245,14 +277,14 @@ pub(crate) fn use_unsat_candidates_for_atom(
             "{}/{}-{}:{}/{}::{}",
             display.category, display.package, c.version, c.slot, c.sub_slot, c.repo_name
         );
-        let stable = is_stable(
-            &c.keywords,
-            &candidate_str,
-            &display.category,
-            &display.package,
-            &config.accept_keywords,
-            &config.package_accept_keywords,
-        );
+        let stable = is_stable(IsStableArgs {
+            keywords: &c.keywords,
+            candidate_str: &candidate_str,
+            category: &display.category,
+            package: &display.package,
+            accept_keywords: &config.accept_keywords,
+            package_accept_keywords: &config.package_accept_keywords,
+        });
         // Owned union of the two shared sets (display path; the union
         // is small).
         let mut untouchable = resolved_use_mask_or_force(
@@ -296,9 +328,14 @@ pub(crate) fn use_unsat_candidates_for_atom(
         // (highest-version) unmasked `Change USE:` candidate, then the
         // requirer's own row when the dep is conditional.
         let mut rows = vec![change_rows.remove(0)];
-        if let Some(parent_row) =
-            use_unsat_parent_row(repos, root, entries, display_atom, owner, config)
-        {
+        if let Some(parent_row) = use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos,
+            root,
+            entries,
+            display_atom,
+            owner,
+            config,
+        }) {
             rows.push(parent_row);
         }
         return Some(rows);

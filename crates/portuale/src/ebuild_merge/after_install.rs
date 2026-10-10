@@ -11,18 +11,18 @@ pub(crate) fn merge_after_install(
 ) -> Result<i32, String> {
     // Real `dblink.treewalk()` starts with the `instprep` phase, before
     // anything below -- see `ebuild_phases::run_instprep`.
-    let instprep_status = ebuild_phases::run_instprep(
+    let instprep_status = ebuild_phases::run_instprep(ebuild_phases::RunInstprepArgs {
         ebuild_path,
-        None,
-        false,
+        saved_env_bz2: None,
+        seed: false,
         root,
         portage_tmpdir,
-        &options.build_env,
-        options.debug,
-        &options.config_root,
-        options.shell,
-        options.log_file.as_deref(),
-    )?;
+        build_env: &options.build_env,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        log_file: options.log_file.as_deref(),
+    })?;
     if instprep_status != 0 {
         eprintln!("!!! instprep failed");
         return Ok(1);
@@ -123,17 +123,17 @@ pub(crate) fn merge_after_install(
     // has never resolved real config/USE at all before this).
     let blocked =
         blocked_installed_packages(root, &options.config_root, env, main_slot, &repository);
-    let (collisions, symlink_collisions, plib_collisions) = find_collisions(
-        &env.d(),
+    let (collisions, symlink_collisions, plib_collisions) = find_collisions(FindCollisionsArgs {
+        d: &env.d(),
         root,
-        &env.category,
-        &env.split.pn,
-        main_slot,
-        &options.config_protect,
-        &options.config_protect_mask,
-        &plib_inodes,
-        &blocked,
-    )?;
+        category: &env.category,
+        package: &env.split.pn,
+        slot: main_slot,
+        config_protect: &options.config_protect,
+        config_protect_mask: &options.config_protect_mask,
+        plib_inodes: &plib_inodes,
+        blocked: &blocked,
+    })?;
     // Real `dblink.merge()`'s own abort condition (`vartree.py:4830-
     // 4838`, Python operator precedence: `collision_protect or
     // (protect_owned and owners)`): a checked symlink-over-directory
@@ -175,42 +175,42 @@ pub(crate) fn merge_after_install(
     // of `install`'s own `actionmap_deps` chain (real `treewalk()` invokes
     // them directly, not through `doebuild()`).
     create_vdb_tmp(root, &env.category, &env.split.pf)?;
-    let preinst_status = ebuild_phases::run_single_phase(
+    let preinst_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
         ebuild_path,
-        "preinst",
+        phase: "preinst",
         root,
         portage_tmpdir,
-        options.debug,
-        &options.config_root,
-        options.shell,
-        &preinst_env,
-        options.log_file.as_deref(),
-    )?;
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &preinst_env,
+        log_file: options.log_file.as_deref(),
+    })?;
     if preinst_status != 0 {
         return Ok(preinst_status);
     }
-    populate_vdb_tmp(
+    populate_vdb_tmp(PopulateVdbTmpArgs {
         root,
-        &env.category,
-        &env.split.pf,
-        &env.build_info(),
-        &full_slot,
-        &repository,
-    )?;
+        category: &env.category,
+        pf: &env.split.pf,
+        build_info_dir: &env.build_info(),
+        slot: &full_slot,
+        repository: &repository,
+    })?;
 
     let mut cfgfiledict = read_cfgfiledict(root);
-    let mut contents = merge_tree(
-        &env.d(),
+    let mut contents = merge_tree(MergeTreeArgs {
+        d: &env.d(),
         root,
-        &env.category,
-        installed_instance_pf.as_deref(),
-        options.protect_if_modified,
-        &options.config_protect,
-        &options.config_protect_mask,
-        options.noconfmem,
-        &mut cfgfiledict,
-        &XattrPolicy::from_options(options),
-    )?;
+        category: &env.category,
+        installed_instance_pf: installed_instance_pf.as_deref(),
+        protect_if_modified: options.protect_if_modified,
+        config_protect: &options.config_protect,
+        config_protect_mask: &options.config_protect_mask,
+        noconfmem: options.noconfmem,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::from_options(options),
+    })?;
     // Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
     // block: the replaced same-slot instance's
     // still-needed libraries are selected now -- the new vdb entry sits
@@ -228,14 +228,16 @@ pub(crate) fn merge_after_install(
         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
         .collect();
     let mut preserve_paths = BTreeSet::new();
-    if let Some((paths, old_contents_text)) = find_preserve_paths_for_merge(
-        root,
-        &env.category,
-        &env.split.pn,
-        &env.split.pf,
-        main_slot,
-        &new_image_paths,
-    ) {
+    if let Some((paths, old_contents_text)) =
+        find_preserve_paths_for_merge(FindPreservePathsForMergeArgs {
+            root,
+            category: &env.category,
+            package: &env.split.pn,
+            new_pf: &env.split.pf,
+            main_slot,
+            new_image_paths: &new_image_paths,
+        })
+    {
         let (injected, surviving) =
             inject_preserved_libs_into_contents(&old_contents_text, &paths, &new_image_paths);
         contents.push_str(&injected);
@@ -290,15 +292,15 @@ pub(crate) fn merge_after_install(
     // is read back from the published entry). On a database backend the
     // publish, the deletion of the replaced entries and this registration
     // are one commit (see `publish_merged_entry`).
-    publish_merged_entry(
+    publish_merged_entry(PublishMergedEntryArgs {
         root,
-        &env.category,
-        &env.split.pn,
-        &env.split.pf,
+        category: &env.category,
+        pn: &env.split.pn,
+        pf: &env.split.pf,
         main_slot,
-        &preserve_paths,
-        &replaced,
-    )?;
+        preserve_paths: &preserve_paths,
+        replaced: &replaced,
+    })?;
 
     // Real `merge()`'s own ordering: `postinst` runs, but its own exit
     // status never gates anything after it ("It's stupid to bail out
@@ -342,17 +344,17 @@ pub(crate) fn merge_after_install(
     if let Some(a) = source_distfiles(env, &postinst_env) {
         postinst_env.push(("A".to_string(), a));
     }
-    let postinst_status = ebuild_phases::run_single_phase(
+    let postinst_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
         ebuild_path,
-        "postinst",
+        phase: "postinst",
         root,
         portage_tmpdir,
-        options.debug,
-        &options.config_root,
-        options.shell,
-        &postinst_env,
-        options.log_file.as_deref(),
-    )?;
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &postinst_env,
+        log_file: options.log_file.as_deref(),
+    })?;
     absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
 
     if !contents.is_empty() || !replaced.is_empty() {
@@ -494,17 +496,12 @@ pub(crate) fn unmerge_replaced_same_slot(
         })
         .collect();
     crate::elog::process_batch(
-        &crate::elog::logdir(root),
-        &root.display().to_string(),
-        &items,
-        Some(&["prerm", "postrm"]),
-        &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
-        // The merge path's resolved list when one was set (#37 S3); the
+        crate::elog::ProcessBatchArgs { logdir: &crate::elog::logdir(root), root_display: &root.display().to_string(), items: &items, phases: Some(&["prerm", "postrm"]), color: &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)), split_elog: // The merge path's resolved list when one was set (#37 S3); the
         // standalone `ebuild <file> merge` fallback is the raw env.
         options
             .features
             .split_whitespace()
-            .any(|t| t == "split-elog"),
+            .any(|t| t == "split-elog") },
     );
 
     Ok(replaced)
@@ -717,22 +714,10 @@ pub(crate) fn run_vdb_saved_env_phase(
     let dst = src_dir.join(format!("{pf}.ebuild"));
     std::fs::copy(&ebuild, &dst).map_err(|e| format!("{}: {e}", ebuild.display()))?;
     crate::ebuild_phases::run_phase_from_saved_env(
-        &dst,
-        &env,
-        // Each unmerge seeds its own (old version's) builddir once.
-        true,
-        phase,
-        root,
-        portage_tmpdir,
-        options.debug,
-        &options.config_root,
-        options.shell,
-        options.log_file.as_deref(),
-        // An unmerge's `prerm`/`postrm` never rewrites a vdb env (the
+        crate::ebuild_phases::RunPhaseFromSavedEnvArgs { ebuild_path: &dst, saved_env_bz2: &env, seed: // Each unmerge seeds its own (old version's) builddir once.
+        true, phase, root, portage_tmpdir, debug: options.debug, config_root: &options.config_root, shell: options.shell, log_file: options.log_file.as_deref(), update_env: // An unmerge's `prerm`/`postrm` never rewrites a vdb env (the
         // entry is on its way out).
-        None,
-        None,
-        // Real does not give an unmerge hook `REPLACING_VERSIONS`.
-        None,
+        None, refresh_features: None, replacing_versions: // Real does not give an unmerge hook `REPLACING_VERSIONS`.
+        None },
     )
 }

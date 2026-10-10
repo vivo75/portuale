@@ -213,42 +213,42 @@ fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
             false,
         ),
     ];
-    assert!(complete_graph_auto_enable(
-        &entries,
-        true,
-        true,
-        true,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(complete_graph_auto_enable(
-        &entries,
-        false,
-        true,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        &entries,
-        true,
-        false,
-        true,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        &entries,
-        false,
-        false,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: true,
+        if_new_ver: true,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
 }
 
 /// A new-slot `New` enables on `if_new_ver` or `if_new_slot`
@@ -266,33 +266,33 @@ fn complete_graph_auto_enable_new_only_for_a_new_slot() {
         Some("1"),
         true,
     )];
-    assert!(complete_graph_auto_enable(
-        &new_slot,
-        false,
-        false,
-        true,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(complete_graph_auto_enable(
-        &new_slot,
-        false,
-        true,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        &new_slot,
-        false,
-        false,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &new_slot,
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &new_slot,
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &new_slot,
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
     let same_slot = vec![entry_162(
         "dev-libs",
         "fresh",
@@ -302,15 +302,15 @@ fn complete_graph_auto_enable_new_only_for_a_new_slot() {
         Some("0"),
         false,
     )];
-    assert!(!complete_graph_auto_enable(
-        &same_slot,
-        true,
-        true,
-        true,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &same_slot,
+        if_new_use: true,
+        if_new_ver: true,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
 }
 
 /// A `Reinstall` with USE churn enables on `if_new_use`, one with
@@ -336,33 +336,33 @@ fn complete_graph_auto_enable_reinstall_needs_churn() {
             false,
         )
     };
-    assert!(complete_graph_auto_enable(
-        &[use_churn(vec!["flip".to_string()])],
-        true,
-        false,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        &[use_churn(vec!["flip".to_string()])],
-        false,
-        false,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        &[use_churn(Vec::new())],
-        true,
-        false,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[use_churn(vec!["flip".to_string()])],
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[use_churn(vec!["flip".to_string()])],
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[use_churn(Vec::new())],
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
 }
 
 /// A `Reinstall` with only a slot change enables on `if_new_ver`
@@ -386,33 +386,33 @@ fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
         Some("0"),
         false,
     );
-    assert!(!complete_graph_auto_enable(
-        std::slice::from_ref(&slot_churn),
-        true,
-        false,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(complete_graph_auto_enable(
-        std::slice::from_ref(&slot_churn),
-        false,
-        true,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        &[slot_churn],
-        false,
-        false,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: std::slice::from_ref(&slot_churn),
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: std::slice::from_ref(&slot_churn),
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[slot_churn],
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
     let crossed = entry_162(
         "dev-libs",
         "re",
@@ -428,15 +428,15 @@ fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
         Some("0"),
         false,
     );
-    assert!(!complete_graph_auto_enable(
-        &[crossed],
-        false,
-        true,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[crossed],
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
 }
 
 /// Settled entries never enable, whatever the flags -- pins the
@@ -461,15 +461,15 @@ fn complete_graph_auto_enable_settled_entries_stay_off() {
             false,
         ),
     ];
-    assert!(!complete_graph_auto_enable(
-        &entries,
-        true,
-        true,
-        true,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: true,
+        if_new_ver: true,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
 }
 
 /// Fixed "amd64"-only, no-overrides config, mirroring `tests`'
@@ -522,7 +522,14 @@ fn check_if_latest_atom_form_renders_gte_when_nothing_is_higher() {
         cand_162("2.0", &["amd64"], "0"),
     ];
     assert_eq!(
-        check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+        check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+            resolved: &resolved,
+            all_candidates: &all,
+            category: "test",
+            package: "pkg",
+            config: &config,
+            check_visibility: false
+        }),
         ">=test/pkg-2.0"
     );
 }
@@ -539,7 +546,14 @@ fn check_if_latest_atom_form_renders_slot_when_only_other_slots_are_higher() {
         cand_162("3.0", &["amd64"], "1"),
     ];
     assert_eq!(
-        check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+        check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+            resolved: &resolved,
+            all_candidates: &all,
+            category: "test",
+            package: "pkg",
+            config: &config,
+            check_visibility: false
+        }),
         ">=test/pkg-2.0:0"
     );
 }
@@ -556,7 +570,14 @@ fn check_if_latest_atom_form_renders_equals_when_its_slot_is_higher() {
         cand_162("2.5", &["amd64"], "0"),
     ];
     assert_eq!(
-        check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+        check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+            resolved: &resolved,
+            all_candidates: &all,
+            category: "test",
+            package: "pkg",
+            config: &config,
+            check_visibility: false
+        }),
         "=test/pkg-2.0"
     );
 }
@@ -573,7 +594,14 @@ fn check_if_latest_atom_form_ignores_a_masked_higher_candidate() {
         cand_162("3.0", &["~amd64"], "1"),
     ];
     assert_eq!(
-        check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, true),
+        check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+            resolved: &resolved,
+            all_candidates: &all,
+            category: "test",
+            package: "pkg",
+            config: &config,
+            check_visibility: true
+        }),
         ">=test/pkg-2.0"
     );
 }
@@ -590,7 +618,14 @@ fn check_if_latest_atom_form_counts_a_masked_candidate_without_visibility() {
         cand_162("3.0", &["~amd64"], "1"),
     ];
     assert_eq!(
-        check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+        check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+            resolved: &resolved,
+            all_candidates: &all,
+            category: "test",
+            package: "pkg",
+            config: &config,
+            check_visibility: false
+        }),
         ">=test/pkg-2.0:0"
     );
 }

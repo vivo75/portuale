@@ -90,16 +90,16 @@ pub(crate) fn show_merge_list_summary(args: ShowMergeListSummaryArgs<'_>) {
         println!();
         println!(
             "{}",
-            package_counters_summary(
-                disp_count_entries.as_deref().unwrap_or(display_entries),
+            package_counters_summary(PackageCountersSummaryArgs {
+                entries: disp_count_entries.as_deref().unwrap_or(display_entries),
                 root,
                 top_level_pkgs,
                 onlydeps,
                 color,
-                &result.orphan_blockers,
-                disp_tree,
-                &result.circular_dependency,
-            )
+                orphans: &result.orphan_blockers,
+                tree: disp_tree,
+                circular: &result.circular_dependency
+            })
         );
     }
 
@@ -215,42 +215,42 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                     &result.circular_dependency,
                 )
             };
-            *rendered_rows = print_tree(
-                display_entries,
-                &tree_order,
+            *rendered_rows = print_tree(PrintTreeArgs {
+                entries: display_entries,
+                display_order: &tree_order,
                 root,
                 top_level_pkgs,
                 onlydeps,
                 oneshot,
                 unordered_display,
-                disp_verbose,
-                disp_quiet,
+                verbose: disp_verbose,
+                quiet: disp_quiet,
                 alphabetical,
-                root_deps_running_root.as_deref(),
+                running_root: root_deps_running_root.as_deref(),
                 color,
                 system_atoms,
                 world_atoms,
                 force_reinstall_cps,
-                &mut *blocker_lines,
-                &result.masked_deps,
-                &result.use_unsat_deps,
-                &result.plain_miss_deps,
-                circular_forced_display,
-                &result.circular_dependency,
-            );
+                blocker_lines: &mut *blocker_lines,
+                masked_deps: &result.masked_deps,
+                use_unsat_deps: &result.use_unsat_deps,
+                plain_miss_deps: &result.plain_miss_deps,
+                force_sizes: circular_forced_display,
+                circular: &result.circular_dependency,
+            });
         } else {
             // #68/#72 B2: rows whose replacement waits on its owner print
             // right after that replacement's package line (real appends
             // them to `print_msg` at the solved blocker's merge-list
             // position, `output.py:119-121`).
-            let inline_blockers = collect_inline_blocker_lines(
-                display_entries,
+            let inline_blockers = collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
+                entries: display_entries,
                 root,
                 quiet,
                 columns,
                 color,
-                &result.circular_dependency,
-            );
+                circular: &result.circular_dependency,
+            });
             for i in 0..display_entries.len() {
                 print_entry_line(
                     display_entries,
@@ -458,22 +458,22 @@ pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCod
         ..
     } = opts;
     if json {
-        print_json(
-            display_entries,
-            result.backtrack_restarts,
-            result.backtrack_max,
-            &result.slot_conflicts,
-            &result.changed_deps_report,
-            &result.autounmask_keyword_changes,
-            &result.autounmask_use_changes,
-            &result.autounmask_license_changes,
-            &result.autounmask_mask_changes,
-            &result.abi_rebuilds,
-            &result.outcome,
+        print_json(PrintJsonArgs {
+            entries: display_entries,
+            backtrack_restarts: result.backtrack_restarts,
+            backtrack_max: result.backtrack_max,
+            slot_conflicts: &result.slot_conflicts,
+            changed_deps_report: &result.changed_deps_report,
+            autounmask_keyword_changes: &result.autounmask_keyword_changes,
+            autounmask_use_changes: &result.autounmask_use_changes,
+            autounmask_license_changes: &result.autounmask_license_changes,
+            autounmask_mask_changes: &result.autounmask_mask_changes,
+            abi_rebuilds: &result.abi_rebuilds,
+            outcome: &result.outcome,
             top_level_pkgs,
             verbose,
-            root_deps_running_root.as_deref(),
-        );
+            running_root: root_deps_running_root.as_deref(),
+        });
         // Same non-zero-on-autounmask-changes contract as the text path
         // below (a `--json` consumer's exit-code check must see the
         // "config still needs editing" signal too). `--autounmask-only`
@@ -579,7 +579,12 @@ pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult
     // probe/probe-a` in six shapes; the gating is identical in 3.0.82.2
     // by source read) plus the 3.0.82.2 source for exact text.
     if !pretend && !quiet {
-        if resolution_header_shown(ask, tree, verbose, quiet) {
+        if resolution_header_shown(ResolutionHeaderShownArgs {
+            ask,
+            tree,
+            verbose,
+            quiet,
+        }) {
             // Real `_start_resolution_display`
             // (`depgraph.py:12087-12127`): a leading blank line, then
             // `These are the packages that would be ...` -- `in reverse

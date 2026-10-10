@@ -2,6 +2,25 @@
 
 use crate::pretend::*;
 
+/// Arguments of [`package_counters_summary`].
+pub(crate) struct PackageCountersSummaryArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) onlydeps: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Backlog #80: unresolved rows with no owner entry count in
+    /// `Conflict:` exactly like entry-owned rows (real counts every
+    /// `Blocker` node in the merge list).
+    pub(crate) orphans: &'a [portage_repo::OrphanBlocker],
+    /// Backlog #81: in tree mode the solved-stuck rows count too (C0 p2b:
+    /// `Conflict: 1 block (all satisfied)` under `--tree -v`).
+    pub(crate) tree: bool,
+    /// Backlog #221 (I5): the settling pass's recorded cycle edges,
+    /// threaded into the blocker-row counters below.
+    pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+}
+
 /// Real `_PackageCounters.__str__` (`output_helpers.py`), the trailing
 /// `Total: …` summary line real `output.py::print_verbose` emits via
 /// `writemsg_stdout(f"\n{self.counters}\n")` -- gated, in real portage
@@ -17,24 +36,17 @@ use crate::pretend::*;
 /// comment (portage-repo) explains. A top-level package suppressed by
 /// `--onlydeps` isn't in real's merge list at all (`pkg_info.ordered`),
 /// so it isn't counted here either.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn package_counters_summary(
-    entries: &[GraphEntry],
-    root: &Path,
-    top_level_pkgs: &HashSet<(String, String)>,
-    onlydeps: bool,
-    color: &Colorizer,
-    // Backlog #80: unresolved rows with no owner entry count in
-    // `Conflict:` exactly like entry-owned rows (real counts every
-    // `Blocker` node in the merge list).
-    orphans: &[portage_repo::OrphanBlocker],
-    // Backlog #81: in tree mode the solved-stuck rows count too (C0 p2b:
-    // `Conflict: 1 block (all satisfied)` under `--tree -v`).
-    tree: bool,
-    // Backlog #221 (I5): the settling pass's recorded cycle edges,
-    // threaded into the blocker-row counters below.
-    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
-) -> String {
+pub(crate) fn package_counters_summary(args: PackageCountersSummaryArgs<'_>) -> String {
+    let PackageCountersSummaryArgs {
+        entries,
+        root,
+        top_level_pkgs,
+        onlydeps,
+        color,
+        orphans,
+        tree,
+        circular,
+    } = args;
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
         (0u64, 0u64, 0u64, 0u64, 0u64);

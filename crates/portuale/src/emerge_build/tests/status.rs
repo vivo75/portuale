@@ -258,22 +258,50 @@ fn scheduler_status_mode_matches_portages_background_gates() {
 fn jobs_line_matches_portages_display_status_shape() {
     let color = crate::color::Colorizer::new(false);
     assert_eq!(
-        jobs_line(&color, 0, 3, 1, 0, 0),
+        jobs_line(JobsLineArgs {
+            color: &color,
+            curval: 0,
+            maxval: 3,
+            running: 1,
+            failed: 0,
+            merge_wait: 0
+        }),
         ">>> Jobs: 0 of 3 complete, 1 running                                    ",
     );
     assert_eq!(
-        jobs_line(&color, 2, 3, 0, 0, 0),
+        jobs_line(JobsLineArgs {
+            color: &color,
+            curval: 2,
+            maxval: 3,
+            running: 0,
+            failed: 0,
+            merge_wait: 0
+        }),
         ">>> Jobs: 2 of 3 complete                                               ",
     );
     assert_eq!(
-        jobs_line(&color, 1, 3, 1, 2, 1),
+        jobs_line(JobsLineArgs {
+            color: &color,
+            curval: 1,
+            maxval: 3,
+            running: 1,
+            failed: 2,
+            merge_wait: 1
+        }),
         ">>> Jobs: 1 of 3 complete, 1 running, 2 failed, 1 merge wait            ",
     );
     // Coloured: the counters wear `INFORM`, the padding is still
     // measured on the plain text (real's `plain_output` gauge) and
     // the line still ends at real's column.
     let tty_color = crate::color::Colorizer::new(true);
-    let line = jobs_line(&tty_color, 0, 3, 1, 0, 0);
+    let line = jobs_line(JobsLineArgs {
+        color: &tty_color,
+        curval: 0,
+        maxval: 3,
+        running: 1,
+        failed: 0,
+        merge_wait: 0,
+    });
     assert!(line.starts_with(">>> Jobs: "), "{line}");
     assert!(line.contains(&tty_color.c("INFORM", "0")), "{line}");
     // The escape codes around the counts move the byte indices, so

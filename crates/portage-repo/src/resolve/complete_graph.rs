@@ -2,6 +2,17 @@
 
 use crate::*;
 
+/// Arguments of [`complete_graph_auto_enable`].
+pub struct CompleteGraphAutoEnableArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub if_new_use: bool,
+    pub if_new_ver: bool,
+    pub if_new_slot: bool,
+    pub root: &'a Path,
+    pub repos: &'a [RepoConfig],
+    pub config: &'a portage_profile::Config,
+}
+
 /// Real `depgraph.py::_complete_graph` (8581-8648) auto-enable check:
 /// even without `--complete-graph`, complete mode switches on when
 /// `--complete-graph-if-new-use` (`complete_if_new_use`, default `"y"`)
@@ -38,17 +49,16 @@ use crate::*;
 /// already in force) re-resolves with `complete = true` -- see
 /// `pretend.rs`'s two-pass, which mirrors real portage's own "resolve,
 /// then `_complete_graph` re-walk" structure.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn complete_graph_auto_enable(
-    entries: &[GraphEntry],
-    if_new_use: bool,
-    if_new_ver: bool,
-    if_new_slot: bool,
-    root: &Path,
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-) -> bool {
+pub fn complete_graph_auto_enable(args: CompleteGraphAutoEnableArgs<'_>) -> bool {
+    let CompleteGraphAutoEnableArgs {
+        entries,
+        if_new_use,
+        if_new_ver,
+        if_new_slot,
+        root,
+        repos,
+        config,
+    } = args;
     entries.iter().any(|e| match &e.outcome {
         PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => if_new_ver,
         PretendOutcome::New { .. } if e.new_slot => if_new_ver || if_new_slot,
@@ -61,14 +71,14 @@ pub fn complete_graph_auto_enable(
             (if_new_ver && *slot_changed)
                 || (if_new_use
                     && (!changed_flags.is_empty()
-                        || merge_use_changed_vs_installed(
+                        || merge_use_changed_vs_installed(MergeUseChangedVsInstalledArgs {
                             root,
                             repos,
                             config,
-                            &e.category,
-                            &e.package,
+                            category: &e.category,
+                            package: &e.package,
                             version,
-                        )
+                        })
                         .unwrap_or(false)))
         }
         _ => false,

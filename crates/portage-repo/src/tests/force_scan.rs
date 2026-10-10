@@ -47,16 +47,16 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
 
     let mut scheduled = BTreeSet::new();
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &dir,
-        &repos,
-        &[parent.clone(), child.clone()],
-        &empty,
-        &mut scheduled,
-        &[],
-        &mut masked,
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &[parent.clone(), child.clone()],
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut masked,
+        config: &test_config(),
+    });
     assert_eq!(
         scheduled,
         BTreeSet::from([child_cp.clone()]),
@@ -80,30 +80,30 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
         slot_operator_rebuild: false,
     };
     let mut scheduled = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &dir,
-        &repos,
-        &[parent.clone(), merged_child],
-        &empty,
-        &mut scheduled,
-        &[],
-        &mut BTreeSet::new(),
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &[parent.clone(), merged_child],
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut BTreeSet::new(),
+        config: &test_config(),
+    });
     assert!(scheduled.is_empty());
 
     // The S4 undo latch suppresses a re-add.
     let mut scheduled = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &dir,
-        &repos,
-        &[parent, child],
-        &BTreeSet::from([child_cp]),
-        &mut scheduled,
-        &[],
-        &mut BTreeSet::new(),
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &[parent, child],
+        undone: &BTreeSet::from([child_cp]),
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut BTreeSet::new(),
+        config: &test_config(),
+    });
     assert!(scheduled.is_empty());
 
     // A child whose tree ebuild did *not* move is not scheduled: the
@@ -135,16 +135,16 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
         ..graph_entry("dev-libs", "souprov", "1.0")
     };
     let mut scheduled = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &dir,
-        &repos,
-        &[parent_souprov, child_souprov],
-        &empty,
-        &mut scheduled,
-        &[],
-        &mut BTreeSet::new(),
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &[parent_souprov, child_souprov],
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut BTreeSet::new(),
+        config: &test_config(),
+    });
     assert!(scheduled.is_empty());
 
     let _ = fs::remove_dir_all(&dir);
@@ -228,16 +228,16 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
     };
     let mut scheduled = BTreeSet::new();
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &base,
-        &repos,
-        &[upgrade_a, child.clone()],
-        &empty,
-        &mut scheduled,
-        &[],
-        &mut masked,
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &[upgrade_a, child.clone()],
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut masked,
+        config: &test_config(),
+    });
     assert_eq!(
         scheduled,
         BTreeSet::from([child_cp.clone()]),
@@ -247,16 +247,16 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
     // A plain `:0` dep is not a slot-operator atom: no probe.
     let new_b = graph_entry("dev-libs", "probeparentB", "1.0");
     let mut scheduled_b = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &base,
-        &repos,
-        &[new_b, child],
-        &empty,
-        &mut scheduled_b,
-        &[],
-        &mut BTreeSet::new(),
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &[new_b, child],
+        undone: &empty,
+        scheduled: &mut scheduled_b,
+        excluded: &[],
+        masked: &mut BTreeSet::new(),
+        config: &test_config(),
+    });
     assert!(
         scheduled_b.is_empty(),
         "a slot-only dep without `=` never probes"
@@ -343,16 +343,16 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
     let empty = BTreeSet::new();
     let mut scheduled = BTreeSet::new();
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &base,
-        &repos,
-        &entries,
-        &empty,
-        &mut scheduled,
-        &[],
-        &mut masked,
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &entries,
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut masked,
+        config: &test_config(),
+    });
     assert_eq!(
         masked,
         BTreeSet::from([(
@@ -452,16 +452,16 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     // (no installed instance exists in this scratch root).
     let mut scheduled = BTreeSet::new();
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &base,
-        &repos,
-        &entries,
-        &empty,
-        &mut scheduled,
-        &[],
-        &mut masked,
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &entries,
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut masked,
+        config: &test_config(),
+    });
     assert!(scheduled.is_empty());
     assert_eq!(
         masked,
@@ -477,16 +477,16 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     // `--exclude` on the tree ebuild vetoes the mask (real `:2343`).
     let mut masked_excl: BTreeSet<(String, String, String)> = BTreeSet::new();
     let mut scheduled_excl = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &base,
-        &repos,
-        &entries,
-        &empty,
-        &mut scheduled_excl,
-        &["dev-libs/maskchild".to_string()],
-        &mut masked_excl,
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &entries,
+        undone: &empty,
+        scheduled: &mut scheduled_excl,
+        excluded: &["dev-libs/maskchild".to_string()],
+        masked: &mut masked_excl,
+        config: &test_config(),
+    });
     assert!(
         masked_excl.is_empty(),
         "an excluded tree ebuild is no replacement"
@@ -500,16 +500,16 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     };
     let mut masked_bpar: BTreeSet<(String, String, String)> = BTreeSet::new();
     let mut scheduled_bpar = BTreeSet::new();
-    slot_operator_slot_change_probe(
-        &base,
-        &repos,
-        &[binary_parent, binary_child("maskchild", "0", "1")],
-        &empty,
-        &mut scheduled_bpar,
-        &[],
-        &mut masked_bpar,
-        &test_config(),
-    );
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &[binary_parent, binary_child("maskchild", "0", "1")],
+        undone: &empty,
+        scheduled: &mut scheduled_bpar,
+        excluded: &[],
+        masked: &mut masked_bpar,
+        config: &test_config(),
+    });
     assert!(masked_bpar.is_empty(), "a binary parent never probes");
     let _ = fs::remove_dir_all(&base);
 }
@@ -598,19 +598,19 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
     let veto = ("dev-libs".to_string(), "forceveto".to_string());
     let config = test_config();
     let scan = |entries: &[GraphEntry], reachable: &HashSet<(String, String)>, update: bool| {
-        slot_operator_update_force_scan(
-            &base,
-            &repos,
-            &config,
+        slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
+            root: &base,
+            repos: &repos,
+            config: &config,
             entries,
             reachable,
-            &empty,
-            &empty,
-            false,
+            already: &empty,
+            undone: &empty,
+            with_bdeps: false,
             update,
-            &HashSet::new(),
-            &[],
-        )
+            top_level_cps: &HashSet::new(),
+            excluded: &[],
+        })
     };
     let (consumers, forced) = scan(&entries, &HashSet::new(), true);
     assert_eq!(consumers, BTreeSet::from([cons.clone()]));

@@ -40,21 +40,21 @@ pub(crate) fn step_reverse_dep_pins(
     // `slot_constraints`, so the hard-required version is never
     // masked into invisibility.
     let mut added = false;
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &ctx.repos,
-        ctx.root,
-        &pass.entries,
-        ctx.with_bdeps,
-        ctx.excluded,
-        &pass.slot_want,
-        &ctx.slot_op_reachable,
-        ctx.dynamic_deps,
-        ctx.ignore_built_slot_operator_deps,
-        &ctx.top_level_cps,
-        &ctx.world_reachable,
-        ctx.config,
-        ctx.complete,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &ctx.repos,
+        root: ctx.root,
+        entries: &pass.entries,
+        with_bdeps: ctx.with_bdeps,
+        excluded: ctx.excluded,
+        hard_want: &pass.slot_want,
+        reachable: &ctx.slot_op_reachable,
+        dynamic_deps: ctx.dynamic_deps,
+        ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
+        top_level_cps: &ctx.top_level_cps,
+        world_reachable: &ctx.world_reachable,
+        config: ctx.config,
+        complete: ctx.complete,
+    });
     // #24 S4: rule 4 of `_eliminate_rebuilds` checks every parent atom of
     // the rebuilt pkg, and real's complete-graph nomerge consumers are
     // part of `_parent_atoms`; these are the pins carrying their atoms.

@@ -147,22 +147,22 @@ fn entries_not_merged_tags_and_includes_both_source_and_binary_entries() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
 
-    let source_entry = emerge_build::resume_entry(
-        "dev-libs",
-        "src-pkg",
-        "1.0",
-        portage_repo::CandidateSource::Ebuild,
-        &[],
-        None,
-    );
-    let binary_entry = emerge_build::resume_entry(
-        "dev-libs",
-        "bin-pkg",
-        "2.0",
-        portage_repo::CandidateSource::Binary,
-        &[],
-        None,
-    );
+    let source_entry = emerge_build::resume_entry(emerge_build::ResumeEntryArgs {
+        category: "dev-libs",
+        package: "src-pkg",
+        version: "1.0",
+        source: portage_repo::CandidateSource::Ebuild,
+        repos: &[],
+        binary_repo: None,
+    });
+    let binary_entry = emerge_build::resume_entry(emerge_build::ResumeEntryArgs {
+        category: "dev-libs",
+        package: "bin-pkg",
+        version: "2.0",
+        source: portage_repo::CandidateSource::Binary,
+        repos: &[],
+        binary_repo: None,
+    });
     let entries = vec![source_entry, binary_entry];
 
     // Neither has a real vdb CONTENTS under `root` -- both count as
@@ -203,22 +203,22 @@ fn up_front_save_covers_exactly_the_failure_path_tail_when_nothing_merged() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let entries = vec![
-        emerge_build::resume_entry(
-            "dev-libs",
-            "src-pkg",
-            "1.0",
-            portage_repo::CandidateSource::Ebuild,
-            &[],
-            None,
-        ),
-        emerge_build::resume_entry(
-            "dev-libs",
-            "bin-pkg",
-            "2.0",
-            portage_repo::CandidateSource::Binary,
-            &[],
-            None,
-        ),
+        emerge_build::resume_entry(emerge_build::ResumeEntryArgs {
+            category: "dev-libs",
+            package: "src-pkg",
+            version: "1.0",
+            source: portage_repo::CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
+        emerge_build::resume_entry(emerge_build::ResumeEntryArgs {
+            category: "dev-libs",
+            package: "bin-pkg",
+            version: "2.0",
+            source: portage_repo::CandidateSource::Binary,
+            repos: &[],
+            binary_repo: None,
+        }),
     ];
     let up_front: Vec<crate::mtimedb::ResumeCpv> = entries
         .iter()

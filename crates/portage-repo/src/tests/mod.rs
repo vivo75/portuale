@@ -304,15 +304,15 @@ fn resolve_update_excluded(category: &str, package: &str, excluded: &[String]) -
 fn resolve_real(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
@@ -336,15 +336,15 @@ fn resolve_real(category: &str, package: &str) -> PretendOutcome {
 fn resolve_real_newuse(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
@@ -368,15 +368,15 @@ fn resolve_real_newuse(category: &str, package: &str) -> PretendOutcome {
 fn resolve_real_changed_use(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
@@ -399,15 +399,15 @@ fn resolve_real_changed_use(category: &str, package: &str) -> PretendOutcome {
 fn resolve_real_changed_deps(category: &str, package: &str, with_bdeps: bool) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
@@ -452,15 +452,15 @@ fn graph_changed_deps_report(
 fn resolve_real_changed_slot(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
@@ -483,15 +483,15 @@ fn resolve_real_changed_slot(category: &str, package: &str) -> PretendOutcome {
 fn resolve_real_newrepo(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
@@ -824,15 +824,15 @@ fn graph_rebuild_if(
 /// contract suite's `PORTAGE_RUNNING_ROOT=$ROOT` pin).
 fn resolve_deep_consumer(atom: &str, root_deps: bool) -> Vec<(String, String, bool)> {
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let running_root = root.clone();
     ResolveRequest {
@@ -944,15 +944,15 @@ fn graph_real_with(
     tweak: impl FnOnce(&mut ResolveRequest),
 ) -> Vec<(String, PretendOutcome)> {
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let mut request = ResolveRequest::new(
         &root,
@@ -984,15 +984,15 @@ fn graph_real_with_test_deps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
 /// returns the error message instead of panicking on one.
 fn graph_real_err(atom_str: &str) -> String {
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     ResolveRequest::new(
         &root,
@@ -1031,15 +1031,15 @@ fn graph_result_real(atom_str: &str) -> GraphResult {
 /// after `tweak` adjusts the request.
 fn graph_result_with(atom_str: &str, tweak: impl FnOnce(&mut ResolveRequest)) -> GraphResult {
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let mut request = ResolveRequest::new(
         &root,
@@ -1096,15 +1096,15 @@ fn graph_result_real_backtrack(atom_str: &str, backtrack_max: u32) -> GraphResul
 fn graph_result_real_atoms(atoms: &[String], backtrack_max: u32) -> GraphResult {
     let atom_str = atoms.join(" ");
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     ResolveRequest {
         backtrack_max,
@@ -1130,15 +1130,15 @@ fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
 /// (`depgraph.py:10365-10383`).
 fn graph_entries_with_retry_seeds(atom_str: &str, seeds: &[&str]) -> Vec<GraphEntry> {
     let root = fixtures_root();
-    let mut config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     config.blocker_retry_seed_atoms = seeds.iter().map(|s| s.to_string()).collect();
     ResolveRequest::new(
@@ -1157,15 +1157,15 @@ fn graph_entries_with_retry_seeds(atom_str: &str, seeds: &[&str]) -> Vec<GraphEn
 /// resolution enabled (`autounmask_suggest_keywords = true`).
 fn graph_result_autounmask(atom_str: &str) -> GraphResult {
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     graph_result_autounmask_cfg(&config, atom_str)
 }
@@ -1176,15 +1176,15 @@ fn graph_result_autounmask(atom_str: &str) -> GraphResult {
 /// collect-and-display-only behaviour.
 fn graph_result_autounmask_backtrack(atom_str: &str) -> GraphResult {
     let root = fixtures_root();
-    let mut config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     config.autounmask_backtrack = true;
     graph_result_autounmask_cfg(&config, atom_str)
@@ -1232,15 +1232,15 @@ fn graph_result_autounmask_use_n(atom_str: &str) -> GraphResult {
 /// (`LLM/evidence/2026-09-28-244/fixture-oracle/real/`).
 fn aub0_result(order: &str, backtrack_y: bool) -> GraphResult {
     let root = fixtures_root();
-    let mut config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     config.autounmask_backtrack = backtrack_y;
     let atoms: Vec<String> = order
@@ -1842,15 +1842,15 @@ fn blocker_161_scratch_repo(
 /// test uses for its world consumer.
 fn graph_result_abk0_worldb_on(root: &Path, backtrack_max: u32) -> GraphResult {
     let fixture_root = fixtures_root();
-    let mut config = portage_profile::resolve_config(
-        &fixture_root,
-        &fixture_root.join("repo"),
-        &[("overlay".to_string(), fixture_root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &fixture_root,
-    )
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &fixture_root,
+        main_repo_location: &fixture_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), fixture_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &fixture_root,
+    })
     .expect("fixture config resolves");
     config.autounmask_backtrack = true;
     config.complete_seed_atoms = vec!["dev-libs/abk0b".to_string()];
@@ -2879,16 +2879,16 @@ mod tests_164 {
             ),
         ];
         let atoms = ["dev-libs/grandma".to_string()];
-        let got = masked_dep_chain(
-            &[],
-            &portage_profile::Config::default(),
-            &entries,
-            "dev-libs",
-            "target",
-            &atoms,
-            &dir,
-            "",
-        );
+        let got = masked_dep_chain(MaskedDepChainArgs {
+            repos: &[],
+            config: &portage_profile::Config::default(),
+            entries: &entries,
+            category: "dev-libs",
+            package: "target",
+            atoms: &atoms,
+            root: &dir,
+            atom: "",
+        });
         assert_eq!(
             got,
             vec![
@@ -2955,16 +2955,16 @@ mod tests_164 {
             ),
         ];
         let atoms = ["dev-libs/grandma".to_string()];
-        let got = masked_dep_chain(
-            &[],
-            &portage_profile::Config::default(),
-            &entries,
-            "dev-libs",
-            "target",
-            &atoms,
-            &dir,
-            "",
-        );
+        let got = masked_dep_chain(MaskedDepChainArgs {
+            repos: &[],
+            config: &portage_profile::Config::default(),
+            entries: &entries,
+            category: "dev-libs",
+            package: "target",
+            atoms: &atoms,
+            root: &dir,
+            atom: "",
+        });
         assert_eq!(
             got,
             vec![
@@ -3014,16 +3014,16 @@ mod tests_164 {
             "!dev-libs/grandma".to_string(),
             "dev-libs/unrelated".to_string(),
         ];
-        let got = masked_dep_chain(
-            &[],
-            &portage_profile::Config::default(),
-            &entries,
-            "dev-libs",
-            "target",
-            &atoms,
-            &dir,
-            "",
-        );
+        let got = masked_dep_chain(MaskedDepChainArgs {
+            repos: &[],
+            config: &portage_profile::Config::default(),
+            entries: &entries,
+            category: "dev-libs",
+            package: "target",
+            atoms: &atoms,
+            root: &dir,
+            atom: "",
+        });
         assert_eq!(
             got,
             vec![

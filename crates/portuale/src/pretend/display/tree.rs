@@ -2,6 +2,36 @@
 
 use crate::pretend::*;
 
+/// Arguments of [`print_tree`].
+pub(crate) struct PrintTreeArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) display_order: &'a [usize],
+    pub(crate) root: &'a Path,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) onlydeps: bool,
+    pub(crate) oneshot: bool,
+    pub(crate) unordered_display: bool,
+    pub(crate) verbose: bool,
+    pub(crate) quiet: bool,
+    pub(crate) alphabetical: bool,
+    pub(crate) running_root: Option<&'a Path>,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) system_atoms: &'a [String],
+    pub(crate) world_atoms: &'a [String],
+    pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
+    pub(crate) blocker_lines: &'a mut Vec<String>,
+    pub(crate) masked_deps: &'a [portage_repo::MaskedDepReport],
+    pub(crate) use_unsat_deps: &'a [portage_repo::UseUnsatDepReport],
+    pub(crate) plain_miss_deps: &'a [portage_repo::PlainMissDepReport],
+    /// Backlog #206 S2: forwarded to `print_entry_line` (see its
+    /// `force_sizes`).
+    pub(crate) force_sizes: bool,
+    /// Backlog #221: the resolve's recorded cycle edges (see
+    /// `kept_alt_for_display`): the `--tree` walk keeps the
+    /// cycle-breaking branch the walk took.
+    pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+}
+
 /// `--tree`/`-t` and `--unordered-display`: real's tree display
 /// (`output.py:585-586` routes tree mode through
 /// `output_helpers.py::_tree_display`, `:341-407`, then
@@ -47,36 +77,30 @@ use crate::pretend::*;
 /// consumer of the return is backlog #206 S2's `Total:` recount (real
 /// counts displayed merge *rows*, repeats included, `nomerge` excluded);
 /// every other caller ignores it.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn print_tree(
-    entries: &[GraphEntry],
-    display_order: &[usize],
-    root: &Path,
-    top_level_pkgs: &HashSet<(String, String)>,
-    onlydeps: bool,
-    oneshot: bool,
-    unordered_display: bool,
-    verbose: bool,
-    quiet: bool,
-    alphabetical: bool,
-    running_root: Option<&Path>,
-    color: &Colorizer,
-    system_atoms: &[String],
-    world_atoms: &[String],
-    force_reinstall_cps: &HashSet<(String, String)>,
-    blocker_lines: &mut Vec<String>,
-    masked_deps: &[portage_repo::MaskedDepReport],
-    use_unsat_deps: &[portage_repo::UseUnsatDepReport],
-    plain_miss_deps: &[portage_repo::PlainMissDepReport],
-    // Backlog #206 S2: forwarded to `print_entry_line` (see its
-    // `force_sizes`).
-    force_sizes: bool,
-    // Backlog #221: the resolve's recorded cycle edges (see
-    // `kept_alt_for_display`): the `--tree` walk keeps the
-    // cycle-breaking branch the walk took.
-    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
-) -> Vec<(usize, bool)> {
+pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
+    let PrintTreeArgs {
+        entries,
+        display_order,
+        root,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        unordered_display,
+        verbose,
+        quiet,
+        alphabetical,
+        running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        blocker_lines,
+        masked_deps,
+        use_unsat_deps,
+        plain_miss_deps,
+        force_sizes,
+        circular,
+    } = args;
     /// One node of the display graph: an entry, or a satisfied blocker
     /// row `entries[owner].blockers[index]`.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -280,19 +304,31 @@ pub(crate) fn print_tree(
     // reversed list; a node that is a child of the current chain continues
     // it, otherwise `add_parents` fills the ancestor chain in first. The
     // `ordered` flag is `False` for every ancestor-walk occurrence
-    // (`:453`), which is what renders a merge node as `nomerge`.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn add_parents(
+    // (`:453`), which is what renders a merge node as `nomerge`.    /// Arguments of [`add_parents`].
+    struct AddParentsArgs<'a> {
         current: TreeNode,
         ordered: bool,
-        children: &HashMap<TreeNode, Vec<TreeNode>>,
-        parents: &HashMap<TreeNode, Vec<TreeNode>>,
-        set_nodes: &HashSet<TreeNode>,
-        traversed: &mut HashSet<TreeNode>,
-        shown_edges: &mut HashSet<(TreeNode, TreeNode)>,
-        tree_nodes: &mut Vec<TreeNode>,
-        out: &mut Vec<(TreeNode, usize, bool)>,
-    ) {
+        children: &'a HashMap<TreeNode, Vec<TreeNode>>,
+        parents: &'a HashMap<TreeNode, Vec<TreeNode>>,
+        set_nodes: &'a HashSet<TreeNode>,
+        traversed: &'a mut HashSet<TreeNode>,
+        shown_edges: &'a mut HashSet<(TreeNode, TreeNode)>,
+        tree_nodes: &'a mut Vec<TreeNode>,
+        out: &'a mut Vec<(TreeNode, usize, bool)>,
+    }
+
+    fn add_parents(args: AddParentsArgs<'_>) {
+        let AddParentsArgs {
+            current,
+            ordered,
+            children,
+            parents,
+            set_nodes,
+            traversed,
+            shown_edges,
+            tree_nodes,
+            out,
+        } = args;
         let parent_nodes: &[TreeNode] = if !set_nodes.contains(&current) {
             parents_of(parents, current)
         } else {
@@ -328,9 +364,9 @@ pub(crate) fn print_tree(
             if let Some(parent) = selected {
                 shown_edges.insert((current, parent));
                 traversed.insert(parent);
-                add_parents(
-                    parent,
-                    false,
+                add_parents(AddParentsArgs {
+                    current: parent,
+                    ordered: false,
                     children,
                     parents,
                     set_nodes,
@@ -338,7 +374,7 @@ pub(crate) fn print_tree(
                     shown_edges,
                     tree_nodes,
                     out,
-                );
+                });
             }
         }
         out.push((current, tree_nodes.len(), ordered));
@@ -378,17 +414,17 @@ pub(crate) fn print_tree(
             } else {
                 let mut traversed: HashSet<TreeNode> = HashSet::from([x]);
                 tree_nodes.clear();
-                add_parents(
-                    x,
-                    true,
-                    &children,
-                    &parents,
-                    &set_nodes,
-                    &mut traversed,
-                    &mut shown_edges,
-                    &mut tree_nodes,
-                    &mut display,
-                );
+                add_parents(AddParentsArgs {
+                    current: x,
+                    ordered: true,
+                    children: &children,
+                    parents: &parents,
+                    set_nodes: &set_nodes,
+                    traversed: &mut traversed,
+                    shown_edges: &mut shown_edges,
+                    tree_nodes: &mut tree_nodes,
+                    out: &mut display,
+                });
             }
         }
     }

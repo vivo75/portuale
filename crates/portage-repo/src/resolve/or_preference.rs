@@ -568,12 +568,14 @@ pub(crate) fn promote_tied_alternative(
                 }
                 let cp = format!("{}/{}", atom.category, atom.package);
                 if let Some((candidate_str, .., _slot)) = highest_available_candidate_ignoring_use(
-                    repos,
-                    a,
-                    &atom.category,
-                    &atom.package,
-                    config,
-                    constraints_for(a),
+                    HighestAvailableCandidateIgnoringUseArgs {
+                        repos,
+                        atom_str: a,
+                        category: &atom.category,
+                        package: &atom.package,
+                        config,
+                        extra_constraints: constraints_for(a),
+                    },
                 ) && let Some(version) =
                     candidate_version(&candidate_str, &atom.category, &atom.package)
                 {

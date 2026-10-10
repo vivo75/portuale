@@ -85,14 +85,14 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
     // gate is per-category, not `keyword_masked_only`: a candidate
     // masked by `~arch` *and* `LICENSE` records *both* changes.
     if bp.autounmask_suggest_keywords
-        && !keywords_accepted(
-            &resolved.keywords,
-            &resolved_cpv_str,
-            &key.0,
-            &key.1,
-            &config.accept_keywords,
-            &config.package_accept_keywords,
-        )
+        && !keywords_accepted(KeywordsAcceptedArgs {
+            keywords: &resolved.keywords,
+            candidate_str: &resolved_cpv_str,
+            category: &key.0,
+            package: &key.1,
+            accept_keywords: &config.accept_keywords,
+            package_accept_keywords: &config.package_accept_keywords,
+        })
         && let Some(kw) = suggested_keyword(resolved)
     {
         state.autounmask_keyword_changes.push(AutounmaskChange {
@@ -114,7 +114,14 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
         if !missing.is_empty() {
             let all = list_candidates(&ctx.repos, &key.0, &key.1).unwrap_or_default();
             state.autounmask_license_changes.push(AutounmaskChange {
-                atom: check_if_latest_atom_form(resolved, &all, &key.0, &key.1, config, false),
+                atom: check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+                    resolved,
+                    all_candidates: &all,
+                    category: &key.0,
+                    package: &key.1,
+                    config,
+                    check_visibility: false,
+                }),
                 token: missing.join(" "),
                 dep_chain: Vec::new(),
                 trigger: None,
@@ -160,14 +167,14 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
     // a merge (`New`/`Upgrade`/`Downgrade`/`Reinstall` -- the only
     // outcomes `resolved_slots` ever indexes), so no separate
     // operation check is needed here.
-    let interactive = evaluated_metadata_tokens(
-        &resolved.properties,
-        resolved,
-        &key.0,
-        &key.1,
-        &candidate_str,
+    let interactive = evaluated_metadata_tokens(EvaluatedMetadataTokensArgs {
+        value_str: &resolved.properties,
+        candidate: resolved,
+        category: &key.0,
+        package: &key.1,
+        candidate_str: &candidate_str,
         config,
-    )
+    })
     .contains("interactive");
     // Real `_get_installed_best`'s `myoldbest`: an `Upgrade`/
     // `Downgrade` replaces the installed version(s) in *its* slot

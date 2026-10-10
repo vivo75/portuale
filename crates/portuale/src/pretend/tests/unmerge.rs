@@ -36,17 +36,17 @@ fn execute_unmerge_forwards_quiet_and_noinfo_to_the_info_regen() {
     // No repos and a default (news-less) config: the post-removal
     // GLEP 42 notice (backlog #196 fix round 1) is gated off, so
     // these info-regen assertions observe no notice output.
-    let rc = execute_unmerge(
-        &[],
-        &root,
-        crate::ebuild_phases::ShellBackend::default(),
-        false,
-        &color,
-        true,
-        false,
-        &[],
-        &portage_profile::Config::default(),
-    );
+    let rc = execute_unmerge(ExecuteUnmergeArgs {
+        removal_list: &[],
+        root: &root,
+        shell: crate::ebuild_phases::ShellBackend::default(),
+        debug: false,
+        color: &color,
+        quiet: true,
+        noinfo: false,
+        repos: &[],
+        config: &portage_profile::Config::default(),
+    });
     assert_eq!(format!("{rc:?}"), success);
     assert!(
         crate::mtimedb::read_info_mtimes(&root).contains_key(&inforoot),
@@ -57,17 +57,17 @@ fn execute_unmerge_forwards_quiet_and_noinfo_to_the_info_regen() {
     // `noinfo=true` (resolved-config `FEATURES=noinfo`) suppresses
     // the whole block: the memo stays empty.
     let (root, _) = scratch_info_root("suppressed");
-    let rc = execute_unmerge(
-        &[],
-        &root,
-        crate::ebuild_phases::ShellBackend::default(),
-        false,
-        &color,
-        true,
-        true,
-        &[],
-        &portage_profile::Config::default(),
-    );
+    let rc = execute_unmerge(ExecuteUnmergeArgs {
+        removal_list: &[],
+        root: &root,
+        shell: crate::ebuild_phases::ShellBackend::default(),
+        debug: false,
+        color: &color,
+        quiet: true,
+        noinfo: true,
+        repos: &[],
+        config: &portage_profile::Config::default(),
+    });
     assert_eq!(format!("{rc:?}"), success);
     assert!(crate::mtimedb::read_info_mtimes(&root).is_empty());
     let _ = std::fs::remove_dir_all(&root);
@@ -85,17 +85,17 @@ fn unmerge_end_notice_skips_an_empty_removal_list() {
     // pinned by the contract suite instead.
     let color = crate::color::Colorizer::new(false);
     let (base, root, repos, config) = news_notice_test_tree("unmerge_empty");
-    let rc = execute_unmerge(
-        &[],
-        &root,
-        crate::ebuild_phases::ShellBackend::default(),
-        false,
-        &color,
-        true,
-        true,
-        &repos,
-        &config,
-    );
+    let rc = execute_unmerge(ExecuteUnmergeArgs {
+        removal_list: &[],
+        root: &root,
+        shell: crate::ebuild_phases::ShellBackend::default(),
+        debug: false,
+        color: &color,
+        quiet: true,
+        noinfo: true,
+        repos: &repos,
+        config: &config,
+    });
     assert_eq!(format!("{rc:?}"), format!("{:?}", ExitCode::SUCCESS));
     assert!(
         !root.join("var/lib/gentoo/news").exists(),

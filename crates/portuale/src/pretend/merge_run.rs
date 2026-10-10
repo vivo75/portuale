@@ -177,16 +177,16 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         {
             rctx.config_protect_mask = v.join(" ");
         }
-        if let Err(e) = crate::remote::run_remote_plan(
+        if let Err(e) = crate::remote::run_remote_plan(crate::remote::RunRemotePlanArgs {
             entries,
             config,
             repos,
             root,
-            &std::path::PathBuf::from(&config.pkgdir),
+            pkgdir: &std::path::PathBuf::from(&config.pkgdir),
             portage_tmpdir,
-            &rctx,
+            ctx: &rctx,
             keep_going,
-        ) {
+        }) {
             eprintln!("emerge: {e}");
             return Some(ExitCode::from(1));
         }
@@ -230,19 +230,19 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
     // `emerge --getbinpkg`/`-g` (and `-G`, binary-only): merge
     // every resolved entry, per-entry `Binary` vs `Source` --
     // see `emerge_getbinpkg::run_merge_plan`.
-    if let Err(e) = emerge_getbinpkg::run_merge_plan(
+    if let Err(e) = emerge_getbinpkg::run_merge_plan(emerge_getbinpkg::RunMergePlanArgs {
         entries,
         config,
         repos,
         root,
-        &package_options.pkgdir,
+        pkgdir: &package_options.pkgdir,
         portage_tmpdir,
         merge_options,
         keep_going,
         buildpkg,
         buildpkg_exclude,
-        status_mode,
-    ) {
+        mode: status_mode,
+    }) {
         // Backlog #174: a merge-time binpkg digest failure
         // already printed real's full tail (digest block +
         // `>>> Failed to emerge ...`, real

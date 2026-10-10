@@ -113,15 +113,15 @@ pub(crate) fn record_world_after_merge(args: RecordWorldAfterMergeArgs<'_>) -> O
     // never merges, so a package that isn't installed can't be a
     // world member yet); `--oneshot`/`--onlydeps` are handled inside.
     if !buildpkgonly {
-        if let Err(e) = update_world_file(
+        if let Err(e) = update_world_file(UpdateWorldFileArgs {
             root,
-            atom_args,
+            target_atoms: atom_args,
             entries,
             system_atoms,
             repos,
             oneshot,
             onlydeps,
-        ) {
+        }) {
             eprintln!("emerge: {e}");
             return Some(ExitCode::from(1));
         }

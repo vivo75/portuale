@@ -306,6 +306,19 @@ pub(crate) fn replace_symlink_atomic(
     outcome
 }
 
+/// Arguments of [`protect_decision`].
+pub(crate) struct ProtectDecisionArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) installed_instance_pf: Option<&'a str>,
+    pub(crate) protect_if_modified: bool,
+    pub(crate) dest: &'a Path,
+    pub(crate) abs_path: &'a str,
+    pub(crate) src_md5: &'a str,
+    pub(crate) cfgfiledict: &'a mut BTreeMap<String, String>,
+    pub(crate) noconfmem: bool,
+}
+
 /// Real `dblink._protect()`'s own decision, shared by `merge_tree`'s
 /// `obj`/`sym` branches (`vartree.py:5434-5480`/`5831-5901`): `dest_md5`/
 /// `dest_link` are computed from the *live destination's own lstat'd
@@ -373,18 +386,18 @@ pub(crate) fn replace_symlink_atomic(
 /// it can only match by being equal to `src_md5` too). Every other
 /// return path keeps `moveme` `true`, matching real `_protect()`'s own
 /// `move_me = True` initial default, never cleared on any other branch.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn protect_decision(
-    root: &Path,
-    category: &str,
-    installed_instance_pf: Option<&str>,
-    protect_if_modified: bool,
-    dest: &Path,
-    abs_path: &str,
-    src_md5: &str,
-    cfgfiledict: &mut BTreeMap<String, String>,
-    noconfmem: bool,
-) -> Result<(PathBuf, bool), String> {
+pub(crate) fn protect_decision(args: ProtectDecisionArgs<'_>) -> Result<(PathBuf, bool), String> {
+    let ProtectDecisionArgs {
+        root,
+        category,
+        installed_instance_pf,
+        protect_if_modified,
+        dest,
+        abs_path,
+        src_md5,
+        cfgfiledict,
+        noconfmem,
+    } = args;
     let matched: Option<(String, String)> =
         installed_instance_pf.and_then(|pf| owned_node_value_pf(root, category, pf, abs_path));
 

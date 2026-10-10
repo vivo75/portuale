@@ -10,27 +10,27 @@ fn register_preserved_libs_unregister_only_matches_the_same_cpv_and_counter() {
         entries: BTreeMap::new(),
         orig_entries: BTreeMap::new(),
     };
-    register_preserved_libs(
-        &mut registry,
-        "dev-libs/foo-1.0",
-        "dev-libs",
-        "foo",
-        "0",
-        "5",
-        &["/usr/lib/libfoo.so.1".to_string()],
-    );
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &["/usr/lib/libfoo.so.1".to_string()],
+    });
     assert!(registry.entries.contains_key("dev-libs/foo:0"));
 
     // Wrong counter: real `unregister` must leave the entry alone.
-    register_preserved_libs(
-        &mut registry,
-        "dev-libs/foo-1.0",
-        "dev-libs",
-        "foo",
-        "0",
-        "9",
-        &[],
-    );
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "9",
+        paths: &[],
+    });
     assert!(
         registry.entries.contains_key("dev-libs/foo:0"),
         "a stale counter must not unregister someone else's live entry"
@@ -38,30 +38,30 @@ fn register_preserved_libs_unregister_only_matches_the_same_cpv_and_counter() {
 
     // Wrong cpv (a different version currently holding this slot):
     // same real "leave it alone" rule.
-    register_preserved_libs(
-        &mut registry,
-        "dev-libs/foo-2.0",
-        "dev-libs",
-        "foo",
-        "0",
-        "5",
-        &[],
-    );
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-2.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &[],
+    });
     assert!(
         registry.entries.contains_key("dev-libs/foo:0"),
         "a different cpv must not unregister someone else's live entry"
     );
 
     // Matching cpv and counter: real `unregister` removes it.
-    register_preserved_libs(
-        &mut registry,
-        "dev-libs/foo-1.0",
-        "dev-libs",
-        "foo",
-        "0",
-        "5",
-        &[],
-    );
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &[],
+    });
     assert!(!registry.entries.contains_key("dev-libs/foo:0"));
 }
 
@@ -75,24 +75,24 @@ fn register_preserved_libs_with_paths_unconditionally_overwrites() {
         entries: BTreeMap::new(),
         orig_entries: BTreeMap::new(),
     };
-    register_preserved_libs(
-        &mut registry,
-        "dev-libs/foo-1.0",
-        "dev-libs",
-        "foo",
-        "0",
-        "5",
-        &["/usr/lib/libfoo.so.1".to_string()],
-    );
-    register_preserved_libs(
-        &mut registry,
-        "dev-libs/foo-2.0",
-        "dev-libs",
-        "foo",
-        "0",
-        "6",
-        &["/usr/lib/libfoo.so.2".to_string()],
-    );
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &["/usr/lib/libfoo.so.1".to_string()],
+    });
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-2.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "6",
+        paths: &["/usr/lib/libfoo.so.2".to_string()],
+    });
 
     let (cpv, counter, paths) = registry.entries.get("dev-libs/foo:0").unwrap();
     assert_eq!(cpv, "dev-libs/foo-2.0");
@@ -154,14 +154,14 @@ fn merge_side_preserve_sees_the_replacing_packages_merging_needed() {
     // The new image ships the consumer but not the library.
     let new_image_paths: BTreeSet<String> = ["/usr/bin/newtool".to_string()].into_iter().collect();
 
-    let (paths, _) = find_preserve_paths_for_merge(
-        &root,
-        "dev-libs",
-        "oldapp",
-        "oldapp-2.0",
-        "0",
-        &new_image_paths,
-    )
+    let (paths, _) = find_preserve_paths_for_merge(FindPreservePathsForMergeArgs {
+        root: &root,
+        category: "dev-libs",
+        package: "oldapp",
+        new_pf: "oldapp-2.0",
+        main_slot: "0",
+        new_image_paths: &new_image_paths,
+    })
     .expect("a same-slot instance owning files preserves");
     assert!(
         paths.contains("/usr/lib/libold.so.1"),

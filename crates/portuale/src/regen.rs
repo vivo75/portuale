@@ -308,16 +308,16 @@ pub fn run(
                 })
                 .collect()
         } else {
-            run_parallel(
-                &work,
-                &pass_indices,
+            run_parallel(RunParallelArgs {
+                work: &work,
+                pass_indices: &pass_indices,
                 root,
                 config_root,
-                &portage_tmpdir,
+                portage_tmpdir: &portage_tmpdir,
                 debug,
                 jobs,
                 load_average,
-            )
+            })
         };
         for (i, r) in pass_results {
             results[i] = Some(r);
@@ -381,17 +381,29 @@ fn run_work_item(
     portage_tmpdir: &Path,
     debug: bool,
 ) -> Result<(), RegenFailure> {
-    regen_one(
-        &item.ebuild_path,
-        &item.repo_location,
-        &item.masters,
-        &item.category,
-        &item.pf,
+    regen_one(RegenOneArgs {
+        ebuild_path: &item.ebuild_path,
+        repo_location: &item.repo_location,
+        masters: &item.masters,
+        category: &item.category,
+        pf: &item.pf,
         root,
         config_root,
         portage_tmpdir,
         debug,
-    )
+    })
+}
+
+/// Arguments of [`run_parallel`].
+struct RunParallelArgs<'a> {
+    work: &'a [RegenWorkItem],
+    pass_indices: &'a [usize],
+    root: &'a Path,
+    config_root: &'a Path,
+    portage_tmpdir: &'a Path,
+    debug: bool,
+    jobs: usize,
+    load_average: Option<f64>,
 }
 
 /// Real `AsyncScheduler._schedule_tasks` for the `MetadataRegen` case:
@@ -405,17 +417,17 @@ fn run_work_item(
 /// come back as `(global index, outcome)` pairs, so the caller folds
 /// them into pass order deterministically regardless of completion
 /// order.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn run_parallel(
-    work: &[RegenWorkItem],
-    pass_indices: &[usize],
-    root: &Path,
-    config_root: &Path,
-    portage_tmpdir: &Path,
-    debug: bool,
-    jobs: usize,
-    load_average: Option<f64>,
-) -> Vec<(usize, Result<(), RegenFailure>)> {
+fn run_parallel(args: RunParallelArgs<'_>) -> Vec<(usize, Result<(), RegenFailure>)> {
+    let RunParallelArgs {
+        work,
+        pass_indices,
+        root,
+        config_root,
+        portage_tmpdir,
+        debug,
+        jobs,
+        load_average,
+    } = args;
     use std::collections::VecDeque;
     use std::sync::mpsc;
 
@@ -521,19 +533,31 @@ fn prune_stale_entries(repo_location: &Path, valid: Option<&HashSet<(String, Str
         }
     }
 }
-
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn regen_one(
-    ebuild_path: &Path,
-    repo_location: &Path,
-    masters: &[PathBuf],
-    category: &str,
-    pf: &str,
-    root: &Path,
-    config_root: &Path,
-    portage_tmpdir: &Path,
+/// Arguments of [`regen_one`].
+struct RegenOneArgs<'a> {
+    ebuild_path: &'a Path,
+    repo_location: &'a Path,
+    masters: &'a [PathBuf],
+    category: &'a str,
+    pf: &'a str,
+    root: &'a Path,
+    config_root: &'a Path,
+    portage_tmpdir: &'a Path,
     debug: bool,
-) -> Result<(), RegenFailure> {
+}
+
+fn regen_one(args: RegenOneArgs<'_>) -> Result<(), RegenFailure> {
+    let RegenOneArgs {
+        ebuild_path,
+        repo_location,
+        masters,
+        category,
+        pf,
+        root,
+        config_root,
+        portage_tmpdir,
+        debug,
+    } = args;
     // Every `Err` below carries the returncode real
     // `EbuildMetadataPhase` would report for the same outcome, so the
     // caller can replay `MetadataRegen._task_exit`'s `cp_retry`
@@ -548,14 +572,9 @@ fn regen_one(
     // only -- the rewrite would be byte-identical). The file is left
     // untouched, preserving its mtime.
     if portage_repo::md5_dict::cache_entry_is_valid(
-        ebuild_path,
-        repo_location,
-        masters,
-        category,
-        pf,
-        // The repo's pregen cache is `flat_hash.md5_database`:
+        portage_repo::md5_dict::CacheEntryIsValidArgs { ebuild_path, repo_location, masters, category, pf, store_eclass_paths: // The repo's pregen cache is `flat_hash.md5_database`:
         // `_eclasses_` is `name\tmd5` pairs (`store_eclass_paths = False`).
-        false,
+        false },
     ) {
         return Ok(());
     }

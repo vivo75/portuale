@@ -186,16 +186,16 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         );
     if let Some(cycle) = result.circular_deps.first() {
         if !gated_abort {
-            print_circular_block(
+            print_circular_block(PrintCircularBlockArgs {
                 cycle,
-                &portage_repo::cycle_edge_labels(&result.entries, cycle),
+                edge_labels: &portage_repo::cycle_edge_labels(&result.entries, cycle),
                 color,
                 repos,
                 config,
-                &result.autounmask_use_changes,
-                &result.entries,
-                result.large_cycle_count,
-            );
+                autounmask_use_changes: &result.autounmask_use_changes,
+                entries: &result.entries,
+                large_cycle_count: result.large_cycle_count,
+            });
         }
         pretend_end_news_notice(pretend, repos, root, config, color);
         return Some(ExitCode::from(1));

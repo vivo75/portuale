@@ -13,15 +13,15 @@ fn autounmask_suggests_a_keyword_only_when_enabled() {
     // this mirrors), no suggestion is appended, matching this
     // portuale's own pre-existing behavior exactly.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atoms = vec!["dev-libs/autounmaskkeywordpkg".to_string()];
     let err_without_suggestion = ResolveRequest::new(
@@ -76,15 +76,15 @@ fn autounmask_use_suggests_a_flag_flip_only_when_enabled() {
     // no suggestion is appended; the abort is real's own USE block
     // (backlog #265(b)), not the bare miss.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
     let err_without_suggestion = ResolveRequest::new(

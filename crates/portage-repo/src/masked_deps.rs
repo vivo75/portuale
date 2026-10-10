@@ -298,28 +298,28 @@ pub(crate) fn atom_all_use_unmasked(
         return true;
     };
     let Some((candidate_str, keywords, iuse, enabled, _slot)) =
-        highest_available_candidate_ignoring_use(
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
             repos,
             atom_str,
-            &atom.category,
-            &atom.package,
+            category: &atom.category,
+            package: &atom.package,
             config,
             extra_constraints,
-        )
+        })
     else {
         // No visible candidate at all -- `all_available` already sent the
         // whole choice to `Unsatisfiable`; nothing to evaluate here.
         return true;
     };
     let valid_iuse = valid_iuse(&iuse, config);
-    let stable = is_stable(
-        &keywords,
-        &candidate_str,
-        &atom.category,
-        &atom.package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    );
+    let stable = is_stable(IsStableArgs {
+        keywords: &keywords,
+        candidate_str: &candidate_str,
+        category: &atom.category,
+        package: &atom.package,
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    });
     let mask = resolved_use_mask_or_force(
         MaskOrForce::Mask,
         config,
@@ -380,21 +380,33 @@ pub(crate) type CandidateUseProbe = (
     String,
 );
 
+/// Arguments of [`highest_available_candidate_ignoring_use`].
+pub(crate) struct HighestAvailableCandidateIgnoringUseArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) atom_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) extra_constraints: &'a [String],
+}
+
 /// `extra_constraints` is the same `'backtrack`-loop `runtime_pkg_mask`
 /// filter [`atom_currently_satisfiable`] applies -- real's `mydbapi` in
 /// `dep_zapdeps` is `_dep_check_composite_db`, which honours it too, so
 /// once backtracking masks the highest version this must probe the
 /// highest *unmasked* one instead. Empty `&[]` at every non-disjunctive
 /// call site, a strict no-op.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn highest_available_candidate_ignoring_use(
-    repos: &[RepoConfig],
-    atom_str: &str,
-    category: &str,
-    package: &str,
-    config: &portage_profile::Config,
-    extra_constraints: &[String],
+    args: HighestAvailableCandidateIgnoringUseArgs<'_>,
 ) -> Option<CandidateUseProbe> {
+    let HighestAvailableCandidateIgnoringUseArgs {
+        repos,
+        atom_str,
+        category,
+        package,
+        config,
+        extra_constraints,
+    } = args;
     let stripped = portage_dep::without_use(atom_str);
     let Ok(candidates) = list_candidates(repos, category, package) else {
         return None;
@@ -677,42 +689,42 @@ pub(crate) fn candidate_masking_reasons(
         });
     }
 
-    if !metadata_key_accepted(
-        &candidate.properties,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Properties,
-        &config.accept_properties,
-        &config.package_properties,
-    ) {
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
         reasons.push("PROPERTIES".to_string());
     }
 
-    if !metadata_key_accepted(
-        &candidate.restrict,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Restrict,
-        &config.accept_restrict,
-        &config.package_accept_restrict,
-    ) {
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
         reasons.push("RESTRICT".to_string());
     }
 
-    if !keywords_accepted(
-        &candidate.keywords,
-        &candidate_str,
+    if !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    ) {
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
         let kmask = candidate
             .keywords
             .iter()

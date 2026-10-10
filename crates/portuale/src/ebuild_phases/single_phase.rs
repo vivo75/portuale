@@ -30,6 +30,26 @@ pub(crate) fn brush_phase_params(
     Ok((shell.default_exec_params(), pump))
 }
 
+/// Arguments of [`run_single_phase`].
+pub(crate) struct RunSinglePhaseArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) phase: &'a str,
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    /// See `run_commands_async`'s `build_env` doc: the resolved `USE` for
+    /// an `emerge <atom>` merge's own `pkg_preinst`/`pkg_postinst`. `&[]`
+    /// for a standalone phase / a removal hook / a binary merge.
+    pub(crate) build_env: &'a [(String, String)],
+    /// Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`,
+    /// extended to this hook -- see `ebuild_merge::MergeOptions::
+    /// log_file`'s own doc comment. `None` for a standalone/foreground
+    /// run.
+    pub(crate) log_file: Option<&'a Path>,
+}
+
 /// Runs exactly `phase`, with no `actionmap_deps` prerequisite chain --
 /// unlike `run_commands`, for phases real portage itself never reaches
 /// via `doebuild()`'s own chain at all. Real `dblink.treewalk()` invokes
@@ -45,25 +65,18 @@ pub(crate) fn brush_phase_params(
 /// (`declare -F "$1" >/dev/null && __qa_call $1`) -- so this is safe to
 /// call even for a fixture ebuild that defines neither `pkg_preinst` nor
 /// `pkg_postinst` at all.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_single_phase(
-    ebuild_path: &Path,
-    phase: &str,
-    root: &Path,
-    portage_tmpdir: &Path,
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    // See `run_commands_async`'s `build_env` doc: the resolved `USE` for
-    // an `emerge <atom>` merge's own `pkg_preinst`/`pkg_postinst`. `&[]`
-    // for a standalone phase / a removal hook / a binary merge.
-    build_env: &[(String, String)],
-    // Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`,
-    // extended to this hook -- see `ebuild_merge::MergeOptions::
-    // log_file`'s own doc comment. `None` for a standalone/foreground
-    // run.
-    log_file: Option<&Path>,
-) -> Result<i32, String> {
+pub(crate) fn run_single_phase(args: RunSinglePhaseArgs<'_>) -> Result<i32, String> {
+    let RunSinglePhaseArgs {
+        ebuild_path,
+        phase,
+        root,
+        portage_tmpdir,
+        debug,
+        config_root,
+        shell,
+        build_env,
+        log_file,
+    } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
@@ -86,6 +99,18 @@ pub(crate) fn run_single_phase(
         )
         .await
     })
+}
+
+/// Arguments of [`run_clean`].
+pub(crate) struct RunCleanArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) build_env: &'a [(String, String)],
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) log_file: Option<&'a Path>,
 }
 
 /// Real `clean` phase (`bin/ebuild.sh clean` -> `bin/phase-functions.sh:
@@ -114,20 +139,20 @@ pub(crate) fn run_single_phase(
 /// phase through an `EbuildPhase`, i.e. `bin/ebuild.sh clean`), kept as
 /// its own named entry point so every call site below reads as the real
 /// mechanism.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_clean(
-    ebuild_path: &Path,
-    root: &Path,
-    portage_tmpdir: &Path,
-    build_env: &[(String, String)],
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    log_file: Option<&Path>,
-) -> Result<i32, String> {
-    run_single_phase(
+pub(crate) fn run_clean(args: RunCleanArgs<'_>) -> Result<i32, String> {
+    let RunCleanArgs {
         ebuild_path,
-        "clean",
+        root,
+        portage_tmpdir,
+        build_env,
+        debug,
+        config_root,
+        shell,
+        log_file,
+    } = args;
+    run_single_phase(RunSinglePhaseArgs {
+        ebuild_path,
+        phase: "clean",
         root,
         portage_tmpdir,
         debug,
@@ -135,7 +160,7 @@ pub(crate) fn run_clean(
         shell,
         build_env,
         log_file,
-    )
+    })
 }
 
 /// Real `_emerge/BinpkgEnvExtractor`: `${T}/environment` <- the binpkg's
@@ -184,6 +209,26 @@ pub(crate) fn binary_merge_env() -> Vec<(String, String)> {
     ]
 }
 
+/// Arguments of [`run_instprep`].
+pub(crate) struct RunInstprepArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) saved_env_bz2: Option<&'a Path>,
+    /// Extract `${T}/environment` from `saved_env_bz2` first: `true` when
+    /// this is the first phase of a binary merge (no earlier hook has
+    /// seeded it), `false` when `pkg_setup` already ran -- real extracts
+    /// the archive env **once** and every phase evolves it, so a second
+    /// extraction here would wipe `pkg_setup`'s own variables (e.g.
+    /// `linux-info`'s `SKIP_KERNEL_BINPKG_ENV_RESET`).
+    pub(crate) seed: bool,
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) build_env: &'a [(String, String)],
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) log_file: Option<&'a Path>,
+}
+
 /// Real `dblink.treewalk()`'s first step (`vartree.py:4440-4450`,
 /// `doebuild.py:880` `"instprep": {"cmd": misc_sh}`): the `instprep`
 /// internal phase, `bin/misc-functions.sh __dyn_instprep`, on *every*
@@ -205,25 +250,19 @@ pub(crate) fn binary_merge_env() -> Vec<(String, String)> {
 /// source merge, whose `${T}/environment` is still the install chain's.
 /// `build_env` is the resolved phase env (`FEATURES`,
 /// `PORTAGE_COMPRESS*`, ...) the gates read.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_instprep(
-    ebuild_path: &Path,
-    saved_env_bz2: Option<&Path>,
-    // Extract `${T}/environment` from `saved_env_bz2` first: `true` when
-    // this is the first phase of a binary merge (no earlier hook has
-    // seeded it), `false` when `pkg_setup` already ran -- real extracts
-    // the archive env **once** and every phase evolves it, so a second
-    // extraction here would wipe `pkg_setup`'s own variables (e.g.
-    // `linux-info`'s `SKIP_KERNEL_BINPKG_ENV_RESET`).
-    seed: bool,
-    root: &Path,
-    portage_tmpdir: &Path,
-    build_env: &[(String, String)],
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    log_file: Option<&Path>,
-) -> Result<i32, String> {
+pub(crate) fn run_instprep(args: RunInstprepArgs<'_>) -> Result<i32, String> {
+    let RunInstprepArgs {
+        ebuild_path,
+        saved_env_bz2,
+        seed,
+        root,
+        portage_tmpdir,
+        build_env,
+        debug,
+        config_root,
+        shell,
+        log_file,
+    } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
@@ -248,6 +287,48 @@ pub(crate) fn run_instprep(
         )
         .await
     })
+}
+
+/// Arguments of [`run_phase_from_saved_env`].
+pub(crate) struct RunPhaseFromSavedEnvArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) saved_env_bz2: &'a Path,
+    /// Extract `${T}/environment` from `saved_env_bz2` first (see the
+    /// doc comment above): `true` for the first hook of a package /
+    /// an unmerge, `false` for the following hooks of the same merge.
+    pub(crate) seed: bool,
+    pub(crate) phase: &'a str,
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    /// Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`,
+    /// extended to this hook -- see `ebuild_merge::MergeOptions::
+    /// log_file`'s own doc comment. `None` for a standalone/foreground
+    /// run.
+    pub(crate) log_file: Option<&'a Path>,
+    /// Real `dblink.treewalk`'s `PORTAGE_UPDATE_ENV` (`vartree.py:5334`,
+    /// set around the merge's `postinst` phase to
+    /// `<dbpkgdir>/environment.bz2`): `bin/phase-functions.sh`'s
+    /// `prerm|postrm|preinst|postinst|config|info` case regenerates that
+    /// file from the *live* phase environment
+    /// (`___save_and_filter_ebuild_env … | bzip2 -9 > $PORTAGE_UPDATE_ENV`)
+    /// -- so the vdb env carries the merge-time config, not the binpkg's
+    /// build-time one, and stale locals a different build host baked in
+    /// are filtered out. `None` for every hook that must not touch the
+    /// vdb env. `refresh_features`, when `Some` and non-empty, overrides
+    /// `FEATURES`/`PORTAGE_FEATURES` in the phase env for exactly that
+    /// regeneration -- real portage's vdb env carries the resolved
+    /// incremental list.
+    pub(crate) update_env: Option<&'a Path>,
+    pub(crate) refresh_features: Option<&'a str>,
+    /// Real `dblink.treewalk`'s `REPLACING_VERSIONS` (`vartree.py:4768-
+    /// 4771`), threaded into the hook env for the binary-merge
+    /// `pkg_preinst`/`pkg_postinst` (`None` for every unmerge hook, which
+    /// real does not give the var). See `ebuild_merge::replacing_versions`
+    /// for the value's source.
+    pub(crate) replacing_versions: Option<&'a str>,
 }
 
 /// Like `run_single_phase`, but first seeds `${T}/environment` from a
@@ -294,47 +375,22 @@ pub(crate) fn run_instprep(
 /// eclass's own `_ACCT_USER_*`) before the vdb env is regenerated.
 /// `unmerge` hooks use `true` (each old version seeds its own
 /// builddir).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_phase_from_saved_env(
-    ebuild_path: &Path,
-    saved_env_bz2: &Path,
-    // Extract `${T}/environment` from `saved_env_bz2` first (see the
-    // doc comment above): `true` for the first hook of a package /
-    // an unmerge, `false` for the following hooks of the same merge.
-    seed: bool,
-    phase: &str,
-    root: &Path,
-    portage_tmpdir: &Path,
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    // Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`,
-    // extended to this hook -- see `ebuild_merge::MergeOptions::
-    // log_file`'s own doc comment. `None` for a standalone/foreground
-    // run.
-    log_file: Option<&Path>,
-    // Real `dblink.treewalk`'s `PORTAGE_UPDATE_ENV` (`vartree.py:5334`,
-    // set around the merge's `postinst` phase to
-    // `<dbpkgdir>/environment.bz2`): `bin/phase-functions.sh`'s
-    // `prerm|postrm|preinst|postinst|config|info` case regenerates that
-    // file from the *live* phase environment
-    // (`___save_and_filter_ebuild_env … | bzip2 -9 > $PORTAGE_UPDATE_ENV`)
-    // -- so the vdb env carries the merge-time config, not the binpkg's
-    // build-time one, and stale locals a different build host baked in
-    // are filtered out. `None` for every hook that must not touch the
-    // vdb env. `refresh_features`, when `Some` and non-empty, overrides
-    // `FEATURES`/`PORTAGE_FEATURES` in the phase env for exactly that
-    // regeneration -- real portage's vdb env carries the resolved
-    // incremental list.
-    update_env: Option<&Path>,
-    refresh_features: Option<&str>,
-    // Real `dblink.treewalk`'s `REPLACING_VERSIONS` (`vartree.py:4768-
-    // 4771`), threaded into the hook env for the binary-merge
-    // `pkg_preinst`/`pkg_postinst` (`None` for every unmerge hook, which
-    // real does not give the var). See `ebuild_merge::replacing_versions`
-    // for the value's source.
-    replacing_versions: Option<&str>,
-) -> Result<i32, String> {
+pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Result<i32, String> {
+    let RunPhaseFromSavedEnvArgs {
+        ebuild_path,
+        saved_env_bz2,
+        seed,
+        phase,
+        root,
+        portage_tmpdir,
+        debug,
+        config_root,
+        shell,
+        log_file,
+        update_env,
+        refresh_features,
+        replacing_versions,
+    } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;

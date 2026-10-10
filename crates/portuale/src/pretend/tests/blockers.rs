@@ -87,41 +87,41 @@ fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
         },
     ];
     let entries = [entry];
-    let lines = trailing_blocker_lines(
-        &entries,
-        Path::new("/nonexistent"),
-        0,
-        true,
-        false,
-        &nc,
-        &HashMap::new(),
-    );
+    let lines = trailing_blocker_lines(TrailingBlockerLinesArgs {
+        entries: &entries,
+        root: Path::new("/nonexistent"),
+        owner_index: 0,
+        include_mask: true,
+        columns: false,
+        color: &nc,
+        circular: &HashMap::new(),
+    });
     assert_eq!(lines.len(), 1, "only the uninstall-satisfied row trails");
     assert!(
         lines[0].starts_with("[blocks b      ] dev-libs/other ("),
         "the trailing row is the Uninstall one: {lines:?}"
     );
     assert!(
-        collect_inline_blocker_lines(
-            &entries,
-            Path::new("/nonexistent"),
-            false,
-            false,
-            &nc,
-            &HashMap::new(),
-        )
+        collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
+            entries: &entries,
+            root: Path::new("/nonexistent"),
+            quiet: false,
+            columns: false,
+            color: &nc,
+            circular: &HashMap::new()
+        })
         .is_empty()
     );
-    let summary = package_counters_summary(
-        &entries,
-        Path::new("/nonexistent"),
-        &HashSet::new(),
-        false,
-        &nc,
-        &[],
-        false,
-        &HashMap::new(),
-    );
+    let summary = package_counters_summary(PackageCountersSummaryArgs {
+        entries: &entries,
+        root: Path::new("/nonexistent"),
+        top_level_pkgs: &HashSet::new(),
+        onlydeps: false,
+        color: &nc,
+        orphans: &[],
+        tree: false,
+        circular: &HashMap::new(),
+    });
     assert!(
         summary.contains("Conflict: 1 block (all satisfied)"),
         "the hidden row is not counted: {summary}"
@@ -142,14 +142,14 @@ fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
         ),
         replacement(),
     ];
-    let inline = collect_inline_blocker_lines(
-        &entries,
-        Path::new("/nonexistent"),
-        false,
-        false,
-        &nc,
-        &HashMap::new(),
-    );
+    let inline = collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
+        entries: &entries,
+        root: Path::new("/nonexistent"),
+        quiet: false,
+        columns: false,
+        color: &nc,
+        circular: &HashMap::new(),
+    });
     assert_eq!(inline.len(), 1, "the wait prints one inline row");
     assert_eq!(inline[0].0, 2, "after the replacement entry");
     assert!(
@@ -167,14 +167,14 @@ fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
     // (real counts every Blocker node in the merge list).
     let entries = [replacement_owner(&[]), replacement()];
     assert!(
-        collect_inline_blocker_lines(
-            &entries,
-            Path::new("/nonexistent"),
-            false,
-            true,
-            &nc,
-            &HashMap::new(),
-        )
+        collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
+            entries: &entries,
+            root: Path::new("/nonexistent"),
+            quiet: false,
+            columns: true,
+            color: &nc,
+            circular: &HashMap::new()
+        })
         .is_empty()
     );
     assert_eq!(
@@ -250,14 +250,14 @@ fn replacement_wait_follows_the_selected_disjunctive_branch() {
             alt_edge("absent", "1.0", 1),
         ]),
     ];
-    let inline = collect_inline_blocker_lines(
-        &entries,
-        Path::new("/nonexistent"),
-        false,
-        false,
-        &nc,
-        &HashMap::new(),
-    );
+    let inline = collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
+        entries: &entries,
+        root: Path::new("/nonexistent"),
+        quiet: false,
+        columns: false,
+        color: &nc,
+        circular: &HashMap::new(),
+    });
     assert_eq!(inline.len(), 1, "the kept disjunctive wait prints a row");
     assert_eq!(inline[0].0, 1, "after the replacement entry");
 
@@ -281,14 +281,14 @@ fn replacement_wait_follows_the_selected_disjunctive_branch() {
         other,
     ];
     assert!(
-        collect_inline_blocker_lines(
-            &entries,
-            Path::new("/nonexistent"),
-            false,
-            false,
-            &nc,
-            &HashMap::new(),
-        )
+        collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
+            entries: &entries,
+            root: Path::new("/nonexistent"),
+            quiet: false,
+            columns: false,
+            color: &nc,
+            circular: &HashMap::new()
+        })
         .is_empty(),
         "a suppressed wait branch is not followed"
     );

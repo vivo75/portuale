@@ -253,15 +253,15 @@ fn changed_slot_does_not_fire_for_a_package_with_no_recorded_difference() {
     // --changed-slot enabled.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     assert_eq!(
         resolve_pretend(
@@ -295,15 +295,15 @@ fn changed_deps_and_changed_slot_combine_in_one_reinstall_outcome() {
     // the same Reinstall outcome, not just whichever fires first.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     assert_eq!(
         resolve_pretend(
@@ -344,15 +344,15 @@ fn fixture_repo_constrained_atom_finds_the_named_repo_only() {
     // and match it in isolation.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     assert_eq!(
         resolve_pretend(

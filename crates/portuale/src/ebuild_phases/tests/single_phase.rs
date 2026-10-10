@@ -23,16 +23,16 @@ fn run_clean_removes_a_stale_installed_marker_image_and_temp() {
     std::fs::create_dir_all(builddir.join("temp")).unwrap();
     std::fs::write(builddir.join("temp/build.log"), "stale log\n").unwrap();
 
-    let status = run_clean(
-        &ebuild_path,
-        Path::new("/"),
-        &portage_tmpdir,
-        &[],
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Bash,
-        None,
-    )
+    let status = run_clean(RunCleanArgs {
+        ebuild_path: &ebuild_path,
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        build_env: &[],
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Bash,
+        log_file: None,
+    })
     .expect("run_clean should not itself error");
     assert_eq!(status, 0, "clean should exit successfully");
     assert!(
@@ -67,16 +67,16 @@ fn run_clean_with_keepwork_keeps_temp_and_workdir_but_still_drops_the_marker() {
     std::fs::write(builddir.join(".installed"), []).unwrap();
 
     let keepwork = vec![("FEATURES".to_string(), "keepwork".to_string())];
-    let status = run_clean(
-        &ebuild_path,
-        Path::new("/"),
-        &portage_tmpdir,
-        &keepwork,
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Bash,
-        None,
-    )
+    let status = run_clean(RunCleanArgs {
+        ebuild_path: &ebuild_path,
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        build_env: &keepwork,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Bash,
+        log_file: None,
+    })
     .expect("run_clean should not itself error");
     assert_eq!(status, 0, "clean should exit successfully");
     assert!(!builddir.join(".installed").exists());
@@ -108,30 +108,30 @@ fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
     ));
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-    let config_status = run_single_phase(
-        &ebuild_path,
-        "config",
-        Path::new("/"),
-        &portage_tmpdir,
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-        None,
-    )
+    let config_status = run_single_phase(RunSinglePhaseArgs {
+        ebuild_path: &ebuild_path,
+        phase: "config",
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+        log_file: None,
+    })
     .expect("run_single_phase should not itself error");
     assert_eq!(config_status, 0);
-    let info_status = run_single_phase(
-        &ebuild_path,
-        "info",
-        Path::new("/"),
-        &portage_tmpdir,
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-        None,
-    )
+    let info_status = run_single_phase(RunSinglePhaseArgs {
+        ebuild_path: &ebuild_path,
+        phase: "info",
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+        log_file: None,
+    })
     .expect("run_single_phase should not itself error");
     assert_eq!(info_status, 0);
 
@@ -169,30 +169,30 @@ fn run_single_phase_actually_runs_pkg_prerm_and_pkg_postrm() {
     ));
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-    let prerm_status = run_single_phase(
-        &ebuild_path,
-        "prerm",
-        Path::new("/"),
-        &portage_tmpdir,
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-        None,
-    )
+    let prerm_status = run_single_phase(RunSinglePhaseArgs {
+        ebuild_path: &ebuild_path,
+        phase: "prerm",
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+        log_file: None,
+    })
     .expect("run_single_phase should not itself error");
     assert_eq!(prerm_status, 0);
-    let postrm_status = run_single_phase(
-        &ebuild_path,
-        "postrm",
-        Path::new("/"),
-        &portage_tmpdir,
-        false,
-        Path::new("/dev/null/no-config-root"),
-        ShellBackend::Brush,
-        &[],
-        None,
-    )
+    let postrm_status = run_single_phase(RunSinglePhaseArgs {
+        ebuild_path: &ebuild_path,
+        phase: "postrm",
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+        log_file: None,
+    })
     .expect("run_single_phase should not itself error");
     assert_eq!(postrm_status, 0);
 

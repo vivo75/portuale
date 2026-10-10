@@ -2,6 +2,28 @@
 
 use crate::pretend::*;
 
+/// Arguments of [`run_prune_pretend`].
+pub(crate) struct RunPrunePretendArgs<'a> {
+    pub(crate) targets: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    /// The `repos.conf` repos -- threaded into the post-removal GLEP 42
+    /// count notice (backlog #196 fix round 1).
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) verbose: bool,
+    pub(crate) lib_check: bool,
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Threaded into the post-removal info-regen block (real `--quiet`
+    /// suppression + resolved-config `noinfo`); computed by the caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+}
+
 /// Real `emerge --prune` / `-P` (real `action_depclean` with
 /// `action="prune"`). Unlike `--depclean`, real `action_depclean`
 /// returns right after `unmerge()` (`actions.py:888`), so there is
@@ -13,28 +35,23 @@ use crate::pretend::*;
 /// removes the cleanlist (`execute_unmerge`). See
 /// `portage_repo::prune_cleanlist`'s own doc comment for the removal-set
 /// semantics.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_prune_pretend(
-    targets: &[&str],
-    root: &Path,
-    config_root: &Path,
-    config: &portage_profile::Config,
-    // The `repos.conf` repos -- threaded into the post-removal GLEP 42
-    // count notice (backlog #196 fix round 1).
-    repos: &[portage_repo::RepoConfig],
-    verbose: bool,
-    lib_check: bool,
-    pretend: bool,
-    ask: bool,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    color: &Colorizer,
-    // Threaded into the post-removal info-regen block (real `--quiet`
-    // suppression + resolved-config `noinfo`); computed by the caller.
-    quiet: bool,
-    noinfo: bool,
-) -> ExitCode {
+pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
+    let RunPrunePretendArgs {
+        targets,
+        root,
+        config_root,
+        config,
+        repos,
+        verbose,
+        lib_check,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        noinfo,
+    } = args;
     let args = match resolve_cleanup_args(targets, root, "prune") {
         Ok(a) => a,
         Err(code) => return code,
@@ -86,14 +103,14 @@ pub(crate) fn run_prune_pretend(
     // Real `action_depclean` (`action == "prune"`): `unmerge(...,
     // "unmerge", cleanlist, ordered=ordered)`. Without `--pretend`,
     // `run_unmerge_pretend` removes them.
-    run_unmerge_pretend(
-        &cpv_refs,
-        "unmerge",
+    run_unmerge_pretend(RunUnmergePretendArgs {
+        targets: &cpv_refs,
+        action: "unmerge",
         root,
         config_root,
         config,
         repos,
-        result.ordered,
+        preserve_order: result.ordered,
         pretend,
         ask,
         shell,
@@ -101,7 +118,27 @@ pub(crate) fn run_prune_pretend(
         color,
         quiet,
         noinfo,
-    )
+    })
+}
+
+/// Arguments of [`run_prune_nodeps_pretend`].
+pub(crate) struct RunPruneNodepsPretendArgs<'a> {
+    pub(crate) targets: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Threaded into the post-removal info-regen block (real `--quiet`
+    /// suppression + resolved-config `noinfo`); computed by the caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+    /// The `repos.conf` repos + resolved config -- threaded into the
+    /// post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
 }
 
 /// Real `emerge --pretend --prune --nodeps` (`actions.py:2684-2697`):
@@ -123,27 +160,8 @@ pub(crate) fn run_prune_pretend(
 /// exit 0). Without `--pretend`, `execute_unmerge` removes the selected
 /// versions after the display -- real `actions.py:2684` routes `prune
 /// --nodeps` through the very same `unmerge()` `-C` uses.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_prune_nodeps_pretend(
-    targets: &[&str],
-    root: &Path,
-    config_root: &Path,
-    pretend: bool,
-    ask: bool,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    color: &Colorizer,
-    // Threaded into the post-removal info-regen block (real `--quiet`
-    // suppression + resolved-config `noinfo`); computed by the caller.
-    quiet: bool,
-    noinfo: bool,
-    // The `repos.conf` repos + resolved config -- threaded into the
-    // post-removal GLEP 42 count notice (backlog #196 fix round 1).
-    repos: &[portage_repo::RepoConfig],
-    config: &portage_profile::Config,
-) -> ExitCode {
-    run_prune_nodeps_or_clean(
+pub(crate) fn run_prune_nodeps_pretend(args: RunPruneNodepsPretendArgs<'_>) -> ExitCode {
+    let RunPruneNodepsPretendArgs {
         targets,
         root,
         config_root,
@@ -152,12 +170,46 @@ pub(crate) fn run_prune_nodeps_pretend(
         shell,
         debug,
         color,
-        false,
         quiet,
         noinfo,
         repos,
         config,
-    )
+    } = args;
+    run_prune_nodeps_or_clean(RunPruneNodepsOrCleanArgs {
+        targets,
+        root,
+        config_root,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        is_clean: false,
+        quiet,
+        noinfo,
+        repos,
+        config,
+    })
+}
+
+/// Arguments of [`run_clean_pretend`].
+pub(crate) struct RunCleanPretendArgs<'a> {
+    pub(crate) targets: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Threaded into the post-removal info-regen block (real `--quiet`
+    /// suppression + resolved-config `noinfo`); computed by the caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+    /// The `repos.conf` repos + resolved config -- threaded into the
+    /// post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
 }
 
 /// Real `emerge --clean` (`action_uninstall` -> `unmerge` with
@@ -168,27 +220,8 @@ pub(crate) fn run_prune_nodeps_pretend(
 /// names `clean`. Individual ebuild-path args are rejected (real
 /// `unmerge.py:131`); `resolve_cleanup_args` already only produces
 /// `cat/pkg` atoms here.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_clean_pretend(
-    targets: &[&str],
-    root: &Path,
-    config_root: &Path,
-    pretend: bool,
-    ask: bool,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    color: &Colorizer,
-    // Threaded into the post-removal info-regen block (real `--quiet`
-    // suppression + resolved-config `noinfo`); computed by the caller.
-    quiet: bool,
-    noinfo: bool,
-    // The `repos.conf` repos + resolved config -- threaded into the
-    // post-removal GLEP 42 count notice (backlog #196 fix round 1).
-    repos: &[portage_repo::RepoConfig],
-    config: &portage_profile::Config,
-) -> ExitCode {
-    run_prune_nodeps_or_clean(
+pub(crate) fn run_clean_pretend(args: RunCleanPretendArgs<'_>) -> ExitCode {
+    let RunCleanPretendArgs {
         targets,
         root,
         config_root,
@@ -197,35 +230,64 @@ pub(crate) fn run_clean_pretend(
         shell,
         debug,
         color,
-        true,
         quiet,
         noinfo,
         repos,
         config,
-    )
+    } = args;
+    run_prune_nodeps_or_clean(RunPruneNodepsOrCleanArgs {
+        targets,
+        root,
+        config_root,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        is_clean: true,
+        quiet,
+        noinfo,
+        repos,
+        config,
+    })
+}
+/// Arguments of [`run_prune_nodeps_or_clean`].
+pub(crate) struct RunPruneNodepsOrCleanArgs<'a> {
+    pub(crate) targets: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) is_clean: bool,
+    /// Threaded into the post-removal info-regen block (real `--quiet`
+    /// suppression + resolved-config `noinfo`); computed by the caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+    /// The `repos.conf` repos + resolved config -- threaded into the
+    /// post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
 }
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_prune_nodeps_or_clean(
-    targets: &[&str],
-    root: &Path,
-    config_root: &Path,
-    pretend: bool,
-    ask: bool,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    color: &Colorizer,
-    is_clean: bool,
-    // Threaded into the post-removal info-regen block (real `--quiet`
-    // suppression + resolved-config `noinfo`); computed by the caller.
-    quiet: bool,
-    noinfo: bool,
-    // The `repos.conf` repos + resolved config -- threaded into the
-    // post-removal GLEP 42 count notice (backlog #196 fix round 1).
-    repos: &[portage_repo::RepoConfig],
-    config: &portage_profile::Config,
-) -> ExitCode {
+pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> ExitCode {
+    let RunPruneNodepsOrCleanArgs {
+        targets,
+        root,
+        config_root,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        is_clean,
+        quiet,
+        noinfo,
+        repos,
+        config,
+    } = args;
     let action = if is_clean { "clean" } else { "prune" };
     let args = match resolve_cleanup_args(targets, root, action) {
         Ok(a) => a,
@@ -352,8 +414,8 @@ pub(crate) fn run_prune_nodeps_or_clean(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(
-            &removal_list,
+        return execute_unmerge(ExecuteUnmergeArgs {
+            removal_list: &removal_list,
             root,
             shell,
             debug,
@@ -362,7 +424,7 @@ pub(crate) fn run_prune_nodeps_or_clean(
             noinfo,
             repos,
             config,
-        );
+        });
     }
     ExitCode::SUCCESS
 }

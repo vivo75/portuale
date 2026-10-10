@@ -242,22 +242,22 @@ pub(crate) fn unread_news_counts(
             per_repo.push((repo.name.clone(), 0));
             continue;
         };
-        write_news_state_if_changed(
-            &root.join("var/lib/gentoo/news"),
-            &repo.name,
-            "unread",
-            &eval.unread_orig,
-            &eval.unread,
+        write_news_state_if_changed(WriteNewsStateIfChangedArgs {
+            news_state_dir: &root.join("var/lib/gentoo/news"),
+            repo_name: &repo.name,
+            suffix: "unread",
+            orig: &eval.unread_orig,
+            updated: &eval.unread,
             context,
-        );
-        write_news_state_if_changed(
-            &root.join("var/lib/gentoo/news"),
-            &repo.name,
-            "skip",
-            &eval.skip_orig,
-            &eval.skip,
+        });
+        write_news_state_if_changed(WriteNewsStateIfChangedArgs {
+            news_state_dir: &root.join("var/lib/gentoo/news"),
+            repo_name: &repo.name,
+            suffix: "skip",
+            orig: &eval.skip_orig,
+            updated: &eval.skip,
             context,
-        );
+        });
         per_repo.push((repo.name.clone(), eval.unread.len()));
     }
     per_repo
@@ -332,6 +332,14 @@ pub(crate) fn display_news_notice_if_any(
     print_news_notifications(&per_repo, color)
 }
 
+/// Arguments of [`offer_news_reading`].
+pub(crate) struct OfferNewsReadingArgs<'a> {
+    pub(crate) ask: bool,
+    pub(crate) read_news: bool,
+    pub(crate) notice_printed: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
 /// Backlog #231 (c): real `_emerge/actions.py::run_action`
 /// (`actions.py:4266-4281`) -- when the pre-resolution notice printed
 /// *and* `--ask` *and* `--read-news` are given, real asks "Would you
@@ -352,13 +360,13 @@ pub(crate) fn display_news_notice_if_any(
 /// first), matching real `actions.py:3917-3926`; under `--pretend`
 /// `ask` is already false, matching real's `--pretend` gate around the
 /// whole block.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn offer_news_reading(
-    ask: bool,
-    read_news: bool,
-    notice_printed: bool,
-    color: &Colorizer,
-) -> bool {
+pub(crate) fn offer_news_reading(args: OfferNewsReadingArgs<'_>) -> bool {
+    let OfferNewsReadingArgs {
+        ask,
+        read_news,
+        notice_printed,
+        color,
+    } = args;
     if !(ask && read_news && notice_printed) {
         return false;
     }
@@ -424,16 +432,25 @@ pub(crate) fn merge_failure_news_notice(
         display_news_notice_if_any(repos, root, config, color);
     }
 }
+/// Arguments of [`run_check_news`].
+pub(crate) struct RunCheckNewsArgs<'a> {
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) quiet: bool,
+    pub(crate) color: &'a Colorizer,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_check_news(
-    repos: &[portage_repo::RepoConfig],
-    root: &Path,
-    config_root: &Path,
-    config: &portage_profile::Config,
-    quiet: bool,
-    color: &Colorizer,
-) -> ExitCode {
+pub(crate) fn run_check_news(args: RunCheckNewsArgs<'_>) -> ExitCode {
+    let RunCheckNewsArgs {
+        repos,
+        root,
+        config_root,
+        config,
+        quiet,
+        color,
+    } = args;
     let context = news_context(repos, config_root, config);
     let per_repo = unread_news_counts(repos, root, &context);
     let any = per_repo.iter().any(|(_, count)| *count > 0);
@@ -465,6 +482,16 @@ pub(crate) fn grab_news_state_file(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Arguments of [`write_news_state_if_changed`].
+pub(crate) struct WriteNewsStateIfChangedArgs<'a> {
+    pub(crate) news_state_dir: &'a Path,
+    pub(crate) repo_name: &'a str,
+    pub(crate) suffix: &'a str,
+    pub(crate) orig: &'a std::collections::HashSet<String>,
+    pub(crate) updated: &'a std::collections::HashSet<String>,
+    pub(crate) context: &'a NewsContext,
+}
+
 /// Real `NewsManager.updateItems`'s own `write_atomic` calls
 /// (`news.py:183-200`): `news-<repo>.<suffix>` gets rewritten -- one id
 /// per line, sorted -- only when `updated` differs from `orig`, i.e. the
@@ -474,15 +501,15 @@ pub(crate) fn grab_news_state_file(path: &Path) -> Vec<String> {
 /// read on top of the umask mode (a root run lands `0664 root:portage`,
 /// backlog #258). The state directory itself was already prepared by
 /// [`ensure_news_state_dir`].
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn write_news_state_if_changed(
-    news_state_dir: &Path,
-    repo_name: &str,
-    suffix: &str,
-    orig: &std::collections::HashSet<String>,
-    updated: &std::collections::HashSet<String>,
-    context: &NewsContext,
-) {
+pub(crate) fn write_news_state_if_changed(args: WriteNewsStateIfChangedArgs<'_>) {
+    let WriteNewsStateIfChangedArgs {
+        news_state_dir,
+        repo_name,
+        suffix,
+        orig,
+        updated,
+        context,
+    } = args;
     if updated == orig {
         return;
     }

@@ -69,7 +69,14 @@ fn display_preserved_libs(
             if consumer_map.contains_key(f) {
                 continue;
             }
-            let consumers = match needed_elf::find_consumers(root, &map, &defpath, f, None, false) {
+            let consumers = match needed_elf::find_consumers(needed_elf::FindConsumersArgs {
+                root,
+                map: &map,
+                defpath: &defpath,
+                obj: f,
+                exclude_provider: None,
+                greedy: false,
+            }) {
                 Ok(set) => set,
                 Err(_) => {
                     let soname = f.rsplit('/').next().unwrap_or(f);

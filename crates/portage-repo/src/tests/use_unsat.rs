@@ -6,19 +6,28 @@ fn use_unsat_candidates_classify_change_use_and_missing_iuse() {
     // its "Only show the latest version" rule, direct on the fixture
     // repo -- the same rows the contract pins.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
-    let one =
-        |atom: &str| use_unsat_candidates_for_atom(&repos, &root, &[], atom, atom, None, &config);
+    let one = |atom: &str| {
+        use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+            repos: &repos,
+            root: &root,
+            entries: &[],
+            display_atom: atom,
+            evaluated_atom: atom,
+            owner: None,
+            config: &config,
+        })
+    };
     assert_eq!(
         one("dev-libs/unsatusealt[unsatuseorflag]"),
         Some(vec![(
@@ -62,19 +71,27 @@ fn use_unsat_candidates_count_conditional_flags_toward_missing_iuse() {
     // `=dev-libs/mia0a-2` (`mia0b[foo?,bar]`) prints the same row
     // (not portuale's `Change USE: +bar`).
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
     let scan = |display: &str, evaluated: &str| {
-        use_unsat_candidates_for_atom(&repos, &root, &[], display, evaluated, None, &config)
+        use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+            repos: &repos,
+            root: &root,
+            entries: &[],
+            display_atom: display,
+            evaluated_atom: evaluated,
+            owner: None,
+            config: &config,
+        })
     };
     // `foo?` alone: no unconditional flag at all, yet Missing IUSE.
     assert_eq!(

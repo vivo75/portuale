@@ -18,14 +18,14 @@ pub(crate) fn step_slot_conflict_backtrack(
     // real, where a downgraded parent is abandoned via its unsatisfiable
     // atom rather than pre-masked.
     if !pass.slot_conflicts.is_empty() {
-        let choices = slot_conflict_mask_choices(
-            &ctx.repos,
-            ctx.excluded,
-            grown,
-            &pass.slot_pullers,
-            &pass.slot_conflicts[0],
+        let choices = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
+            repos: &ctx.repos,
+            excluded: ctx.excluded,
+            params: grown,
+            slot_pullers: &pass.slot_pullers,
+            sc: &pass.slot_conflicts[0],
             config,
-        );
+        });
         // Novelty mirrors the old trial-dedup, compared on the full
         // entry (neg + reason, the same granularity the node-dedup
         // uses): at least one group member new to the search state. A
@@ -81,19 +81,20 @@ pub(crate) fn step_slot_conflict_backtrack(
                     ctx.excluded,
                     config,
                 );
-                let (force_consumers, forced) = slot_operator_update_force_scan(
-                    ctx.root,
-                    &ctx.repos,
-                    config,
-                    &pass.entries,
-                    &ctx.slot_op_reachable,
-                    &scheduled,
-                    &grown.slot_operator_undone,
-                    ctx.with_bdeps,
-                    ctx.update,
-                    &ctx.top_level_cps,
-                    ctx.excluded,
-                );
+                let (force_consumers, forced) =
+                    slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
+                        root: ctx.root,
+                        repos: &ctx.repos,
+                        config,
+                        entries: &pass.entries,
+                        reachable: &ctx.slot_op_reachable,
+                        already: &scheduled,
+                        undone: &grown.slot_operator_undone,
+                        with_bdeps: ctx.with_bdeps,
+                        update: ctx.update,
+                        top_level_cps: &ctx.top_level_cps,
+                        excluded: ctx.excluded,
+                    });
                 scheduled.extend(force_consumers);
                 grown.slot_operator_forced_upgrade.extend(forced);
                 grown.slot_operator_replace_installed = scheduled;

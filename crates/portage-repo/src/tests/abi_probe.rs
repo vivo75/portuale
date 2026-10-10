@@ -39,29 +39,29 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
             }
         }
         let empty_reach: HashSet<(String, String)> = HashSet::new();
-        let parents = collect_probe_parents(
-            &base,
+        let parents = collect_probe_parents(CollectProbeParentsArgs {
+            root: &base,
             entries,
-            &empty_reach,
-            &walked,
-            &in_graph,
+            reachable: &empty_reach,
+            walked: &walked,
+            in_graph: &in_graph,
             already,
-            true,
+            with_bdeps: true,
             excluded,
-        );
-        slot_conflict_abi_probe(
-            &base,
-            &repos,
+        });
+        slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+            root: &base,
+            repos: &repos,
             entries,
             conflicts,
             already,
-            &BTreeSet::new(),
-            true,
-            &walked,
+            undone: &BTreeSet::new(),
+            with_bdeps: true,
+            walked: &walked,
             excluded,
-            &parents,
-            &test_config(),
-        )
+            probe_parents: &parents,
+            config: &test_config(),
+        })
     };
     let abicons = ("app-misc".to_string(), "abicons".to_string());
     let entries = abi_probe_entries(installed_consumer.clone());
@@ -160,30 +160,30 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
             in_graph.insert((e.category.clone(), e.package.clone()));
         }
     }
-    let bare_parents = collect_probe_parents(
-        &bare_base,
-        &entries,
-        &HashSet::new(),
-        &walked,
-        &in_graph,
-        &BTreeSet::new(),
-        true,
-        &[],
-    );
+    let bare_parents = collect_probe_parents(CollectProbeParentsArgs {
+        root: &bare_base,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        walked: &walked,
+        in_graph: &in_graph,
+        already: &BTreeSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+    });
     assert!(
-        slot_conflict_abi_probe(
-            &bare_base,
-            &bare_repos,
-            &entries,
-            std::slice::from_ref(&record),
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            true,
-            &walked,
-            &[],
-            &bare_parents,
-            &test_config(),
-        )
+        slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+            root: &bare_base,
+            repos: &bare_repos,
+            entries: &entries,
+            conflicts: std::slice::from_ref(&record),
+            already: &BTreeSet::new(),
+            undone: &BTreeSet::new(),
+            with_bdeps: true,
+            walked: &walked,
+            excluded: &[],
+            probe_parents: &bare_parents,
+            config: &test_config()
+        })
         .is_empty(),
         "without a visible replacement the probe does nothing"
     );
@@ -238,30 +238,30 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
             .iter()
             .map(|e| (e.category.clone(), e.package.clone()))
             .collect();
-        let parents = collect_probe_parents(
-            &cond_base,
-            &cond_entries,
-            &HashSet::new(),
-            &walked,
-            &HashSet::new(),
-            &BTreeSet::new(),
-            true,
-            &[],
-        );
+        let parents = collect_probe_parents(CollectProbeParentsArgs {
+            root: &cond_base,
+            entries: &cond_entries,
+            reachable: &HashSet::new(),
+            walked: &walked,
+            in_graph: &HashSet::new(),
+            already: &BTreeSet::new(),
+            with_bdeps: true,
+            excluded: &[],
+        });
         assert!(
-            slot_conflict_abi_probe(
-                &cond_base,
-                &cond_repos,
-                &cond_entries,
-                std::slice::from_ref(&record),
-                &BTreeSet::new(),
-                &BTreeSet::new(),
-                true,
-                &walked,
-                &[],
-                &parents,
-                &test_config(),
-            )
+            slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+                root: &cond_base,
+                repos: &cond_repos,
+                entries: &cond_entries,
+                conflicts: std::slice::from_ref(&record),
+                already: &BTreeSet::new(),
+                undone: &BTreeSet::new(),
+                with_bdeps: true,
+                walked: &walked,
+                excluded: &[],
+                probe_parents: &parents,
+                config: &test_config()
+            })
             .is_empty(),
             "a conditional `:=` whose flag is off is not selected"
         );

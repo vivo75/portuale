@@ -48,55 +48,71 @@ pub(crate) fn still_listed_parents<'a>(
     }
     parents
 }
+/// Arguments of [`run_unmerge_pretend`].
+pub(crate) struct RunUnmergePretendArgs<'a> {
+    pub(crate) targets: &'a [&'a str],
+    /// Real `unmerge_action` -- `"unmerge"`, `"rage-clean"` (both remove
+    /// exactly the given atoms; `--rage-clean` only differs by skipping
+    /// `CLEAN_DELAY` + prerm/postrm, invisible at `--pretend`),
+    /// `"depclean"`, `"prune"`. Threaded into the `Couldn't find ... to
+    /// <action>` / `removal by <action>` / `Portage to <action> itself`
+    /// messages (real `f"... {unmerge_action}"`).
+    pub(crate) action: &'a str,
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    /// The `repos.conf` repos -- threaded into the post-removal GLEP 42
+    /// count notice (backlog #196 fix round 1: real `post_emerge` after
+    /// uninstall actions, `actions.py:4164-4175`).
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    /// Real `_unmerge_display`'s `ordered` flag (`unmerge.py:459`): when
+    /// `true` the per-package blocks are rendered in `targets` order and
+    /// *not* regrouped/re-sorted by `cat/pn`. Only `--depclean`'s own
+    /// topologically-sorted cleanlist sets this (`run_depclean_pretend`);
+    /// a plain `--unmerge`/`-C` from the CLI is always unordered.
+    pub(crate) preserve_order: bool,
+    /// `false` for a real `emerge -C <atom>` (no `--pretend`): the
+    /// `>>> These are the packages that would be unmerged:` header is
+    /// suppressed and `execute_unmerge` runs after the display. `true`
+    /// for `-pC` and for the `--depclean`/`--prune` preview reuse.
+    pub(crate) pretend: bool,
+    /// `--ask`/`-a`: prompt `Would you like to unmerge these packages?`
+    /// before the removal (real `unmerge.py:621`), then run the
+    /// `CLEAN_DELAY` countdown. Always `false` when `pretend` is `true`.
+    pub(crate) ask: bool,
+    /// `--shell bash|brush`: which real shell backend runs each removed
+    /// package's `pkg_prerm`/`pkg_postrm` (and the `FEATURES=unmerge-backup`
+    /// `quickpkg`). Inert when `pretend` is `true`.
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    /// `--debug`/`-d`: `PORTAGE_DEBUG=1` for the `pkg_prerm`/`pkg_postrm`
+    /// phases (and the `unmerge-backup` `quickpkg`). Inert when `pretend`.
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): the
+    /// post-removal info-regen einfo lines are suppressed. `noinfo` is the
+    /// resolved-config `FEATURES` read (`config_features_list`), computed
+    /// by each caller from the `config` already in its scope.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_unmerge_pretend(
-    targets: &[&str],
-    // Real `unmerge_action` -- `"unmerge"`, `"rage-clean"` (both remove
-    // exactly the given atoms; `--rage-clean` only differs by skipping
-    // `CLEAN_DELAY` + prerm/postrm, invisible at `--pretend`),
-    // `"depclean"`, `"prune"`. Threaded into the `Couldn't find ... to
-    // <action>` / `removal by <action>` / `Portage to <action> itself`
-    // messages (real `f"... {unmerge_action}"`).
-    action: &str,
-    root: &Path,
-    config_root: &Path,
-    config: &portage_profile::Config,
-    // The `repos.conf` repos -- threaded into the post-removal GLEP 42
-    // count notice (backlog #196 fix round 1: real `post_emerge` after
-    // uninstall actions, `actions.py:4164-4175`).
-    repos: &[portage_repo::RepoConfig],
-    // Real `_unmerge_display`'s `ordered` flag (`unmerge.py:459`): when
-    // `true` the per-package blocks are rendered in `targets` order and
-    // *not* regrouped/re-sorted by `cat/pn`. Only `--depclean`'s own
-    // topologically-sorted cleanlist sets this (`run_depclean_pretend`);
-    // a plain `--unmerge`/`-C` from the CLI is always unordered.
-    preserve_order: bool,
-    // `false` for a real `emerge -C <atom>` (no `--pretend`): the
-    // `>>> These are the packages that would be unmerged:` header is
-    // suppressed and `execute_unmerge` runs after the display. `true`
-    // for `-pC` and for the `--depclean`/`--prune` preview reuse.
-    pretend: bool,
-    // `--ask`/`-a`: prompt `Would you like to unmerge these packages?`
-    // before the removal (real `unmerge.py:621`), then run the
-    // `CLEAN_DELAY` countdown. Always `false` when `pretend` is `true`.
-    ask: bool,
-    // `--shell bash|brush`: which real shell backend runs each removed
-    // package's `pkg_prerm`/`pkg_postrm` (and the `FEATURES=unmerge-backup`
-    // `quickpkg`). Inert when `pretend` is `true`.
-    shell: ebuild_phases::ShellBackend,
-    // `--debug`/`-d`: `PORTAGE_DEBUG=1` for the `pkg_prerm`/`pkg_postrm`
-    // phases (and the `unmerge-backup` `quickpkg`). Inert when `pretend`.
-    debug: bool,
-    color: &Colorizer,
-    // Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): the
-    // post-removal info-regen einfo lines are suppressed. `noinfo` is the
-    // resolved-config `FEATURES` read (`config_features_list`), computed
-    // by each caller from the `config` already in its scope.
-    quiet: bool,
-    noinfo: bool,
-) -> ExitCode {
+pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
+    let RunUnmergePretendArgs {
+        targets,
+        action,
+        root,
+        config_root,
+        config,
+        repos,
+        preserve_order,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        noinfo,
+    } = args;
     if targets.is_empty() {
         eprintln!("emerge: no package atoms given to --{action}");
         return ExitCode::from(1);
@@ -399,8 +415,8 @@ pub(crate) fn run_unmerge_pretend(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(
-            &removal_list,
+        return execute_unmerge(ExecuteUnmergeArgs {
+            removal_list: &removal_list,
             root,
             shell,
             debug,
@@ -409,7 +425,7 @@ pub(crate) fn run_unmerge_pretend(
             noinfo,
             repos,
             config,
-        );
+        });
     }
     ExitCode::SUCCESS
 }
@@ -430,31 +446,42 @@ pub(crate) fn feature_enabled(token: &str) -> bool {
         .map(|f| f.split_whitespace().any(|t| t == token))
         .unwrap_or(false)
 }
+/// Arguments of [`execute_unmerge`].
+pub(crate) struct ExecuteUnmergeArgs<'a> {
+    pub(crate) removal_list: &'a [(String, String, String)],
+    pub(crate) root: &'a Path,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Real `--quiet` (`noiselimit < 0`): suppresses the info-regen einfo
+    /// lines. `noinfo` is the resolved-config `FEATURES` read, threaded
+    /// from the caller (real `"noinfo" not in settings.features`,
+    /// `post_emerge.py:127`).
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+    /// Backlog #196 fix round 1: real calls `post_emerge` after the
+    /// uninstall actions (clean/depclean/prune/unmerge/rage-clean --
+    /// `actions.py:4164-4175`, except deselect/buildpkgonly/fetchonly/
+    /// pretend), whose tail is the GLEP 42 count notice. `repos` +
+    /// `config` feed that notice; the vdb-changed gate is structural
+    /// (every caller only reaches here with a non-empty `removal_list`
+    /// and `pretend == false`).
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn execute_unmerge(
-    removal_list: &[(String, String, String)],
-    root: &Path,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    color: &Colorizer,
-    // Real `--quiet` (`noiselimit < 0`): suppresses the info-regen einfo
-    // lines. `noinfo` is the resolved-config `FEATURES` read, threaded
-    // from the caller (real `"noinfo" not in settings.features`,
-    // `post_emerge.py:127`).
-    quiet: bool,
-    noinfo: bool,
-    // Backlog #196 fix round 1: real calls `post_emerge` after the
-    // uninstall actions (clean/depclean/prune/unmerge/rage-clean --
-    // `actions.py:4164-4175`, except deselect/buildpkgonly/fetchonly/
-    // pretend), whose tail is the GLEP 42 count notice. `repos` +
-    // `config` feed that notice; the vdb-changed gate is structural
-    // (every caller only reaches here with a non-empty `removal_list`
-    // and `pretend == false`).
-    repos: &[portage_repo::RepoConfig],
-    config: &portage_profile::Config,
-) -> ExitCode {
+pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
+    let ExecuteUnmergeArgs {
+        removal_list,
+        root,
+        shell,
+        debug,
+        color,
+        quiet,
+        noinfo,
+        repos,
+        config,
+    } = args;
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let mut options = ebuild_merge::MergeOptions::from_env(shell, debug);
     // #333: `FEATURES=unmerge-orphans` keeps what the resolved
@@ -543,14 +570,14 @@ pub(crate) fn execute_unmerge(
             (format!("{category}/{pf}"), t_dir)
         })
         .collect();
-    crate::elog::process_batch(
-        &crate::elog::logdir(root),
-        &root.display().to_string(),
-        &items,
-        Some(&["prerm", "postrm"]),
+    crate::elog::process_batch(crate::elog::ProcessBatchArgs {
+        logdir: &crate::elog::logdir(root),
+        root_display: &root.display().to_string(),
+        items: &items,
+        phases: Some(&["prerm", "postrm"]),
         color,
-        feature_enabled("split-elog"),
-    );
+        split_elog: feature_enabled("split-elog"),
+    });
 
     // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
     // removed something, regenerate any stale GNU info directory index,

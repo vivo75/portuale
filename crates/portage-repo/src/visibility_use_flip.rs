@@ -2,6 +2,16 @@
 
 use crate::*;
 
+/// Arguments of [`flag_is_settable`].
+pub(crate) struct FlagIsSettableArgs<'a> {
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) flag: &'a str,
+    pub(crate) desired: bool,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Whether `flag` can actually be forced to `desired` via a
 /// `package.use` entry for `candidate` -- real `pkg.use.mask`/`pkg.use.
 /// force` (global `use.mask`/`use.force` folded in) always override
@@ -15,15 +25,15 @@ use crate::*;
 /// candidate appended and checks whether the result actually reflects
 /// `desired` -- if mask/force override it, the synthetic entry's own
 /// effect is silently discarded the same way a real one would be.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn flag_is_settable(
-    candidate: &Candidate,
-    category: &str,
-    package: &str,
-    flag: &str,
-    desired: bool,
-    config: &portage_profile::Config,
-) -> bool {
+pub(crate) fn flag_is_settable(args: FlagIsSettableArgs<'_>) -> bool {
+    let FlagIsSettableArgs {
+        candidate,
+        category,
+        package,
+        flag,
+        desired,
+        config,
+    } = args;
     let pf = format!("{package}-{}", candidate.version);
     let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf) else {
         return false;
@@ -125,7 +135,14 @@ pub(crate) fn suggested_use_flip(
         return None;
     }
     if changes.iter().any(|(flag, desired)| {
-        !flag_is_settable(candidate, category, package, flag, *desired, config)
+        !flag_is_settable(FlagIsSettableArgs {
+            candidate,
+            category,
+            package,
+            flag,
+            desired: *desired,
+            config,
+        })
     }) {
         return None;
     }
@@ -488,6 +505,16 @@ pub(crate) fn violated_parent_flags(
     involved
 }
 
+/// Arguments of [`viable_parent_flip_targets`].
+pub(crate) struct ViableParentFlipTargetsArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) unevaluated: &'a portage_dep::Atom,
+    pub(crate) evaluated: &'a portage_dep::Atom,
+    pub(crate) unevaluated_atom: &'a str,
+    pub(crate) parent_use: &'a HashSet<String>,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Real `_show_unsatisfied_dep`'s per-`missing_use`-package loop
 /// (`lib/_emerge/depgraph.py:6716-6858`), descending-cpv order: the
 /// version/slot-matching *visible* ebuilds behind the unevaluated atom
@@ -501,15 +528,17 @@ pub(crate) fn violated_parent_flags(
 /// ([`suggested_parent_use_candidate`]) and the display twin
 /// ([`use_unsat_parent_row`]) both walk this list and take the first
 /// viable candidate, mirroring real's return-True-on-first-collect.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn viable_parent_flip_targets(
-    repos: &[RepoConfig],
-    unevaluated: &portage_dep::Atom,
-    evaluated: &portage_dep::Atom,
-    unevaluated_atom: &str,
-    parent_use: &HashSet<String>,
-    config: &portage_profile::Config,
+    args: ViableParentFlipTargetsArgs<'_>,
 ) -> Vec<(Candidate, Vec<String>)> {
+    let ViableParentFlipTargetsArgs {
+        repos,
+        unevaluated,
+        evaluated,
+        unevaluated_atom,
+        parent_use,
+        config,
+    } = args;
     let category = unevaluated.category.clone();
     let package = unevaluated.package.clone();
     let Ok(candidates) = list_candidates(repos, &category, &package) else {
@@ -588,14 +617,14 @@ pub(crate) fn viable_parent_flip_targets(
             "{}/{}-{}:{}/{}::{}",
             category, package, c.version, c.slot, c.sub_slot, c.repo_name
         );
-        let stable = is_stable(
-            &c.keywords,
-            &candidate_str,
-            &category,
-            &package,
-            &config.accept_keywords,
-            &config.package_accept_keywords,
-        );
+        let stable = is_stable(IsStableArgs {
+            keywords: &c.keywords,
+            candidate_str: &candidate_str,
+            category: &category,
+            package: &package,
+            accept_keywords: &config.accept_keywords,
+            package_accept_keywords: &config.package_accept_keywords,
+        });
         let mut untouchable = resolved_use_mask_or_force(
             MaskOrForce::Mask,
             config,
@@ -691,14 +720,14 @@ pub(crate) fn suggested_parent_use_candidate(
         parent_use_state(repos, entries, owner, config)?;
     let evaluated_atom = portage_dep::evaluate_atom_conditionals(unevaluated_atom, &parent_use)?;
     let evaluated = portage_dep::parse_atom(&evaluated_atom)?;
-    for (_child, involved) in viable_parent_flip_targets(
+    for (_child, involved) in viable_parent_flip_targets(ViableParentFlipTargetsArgs {
         repos,
-        &unevaluated,
-        &evaluated,
+        unevaluated: &unevaluated,
+        evaluated: &evaluated,
         unevaluated_atom,
-        &parent_use,
+        parent_use: &parent_use,
         config,
-    ) {
+    }) {
         if involved.iter().any(|f| !parent_iuse.contains(f)) {
             continue;
         }
@@ -708,14 +737,14 @@ pub(crate) fn suggested_parent_use_candidate(
             .map(|f| (f.clone(), !parent_use.contains(f)))
             .collect();
         if target_use.iter().any(|(flag, desired)| {
-            !flag_is_settable(
-                &parent_candidate,
-                &owner.0,
-                &owner.1,
+            !flag_is_settable(FlagIsSettableArgs {
+                candidate: &parent_candidate,
+                category: &owner.0,
+                package: &owner.1,
                 flag,
-                *desired,
+                desired: *desired,
                 config,
-            )
+            })
         }) {
             continue;
         }

@@ -272,15 +272,15 @@ pub(crate) fn select_nodes(
                 ranges.push(&SATISFIED);
             }
             for lr in ranges {
-                if let Some((sub, ig)) = find_smallest_cycle(
+                if let Some((sub, ig)) = find_smallest_cycle(FindSmallestCycleArgs {
                     g,
-                    frontier.as_mut(),
+                    frontier: frontier.as_mut(),
                     entries,
-                    lr,
-                    &asap,
+                    range: lr,
+                    asap: &asap,
                     prefer_asap,
-                    &ineligible,
-                ) {
+                    ineligible: &ineligible,
+                }) {
                     used_ig = ig;
                     // `emerge --pretend --debug`: real
                     // `depgraph.py:9917-9930`'s `\nruntime cycle digraph
@@ -472,16 +472,16 @@ pub(crate) fn select_nodes(
                 .collect();
             eprintln!(
                 "{}",
-                mo_sel_trace_line(
-                    mo_iter,
-                    retlist_merges,
+                mo_sel_trace_line(MoSelTraceLineArgs {
+                    iter: mo_iter,
+                    retlist: retlist_merges,
                     alive,
-                    &asap_cpvs,
+                    asap: &asap_cpvs,
                     prefer_asap,
                     drop_satisfied,
-                    used_ig,
-                    &pick,
-                )
+                    ig: used_ig,
+                    pick: &pick
+                })
             );
         }
         prefer_asap = true;

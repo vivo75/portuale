@@ -185,6 +185,19 @@ pub(crate) async fn run_commands_async(
     Ok(0)
 }
 
+/// Arguments of [`run_commands`].
+pub struct RunCommandsArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub commands: &'a [&'a str],
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub distdir: &'a Path,
+    pub debug: bool,
+    pub config_root: &'a Path,
+    pub shell: ShellBackend,
+    pub build_env: &'a [(String, String)],
+}
+
 /// Synchronous entry point for `ebuild.rs` (which is not itself async --
 /// `emerge`'s own dispatch never needs an async runtime at all, so this
 /// portuale doesn't pay for one there; only this one code path does). Spins
@@ -204,19 +217,8 @@ pub(crate) async fn run_commands_async(
 /// once at the CLI boundary" shape `emerge`'s own `pretend.rs` already
 /// uses for `ROOT`/`PORTAGE_CONFIGROOT` via `root_from_env`/
 /// `config_root_from_env`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn run_commands(
-    ebuild_path: &Path,
-    commands: &[&str],
-    root: &Path,
-    portage_tmpdir: &Path,
-    distdir: &Path,
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    build_env: &[(String, String)],
-) -> Result<i32, String> {
-    run_commands_logged(
+pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
+    let RunCommandsArgs {
         ebuild_path,
         commands,
         root,
@@ -225,9 +227,34 @@ pub fn run_commands(
         debug,
         config_root,
         shell,
-        None,
         build_env,
-    )
+    } = args;
+    run_commands_logged(RunCommandsLoggedArgs {
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        log_file: None,
+        build_env,
+    })
+}
+
+/// Arguments of [`run_commands_logged`].
+pub struct RunCommandsLoggedArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub commands: &'a [&'a str],
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub distdir: &'a Path,
+    pub debug: bool,
+    pub config_root: &'a Path,
+    pub shell: ShellBackend,
+    pub log_file: Option<&'a Path>,
+    pub build_env: &'a [(String, String)],
 }
 
 /// Like `run_commands`, but when `log_file` is `Some`, every phase (and
@@ -236,19 +263,19 @@ pub fn run_commands(
 /// `PORTAGE_LOG_FILE` (default `${T}/build.log`). `run_build_scheduler`
 /// passes it so a parallel `--jobs` build's output doesn't interleave;
 /// the scheduler dumps the file on a build failure.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn run_commands_logged(
-    ebuild_path: &Path,
-    commands: &[&str],
-    root: &Path,
-    portage_tmpdir: &Path,
-    distdir: &Path,
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-    log_file: Option<&Path>,
-    build_env: &[(String, String)],
-) -> Result<i32, String> {
+pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, String> {
+    let RunCommandsLoggedArgs {
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        log_file,
+        build_env,
+    } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(run_commands_async(
         ebuild_path,

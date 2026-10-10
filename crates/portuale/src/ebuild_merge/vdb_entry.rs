@@ -27,6 +27,16 @@ pub(crate) fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<()
     txn.commit().map_err(|e| e.to_string())
 }
 
+/// Arguments of [`populate_vdb_tmp`].
+pub(crate) struct PopulateVdbTmpArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) build_info_dir: &'a Path,
+    pub(crate) slot: &'a str,
+    pub(crate) repository: &'a str,
+}
+
 /// Real `dblink.treewalk()`'s own info-file + `COUNTER` step (`vartree.py`,
 /// after `pkg_preinst`, before `_merge_contents` copies a single file to
 /// `${ROOT}`): copy *every* regular file directly under `build_info_dir`
@@ -49,15 +59,15 @@ pub(crate) fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<()
 /// `counter_tick_core` since #306: under the VDB lock, the max of the
 /// `counter` file and every installed package's own `COUNTER`, plus one,
 /// written atomically).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn populate_vdb_tmp(
-    root: &Path,
-    category: &str,
-    pf: &str,
-    build_info_dir: &Path,
-    slot: &str,
-    repository: &str,
-) -> Result<(), String> {
+pub(crate) fn populate_vdb_tmp(args: PopulateVdbTmpArgs<'_>) -> Result<(), String> {
+    let PopulateVdbTmpArgs {
+        root,
+        category,
+        pf,
+        build_info_dir,
+        slot,
+        repository,
+    } = args;
     let key = portage_vdb::EntryKey::new(category, pf);
     let db = portage_vdb::for_root(root);
     let mut txn = db.begin_write().map_err(|e| e.to_string())?;
@@ -151,6 +161,17 @@ pub(crate) fn publish_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(
     txn.commit().map_err(|e| e.to_string())
 }
 
+/// Arguments of [`publish_merged_entry`].
+pub(crate) struct PublishMergedEntryArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) preserve_paths: &'a BTreeSet<String>,
+    pub(crate) replaced: &'a [String],
+}
+
 /// The merge's publish step: the new entry goes live, the replaced
 /// same-slot entries go away, and the merge's preserved-libs registration
 /// (real `vartree.py:5266-5272`) is stored.
@@ -168,20 +189,27 @@ pub(crate) fn publish_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(
 ///   same value the published entry carries. Until this commit every
 ///   reader (`has_version` included) still sees the old instances; a
 ///   crash before it leaves them installed and the new row `merging`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn publish_merged_entry(
-    root: &Path,
-    category: &str,
-    pn: &str,
-    pf: &str,
-    main_slot: &str,
-    preserve_paths: &BTreeSet<String>,
-    replaced: &[String],
-) -> Result<(), String> {
+pub(crate) fn publish_merged_entry(args: PublishMergedEntryArgs<'_>) -> Result<(), String> {
+    let PublishMergedEntryArgs {
+        root,
+        category,
+        pn,
+        pf,
+        main_slot,
+        preserve_paths,
+        replaced,
+    } = args;
     let db = portage_vdb::for_root(root);
     if !db.replace_in_publish() {
         publish_vdb_tmp(root, category, pf)?;
-        return register_merge_preserved_libs(root, category, pn, pf, main_slot, preserve_paths);
+        return register_merge_preserved_libs(RegisterMergePreservedLibsArgs {
+            root,
+            category,
+            pn,
+            new_pf: pf,
+            main_slot,
+            preserve_paths,
+        });
     }
     let key = portage_vdb::EntryKey::new(category, pf);
     let libs = if preserve_paths.is_empty() {
@@ -193,15 +221,15 @@ pub(crate) fn publish_merged_entry(
             .flatten()
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .unwrap_or_else(|| "0".to_string());
-        plib_store(&merge_plib_registration(
+        plib_store(&merge_plib_registration(MergePlibRegistrationArgs {
             root,
             category,
             pn,
-            pf,
+            new_pf: pf,
             main_slot,
             preserve_paths,
-            &counter,
-        ))
+            new_counter: &counter,
+        }))
     };
     let old: Vec<portage_vdb::EntryKey> = replaced
         .iter()

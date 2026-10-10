@@ -136,9 +136,16 @@ pub(crate) fn slot_operator_rebuild_scan(
     // `_slot_operator_check_reverse_dependencies`, `depgraph.py:2472`).
     // Collected once per scan; the per-edge verdict reads the replace
     // set as it grows (see `probe_refused`).
-    let mut probe_parents = collect_probe_parents(
-        root, entries, reachable, &walked, &in_graph, already, with_bdeps, excluded,
-    );
+    let mut probe_parents = collect_probe_parents(CollectProbeParentsArgs {
+        root,
+        entries,
+        reachable,
+        walked: &walked,
+        in_graph: &in_graph,
+        already,
+        with_bdeps,
+        excluded,
+    });
     // #288: real records the arguments as parents too (`_add_parent_atom`),
     // so an argument pin vetoes a provider candidate it does not match.
     add_argument_probe_parents(&mut probe_parents, top_level_atoms);
@@ -431,14 +438,14 @@ pub(crate) fn slot_operator_rebuild_scan(
                             );
                             // #304: a replacement parent whose own atom
                             // accepts the new slot must exist.
-                            if !replacement_parent_accepts(
+                            if !replacement_parent_accepts(ReplacementParentAcceptsArgs {
                                 repos,
                                 config,
-                                (&pkg.category, &pkg.package, &pkg.slot),
+                                consumer: (&pkg.category, &pkg.package, &pkg.slot),
                                 dep_keys,
-                                (&atom.category, &atom.package),
-                                &cand,
-                            ) {
+                                provider: (&atom.category, &atom.package),
+                                candidate: &cand,
+                            }) {
                                 continue;
                             }
                             if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
@@ -490,16 +497,16 @@ pub(crate) fn slot_operator_rebuild_scan(
     // `masked` for `collect_feedback`'s `slot_operator_mask_built`
     // records.
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
-    slot_operator_slot_change_probe(
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root,
         repos,
         entries,
         undone,
-        &mut scheduled,
+        scheduled: &mut scheduled,
         excluded,
-        &mut masked,
+        masked: &mut masked,
         config,
-    );
+    });
 
     abi_rebuilds.sort();
     abi_rebuilds.dedup();

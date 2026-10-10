@@ -251,8 +251,14 @@ pub fn resolve_info_candidate(
     );
     // `all_flags = true` (real `pkg_use_display` for a non-installed
     // package renders every flag), no installed diff, no reinstall flags.
-    let use_expand_display =
-        build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new());
+    let use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
+        use_flags_display: &disp,
+        config,
+        installed: None,
+        forced: &forced,
+        all_flags: true,
+        reinst_flags: &HashSet::new(),
+    });
     // Real `action_info`'s `mypkgs` gate (`actions.py:1896-1900`): a
     // candidate is only listed in the per-package block when its EAPI is
     // 4+ and its `DEFINED_PHASES` names `info` (so `pkg_info()` can run).
@@ -437,8 +443,14 @@ pub fn resolve_info_binary_candidate(
             &atom.package,
             config,
         );
-        let use_expand_display =
-            build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new());
+        let use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &disp,
+            config,
+            installed: None,
+            forced: &forced,
+            all_flags: true,
+            reinst_flags: &HashSet::new(),
+        });
         return Ok(Some(InfoBinaryCandidate {
             cpv,
             repo_name: best.repo_name.clone(),
@@ -679,8 +691,14 @@ pub fn resolve_installed_info(
             &atom.package,
             config,
         );
-        let use_expand_display =
-            build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new());
+        let use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &disp,
+            config,
+            installed: None,
+            forced: &forced,
+            all_flags: true,
+            reinst_flags: &HashSet::new(),
+        });
 
         // Real `mydesiredvars` sourcing (`actions.py:2335-2342` over
         // `_aux_env_search`): the saved env, or nothing -- a var the

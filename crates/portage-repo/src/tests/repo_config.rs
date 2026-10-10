@@ -255,21 +255,21 @@ fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_tim
         ("dev-libs".to_string(), "whtarget".to_string()),
         ("dev-libs".to_string(), "rdctarget".to_string()),
     ]);
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &repos,
-        &root,
-        &entries,
-        true,
-        &[],
-        &hard_want,
-        &reachable,
-        true,
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &portage_profile::Config::default(),
-        false,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &repos,
+        root: &root,
+        entries: &entries,
+        with_bdeps: true,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
     assert_eq!(
         enforced.len(),
         1,

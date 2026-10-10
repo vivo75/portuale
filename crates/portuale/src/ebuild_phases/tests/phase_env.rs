@@ -202,16 +202,16 @@ fn standalone_phase_env_layers_matching_package_env_build_vars() {
             &portage_tmpdir,
         )
         .expect("fixture ebuild parses");
-        phase_env_vars(
-            &env,
-            &fixtures,
-            phase,
-            false,
-            &bin_dir,
-            &bin_dir.join("ebuild-helpers"),
-            &fixtures,
-            &[],
-        )
+        phase_env_vars(PhaseEnvVarsArgs {
+            env: &env,
+            root: &fixtures,
+            ebuild_phase_value: phase,
+            debug: false,
+            bin_dir: &bin_dir,
+            helpers_dir: &bin_dir.join("ebuild-helpers"),
+            config_root: &fixtures,
+            extra_env: &[],
+        })
     };
     let get = |vars: &[(String, String)], key: &str| {
         vars.iter()

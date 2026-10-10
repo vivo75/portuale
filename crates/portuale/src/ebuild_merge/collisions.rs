@@ -65,15 +65,15 @@ pub(crate) fn blocked_installed_packages(
             .iter()
             .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
             .collect();
-        let config = portage_profile::resolve_config(
+        let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
             config_root,
-            &main_repo.location,
-            &overlay_repos,
-            &repo_aliases,
-            &main_repo.name,
-            &repo_masters,
-            root,
-        )
+            main_repo_location: &main_repo.location,
+            overlay_repos: &overlay_repos,
+            repo_aliases: &repo_aliases,
+            main_repo_name: &main_repo.name,
+            repo_masters: &repo_masters,
+            eroot: root,
+        })
         .ok()?;
 
         let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
@@ -209,19 +209,31 @@ pub(crate) fn blockers_from_flat_deps(
 /// unconditionally, regardless of `FEATURES`).
 pub(crate) type CollisionsResult =
     Result<(Vec<String>, Vec<String>, BTreeMap<String, BTreeSet<String>>), String>;
+/// Arguments of [`find_collisions`].
+pub(crate) struct FindCollisionsArgs<'a> {
+    pub(crate) d: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) config_protect: &'a str,
+    pub(crate) config_protect_mask: &'a str,
+    pub(crate) plib_inodes: &'a HashMap<(u64, u64), Vec<(String, String)>>,
+    pub(crate) blocked: &'a HashSet<(String, String)>,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn find_collisions(
-    d: &Path,
-    root: &Path,
-    category: &str,
-    package: &str,
-    slot: &str,
-    config_protect: &str,
-    config_protect_mask: &str,
-    plib_inodes: &HashMap<(u64, u64), Vec<(String, String)>>,
-    blocked: &HashSet<(String, String)>,
-) -> CollisionsResult {
+pub(crate) fn find_collisions(args: FindCollisionsArgs<'_>) -> CollisionsResult {
+    let FindCollisionsArgs {
+        d,
+        root,
+        category,
+        package,
+        slot,
+        config_protect,
+        config_protect_mask,
+        plib_inodes,
+        blocked,
+    } = args;
     let own_versions: Vec<String> = portage_repo::installed_versions(root, category, package)
         .into_iter()
         .filter(|version| {

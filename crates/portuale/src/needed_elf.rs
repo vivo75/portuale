@@ -1046,6 +1046,16 @@ impl LibGraph {
     }
 }
 
+/// Arguments of [`find_consumers`].
+pub struct FindConsumersArgs<'a> {
+    pub root: &'a Path,
+    pub map: &'a LinkageMap,
+    pub defpath: &'a [String],
+    pub obj: &'a str,
+    pub exclude_provider: Option<&'a dyn Fn(&str) -> bool>,
+    pub greedy: bool,
+}
+
 /// Real `LinkageMap.findConsumers()` (`LinkageMapELF.py:817-960`),
 /// narrowed to the one real calling convention `_find_libs_to_preserve`
 /// itself actually uses: `obj` is always a path string (never an
@@ -1070,15 +1080,15 @@ impl LibGraph {
 /// `Err` for a real `KeyError` (matching portuale's own established
 /// error-string convention) -- `obj` itself not a real indexed object at
 /// all.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn find_consumers(
-    root: &Path,
-    map: &LinkageMap,
-    defpath: &[String],
-    obj: &str,
-    exclude_provider: Option<&dyn Fn(&str) -> bool>,
-    greedy: bool,
-) -> Result<BTreeSet<String>, String> {
+pub fn find_consumers(args: FindConsumersArgs<'_>) -> Result<BTreeSet<String>, String> {
+    let FindConsumersArgs {
+        root,
+        map,
+        defpath,
+        obj,
+        exclude_provider,
+        greedy,
+    } = args;
     let obj_key_val = obj_key(root, obj);
     let Some(obj_props) = map.obj_properties.get(&obj_key_val) else {
         return Err(format!("{obj_key_val:?} ({obj}) not in object list"));
@@ -1164,6 +1174,16 @@ pub fn find_consumers(
     Ok(result)
 }
 
+/// Arguments of [`find_libs_to_preserve`].
+pub struct FindLibsToPreserveArgs<'a> {
+    pub root: &'a Path,
+    pub map: &'a LinkageMap,
+    pub defpath: &'a [String],
+    pub old_contents: &'a [String],
+    pub old_owner_is_owner: &'a dyn Fn(&str) -> bool,
+    pub new_owner_is_owner: &'a dyn Fn(&str) -> bool,
+}
+
 /// Real `dblink._find_libs_to_preserve()` (`vartree.py:3491-3595`),
 /// narrowed to its own pure computation: the real gating conditions
 /// (`_linkmap_broken`, `_plib_registry is None`, `FEATURES=preserve-libs`
@@ -1196,22 +1216,28 @@ pub fn find_consumers(
 /// For each, real hardlink/soname-symlink classification decides what to
 /// actually preserve (skipping a candidate the *new* package already
 /// replaces both the real file *and* the soname symlink for).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn find_libs_to_preserve(
-    root: &Path,
-    map: &LinkageMap,
-    defpath: &[String],
-    old_contents: &[String],
-    old_owner_is_owner: &dyn Fn(&str) -> bool,
-    new_owner_is_owner: &dyn Fn(&str) -> bool,
-) -> BTreeSet<String> {
+pub fn find_libs_to_preserve(args: FindLibsToPreserveArgs<'_>) -> BTreeSet<String> {
+    let FindLibsToPreserveArgs {
+        root,
+        map,
+        defpath,
+        old_contents,
+        old_owner_is_owner,
+        new_owner_is_owner,
+    } = args;
     let mut graph = LibGraph::default();
     let mut consumer_map: BTreeMap<ObjKey, BTreeSet<String>> = BTreeMap::new();
     let mut provider_nodes: BTreeSet<ObjKey> = BTreeSet::new();
 
     for f in old_contents {
-        let Ok(consumers) = find_consumers(root, map, defpath, f, Some(old_owner_is_owner), true)
-        else {
+        let Ok(consumers) = find_consumers(FindConsumersArgs {
+            root,
+            map,
+            defpath,
+            obj: f,
+            exclude_provider: Some(old_owner_is_owner),
+            greedy: true,
+        }) else {
             continue;
         };
         if consumers.is_empty() {
@@ -1766,8 +1792,15 @@ mod tests {
         let map = rebuild(&root, &owner_entries);
         let defpath = vec!["/usr/lib".to_string()];
 
-        let consumers =
-            find_consumers(&root, &map, &defpath, "/usr/lib/libfoo.so.1", None, true).unwrap();
+        let consumers = find_consumers(FindConsumersArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            obj: "/usr/lib/libfoo.so.1",
+            exclude_provider: None,
+            greedy: true,
+        })
+        .unwrap();
         assert_eq!(consumers, BTreeSet::from(["/usr/bin/app".to_string()]));
     }
 
@@ -1791,8 +1824,15 @@ mod tests {
         // path both miss it, so it can never actually be found.
         let defpath = vec!["/usr/lib".to_string()];
 
-        let consumers =
-            find_consumers(&root, &map, &defpath, "/opt/hidden/libfoo.so.1", None, true).unwrap();
+        let consumers = find_consumers(FindConsumersArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            obj: "/opt/hidden/libfoo.so.1",
+            exclude_provider: None,
+            greedy: true,
+        })
+        .unwrap();
         assert!(consumers.is_empty());
     }
 
@@ -1826,14 +1866,14 @@ mod tests {
         // Querying the excluded provider: app is satisfied elsewhere
         // (the real, non-excluded /usr/lib/libfoo.so.1), so it's not
         // reported as a real consumer of the excluded one.
-        let consumers = find_consumers(
-            &root,
-            &map,
-            &defpath,
-            "/usr/lib/excluded/libfoo.so.1",
-            Some(&exclude),
-            true,
-        )
+        let consumers = find_consumers(FindConsumersArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            obj: "/usr/lib/excluded/libfoo.so.1",
+            exclude_provider: Some(&exclude),
+            greedy: true,
+        })
         .unwrap();
         assert!(consumers.is_empty(), "{consumers:?}");
     }
@@ -1858,14 +1898,14 @@ mod tests {
         let map = rebuild(&root, &owner_entries);
         let defpath = vec!["/usr/lib".to_string()];
 
-        let consumers = find_consumers(
-            &root,
-            &map,
-            &defpath,
-            "/usr/lib/libfoo.so.1.2.3",
-            None,
-            true,
-        )
+        let consumers = find_consumers(FindConsumersArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            obj: "/usr/lib/libfoo.so.1.2.3",
+            exclude_provider: None,
+            greedy: true,
+        })
         .unwrap();
         assert!(consumers.is_empty());
     }
@@ -1874,7 +1914,17 @@ mod tests {
     fn find_consumers_errors_for_an_object_not_in_the_map() {
         let root = tempdir();
         let map = LinkageMap::default();
-        assert!(find_consumers(&root, &map, &[], "/nope", None, true).is_err());
+        assert!(
+            find_consumers(FindConsumersArgs {
+                root: &root,
+                map: &map,
+                defpath: &[],
+                obj: "/nope",
+                exclude_provider: None,
+                greedy: true
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -1898,8 +1948,14 @@ mod tests {
         let old_owner = |p: &str| p == "/usr/lib/libfoo.so.1";
         let new_owner = |_: &str| false;
 
-        let preserved =
-            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        let preserved = find_libs_to_preserve(FindLibsToPreserveArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner,
+            new_owner_is_owner: &new_owner,
+        });
         assert_eq!(
             preserved,
             BTreeSet::from(["/usr/lib/libfoo.so.1".to_string()])
@@ -1945,8 +2001,14 @@ mod tests {
         // and the soname symlink itself -- nothing to preserve.
         let new_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
 
-        let preserved =
-            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        let preserved = find_libs_to_preserve(FindLibsToPreserveArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner,
+            new_owner_is_owner: &new_owner,
+        });
         assert!(preserved.is_empty(), "{preserved:?}");
     }
 
@@ -1964,8 +2026,14 @@ mod tests {
         let old_owner = |p: &str| p == "/usr/lib/unused.so.1";
         let new_owner = |_: &str| false;
 
-        let preserved =
-            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        let preserved = find_libs_to_preserve(FindLibsToPreserveArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner,
+            new_owner_is_owner: &new_owner,
+        });
         assert!(preserved.is_empty());
     }
 

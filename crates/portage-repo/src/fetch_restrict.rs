@@ -2,6 +2,16 @@
 
 use crate::*;
 
+/// Arguments of [`use_flags_if_conditional`].
+pub(crate) struct UseFlagsIfConditionalArgs<'a> {
+    pub(crate) value_str: &'a str,
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Whether `candidate`'s own declared LICENSE is fully accepted -- real
 /// `Package.py`'s own `settings._getMissingLicenses` check (via
 /// `LicenseManager.getMissingLicenses`/`_getPkgAcceptLicense`).
@@ -37,15 +47,15 @@ use crate::*;
 /// `?` at all -- real `use_reduce`'s own "if '?' in license_str"
 /// optimization, shared by every metadata key that needs this same
 /// "resolve USE, but only when it could possibly matter" treatment.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn use_flags_if_conditional(
-    value_str: &str,
-    candidate: &Candidate,
-    category: &str,
-    package: &str,
-    candidate_str: &str,
-    config: &portage_profile::Config,
-) -> HashSet<String> {
+pub(crate) fn use_flags_if_conditional(args: UseFlagsIfConditionalArgs<'_>) -> HashSet<String> {
+    let UseFlagsIfConditionalArgs {
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    } = args;
     if !value_str.contains('?') {
         return HashSet::new();
     }
@@ -63,6 +73,16 @@ pub(crate) fn use_flags_if_conditional(
     .clone()
 }
 
+/// Arguments of [`evaluated_metadata_tokens`].
+pub(crate) struct EvaluatedMetadataTokensArgs<'a> {
+    pub(crate) value_str: &'a str,
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// A candidate's own `PROPERTIES` (or `RESTRICT`) tokens after real
 /// USE-conditional evaluation against this candidate's own effective USE
 /// -- real `_PackageMetadataWrapper.__getitem__`'s own `use_reduce(...)`
@@ -76,30 +96,40 @@ pub(crate) fn use_flags_if_conditional(
 /// `metadata_key_accepted` already documents. An unparsable value yields
 /// an empty set (the token simply won't be found), the "can't tell, so
 /// don't claim it" precedent this crate already sets elsewhere.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn evaluated_metadata_tokens(
-    value_str: &str,
-    candidate: &Candidate,
-    category: &str,
-    package: &str,
-    candidate_str: &str,
-    config: &portage_profile::Config,
-) -> HashSet<String> {
-    if value_str.trim().is_empty() {
-        return HashSet::new();
-    }
-    let use_flags = use_flags_if_conditional(
+pub(crate) fn evaluated_metadata_tokens(args: EvaluatedMetadataTokensArgs<'_>) -> HashSet<String> {
+    let EvaluatedMetadataTokensArgs {
         value_str,
         candidate,
         category,
         package,
         candidate_str,
         config,
-    );
+    } = args;
+    if value_str.trim().is_empty() {
+        return HashSet::new();
+    }
+    let use_flags = use_flags_if_conditional(UseFlagsIfConditionalArgs {
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    });
     let tokens: Vec<String> = value_str.split_whitespace().map(String::from).collect();
     portage_use_reduce::use_reduce_flat(&tokens, &use_flags, portage_use_reduce::MatchMode::Normal)
         .map(|flat| flat.into_iter().filter(|t| t != "||").collect())
         .unwrap_or_default()
+}
+
+/// Arguments of [`fetch_restrict_files_all_present`].
+pub(crate) struct FetchRestrictFilesAllPresentArgs<'a> {
+    pub(crate) src_uri: &'a str,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) repo_location: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) distdir: &'a Path,
 }
 
 /// Real `output.py:636`'s own `not getfetchsizes(cpv, useflags=…,
@@ -114,15 +144,15 @@ pub(crate) fn evaluated_metadata_tokens(
 /// satisfied -- the loud `F` column, same "can't tell, so don't claim
 /// it's fine" precedent as `evaluated_metadata_tokens` above. An empty
 /// `SRC_URI` (no distfiles at all) is trivially satisfied.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn fetch_restrict_files_all_present(
-    src_uri: &str,
-    use_flags: &HashSet<String>,
-    repo_location: &Path,
-    category: &str,
-    package: &str,
-    distdir: &Path,
-) -> bool {
+pub(crate) fn fetch_restrict_files_all_present(args: FetchRestrictFilesAllPresentArgs<'_>) -> bool {
+    let FetchRestrictFilesAllPresentArgs {
+        src_uri,
+        use_flags,
+        repo_location,
+        category,
+        package,
+        distdir,
+    } = args;
     let Ok(files) = flatten_src_uri_with_use(src_uri, use_flags) else {
         return false;
     };
@@ -157,6 +187,16 @@ pub(crate) fn flatten_src_uri_with_use(
     .map_err(Error::Fetch)
 }
 
+/// Arguments of [`fetch_bytes_to_download`].
+pub(crate) struct FetchBytesToDownloadArgs<'a> {
+    pub(crate) src_uri: &'a str,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) repo_location: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) distdir: &'a Path,
+}
+
 /// Real `output.py:300-332`'s own per-package `_calc_size` contribution
 /// to `counters.totalsize` -- `db.getfetchsizes(cpv, useflags=pkg.use,
 /// myrepo=…)` (no `only_restricted`): every one of this candidate's own
@@ -168,15 +208,15 @@ pub(crate) fn flatten_src_uri_with_use(
 /// distfile with no `Manifest` `DIST` line, yields an empty list -- real
 /// `getfetchsizes` returns `None` for an incomplete digest map and
 /// `_calc_size` then adds nothing (`"[empty/missing/bad digest]"`).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn fetch_bytes_to_download(
-    src_uri: &str,
-    use_flags: &HashSet<String>,
-    repo_location: &Path,
-    category: &str,
-    package: &str,
-    distdir: &Path,
-) -> Vec<(String, u64)> {
+pub(crate) fn fetch_bytes_to_download(args: FetchBytesToDownloadArgs<'_>) -> Vec<(String, u64)> {
+    let FetchBytesToDownloadArgs {
+        src_uri,
+        use_flags,
+        repo_location,
+        category,
+        package,
+        distdir,
+    } = args;
     let Ok(files) = flatten_src_uri_with_use(src_uri, use_flags) else {
         return Vec::new();
     };

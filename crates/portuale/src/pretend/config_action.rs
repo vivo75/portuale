@@ -2,6 +2,16 @@
 
 use crate::pretend::*;
 
+/// Arguments of [`run_config_action`].
+pub(crate) struct RunConfigActionArgs<'a> {
+    pub(crate) atom_args: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) ask: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
 /// Real `_emerge/actions.py::action_config` (`emerge --config <atom>`):
 /// run `pkg_config` for a single installed package. Exactly one atom
 /// (real `if len(myfiles) != 1`), matched against the vdb the same way
@@ -18,15 +28,15 @@ use crate::pretend::*;
 /// **v1 cuts:** `--ask` (the interactive package picker / "Ready to
 /// configure?" prompt) -- portuale is non-interactive, matching real
 /// portage's own non-`--ask` branch; `elog` processing.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_config_action(
-    atom_args: &[&str],
-    root: &Path,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    ask: bool,
-    color: &Colorizer,
-) -> ExitCode {
+pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
+    let RunConfigActionArgs {
+        atom_args,
+        root,
+        shell,
+        debug,
+        ask,
+        color,
+    } = args;
     if atom_args.len() != 1 {
         // Real `action_config`: `print(red("!!! ...\n"))` -- stdout, with
         // the string's own trailing newline plus `print`'s.

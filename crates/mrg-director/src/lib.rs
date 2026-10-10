@@ -1046,16 +1046,16 @@ pub struct WgetFetcher;
 impl Fetcher for WgetFetcher {
     fn fetch(&self, request: &FetchRequest<'_>) -> Result<(), String> {
         let distdir = request.dest.parent().unwrap_or_else(|| Path::new("."));
-        portage_fetch::download_with_commands(
-            request.uri,
-            request.dest,
-            request.resume,
+        portage_fetch::download_with_commands(portage_fetch::DownloadWithCommandsArgs {
+            uri: request.uri,
+            dest: request.dest,
+            resume: request.resume,
             distdir,
-            request.vars,
-            request
+            vars: request.vars,
+            commands: request
                 .commands
                 .unwrap_or_else(|| portage_fetch::default_commands()),
-        )
+        })
     }
 }
 
@@ -1144,14 +1144,14 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
         package: &str,
         version: &str,
     ) -> Option<std::collections::HashMap<String, String>> {
-        portage_repo::read_binary_metadata_any(
-            self.config,
-            self.root,
-            self.local,
+        portage_repo::read_binary_metadata_any(portage_repo::ReadBinaryMetadataAnyArgs {
+            config: self.config,
+            root: self.root,
+            local: self.local,
             category,
             package,
             version,
-        )
+        })
     }
     fn metadata_with_source(
         &self,
@@ -1504,18 +1504,28 @@ mod tests {
         TempDir::new(prefix).keep()
     }
 
+    /// Arguments of [`write_vdb_entry`].
+    struct WriteVdbEntryArgs<'a> {
+        root: &'a Path,
+        category: &'a str,
+        package: &'a str,
+        version: &'a str,
+        slot: &'a str,
+        files: &'a [(&'a str, &'a str)],
+    }
+
     /// Write one vdb entry: `<root>/var/db/pkg/<cat>/<pkg>-<ver>/` with
     /// the given `SLOT` plus `(filename, content)` files (`CONTENTS`,
     /// `USE`, `RDEPEND`, …).
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn write_vdb_entry(
-        root: &Path,
-        category: &str,
-        package: &str,
-        version: &str,
-        slot: &str,
-        files: &[(&str, &str)],
-    ) {
+    fn write_vdb_entry(args: WriteVdbEntryArgs<'_>) {
+        let WriteVdbEntryArgs {
+            root,
+            category,
+            package,
+            version,
+            slot,
+            files,
+        } = args;
         let dir = root
             .join("var/db/pkg")
             .join(category)
@@ -1624,13 +1634,13 @@ mod tests {
     #[test]
     fn packages_db_vdb_reader_reads_a_real_vdb_tree() {
         let root = tempdir("mrg_director_vdb");
-        write_vdb_entry(
-            &root,
-            "dev-libs",
-            "example",
-            "1.0",
-            "0",
-            &[
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "example",
+            version: "1.0",
+            slot: "0",
+            files: &[
                 (
                     "CONTENTS",
                     "obj /usr/lib/libx.a abc 123\nsym /usr/lib/libx.so -> libx.a 123\ndir /usr/lib\n",
@@ -1638,27 +1648,27 @@ mod tests {
                 ("USE", ""),
                 ("RDEPEND", ""),
             ],
-        );
-        write_vdb_entry(
-            &root,
-            "dev-libs",
-            "example",
-            "2.0",
-            "0",
-            &[("CONTENTS", "obj /usr/lib/libx.so.2 def 456\n")],
-        );
-        write_vdb_entry(
-            &root,
-            "dev-libs",
-            "consumer",
-            "1.0",
-            "0",
-            &[
+        });
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "example",
+            version: "2.0",
+            slot: "0",
+            files: &[("CONTENTS", "obj /usr/lib/libx.so.2 def 456\n")],
+        });
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "consumer",
+            version: "1.0",
+            slot: "0",
+            files: &[
                 ("CONTENTS", "obj /usr/lib/libc.a 000 1\n"),
                 ("USE", ""),
                 ("RDEPEND", "dev-libs/example"),
             ],
-        );
+        });
         let db = VdbReader::new(&root);
         assert_eq!(
             db.root().to_str(),

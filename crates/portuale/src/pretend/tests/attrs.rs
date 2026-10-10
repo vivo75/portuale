@@ -60,36 +60,60 @@ fn attr_display_field_carries_the_seventh_mask_column_unless_quiet() {
     // `include_mask` false). A plain reinstall with no keyword/hard
     // mask -> `I N S f U D` = `  R   ` then a bare space.
     let nc = Colorizer::new(false);
-    let plain = attr_display_field(
-        false, false, false, false, true, false, false, false, false, false, None, true, &nc,
-    );
+    let plain = attr_display_field(AttrDisplayFieldArgs {
+        interactive: false,
+        new: false,
+        force_reinstall: false,
+        new_slot: false,
+        replace: true,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        remote_binary: false,
+        new_version: false,
+        downgrade: false,
+        mask: None,
+        include_mask: true,
+        color: &nc,
+    });
     assert_eq!(plain, "  R    ");
     assert_eq!(plain.chars().count(), 7);
 
     // Same entry under `--quiet`: 6 columns, no mask slot.
-    let quiet = attr_display_field(
-        false, false, false, false, true, false, false, false, false, false, None, false, &nc,
-    );
+    let quiet = attr_display_field(AttrDisplayFieldArgs {
+        interactive: false,
+        new: false,
+        force_reinstall: false,
+        new_slot: false,
+        replace: true,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        remote_binary: false,
+        new_version: false,
+        downgrade: false,
+        mask: None,
+        include_mask: false,
+        color: &nc,
+    });
     assert_eq!(quiet, "  R   ");
     assert_eq!(quiet.chars().count(), 6);
 
     // A `~arch`-only-visible New -> the 7th column is `~`
     // (`gen_mask_str` "unstable"), not a space.
-    let masked = attr_display_field(
-        false,
-        true,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        Some('~'),
-        true,
-        &nc,
-    );
+    let masked = attr_display_field(AttrDisplayFieldArgs {
+        interactive: false,
+        new: true,
+        force_reinstall: false,
+        new_slot: false,
+        replace: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        remote_binary: false,
+        new_version: false,
+        downgrade: false,
+        mask: Some('~'),
+        include_mask: true,
+        color: &nc,
+    });
     assert_eq!(masked, " N    ~");
     assert_eq!(masked.chars().count(), 7);
 }
@@ -108,19 +132,46 @@ fn use_suffix_picks_the_p_or_pv_use_rendering_by_verbosity() {
         "bar -baz",
     );
     assert_eq!(
-        use_suffix(&new, false, false, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &new,
+            verbose: false,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar -baz\" "
     );
     assert_eq!(
-        use_suffix(&new, true, false, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &new,
+            verbose: true,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar -baz\" "
     );
     // `--quiet` (verbosity 1): no USE line at all unless `-v` too.
-    assert_eq!(use_suffix(&new, false, true, false, &nc), "");
+    assert_eq!(
+        use_suffix(UseSuffixArgs {
+            entry: &new,
+            verbose: false,
+            quiet: true,
+            alphabetical: false,
+            color: &nc
+        }),
+        ""
+    );
     // `-pvq`: `print_use_string` true again, `all_flags` true -> the
     // full list (like `-pv`).
     assert_eq!(
-        use_suffix(&new, true, true, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &new,
+            verbose: true,
+            quiet: true,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar -baz\" "
     );
 
@@ -140,16 +191,34 @@ fn use_suffix_picks_the_p_or_pv_use_rendering_by_verbosity() {
         "bar*",
     );
     assert_eq!(
-        use_suffix(&reinstall, false, false, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &reinstall,
+            verbose: false,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar*\" "
     );
     assert_eq!(
-        use_suffix(&reinstall, true, false, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &reinstall,
+            verbose: true,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar* -baz\" "
     );
     // `-pvq`: full list, same as `-pv`.
     assert_eq!(
-        use_suffix(&reinstall, true, true, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &reinstall,
+            verbose: true,
+            quiet: true,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar* -baz\" "
     );
 
@@ -167,15 +236,36 @@ fn use_suffix_picks_the_p_or_pv_use_rendering_by_verbosity() {
         "bar -baz",
         "",
     );
-    assert_eq!(use_suffix(&unchanged, false, false, false, &nc), "");
     assert_eq!(
-        use_suffix(&unchanged, true, false, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &unchanged,
+            verbose: false,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
+        ""
+    );
+    assert_eq!(
+        use_suffix(UseSuffixArgs {
+            entry: &unchanged,
+            verbose: true,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar -baz\" "
     );
     // `-pvq`: `all_flags` true -> the full list shows even though
     // nothing changed.
     assert_eq!(
-        use_suffix(&unchanged, true, true, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &unchanged,
+            verbose: true,
+            quiet: true,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar -baz\" "
     );
 }
@@ -199,10 +289,23 @@ fn nomerge_row_carries_the_use_suffix_when_the_package_has_one() {
         "x",
         "x",
     );
-    let use_str = use_suffix(&gpcyclea, false, false, false, &nc);
+    let use_str = use_suffix(UseSuffixArgs {
+        entry: &gpcyclea,
+        verbose: false,
+        quiet: false,
+        alphabetical: false,
+        color: &nc,
+    });
     assert_eq!(use_str, " USE=\"x\" ");
     assert_eq!(
-        nomerge_row("dev-libs", "gpcyclea", "1.0", " ", false, &use_str),
+        nomerge_row(NomergeRowArgs {
+            category: "dev-libs",
+            package: "gpcyclea",
+            disp_ver: "1.0",
+            indent: " ",
+            quiet: false,
+            tail: &use_str
+        }),
         "[nomerge       ]  dev-libs/gpcyclea-1.0 USE=\"x\" "
     );
     // A USE-less package (empty display, e.g. `dev-libs/diamond`):
@@ -215,15 +318,35 @@ fn nomerge_row_carries_the_use_suffix_when_the_package_has_one() {
         "",
         "",
     );
-    let bare_use = use_suffix(&bare, false, false, false, &nc);
+    let bare_use = use_suffix(UseSuffixArgs {
+        entry: &bare,
+        verbose: false,
+        quiet: false,
+        alphabetical: false,
+        color: &nc,
+    });
     assert_eq!(bare_use, "");
     assert_eq!(
-        nomerge_row("dev-libs", "diamond", "1.0", "", false, &bare_use),
+        nomerge_row(NomergeRowArgs {
+            category: "dev-libs",
+            package: "diamond",
+            disp_ver: "1.0",
+            indent: "",
+            quiet: false,
+            tail: &bare_use
+        }),
         "[nomerge       ] dev-libs/diamond-1.0"
     );
     // `--quiet` keeps the established narrow pad.
     assert_eq!(
-        nomerge_row("dev-libs", "diamond", "1.0", " ", true, &bare_use),
+        nomerge_row(NomergeRowArgs {
+            category: "dev-libs",
+            package: "diamond",
+            disp_ver: "1.0",
+            indent: " ",
+            quiet: true,
+            tail: &bare_use
+        }),
         "[nomerge      ]  dev-libs/diamond-1.0"
     );
 }
@@ -257,12 +380,24 @@ fn use_suffix_renders_portages_trailing_space_after_each_use_group() {
     );
     // Plain `-p`: the changed flag paints, with real's trailing space.
     assert_eq!(
-        use_suffix(&reinstall, false, false, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &reinstall,
+            verbose: false,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar*\" "
     );
     // `-pv`: the full list, same trailing space.
     assert_eq!(
-        use_suffix(&reinstall, true, false, false, &nc),
+        use_suffix(UseSuffixArgs {
+            entry: &reinstall,
+            verbose: true,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
         " USE=\"bar* -baz\" "
     );
     // Bare rows stay bare: an empty display still renders nothing.
@@ -273,5 +408,14 @@ fn use_suffix_renders_portages_trailing_space_after_each_use_group() {
         "",
         "",
     );
-    assert_eq!(use_suffix(&bare, false, false, false, &nc), "");
+    assert_eq!(
+        use_suffix(UseSuffixArgs {
+            entry: &bare,
+            verbose: false,
+            quiet: false,
+            alphabetical: false,
+            color: &nc
+        }),
+        ""
+    );
 }

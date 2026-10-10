@@ -521,13 +521,19 @@ pub fn run(args: &[String]) -> ExitCode {
         || !result.autounmask_use_changes.is_empty()
         || !result.autounmask_license_changes.is_empty();
     let show_merge_list = (!opts.autounmask_only
-        && merge_list_shown(opts.pretend, opts.ask, opts.tree, opts.verbose, opts.quiet)
+        && merge_list_shown(MergeListShownArgs {
+            pretend: opts.pretend,
+            ask: opts.ask,
+            tree: opts.tree,
+            verbose: opts.verbose,
+            quiet: opts.quiet,
+        })
         && (opts.pretend || gated_abort_partial.is_none()))
-        || autounmask_only_reshows_merge_list(
-            opts.pretend,
-            opts.autounmask_only,
-            has_autounmask_changes,
-        );
+        || autounmask_only_reshows_merge_list(AutounmaskOnlyReshowsMergeListArgs {
+            pretend: opts.pretend,
+            autounmask_only: opts.autounmask_only,
+            has_changes: has_autounmask_changes,
+        });
     show_resolution_header(&opts, &result);
 
     show_pprovided_notice(&result, &color);
@@ -849,12 +855,10 @@ pub fn run(args: &[String]) -> ExitCode {
         // override -- see `usersets_world_candidate`). Built-in
         // `@world`/`@system`/`@profile` never count on either side.
         let deferred = selective_noop_deferred(
-            plan.selective,
-            // Real's folded gate variable (`actions.py:257`): `--onlydeps`
+            SelectiveNoopDeferredArgs { selective: plan.selective, oneshot_or_onlydeps: // Real's folded gate variable (`actions.py:257`): `--onlydeps`
             // keeps the deferral at bay exactly like `--oneshot`.
-            opts.oneshot || opts.onlydeps,
-            opts.atom_args.iter().any(|a| !a.starts_with('@'))
-                || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()),
+            opts.oneshot || opts.onlydeps, has_world_candidates: opts.atom_args.iter().any(|a| !a.starts_with('@'))
+                || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()) },
         );
         if let Some(code) = show_nothing_to_merge(ShowNothingToMergeArgs {
             opts: &opts,
@@ -902,16 +906,16 @@ pub fn run(args: &[String]) -> ExitCode {
             .iter()
             .any(|e| e.source == portage_repo::CandidateSource::Binary);
         if opts.buildpkgonly {
-            if let Err(e) = emerge_build::run_buildpkgonly(
+            if let Err(e) = emerge_build::run_buildpkgonly(emerge_build::RunBuildpkgonlyArgs {
                 entries,
-                &config,
-                &repos,
-                &root,
-                &portage_tmpdir,
-                &package_options,
-                opts.keep_going,
-                status_mode,
-            ) {
+                config: &config,
+                repos: &repos,
+                root: &root,
+                portage_tmpdir: &portage_tmpdir,
+                options: &package_options,
+                keep_going: opts.keep_going,
+                mode: status_mode,
+            }) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }

@@ -235,15 +235,15 @@ pub(crate) fn show_nothing_to_merge(args: ShowNothingToMergeArgs<'_>) -> Option<
                 // intervening write, so the recompute is identical,
                 // and it keeps one writer entry point for both this
                 // arm and the success path.
-                if let Err(e) = update_world_file(
+                if let Err(e) = update_world_file(UpdateWorldFileArgs {
                     root,
-                    &fav_refs,
+                    target_atoms: &fav_refs,
                     entries,
                     system_atoms,
                     repos,
                     oneshot,
                     onlydeps,
-                ) {
+                }) {
                     eprintln!("emerge: {e}");
                     return Some(ExitCode::from(1));
                 }

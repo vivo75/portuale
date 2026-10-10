@@ -126,6 +126,16 @@ pub fn eapi_has_idepend(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 8)
 }
 
+/// Arguments of [`cache_entry_is_valid`].
+pub struct CacheEntryIsValidArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub repo_location: &'a Path,
+    pub masters: &'a [PathBuf],
+    pub category: &'a str,
+    pub pf: &'a str,
+    pub store_eclass_paths: bool,
+}
+
 /// Real `portdbapi._pull_valid_cache` (`porttree.py:603-658`) against a
 /// single on-disk `md5-cache` entry: `true` when
 /// `metadata/md5-cache/<category>/<pf>` validates, so the `depend` phase
@@ -152,15 +162,15 @@ pub fn eapi_has_idepend(eapi: &str) -> bool {
 /// Any I/O failure (no cache file, no ebuild, no eclass dir) is
 /// `false` -- the `depend` phase runs, exactly like real falling
 /// through to `EbuildMetadataPhase` when no auxdb hits.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn cache_entry_is_valid(
-    ebuild_path: &Path,
-    repo_location: &Path,
-    masters: &[PathBuf],
-    category: &str,
-    pf: &str,
-    store_eclass_paths: bool,
-) -> bool {
+pub fn cache_entry_is_valid(args: CacheEntryIsValidArgs<'_>) -> bool {
+    let CacheEntryIsValidArgs {
+        ebuild_path,
+        repo_location,
+        masters,
+        category,
+        pf,
+        store_eclass_paths,
+    } = args;
     let cache_file = repo_location
         .join("metadata/md5-cache")
         .join(category)
@@ -389,14 +399,14 @@ mod tests {
     ) -> bool {
         let dir = Layout::new();
         let (ebuild_path, repo, masters) = write_repo(&dir, ebuild, eclass, cache);
-        cache_entry_is_valid(
-            &ebuild_path,
-            &repo,
-            &masters,
-            "dev-libs",
-            "pkg-1.0",
-            store_paths,
-        )
+        cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: store_paths,
+        })
     }
 
     #[test]
@@ -515,24 +525,24 @@ mod tests {
         let cache = format!("EAPI=8\n_eclasses_=myclass\t{first}\n_md5_={ebuild_md5}\n");
         let (ebuild_path, repo, masters) =
             write_repo(&dir, ebuild, Some("# eclass\n"), Some(&cache));
-        assert!(cache_entry_is_valid(
-            &ebuild_path,
-            &repo,
-            &masters,
-            "dev-libs",
-            "pkg-1.0",
-            false
-        ));
+        assert!(cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: false
+        }));
         // Content changes (size and mtime change) -> invalid.
         std::fs::write(repo.join("eclass/myclass.eclass"), "# changed!\n").unwrap();
-        assert!(!cache_entry_is_valid(
-            &ebuild_path,
-            &repo,
-            &masters,
-            "dev-libs",
-            "pkg-1.0",
-            false
-        ));
+        assert!(!cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: false
+        }));
     }
 
     #[test]

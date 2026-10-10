@@ -100,6 +100,16 @@ pub(crate) fn repo_containing(
         .max_by_key(|(_, loc)| loc.as_os_str().len())
 }
 
+/// Arguments of [`expand_parent_colon`].
+pub(crate) struct ExpandParentColonArgs<'a> {
+    pub(crate) parent: &'a str,
+    pub(crate) current_repo: Option<&'a (String, PathBuf)>,
+    pub(crate) repos: &'a [(String, PathBuf)],
+    pub(crate) repo_aliases: &'a [(String, PathBuf)],
+    pub(crate) parents_file: &'a Path,
+    pub(crate) parent_colon_repos: &'a HashSet<String>,
+}
+
 /// Expands a profile `parent` file line's real cross-repo `:path`/
 /// `reponame:path` syntax (`LocationsManager._expand_parent_colon`):
 /// a `:` with nothing before it means "this same repo" (`current_repo`),
@@ -116,15 +126,15 @@ pub(crate) fn repo_containing(
 /// is returned *unchanged*, matching real portage: the `:` then becomes
 /// a literal path component that fails to resolve downstream exactly as
 /// it would there.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn expand_parent_colon(
-    parent: &str,
-    current_repo: Option<&(String, PathBuf)>,
-    repos: &[(String, PathBuf)],
-    repo_aliases: &[(String, PathBuf)],
-    parents_file: &Path,
-    parent_colon_repos: &HashSet<String>,
-) -> Result<String, Error> {
+pub(crate) fn expand_parent_colon(args: ExpandParentColonArgs<'_>) -> Result<String, Error> {
+    let ExpandParentColonArgs {
+        parent,
+        current_repo,
+        repos,
+        repo_aliases,
+        parents_file,
+        parent_colon_repos,
+    } = args;
     let Some(colon) = parent.find(':') else {
         return Ok(parent.to_string());
     };
@@ -188,26 +198,35 @@ pub(crate) fn resolve_profile_chain(
 ) -> Result<Vec<PathBuf>, Error> {
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut chain: Vec<PathBuf> = Vec::new();
-    visit_profile(
-        leaf,
+    visit_profile(VisitProfileArgs {
+        dir: leaf,
         repos,
         repo_aliases,
         parent_colon_repos,
-        &mut visited,
-        &mut chain,
-    )?;
+        visited: &mut visited,
+        chain: &mut chain,
+    })?;
     Ok(chain)
 }
+/// Arguments of [`visit_profile`].
+pub(crate) struct VisitProfileArgs<'a> {
+    pub(crate) dir: &'a Path,
+    pub(crate) repos: &'a [(String, PathBuf)],
+    pub(crate) repo_aliases: &'a [(String, PathBuf)],
+    pub(crate) parent_colon_repos: &'a HashSet<String>,
+    pub(crate) visited: &'a mut HashSet<PathBuf>,
+    pub(crate) chain: &'a mut Vec<PathBuf>,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn visit_profile(
-    dir: &Path,
-    repos: &[(String, PathBuf)],
-    repo_aliases: &[(String, PathBuf)],
-    parent_colon_repos: &HashSet<String>,
-    visited: &mut HashSet<PathBuf>,
-    chain: &mut Vec<PathBuf>,
-) -> Result<(), Error> {
+pub(crate) fn visit_profile(args: VisitProfileArgs<'_>) -> Result<(), Error> {
+    let VisitProfileArgs {
+        dir,
+        repos,
+        repo_aliases,
+        parent_colon_repos,
+        visited,
+        chain,
+    } = args;
     let canon = dir.canonicalize().map_err(|e| Error::ResolveProfile {
         path: dir.display().to_string(),
         source: e,
@@ -218,22 +237,22 @@ pub(crate) fn visit_profile(
     let current_repo = repo_containing(&canon, repos);
     let parents_file = canon.join("parent");
     for parent in read_parent_lines(&canon)? {
-        let expanded = expand_parent_colon(
-            &parent,
-            current_repo.as_ref(),
+        let expanded = expand_parent_colon(ExpandParentColonArgs {
+            parent: &parent,
+            current_repo: current_repo.as_ref(),
             repos,
             repo_aliases,
-            &parents_file,
+            parents_file: &parents_file,
             parent_colon_repos,
-        )?;
-        visit_profile(
-            &canon.join(&expanded),
+        })?;
+        visit_profile(VisitProfileArgs {
+            dir: &canon.join(&expanded),
             repos,
             repo_aliases,
             parent_colon_repos,
             visited,
             chain,
-        )?;
+        })?;
     }
     chain.push(canon);
     Ok(())

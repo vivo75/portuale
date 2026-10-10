@@ -317,6 +317,18 @@ pub(crate) fn colorize_marked_spans(
     (out, shifted)
 }
 
+/// Arguments of [`slot_conflict_need_rebuild`].
+pub(crate) struct SlotConflictNeedRebuildArgs<'a> {
+    pub(crate) parent_cpv: &'a str,
+    pub(crate) atom: &'a Atom,
+    pub(crate) excluded: &'a [String],
+    pub(crate) useoldpkg_atoms: &'a [String],
+    pub(crate) usepkgonly: bool,
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) installed: &'a std::collections::HashSet<(String, String, String)>,
+}
+
 /// Real `slot_collision.py`'s `need_rebuild` scan (lines 407-458) for one
 /// shown parent in a `slot` group: when the parent package is installed
 /// and its atom is a *built* slot-operator atom (`cat/pkg:S/SS=` -- real
@@ -326,17 +338,17 @@ pub(crate) fn colorize_marked_spans(
 /// masked/unavailable (real `_equiv_ebuild_visible`). Under
 /// `--usepkgonly` real stays quiet to avoid false positives. Returns the
 /// reason, if any. `installed` holds every vdb `(cat, pkg, ver)`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn slot_conflict_need_rebuild(
-    parent_cpv: &str,
-    atom: &Atom,
-    excluded: &[String],
-    useoldpkg_atoms: &[String],
-    usepkgonly: bool,
-    repos: &[portage_repo::RepoConfig],
-    config: &portage_profile::Config,
-    installed: &std::collections::HashSet<(String, String, String)>,
-) -> Option<String> {
+pub(crate) fn slot_conflict_need_rebuild(args: SlotConflictNeedRebuildArgs<'_>) -> Option<String> {
+    let SlotConflictNeedRebuildArgs {
+        parent_cpv,
+        atom,
+        excluded,
+        useoldpkg_atoms,
+        usepkgonly,
+        repos,
+        config,
+        installed,
+    } = args;
     if atom.slot_operator != Some(SlotOperator::Equals) || atom.sub_slot.is_none() {
         return None;
     }

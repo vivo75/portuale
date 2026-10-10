@@ -7,23 +7,32 @@ fn mo_sel_trace_line_pins_the_harness_format() {
     // fields `iter retlist alive asap prefer_asap drop_satisfied ig
     // pick`. Changing this string breaks the aligner, so it is
     // pinned.
-    let line = mo_sel_trace_line(
-        7,
-        3,
-        42,
-        &["m:llvm-runtimes/clang-runtime-22".to_string()],
-        false,
-        true,
-        Some(n_ignore_runtime),
-        &["m:dev-libs/a-1".to_string(), "n:dev-libs/b-2".to_string()],
-    );
+    let line = mo_sel_trace_line(MoSelTraceLineArgs {
+        iter: 7,
+        retlist: 3,
+        alive: 42,
+        asap: &["m:llvm-runtimes/clang-runtime-22".to_string()],
+        prefer_asap: false,
+        drop_satisfied: true,
+        ig: Some(n_ignore_runtime),
+        pick: &["m:dev-libs/a-1".to_string(), "n:dev-libs/b-2".to_string()],
+    });
     assert_eq!(
         line,
         "MO_SEL iter=7 retlist=3 alive=42 asap=[m:llvm-runtimes/clang-runtime-22] \
          prefer_asap=0 drop_satisfied=1 ig=ignore_runtime pick=m:dev-libs/a-1 n:dev-libs/b-2"
     );
     assert_eq!(
-        mo_sel_trace_line(1, 0, 5, &[], true, false, None, &[]),
+        mo_sel_trace_line(MoSelTraceLineArgs {
+            iter: 1,
+            retlist: 0,
+            alive: 5,
+            asap: &[],
+            prefer_asap: true,
+            drop_satisfied: false,
+            ig: None,
+            pick: &[]
+        }),
         "MO_SEL iter=1 retlist=0 alive=5 asap=[] prefer_asap=1 \
          drop_satisfied=0 ig=none pick="
     );
@@ -102,7 +111,14 @@ fn add_installed_dependency_closure_seeds_and_expands_the_installed_tree() {
         ],
     );
     let mut entries = vec![top, two];
-    add_installed_dependency_closure(&mut entries, &root, &[], &[], false, true);
+    add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
+        entries: &mut entries,
+        root: &root,
+        repos: &[],
+        system_atoms: &[],
+        virtuals_only: false,
+        dynamic_deps: true,
+    });
     // top, two, three-1.0 (the version-qualified pick), one, three-2.0
     // (the highest match of two's bare atom).
     assert_eq!(
@@ -170,7 +186,14 @@ fn add_installed_dependency_closure_keeps_the_first_of_vercmp_equal_versions() {
         "1.0",
         vec![runtime_edge("dev-libs/eqver", "dev-libs", "eqver")],
     )];
-    add_installed_dependency_closure(&mut entries, &root, &[], &[], false, true);
+    add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
+        entries: &mut entries,
+        root: &root,
+        repos: &[],
+        system_atoms: &[],
+        virtuals_only: false,
+        dynamic_deps: true,
+    });
     let picked = entries
         .iter()
         .find(|e| e.package == "eqver")

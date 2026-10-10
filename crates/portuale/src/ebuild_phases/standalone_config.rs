@@ -169,15 +169,15 @@ pub(crate) fn resolve_standalone_config(
         .iter()
         .map(|r| (r.name.clone(), r.masters.clone()))
         .collect();
-    portage_profile::resolve_config(
+    portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root,
-        &main_repo.location,
-        &overlay_repos,
-        &repo_aliases,
-        &main_repo.name,
-        &repo_masters,
+        main_repo_location: &main_repo.location,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &repo_aliases,
+        main_repo_name: &main_repo.name,
+        repo_masters: &repo_masters,
         eroot,
-    )
+    })
     .ok()
 }
 
@@ -525,14 +525,14 @@ pub(crate) fn resolve_unmerge_config(
         .iter()
         .map(|r| (r.name.clone(), r.masters.clone()))
         .collect();
-    portage_profile::resolve_config(
+    portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root,
-        &main_repo.location,
-        &overlay_repos,
-        &repo_aliases,
-        &main_repo.name,
-        &repo_masters,
+        main_repo_location: &main_repo.location,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &repo_aliases,
+        main_repo_name: &main_repo.name,
+        repo_masters: &repo_masters,
         eroot,
-    )
+    })
     .ok()
 }

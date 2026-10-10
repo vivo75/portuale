@@ -537,15 +537,15 @@ fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
     // directly -- the `FX_WORLD_EXTRA=dev-libs/r25consumer`
     // equivalent the bed cell stages.
     let root = fixtures_root();
-    let mut config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     config.complete_seed_atoms = vec!["dev-libs/r25consumer".to_string()];
     let result = ResolveRequest {
@@ -1574,15 +1574,15 @@ fn deep_walk_evaluates_flag_deps_against_the_installed_vdb_use_not_effective() {
     // evaluated against the recorded vdb USE (real `_pkg_use_enabled`
     // for a built package) -> deepvdbusetarget NOT pulled.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let names: Vec<String> = ResolveRequest {
         deep: Deep::Unlimited,
@@ -2095,15 +2095,15 @@ fn cross_root_bdepend_self_branch_merges_in_both_roots() {
     // Hermetic running root: nothing installed there, so every build
     // dep selects from the tree.
     let running = TempDir::new("portuale-242-xc-empty-running-root").keep();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let result = ResolveRequest {
         root_deps_running_root: Some(running.to_path_buf()),
@@ -2446,15 +2446,15 @@ fn nodeps_still_computes_use_flags_display_for_the_top_level_atom() {
     // walk really is skipped (no second entry), while its own
     // IUSE="foo missingflag" still shows up correctly.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let entries = ResolveRequest {
         nodeps: true,
@@ -2482,15 +2482,15 @@ fn nodeps_still_computes_use_flags_display_for_the_top_level_atom() {
 #[test]
 fn use_expand_hidden_group_is_absent_from_the_pv_display() {
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let entry = ResolveRequest::new(
         &root,
@@ -2757,15 +2757,15 @@ fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cyc
     // test previously pinned the followup suggestion; that output
     // described a merge real never makes.)
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let err = ResolveRequest::new(
         &root,
@@ -3092,15 +3092,15 @@ fn recursion_dedupes_across_depend_and_rdepend() {
 #[test]
 fn real_resolved_use_flags_drive_dependency_recursion() {
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let entries = ResolveRequest::new(
         &root,
@@ -3531,15 +3531,15 @@ fn required_use_violations_are_collected_across_the_whole_walk_not_just_the_firs
     // but collecting both stays portuale's own established,
     // separately-pinned behavior; only the order moves here.)
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let err = ResolveRequest::new(
         &root,
@@ -3588,15 +3588,15 @@ fn fixture_dependency_no_visible_candidate_gets_no_keyword_suggestion_by_default
 #[test]
 fn fixture_dependency_no_visible_candidate_gets_a_keyword_suggestion_once_enabled() {
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atoms = vec!["dev-libs/autounmaskdepconsumer".to_string()];
     let result = ResolveRequest {
@@ -3647,15 +3647,15 @@ fn top_level_use_miss_reports_the_use_block_without_chain() {
     // `for <root>.` suffix stays absent (the long-standing
     // `fixture-miss-message-unsuffixed` class).
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
     let err = ResolveRequest::new(
@@ -4097,15 +4097,15 @@ fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
     // consumer is normally rebuilt -- unless
     // `ignore_built_slot_operator_deps` is set.
     let cfg_root = fixtures_root();
-    let mut config = portage_profile::resolve_config(
-        &cfg_root,
-        &cfg_root.join("repo"),
-        &[("overlay".to_string(), cfg_root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &cfg_root,
-    )
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &cfg_root,
+        main_repo_location: &cfg_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), cfg_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &cfg_root,
+    })
     .expect("fixture config resolves");
     // Complete mode: `slotbindconsumer` is in `@world`, so the
     // slot-op scan considers it (see `required_set_reachable_cps`).
@@ -4217,15 +4217,15 @@ fn dependency_avoid_update_candidate_is_slot_aware() {
     // The `:1` dependency must NOT short-circuit to "already
     // installed" off the slot-2 install -- slot 1 is genuinely new.
     let cfg_root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &cfg_root,
-        &cfg_root.join("repo"),
-        &[("overlay".to_string(), cfg_root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &cfg_root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &cfg_root,
+        main_repo_location: &cfg_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), cfg_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &cfg_root,
+    })
     .expect("fixture config resolves");
     let dir = TempDir::new("portage-repo-avoidslot").keep();
     let d = dir.join("var/db/pkg/dev-libs/avoidslotpkg-1.0");

@@ -49,6 +49,22 @@ pub(crate) fn columnwidth_from_env() -> i64 {
     }
 }
 
+/// Arguments of [`columns_line`].
+pub(crate) struct ColumnsLineArgs<'a> {
+    pub(crate) bracket_word: &'a str,
+    pub(crate) field: &'a str,
+    pub(crate) indent: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) oldbest: &'a str,
+    pub(crate) columnwidth: i64,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) binary: bool,
+    pub(crate) system: bool,
+    pub(crate) world: bool,
+}
+
 /// One `--columns` line: real `_set_root_columns`'s own layout algorithm
 /// (the `pkg_info.merge == True` branch only -- see this function's own
 /// call sites' doc comments for why the "not merging" branch never
@@ -67,22 +83,21 @@ pub(crate) fn columnwidth_from_env() -> i64 {
 /// skipped once the line's already past the target width, exactly like
 /// real portage's own `if (newlp - nc_len(myprint)) > 0` guard -- never
 /// truncates, just doesn't pad further.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn columns_line(
-    bracket_word: &str,
-    field: &str,
-    indent: &str,
-    category: &str,
-    package: &str,
-    version: &str,
-    oldbest: &str,
-    columnwidth: i64,
-    color: &Colorizer,
-    binary: bool,
-    system: bool,
-    world: bool,
-) -> String {
+pub(crate) fn columns_line(args: ColumnsLineArgs<'_>) -> String {
+    let ColumnsLineArgs {
+        bracket_word,
+        field,
+        indent,
+        category,
+        package,
+        version,
+        oldbest,
+        columnwidth,
+        color,
+        binary,
+        system,
+        world,
+    } = args;
     let newlp = (columnwidth - 60).max(0) as usize;
     let oldlp = (columnwidth - 30).max(0) as usize;
     // Real `_set_root_columns` merge branch: the type word and `pkg.cp`
@@ -105,6 +120,23 @@ pub(crate) fn columns_line(
         line.push_str(&color.c("blue", oldbest));
     }
     line
+}
+
+/// Arguments of [`attr_display_field`].
+pub(crate) struct AttrDisplayFieldArgs<'a> {
+    pub(crate) interactive: bool,
+    pub(crate) new: bool,
+    pub(crate) force_reinstall: bool,
+    pub(crate) new_slot: bool,
+    pub(crate) replace: bool,
+    pub(crate) fetch_restrict: bool,
+    pub(crate) fetch_restrict_satisfied: bool,
+    pub(crate) remote_binary: bool,
+    pub(crate) new_version: bool,
+    pub(crate) downgrade: bool,
+    pub(crate) mask: Option<char>,
+    pub(crate) include_mask: bool,
+    pub(crate) color: &'a Colorizer,
 }
 
 /// Real `PkgAttrDisplay.__str__` (`_emerge/resolver/output_helpers.py`):
@@ -140,23 +172,22 @@ pub(crate) fn columns_line(
 /// every call returns the bare char, so the field is exactly 7 visible
 /// columns either way (`color::nc_len` recovers that width for
 /// `--columns` padding).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn attr_display_field(
-    interactive: bool,
-    new: bool,
-    force_reinstall: bool,
-    new_slot: bool,
-    replace: bool,
-    fetch_restrict: bool,
-    fetch_restrict_satisfied: bool,
-    remote_binary: bool,
-    new_version: bool,
-    downgrade: bool,
-    mask: Option<char>,
-    include_mask: bool,
-    color: &Colorizer,
-) -> String {
+pub(crate) fn attr_display_field(args: AttrDisplayFieldArgs<'_>) -> String {
+    let AttrDisplayFieldArgs {
+        interactive,
+        new,
+        force_reinstall,
+        new_slot,
+        replace,
+        fetch_restrict,
+        fetch_restrict_satisfied,
+        remote_binary,
+        new_version,
+        downgrade,
+        mask,
+        include_mask,
+        color,
+    } = args;
     let col = |key: &str, ch: char| color.c(key, &ch.to_string());
     let mut f = String::new();
     f.push_str(&if interactive {
@@ -256,6 +287,16 @@ pub(crate) fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
     format!("{open}{}{markers}{close}", color.c(key, core))
 }
 
+/// Arguments of [`decorate_version`].
+pub(crate) struct DecorateVersionArgs<'a> {
+    pub(crate) version: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) sub_slot: &'a str,
+    pub(crate) repo: &'a str,
+    pub(crate) show_slot: bool,
+    pub(crate) force_sub_slot: bool,
+}
+
 /// Real `output.py::_append_slot` + `_append_repository`, which decorate
 /// the bracket-line version *only at `emerge -pv`* (`verbosity == 3`):
 /// `:slot` (plus `/sub_slot` when it differs from `slot`) and `::repo`.
@@ -264,15 +305,15 @@ pub(crate) fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
 /// `oldbest` refs) has a slot/sub-slot other than `0/0`. Real portage
 /// omits `::repo` only under `--quiet-repo-display` (not modelled here --
 /// its default is off, so `::repo` is always shown at `-pv`).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn decorate_version(
-    version: &str,
-    slot: &str,
-    sub_slot: &str,
-    repo: &str,
-    show_slot: bool,
-    force_sub_slot: bool,
-) -> String {
+pub(crate) fn decorate_version(args: DecorateVersionArgs<'_>) -> String {
+    let DecorateVersionArgs {
+        version,
+        slot,
+        sub_slot,
+        repo,
+        show_slot,
+        force_sub_slot,
+    } = args;
     let mut s = String::from(version);
     if show_slot {
         s.push(':');
@@ -285,6 +326,15 @@ pub(crate) fn decorate_version(
     s.push_str("::");
     s.push_str(repo);
     s
+}
+
+/// Arguments of [`use_suffix`].
+pub(crate) struct UseSuffixArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) verbose: bool,
+    pub(crate) quiet: bool,
+    pub(crate) alphabetical: bool,
+    pub(crate) color: &'a Colorizer,
 }
 
 /// Renders the ` USE="…"` (and `VAR="…"` per USE_EXPAND group) suffix.
@@ -302,14 +352,14 @@ pub(crate) fn decorate_version(
 /// everything) the `-p` list equals the `-pv` list, and for a
 /// `Reinstall`/`Upgrade`/`Downgrade` only the changed flags
 /// (`flag%*`/`flag*`/`-flag%`/`-flag*`) show, often none.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn use_suffix(
-    entry: &GraphEntry,
-    verbose: bool,
-    quiet: bool,
-    alphabetical: bool,
-    color: &Colorizer,
-) -> String {
+pub(crate) fn use_suffix(args: UseSuffixArgs<'_>) -> String {
+    let UseSuffixArgs {
+        entry,
+        verbose,
+        quiet,
+        alphabetical,
+        color,
+    } = args;
     // Real `print_use_string = verbosity != 1 or "--verbose"`.
     if quiet && !verbose {
         return String::new();
@@ -363,6 +413,16 @@ pub(crate) fn use_suffix(
     format!(" {}", groups.concat())
 }
 
+/// Arguments of [`nomerge_row`].
+pub(crate) struct NomergeRowArgs<'a> {
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) disp_ver: &'a str,
+    pub(crate) indent: &'a str,
+    pub(crate) quiet: bool,
+    pub(crate) tail: &'a str,
+}
+
 /// Pure constructor for the `[nomerge …]` row, so the ancestor arm's
 /// exact rendering contract is unit-pinned below (#154). `tail` carries
 /// the oldbest / running-root / USE pieces (each empty when absent --
@@ -370,15 +430,15 @@ pub(crate) fn use_suffix(
 /// The bracket pad is real's `"nomerge".ljust(13)` plus
 /// `empty_space_in_brackets()`; the `--quiet` narrowing is portuale's
 /// established quiet rendering, pinned by the quiet contract tests.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn nomerge_row(
-    category: &str,
-    package: &str,
-    disp_ver: &str,
-    indent: &str,
-    quiet: bool,
-    tail: &str,
-) -> String {
+pub(crate) fn nomerge_row(args: NomergeRowArgs<'_>) -> String {
+    let NomergeRowArgs {
+        category,
+        package,
+        disp_ver,
+        indent,
+        quiet,
+        tail,
+    } = args;
     let pad = if quiet { "      " } else { "       " };
     format!("[nomerge{pad}] {indent}{category}/{package}-{disp_ver}{tail}")
 }

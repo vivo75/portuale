@@ -188,6 +188,16 @@ pub(crate) fn required_use_dep_chain(
     chain
 }
 
+/// Arguments of [`render_required_use_block`].
+pub(crate) struct RenderRequiredUseBlockArgs<'a> {
+    pub(crate) xinfo: &'a str,
+    pub(crate) cpv_repo: &'a str,
+    pub(crate) use_display: &'a [(String, String)],
+    pub(crate) reduced_human: &'a str,
+    pub(crate) full_human: &'a str,
+    pub(crate) dep_chain: &'a [(String, String)],
+}
+
 /// Real `depgraph.py::_show_unsatisfied_dep`'s own REQUIRED_USE block
 /// (`:6763-6799` + the `:6899-6912` dep-chain tail): the `!!! The ebuild
 /// selected to satisfy "<atom>" has unmet requirements.` header, the
@@ -197,15 +207,15 @@ pub(crate) fn required_use_dep_chain(
 /// `full_human` are already [`portage_required_use::human_readable`]-
 /// rewritten. Colorization is a documented no-op (matches `emerge -p`
 /// without `--color=y`).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn render_required_use_block(
-    xinfo: &str,
-    cpv_repo: &str,
-    use_display: &[(String, String)],
-    reduced_human: &str,
-    full_human: &str,
-    dep_chain: &[(String, String)],
-) -> String {
+pub(crate) fn render_required_use_block(args: RenderRequiredUseBlockArgs<'_>) -> String {
+    let RenderRequiredUseBlockArgs {
+        xinfo,
+        cpv_repo,
+        use_display,
+        reduced_human,
+        full_human,
+        dep_chain,
+    } = args;
     let mut out =
         format!("\n!!! The ebuild selected to satisfy \"{xinfo}\" has unmet requirements.\n");
     out.push_str(&format!(
@@ -232,6 +242,16 @@ pub(crate) fn render_required_use_block(
     out
 }
 
+/// Arguments of [`check_if_latest_atom_form`].
+pub(crate) struct CheckIfLatestAtomFormArgs<'a> {
+    pub(crate) resolved: &'a Candidate,
+    pub(crate) all_candidates: &'a [Candidate],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) check_visibility: bool,
+}
+
 /// Real `_display_autounmask`'s own `check_if_latest(pkg,
 /// check_visibility=...)` (`depgraph.py:10649`), for an autounmask
 /// change's left-hand atom: `>=<cpv>` when `resolved` is the highest
@@ -246,15 +266,15 @@ pub(crate) fn render_required_use_block(
 /// genuinely-visible higher builds should widen the atom), `false` for
 /// **license** changes (real calls `check_if_latest(pkg)` there -- every
 /// higher build counts, visible or not).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn check_if_latest_atom_form(
-    resolved: &Candidate,
-    all_candidates: &[Candidate],
-    category: &str,
-    package: &str,
-    config: &portage_profile::Config,
-    check_visibility: bool,
-) -> String {
+pub(crate) fn check_if_latest_atom_form(args: CheckIfLatestAtomFormArgs<'_>) -> String {
+    let CheckIfLatestAtomFormArgs {
+        resolved,
+        all_candidates,
+        category,
+        package,
+        config,
+        check_visibility,
+    } = args;
     let cpv = format!("{category}/{package}-{}", resolved.version);
     let higher = |same_slot: bool| {
         all_candidates.iter().any(|c| {
@@ -281,7 +301,14 @@ pub(crate) fn autounmask_use_atom_form(
     package: &str,
     config: &portage_profile::Config,
 ) -> String {
-    check_if_latest_atom_form(resolved, all_candidates, category, package, config, true)
+    check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+        resolved,
+        all_candidates,
+        category,
+        package,
+        config,
+        check_visibility: true,
+    })
 }
 
 /// The `'backtrack` loop's `autounmask_use_config` accumulator rendered

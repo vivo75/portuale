@@ -134,7 +134,14 @@ fn rebuilt_binary_166_timestamped_comparison() {
     let root = dir_166("rebuilt-ts");
     install_166(&root, "dev-libs", "rebuilt-1.0", "100\n");
     let changed = |built: Option<i64>, ts: Option<u64>| {
-        rebuilt_binary_changed(&root, built, "dev-libs", "rebuilt", "1.0", ts)
+        rebuilt_binary_changed(RebuiltBinaryChangedArgs {
+            root: &root,
+            binary_build_time: built,
+            category: "dev-libs",
+            package: "rebuilt",
+            version: "1.0",
+            rebuilt_binaries_timestamp: ts,
+        })
     };
     // No binary candidate (or no BUILD_TIME): no verdict either way
     // (pins both `let-else return false` arms; no mutant targets).
@@ -156,7 +163,14 @@ fn rebuilt_binary_166_untimestamped_comparison() {
     let root = dir_166("rebuilt-plain");
     install_166(&root, "dev-libs", "rebuilt-1.0", "100\n");
     let changed = |built: Option<i64>| {
-        rebuilt_binary_changed(&root, built, "dev-libs", "rebuilt", "1.0", None)
+        rebuilt_binary_changed(RebuiltBinaryChangedArgs {
+            root: &root,
+            binary_build_time: built,
+            category: "dev-libs",
+            package: "rebuilt",
+            version: "1.0",
+            rebuilt_binaries_timestamp: None,
+        })
     };
     assert!(changed(Some(200)));
     assert!(!changed(Some(100)));
@@ -164,14 +178,14 @@ fn rebuilt_binary_166_untimestamped_comparison() {
     // (no mutant target; documents the missing-record tolerance).
     let bare = dir_166("rebuilt-bare");
     std::fs::create_dir_all(bare.join("var/db/pkg/dev-libs/rebuilt-1.0")).unwrap();
-    assert!(!rebuilt_binary_changed(
-        &bare,
-        Some(200),
-        "dev-libs",
-        "rebuilt",
-        "1.0",
-        None
-    ));
+    assert!(!rebuilt_binary_changed(RebuiltBinaryChangedArgs {
+        root: &bare,
+        binary_build_time: Some(200),
+        category: "dev-libs",
+        package: "rebuilt",
+        version: "1.0",
+        rebuilt_binaries_timestamp: None
+    }));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&bare);
 }
@@ -316,20 +330,31 @@ fn direct_solve_arg_mode_166_rejects_every_non_arg_shape() {
 // instance reads its vdb record -- see the function's own doc
 // comment). ----
 
+/// Arguments of [`write_pkg_166`].
+struct WritePkg166Args<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    iuse: &'a str,
+    depend: &'a str,
+    required_use: &'a str,
+}
+
 /// One scratch ebuild plus its real md5-cache entry (the md5-cache
 /// validation guard fails otherwise), in the #162
 /// `write_pkg_162` shape extended with `DEPEND`/`REQUIRED_USE`
 /// lines for the circular legs below.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn write_pkg_166(
-    repo: &Path,
-    cp: &str,
-    pv: &str,
-    slot: &str,
-    iuse: &str,
-    depend: &str,
-    required_use: &str,
-) {
+fn write_pkg_166(args: WritePkg166Args<'_>) {
+    let WritePkg166Args {
+        repo,
+        cp,
+        pv,
+        slot,
+        iuse,
+        depend,
+        required_use,
+    } = args;
     use md5::Digest as _;
     use std::fmt::Write as _;
     let (cat, pkg) = cp.split_once('/').expect("category/package");
@@ -371,7 +396,15 @@ fn write_pkg_166(
 fn repo_pkgs_166(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
     let repo = dir.join("repo");
     for (cp, pv, slot, iuse, depend, required_use) in pkgs {
-        write_pkg_166(&repo, cp, pv, slot, iuse, depend, required_use);
+        write_pkg_166(WritePkg166Args {
+            repo: &repo,
+            cp,
+            pv,
+            slot,
+            iuse,
+            depend,
+            required_use,
+        });
     }
     vec![RepoConfig {
         name: "testrepo".to_string(),

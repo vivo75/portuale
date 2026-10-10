@@ -98,6 +98,20 @@ pub(crate) fn built_slot_operator_atoms(
         .collect()
 }
 
+/// Arguments of [`installed_dep_string`].
+pub(crate) struct InstalledDepStringArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) live: Option<&'a HashMap<String, String>>,
+    pub(crate) key: &'a str,
+    pub(crate) layer: InstalledMetaLayer,
+    pub(crate) memo: &'a mut HashMap<(String, String, String, String), String>,
+}
+
 /// One installed package's `*DEPEND` string for `key`, at `layer` --
 /// real `Package._raw_metadata[key]` vs `Package._metadata[key]`.
 ///
@@ -137,19 +151,19 @@ pub(crate) fn built_slot_operator_atoms(
 /// - otherwise the vdb's own built `:=` atoms for this key are appended
 ///   to the live string (`:175-180`); when the live EAPI itself lacks
 ///   `:=` support the whole overlay is void (`:176-178`, raw fallback).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn installed_dep_string(
-    root: &Path,
-    dynamic_deps: bool,
-    ignore_built_slot_operator_deps: bool,
-    category: &str,
-    package: &str,
-    version: &str,
-    live: Option<&HashMap<String, String>>,
-    key: &str,
-    layer: InstalledMetaLayer,
-    memo: &mut HashMap<(String, String, String, String), String>,
-) -> String {
+pub(crate) fn installed_dep_string(args: InstalledDepStringArgs<'_>) -> String {
+    let InstalledDepStringArgs {
+        root,
+        dynamic_deps,
+        ignore_built_slot_operator_deps,
+        category,
+        package,
+        version,
+        live,
+        key,
+        layer,
+        memo,
+    } = args;
     let raw = read_vdb_string(root, category, package, version, key);
     if layer == InstalledMetaLayer::Raw || !dynamic_deps {
         return raw;

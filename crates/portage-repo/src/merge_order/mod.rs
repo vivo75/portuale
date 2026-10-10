@@ -91,6 +91,18 @@ pub(crate) fn entry_version(e: &GraphEntry) -> Option<&str> {
     }
 }
 
+/// Arguments of [`serialize_merge_order`].
+pub(crate) struct SerializeMergeOrderArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) top_level_atoms: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
 /// The whole pipeline: build the digraph out of `entries`, prune it the
 /// way real does, bias it, schedule it, and weave portuale's own
 /// non-merge-bound entries back in.
@@ -100,18 +112,8 @@ pub(crate) fn entry_version(e: &GraphEntry) -> Option<&str> {
 /// and weave-back are identical either way.
 ///
 /// Returns a permutation of `0..entries.len()` in merge order.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn serialize_merge_order(
-    entries: &[GraphEntry],
-    top_level_atoms: &[String],
-    config: &portage_profile::Config,
-    root: &Path,
-    implicit_system_deps: bool,
-    repos: &[RepoConfig],
-    dynamic_deps: bool,
-    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
-) -> (Vec<usize>, Vec<usize>) {
-    let (ext, mut g, real_n, discovery_rank) = schedule_graph(
+pub(crate) fn serialize_merge_order(args: SerializeMergeOrderArgs<'_>) -> (Vec<usize>, Vec<usize>) {
+    let SerializeMergeOrderArgs {
         entries,
         top_level_atoms,
         config,
@@ -120,7 +122,17 @@ pub(crate) fn serialize_merge_order(
         repos,
         dynamic_deps,
         circular,
-    );
+    } = args;
+    let (ext, mut g, real_n, discovery_rank) = schedule_graph(ScheduleGraphArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    });
     let entries: &[GraphEntry] = &ext;
 
     debug_dump_graph(&g, entries, top_level_atoms, root);
@@ -166,23 +178,35 @@ pub(crate) fn serialize_merge_order(
     (scheduled, discovery_rank[..real_n].to_vec())
 }
 
+/// Arguments of [`schedule_graph`].
+struct ScheduleGraphArgs<'a> {
+    entries: &'a [GraphEntry],
+    top_level_atoms: &'a [String],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    implicit_system_deps: bool,
+    repos: &'a [RepoConfig],
+    dynamic_deps: bool,
+    circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
 /// The shared scheduler-graph setup for [`serialize_merge_order`]
 /// and the #81 tree-mode simulation: the installed-dependency closure,
 /// `build_digraph`, the nomerge-root prune and `_merge_order_bias`.
 /// Returns the extended entries, the biased graph, the real-entry count
 /// and the unbiased discovery rank. Diagnostics (`debug_dump_graph`,
 /// the `MO_ORDER` print) stay with the flat caller, not here.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn schedule_graph(
-    entries: &[GraphEntry],
-    top_level_atoms: &[String],
-    config: &portage_profile::Config,
-    root: &Path,
-    implicit_system_deps: bool,
-    repos: &[RepoConfig],
-    dynamic_deps: bool,
-    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
-) -> (Vec<GraphEntry>, Digraph, usize, Vec<usize>) {
+fn schedule_graph(args: ScheduleGraphArgs<'_>) -> (Vec<GraphEntry>, Digraph, usize, Vec<usize>) {
+    let ScheduleGraphArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
     let real_n = entries.len();
     // Real `_complete_graph` auto-enables (a merge changes an
     // already-installed package -> real re-walks the whole `@world` /
@@ -210,14 +234,14 @@ fn schedule_graph(
         ) || (matches!(e.outcome, PretendOutcome::New { .. }) && e.new_slot)
     });
     let mut ext = entries.to_vec();
-    add_installed_dependency_closure(
-        &mut ext,
+    add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
+        entries: &mut ext,
         root,
         repos,
-        &config.system_packages,
-        !complete,
+        system_atoms: &config.system_packages,
+        virtuals_only: !complete,
         dynamic_deps,
-    );
+    });
     let entries: &[GraphEntry] = &ext;
     let n = entries.len();
 

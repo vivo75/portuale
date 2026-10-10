@@ -19,15 +19,15 @@ fn envd_use_tokens_follow_eroot_not_config_root() {
     let root = fixtures_root();
     let overlay_repos = [("overlay".to_string(), root.join("overlay"))];
     let args = |eroot: &Path| {
-        resolve_config(
-            &root,
-            &root.join("repo"),
-            &overlay_repos,
-            &[],
-            "testrepo",
-            &HashMap::new(),
+        resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &root.join("repo"),
+            overlay_repos: &overlay_repos,
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
             eroot,
-        )
+        })
         .expect("fixture config must resolve")
     };
     assert_eq!(
@@ -75,8 +75,16 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
     .unwrap();
     let resolve = || {
         with_test_env(&[], || {
-            resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-                .expect("resolves")
+            resolve_config(ResolveConfigArgs {
+                config_root: &root,
+                main_repo_location: &repo,
+                overlay_repos: &[],
+                repo_aliases: &[],
+                main_repo_name: "testrepo",
+                repo_masters: &HashMap::new(),
+                eroot: &root,
+            })
+            .expect("resolves")
         })
     };
     let mut config = resolve();
@@ -166,8 +174,16 @@ fn reload_env_d_never_admits_a_profile_only_variable() {
     )
     .unwrap();
     let mut config = with_test_env(&[], || {
-        resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-            .expect("resolves")
+        resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves")
     });
     assert_eq!(config.other_vars.get("ENVDRELOAD_PO"), None);
     assert_eq!(
@@ -197,15 +213,15 @@ fn resolves_fixture_profile_chain_and_make_conf() {
     // (portuale's pretend.rs, built from real find_repos) already
     // passes for this same fixture tree.
     let overlay_repos = [("overlay".to_string(), root.join("overlay"))];
-    let config = resolve_config(
-        &root,
-        &root.join("repo"),
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config must resolve");
     assert_eq!(
         config.use_flags,
@@ -306,15 +322,15 @@ fn license_groups_come_from_each_repo_profiles_dir_not_the_profile_chain() {
     let root = fixtures_root();
     let stray = root.join("repo/profiles/base/license_groups");
     std::fs::write(&stray, "EULA StrayShouldBeIgnored\n").unwrap();
-    let config = resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    );
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    });
     std::fs::remove_file(&stray).ok();
     let config = config.expect("fixture config must resolve");
     // Only the two real repo-level members, in repo-then-overlay
@@ -332,15 +348,15 @@ fn license_groups_come_from_each_repo_profiles_dir_not_the_profile_chain() {
 fn missing_profile_and_make_conf_yield_empty_config() {
     let empty_root = TempDir::new("portage-profile-test-empty-root").keep();
     let _ = fs::create_dir_all(&empty_root);
-    let config = resolve_config(
-        &empty_root,
-        &empty_root.join("repo"),
-        &[],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &empty_root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &empty_root,
+        main_repo_location: &empty_root.join("repo"),
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &empty_root,
+    })
     .expect("missing profile/make.conf is not an error");
     assert_eq!(config.use_flags, HashSet::new());
     assert_eq!(config.accept_keywords, HashSet::new());
@@ -382,15 +398,15 @@ fn cross_repo_profile_parent_resolves_a_named_repos_own_profile() {
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
     let overlay_repos = [("otherrepo".to_string(), other_repo.clone())];
-    let config = resolve_config(
-        &root,
-        &main_repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &main_repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("cross-repo parent must resolve");
     assert!(config.use_flags.contains("crossrepoflag"));
 }
@@ -425,29 +441,29 @@ fn cross_repo_profile_parent_resolves_an_aliased_repo_name() {
     // `otherrepo` is a canonical name, `ovl` its alias.
     let overlay_repos = [("otherrepo".to_string(), other_repo.clone())];
     let repo_aliases = [("ovl".to_string(), other_repo.clone())];
-    let config = resolve_config(
-        &root,
-        &main_repo,
-        &overlay_repos,
-        &repo_aliases,
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &main_repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &repo_aliases,
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("aliased cross-repo parent must resolve");
     assert!(config.use_flags.contains("aliasedflag"));
 
     // ...and without the alias registered, it's the same clear error
     // an unknown repo name gets.
-    let err = resolve_config(
-        &root,
-        &main_repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let err = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &main_repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .unwrap_err();
     assert!(err.to_string().contains("no repo named \"ovl\""), "{err}");
 }
@@ -465,15 +481,15 @@ fn cross_repo_profile_parent_unknown_repo_name_is_a_clear_error() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let err = resolve_config(
-        &root,
-        &root.join("repo"),
-        &[],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let err = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect_err("unknown repo name must be rejected");
     assert!(
         err.to_string().contains("no repo named"),
@@ -515,15 +531,15 @@ fn same_repo_colon_profile_parent_resolves_within_the_current_repo() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
 
-    let config = resolve_config(
-        &root,
-        &main_repo,
-        &[],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &main_repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("same-repo colon parent must resolve");
     assert!(config.use_flags.contains("samerepocolon"));
 }
@@ -550,15 +566,15 @@ fn colon_profile_parent_is_not_expanded_when_the_repo_lacks_portage_2() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
 
-    let err = resolve_config(
-        &root,
-        &main_repo,
-        &[],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let err = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &main_repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect_err("a colon parent in a non-portage-2 repo must not resolve");
     assert!(err.to_string().contains(":base"), "unexpected error: {err}");
 }
@@ -576,15 +592,15 @@ fn same_repo_colon_profile_parent_outside_any_known_repo_is_a_clear_error() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let err = resolve_config(
-        &root,
-        &root.join("repo"),
-        &[],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let err = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect_err("same-repo colon outside any known repo must be rejected");
     assert!(
         err.to_string().contains("not inside any known repo"),
@@ -617,15 +633,15 @@ fn diamond_profile_inheritance_does_not_double_apply_a_shared_ancestor() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("top"), &make_profile).unwrap();
 
-    let config = resolve_config(
-        &root,
-        &root.join("repo"),
-        &[],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("diamond inheritance must resolve");
     assert_eq!(
         config.use_flags,
@@ -662,15 +678,15 @@ fn package_mask_unmask_accept_keywords_load_correctly() {
     )
     .unwrap();
 
-    let config = resolve_config(
-        &root,
-        &root.join("repo"),
-        &[],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config with package.* files must resolve");
     assert_eq!(config.package_mask, vec!["dev-libs/foo".to_string()]);
     assert_eq!(config.package_unmask, vec!["dev-libs/baz".to_string()]);
@@ -724,8 +740,16 @@ fn package_mask_atom_removal_applies_across_repo_profile_and_user_sources() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_mask,
         vec!["dev-libs/b::testrepo".to_string(), "dev-libs/d".to_string()]
@@ -747,15 +771,15 @@ fn overlay_package_mask_is_scoped_to_its_own_repo_only() {
     fs::write(overlay.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
 
     let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
-    let config = resolve_config(
-        &root,
-        &repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config must resolve");
     assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
 }
@@ -778,15 +802,15 @@ fn overlay_package_unmask_gets_the_same_scoping_as_overlay_package_mask() {
     fs::write(overlay.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
     let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
-    let config = resolve_config(
-        &root,
-        &repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config must resolve");
     assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
     assert_eq!(
@@ -815,15 +839,15 @@ fn overlay_package_mask_inherits_the_main_repos_own_entries_via_implicit_masters
     fs::write(overlay.join("profiles/package.mask"), "dev-libs/b\n").unwrap();
 
     let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
-    let config = resolve_config(
-        &root,
-        &repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config must resolve");
     assert_eq!(
         config.package_mask,
@@ -852,15 +876,15 @@ fn overlay_package_unmask_does_not_inherit_via_masters() {
     fs::write(repo.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
     let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
-    let config = resolve_config(
-        &root,
-        &repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config must resolve");
     assert_eq!(
         config.package_unmask,
@@ -885,15 +909,15 @@ fn explicit_repo_masters_overrides_the_implicit_main_repo_default() {
 
     let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
     let repo_masters = HashMap::from([("overlay".to_string(), Vec::<PathBuf>::new())]);
-    let config = resolve_config(
-        &root,
-        &repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &repo_masters,
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &repo_masters,
+        eroot: &root,
+    })
     .expect("config must resolve");
     // The main repo's own "dev-libs/a" entry still applies to
     // itself (real portage's own repo-level package.mask always
@@ -929,15 +953,15 @@ fn explicit_repo_masters_resolves_a_non_main_master_chain() {
         ("downstream".to_string(), downstream.clone()),
     ];
     let repo_masters = HashMap::from([("downstream".to_string(), vec![overlay.to_path_buf()])]);
-    let config = resolve_config(
-        &root,
-        &repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &repo_masters,
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &repo_masters,
+        eroot: &root,
+    })
     .expect("config must resolve");
     assert!(
         config
@@ -968,15 +992,15 @@ fn overlay_package_use_is_scoped_to_its_own_repo_only() {
     fs::write(overlay.join("profiles/package.use"), "dev-libs/a flag\n").unwrap();
 
     let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
-    let config = resolve_config(
-        &root,
-        &repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config must resolve");
     assert_eq!(
         config.package_use_repo,
@@ -1013,8 +1037,16 @@ fn system_packages_stack_across_profile_levels_with_atom_removal_and_star_filter
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
 }
 
@@ -1060,8 +1092,16 @@ fn profile_packages_are_the_unstarred_lines_of_profile_set_repo_levels() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.profile_packages,
         vec!["dev-libs/leafonly".to_string()]
@@ -1108,8 +1148,16 @@ fn profile_packages_require_the_profile_set_format() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert!(config.profile_packages.is_empty());
     assert_eq!(
         config.system_packages,
@@ -1155,8 +1203,16 @@ fn package_provided_stacks_the_profile_chain_plus_the_user_file_with_atom_remova
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(config.package_provided, vec!["dev-libs/c-1.0".to_string()]);
 }
 
@@ -1198,8 +1254,16 @@ fn use_mask_and_use_force_stack_across_levels_but_stay_out_of_use_flags() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.use_flags,
         HashSet::from(["normalflag".to_string(), "maskflag".to_string()])
@@ -1240,8 +1304,16 @@ fn archlist_stacks_across_profile_levels_with_removal_semantics() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.archlist,
         HashSet::from(["amd64".to_string(), "arm64".to_string()])
@@ -1283,8 +1355,16 @@ fn use_expand_variable_names_stack_incrementally_across_profile_levels() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.use_expand,
         HashSet::from(["VIDEO_CARDS".to_string(), "PYTHON_TARGETS".to_string()])
@@ -1322,8 +1402,16 @@ fn use_expand_variable_value_expands_with_negation_and_plus_stripped() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert!(!config.use_flags.contains("video_cards_nvidia"));
     assert!(config.use_flags.contains("video_cards_intel"));
     assert!(!config.use_flags.contains("+video_cards_intel"));
@@ -1359,8 +1447,16 @@ fn profile_make_defaults_use_expand_is_folded_per_level_before_package_use() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     let layer = &config.profile_use_layers[0];
     // folded flag lands in this level's make_defaults_use, prepended.
     assert_eq!(
@@ -1420,8 +1516,16 @@ fn use_expand_value_set_at_two_profile_levels_stacks_incrementally() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     // base-only value survives the leaf's own VIDEO_CARDS assignment.
     assert!(config.use_flags.contains("video_cards_dummy"));
     // both levels' additive values are present.
@@ -1461,8 +1565,16 @@ fn use_expand_prefix_wildcard_cancels_parent_level_values() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert!(config.use_flags.contains("video_cards_intel"));
     assert!(
         !config.use_flags.contains("video_cards_dummy"),
@@ -1498,8 +1610,16 @@ fn use_expand_unprefixed_variable_contributes_a_bare_flag_no_prefix() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.use_expand_unprefixed,
         HashSet::from(["ARCH".to_string()])
@@ -1535,8 +1655,16 @@ fn use_expand_unprefixed_variable_value_expands_with_negation_and_plus_stripped(
     #[cfg(unix)]
     std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert!(!config.use_flags.contains("foo"));
     assert!(config.use_flags.contains("bar"));
     assert!(!config.use_flags.contains("+bar"));
@@ -1569,8 +1697,16 @@ fn package_accept_keywords_stacks_profile_chain_then_user_no_repo_source() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_accept_keywords,
         vec![
@@ -1611,8 +1747,16 @@ fn accept_keywords_defaults_substitutes_tilde_arch_for_a_bare_atom() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_accept_keywords,
         vec![("dev-libs/foo".to_string(), vec!["~amd64".to_string()])]
@@ -1648,8 +1792,16 @@ fn accept_keywords_defaults_excludes_already_prefixed_tokens() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_accept_keywords,
         vec![("dev-libs/foo".to_string(), vec!["~amd64".to_string()])]
@@ -1682,8 +1834,16 @@ fn package_use_splits_repo_profile_and_user_into_their_own_fields() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_use_repo,
         vec![("dev-libs/a".to_string(), vec!["flaga".to_string()])]
@@ -1724,8 +1884,16 @@ fn env_layer_overrides_config_vars() {
 
     // No env: baseline.
     with_test_env(&[], || {
-        let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-            .expect("resolves");
+        let c = resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves");
         assert!(c.accept_keywords.contains("amd64"));
         assert!(!c.accept_keywords.contains("~amd64"));
         assert!(c.use_flags.contains("video_cards_nvidia"));
@@ -1740,8 +1908,16 @@ fn env_layer_overrides_config_vars() {
             ("CFLAGS", "-O3"),
         ],
         || {
-            let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-                .expect("resolves");
+            let c = resolve_config(ResolveConfigArgs {
+                config_root: &root,
+                main_repo_location: &repo,
+                overlay_repos: &[],
+                repo_aliases: &[],
+                main_repo_name: "testrepo",
+                repo_masters: &HashMap::new(),
+                eroot: &root,
+            })
+            .expect("resolves");
             // ACCEPT_KEYWORDS: incremental -- profile amd64 kept, env ~amd64 added.
             assert!(c.accept_keywords.contains("amd64"));
             assert!(c.accept_keywords.contains("~amd64"));
@@ -1790,8 +1966,16 @@ fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
     let resolve = || {
-        resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-            .expect("resolves")
+        resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves")
     };
 
     // No env: the `make.conf` layer alone.
@@ -1866,8 +2050,16 @@ fn user_package_use_star_atom_folds_onto_the_global_use() {
     .unwrap();
 
     with_test_env(&[], || {
-        let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-            .expect("resolves");
+        let c = resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves");
         assert!(c.use_flags.contains("globalflag"));
         assert!(!c.use_flags.contains("profileflag"));
         assert!(c.use_flags.contains("video_cards_nouveau"));
@@ -1898,8 +2090,16 @@ fn profile_use_layers_are_built_one_per_chain_level() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.profile_use_layers,
         vec![
@@ -1952,15 +2152,15 @@ fn repo_make_defaults_use_is_read_per_repo_with_var_expansion() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
 
-    let config = resolve_config(
-        &root,
-        &repo,
-        &[("myoverlay".to_string(), overlay.to_path_buf())],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[("myoverlay".to_string(), overlay.to_path_buf())],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config must resolve");
     assert_eq!(
         config.repo_make_defaults_use,
@@ -1994,14 +2194,30 @@ fn envd_use_tokens_are_read_from_profile_env() {
     )
     .unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(config.envd_use_tokens, vec!["envdflag -other".to_string()]);
 
     // No profile.env -> empty.
     fs::remove_file(etc.join("profile.env")).unwrap();
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert!(config.envd_use_tokens.is_empty());
     let _ = fs::remove_dir_all(&root);
 }
@@ -2033,8 +2249,16 @@ fn package_env_resolves_env_file_use_including_source_and_missing_files() {
     fs::write(env_dir.join("shared"), "USE=\"sharedflag -commonflag\"\n").unwrap();
     // `gone` is referenced but doesn't exist -> contributes nothing.
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
 
     assert_eq!(
         config.package_env,
@@ -2099,8 +2323,16 @@ fn package_env_expands_dollar_vars_against_the_global_map_with_chaining() {
     )
     .unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_env_use,
         vec![(
@@ -2143,8 +2375,16 @@ fn package_use_expand_shorthand_applies_prefix_to_following_tokens_on_the_same_l
     )
     .unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_use_user,
         vec![(
@@ -2174,8 +2414,16 @@ fn package_use_expand_shorthand_resets_at_the_start_of_each_line() {
     )
     .unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_use_user,
         vec![
@@ -2206,8 +2454,16 @@ fn package_use_expand_shorthand_is_user_level_only() {
     )
     .unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_use_repo,
         vec![(
@@ -2250,8 +2506,16 @@ fn package_use_mask_and_force_stack_repo_then_profile_only_no_user_source() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_use_mask,
         vec![
@@ -2292,8 +2556,16 @@ fn use_stable_mask_and_force_stack_profile_chain_only_and_stay_out_of_use_flags(
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.use_stable_mask,
         HashSet::from(["stablemaskflag".to_string()])
@@ -2350,8 +2622,16 @@ fn package_use_stable_mask_and_force_stack_repo_then_profile_only_no_user_source
     #[cfg(unix)]
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.package_use_stable_mask,
         vec![
@@ -2379,15 +2659,15 @@ fn package_use_loads_tokens_and_skips_bare_atom_lines() {
     )
     .unwrap();
 
-    let config = resolve_config(
-        &root,
-        &root.join("repo"),
-        &[],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config with package.use must resolve");
     assert_eq!(
         config.package_use_user,

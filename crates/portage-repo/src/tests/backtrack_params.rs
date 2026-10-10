@@ -43,14 +43,14 @@ fn slot_conflict_mask_choices_groups_missed_update_siblings() {
         conflicting_atom: "=dev-libs/mgfc-1".to_string(),
         instances: vec![instance("2"), instance("1")],
     };
-    let choices = slot_conflict_mask_choices(
-        &repos,
-        &[],
-        &BacktrackParams::default(),
-        &pullers,
-        &sc,
-        &config,
-    );
+    let choices = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
+        repos: &repos,
+        excluded: &[],
+        params: &BacktrackParams::default(),
+        slot_pullers: &pullers,
+        sc: &sc,
+        config: &config,
+    });
     assert_eq!(choices.len(), 2);
     // Ascending length: the 1.0 choice (one parent) first.
     assert_eq!(
@@ -167,7 +167,14 @@ fn slot_conflict_mask_choices_skips_an_already_masked_sibling() {
             },
         }],
     );
-    let choices = slot_conflict_mask_choices(&repos, &[], &params, &pullers, &sc, &config);
+    let choices = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
+        repos: &repos,
+        excluded: &[],
+        params: &params,
+        slot_pullers: &pullers,
+        sc: &sc,
+        config: &config,
+    });
     assert!(!choices.is_empty());
     assert!(
         choices

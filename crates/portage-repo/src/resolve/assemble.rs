@@ -62,15 +62,16 @@ pub(crate) fn assemble_result(
     // package whose build-time dep is being merged this run gets its
     // own `[ebuild R]` rebuild entry. Same `all_installed_packages`
     // scan / entry shape as the slot-operator pass above.
-    pass.entries.extend(rebuild_if_entries(
-        ctx.root,
-        &pass.entries,
-        ctx.rebuild_if_unbuilt,
-        ctx.rebuild_if_new_rev,
-        ctx.rebuild_if_new_ver,
-        ctx.rebuild_exclude,
-        ctx.rebuild_ignore,
-    ));
+    pass.entries
+        .extend(rebuild_if_entries(RebuildIfEntriesArgs {
+            root: ctx.root,
+            entries: &pass.entries,
+            unbuilt: ctx.rebuild_if_unbuilt,
+            new_rev: ctx.rebuild_if_new_rev,
+            new_ver: ctx.rebuild_if_new_ver,
+            rebuild_exclude: ctx.rebuild_exclude,
+            rebuild_ignore: ctx.rebuild_ignore,
+        }));
 
     // `emerge --pretend --debug` stages 2/4/6: the per-package
     // resolution narration, emitted here (final `entries`, successful
@@ -409,31 +410,31 @@ pub(crate) fn assemble_result(
     // data was recorded at each `NoVisibleCandidate` push above.
     for rep in &mut pass.masked_deps {
         let atom = rep.atom.clone();
-        rep.chain = masked_dep_chain(
-            &ctx.repos,
-            ctx.config,
-            &pass.entries,
-            &rep.category,
-            &rep.package,
-            ctx.atoms,
-            ctx.root,
-            &atom,
-        );
+        rep.chain = masked_dep_chain(MaskedDepChainArgs {
+            repos: &ctx.repos,
+            config: ctx.config,
+            entries: &pass.entries,
+            category: &rep.category,
+            package: &rep.package,
+            atoms: ctx.atoms,
+            root: ctx.root,
+            atom: &atom,
+        });
     }
     // Same walk for the `[use]`-unsatisfied disclosures (#20): the chain
     // shape is real `_get_dep_chain`'s, shared with the masked block.
     for rep in &mut pass.use_unsat_deps {
         let atom = rep.atom.clone();
-        rep.chain = masked_dep_chain(
-            &ctx.repos,
-            ctx.config,
-            &pass.entries,
-            &rep.category,
-            &rep.package,
-            ctx.atoms,
-            ctx.root,
-            &atom,
-        );
+        rep.chain = masked_dep_chain(MaskedDepChainArgs {
+            repos: &ctx.repos,
+            config: ctx.config,
+            entries: &pass.entries,
+            category: &rep.category,
+            package: &rep.package,
+            atoms: ctx.atoms,
+            root: ctx.root,
+            atom: &atom,
+        });
     }
     // #135 (d) post-pass: every dependency `NoVisibleCandidate` entry
     // that neither sibling block claimed gets a plain-miss disclosure.
@@ -533,16 +534,16 @@ pub(crate) fn assemble_result(
     // Same walk for the plain-miss disclosures (#135 (d)).
     for rep in &mut pass.plain_miss_deps {
         let atom = rep.atom.clone();
-        rep.chain = masked_dep_chain(
-            &ctx.repos,
-            ctx.config,
-            &pass.entries,
-            &rep.category,
-            &rep.package,
-            ctx.atoms,
-            ctx.root,
-            &atom,
-        );
+        rep.chain = masked_dep_chain(MaskedDepChainArgs {
+            repos: &ctx.repos,
+            config: ctx.config,
+            entries: &pass.entries,
+            category: &rep.category,
+            package: &rep.package,
+            atoms: ctx.atoms,
+            root: ctx.root,
+            atom: &atom,
+        });
     }
 
     // Backlog #19 Slice 3: classify the settled graph the way real's
@@ -553,15 +554,15 @@ pub(crate) fn assemble_result(
     // gate (no merge-bound virtual, no probe) keeps ordinary resolves
     // free.
     let virtual_cycle = find_virtual_cycles(&pass.entries, ctx.root);
-    let outcome = abort_outcome(
-        &pass.entries,
-        &pass.masked_deps,
-        &circular_deps,
-        &cycle_display,
-        &cycle_display_idx,
-        &pass.nvc_dep_atoms,
-        &virtual_cycle,
-    );
+    let outcome = abort_outcome(AbortOutcomeArgs {
+        entries: &pass.entries,
+        masked_deps: &pass.masked_deps,
+        circular_deps: &circular_deps,
+        cycle_display: &cycle_display,
+        cycle_display_idx: &cycle_display_idx,
+        nvc_dep_atoms: &pass.nvc_dep_atoms,
+        virtual_cycle: &virtual_cycle,
+    });
 
     // Backlog #129 (S1): real `display_problems` shows missed updates
     // only with no unresolved conflicts (`depgraph.py:11127-11132` --
@@ -580,14 +581,15 @@ pub(crate) fn assemble_result(
             .iter()
             .any(|e| e.blockers.iter().any(|b| b.unsolvable))
     {
-        let (mask_skipped, mask_missing, mask_full) = backtrack_missed_updates(
-            &ctx.repos,
-            ctx.root,
-            config,
-            &pass.entries,
-            params,
-            &pass.missing_args,
-        );
+        let (mask_skipped, mask_missing, mask_full) =
+            backtrack_missed_updates(BacktrackMissedUpdatesArgs {
+                repos: &ctx.repos,
+                root: ctx.root,
+                config,
+                entries: &pass.entries,
+                params,
+                missing_args: &pass.missing_args,
+            });
         // Real chains the mask dict before the handler removals
         // (`:1533-1536`), so mask rows lead in first-seen order and the
         // direct-solve rows (first-seen block order) and the sorted

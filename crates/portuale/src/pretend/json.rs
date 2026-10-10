@@ -386,27 +386,44 @@ pub(crate) fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> S
         },
     }
 }
+/// Arguments of [`print_json`].
+pub(crate) struct PrintJsonArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    /// #59 S2 (K1 option (a)): the deterministic `(backtrack: N/M)` count
+    /// real's `_show_resolution_report` prints on every run -- `--json`
+    /// only, no stdout line (the timing half is a deliberate cut).
+    pub(crate) backtrack_restarts: u64,
+    pub(crate) backtrack_max: u32,
+    pub(crate) slot_conflicts: &'a [SlotConflict],
+    pub(crate) changed_deps_report: &'a [ChangedDepsReportEntry],
+    pub(crate) autounmask_keyword_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) autounmask_use_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) autounmask_license_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) autounmask_mask_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) abi_rebuilds: &'a [(String, String)],
+    pub(crate) outcome: &'a portage_repo::ResolveOutcome,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) verbose: bool,
+    pub(crate) running_root: Option<&'a Path>,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn print_json(
-    entries: &[GraphEntry],
-    // #59 S2 (K1 option (a)): the deterministic `(backtrack: N/M)` count
-    // real's `_show_resolution_report` prints on every run -- `--json`
-    // only, no stdout line (the timing half is a deliberate cut).
-    backtrack_restarts: u64,
-    backtrack_max: u32,
-    slot_conflicts: &[SlotConflict],
-    changed_deps_report: &[ChangedDepsReportEntry],
-    autounmask_keyword_changes: &[portage_repo::AutounmaskChange],
-    autounmask_use_changes: &[portage_repo::AutounmaskChange],
-    autounmask_license_changes: &[portage_repo::AutounmaskChange],
-    autounmask_mask_changes: &[portage_repo::AutounmaskChange],
-    abi_rebuilds: &[(String, String)],
-    outcome: &portage_repo::ResolveOutcome,
-    top_level_pkgs: &HashSet<(String, String)>,
-    verbose: bool,
-    running_root: Option<&Path>,
-) {
+pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
+    let PrintJsonArgs {
+        entries,
+        backtrack_restarts,
+        backtrack_max,
+        slot_conflicts,
+        changed_deps_report,
+        autounmask_keyword_changes,
+        autounmask_use_changes,
+        autounmask_license_changes,
+        autounmask_mask_changes,
+        abi_rebuilds,
+        outcome,
+        top_level_pkgs,
+        verbose,
+        running_root,
+    } = args;
     let entries_json: Vec<String> = entries
         .iter()
         .enumerate()

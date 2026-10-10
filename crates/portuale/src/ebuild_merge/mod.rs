@@ -308,14 +308,9 @@ pub(crate) fn process_merge_elog(
 ) {
     let cpv = format!("{}/{}", env.category, env.split.pf);
     crate::elog::process_batch(
-        &crate::elog::logdir(root),
-        &root.display().to_string(),
-        &[(cpv, env.t())],
-        None,
-        &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
-        // The merge's resolved list when one was set (#37 S2); the
+        crate::elog::ProcessBatchArgs { logdir: &crate::elog::logdir(root), root_display: &root.display().to_string(), items: &[(cpv, env.t())], phases: None, color: &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)), split_elog: // The merge's resolved list when one was set (#37 S2); the
         // standalone `ebuild <file> merge` fallback is the raw env.
-        feature_enabled(options, "split-elog"),
+        feature_enabled(options, "split-elog") },
     );
 }
 
@@ -343,7 +338,24 @@ pub fn run_merge(
     // real `bin/ebuild` equivalent.
     buildpkg: Option<&crate::ebuild_package::PackageOptions>,
 ) -> Result<i32, String> {
-    run_merge_with_hook(ebuild_path, root, portage_tmpdir, options, buildpkg, None)
+    run_merge_with_hook(RunMergeWithHookArgs {
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        options,
+        buildpkg,
+        before_merge: None,
+    })
+}
+
+/// Arguments of [`run_merge_with_hook`].
+pub struct RunMergeWithHookArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub options: &'a MergeOptions,
+    pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
+    pub before_merge: Option<&'a dyn Fn()>,
 }
 
 /// [`run_merge`], with a hook real's `Scheduler._build_exit` fires
@@ -356,26 +368,26 @@ pub fn run_merge(
 /// (real queues no merge for it), so callers that print the
 /// `Installing` line from the hook also regain that gating for free.
 /// `None` runs the fused build+merge exactly like [`run_merge`].
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn run_merge_with_hook(
-    ebuild_path: &Path,
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &MergeOptions,
-    buildpkg: Option<&crate::ebuild_package::PackageOptions>,
-    before_merge: Option<&dyn Fn()>,
-) -> Result<i32, String> {
-    let status = ebuild_phases::run_commands(
+pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String> {
+    let RunMergeWithHookArgs {
         ebuild_path,
-        &["install"],
         root,
         portage_tmpdir,
-        &options.distdir,
-        options.debug,
-        &options.config_root,
-        options.shell,
-        &options.build_env,
-    )?;
+        options,
+        buildpkg,
+        before_merge,
+    } = args;
+    let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
+        ebuild_path,
+        commands: &["install"],
+        root,
+        portage_tmpdir,
+        distdir: &options.distdir,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &options.build_env,
+    })?;
     if status != 0 {
         return Ok(status);
     }
@@ -439,16 +451,16 @@ pub fn run_merge_with_hook(
     // build+merge split gets the same call from
     // `emerge_build::merge_one_built_entry`.
     if merge_status == 0 && !feature_enabled(options, "noclean") {
-        ebuild_phases::run_clean(
+        ebuild_phases::run_clean(ebuild_phases::RunCleanArgs {
             ebuild_path,
             root,
             portage_tmpdir,
-            &options.build_env,
-            options.debug,
-            &options.config_root,
-            options.shell,
-            options.log_file.as_deref(),
-        )?;
+            build_env: &options.build_env,
+            debug: options.debug,
+            config_root: &options.config_root,
+            shell: options.shell,
+            log_file: options.log_file.as_deref(),
+        })?;
     }
     Ok(merge_status)
 }

@@ -304,15 +304,25 @@ impl StatusDisplay {
     /// like real's `plain_output` gauge.
     pub(crate) fn jobs_line(&self) -> String {
         let state = self.state.lock().unwrap();
-        jobs_line(
-            &self.color,
-            state.curval,
-            state.maxval,
-            state.running,
-            state.failed,
-            0,
-        )
+        jobs_line(JobsLineArgs {
+            color: &self.color,
+            curval: state.curval,
+            maxval: state.maxval,
+            running: state.running,
+            failed: state.failed,
+            merge_wait: 0,
+        })
     }
+}
+
+/// Arguments of [`jobs_line`].
+pub(crate) struct JobsLineArgs<'a> {
+    pub(crate) color: &'a crate::color::Colorizer,
+    pub(crate) curval: usize,
+    pub(crate) maxval: usize,
+    pub(crate) running: usize,
+    pub(crate) failed: usize,
+    pub(crate) merge_wait: usize,
 }
 
 /// Backlog #197: the pure `>>> Jobs:` shape (real
@@ -321,15 +331,15 @@ impl StatusDisplay {
 /// arm stays because it is part of the shape. Real's `Load avg:`
 /// trailer is cut (see [`StatusDisplay::jobs_line`]); the padding that
 /// precedes it is kept, so the line keeps real's shape and column.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn jobs_line(
-    color: &crate::color::Colorizer,
-    curval: usize,
-    maxval: usize,
-    running: usize,
-    failed: usize,
-    merge_wait: usize,
-) -> String {
+pub(crate) fn jobs_line(args: JobsLineArgs<'_>) -> String {
+    let JobsLineArgs {
+        color,
+        curval,
+        maxval,
+        running,
+        failed,
+        merge_wait,
+    } = args;
     let mut plain = format!("Jobs: {curval} of {maxval} complete");
     let mut styled = format!(
         "Jobs: {} of {} complete",

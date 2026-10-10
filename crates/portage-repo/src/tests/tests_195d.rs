@@ -17,12 +17,27 @@ fn set_195d(flags: &[&str]) -> HashSet<String> {
     flags.iter().map(|s| s.to_string()).collect()
 }
 
+/// Arguments of [`cell_195d`].
+struct Cell195dArgs<'a> {
+    token: &'a str,
+    valid: bool,
+    p: bool,
+    c: bool,
+    hit: bool,
+}
+
 /// One single-token oracle cell: `token` is the full `[...]` entry
 /// (e.g. `"foo(+)?"`), `valid` whether `foo` is in child IUSE, `p` /
 /// `c` the parent/child USE bits. `hit` is the oracle `arm` column
 /// (`true` = `[foo]`, `false` = `[]`).
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-fn cell_195d(token: &str, valid: bool, p: bool, c: bool, hit: bool) {
+fn cell_195d(args: Cell195dArgs<'_>) {
+    let Cell195dArgs {
+        token,
+        valid,
+        p,
+        c,
+        hit,
+    } = args;
     let atom =
         portage_dep::parse_atom(&format!("dev-libs/child[{token}]")).expect("oracle token parses");
     let child_valid = if valid {
@@ -60,7 +75,13 @@ fn violated_parent_flags_matches_portage_across_the_oracle_matrix() {
     for tok in ["foo?", "foo(+)?", "foo(-)?"] {
         for p in [false, true] {
             for c in [false, true] {
-                cell_195d(tok, true, p, c, p && !c);
+                cell_195d(Cell195dArgs {
+                    token: tok,
+                    valid: true,
+                    p,
+                    c,
+                    hit: p && !c,
+                });
             }
         }
     }
@@ -68,16 +89,46 @@ fn violated_parent_flags_matches_portage_across_the_oracle_matrix() {
     // violates only for `(-)` (defaultless poisons via the
     // `missing_iuse`-equivalent path).
     for tok in ["foo?", "foo(+)?", "foo(-)?"] {
-        cell_195d(tok, false, false, false, false);
+        cell_195d(Cell195dArgs {
+            token: tok,
+            valid: false,
+            p: false,
+            c: false,
+            hit: false,
+        });
     }
-    cell_195d("foo?", false, true, false, false);
-    cell_195d("foo(+)?", false, true, false, false);
-    cell_195d("foo(-)?", false, true, false, true);
+    cell_195d(Cell195dArgs {
+        token: "foo?",
+        valid: false,
+        p: true,
+        c: false,
+        hit: false,
+    });
+    cell_195d(Cell195dArgs {
+        token: "foo(+)?",
+        valid: false,
+        p: true,
+        c: false,
+        hit: false,
+    });
+    cell_195d(Cell195dArgs {
+        token: "foo(-)?",
+        valid: false,
+        p: true,
+        c: false,
+        hit: true,
+    });
     // `flag=` -- real `:1532-1549`. Valid: violated iff P != C.
     for tok in ["foo=", "foo(+)=", "foo(-)="] {
         for p in [false, true] {
             for c in [false, true] {
-                cell_195d(tok, true, p, c, p != c);
+                cell_195d(Cell195dArgs {
+                    token: tok,
+                    valid: true,
+                    p,
+                    c,
+                    hit: p != c,
+                });
             }
         }
     }
@@ -86,50 +137,185 @@ fn violated_parent_flags_matches_portage_across_the_oracle_matrix() {
     // `(-)` violates only when the parent has it.
     for tok in ["foo=", "foo(+)=", "foo(-)="] {
         // Only the `(+)` parent-lacks row violates (oracle `= invalid plus 0 0`).
-        cell_195d(tok, false, false, false, tok == "foo(+)=");
+        cell_195d(Cell195dArgs {
+            token: tok,
+            valid: false,
+            p: false,
+            c: false,
+            hit: tok == "foo(+)=",
+        });
     }
-    cell_195d("foo=", false, true, false, false);
-    cell_195d("foo(+)=", false, true, false, false);
-    cell_195d("foo(-)=", false, true, false, true);
+    cell_195d(Cell195dArgs {
+        token: "foo=",
+        valid: false,
+        p: true,
+        c: false,
+        hit: false,
+    });
+    cell_195d(Cell195dArgs {
+        token: "foo(+)=",
+        valid: false,
+        p: true,
+        c: false,
+        hit: false,
+    });
+    cell_195d(Cell195dArgs {
+        token: "foo(-)=",
+        valid: false,
+        p: true,
+        c: false,
+        hit: true,
+    });
     // `flag!=` -- real `:1550-1567`.
     for p in [false, true] {
         for c in [false, true] {
-            cell_195d("!foo=", true, p, c, p == c);
-            cell_195d("!foo(+)=", true, p, c, p == c);
-            cell_195d("!foo(-)=", true, p, c, p == c);
+            cell_195d(Cell195dArgs {
+                token: "!foo=",
+                valid: true,
+                p,
+                c,
+                hit: p == c,
+            });
+            cell_195d(Cell195dArgs {
+                token: "!foo(+)=",
+                valid: true,
+                p,
+                c,
+                hit: p == c,
+            });
+            cell_195d(Cell195dArgs {
+                token: "!foo(-)=",
+                valid: true,
+                p,
+                c,
+                hit: p == c,
+            });
         }
     }
-    cell_195d("!foo=", false, false, false, false);
-    cell_195d("!foo=", false, true, false, false);
+    cell_195d(Cell195dArgs {
+        token: "!foo=",
+        valid: false,
+        p: false,
+        c: false,
+        hit: false,
+    });
+    cell_195d(Cell195dArgs {
+        token: "!foo=",
+        valid: false,
+        p: true,
+        c: false,
+        hit: false,
+    });
     // Invalid `(+)`: parent-has-child-lacks violates (the review's
     // corner: real's `missing_enabled` sub-branch); parent-lacks-
     // child-lacks is satisfied.
-    cell_195d("!foo(+)=", false, false, false, false);
-    cell_195d("!foo(+)=", false, true, false, true);
-    cell_195d("!foo(-)=", false, false, false, true);
-    cell_195d("!foo(-)=", false, true, false, false);
+    cell_195d(Cell195dArgs {
+        token: "!foo(+)=",
+        valid: false,
+        p: false,
+        c: false,
+        hit: false,
+    });
+    cell_195d(Cell195dArgs {
+        token: "!foo(+)=",
+        valid: false,
+        p: true,
+        c: false,
+        hit: true,
+    });
+    cell_195d(Cell195dArgs {
+        token: "!foo(-)=",
+        valid: false,
+        p: false,
+        c: false,
+        hit: true,
+    });
+    cell_195d(Cell195dArgs {
+        token: "!foo(-)=",
+        valid: false,
+        p: true,
+        c: false,
+        hit: false,
+    });
     // `!flag?` -- real `:1568-1576`.
     for p in [false, true] {
         for c in [false, true] {
-            cell_195d("!foo?", true, p, c, !p && c);
-            cell_195d("!foo(+)?", true, p, c, !p && c);
-            cell_195d("!foo(-)?", true, p, c, !p && c);
+            cell_195d(Cell195dArgs {
+                token: "!foo?",
+                valid: true,
+                p,
+                c,
+                hit: !p && c,
+            });
+            cell_195d(Cell195dArgs {
+                token: "!foo(+)?",
+                valid: true,
+                p,
+                c,
+                hit: !p && c,
+            });
+            cell_195d(Cell195dArgs {
+                token: "!foo(-)?",
+                valid: true,
+                p,
+                c,
+                hit: !p && c,
+            });
         }
     }
     for tok in ["!foo?", "!foo(+)?", "!foo(-)?"] {
-        cell_195d(tok, false, true, false, false);
+        cell_195d(Cell195dArgs {
+            token: tok,
+            valid: false,
+            p: true,
+            c: false,
+            hit: false,
+        });
     }
-    cell_195d("!foo?", false, false, false, false);
-    cell_195d("!foo(+)?", false, false, false, true);
-    cell_195d("!foo(-)?", false, false, false, false);
+    cell_195d(Cell195dArgs {
+        token: "!foo?",
+        valid: false,
+        p: false,
+        c: false,
+        hit: false,
+    });
+    cell_195d(Cell195dArgs {
+        token: "!foo(+)?",
+        valid: false,
+        p: false,
+        c: false,
+        hit: true,
+    });
+    cell_195d(Cell195dArgs {
+        token: "!foo(-)?",
+        valid: false,
+        p: false,
+        c: false,
+        hit: false,
+    });
+}
+
+/// Arguments of [`gate_195d`].
+struct Gate195dArgs<'a> {
+    cond_tok: &'a str,
+    uncond_tok: &'a str,
+    bar_valid: bool,
+    bar_use: bool,
+    hit: bool,
 }
 
 /// The concrete gate on two-token atoms (oracle gate cells G1-G10):
 /// a valid parent-active conditional plus one unconditional token.
 /// `bar_valid` / `bar_use` mirror the oracle's columns; `hit` is
 /// the oracle `arm` column.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-fn gate_195d(cond_tok: &str, uncond_tok: &str, bar_valid: bool, bar_use: bool, hit: bool) {
+fn gate_195d(args: Gate195dArgs<'_>) {
+    let Gate195dArgs {
+        cond_tok,
+        uncond_tok,
+        bar_valid,
+        bar_use,
+        hit,
+    } = args;
     let atom = portage_dep::parse_atom(&format!("dev-libs/child[{cond_tok},{uncond_tok}]"))
         .expect("oracle gate atom parses");
     let mut valid = set_195d(&["foo"]);
@@ -155,23 +341,95 @@ fn gate_195d(cond_tok: &str, uncond_tok: &str, bar_valid: bool, bar_use: bool, h
 fn violated_parent_flags_concrete_gate_matches_portage() {
     // Controls: satisfied unconditional tokens leave the parent:foo
     // hit alone (oracle-verified `[foo]`, gate PASS).
-    gate_195d("foo?", "bar", true, true, true);
-    gate_195d("foo?", "-bar", true, false, true);
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "bar",
+        bar_valid: true,
+        bar_use: true,
+        hit: true,
+    });
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "-bar",
+        bar_valid: true,
+        bar_use: false,
+        hit: true,
+    });
     // Valid concrete violations fail the gate (G1, G2).
-    gate_195d("foo?", "bar", true, false, false);
-    gate_195d("foo?", "-bar", true, true, false);
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "bar",
+        bar_valid: true,
+        bar_use: false,
+        hit: false,
+    });
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "-bar",
+        bar_valid: true,
+        bar_use: true,
+        hit: false,
+    });
     // Invalid `(-)`-assumed `bar` / invalid `(+)`-assumed `-bar`
     // fail real's gate (G3, G4, G9, G10); the port's valid-only
     // gate used to let them through.
-    gate_195d("foo?", "bar(-)", false, false, false);
-    gate_195d("foo?", "-bar(+)", false, false, false);
-    gate_195d("foo=", "bar(-)", false, false, false);
-    gate_195d("foo=", "-bar(+)", false, false, false);
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "bar(-)",
+        bar_valid: false,
+        bar_use: false,
+        hit: false,
+    });
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "-bar(+)",
+        bar_valid: false,
+        bar_use: false,
+        hit: false,
+    });
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo=",
+        uncond_tok: "bar(-)",
+        bar_valid: false,
+        bar_use: false,
+        hit: false,
+    });
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo=",
+        uncond_tok: "-bar(+)",
+        bar_valid: false,
+        bar_use: false,
+        hit: false,
+    });
     // The satisfied invalid-defaulted mirrors pass (G5, G6).
-    gate_195d("foo?", "bar(+)", false, false, true);
-    gate_195d("foo?", "-bar(-)", false, false, true);
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "bar(+)",
+        bar_valid: false,
+        bar_use: false,
+        hit: true,
+    });
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "-bar(-)",
+        bar_valid: false,
+        bar_use: false,
+        hit: true,
+    });
     // Invalid defaultless unconditionals poison via `required`
     // (G7, G8 -- real skips the arm via `missing_iuse`).
-    gate_195d("foo?", "bar", false, false, false);
-    gate_195d("foo?", "-bar", false, false, false);
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "bar",
+        bar_valid: false,
+        bar_use: false,
+        hit: false,
+    });
+    gate_195d(Gate195dArgs {
+        cond_tok: "foo?",
+        uncond_tok: "-bar",
+        bar_valid: false,
+        bar_use: false,
+        hit: false,
+    });
 }

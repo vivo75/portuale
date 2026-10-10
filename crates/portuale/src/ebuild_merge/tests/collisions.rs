@@ -111,17 +111,17 @@ fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
 
     let empty_plib = HashMap::new();
     let empty_blocked = HashSet::new();
-    let (collisions, symlink_collisions, _) = find_collisions(
-        &image,
-        &root,
-        "sys-kernel",
-        "linux-firmware",
-        "0",
-        "/etc",
-        "/etc/env.d",
-        &empty_plib,
-        &empty_blocked,
-    )
+    let (collisions, symlink_collisions, _) = find_collisions(FindCollisionsArgs {
+        d: &image,
+        root: &root,
+        category: "sys-kernel",
+        package: "linux-firmware",
+        slot: "0",
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        plib_inodes: &empty_plib,
+        blocked: &empty_blocked,
+    })
     .expect("find_collisions succeeds");
     assert!(
         symlink_collisions.is_empty(),
@@ -137,18 +137,18 @@ fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
     );
 
     let mut cfgfiledict = BTreeMap::new();
-    merge_tree(
-        &image,
-        &root,
-        "sys-kernel",
-        None,
-        true,
-        "/etc",
-        "/etc/env.d",
-        false,
-        &mut cfgfiledict,
-        &XattrPolicy::default(),
-    )
+    merge_tree(MergeTreeArgs {
+        d: &image,
+        root: &root,
+        category: "sys-kernel",
+        installed_instance_pf: None,
+        protect_if_modified: true,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
     .expect("merge_tree succeeds");
 
     // The installed directory survives; the new symlink lands at the

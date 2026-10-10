@@ -9,18 +9,39 @@ fn circular_node_text_matches_portage_package_str() {
     // `dev-libs/usecyclea`, all `ROOT=$FX` with no `to` suffix).
     let nc = Colorizer::new(false);
     assert_eq!(
-        circular_node_text("dev-libs/cyc0b-1", "0", "0", "testrepo", "ebuild", &nc),
+        circular_node_text(CircularNodeTextArgs {
+            cpv: "dev-libs/cyc0b-1",
+            slot: "0",
+            sub_slot: "0",
+            repo: "testrepo",
+            type_name: "ebuild",
+            color: &nc
+        }),
         "(dev-libs/cyc0b-1:0/0::testrepo, ebuild scheduled for merge)"
     );
     // A non-0 slot renders `:slot/sub_slot`, like real
     // `_append_slot`-less `__str__` (which always prints both).
     assert_eq!(
-        circular_node_text("dev-libs/slotted-2.0", "1", "2", "testrepo", "ebuild", &nc),
+        circular_node_text(CircularNodeTextArgs {
+            cpv: "dev-libs/slotted-2.0",
+            slot: "1",
+            sub_slot: "2",
+            repo: "testrepo",
+            type_name: "ebuild",
+            color: &nc
+        }),
         "(dev-libs/slotted-2.0:1/2::testrepo, ebuild scheduled for merge)"
     );
     // A binary merge says `binary`, like real `type_name`.
     assert_eq!(
-        circular_node_text("dev-libs/binpkg-1.0", "0", "0", "testrepo", "binary", &nc),
+        circular_node_text(CircularNodeTextArgs {
+            cpv: "dev-libs/binpkg-1.0",
+            slot: "0",
+            sub_slot: "0",
+            repo: "testrepo",
+            type_name: "binary",
+            color: &nc
+        }),
         "(dev-libs/binpkg-1.0:0/0::testrepo, binary scheduled for merge)"
     );
     // Under `--color y` real wraps the `cpv:slot/sub::repo` head in
@@ -28,11 +49,25 @@ fn circular_node_text_matches_portage_package_str() {
     // `, <type> scheduled for merge)` tail stays plain.
     let yc = Colorizer::new(true);
     assert_eq!(
-        circular_node_text("dev-libs/cyc0b-1", "0", "0", "testrepo", "ebuild", &yc),
+        circular_node_text(CircularNodeTextArgs {
+            cpv: "dev-libs/cyc0b-1",
+            slot: "0",
+            sub_slot: "0",
+            repo: "testrepo",
+            type_name: "ebuild",
+            color: &yc
+        }),
         "(\x1b[32mdev-libs/cyc0b-1:0/0::testrepo\x1b[39;49;00m, ebuild scheduled for merge)"
     );
     assert_eq!(
-        circular_node_text("dev-libs/binpkg-1.0", "0", "0", "testrepo", "binary", &yc),
+        circular_node_text(CircularNodeTextArgs {
+            cpv: "dev-libs/binpkg-1.0",
+            slot: "0",
+            sub_slot: "0",
+            repo: "testrepo",
+            type_name: "binary",
+            color: &yc
+        }),
         "(\x1b[35mdev-libs/binpkg-1.0:0/0::testrepo\x1b[39;49;00m, binary scheduled for merge)"
     );
 }

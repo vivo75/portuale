@@ -367,14 +367,14 @@ pub(crate) fn effective_use_flags_uncached(
         }
     }
 
-    let stable = is_stable(
+    let stable = is_stable(IsStableArgs {
         keywords,
         candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    );
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    });
 
     // use.force/use.mask (+ .stable. variants when the candidate is
     // stable) layered on top of package.use as the literal last step of
@@ -611,14 +611,14 @@ pub(crate) fn forced_or_masked_flags_unfiltered(
     package: &str,
     config: &portage_profile::Config,
 ) -> HashSet<String> {
-    let stable = is_stable(
+    let stable = is_stable(IsStableArgs {
         keywords,
         candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    );
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    });
     // Owned union of the two shared sets (both usually cache hits now);
     // the union itself is small (a handful of forced/masked flags).
     let mut result = resolved_use_mask_or_force(

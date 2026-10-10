@@ -219,19 +219,31 @@ fn find_repos_impl_computes_volatile_from_location_and_owner() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Arguments of [`write_pkg_165`].
+struct WritePkg165Args<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    iuse: &'a str,
+    depend: &'a str,
+    rdepend: &'a str,
+    bdepend: &'a str,
+}
+
 /// One scratch ebuild plus its real md5-cache entry (the md5-cache
 /// validation guard fails otherwise), with optional dependency keys.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn write_pkg_165(
-    repo: &Path,
-    cp: &str,
-    pv: &str,
-    slot: &str,
-    iuse: &str,
-    depend: &str,
-    rdepend: &str,
-    bdepend: &str,
-) {
+fn write_pkg_165(args: WritePkg165Args<'_>) {
+    let WritePkg165Args {
+        repo,
+        cp,
+        pv,
+        slot,
+        iuse,
+        depend,
+        rdepend,
+        bdepend,
+    } = args;
     use md5::Digest as _;
     use std::fmt::Write as _;
     let (cat, pkg) = cp.split_once('/').expect("category/package");
@@ -275,7 +287,16 @@ fn write_pkg_165(
 fn repo_165(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
     let repo = dir.join("repo");
     for (cp, pv, slot, iuse, depend, rdepend, bdepend) in pkgs {
-        write_pkg_165(&repo, cp, pv, slot, iuse, depend, rdepend, bdepend);
+        write_pkg_165(WritePkg165Args {
+            repo: &repo,
+            cp,
+            pv,
+            slot,
+            iuse,
+            depend,
+            rdepend,
+            bdepend,
+        });
     }
     vec![RepoConfig {
         name: "testrepo".to_string(),
@@ -862,19 +883,29 @@ fn upgrade_165(cat: &str, pkg: &str, from: &str, to: &str) -> GraphEntry {
         Some("0"),
     )
 }
-
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-fn pending_165(
-    atom: &str,
+/// Arguments of [`pending_165`].
+struct Pending165Args<'a> {
+    atom: &'a str,
     strong: bool,
     buildtime: bool,
-    target: (&str, &str),
-    owner: (&str, &str),
-    owner_version: &str,
+    target: (&'a str, &'a str),
+    owner: (&'a str, &'a str),
+    owner_version: &'a str,
     owner_merging: bool,
     owner_installed: bool,
-) -> PendingBlocker {
+}
+
+fn pending_165(args: Pending165Args<'_>) -> PendingBlocker {
+    let Pending165Args {
+        atom,
+        strong,
+        buildtime,
+        target,
+        owner,
+        owner_version,
+        owner_merging,
+        owner_installed,
+    } = args;
     PendingBlocker {
         atom_str: atom.to_string(),
         strong,
@@ -896,16 +927,16 @@ fn resolve_blockers_matches_upgrade_downgrade_and_reinstall_targets() {
     let mk = |outcome| {
         resolve_blockers(
             Path::new("/nonexistent-root-for-this-test"),
-            &[pending_165(
-                "!!dev-libs/target",
-                true,
-                true,
-                ("dev-libs", "target"),
-                ("dev-libs", "owner"),
-                "1.0",
-                true,
-                false,
-            )],
+            &[pending_165(Pending165Args {
+                atom: "!!dev-libs/target",
+                strong: true,
+                buildtime: true,
+                target: ("dev-libs", "target"),
+                owner: ("dev-libs", "owner"),
+                owner_version: "1.0",
+                owner_merging: true,
+                owner_installed: false,
+            })],
             &[
                 new_165("dev-libs", "owner", "1.0"),
                 entry_165("dev-libs", "target", outcome, Some("0")),
@@ -970,16 +1001,16 @@ fn resolve_blockers_sees_a_merge_bound_target_beside_its_installed_slot() {
     ];
     let conflicts = resolve_blockers(
         &root,
-        &[pending_165(
-            "!!dev-libs/target:1",
-            true,
-            true,
-            ("dev-libs", "target"),
-            ("dev-libs", "owner"),
-            "1.0",
-            true,
-            false,
-        )],
+        &[pending_165(Pending165Args {
+            atom: "!!dev-libs/target:1",
+            strong: true,
+            buildtime: true,
+            target: ("dev-libs", "target"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: true,
+            owner_installed: false,
+        })],
         &entries,
         &HashSet::new(),
         false,
@@ -1022,16 +1053,16 @@ fn resolve_blockers_requires_slot_and_version_for_an_installed_match() {
     ];
     let conflicts = resolve_blockers(
         &root,
-        &[pending_165(
-            "!!dev-libs/target:1",
-            true,
-            true,
-            ("dev-libs", "target"),
-            ("dev-libs", "owner"),
-            "1.0",
-            true,
-            false,
-        )],
+        &[pending_165(Pending165Args {
+            atom: "!!dev-libs/target:1",
+            strong: true,
+            buildtime: true,
+            target: ("dev-libs", "target"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: true,
+            owner_installed: false,
+        })],
         &entries,
         &HashSet::new(),
         false,
@@ -1053,16 +1084,16 @@ fn resolve_blockers_requires_slot_and_version_for_an_installed_match() {
 fn resolve_blockers_keeps_a_strong_blocker_against_its_own_slot() {
     let conflicts = resolve_blockers(
         Path::new("/nonexistent-root-for-this-test"),
-        &[pending_165(
-            "!!dev-libs/owner",
-            true,
-            true,
-            ("dev-libs", "owner"),
-            ("dev-libs", "owner"),
-            "1.0",
-            true,
-            false,
-        )],
+        &[pending_165(Pending165Args {
+            atom: "!!dev-libs/owner",
+            strong: true,
+            buildtime: true,
+            target: ("dev-libs", "owner"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: true,
+            owner_installed: false,
+        })],
         &[new_165("dev-libs", "owner", "1.0")],
         &HashSet::new(),
         false,
@@ -1088,16 +1119,16 @@ fn resolve_blockers_ignores_an_installed_only_match_for_a_nomerge_owner() {
     )];
     let conflicts = resolve_blockers(
         &root,
-        &[pending_165(
-            "!dev-libs/target",
-            false,
-            false,
-            ("dev-libs", "target"),
-            ("dev-libs", "owner"),
-            "1.0",
-            false,
-            false,
-        )],
+        &[pending_165(Pending165Args {
+            atom: "!dev-libs/target",
+            strong: false,
+            buildtime: false,
+            target: ("dev-libs", "target"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: false,
+            owner_installed: false,
+        })],
         &entries,
         &HashSet::new(),
         false,
@@ -1135,16 +1166,16 @@ fn resolve_blockers_unblocks_a_nomerge_row_outside_the_required_sets() {
             Some("0"),
         ),
     ];
-    let pending = vec![pending_165(
-        "!dev-libs/target",
-        false,
-        false,
-        ("dev-libs", "target"),
-        ("dev-libs", "owner"),
-        "1.0",
-        false,
-        false,
-    )];
+    let pending = vec![pending_165(Pending165Args {
+        atom: "!dev-libs/target",
+        strong: false,
+        buildtime: false,
+        target: ("dev-libs", "target"),
+        owner: ("dev-libs", "owner"),
+        owner_version: "1.0",
+        owner_merging: false,
+        owner_installed: false,
+    })];
     // Outside every required set the merge-bound match resolves by
     // removing the owner.
     let solvable = resolve_blockers(&root, &pending, &entries, &HashSet::new(), false);
@@ -1180,16 +1211,16 @@ fn resolve_blockers_evaluates_use_deps_against_the_matched_versions_entry() {
     let entries = vec![target_a, target_b, new_165("dev-libs", "owner", "1.0")];
     let conflicts = resolve_blockers(
         Path::new("/nonexistent-root-for-this-test"),
-        &[pending_165(
-            "!!dev-libs/target[wantblock]",
-            true,
-            true,
-            ("dev-libs", "target"),
-            ("dev-libs", "owner"),
-            "1.0",
-            true,
-            false,
-        )],
+        &[pending_165(Pending165Args {
+            atom: "!!dev-libs/target[wantblock]",
+            strong: true,
+            buildtime: true,
+            target: ("dev-libs", "target"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: true,
+            owner_installed: false,
+        })],
         &entries,
         &HashSet::new(),
         false,
@@ -1221,16 +1252,16 @@ fn resolve_blockers_needs_slot_and_version_for_a_merge_bound_match() {
     ];
     let conflicts = resolve_blockers(
         &root,
-        &[pending_165(
-            "!!dev-libs/target",
-            true,
-            true,
-            ("dev-libs", "target"),
-            ("dev-libs", "owner"),
-            "1.0",
-            true,
-            false,
-        )],
+        &[pending_165(Pending165Args {
+            atom: "!!dev-libs/target",
+            strong: true,
+            buildtime: true,
+            target: ("dev-libs", "target"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: true,
+            owner_installed: false,
+        })],
         &entries,
         &HashSet::new(),
         false,
@@ -1278,16 +1309,16 @@ fn resolve_blockers_falls_back_to_a_same_cp_nomerge_owner_only() {
     ];
     let conflicts = resolve_blockers(
         &root,
-        &[pending_165(
-            "!!dev-libs/target",
-            true,
-            true,
-            ("dev-libs", "target"),
-            ("dev-libs", "owner"),
-            "1.0",
-            true,
-            false,
-        )],
+        &[pending_165(Pending165Args {
+            atom: "!!dev-libs/target",
+            strong: true,
+            buildtime: true,
+            target: ("dev-libs", "target"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: true,
+            owner_installed: false,
+        })],
         &entries,
         &HashSet::new(),
         false,
@@ -1306,17 +1337,27 @@ fn resolve_blockers_falls_back_to_a_same_cp_nomerge_owner_only() {
 // `collect_unwalked_installed_blockers` (real `_validate_blockers`'
 // all-installed-packages scan for blockers the walk never
 // reached). ----
-
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn filed_165(
-    owner: (&str, &str),
-    owner_version: &str,
-    atom: &str,
+/// Arguments of [`filed_165`].
+struct Filed165Args<'a> {
+    owner: (&'a str, &'a str),
+    owner_version: &'a str,
+    atom: &'a str,
     strong: bool,
-    target: (&str, &str, &str),
+    target: (&'a str, &'a str, &'a str),
     unsolvable: bool,
     satisfied_by: Option<BlockerSatisfiedBy>,
-) -> FiledBlocker {
+}
+
+fn filed_165(args: Filed165Args<'_>) -> FiledBlocker {
+    let Filed165Args {
+        owner,
+        owner_version,
+        atom,
+        strong,
+        target,
+        unsolvable,
+        satisfied_by,
+    } = args;
     FiledBlocker {
         owner: (owner.0.to_string(), owner.1.to_string()),
         owner_version: owner_version.to_string(),
@@ -1354,15 +1395,15 @@ fn file_blocker_conflicts_files_an_owned_row_on_its_entry_and_removal() {
     file_blocker_conflicts(
         &mut entries,
         &root,
-        vec![filed_165(
-            ("dev-libs", "owner"),
-            "1.0",
-            "!!dev-libs/victim",
-            true,
-            ("dev-libs", "victim", "1.0"),
-            false,
-            Some(uninstall_165("dev-libs/victim-1.0", ("dev-libs", "owner"))),
-        )],
+        vec![filed_165(Filed165Args {
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            atom: "!!dev-libs/victim",
+            strong: true,
+            target: ("dev-libs", "victim", "1.0"),
+            unsolvable: false,
+            satisfied_by: Some(uninstall_165("dev-libs/victim-1.0", ("dev-libs", "owner"))),
+        })],
         &mut orphans,
     );
     assert!(orphans.is_empty());
@@ -1398,24 +1439,24 @@ fn file_blocker_conflicts_merges_two_owned_rows_into_one_removal() {
         &mut entries,
         &root,
         vec![
-            filed_165(
-                ("dev-libs", "owner"),
-                "1.0",
-                "!!dev-libs/victim",
-                true,
-                ("dev-libs", "victim", "1.0"),
-                false,
-                Some(uninstall_165("dev-libs/victim-1.0", anchor)),
-            ),
-            filed_165(
-                ("dev-libs", "owner"),
-                "1.0",
-                "!dev-libs/victim",
-                false,
-                ("dev-libs", "victim", "1.0"),
-                false,
-                Some(uninstall_165("dev-libs/victim-1.0", anchor)),
-            ),
+            filed_165(Filed165Args {
+                owner: ("dev-libs", "owner"),
+                owner_version: "1.0",
+                atom: "!!dev-libs/victim",
+                strong: true,
+                target: ("dev-libs", "victim", "1.0"),
+                unsolvable: false,
+                satisfied_by: Some(uninstall_165("dev-libs/victim-1.0", anchor)),
+            }),
+            filed_165(Filed165Args {
+                owner: ("dev-libs", "owner"),
+                owner_version: "1.0",
+                atom: "!dev-libs/victim",
+                strong: false,
+                target: ("dev-libs", "victim", "1.0"),
+                unsolvable: false,
+                satisfied_by: Some(uninstall_165("dev-libs/victim-1.0", anchor)),
+            }),
         ],
         &mut orphans,
     );
@@ -1446,24 +1487,24 @@ fn file_blocker_conflicts_keeps_different_removals_separate() {
         &mut entries,
         &root,
         vec![
-            filed_165(
-                ("dev-libs", "owner"),
-                "1.0",
-                "!!dev-libs/victim",
-                true,
-                ("dev-libs", "victim", "1.0"),
-                false,
-                Some(uninstall_165("dev-libs/victim-1.0", anchor)),
-            ),
-            filed_165(
-                ("dev-libs", "owner"),
-                "1.0",
-                "!!dev-libs/other",
-                true,
-                ("dev-libs", "other", "1.0"),
-                false,
-                Some(uninstall_165("dev-libs/other-1.0", anchor)),
-            ),
+            filed_165(Filed165Args {
+                owner: ("dev-libs", "owner"),
+                owner_version: "1.0",
+                atom: "!!dev-libs/victim",
+                strong: true,
+                target: ("dev-libs", "victim", "1.0"),
+                unsolvable: false,
+                satisfied_by: Some(uninstall_165("dev-libs/victim-1.0", anchor)),
+            }),
+            filed_165(Filed165Args {
+                owner: ("dev-libs", "owner"),
+                owner_version: "1.0",
+                atom: "!!dev-libs/other",
+                strong: true,
+                target: ("dev-libs", "other", "1.0"),
+                unsolvable: false,
+                satisfied_by: Some(uninstall_165("dev-libs/other-1.0", anchor)),
+            }),
         ],
         &mut orphans,
     );
@@ -1492,39 +1533,39 @@ fn file_blocker_conflicts_rides_ownerless_rows_on_their_removals() {
         &mut entries,
         &root,
         vec![
-            filed_165(
-                ("dev-libs", "scanner"),
-                "1.0",
-                "!!dev-libs/victim",
-                true,
-                ("dev-libs", "victim", "1.0"),
-                false,
-                Some(uninstall_165(
+            filed_165(Filed165Args {
+                owner: ("dev-libs", "scanner"),
+                owner_version: "1.0",
+                atom: "!!dev-libs/victim",
+                strong: true,
+                target: ("dev-libs", "victim", "1.0"),
+                unsolvable: false,
+                satisfied_by: Some(uninstall_165(
                     "dev-libs/victim-1.0",
                     ("dev-libs", "scanner"),
                 )),
-            ),
-            filed_165(
-                ("dev-libs", "scanner"),
-                "1.0",
-                "!dev-libs/victim",
-                false,
-                ("dev-libs", "victim", "1.0"),
-                false,
-                Some(uninstall_165(
+            }),
+            filed_165(Filed165Args {
+                owner: ("dev-libs", "scanner"),
+                owner_version: "1.0",
+                atom: "!dev-libs/victim",
+                strong: false,
+                target: ("dev-libs", "victim", "1.0"),
+                unsolvable: false,
+                satisfied_by: Some(uninstall_165(
                     "dev-libs/victim-1.0",
                     ("dev-libs", "scanner2"),
                 )),
-            ),
-            filed_165(
-                ("dev-libs", "scanner"),
-                "1.0",
-                "!!dev-libs/other",
-                true,
-                ("dev-libs", "other", "1.0"),
-                false,
-                Some(uninstall_165("dev-libs/other-1.0", ("dev-libs", "scanner"))),
-            ),
+            }),
+            filed_165(Filed165Args {
+                owner: ("dev-libs", "scanner"),
+                owner_version: "1.0",
+                atom: "!!dev-libs/other",
+                strong: true,
+                target: ("dev-libs", "other", "1.0"),
+                unsolvable: false,
+                satisfied_by: Some(uninstall_165("dev-libs/other-1.0", ("dev-libs", "scanner"))),
+            }),
         ],
         &mut orphans,
     );
@@ -1554,15 +1595,15 @@ fn file_blocker_conflicts_orphans_an_unsolvable_ownerless_row() {
     file_blocker_conflicts(
         &mut entries,
         &root,
-        vec![filed_165(
-            ("dev-libs", "scanner"),
-            "1.0",
-            "!!dev-libs/gone",
-            true,
-            ("dev-libs", "gone", "9.9"),
-            true,
-            None,
-        )],
+        vec![filed_165(Filed165Args {
+            owner: ("dev-libs", "scanner"),
+            owner_version: "1.0",
+            atom: "!!dev-libs/gone",
+            strong: true,
+            target: ("dev-libs", "gone", "9.9"),
+            unsolvable: true,
+            satisfied_by: None,
+        })],
         &mut orphans,
     );
     assert!(entries.is_empty());
@@ -1588,18 +1629,18 @@ fn collect_unwalked_installed_blockers_files_an_unwalked_strong_blocker() {
     let entries = vec![new_165("dev-libs", "victim", "2.0")];
     let mut pending = Vec::new();
     let mut memo = HashMap::new();
-    collect_unwalked_installed_blockers(
-        &[],
-        &root,
-        &cfg_165(),
-        false,
-        false,
-        &HashMap::new(),
-        None,
-        &entries,
-        &mut pending,
-        &mut memo,
-    );
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &root,
+        config: &cfg_165(),
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &HashMap::new(),
+        root_deps_running_root: None,
+        entries: &entries,
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].atom_str, "!!dev-libs/victim");
     assert!(pending[0].strong);
@@ -1636,18 +1677,18 @@ fn collect_unwalked_installed_blockers_skips_walked_cps_and_nomerge_runs() {
     ];
     let mut pending = Vec::new();
     let mut memo = HashMap::new();
-    collect_unwalked_installed_blockers(
-        &[],
-        &root,
-        &cfg_165(),
-        false,
-        false,
-        &HashMap::new(),
-        None,
-        &entries,
-        &mut pending,
-        &mut memo,
-    );
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &root,
+        config: &cfg_165(),
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &HashMap::new(),
+        root_deps_running_root: None,
+        entries: &entries,
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
     assert!(pending.is_empty());
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -1680,18 +1721,18 @@ fn collect_unwalked_installed_blockers_dedups_exact_rows_only() {
     };
     let mut pending = vec![seed];
     let mut memo = HashMap::new();
-    collect_unwalked_installed_blockers(
-        &[],
-        &root,
-        &cfg_165(),
-        false,
-        false,
-        &HashMap::new(),
-        None,
-        &entries,
-        &mut pending,
-        &mut memo,
-    );
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &root,
+        config: &cfg_165(),
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &HashMap::new(),
+        root_deps_running_root: None,
+        entries: &entries,
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
     assert_eq!(pending.len(), 2);
     assert_eq!(pending[1].atom_str, "!!dev-libs/other");
     let _ = std::fs::remove_dir_all(&root);
@@ -1702,20 +1743,33 @@ fn collect_unwalked_installed_blockers_dedups_exact_rows_only() {
 // flattened deps go to the queue, blockers to pending). Called
 // directly with `dynamic_deps = false`, so dep strings come from
 // the vdb snapshot and only the version lookup needs the tree. ----
-
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn enqueue_165(
-    repos: &[RepoConfig],
-    root: &Path,
-    config: &portage_profile::Config,
-    cat: &str,
-    pkg: &str,
-    ver: &str,
+/// Arguments of [`enqueue_165`].
+struct Enqueue165Args<'a> {
+    repos: &'a [RepoConfig],
+    root: &'a Path,
+    config: &'a portage_profile::Config,
+    cat: &'a str,
+    pkg: &'a str,
+    ver: &'a str,
     with_bdeps: bool,
-    entries: &mut Vec<GraphEntry>,
-    queue: &mut std::collections::VecDeque<QueueItem>,
-    pending: &mut Vec<PendingBlocker>,
-) -> SlotPullers {
+    entries: &'a mut Vec<GraphEntry>,
+    queue: &'a mut std::collections::VecDeque<QueueItem>,
+    pending: &'a mut Vec<PendingBlocker>,
+}
+
+fn enqueue_165(args: Enqueue165Args<'_>) -> SlotPullers {
+    let Enqueue165Args {
+        repos,
+        root,
+        config,
+        cat,
+        pkg,
+        ver,
+        with_bdeps,
+        entries,
+        queue,
+        pending,
+    } = args;
     let mut seen = HashSet::new();
     let mut memo = HashMap::new();
     let mut pullers = HashMap::new();
@@ -1778,18 +1832,18 @@ fn enqueue_dependencies_queues_a_plain_dep_on_an_installed_package() {
     let mut entries = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut pending = Vec::new();
-    let pullers = enqueue_165(
-        &repos,
-        &root,
-        &cfg_165(),
-        "dev-libs",
-        "consumer",
-        "1.0",
-        false,
-        &mut entries,
-        &mut queue,
-        &mut pending,
-    );
+    let pullers = enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
     assert!(pending.is_empty());
     assert_eq!(queue.len(), 1);
     assert_eq!(queue[0].atom, "dev-libs/dep");
@@ -1823,18 +1877,18 @@ fn enqueue_dependencies_drops_a_dep_satisfied_by_the_instance_itself() {
     let mut entries = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut pending = Vec::new();
-    enqueue_165(
-        &repos,
-        &root,
-        &cfg_165(),
-        "dev-libs",
-        "consumer",
-        "1.0",
-        false,
-        &mut entries,
-        &mut queue,
-        &mut pending,
-    );
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
     assert!(queue.is_empty());
     assert!(pending.is_empty());
     let _ = std::fs::remove_dir_all(&root);
@@ -1858,18 +1912,18 @@ fn enqueue_dependencies_files_a_strong_blocker_into_pending() {
     let mut entries = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut pending = Vec::new();
-    enqueue_165(
-        &repos,
-        &root,
-        &cfg_165(),
-        "dev-libs",
-        "consumer",
-        "1.0",
-        false,
-        &mut entries,
-        &mut queue,
-        &mut pending,
-    );
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
     assert!(queue.is_empty());
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].atom_str, "!!dev-libs/victim");
@@ -1898,18 +1952,18 @@ fn enqueue_dependencies_marks_a_depend_blocker_as_buildtime() {
     let mut entries = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut pending = Vec::new();
-    enqueue_165(
-        &repos,
-        &root,
-        &cfg_165(),
-        "dev-libs",
-        "consumer",
-        "1.0",
-        true,
-        &mut entries,
-        &mut queue,
-        &mut pending,
-    );
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: true,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
     assert!(queue.is_empty());
     assert_eq!(pending.len(), 1);
     assert!(pending[0].strong);
@@ -1945,18 +1999,18 @@ fn enqueue_dependencies_records_the_unevaluated_form_of_a_conditional_dep() {
     let mut entries = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut pending = Vec::new();
-    enqueue_165(
-        &repos,
-        &root,
-        &cfg_165(),
-        "dev-libs",
-        "consumer",
-        "1.0",
-        false,
-        &mut entries,
-        &mut queue,
-        &mut pending,
-    );
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
     assert!(pending.is_empty());
     assert_eq!(queue.len(), 2);
     let cond = queue
@@ -1996,18 +2050,18 @@ fn enqueue_dependencies_queues_plains_before_disjunction_choices() {
     let mut entries = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut pending = Vec::new();
-    enqueue_165(
-        &repos,
-        &root,
-        &cfg_165(),
-        "dev-libs",
-        "consumer",
-        "1.0",
-        false,
-        &mut entries,
-        &mut queue,
-        &mut pending,
-    );
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
     assert!(pending.is_empty());
     let atoms: Vec<String> = queue.iter().map(|q| q.atom.clone()).collect();
     assert_eq!(atoms, vec!["dev-libs/plain", "dev-libs/only"]);

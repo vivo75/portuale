@@ -157,14 +157,16 @@ pub(crate) fn atom_installed_in_slot_of(
     if atom.blocker != portage_dep::Blocker::None || atom.category == "virtual" {
         return true;
     }
-    let Some((.., slot)) = highest_available_candidate_ignoring_use(
-        repos,
-        atom_str,
-        &atom.category,
-        &atom.package,
-        config,
-        extra_constraints,
-    ) else {
+    let Some((.., slot)) =
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos,
+            atom_str,
+            category: &atom.category,
+            package: &atom.package,
+            config,
+            extra_constraints,
+        })
+    else {
         return false;
     };
     installed_candidates(root, &atom.category, &atom.package)

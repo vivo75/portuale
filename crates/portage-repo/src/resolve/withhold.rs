@@ -205,6 +205,25 @@ pub(crate) type SkippedUpdateKey = (
     bool,
 );
 
+/// Arguments of [`backtrack_missed_updates`].
+pub(crate) struct BacktrackMissedUpdatesArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) params: &'a BacktrackParams,
+    /// Backlog #286: the settled pass's dropped set-member atoms. A
+    /// dropped member has no entry, so the chosen-instance scan below
+    /// would find nothing selected; real's tracker still holds its
+    /// installed instance (complete-walk nomerge node), hence the vdb
+    /// fallback in [`missing_dep_full_row`] consults these. Empty at the
+    /// prune-rebuilds probe site (that check runs mid-search on the live
+    /// graph, where the row must not materialize -- real prunes from the
+    /// live graph too, but portuale's blunt clear would drop the healing
+    /// sibling's forced reinstall for good).
+    pub(crate) missing_args: &'a [String],
+}
+
 /// Backlog #129 (S1): real `_get_missed_updates`
 /// (`lib/_emerge/depgraph.py:1529-1565`) over the settled backtrack
 /// trial state -- `self._dynamic_config._runtime_pkg_mask` (masks
@@ -247,28 +266,21 @@ pub(crate) type SkippedUpdateKey = (
 ///   per-(version, parent) shape).
 /// - parents render merge-scheduled (`consumer_installed: false`), the
 ///   `build_slot_conflict` convention -- mask parents are graph pullers.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn backtrack_missed_updates(
-    repos: &[RepoConfig],
-    root: &Path,
-    config: &portage_profile::Config,
-    entries: &[GraphEntry],
-    params: &BacktrackParams,
-    // Backlog #286: the settled pass's dropped set-member atoms. A
-    // dropped member has no entry, so the chosen-instance scan below
-    // would find nothing selected; real's tracker still holds its
-    // installed instance (complete-walk nomerge node), hence the vdb
-    // fallback in [`missing_dep_full_row`] consults these. Empty at the
-    // prune-rebuilds probe site (that check runs mid-search on the live
-    // graph, where the row must not materialize -- real prunes from the
-    // live graph too, but portuale's blunt clear would drop the healing
-    // sibling's forced reinstall for good).
-    missing_args: &[String],
+    args: BacktrackMissedUpdatesArgs<'_>,
 ) -> (
     Vec<SkippedUpdate>,
     Vec<SkippedMissingDep>,
     Vec<SkippedMissingDepFull>,
 ) {
+    let BacktrackMissedUpdatesArgs {
+        repos,
+        root,
+        config,
+        entries,
+        params,
+        missing_args,
+    } = args;
     // First-seen position per negative (real's dict insertion order;
     // defensive `usize::MAX` for entries the order vector never saw).
     let order_of = |cp: &(String, String), neg: &str| -> usize {
@@ -493,9 +505,19 @@ pub(crate) fn backtrack_missed_updates(
                         package: pkg.clone(),
                         slot: slot.clone(),
                     });
-                } else if let Some(row) = missing_dep_full_row(
-                    repos, root, config, entries, &cat, &pkg, &slot, &ver, &sub, &repo, &atom,
-                ) {
+                } else if let Some(row) = missing_dep_full_row(MissingDepFullRowArgs {
+                    repos,
+                    root,
+                    config,
+                    entries,
+                    cat: &cat,
+                    pkg: &pkg,
+                    slot: &slot,
+                    ver: &ver,
+                    sub: &sub,
+                    repo: &repo,
+                    atom: &atom,
+                }) {
                     full.push(row);
                 }
             }

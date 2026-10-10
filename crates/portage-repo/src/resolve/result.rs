@@ -103,6 +103,17 @@ pub fn abort_path_enabled() -> bool {
     }
 }
 
+/// Arguments of [`abort_outcome`].
+pub struct AbortOutcomeArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub masked_deps: &'a [MaskedDepReport],
+    pub circular_deps: &'a [Vec<String>],
+    pub cycle_display: &'a [String],
+    pub cycle_display_idx: &'a [usize],
+    pub nvc_dep_atoms: &'a HashMap<(String, String), String>,
+    pub virtual_cycle: &'a [String],
+}
+
 /// Derives the abort outcome from the settled graph — real's three
 /// abandon sites as a post-loop classification, since portuale's
 /// `'backtrack` loop (unlike real's `_backtrack_depgraph`) rebuilds
@@ -145,16 +156,16 @@ pub fn abort_path_enabled() -> bool {
 /// `:3479-3483`, oracled by the `abort-au-plain` capture taken with
 /// `--autounmask-use` off). `nvc_dep_atoms` carries each such entry's
 /// unevaluated atom as queued.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn abort_outcome(
-    entries: &[GraphEntry],
-    masked_deps: &[MaskedDepReport],
-    circular_deps: &[Vec<String>],
-    cycle_display: &[String],
-    cycle_display_idx: &[usize],
-    nvc_dep_atoms: &HashMap<(String, String), String>,
-    virtual_cycle: &[String],
-) -> ResolveOutcome {
+pub fn abort_outcome(args: AbortOutcomeArgs<'_>) -> ResolveOutcome {
+    let AbortOutcomeArgs {
+        entries,
+        masked_deps,
+        circular_deps,
+        cycle_display,
+        cycle_display_idx,
+        nvc_dep_atoms,
+        virtual_cycle,
+    } = args;
     // Backlog #193: real's virtual-cycle failure is an exception raised
     // out of the walk (`_virtual_cycle_error` propagating through
     // `_resolve` to `select_files`, `depgraph.py:5002`), so it preempts

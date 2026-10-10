@@ -604,15 +604,15 @@ pub(crate) fn resolve_config_for_root(
         .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
         .collect();
 
-    let config = portage_profile::resolve_config(
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root,
-        &main_repo.location,
-        &overlay_repos,
-        &repo_aliases,
-        &main_repo.name,
-        &repo_masters,
-        root,
-    )
+        main_repo_location: &main_repo.location,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &repo_aliases,
+        main_repo_name: &main_repo.name,
+        repo_masters: &repo_masters,
+        eroot: root,
+    })
     .map_err(|e| e.to_string())?;
     Ok(config)
 }

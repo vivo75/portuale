@@ -144,14 +144,14 @@ pub(crate) fn record_entry_use_display(
                 let dep_chain = required_use_dep_chain(owner, &ctx.top_level, &state.entries);
                 state
                     .required_use_violations
-                    .push(render_required_use_block(
-                        unevaluated_atom.as_deref().unwrap_or(current_atom),
-                        &cpv_repo,
-                        &use_display,
-                        &reduced,
-                        &full,
-                        &dep_chain,
-                    ));
+                    .push(render_required_use_block(RenderRequiredUseBlockArgs {
+                        xinfo: unevaluated_atom.as_deref().unwrap_or(current_atom),
+                        cpv_repo: &cpv_repo,
+                        use_display: &use_display,
+                        reduced_human: &reduced,
+                        full_human: &full,
+                        dep_chain: &dep_chain,
+                    }));
                 return Ok(ControlFlow::Break(()));
             }
             Err(e) => {
@@ -222,22 +222,24 @@ pub(crate) fn record_entry_use_display(
         // regardless). `pretend.rs`'s `use_suffix` picks by
         // verbosity. Both are cheap; for a `New` (no `installed`
         // diff) they're identical.
-        state.entries[entry_idx].use_expand_display = build_use_expand_display(
-            &display,
-            config,
-            installed.as_ref(),
-            &forced,
-            true,
-            &reinst_flags,
-        );
-        state.entries[entry_idx].use_expand_display_p = build_use_expand_display(
-            &display,
-            config,
-            installed.as_ref(),
-            &forced,
-            false,
-            &reinst_flags,
-        );
+        state.entries[entry_idx].use_expand_display =
+            build_use_expand_display(BuildUseExpandDisplayArgs {
+                use_flags_display: &display,
+                config,
+                installed: installed.as_ref(),
+                forced: &forced,
+                all_flags: true,
+                reinst_flags: &reinst_flags,
+            });
+        state.entries[entry_idx].use_expand_display_p =
+            build_use_expand_display(BuildUseExpandDisplayArgs {
+                use_flags_display: &display,
+                config,
+                installed: installed.as_ref(),
+                forced: &forced,
+                all_flags: false,
+                reinst_flags: &reinst_flags,
+            });
         state.entries[entry_idx].use_flags_display = display;
     }
     Ok(ControlFlow::Continue(()))

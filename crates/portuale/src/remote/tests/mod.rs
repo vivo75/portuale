@@ -557,15 +557,15 @@ fn l171e_resolve_with_server_repos(
         .iter()
         .map(|repo| (repo.name.clone(), repo.masters.clone()))
         .collect();
-    portage_profile::resolve_config(
-        placed_dir,
-        &main.location,
-        &overlays,
-        &aliases,
-        &main.name,
-        &masters,
+    portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: placed_dir,
+        main_repo_location: &main.location,
+        overlay_repos: &overlays,
+        repo_aliases: &aliases,
+        main_repo_name: &main.name,
+        repo_masters: &masters,
         eroot,
-    )
+    })
     .expect("placed client config resolves")
 }
 

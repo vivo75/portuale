@@ -63,15 +63,15 @@ fn enforced_pin_miss_renders_the_installed_enforcing_consumer() {
     // (`skipped_update_installed_use_display_for`), which always
     // emits the USE group instead of the old empty vec.
     let fixture_root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &fixture_root,
-        &fixture_root.join("repo"),
-        &[("overlay".to_string(), fixture_root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &fixture_root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &fixture_root,
+        main_repo_location: &fixture_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), fixture_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &fixture_root,
+    })
     .expect("fixture config resolves");
     let expected =
         skipped_update_installed_use_display_for(&fixture_root, &config, "dev-libs", "abk0b", "1");
@@ -128,15 +128,15 @@ fn enforced_pin_miss_carries_the_vdb_use_and_repo() {
     // the staged root -- not the tree ebuild's IUSE (abk0b-1's
     // ebuild declares none, so a tree-sourced display would be
     // empty).
-    let config = portage_profile::resolve_config(
-        &fixture_root,
-        &fixture_root.join("repo"),
-        &[("overlay".to_string(), fixture_root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &fixture_root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &fixture_root,
+        main_repo_location: &fixture_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), fixture_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &fixture_root,
+    })
     .expect("fixture config resolves");
     let expected = installed_use_display_for(&dir, &config, "dev-libs", "abk0b", "1");
     assert!(!expected.is_empty(), "the staged USE file must surface");
@@ -279,15 +279,15 @@ fn skipped_use_display_orders_enabled_first_then_byte_sorted() {
 fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     assert_eq!(
         skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "3"),
@@ -330,15 +330,15 @@ fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
 fn slot_conflict_use_display_renders_use_expand_groups() {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     assert_eq!(
         pkg_use_display_for(&repos, &config, "dev-libs", "aub0d", "0"),

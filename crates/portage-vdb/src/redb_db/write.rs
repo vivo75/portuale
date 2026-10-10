@@ -275,7 +275,14 @@ impl WriteTxn for RedbTxn<'_> {
                 body.push_str(&format!("{k}={v}\n"));
             }
             body.push_str(&format!("#dir_mtime={now}\n"));
-            put_file(t, rec.id, "metadata", body.as_bytes(), FILE_MODE, now)?;
+            put_file(PutFileArgs {
+                t,
+                id: rec.id,
+                name: "metadata",
+                data: body.as_bytes(),
+                mode: FILE_MODE,
+                mtime_ns: now,
+            })?;
             rec.stamp = MetadataStamp::Valid;
             rec.dir_mtime_ns = now;
             put_rec(t, PENDING, key, &rec)?;
@@ -342,7 +349,14 @@ impl WriteTxn for RedbTxn<'_> {
             };
             put_rec(t, INSTALLED, &image.key, &rec)?;
             for (name, data, mode, mtime) in files {
-                put_file(t, rec.id, name, data, mode, mtime)?;
+                put_file(PutFileArgs {
+                    t,
+                    id: rec.id,
+                    name,
+                    data,
+                    mode,
+                    mtime_ns: mtime,
+                })?;
             }
             index_all(t, &image.key, rec.id)?;
             Ok(())
@@ -369,7 +383,14 @@ impl WriteTxn for RedbTxn<'_> {
             };
             let mode = file_rec(t, rec.id, name)?.map_or(FILE_MODE, |r| r.mode);
             unindex_file(t, rec.id, name)?;
-            put_file(t, rec.id, name, data, mode, now_ns())?;
+            put_file(PutFileArgs {
+                t,
+                id: rec.id,
+                name,
+                data,
+                mode,
+                mtime_ns: now_ns(),
+            })?;
             index_file(t, key, rec.id, name)
         })
     }
@@ -613,16 +634,26 @@ fn read_file(t: &WriteTransaction, id: u64, name: &str) -> Tx<Option<Vec<u8>>> {
     Ok(Some(out))
 }
 
-/// Store (or replace) one file: its record and its 64 KiB chunks.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn put_file(
-    t: &WriteTransaction,
+/// Arguments of [`put_file`].
+struct PutFileArgs<'a> {
+    t: &'a WriteTransaction,
     id: u64,
-    name: &str,
-    data: &[u8],
+    name: &'a str,
+    data: &'a [u8],
     mode: u32,
     mtime_ns: i64,
-) -> Tx<()> {
+}
+
+/// Store (or replace) one file: its record and its 64 KiB chunks.
+fn put_file(args: PutFileArgs<'_>) -> Tx<()> {
+    let PutFileArgs {
+        t,
+        id,
+        name,
+        data,
+        mode,
+        mtime_ns,
+    } = args;
     {
         let mut ch = t.open_table(ENTRY_FILE_CHUNK)?;
         ch.retain_in((id, name, 0u32)..=(id, name, u32::MAX), |_, _| false)?;
@@ -666,7 +697,14 @@ fn put_pending(t: &WriteTransaction, key: &EntryKey, name: &str, data: &[u8], mo
     let mut rec = pending(t, key)?;
     let now = now_ns();
     let existed = file_rec(t, rec.id, name)?.is_some();
-    put_file(t, rec.id, name, data, mode, now)?;
+    put_file(PutFileArgs {
+        t,
+        id: rec.id,
+        name,
+        data,
+        mode,
+        mtime_ns: now,
+    })?;
     if !existed {
         rec.dir_mtime_ns = now;
         if rec.stamp == MetadataStamp::Valid {

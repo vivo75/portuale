@@ -71,15 +71,15 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
             && !(atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
                 && atom.slot.is_none()
                 && atom.sub_slot.is_none()
-                && built_equals_shift_unrebuildable(
-                    ctx.root,
-                    &ctx.repos,
-                    &key.0,
-                    &key.1,
-                    &existing_sub,
-                    &state.slot_pullers,
-                    ctx.excluded,
-                ));
+                && built_equals_shift_unrebuildable(BuiltEqualsShiftUnrebuildableArgs {
+                    root: ctx.root,
+                    repos: &ctx.repos,
+                    category: &key.0,
+                    package: &key.1,
+                    existing_sub: &existing_sub,
+                    pullers: &state.slot_pullers,
+                    excluded: ctx.excluded,
+                }));
         if !satisfied {
             // #290: the same rebuild-trigger forgiveness as the
             // AlreadyInstalled arm above. A provider pulled in only
@@ -148,15 +148,15 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
             && atom.sub_slot.is_none()
             && let Some((inst_ver, _)) = built_equals_binding(ctx.root, &ctx.repos, &key.0, &key.1)
             && inst_ver != existing_version
-            && built_equals_shift_unrebuildable(
-                ctx.root,
-                &ctx.repos,
-                &key.0,
-                &key.1,
-                &existing_sub,
-                &state.slot_pullers,
-                ctx.excluded,
-            )
+            && built_equals_shift_unrebuildable(BuiltEqualsShiftUnrebuildableArgs {
+                root: ctx.root,
+                repos: &ctx.repos,
+                category: &key.0,
+                package: &key.1,
+                existing_sub: &existing_sub,
+                pullers: &state.slot_pullers,
+                excluded: ctx.excluded,
+            })
         {
             record_slot_conflict(
                 &mut state.slot_conflicts,

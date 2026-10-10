@@ -119,6 +119,16 @@ pub(crate) fn synthetic_installed_entry(
     }
 }
 
+/// Arguments of [`add_installed_dependency_closure`].
+pub(crate) struct AddInstalledDependencyClosureArgs<'a> {
+    pub(crate) entries: &'a mut Vec<GraphEntry>,
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) system_atoms: &'a [String],
+    pub(crate) virtuals_only: bool,
+    pub(crate) dynamic_deps: bool,
+}
+
 /// Real `_complete_graph`'s effect on `_serialize_tasks`: every installed
 /// "nomerge" node in the digraph carries its own **recorded vdb
 /// dependency tree**, recursively -- so leaf selection clears a shallow
@@ -150,15 +160,15 @@ pub(crate) fn synthetic_installed_entry(
 /// (`dev-cpp/eigen`) via a premature `drop_satisfied`. The nodes real's
 /// own "Prune 'nomerge' root nodes" step then drops are removed again in
 /// `serialize_merge_order` right after `build_digraph`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn add_installed_dependency_closure(
-    entries: &mut Vec<GraphEntry>,
-    root: &Path,
-    repos: &[RepoConfig],
-    system_atoms: &[String],
-    virtuals_only: bool,
-    dynamic_deps: bool,
-) {
+pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosureArgs<'_>) {
+    let AddInstalledDependencyClosureArgs {
+        entries,
+        root,
+        repos,
+        system_atoms,
+        virtuals_only,
+        dynamic_deps,
+    } = args;
     // `virtuals_only` (a plain `[ebuild N]` resolve, real not in complete
     // mode): real still expands an installed `virtual/*` node to its
     // provider (`virtual/pkgconfig` -> `dev-util/pkgconf`) -- new-style
@@ -262,18 +272,18 @@ pub(crate) fn add_installed_dependency_closure(
             // to the walk/scan sites, so the closure keeps Raw. Thread
             // the real flag through `add_installed_dependency_closure`
             // and its callers if this layer ever changes.
-            let s = crate::installed_dep_string(
+            let s = crate::installed_dep_string(crate::InstalledDepStringArgs {
                 root,
                 dynamic_deps,
-                false,
-                cat,
-                pkg,
-                ver,
-                live.as_deref(),
-                k,
+                ignore_built_slot_operator_deps: false,
+                category: cat,
+                package: pkg,
+                version: ver,
+                live: live.as_deref(),
+                key: k,
                 layer,
-                &mut memo,
-            );
+                memo: &mut memo,
+            });
             if !s.trim().is_empty() {
                 md.insert(k.to_string(), s);
             }

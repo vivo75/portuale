@@ -181,6 +181,20 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
     }
 }
 
+/// Arguments of [`run_binpkg_flow`].
+pub(crate) struct RunBinpkgFlowArgs<'a> {
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) control: Option<&'a std::path::Path>,
+    pub(crate) binpkg_path: &'a Path,
+    pub(crate) ledger: Option<&'a LedgerSpec>,
+    pub(crate) repo_override: Option<&'a str>,
+    pub(crate) shadow: Option<&'a VdbShadow>,
+    pub(crate) install_mask: &'a str,
+    pub(crate) install_mask_prunes_usr_share: bool,
+    pub(crate) regen_features: Option<&'a str>,
+    pub(crate) regen_bzip2: Option<&'a str>,
+}
+
 /// One binpkg end to end (bundle, stream, unpack, phases, merge,
 /// postinst): shared by the `--remote-binpkg` path (no ledger, no
 /// shadow) and the resolve path (ledger per merged entry, shadow
@@ -196,31 +210,31 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
 /// placed config (the merge-time `PORTAGE_BZIP2_COMMAND` the scrubbed
 /// vdb env records). Prints the
 /// stage report lines; `Ok(cpv)` is the merged `category/package-version`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_binpkg_flow(
-    ctx: &RemoteContext,
-    control: Option<&std::path::Path>,
-    binpkg_path: &Path,
-    ledger: Option<&LedgerSpec>,
-    repo_override: Option<&str>,
-    shadow: Option<&VdbShadow>,
-    install_mask: &str,
-    install_mask_prunes_usr_share: bool,
-    regen_features: Option<&str>,
-    regen_bzip2: Option<&str>,
-) -> Result<String, String> {
+pub(crate) fn run_binpkg_flow(args: RunBinpkgFlowArgs<'_>) -> Result<String, String> {
+    let RunBinpkgFlowArgs {
+        ctx,
+        control,
+        binpkg_path,
+        ledger,
+        repo_override,
+        shadow,
+        install_mask,
+        install_mask_prunes_usr_share,
+        regen_features,
+        regen_bzip2,
+    } = args;
     let staging = TempDir::new("portuale-remote-bundle").keep();
     if let Err(message) = std::fs::create_dir_all(&staging) {
         return Err(format!("mrg: staging dir {}: {message}", staging.display()));
     }
-    let staged = match crate::remote_bundle::build_bundle(
+    let staged = match crate::remote_bundle::build_bundle(crate::remote_bundle::BuildBundleArgs {
         binpkg_path,
-        &staging,
+        staging_tmp: &staging,
         repo_override,
-        &crate::binpkg::GpgVerify::from_env(),
+        gpg: &crate::binpkg::GpgVerify::from_env(),
         install_mask,
         install_mask_prunes_usr_share,
-    ) {
+    }) {
         Ok(staged) => staged,
         Err(message) => {
             let _ = std::fs::remove_dir_all(&staging);
@@ -322,16 +336,16 @@ pub(crate) fn run_binpkg_flow(
     if !stateless {
         let unit_dir = format!("{}/{pf}", ctx.workdir);
         let mainslot = staged.manifest.slot.split('/').next().unwrap_or("0");
-        let shipment = ship_old_hook_envs(
+        let shipment = ship_old_hook_envs(ShipOldHookEnvsArgs {
             ctx,
             control,
-            &unit_dir,
-            &vdb,
-            &staged.category,
-            &staged.pn,
-            &staged.pf,
-            mainslot,
-        );
+            unit_dir: &unit_dir,
+            vdb: &vdb,
+            category: &staged.category,
+            pn: &staged.pn,
+            new_pf: &staged.pf,
+            new_mainslot: mainslot,
+        });
         for pf in &shipment.shipped {
             println!(
                 ">>> Remote old-env {}: staged for {pf}",
@@ -393,14 +407,14 @@ pub(crate) fn run_binpkg_flow(
     // the server process -- forward its set locale variables (real's
     // `environ_whitelist` rule; never invented defaults).
     let server_locale = collect_server_locale(|name| std::env::var(name).ok());
-    match run_postinst_regen_stage(
+    match run_postinst_regen_stage(RunPostinstRegenStageArgs {
         ctx,
         control,
-        &unit_dir,
-        &staged,
-        regen_features,
-        &server_locale,
-    ) {
+        unit_dir: &unit_dir,
+        staged: &staged,
+        features: regen_features,
+        locale: &server_locale,
+    }) {
         Ok(report) => {
             if report.skipped_no_hooks {
                 println!(">>> Remote postinst {cpv}: none to run from, skipped");
@@ -504,18 +518,18 @@ pub(crate) fn run_bundle_stage(
         eprintln!("{message}");
         return ExitCode::from(1);
     }
-    match run_binpkg_flow(
+    match run_binpkg_flow(RunBinpkgFlowArgs {
         ctx,
         control,
         binpkg_path,
-        None,
-        None,
-        None,
-        &install_mask,
+        ledger: None,
+        repo_override: None,
+        shadow: None,
+        install_mask: &install_mask,
         install_mask_prunes_usr_share,
-        Some(&regen_features),
-        Some(&regen_bzip2),
-    ) {
+        regen_features: Some(&regen_features),
+        regen_bzip2: Some(&regen_bzip2),
+    }) {
         Ok(_) => ExitCode::from(0),
         Err(message) => {
             eprintln!("{message}");

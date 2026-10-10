@@ -36,15 +36,15 @@ fn check_overlay_package_use_scoping(
     }
 
     let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
-    let config = resolve_config(
-        &root,
-        &repo,
-        &overlay_repos,
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("config must resolve");
     let entry = |atom: &str, flag: &str| (atom.to_string(), vec![flag.to_string()]);
     let (mask, force) = fields(&config);

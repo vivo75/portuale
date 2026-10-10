@@ -230,18 +230,18 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
 
     // The `--solver=` bridges keep the pre-S3 synthesiser; it must
     // still build the one entry, flagged `slot_operator_rebuild`.
-    let (out, _) = slot_operator_rebuild_entries(
-        &dir,
-        &[],
-        std::slice::from_ref(&bar_upgrade),
-        &reach,
-        true,
-        &[],
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &test_config(),
-    );
+    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        root: &dir,
+        repos: &[],
+        entries: std::slice::from_ref(&bar_upgrade),
+        reachable: &reach,
+        with_bdeps: true,
+        excluded: &[],
+        update: false,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        config: &test_config(),
+    });
     let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["stale"]);
     assert!(matches!(

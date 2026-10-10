@@ -512,6 +512,7 @@ pub fn phase_environ_pkg(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ResolveConfigArgs;
     use crate::{TEST_ENV_OVERRIDE, resolve_config};
     use portage_util::TempDir;
     use std::collections::HashMap;
@@ -576,8 +577,16 @@ mod tests {
     }
 
     fn resolve(root: &Path, repo: &Path) -> Config {
-        resolve_config(root, repo, &[], &[], "testrepo", &HashMap::new(), root)
-            .expect("synthetic profile resolves")
+        resolve_config(ResolveConfigArgs {
+            config_root: root,
+            main_repo_location: repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: root,
+        })
+        .expect("synthetic profile resolves")
     }
 
     fn get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {

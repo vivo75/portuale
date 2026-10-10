@@ -488,6 +488,16 @@ enum Candidate {
     Mirror(String),
 }
 
+/// Arguments of [`mirror_url`].
+struct MirrorUrlArgs<'a> {
+    mirror: &'a str,
+    filename: &'a str,
+    digests: &'a std::collections::HashMap<String, String>,
+    distdir: &'a Path,
+    cache_path: Option<&'a Path>,
+    now: f64,
+}
+
 /// Real `async_mirror_url(mirror_url, filename, mysettings, cache_path)`
 /// (`fetch.py:731-785`): the URL (or, for a `/`-rooted mirror, the local
 /// path) of `filename` under `mirror`, laid out per the mirror's own
@@ -505,15 +515,15 @@ enum Candidate {
 ///   unparseable file silently means "flat, nothing cached".
 /// - `now` is real `time.time()`, passed in so the day-long freshness
 ///   window is testable.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn mirror_url(
-    mirror: &str,
-    filename: &str,
-    digests: &std::collections::HashMap<String, String>,
-    distdir: &Path,
-    cache_path: Option<&Path>,
-    now: f64,
-) -> String {
+fn mirror_url(args: MirrorUrlArgs<'_>) -> String {
+    let MirrorUrlArgs {
+        mirror,
+        filename,
+        digests,
+        distdir,
+        cache_path,
+        now,
+    } = args;
     use portage_fetch::layout::MirrorLayoutConfig;
     use portage_fetch::mirror_cache::{
         CacheEntry, MIRROR_CACHE_TTL_SECS, mirror_file_url, parse_mirror_cache,
@@ -606,7 +616,14 @@ fn copy_from_fsmirrors(
     dest: &Path,
 ) -> Result<bool, String> {
     for dir in fsmirrors {
-        let source = mirror_url(dir, filename, digests, &options.distdir, None, 0.0);
+        let source = mirror_url(MirrorUrlArgs {
+            mirror: dir,
+            filename,
+            digests,
+            distdir: &options.distdir,
+            cache_path: None,
+            now: 0.0,
+        });
         match std::fs::copy(&source, dest) {
             Ok(_) => {
                 eprintln!("Local mirror has file: {filename}");
@@ -759,14 +776,14 @@ pub fn fetch_src_uri(
                 if !dir.is_dir() {
                     continue;
                 }
-                let source = mirror_url(
-                    &dir.to_string_lossy(),
-                    &entry.filename,
-                    &digests.hashes,
-                    &options.distdir,
-                    None,
-                    0.0,
-                );
+                let source = mirror_url(MirrorUrlArgs {
+                    mirror: &dir.to_string_lossy(),
+                    filename: &entry.filename,
+                    digests: &digests.hashes,
+                    distdir: &options.distdir,
+                    cache_path: None,
+                    now: 0.0,
+                });
                 let source = std::path::PathBuf::from(source);
                 if verify_digests(&source, digests).is_ok() {
                     let _ = std::fs::remove_file(&dest);
@@ -878,14 +895,14 @@ pub fn fetch_src_uri(
             while let Some(candidate) = uri_list.pop() {
                 let candidate = match &candidate {
                     Candidate::Uri(uri) => uri.clone(),
-                    Candidate::Mirror(root) => mirror_url(
-                        root,
-                        &entry.filename,
-                        &digests.hashes,
-                        &options.distdir,
-                        cache_path.as_deref(),
+                    Candidate::Mirror(root) => mirror_url(MirrorUrlArgs {
+                        mirror: root,
+                        filename: &entry.filename,
+                        digests: &digests.hashes,
+                        distdir: &options.distdir,
+                        cache_path: cache_path.as_deref(),
                         now,
-                    ),
+                    }),
                 };
                 if !tried.insert(candidate.clone()) {
                     continue;
@@ -1320,15 +1337,15 @@ mod tests {
 
         let config_root = tempdir();
         let eroot = tempdir();
-        let config = portage_profile::resolve_config(
-            &config_root,
-            &config_root,
-            &[],
-            &[],
-            "gentoo",
-            &std::collections::HashMap::new(),
-            &eroot,
-        )
+        let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+            config_root: &config_root,
+            main_repo_location: &config_root,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "gentoo",
+            repo_masters: &std::collections::HashMap::new(),
+            eroot: &eroot,
+        })
         .unwrap();
         assert!(
             !config_root

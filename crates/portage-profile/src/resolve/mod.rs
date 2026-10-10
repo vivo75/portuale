@@ -22,17 +22,27 @@ pub(crate) use use_expand::*;
 pub(crate) use use_force_mask::*;
 pub(crate) use use_levels::*;
 pub(crate) use use_masks::*;
+/// Arguments of [`resolve_config`].
+pub struct ResolveConfigArgs<'a> {
+    pub config_root: &'a Path,
+    pub main_repo_location: &'a Path,
+    pub overlay_repos: &'a [(String, PathBuf)],
+    pub repo_aliases: &'a [(String, PathBuf)],
+    pub main_repo_name: &'a str,
+    pub repo_masters: &'a HashMap<String, Vec<PathBuf>>,
+    pub eroot: &'a Path,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn resolve_config(
-    config_root: &Path,
-    main_repo_location: &Path,
-    overlay_repos: &[(String, PathBuf)],
-    repo_aliases: &[(String, PathBuf)],
-    main_repo_name: &str,
-    repo_masters: &HashMap<String, Vec<PathBuf>>,
-    eroot: &Path,
-) -> Result<Config, Error> {
+pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
+    let ResolveConfigArgs {
+        config_root,
+        main_repo_location,
+        overlay_repos,
+        repo_aliases,
+        main_repo_name,
+        repo_masters,
+        eroot,
+    } = args;
     let mut config = Config {
         envd_eroot: eroot.to_path_buf(),
         ..Config::default()

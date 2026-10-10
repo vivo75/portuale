@@ -16,15 +16,15 @@ fn set_seed_holds_the_instance_an_installed_holders_slot_edge_selects() {
     };
     let held = |atoms: &[&str]| {
         let atoms: Vec<String> = atoms.iter().map(|a| (*a).to_string()).collect();
-        set_seed_holds_instance(
-            &atoms,
-            std::slice::from_ref(&merged),
-            "app-misc",
-            "bdprov",
-            "1",
-            "0",
-            "1",
-        )
+        set_seed_holds_instance(SetSeedHoldsInstanceArgs {
+            set_seed_atoms: &atoms,
+            entries: std::slice::from_ref(&merged),
+            category: "app-misc",
+            package: "bdprov",
+            version: "1",
+            slot: "0",
+            sub_slot: "1",
+        })
     };
     assert!(held(&["app-misc/bdprov:0"]));
     assert!(
@@ -50,15 +50,15 @@ fn set_seed_holds_the_instance_only_a_slot_atom_selects() {
     };
     let held = |atoms: &[&str]| {
         let atoms: Vec<String> = atoms.iter().map(|a| (*a).to_string()).collect();
-        set_seed_holds_instance(
-            &atoms,
-            std::slice::from_ref(&merged),
-            "app-misc",
-            "bdprov",
-            "1",
-            "0",
-            "1",
-        )
+        set_seed_holds_instance(SetSeedHoldsInstanceArgs {
+            set_seed_atoms: &atoms,
+            entries: std::slice::from_ref(&merged),
+            category: "app-misc",
+            package: "bdprov",
+            version: "1",
+            slot: "0",
+            sub_slot: "1",
+        })
     };
     assert!(held(&["app-misc/bdprov:0"]), "a slot atom selects slot 0");
     assert!(
@@ -976,18 +976,18 @@ fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
         version: "1.0".into(),
     };
     let mut pending = Vec::new();
-    collect_unwalked_installed_blockers(
-        &[],
-        &dir,
-        &config,
-        false,
-        false,
-        &constraints,
-        None,
-        &[installed],
-        &mut pending,
-        &mut memo,
-    );
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &dir,
+        config: &config,
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &constraints,
+        root_deps_running_root: None,
+        entries: &[installed],
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
     assert!(
         pending.is_empty(),
         "nothing merge-bound means nothing to satisfy"
@@ -1001,18 +1001,18 @@ fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
         to: "1.5".into(),
     };
     let mut pending = Vec::new();
-    collect_unwalked_installed_blockers(
-        &[],
-        &dir,
-        &config,
-        false,
-        false,
-        &constraints,
-        None,
-        &[upgrade],
-        &mut pending,
-        &mut memo,
-    );
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &dir,
+        config: &config,
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &constraints,
+        root_deps_running_root: None,
+        entries: &[upgrade],
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
     assert_eq!(
         pending.len(),
         1,

@@ -780,7 +780,15 @@ fn send_mail(
     match route {
         // No second MAILURI word: real still SMTPs to localhost:25,
         // addressed to the whole URI word.
-        None => smtp_send("localhost", 25, "", "", default_recipient, from, message),
+        None => smtp_send(SmtpSendArgs {
+            host: "localhost",
+            port: 25,
+            user: "",
+            passwd: "",
+            recipient: default_recipient,
+            from,
+            message,
+        }),
         Some(MailRoute::Sendmail { path }) => {
             if !std::path::Path::new(path).exists() {
                 // Real `os.path.exists` gate: a missing sendmail path
@@ -833,7 +841,15 @@ fn send_mail(
                 );
                 return Ok(());
             }
-            smtp_send(host, *port, user, passwd, recipient, from, message)
+            smtp_send(SmtpSendArgs {
+                host,
+                port: *port,
+                user,
+                passwd,
+                recipient,
+                from,
+                message,
+            })
         }
     }
 }
@@ -866,21 +882,32 @@ fn smtp_read_response(reader: &mut impl std::io::BufRead) -> Result<(u16, Vec<St
     Ok((code, lines))
 }
 
+/// Arguments of [`smtp_send`].
+struct SmtpSendArgs<'a> {
+    host: &'a str,
+    port: u16,
+    user: &'a str,
+    passwd: &'a str,
+    recipient: &'a str,
+    from: &'a str,
+    message: &'a str,
+}
+
 /// Hand-rolled `smtplib` subset: greeting, EHLO (extensions parsed for
 /// the AUTH choice), optional `AUTH LOGIN` (then `AUTH PLAIN`),
 /// `MAIL`/`RCPT`/`DATA` with dot-stuffing, `QUIT`. Response codes
 /// follow real's `SMTPException`-on-error shape; transport failures
 /// follow its `OSError` shape.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn smtp_send(
-    host: &str,
-    port: u16,
-    user: &str,
-    passwd: &str,
-    recipient: &str,
-    from: &str,
-    message: &str,
-) -> Result<(), String> {
+fn smtp_send(args: SmtpSendArgs<'_>) -> Result<(), String> {
+    let SmtpSendArgs {
+        host,
+        port,
+        user,
+        passwd,
+        recipient,
+        from,
+        message,
+    } = args;
     use std::io::{BufReader, Write};
     use std::net::{TcpStream, ToSocketAddrs};
     fn net_err(e: impl std::fmt::Display) -> String {
@@ -1194,6 +1221,16 @@ pub fn save_modules_process(
     Ok(written)
 }
 
+/// Arguments of [`process_batch`].
+pub struct ProcessBatchArgs<'a> {
+    pub logdir: &'a Path,
+    pub root_display: &'a str,
+    pub items: &'a [(String, PathBuf)],
+    pub phases: Option<&'a [&'a str]>,
+    pub color: &'a Colorizer,
+    pub split_elog: bool,
+}
+
 /// Real `elog_process` over a batch of packages that just merged or
 /// unmerged. Each item is `(cpv, t_dir)` where `t_dir` is that package's
 /// `${T}` (`${PORTAGE_BUILDDIR}/temp`). `phases` restricts which
@@ -1221,15 +1258,15 @@ pub fn save_modules_process(
 /// `settings.features`' `split-elog` token: the `emerge` callers pass
 /// the resolved list (#37 S3), the standalone unmerge path the raw env
 /// fallback.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn process_batch(
-    logdir: &Path,
-    root_display: &str,
-    items: &[(String, PathBuf)],
-    phases: Option<&[&str]>,
-    color: &Colorizer,
-    split_elog: bool,
-) {
+pub fn process_batch(args: ProcessBatchArgs<'_>) {
+    let ProcessBatchArgs {
+        logdir,
+        root_display,
+        items,
+        phases,
+        color,
+        split_elog,
+    } = args;
     let echo = echo_enabled();
     // "save_any" gates the one `collect_all`/`save_modules_process` call
     // below, so it needs every module that call also dispatches to --

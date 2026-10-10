@@ -33,6 +33,16 @@ pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
     entry.repo_name.as_deref().unwrap_or("")
 }
 
+/// Arguments of [`resume_binary_repo`].
+pub(crate) struct ResumeBinaryRepoArgs<'a> {
+    pub(crate) local: &'a portage_repo::BinaryIndex,
+    pub(crate) binrepos: &'a [portage_profile::BinRepo],
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+}
+
 /// A resumed *binary* entry's `::repo` for the merge progress lines.
 /// Real re-resolves a `["binary", root, cpv, "merge"]` resume item from
 /// its bintree (`depgraph.py::_loadResumeCommand` matches
@@ -51,15 +61,15 @@ pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
 /// all: the caller keeps the ebuild-repo fallback (today's display; the
 /// merge itself then reports it cannot locate the entry, same as a
 /// non-resume run).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn resume_binary_repo(
-    local: &portage_repo::BinaryIndex,
-    binrepos: &[portage_profile::BinRepo],
-    root: &Path,
-    category: &str,
-    package: &str,
-    version: &str,
-) -> Option<String> {
+pub(crate) fn resume_binary_repo(args: ResumeBinaryRepoArgs<'_>) -> Option<String> {
+    let ResumeBinaryRepoArgs {
+        local,
+        binrepos,
+        root,
+        category,
+        package,
+        version,
+    } = args;
     if let Some(cand) = portage_repo::list_binary_candidates(local, category, package)
         .into_iter()
         .find(|c| c.version == version)
@@ -74,6 +84,16 @@ pub(crate) fn resume_binary_repo(
             .cloned()
             .unwrap_or_else(|| "__unknown__".to_string()),
     )
+}
+
+/// Arguments of [`resume_entry`].
+pub(crate) struct ResumeEntryArgs<'a> {
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) source: CandidateSource,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) binary_repo: Option<&'a str>,
 }
 
 /// A minimal source `GraphEntry` for `emerge --resume` (`pretend.rs`):
@@ -98,15 +118,15 @@ pub(crate) fn resume_binary_repo(
 /// binary's own repository (`resume_binary_repo`, real's bintree
 /// re-resolution, backlog #186) in `binary_repo`, which wins over the
 /// ebuild lookup; `None` keeps the ebuild lookup as the fallback.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn resume_entry(
-    category: &str,
-    package: &str,
-    version: &str,
-    source: CandidateSource,
-    repos: &[RepoConfig],
-    binary_repo: Option<&str>,
-) -> GraphEntry {
+pub(crate) fn resume_entry(args: ResumeEntryArgs<'_>) -> GraphEntry {
+    let ResumeEntryArgs {
+        category,
+        package,
+        version,
+        source,
+        repos,
+        binary_repo,
+    } = args;
     let repo_name = if source == CandidateSource::Binary {
         binary_repo.map(str::to_string).or_else(|| {
             portage_repo::list_candidates(repos, category, package)

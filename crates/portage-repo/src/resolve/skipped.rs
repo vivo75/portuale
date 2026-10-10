@@ -96,6 +96,21 @@ pub enum SkippedDepDisclosure {
     Plain(PlainMissDepReport),
 }
 
+/// Arguments of [`missing_dep_full_row`].
+pub(crate) struct MissingDepFullRowArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) cat: &'a str,
+    pub(crate) pkg: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) ver: &'a str,
+    pub(crate) sub: &'a str,
+    pub(crate) repo: &'a str,
+    pub(crate) atom: &'a str,
+}
+
 /// Backlog #198: build the full-form row for a missing-dependency mask
 /// whose atom bites nothing backtrack-masked at settle time (real
 /// `_show_missed_update_unsatisfied_dep`, `depgraph.py:1592-1636`).
@@ -104,20 +119,22 @@ pub enum SkippedDepDisclosure {
 /// as queued. Returns `None` when no settled entry holds the slot
 /// (real's `any_selected` gate) or the masked version's tree metadata
 /// cannot name the skipped node.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn missing_dep_full_row(
-    repos: &[RepoConfig],
-    root: &Path,
-    config: &portage_profile::Config,
-    entries: &[GraphEntry],
-    cat: &str,
-    pkg: &str,
-    slot: &str,
-    ver: &str,
-    sub: &str,
-    repo: &str,
-    atom: &str,
+    args: MissingDepFullRowArgs<'_>,
 ) -> Option<SkippedMissingDepFull> {
+    let MissingDepFullRowArgs {
+        repos,
+        root,
+        config,
+        entries,
+        cat,
+        pkg,
+        slot,
+        ver,
+        sub,
+        repo,
+        atom,
+    } = args;
     // Real's `selected_pkg`: the tracker's match for the slot -- a
     // merge-bound entry first, else the installed instance.
     let mut selected_merge: Option<(&str, &str, &str, &str)> = None;

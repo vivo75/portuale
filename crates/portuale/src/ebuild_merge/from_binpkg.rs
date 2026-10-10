@@ -197,19 +197,21 @@ pub fn merge_binpkg(
                 Some(ebuild) if always || phase_defined(phase) => {
                     let seed = !seeded.replace(true);
                     crate::ebuild_phases::run_phase_from_saved_env(
-                        ebuild,
-                        &saved_env,
-                        seed,
-                        phase,
-                        root,
-                        portage_tmpdir,
-                        options.debug,
-                        &options.config_root,
-                        options.shell,
-                        options.log_file.as_deref(),
-                        update_env,
-                        update_env.map(|_| options.features.as_str()),
-                        replacing_versions.as_deref(),
+                        crate::ebuild_phases::RunPhaseFromSavedEnvArgs {
+                            ebuild_path: ebuild,
+                            saved_env_bz2: &saved_env,
+                            seed,
+                            phase,
+                            root,
+                            portage_tmpdir,
+                            debug: options.debug,
+                            config_root: &options.config_root,
+                            shell: options.shell,
+                            log_file: options.log_file.as_deref(),
+                            update_env,
+                            refresh_features: update_env.map(|_| options.features.as_str()),
+                            replacing_versions: replacing_versions.as_deref(),
+                        },
                     )
                 }
                 _ => Ok(0),
@@ -252,18 +254,18 @@ pub fn merge_binpkg(
         // reuse the env `pkg_setup` evolved (see `run_instprep`'s own
         // `seed` doc comment).
         let seed_instprep = !seeded.replace(true);
-        let instprep_status = ebuild_phases::run_instprep(
-            ebuild,
-            Some(&saved_env),
-            seed_instprep,
+        let instprep_status = ebuild_phases::run_instprep(ebuild_phases::RunInstprepArgs {
+            ebuild_path: ebuild,
+            saved_env_bz2: Some(&saved_env),
+            seed: seed_instprep,
             root,
             portage_tmpdir,
-            &options.build_env,
-            options.debug,
-            &options.config_root,
-            options.shell,
-            options.log_file.as_deref(),
-        )?;
+            build_env: &options.build_env,
+            debug: options.debug,
+            config_root: &options.config_root,
+            shell: options.shell,
+            log_file: options.log_file.as_deref(),
+        })?;
         if instprep_status != 0 {
             eprintln!("!!! instprep failed");
             return Ok(1);
@@ -294,17 +296,17 @@ pub fn merge_binpkg(
         }
     }
     let blocked = blockers_from_flat_deps(root, &flat_deps);
-    let (collisions, symlink_collisions, plib_collisions) = find_collisions(
-        &image,
+    let (collisions, symlink_collisions, plib_collisions) = find_collisions(FindCollisionsArgs {
+        d: &image,
         root,
-        &category,
-        &package,
-        &main_slot,
-        &options.config_protect,
-        &options.config_protect_mask,
-        &plib_inodes,
-        &blocked,
-    )?;
+        category: &category,
+        package: &package,
+        slot: &main_slot,
+        config_protect: &options.config_protect,
+        config_protect_mask: &options.config_protect_mask,
+        plib_inodes: &plib_inodes,
+        blocked: &blocked,
+    })?;
     // Real `dblink.merge()`'s own abort condition (Python operator
     // precedence: `collision_protect or (protect_owned and owners)`);
     // identical to `merge_after_install`.
@@ -333,22 +335,29 @@ pub fn merge_binpkg(
     if preinst_status != 0 {
         return Ok(preinst_status);
     }
-    populate_vdb_tmp(root, &category, &pf, &build_info, &full_slot, &repository)?;
+    populate_vdb_tmp(PopulateVdbTmpArgs {
+        root,
+        category: &category,
+        pf: &pf,
+        build_info_dir: &build_info,
+        slot: &full_slot,
+        repository: &repository,
+    })?;
 
     let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
     let mut cfgfiledict = read_cfgfiledict(root);
-    let mut contents = merge_tree(
-        &image,
+    let mut contents = merge_tree(MergeTreeArgs {
+        d: &image,
         root,
-        &category,
-        installed_instance.as_deref(),
-        options.protect_if_modified,
-        &options.config_protect,
-        &options.config_protect_mask,
-        options.noconfmem,
-        &mut cfgfiledict,
-        &XattrPolicy::from_options(options),
-    )?;
+        category: &category,
+        installed_instance_pf: installed_instance.as_deref(),
+        protect_if_modified: options.protect_if_modified,
+        config_protect: &options.config_protect,
+        config_protect_mask: &options.config_protect_mask,
+        noconfmem: options.noconfmem,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::from_options(options),
+    })?;
     // Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
     // block (identical to `merge_after_install`): the replaced same-slot instance's
     // still-needed libraries are carried into this package's own
@@ -359,7 +368,14 @@ pub fn merge_binpkg(
         .collect();
     let mut preserve_paths = BTreeSet::new();
     if let Some((paths, old_contents_text)) =
-        find_preserve_paths_for_merge(root, &category, &package, &pf, &main_slot, &new_image_paths)
+        find_preserve_paths_for_merge(FindPreservePathsForMergeArgs {
+            root,
+            category: &category,
+            package: &package,
+            new_pf: &pf,
+            main_slot: &main_slot,
+            new_image_paths: &new_image_paths,
+        })
     {
         let (injected, surviving) =
             inject_preserved_libs_into_contents(&old_contents_text, &paths, &new_image_paths);
@@ -407,15 +423,15 @@ pub fn merge_binpkg(
     // registration (`vartree.py:5266-5272`) -- identical to
     // `merge_after_install` (one commit on a database backend, see
     // `publish_merged_entry`).
-    publish_merged_entry(
+    publish_merged_entry(PublishMergedEntryArgs {
         root,
-        &category,
-        &package,
-        &pf,
-        &main_slot,
-        &preserve_paths,
-        &replaced_same_slot,
-    )?;
+        category: &category,
+        pn: &package,
+        pf: &pf,
+        main_slot: &main_slot,
+        preserve_paths: &preserve_paths,
+        replaced: &replaced_same_slot,
+    })?;
 
     // Real `treewalk()` order: `pkg_postinst` runs after the vdb entry
     // is live *and* every replaced same-slot version is gone, but before
@@ -461,14 +477,14 @@ pub fn merge_binpkg(
     // unconditional `remove_dir_all` right after would take it with it
     // (the same #42 ordering as `merge_after_install`). Empty (and
     // silent) for a binpkg that carried no saved env.
-    crate::elog::process_batch(
-        &crate::elog::logdir(root),
-        &root.display().to_string(),
-        &[(format!("{category}/{pf}"), builddir.join("temp"))],
-        None,
-        &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
-        feature_enabled(options, "split-elog"),
-    );
+    crate::elog::process_batch(crate::elog::ProcessBatchArgs {
+        logdir: &crate::elog::logdir(root),
+        root_display: &root.display().to_string(),
+        items: &[(format!("{category}/{pf}"), builddir.join("temp"))],
+        phases: None,
+        color: &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
+        split_elog: feature_enabled(options, "split-elog"),
+    });
 
     let _ = std::fs::remove_dir_all(&builddir);
     Ok(postinst_status)

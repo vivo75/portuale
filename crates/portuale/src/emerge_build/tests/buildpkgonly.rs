@@ -72,13 +72,13 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
         },
     ];
     let bogus = PathBuf::from("/nonexistent/does/not/exist");
-    let result = run_buildpkgonly(
-        &entries,
-        &portage_profile::Config::default(),
-        &[],
-        &bogus,
-        &bogus,
-        &PackageOptions {
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &[],
+        root: &bogus,
+        portage_tmpdir: &bogus,
+        options: &PackageOptions {
             debug: false,
             pkgdir: bogus.clone(),
             distdir: bogus.clone(),
@@ -91,9 +91,9 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    );
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
     assert!(result.is_ok());
 }
 
@@ -138,13 +138,13 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
         deps: Vec::new(),
     }];
 
-    let result = run_buildpkgonly(
-        &entries,
-        &portage_profile::Config::default(),
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             debug: false,
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
@@ -161,9 +161,9 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
             binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    );
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
     assert!(result.is_ok(), "{result:?}");
 
     let tbz2 = pkgdir.join("dev-libs/packagepkg-1.0.tbz2");
@@ -220,13 +220,13 @@ fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_m
         ..portage_profile::Config::default()
     };
 
-    let result = run_buildpkgonly(
-        &entries,
-        &config,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &config,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             debug: false,
             pkgdir,
             distdir: tempdir(),
@@ -234,9 +234,9 @@ fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_m
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    );
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
     let err = result.expect_err("a missing matched PORTAGE_TMPDIR must fail the entry");
     assert!(
         err.contains(&format!(
@@ -303,13 +303,13 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() 
         ..portage_profile::Config::default()
     };
 
-    let result = run_buildpkgonly(
-        &entries,
-        &config,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &config,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             debug: false,
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
@@ -322,9 +322,9 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() 
             binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    );
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
     assert!(result.is_ok(), "{result:?}");
 
     // Layout is run-wide: the negated neighbour takes the multi
@@ -408,13 +408,13 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
         ..portage_profile::Config::default()
     };
 
-    let result = run_buildpkgonly(
-        &entries,
-        &config,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &config,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             debug: false,
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
@@ -423,9 +423,9 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
             binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    );
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
     assert!(result.is_ok(), "{result:?}");
 
     let magic_of = |path: std::path::PathBuf| {
@@ -481,13 +481,13 @@ fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
             version: "1.0".into(),
         },
     )];
-    run_buildpkgonly(
-        &entries,
-        &config,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &config,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             debug: false,
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
@@ -495,9 +495,9 @@ fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    )
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("--buildpkgonly succeeds");
 
     let archive = pkgdir.join("dev-libs/phaseenvpkg-1.0.gpkg.tar");
@@ -559,21 +559,21 @@ fn buildpkgonly_post_cleans_the_builddir() {
             version: "1.0".into(),
         },
     )];
-    run_buildpkgonly(
-        &entries,
-        &portage_profile::Config::default(),
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    )
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    })
     .expect("--buildpkgonly succeeds");
 
     // Backlog #173: the default format is gpkg now (real
@@ -636,13 +636,13 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
         deps: Vec::new(),
     }];
 
-    let result = run_buildpkgonly(
-        &entries,
-        &portage_profile::Config::default(),
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             debug: false,
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
@@ -655,9 +655,9 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    );
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
     // `fetchpkg`'s own fixture has a real, nonempty SRC_URI but no
     // Manifest entry at all -- refused before any network access is
     // even attempted (see `crate::fetch::fetch_src_uri`'s own doc
@@ -689,13 +689,13 @@ fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
         buildpkgonly_entry("dev-libs", "packagepkg", "1.0"),
     ];
 
-    let result = run_buildpkgonly(
-        &entries,
-        &portage_profile::Config::default(),
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             debug: false,
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
@@ -703,9 +703,9 @@ fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
-        false,
-        StatusMode::for_tests(),
-    );
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
     let err = result.expect_err("fetchpkg must still fail");
     assert!(err.contains("no Manifest entry"), "{err}");
     assert!(
@@ -730,13 +730,13 @@ fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
         buildpkgonly_entry("dev-libs", "packagepkg", "1.0"),
     ];
 
-    let result = run_buildpkgonly(
-        &entries,
-        &portage_profile::Config::default(),
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &PackageOptions {
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
             debug: false,
             pkgdir: pkgdir.clone(),
             distdir: tempdir(),
@@ -744,9 +744,9 @@ fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
-        true,
-        StatusMode::for_tests(),
-    );
+        keep_going: true,
+        mode: StatusMode::for_tests(),
+    });
     let err = result.expect_err("fetchpkg still fails overall");
     assert!(err.contains("dev-libs/fetchpkg-1.0"), "{err}");
     assert!(err.contains("no Manifest entry"), "{err}");

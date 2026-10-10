@@ -380,7 +380,12 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
         // interrupted news prompt (backlog #234) exits `128 + SIGINT`
         // before `action_build`, like real `UserQuery.query`'s own
         // `sys.exit` (`_emerge/UserQuery.py:74-76`).
-        if offer_news_reading(ask, read_news, notice_printed, color) {
+        if offer_news_reading(OfferNewsReadingArgs {
+            ask,
+            read_news,
+            notice_printed,
+            color,
+        }) {
             return Err(ExitCode::from(130));
         }
     }

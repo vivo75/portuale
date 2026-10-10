@@ -316,6 +316,16 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
         .collect()
 }
 
+/// Arguments of [`build_bundle`].
+pub struct BuildBundleArgs<'a> {
+    pub binpkg_path: &'a Path,
+    pub staging_tmp: &'a Path,
+    pub repo_override: Option<&'a str>,
+    pub gpg: &'a crate::binpkg::GpgVerify,
+    pub install_mask: &'a str,
+    pub install_mask_prunes_usr_share: bool,
+}
+
 /// Stage one binpkg file (`.gpkg.tar` or `.tbz2`) into a wire bundle
 /// under `staging_tmp` (a fresh temp dir per call; caller removes it).
 /// `repo_override` is the resolver-known repo name (the resolve flow's
@@ -335,15 +345,15 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
 /// `gpg` is the same merge-time signature policy `merge_binpkg` runs
 /// (see `crate::binpkg::GpgVerify`) -- the bundle stages exactly what
 /// the merge would see, verified the same way.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn build_bundle(
-    binpkg_path: &Path,
-    staging_tmp: &Path,
-    repo_override: Option<&str>,
-    gpg: &crate::binpkg::GpgVerify,
-    install_mask: &str,
-    install_mask_prunes_usr_share: bool,
-) -> Result<StagedBundle, String> {
+pub fn build_bundle(args: BuildBundleArgs<'_>) -> Result<StagedBundle, String> {
+    let BuildBundleArgs {
+        binpkg_path,
+        staging_tmp,
+        repo_override,
+        gpg,
+        install_mask,
+        install_mask_prunes_usr_share,
+    } = args;
     let name = binpkg_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -591,14 +601,14 @@ mod tests {
     #[test]
     fn bundle_stages_image_build_info_environment_and_manifest() {
         let tmp = tempdir("stage");
-        let staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.cpv, "dev-libs/packagepkg-1.0");
         assert!(staged.byte_count > 0);
@@ -635,26 +645,26 @@ mod tests {
         // resolver-known repo fills the manifest; an explicit override
         // of `"__unknown__"` (a vdb-less resolve) stays unknown.
         let tmp = tempdir("repo-override");
-        let staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            Some("testrepo"),
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: Some("testrepo"),
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "testrepo");
         let _ = std::fs::remove_dir_all(&tmp);
         let tmp = tempdir("repo-unknown");
-        let staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            Some("__unknown__"),
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: Some("__unknown__"),
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "__unknown__");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -671,14 +681,14 @@ mod tests {
         use md5::Digest as _;
         let tmp = tempdir("binpkgmd5");
         let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
-        let staged = build_bundle(
-            &binpkg,
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &binpkg,
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         let bytes = std::fs::read(&binpkg).unwrap();
         let expected = format!("{:x}\n", md5::Md5::digest(&bytes));
@@ -713,14 +723,14 @@ mod tests {
     #[test]
     fn bundle_applies_install_mask_before_filemeta() {
         let tmp = tempdir("mask");
-        let staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "/usr/share/packagepkg",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "/usr/share/packagepkg",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert_eq!(
             std::fs::read_to_string(tmp.join("packagepkg-1.0/build-info/INSTALL_MASK")).unwrap(),
@@ -760,14 +770,14 @@ mod tests {
     #[test]
     fn bundle_empty_mask_prunes_nothing_and_writes_no_file() {
         let tmp = tempdir("mask-empty");
-        let _staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let _staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert!(
             tmp.join("packagepkg-1.0/image/usr/share/packagepkg/hello.txt")
@@ -794,14 +804,14 @@ mod tests {
     fn bundle_ships_bzip2_passthrough_for_regen() {
         use std::os::unix::fs::PermissionsExt as _;
         let tmp = tempdir("passthrough");
-        let _staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let _staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         let passthrough = tmp.join("packagepkg-1.0/bin/bzip2-passthrough");
         assert_eq!(

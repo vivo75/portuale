@@ -46,28 +46,29 @@ pub(crate) fn record_entry_fetch(args: RecordEntryFetchArgs<'_>) {
     // `PROPERTIES`. `fetch_restrict_satisfied` is real
     // `not getfetchsizes(only_restricted=True)`.
     if candidate_source == CandidateSource::Ebuild
-        && evaluated_metadata_tokens(
-            &resolved.restrict,
-            resolved,
-            &key.0,
-            &key.1,
+        && evaluated_metadata_tokens(EvaluatedMetadataTokensArgs {
+            value_str: &resolved.restrict,
+            candidate: resolved,
+            category: &key.0,
+            package: &key.1,
             candidate_str,
             config,
-        )
+        })
         .contains("fetch")
     {
         state.entries[entry_idx].fetch_restrict = true;
-        state.entries[entry_idx].fetch_restrict_satisfied = fetch_restrict_files_all_present(
-            metadata
-                .get("SRC_URI")
-                .map(String::as_str)
-                .unwrap_or_default(),
-            use_flags,
-            repo_location,
-            &key.0,
-            &key.1,
-            ctx.distdir,
-        );
+        state.entries[entry_idx].fetch_restrict_satisfied =
+            fetch_restrict_files_all_present(FetchRestrictFilesAllPresentArgs {
+                src_uri: metadata
+                    .get("SRC_URI")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+                use_flags,
+                repo_location,
+                category: &key.0,
+                package: &key.1,
+                distdir: ctx.distdir,
+            });
     }
 
     // Real `output.py:300-332`'s own `_calc_size` -> `counters.
@@ -76,17 +77,18 @@ pub(crate) fn record_entry_fetch(args: RecordEntryFetchArgs<'_>) {
     // Runs for every merge-bound ebuild entry, not just
     // fetch-restricted ones. See `GraphEntry::download_files`.
     if candidate_source == CandidateSource::Ebuild {
-        state.entries[entry_idx].download_files = fetch_bytes_to_download(
-            metadata
-                .get("SRC_URI")
-                .map(String::as_str)
-                .unwrap_or_default(),
-            use_flags,
-            repo_location,
-            &key.0,
-            &key.1,
-            ctx.distdir,
-        );
+        state.entries[entry_idx].download_files =
+            fetch_bytes_to_download(FetchBytesToDownloadArgs {
+                src_uri: metadata
+                    .get("SRC_URI")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+                use_flags,
+                repo_location,
+                category: &key.0,
+                package: &key.1,
+                distdir: ctx.distdir,
+            });
     } else if candidate_remote {
         // A `--getbinpkg` remote binary: real `_calc_size` -> real
         // `bindbapi.getfetchsizes` returns `{<cpv>: SIZE}` from the

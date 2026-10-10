@@ -230,25 +230,25 @@ fn plib_registry_empty_serializes_to_exactly_empty_braces() {
         entries: BTreeMap::new(),
         orig_entries: BTreeMap::new(),
     };
-    register_preserved_libs(
-        &mut registry,
-        "dev-libs/foo-1.0",
-        "dev-libs",
-        "foo",
-        "0",
-        "5",
-        &["/usr/lib/libfoo.so.1".to_string()],
-    );
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &["/usr/lib/libfoo.so.1".to_string()],
+    });
     registry.orig_entries = registry.entries.clone();
-    register_preserved_libs(
-        &mut registry,
-        "dev-libs/foo-1.0",
-        "dev-libs",
-        "foo",
-        "0",
-        "5",
-        &[],
-    );
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &[],
+    });
     assert!(registry.entries.is_empty());
     write_plib_registry(&tmp, &registry).expect("write succeeds");
     let bytes = std::fs::read(plib_registry_path(&tmp)).unwrap();

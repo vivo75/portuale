@@ -356,6 +356,16 @@ fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, Error> {
     Ok(stack.pop().unwrap())
 }
 
+/// Arguments of [`select_subset`].
+struct SelectSubsetArgs<'a> {
+    nodes: &'a [DepNode],
+    disjunction: bool,
+    selected: bool,
+    subset: &'a HashSet<String>,
+    uselist: &'a HashSet<String>,
+    mode: MatchMode,
+}
+
 /// Real `use_reduce`'s own `select_subset` (invoked whenever `subset` is
 /// given): walks the parsed tree keeping only atoms reachable through a
 /// conditional whose own flag is in `subset` -- `disjunction` is true
@@ -369,15 +379,15 @@ fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, Error> {
 /// `is_active` -- `subset` only decides which already-active branch's
 /// atoms make it into the *output*, never which branches are active in
 /// the first place.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn select_subset(
-    nodes: &[DepNode],
-    disjunction: bool,
-    selected: bool,
-    subset: &HashSet<String>,
-    uselist: &HashSet<String>,
-    mode: MatchMode,
-) -> Result<Vec<DepNode>, Error> {
+fn select_subset(args: SelectSubsetArgs<'_>) -> Result<Vec<DepNode>, Error> {
+    let SelectSubsetArgs {
+        nodes,
+        disjunction,
+        selected,
+        subset,
+        uselist,
+        mode,
+    } = args;
     let mut result: Vec<DepNode> = Vec::new();
     let mut iter = nodes.iter();
     while let Some(node) = iter.next() {
@@ -387,7 +397,14 @@ fn select_subset(
                 // marker at all -- selection state just passes through
                 // unchanged, same as real select_subset's own
                 // AttributeError ("token has no .endswith") branch.
-                let sub = select_subset(children, false, selected, subset, uselist, mode)?;
+                let sub = select_subset(SelectSubsetArgs {
+                    nodes: children,
+                    disjunction: false,
+                    selected,
+                    subset,
+                    uselist,
+                    mode,
+                })?;
                 if disjunction {
                     if !sub.is_empty() {
                         result.push(DepNode::Group(sub));
@@ -403,7 +420,14 @@ fn select_subset(
                 if is_active(s, uselist, mode)? {
                     let flag = &s[..s.len() - 1];
                     let now_selected = selected || subset.contains(flag);
-                    let sub = select_subset(children, false, now_selected, subset, uselist, mode)?;
+                    let sub = select_subset(SelectSubsetArgs {
+                        nodes: children,
+                        disjunction: false,
+                        selected: now_selected,
+                        subset,
+                        uselist,
+                        mode,
+                    })?;
                     if disjunction {
                         if !sub.is_empty() {
                             result.push(DepNode::Group(sub));
@@ -417,7 +441,14 @@ fn select_subset(
                 let Some(DepNode::Group(children)) = iter.next() else {
                     return Err(Error::OrNotFollowedByGroup);
                 };
-                let sub = select_subset(children, true, selected, subset, uselist, mode)?;
+                let sub = select_subset(SelectSubsetArgs {
+                    nodes: children,
+                    disjunction: true,
+                    selected,
+                    subset,
+                    uselist,
+                    mode,
+                })?;
                 if !sub.is_empty() {
                     if disjunction {
                         result.extend(sub);
@@ -668,7 +699,14 @@ pub fn use_reduce_flat_subset(
     subset: &HashSet<String>,
 ) -> Result<Vec<String>, Error> {
     let tree = build_dep_tree(tokens)?;
-    let filtered = select_subset(&tree, false, false, subset, uselist, mode)?;
+    let filtered = select_subset(SelectSubsetArgs {
+        nodes: &tree,
+        disjunction: false,
+        selected: false,
+        subset,
+        uselist,
+        mode,
+    })?;
     let mut reserialized = Vec::new();
     serialize_dep_tree(&filtered, &mut reserialized);
     use_reduce_flat(&reserialized, uselist, mode)

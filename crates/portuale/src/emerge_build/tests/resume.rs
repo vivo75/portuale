@@ -5,14 +5,14 @@ fn resume_cpv_maps_source_and_binary_and_skips_non_merges() {
     // The up-front resume save (real `Scheduler._save_resume_list`'s
     // `operation == "merge"` filter) records every entry that will
     // actually merge -- source and binary alike -- and nothing else.
-    let src = resume_entry(
-        "dev-libs",
-        "src-pkg",
-        "1.0",
-        CandidateSource::Ebuild,
-        &[],
-        None,
-    );
+    let src = resume_entry(ResumeEntryArgs {
+        category: "dev-libs",
+        package: "src-pkg",
+        version: "1.0",
+        source: CandidateSource::Ebuild,
+        repos: &[],
+        binary_repo: None,
+    });
     assert_eq!(
         resume_cpv(&src),
         Some((
@@ -22,14 +22,14 @@ fn resume_cpv_maps_source_and_binary_and_skips_non_merges() {
             "1.0".to_string(),
         ))
     );
-    let bin = resume_entry(
-        "dev-libs",
-        "bin-pkg",
-        "2.0",
-        CandidateSource::Binary,
-        &[],
-        None,
-    );
+    let bin = resume_entry(ResumeEntryArgs {
+        category: "dev-libs",
+        package: "bin-pkg",
+        version: "2.0",
+        source: CandidateSource::Binary,
+        repos: &[],
+        binary_repo: None,
+    });
     assert_eq!(
         resume_cpv(&bin),
         Some((
@@ -39,26 +39,26 @@ fn resume_cpv_maps_source_and_binary_and_skips_non_merges() {
             "2.0".to_string(),
         ))
     );
-    let mut installed = resume_entry(
-        "dev-libs",
-        "old-pkg",
-        "3.0",
-        CandidateSource::Ebuild,
-        &[],
-        None,
-    );
+    let mut installed = resume_entry(ResumeEntryArgs {
+        category: "dev-libs",
+        package: "old-pkg",
+        version: "3.0",
+        source: CandidateSource::Ebuild,
+        repos: &[],
+        binary_repo: None,
+    });
     installed.outcome = PretendOutcome::AlreadyInstalled {
         version: "3.0".into(),
     };
     assert_eq!(resume_cpv(&installed), None);
-    let mut uninstalled = resume_entry(
-        "dev-libs",
-        "gone-pkg",
-        "4.0",
-        CandidateSource::Ebuild,
-        &[],
-        None,
-    );
+    let mut uninstalled = resume_entry(ResumeEntryArgs {
+        category: "dev-libs",
+        package: "gone-pkg",
+        version: "4.0",
+        source: CandidateSource::Ebuild,
+        repos: &[],
+        binary_repo: None,
+    });
     uninstalled.outcome = PretendOutcome::NoVisibleCandidate;
     assert_eq!(resume_cpv(&uninstalled), None);
 }
@@ -88,15 +88,36 @@ fn resume_binary_repo_comes_from_the_binary_pool_not_the_ebuild_repos() {
     ]);
     let here = Path::new("/");
     assert_eq!(
-        resume_binary_repo(&local, &[], here, "dev-libs", "bin-a", "1.0"),
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &[],
+            root: here,
+            category: "dev-libs",
+            package: "bin-a",
+            version: "1.0"
+        }),
         Some("binhostrepo".to_string())
     );
     assert_eq!(
-        resume_binary_repo(&local, &[], here, "dev-libs", "bin-norepo", "1.0"),
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &[],
+            root: here,
+            category: "dev-libs",
+            package: "bin-norepo",
+            version: "1.0"
+        }),
         Some("__unknown__".to_string())
     );
     assert_eq!(
-        resume_binary_repo(&local, &[], here, "dev-libs", "missing", "1.0"),
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &[],
+            root: here,
+            category: "dev-libs",
+            package: "missing",
+            version: "1.0"
+        }),
         None
     );
 
@@ -116,12 +137,26 @@ fn resume_binary_repo_comes_from_the_binary_pool_not_the_ebuild_repos() {
         frozen: false,
     }];
     assert_eq!(
-        resume_binary_repo(&local, &binrepos, here, "dev-libs", "bin-r", "2.0"),
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &binrepos,
+            root: here,
+            category: "dev-libs",
+            package: "bin-r",
+            version: "2.0"
+        }),
         Some("remoterepo".to_string())
     );
     // The local index shadows the binhost for the same version.
     assert_eq!(
-        resume_binary_repo(&local, &binrepos, here, "dev-libs", "bin-s", "1.0"),
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &binrepos,
+            root: here,
+            category: "dev-libs",
+            package: "bin-s",
+            version: "1.0"
+        }),
         Some("localrepo".to_string())
     );
     let _ = fs::remove_dir_all(&remote_dir);
@@ -134,32 +169,32 @@ fn resume_entry_uses_the_binary_repo_for_binary_entries_only() {
     // so the fallback would be `None` either way and the win is
     // exact), is ignored for an `Ebuild` entry, and `None` keeps the
     // ebuild fallback.
-    let bin = resume_entry(
-        "dev-libs",
-        "bin-pkg",
-        "2.0",
-        CandidateSource::Binary,
-        &[],
-        Some("binhostrepo"),
-    );
+    let bin = resume_entry(ResumeEntryArgs {
+        category: "dev-libs",
+        package: "bin-pkg",
+        version: "2.0",
+        source: CandidateSource::Binary,
+        repos: &[],
+        binary_repo: Some("binhostrepo"),
+    });
     assert_eq!(bin.repo_name.as_deref(), Some("binhostrepo"));
-    let src = resume_entry(
-        "dev-libs",
-        "src-pkg",
-        "1.0",
-        CandidateSource::Ebuild,
-        &[],
-        Some("binhostrepo"),
-    );
+    let src = resume_entry(ResumeEntryArgs {
+        category: "dev-libs",
+        package: "src-pkg",
+        version: "1.0",
+        source: CandidateSource::Ebuild,
+        repos: &[],
+        binary_repo: Some("binhostrepo"),
+    });
     assert_eq!(src.repo_name, None);
-    let fallback = resume_entry(
-        "dev-libs",
-        "bin-pkg",
-        "2.0",
-        CandidateSource::Binary,
-        &[],
-        None,
-    );
+    let fallback = resume_entry(ResumeEntryArgs {
+        category: "dev-libs",
+        package: "bin-pkg",
+        version: "2.0",
+        source: CandidateSource::Binary,
+        repos: &[],
+        binary_repo: None,
+    });
     assert_eq!(fallback.repo_name, None);
 }
 
@@ -171,30 +206,30 @@ fn run_merge_loop_shrinks_the_saved_resume_list_per_successful_merge() {
     // tail and the last merge deletes the key.
     let root = tempdir();
     let entries = vec![
-        resume_entry(
-            "dev-libs",
-            "loop-a",
-            "1.0",
-            CandidateSource::Ebuild,
-            &[],
-            None,
-        ),
-        resume_entry(
-            "dev-libs",
-            "loop-b",
-            "1.0",
-            CandidateSource::Ebuild,
-            &[],
-            None,
-        ),
-        resume_entry(
-            "dev-libs",
-            "loop-c",
-            "1.0",
-            CandidateSource::Ebuild,
-            &[],
-            None,
-        ),
+        resume_entry(ResumeEntryArgs {
+            category: "dev-libs",
+            package: "loop-a",
+            version: "1.0",
+            source: CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
+        resume_entry(ResumeEntryArgs {
+            category: "dev-libs",
+            package: "loop-b",
+            version: "1.0",
+            source: CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
+        resume_entry(ResumeEntryArgs {
+            category: "dev-libs",
+            package: "loop-c",
+            version: "1.0",
+            source: CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
     ];
     let full: Vec<crate::mtimedb::ResumeCpv> =
         entries.iter().map(|e| resume_cpv(e).unwrap()).collect();

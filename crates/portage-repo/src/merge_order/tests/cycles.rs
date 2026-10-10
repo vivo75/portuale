@@ -138,15 +138,15 @@ fn find_smallest_cycle_pins_the_ladder_and_smallest_pick() {
         new_entry("dev-libs", "zz2", "1.0", Vec::new()),
     ];
     let mut frontier = SerializeFrontier::build(&g);
-    let (sub, ig) = find_smallest_cycle(
-        &g,
-        Some(&mut frontier),
-        &entries,
-        &NORMAL,
-        &[],
-        true,
-        &HashSet::new(),
-    )
+    let (sub, ig) = find_smallest_cycle(FindSmallestCycleArgs {
+        g: &g,
+        frontier: Some(&mut frontier),
+        entries: &entries,
+        range: &NORMAL,
+        asap: &[],
+        prefer_asap: true,
+        ineligible: &HashSet::new(),
+    })
     .expect("a mergeable cycle exists");
     assert_eq!(sub, HashSet::from([3usize, 4]));
     assert!(ig.is_some());
@@ -270,15 +270,15 @@ fn find_smallest_cycle_keeps_the_first_of_two_equal_rings() {
         new_entry("dev-libs", "zz2", "1.0", Vec::new()),
     ];
     let mut frontier = SerializeFrontier::build(&g);
-    let (sub, _) = find_smallest_cycle(
-        &g,
-        Some(&mut frontier),
-        &entries,
-        &NORMAL,
-        &[],
-        true,
-        &HashSet::new(),
-    )
+    let (sub, _) = find_smallest_cycle(FindSmallestCycleArgs {
+        g: &g,
+        frontier: Some(&mut frontier),
+        entries: &entries,
+        range: &NORMAL,
+        asap: &[],
+        prefer_asap: true,
+        ineligible: &HashSet::new(),
+    })
     .expect("a mergeable cycle exists");
     assert_eq!(
         sub,

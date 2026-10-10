@@ -851,15 +851,15 @@ fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
     // back unconditionally. `_find_suggestions` should offer exactly
     // "disable x on usecyclea".
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
     let result = graph_result_real("dev-libs/usecyclea");
@@ -895,15 +895,15 @@ fn circular_dep_solutions_applies_the_autounmask_use_overlay() {
     // off and no assignment drops the atom (the generic
     // "temporarily disabling USE flags" advisory).
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
     let result = graph_result_autounmask("=dev-libs/cyc0w-3");
@@ -944,15 +944,15 @@ fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
     // back empty. `docs/history/find-suggestions-plan.md`'s "no
     // fixture yet" note.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
     let result = graph_result_real("dev-libs/gpcyclec");
@@ -1008,15 +1008,15 @@ fn circular_dep_solutions_is_empty_for_a_cycle_with_no_conditional_edge() {
     // `DEPEND` and no IUSE -- `extract_affecting_use` finds nothing,
     // so there is no suggestion (real hits the generic-advisory else).
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
     let result = graph_result_real("dev-libs/hardcyclea");

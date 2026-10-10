@@ -63,7 +63,7 @@ pub fn run_source_merge(
         // both keep the `--load-average` gate for additional builds.
         if jobs == usize::MAX {
             let policy = mrg_director::UnlimitedPolicy::new(load_average);
-            return run_build_scheduler(
+            return run_build_scheduler(RunBuildSchedulerArgs {
                 entries,
                 repos,
                 root,
@@ -72,12 +72,12 @@ pub fn run_source_merge(
                 keep_going,
                 buildpkg,
                 buildpkg_exclude,
-                &policy,
-                &display,
-            );
+                policy: &policy,
+                display: &display,
+            });
         }
         let policy = mrg_director::LoadAwarePolicy::new(jobs, load_average);
-        return run_build_scheduler(
+        return run_build_scheduler(RunBuildSchedulerArgs {
             entries,
             repos,
             root,
@@ -86,9 +86,9 @@ pub fn run_source_merge(
             keep_going,
             buildpkg,
             buildpkg_exclude,
-            &policy,
-            &display,
-        );
+            policy: &policy,
+            display: &display,
+        });
     }
     // The serial loop merges through the director's source engine (the
     // same `SourceEngine::merge_entry` the mixed dispatcher runs per
@@ -124,17 +124,17 @@ pub fn run_source_merge(
             // `:1543-1561`), each fired exactly once like the `-jN`
             // scheduler above.
             display.job_started();
-            let path = match build_one_source_entry(
+            let path = match build_one_source_entry(BuildOneSourceEntryArgs {
                 entry,
                 repos,
                 root,
                 portage_tmpdir,
                 options,
-                bp,
-                true,
-                entry_progress,
-                &display,
-            ) {
+                buildpkg: bp,
+                capture_log: true,
+                progress: entry_progress,
+                display: &display,
+            }) {
                 Ok(path) => {
                     display.build_finished();
                     path
@@ -145,16 +145,16 @@ pub fn run_source_merge(
                     return Err(e);
                 }
             };
-            if let Err(e) = merge_one_built_entry(
+            if let Err(e) = merge_one_built_entry(MergeOneBuiltEntryArgs {
                 entry,
                 repos,
-                &path,
+                ebuild_path: &path,
                 root,
                 portage_tmpdir,
                 options,
-                entry_progress,
-                &display,
-            ) {
+                progress: entry_progress,
+                display: &display,
+            }) {
                 display.job_failed();
                 return Err(e);
             }
@@ -347,16 +347,16 @@ pub(crate) fn merge_one_source_entry(
     // already-`instprep`ped image from an earlier build in the same
     // `${PORTAGE_BUILDDIR}` silently skips `install` (backlog #42, found
     // in #38 S4).
-    let clean_status = ebuild_phases::run_clean(
-        &path,
+    let clean_status = ebuild_phases::run_clean(ebuild_phases::RunCleanArgs {
+        ebuild_path: &path,
         root,
         portage_tmpdir,
-        &per_entry.build_env,
-        per_entry.debug,
-        &per_entry.config_root,
-        per_entry.shell,
-        per_entry.log_file.as_deref(),
-    )?;
+        build_env: &per_entry.build_env,
+        debug: per_entry.debug,
+        config_root: &per_entry.config_root,
+        shell: per_entry.shell,
+        log_file: per_entry.log_file.as_deref(),
+    })?;
     if clean_status != 0 {
         return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
     }
@@ -371,14 +371,14 @@ pub(crate) fn merge_one_source_entry(
     // for it, exactly like real queuing no merge for a failed build.
     let installing = installing_line(entry, &version, progress, root, &color);
     let print_installing = || display.status(&installing);
-    let status = ebuild_merge::run_merge_with_hook(
-        &path,
+    let status = ebuild_merge::run_merge_with_hook(ebuild_merge::RunMergeWithHookArgs {
+        ebuild_path: &path,
         root,
         portage_tmpdir,
-        &per_entry,
+        options: &per_entry,
         buildpkg,
-        Some(&print_installing as &dyn Fn()),
-    )?;
+        before_merge: Some(&print_installing as &dyn Fn()),
+    })?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
     }

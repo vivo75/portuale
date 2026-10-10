@@ -98,6 +98,16 @@ pub(crate) fn canonical_dep_key(
     Some(out)
 }
 
+/// Arguments of [`binary_deps_changed`].
+pub(crate) struct BinaryDepsChangedArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) with_bdeps: bool,
+}
+
 /// `--binpkg-changed-deps` (auto-enabled whenever `--usepkgonly` is not
 /// given, `create_depgraph_params.py:196-203`): real
 /// `_wrapped_select_pkg_highest_available_imp` (`depgraph.py:8288-8300`)
@@ -112,15 +122,15 @@ pub(crate) fn canonical_dep_key(
 /// metadata can't be read, or whose deps parse but the ebuild's don't,
 /// stays "unchanged" (`false`); an unparsable binary dep string is
 /// "changed" (`true`), matching real's `except InvalidDependString`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn binary_deps_changed(
-    root: &Path,
-    repos: &[RepoConfig],
-    candidate: &Candidate,
-    category: &str,
-    package: &str,
-    with_bdeps: bool,
-) -> bool {
+pub(crate) fn binary_deps_changed(args: BinaryDepsChangedArgs<'_>) -> bool {
+    let BinaryDepsChangedArgs {
+        root,
+        repos,
+        candidate,
+        category,
+        package,
+        with_bdeps,
+    } = args;
     let dep_keys: &[&str] = if with_bdeps {
         &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
     } else {
@@ -174,16 +184,25 @@ pub(crate) fn binary_deps_changed(
     }
     built_by_key != ebuild_by_key
 }
+/// Arguments of [`deps_changed`].
+pub(crate) struct DepsChangedArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) with_bdeps: bool,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn deps_changed(
-    root: &Path,
-    repos: &[RepoConfig],
-    category: &str,
-    package: &str,
-    version: &str,
-    with_bdeps: bool,
-) -> bool {
+pub(crate) fn deps_changed(args: DepsChangedArgs<'_>) -> bool {
+    let DepsChangedArgs {
+        root,
+        repos,
+        category,
+        package,
+        version,
+        with_bdeps,
+    } = args;
     let dep_keys: &[&str] = if with_bdeps {
         &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
     } else {
@@ -364,6 +383,22 @@ pub(crate) fn new_repo_changed(
     vdb_repo != current_repo_name
 }
 
+/// Arguments of [`rebuilt_binary_changed`].
+pub(crate) struct RebuiltBinaryChangedArgs<'a> {
+    pub(crate) root: &'a Path,
+    /// The `BUILD_TIME` of the binary candidate that would be selected for
+    /// this exact version -- local `$PKGDIR` *or* a `--getbinpkg` remote
+    /// binhost (real `matched_packages`' `built_pkg` is whichever the pool
+    /// actually offers). `None` when no binary candidate exists, or its
+    /// `Packages` entry carried no `BUILD_TIME` (real code's own falsy
+    /// guard, `bug #306659`).
+    pub(crate) binary_build_time: Option<i64>,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) rebuilt_binaries_timestamp: Option<u64>,
+}
+
 /// `--rebuilt-binaries`: real `depgraph.py`'s own reinstall trigger
 /// (lines ~8394-8429, confirmed by reading it) comparing a binary
 /// candidate's own `BUILD_TIME` against the already-installed package's
@@ -396,21 +431,15 @@ pub(crate) fn new_repo_changed(
 /// at all, and (see `resolve_pretend`'s own doc comment on `--usepkg`/
 /// `--usepkgonly`) *either* flag makes that true, matching real
 /// `depgraph.py`'s own `dbs` construction exactly.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn rebuilt_binary_changed(
-    root: &Path,
-    // The `BUILD_TIME` of the binary candidate that would be selected for
-    // this exact version -- local `$PKGDIR` *or* a `--getbinpkg` remote
-    // binhost (real `matched_packages`' `built_pkg` is whichever the pool
-    // actually offers). `None` when no binary candidate exists, or its
-    // `Packages` entry carried no `BUILD_TIME` (real code's own falsy
-    // guard, `bug #306659`).
-    binary_build_time: Option<i64>,
-    category: &str,
-    package: &str,
-    version: &str,
-    rebuilt_binaries_timestamp: Option<u64>,
-) -> bool {
+pub(crate) fn rebuilt_binary_changed(args: RebuiltBinaryChangedArgs<'_>) -> bool {
+    let RebuiltBinaryChangedArgs {
+        root,
+        binary_build_time,
+        category,
+        package,
+        version,
+        rebuilt_binaries_timestamp,
+    } = args;
     let Some(built_timestamp) = binary_build_time else {
         return false;
     };
@@ -463,6 +492,20 @@ pub fn ebuild_visible_at(
         .unwrap_or(false)
 }
 
+/// Arguments of [`binary_reinstall_warranted`].
+pub(crate) struct BinaryReinstallWarrantedArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) binary_build_time: Option<i64>,
+    pub(crate) rebuilt_binaries: bool,
+    pub(crate) rebuilt_binaries_timestamp: Option<u64>,
+    pub(crate) update: bool,
+}
+
 /// Whether a binary at the installed `version` warrants a reinstall, real
 /// `depgraph.py`'s two independent `rebuilt_binary` triggers folded into
 /// one:
@@ -482,32 +525,39 @@ pub fn ebuild_visible_at(
 ///     still-visible ebuild, the installed instance is left alone.) The
 ///     `update`-less "bare top-level always replaces" case is a separate
 ///     mechanism (`is_top_level && !selective`), not this one.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn binary_reinstall_warranted(
-    root: &Path,
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    category: &str,
-    package: &str,
-    version: &str,
-    binary_build_time: Option<i64>,
-    rebuilt_binaries: bool,
-    rebuilt_binaries_timestamp: Option<u64>,
-    update: bool,
-) -> bool {
+pub(crate) fn binary_reinstall_warranted(args: BinaryReinstallWarrantedArgs<'_>) -> bool {
+    let BinaryReinstallWarrantedArgs {
+        root,
+        repos,
+        config,
+        category,
+        package,
+        version,
+        binary_build_time,
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        update,
+    } = args;
     if rebuilt_binaries {
-        return rebuilt_binary_changed(
+        return rebuilt_binary_changed(RebuiltBinaryChangedArgs {
             root,
             binary_build_time,
             category,
             package,
             version,
             rebuilt_binaries_timestamp,
-        );
+        });
     }
     update
         && !ebuild_visible_at(repos, category, package, version, config)
-        && rebuilt_binary_changed(root, binary_build_time, category, package, version, None)
+        && rebuilt_binary_changed(RebuiltBinaryChangedArgs {
+            root,
+            binary_build_time,
+            category,
+            package,
+            version,
+            rebuilt_binaries_timestamp: None,
+        })
 }
 
 /// A candidate's own `is_valid_flag` domain: its declared `IUSE`
@@ -597,6 +647,16 @@ pub(crate) fn candidate_iuse_and_use(
     Some((iuse, use_flags))
 }
 
+/// Arguments of [`reinstall_flags_for_use_change`].
+pub(crate) struct ReinstallFlagsForUseChangeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) newuse: bool,
+}
+
 /// `--newuse`/`--changed-use`: ports both the `newuse` and `elif
 /// changed_use` branches of real `depgraph.py`'s `_reinstall_for_flags`
 /// -- whether `candidate` (a version already installed) needs
@@ -622,15 +682,17 @@ pub(crate) fn candidate_iuse_and_use(
 /// contribute via the shared enablement term above, exactly like real
 /// portage): whether a flag exists in IUSE changed at all, regardless of
 /// whether it's even enabled.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn reinstall_flags_for_use_change(
-    root: &Path,
-    category: &str,
-    package: &str,
-    candidate: &Candidate,
-    config: &portage_profile::Config,
-    newuse: bool,
+    args: ReinstallFlagsForUseChangeArgs<'_>,
 ) -> Option<Vec<String>> {
+    let ReinstallFlagsForUseChangeArgs {
+        root,
+        category,
+        package,
+        candidate,
+        config,
+        newuse,
+    } = args;
     let version = &candidate.version;
     let orig_use = read_vdb_flag_set(root, category, package, version, "USE");
     let orig_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");

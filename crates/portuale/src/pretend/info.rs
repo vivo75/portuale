@@ -387,21 +387,33 @@ pub(crate) fn info_profile_version(config_root: &Path, main_repo_loc: &Path) -> 
     }
     "unavailable".to_string()
 }
+/// Arguments of [`run_info`].
+pub(crate) struct RunInfoArgs<'a> {
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) atom_args: &'a [&'a str],
+    pub(crate) misspell_suggestions: bool,
+    pub(crate) usepkg: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_info(
-    config: &portage_profile::Config,
-    repos: &[portage_repo::RepoConfig],
-    root: &Path,
-    atom_args: &[&str],
-    misspell_suggestions: bool,
-    usepkg: bool,
-    config_root: &Path,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    color: &Colorizer,
-) -> ExitCode {
+pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
+    let RunInfoArgs {
+        config,
+        repos,
+        root,
+        atom_args,
+        misspell_suggestions,
+        usepkg,
+        config_root,
+        shell,
+        debug,
+        color,
+    } = args;
     // The local binary index, built once for the whole `--info` run and
     // shared by the existence probe below and the binary half further
     // down (backlog #123: threaded as an `Arc`, never re-derived from
@@ -770,17 +782,19 @@ pub(crate) fn run_info(
             println!(">>> Attempting to run pkg_info() for '{cpv}'");
             let _ = std::io::Write::flush(&mut std::io::stdout());
             let phase = match pkg {
-                InfoPkg::Ebuild(c) => ebuild_phases::run_single_phase(
-                    &c.ebuild_path,
-                    "info",
-                    root,
-                    &portage_tmpdir,
-                    debug,
-                    config_root,
-                    shell,
-                    &[],
-                    None,
-                ),
+                InfoPkg::Ebuild(c) => {
+                    ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+                        ebuild_path: &c.ebuild_path,
+                        phase: "info",
+                        root,
+                        portage_tmpdir: &portage_tmpdir,
+                        debug,
+                        config_root,
+                        shell,
+                        build_env: &[],
+                        log_file: None,
+                    })
+                }
                 InfoPkg::Installed(i) => {
                     let opts = ebuild_merge::MergeOptions::from_env(shell, debug);
                     let scratch = portage_tmpdir.join("portage").join("_info_src");
@@ -808,17 +822,17 @@ pub(crate) fn run_info(
                     let image = dest.join("image");
                     let build_info = dest.join("build-info");
                     let run = |ep: &Path| {
-                        ebuild_phases::run_single_phase(
-                            ep,
-                            "info",
+                        ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+                            ebuild_path: ep,
+                            phase: "info",
                             root,
-                            &portage_tmpdir,
+                            portage_tmpdir: &portage_tmpdir,
                             debug,
                             config_root,
                             shell,
-                            &[],
-                            None,
-                        )
+                            build_env: &[],
+                            log_file: None,
+                        })
                     };
                     match crate::binpkg::extract_binpkg(
                         &b.archive_path,

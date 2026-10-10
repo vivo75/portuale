@@ -40,15 +40,15 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
     install("dcorphandep", "", "", "", "");
     install("systempkg", "", "", "", "");
 
-    let result = depclean_cleanlist(
-        &root,
-        &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
-        &["dev-libs/systempkg".to_string()],
-        &[],
-        true,
-        &[],
-        &[],
-    );
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
+        system_atoms: &["dev-libs/systempkg".to_string()],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
     assert_eq!(
         clean,
@@ -63,15 +63,15 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
 
     // `args` mode: `-c dev-libs/dcorphan` -> just that one (its
     // private dep dcorphandep is protected, being non-arg).
-    let narrowed = depclean_cleanlist(
-        &root,
-        &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
-        &["dev-libs/systempkg".to_string()],
-        &["dev-libs/dcorphan".to_string()],
-        true,
-        &[],
-        &[],
-    );
+    let narrowed = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
+        system_atoms: &["dev-libs/systempkg".to_string()],
+        args: &["dev-libs/dcorphan".to_string()],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert_eq!(
         narrowed
             .cleanlist
@@ -81,15 +81,15 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
         vec!["dev-libs/dcorphan-1.0".to_string()]
     );
     // `-c dev-libs/dcsub` -> nothing (dcdep still needs it).
-    let needed = depclean_cleanlist(
-        &root,
-        &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
-        &["dev-libs/systempkg".to_string()],
-        &["dev-libs/dcsub".to_string()],
-        true,
-        &[],
-        &[],
-    );
+    let needed = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
+        system_atoms: &["dev-libs/systempkg".to_string()],
+        args: &["dev-libs/dcsub".to_string()],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert!(needed.cleanlist.is_empty());
 
     // `--depclean-lib-check` feedback: forcing dcorphan as a
@@ -101,15 +101,15 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
         version: "1.0".to_string(),
         slot: "0".to_string(),
     };
-    let lib_kept = depclean_cleanlist(
-        &root,
-        &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
-        &["dev-libs/systempkg".to_string()],
-        &[],
-        true,
-        std::slice::from_ref(&protected),
-        &[],
-    );
+    let lib_kept = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
+        system_atoms: &["dev-libs/systempkg".to_string()],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: std::slice::from_ref(&protected),
+        package_provided: &[],
+    });
     assert!(lib_kept.cleanlist.is_empty(), "{:?}", lib_kept.cleanlist);
     assert_eq!(lib_kept.required_count, 9);
 
@@ -144,15 +144,15 @@ fn depclean_flags_a_kept_packages_unsatisfiable_runtime_dep() {
     );
     install("uany", "", "");
 
-    let result = depclean_cleanlist(
-        &root,
-        &[("dev-libs/uw".to_string(), "@selected".to_string())],
-        &[],
-        &[],
-        true,
-        &[],
-        &[],
-    );
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/uw".to_string(), "@selected".to_string())],
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert_eq!(
         result.unresolved,
         vec![(
@@ -177,7 +177,15 @@ fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
 
     // `-c dev-libs/dw` (deselect default true): the world seed is
     // dropped in args mode -> dw is unreachable -> removed.
-    let removed = depclean_cleanlist(&root, world, &[], args, true, &[], &[]);
+    let removed = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: world,
+        system_atoms: &[],
+        args,
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert_eq!(
         removed
             .cleanlist
@@ -189,7 +197,15 @@ fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
 
     // `-c dev-libs/dw --deselect=n`: the world seed is kept ->
     // @selected still reaches dw -> nothing to remove.
-    let kept = depclean_cleanlist(&root, world, &[], args, false, &[], &[]);
+    let kept = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: world,
+        system_atoms: &[],
+        args,
+        deselect: false,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert!(kept.cleanlist.is_empty(), "{:?}", kept.cleanlist);
 
     std::fs::remove_dir_all(&root).ok();
@@ -212,15 +228,15 @@ fn depclean_cleanlist_records_reverse_dep_parents_for_kept_packages() {
     install("rshared", "");
     install("rorphan", "");
 
-    let result = depclean_cleanlist(
-        &root,
-        &[("dev-libs/rw".to_string(), "@selected".to_string())],
-        &[],
-        &[],
-        true,
-        &[],
-        &[],
-    );
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/rw".to_string(), "@selected".to_string())],
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     // rorphan is the cleanlist; kept = rdep, rshared, rw (cpv order).
     assert_eq!(
         result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
@@ -291,7 +307,15 @@ fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_depend
         "dev-libs/pdprov-1.0".to_string(),
     ];
 
-    let result = depclean_cleanlist(&root, world, &[], &[], true, &[], &package_provided);
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: world,
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &package_provided,
+    });
     let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
     assert_eq!(
         clean,
@@ -304,7 +328,15 @@ fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_depend
     // Without `package_provided`, both stay protected (pwprov by its
     // own world membership, pdprov by pw's RDEPEND) -- nothing to
     // clean.
-    let baseline = depclean_cleanlist(&root, world, &[], &[], true, &[], &[]);
+    let baseline = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: world,
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert!(baseline.cleanlist.is_empty(), "{:?}", baseline.cleanlist);
 
     std::fs::remove_dir_all(&root).ok();
@@ -335,11 +367,27 @@ fn depclean_unresolved_halt_does_not_fire_for_a_dep_satisfied_only_by_package_pr
     let world = &[("dev-libs/uw".to_string(), "@selected".to_string())];
     let package_provided = vec!["dev-libs/uprovided-9.9".to_string()];
 
-    let result = depclean_cleanlist(&root, world, &[], &[], true, &[], &package_provided);
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: world,
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &package_provided,
+    });
     assert!(result.unresolved.is_empty(), "{:?}", result.unresolved);
 
     // Without `package_provided`, the same setup halts.
-    let baseline = depclean_cleanlist(&root, world, &[], &[], true, &[], &[]);
+    let baseline = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: world,
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert_eq!(
         baseline.unresolved,
         vec![(
@@ -369,15 +417,15 @@ fn depclean_cleanlist_a_use_conditional_dep_that_is_off_does_not_keep_its_target
     // dcw's `off? ( ... )` group is inactive -> dchidden is orphan.
     install("dcw", "off? ( dev-libs/dchidden )", "");
     install("dchidden", "", "");
-    let result = depclean_cleanlist(
-        &root,
-        &[("dev-libs/dcw".to_string(), "@selected".to_string())],
-        &[],
-        &[],
-        true,
-        &[],
-        &[],
-    );
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/dcw".to_string(), "@selected".to_string())],
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
     assert_eq!(clean, vec!["dev-libs/dchidden-1.0".to_string()]);
     std::fs::remove_dir_all(&root).ok();
@@ -407,7 +455,15 @@ fn depclean_cleanlist_is_returned_in_topological_removal_order() {
     install("aabase", "");
     install("loner", "");
 
-    let result = depclean_cleanlist(&root, &[], &[], &[], true, &[], &[]);
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[],
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert!(result.ordered);
     let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
     // Level 0 ready = {mmid, loner} (nothing depends on them),
@@ -430,7 +486,15 @@ fn depclean_cleanlist_is_returned_in_topological_removal_order() {
         std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
         std::fs::write(d.join("SLOT"), "0\n").unwrap();
     }
-    let flat = depclean_cleanlist(&root2, &[], &[], &[], true, &[], &[]);
+    let flat = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root2,
+        world_seeds: &[],
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
     assert!(!flat.ordered);
     assert_eq!(
         flat.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),

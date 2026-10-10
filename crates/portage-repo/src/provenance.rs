@@ -59,20 +59,30 @@ pub(crate) fn visibility_provenance(
     } else {
         None
     };
-    let keyword_entry = keyword_provenance(
-        &candidate.keywords,
-        &candidate_str,
+    let keyword_entry = keyword_provenance(KeywordProvenanceArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    );
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    });
 
     VisibilityProvenance {
         mask_entry,
         unmask_entry,
         keyword_entry,
     }
+}
+
+/// Arguments of [`keyword_provenance`].
+pub(crate) struct KeywordProvenanceArgs<'a> {
+    pub(crate) keywords: &'a [String],
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) accept_keywords: &'a HashSet<String>,
+    pub(crate) package_accept_keywords: &'a [(String, Vec<String>)],
 }
 
 /// The specific `package.accept_keywords` entry (if any) responsible for
@@ -91,23 +101,23 @@ pub(crate) fn visibility_provenance(
 /// `~arch` grant). `None` if even every matching entry together somehow
 /// isn't enough -- shouldn't happen for a candidate already confirmed
 /// `is_visible`, but a safe fallback rather than a panic.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn keyword_provenance(
-    keywords: &[String],
-    candidate_str: &str,
-    category: &str,
-    package: &str,
-    accept_keywords: &HashSet<String>,
-    package_accept_keywords: &[(String, Vec<String>)],
-) -> Option<String> {
-    if keywords_accepted(
+pub(crate) fn keyword_provenance(args: KeywordProvenanceArgs<'_>) -> Option<String> {
+    let KeywordProvenanceArgs {
         keywords,
         candidate_str,
         category,
         package,
         accept_keywords,
-        &[],
-    ) {
+        package_accept_keywords,
+    } = args;
+    if keywords_accepted(KeywordsAcceptedArgs {
+        keywords,
+        candidate_str,
+        category,
+        package,
+        accept_keywords,
+        package_accept_keywords: &[],
+    }) {
         return None;
     }
     // Same source-order fold `keywords_accepted` -> `specificity_ordered_
@@ -119,7 +129,14 @@ pub(crate) fn keyword_provenance(
     let mut seed = accept_keywords.clone();
     for (entry, tokens) in matching {
         portage_profile::apply_incremental_iter(tokens, &mut seed);
-        if keywords_accepted(keywords, candidate_str, category, package, &seed, &[]) {
+        if keywords_accepted(KeywordsAcceptedArgs {
+            keywords,
+            candidate_str,
+            category,
+            package,
+            accept_keywords: &seed,
+            package_accept_keywords: &[],
+        }) {
             return Some(entry.clone());
         }
     }
@@ -167,14 +184,14 @@ pub(crate) fn keyword_mask_marker(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
-    if keywords_accepted(
-        &candidate.keywords,
-        &candidate_str,
+    if keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &[],
-    ) {
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &[],
+    }) {
         return None;
     }
     let testing_for_our_arch = candidate.keywords.iter().any(|k| {

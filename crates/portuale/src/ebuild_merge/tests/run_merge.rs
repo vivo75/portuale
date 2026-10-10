@@ -262,17 +262,17 @@ fn run_qmerge_merges_without_rerunning_the_install_phase() {
     // Real qmerge assumes a prior real `install` already populated
     // ${D} -- run only the install phase directly here (not
     // run_merge, which would also run qmerge's own merge logic).
-    let install_status = ebuild_phases::run_commands(
-        &ebuild,
-        &["install"],
-        &root,
-        &portage_tmpdir,
-        &MergeOptions::default().distdir,
-        false,
-        &MergeOptions::default().config_root,
-        ebuild_phases::ShellBackend::default(),
-        &[],
-    )
+    let install_status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
+        ebuild_path: &ebuild,
+        commands: &["install"],
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &MergeOptions::default().distdir,
+        debug: false,
+        config_root: &MergeOptions::default().config_root,
+        shell: ebuild_phases::ShellBackend::default(),
+        build_env: &[],
+    })
     .expect("install phase succeeds");
     assert_eq!(install_status, 0);
     // Real bin/phase-functions.sh's own __dyn_install already leaves

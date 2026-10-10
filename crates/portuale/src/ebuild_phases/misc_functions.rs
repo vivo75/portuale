@@ -65,19 +65,19 @@ pub(crate) async fn run_misc_functions(
             )
             .await
         }
-        ShellBackend::Bash => run_misc_functions_bash(
+        ShellBackend::Bash => run_misc_functions_bash(RunMiscFunctionsBashArgs {
             env,
             root,
             ebuild_phase_value,
             dyn_command,
             extra_env,
             debug,
-            &bin_dir,
-            &helpers_dir,
+            bin_dir: &bin_dir,
+            helpers_dir: &helpers_dir,
             config_root,
             log_file,
             fs_sandbox,
-        ),
+        }),
     }
 }
 
@@ -98,7 +98,7 @@ pub(crate) async fn run_misc_functions_brush(
     let mut shell = new_brush_phase_shell().await?;
     let (params, pump) = brush_phase_params(&mut shell, log_file)?;
 
-    let setup = phase_setup_script(
+    let setup = phase_setup_script(PhaseSetupScriptArgs {
         env,
         root,
         ebuild_phase_value,
@@ -107,7 +107,7 @@ pub(crate) async fn run_misc_functions_brush(
         helpers_dir,
         config_root,
         extra_env,
-    );
+    });
     // Same shell-before-pump drop discipline as
     // `run_one_phase_brush`: capture the outcome, drop in order, then
     // return -- see `open_log_file`.
@@ -133,26 +133,41 @@ pub(crate) async fn run_misc_functions_brush(
     outcome
 }
 
+/// Arguments of [`run_misc_functions_bash`].
+pub(crate) struct RunMiscFunctionsBashArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) ebuild_phase_value: &'a str,
+    pub(crate) dyn_command: &'a str,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) debug: bool,
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) fs_sandbox: bool,
+}
+
 /// `--shell bash`: spawns a genuine `bash <bin_dir>/misc-functions.sh
 /// <dyn_command>` subprocess -- matching real `doebuild.py`'s own
 /// `misc_sh = shlex.quote(misc_sh_binary) + " __dyn_%s"` invocation
 /// shape exactly. See `run_one_phase_bash`'s own doc comment for why a
 /// blocking `std::process::Command` here too.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_misc_functions_bash(
-    env: &Environment,
-    root: &Path,
-    ebuild_phase_value: &str,
-    dyn_command: &str,
-    extra_env: &[(String, String)],
-    debug: bool,
-    bin_dir: &Path,
-    helpers_dir: &Path,
-    config_root: &Path,
-    log_file: Option<&Path>,
-    fs_sandbox: bool,
-) -> Result<i32, String> {
-    let mut vars = phase_env_vars(
+pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Result<i32, String> {
+    let RunMiscFunctionsBashArgs {
+        env,
+        root,
+        ebuild_phase_value,
+        dyn_command,
+        extra_env,
+        debug,
+        bin_dir,
+        helpers_dir,
+        config_root,
+        log_file,
+        fs_sandbox,
+    } = args;
+    let mut vars = phase_env_vars(PhaseEnvVarsArgs {
         env,
         root,
         ebuild_phase_value,
@@ -161,7 +176,7 @@ pub(crate) fn run_misc_functions_bash(
         helpers_dir,
         config_root,
         extra_env,
-    );
+    });
     if fs_sandbox {
         // Real `MiscFunctionsProcess._spawn`: swap in a separate log so
         // a misc-functions violation doesn't clobber the phase's own
@@ -247,20 +262,33 @@ pub(crate) fn shared_runtime() -> Result<&'static tokio::runtime::Runtime, Strin
         .map_err(Clone::clone)
 }
 
+/// Arguments of [`run_misc_function`].
+pub(crate) struct RunMiscFunctionArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) ebuild_phase_value: &'a str,
+    pub(crate) dyn_command: &'a str,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+}
+
 /// Synchronous entry point mirroring `run_single_phase`'s own shape, for
 /// `ebuild_package`'s own real `__dyn_package` call.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_misc_function(
-    ebuild_path: &Path,
-    portage_tmpdir: &Path,
-    root: &Path,
-    ebuild_phase_value: &str,
-    dyn_command: &str,
-    extra_env: &[(String, String)],
-    debug: bool,
-    config_root: &Path,
-    shell: ShellBackend,
-) -> Result<i32, String> {
+pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, String> {
+    let RunMiscFunctionArgs {
+        ebuild_path,
+        portage_tmpdir,
+        root,
+        ebuild_phase_value,
+        dyn_command,
+        extra_env,
+        debug,
+        config_root,
+        shell,
+    } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;

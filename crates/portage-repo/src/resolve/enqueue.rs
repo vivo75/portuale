@@ -191,18 +191,18 @@ pub(crate) fn enqueue_dependencies(
             } else {
                 InstalledMetaLayer::Raw
             };
-            let s = installed_dep_string(
+            let s = installed_dep_string(InstalledDepStringArgs {
                 root,
                 dynamic_deps,
                 ignore_built_slot_operator_deps,
                 category,
                 package,
                 version,
-                Some(&metadata),
-                dep_key,
+                live: Some(&metadata),
+                key: dep_key,
                 layer,
-                installed_meta_memo,
-            );
+                memo: installed_meta_memo,
+            });
             depstr.push_str(&s);
             depstr.push(' ');
             keyed_depstr.insert(dep_key.to_string(), s);
@@ -238,18 +238,18 @@ pub(crate) fn enqueue_dependencies(
             } else {
                 InstalledMetaLayer::Raw
             };
-            joined.push_str(&installed_dep_string(
+            joined.push_str(&installed_dep_string(InstalledDepStringArgs {
                 root,
                 dynamic_deps,
                 ignore_built_slot_operator_deps,
                 category,
                 package,
                 version,
-                Some(&metadata),
-                dep_key,
+                live: Some(&metadata),
+                key: dep_key,
                 layer,
-                installed_meta_memo,
-            ));
+                memo: installed_meta_memo,
+            }));
             joined.push(' ');
         }
         let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();

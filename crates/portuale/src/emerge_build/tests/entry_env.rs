@@ -34,8 +34,14 @@ fn buildpkgonly_entry_build_env_matches_package_env_and_folds_flags() {
     };
     let run_wide = run_wide_phase_env(&config);
     let cpv_slot = entry_cpv_slot(&entry, "1.0");
-    let build_env =
-        buildpkgonly_entry_build_env(&config, &repos, &entry, &candidate, &cpv_slot, &run_wide);
+    let build_env = buildpkgonly_entry_build_env(BuildpkgonlyEntryBuildEnvArgs {
+        config: &config,
+        repos: &repos,
+        entry: &entry,
+        candidate: &candidate,
+        cpv_slot: &cpv_slot,
+        run_wide: &run_wide,
+    });
     let get = |key: &str| {
         build_env
             .iter()
@@ -60,14 +66,14 @@ fn buildpkgonly_entry_build_env_matches_package_env_and_folds_flags() {
     let other_candidate = locate_candidate(&repos, "dev-libs", "newpkg", "1.0")
         .expect("newpkg-1.0 fixture candidate resolves");
     let other_cpv_slot = entry_cpv_slot(&other, "1.0");
-    let other_env = buildpkgonly_entry_build_env(
-        &config,
-        &repos,
-        &other,
-        &other_candidate,
-        &other_cpv_slot,
-        &run_wide,
-    );
+    let other_env = buildpkgonly_entry_build_env(BuildpkgonlyEntryBuildEnvArgs {
+        config: &config,
+        repos: &repos,
+        entry: &other,
+        candidate: &other_candidate,
+        cpv_slot: &other_cpv_slot,
+        run_wide: &run_wide,
+    });
     assert_ne!(
         other_env
             .iter()
@@ -107,8 +113,14 @@ fn buildpkgonly_entry_build_env_folds_matched_features() {
         .map(|(_, v)| v.clone())
         .unwrap_or_default();
     let cpv_slot = entry_cpv_slot(&entry, "1.0");
-    let build_env =
-        buildpkgonly_entry_build_env(&config, &repos, &entry, &candidate, &cpv_slot, &run_wide);
+    let build_env = buildpkgonly_entry_build_env(BuildpkgonlyEntryBuildEnvArgs {
+        config: &config,
+        repos: &repos,
+        entry: &entry,
+        candidate: &candidate,
+        cpv_slot: &cpv_slot,
+        run_wide: &run_wide,
+    });
     let features = build_env
         .iter()
         .filter(|(k, _)| k == "FEATURES")

@@ -515,22 +515,24 @@ fn graph_result_from_order(
         );
         // Same `all_flags` split `pretend.rs` uses: enabled-first full
         // form for `-pv`, changed-only form for plain `-p`.
-        let use_expand_display = super::build_use_expand_display(
-            &use_flags_display,
-            &req.config,
-            None,
-            &forced,
-            true,
-            &empty,
-        );
-        let use_expand_display_p = super::build_use_expand_display(
-            &use_flags_display,
-            &req.config,
-            None,
-            &forced,
-            false,
-            &empty,
-        );
+        let use_expand_display =
+            super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
+                use_flags_display: &use_flags_display,
+                config: &req.config,
+                installed: None,
+                forced: &forced,
+                all_flags: true,
+                reinst_flags: &empty,
+            });
+        let use_expand_display_p =
+            super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
+                use_flags_display: &use_flags_display,
+                config: &req.config,
+                installed: None,
+                forced: &forced,
+                all_flags: false,
+                reinst_flags: &empty,
+            });
         let cpv = format!("{cp}-{version}");
         let mut required_by: Vec<(String, String)> = parents.get(&cpv).cloned().unwrap_or_default();
         required_by.sort();
@@ -704,18 +706,18 @@ fn graph_result_from_order(
                 // #268: the raw request atoms behind `top_level_cps`,
                 // for the greedy-eligibility half of the `#252` gate.
                 let top_level_atoms: HashSet<String> = req.atoms.iter().cloned().collect();
-                super::slot_operator_rebuild_entries(
-                    &req.root,
+                super::slot_operator_rebuild_entries(super::SlotOperatorRebuildEntriesArgs {
+                    root: &req.root,
                     repos,
-                    &entries,
-                    &slot_op_reachable,
-                    req.with_bdeps,
-                    &req.excluded,
-                    req.update,
-                    &top_level_cps,
-                    &top_level_atoms,
-                    &req.config,
-                )
+                    entries: &entries,
+                    reachable: &slot_op_reachable,
+                    with_bdeps: req.with_bdeps,
+                    excluded: &req.excluded,
+                    update: req.update,
+                    top_level_cps: &top_level_cps,
+                    top_level_atoms: &top_level_atoms,
+                    config: &req.config,
+                })
             }
         };
     entries.extend(slot_op_rebuilds);

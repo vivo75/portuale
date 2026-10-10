@@ -2,6 +2,20 @@
 
 use crate::*;
 
+/// Arguments of [`slot_operator_eliminate_rebuilds`].
+pub(crate) struct SlotOperatorEliminateRebuildsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) replace: &'a BTreeSet<(String, String)>,
+    pub(crate) slot_want: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) reverse_pins: &'a [RevDepPin],
+    pub(crate) selective: bool,
+    pub(crate) changed_slot: bool,
+    pub(crate) top_level_cps: &'a HashSet<(String, String)>,
+    pub(crate) empty: bool,
+}
+
 /// Backlog #24 S4: real `_eliminate_rebuilds` (`depgraph.py:3859-4000`),
 /// the undo path. For every cp in the S3 replace set whose walked entry
 /// is a `Reinstall { slot_operator_rebuild: true }` at the installed
@@ -32,20 +46,21 @@ use crate::*;
 /// Skipped entirely under `--emptytree` (real `"empty" in myparams`) and
 /// under any live slot conflict (`entries` cannot see the pass; the
 /// caller checks, real bug 922038).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 pub(crate) fn slot_operator_eliminate_rebuilds(
-    root: &Path,
-    repos: &[RepoConfig],
-    entries: &[GraphEntry],
-    replace: &BTreeSet<(String, String)>,
-    slot_want: &HashMap<(String, String), Vec<String>>,
-    reverse_pins: &[RevDepPin],
-    selective: bool,
-    changed_slot: bool,
-    top_level_cps: &HashSet<(String, String)>,
-    empty: bool,
+    args: SlotOperatorEliminateRebuildsArgs<'_>,
 ) -> BTreeSet<(String, String)> {
+    let SlotOperatorEliminateRebuildsArgs {
+        root,
+        repos,
+        entries,
+        replace,
+        slot_want,
+        reverse_pins,
+        selective,
+        changed_slot,
+        top_level_cps,
+        empty,
+    } = args;
     let mut demoted: BTreeSet<(String, String)> = BTreeSet::new();
     if empty || replace.is_empty() {
         return demoted;
@@ -178,6 +193,20 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
     demoted
 }
 
+/// Arguments of [`slot_operator_rebuild_entries`].
+pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) excluded: &'a [String],
+    pub(crate) update: bool,
+    pub(crate) top_level_cps: &'a HashSet<(String, String)>,
+    pub(crate) top_level_atoms: &'a HashSet<String>,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// #24 S3 legacy path, for the `--solver=pubgrub` / `--solver=resolvo`
 /// bridges only (`solver_bridge.rs`). Those engines have no
 /// `Backtracker`, so they cannot re-drive a pass with the consumer
@@ -202,19 +231,21 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
 /// enforces the mask through the backtrack-config restart,
 /// `depgraph.py:5703-5712`); recording one would be dead state. The
 /// bridge keeps its pre-#212 answers on stale-binary shapes.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn slot_operator_rebuild_entries(
-    root: &Path,
-    repos: &[RepoConfig],
-    entries: &[GraphEntry],
-    reachable: &HashSet<(String, String)>,
-    with_bdeps: bool,
-    excluded: &[String],
-    update: bool,
-    top_level_cps: &HashSet<(String, String)>,
-    top_level_atoms: &HashSet<String>,
-    config: &portage_profile::Config,
+    args: SlotOperatorRebuildEntriesArgs<'_>,
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
+    let SlotOperatorRebuildEntriesArgs {
+        root,
+        repos,
+        entries,
+        reachable,
+        with_bdeps,
+        excluded,
+        update,
+        top_level_cps,
+        top_level_atoms,
+        config,
+    } = args;
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
     let mut out: Vec<GraphEntry> = Vec::new();
@@ -431,6 +462,17 @@ pub(crate) fn strip_revision(version: &str) -> &str {
     }
 }
 
+/// Arguments of [`rebuild_if_entries`].
+pub(crate) struct RebuildIfEntriesArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) unbuilt: bool,
+    pub(crate) new_rev: bool,
+    pub(crate) new_ver: bool,
+    pub(crate) rebuild_exclude: &'a [String],
+    pub(crate) rebuild_ignore: &'a [String],
+}
+
 /// Real `_emerge/depgraph.py`'s `_rebuild_config` (`--rebuild-if-unbuilt`
 /// / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an already-
 /// installed package whose own build-time dependency (`DEPEND`/`BDEPEND`
@@ -451,17 +493,16 @@ pub(crate) fn strip_revision(version: &str) -> &str {
 /// `slot_operator_rebuild_entries` above (same `all_installed_packages`
 /// scan, same `Reinstall` rebuild-entry shape) -- `--rebuild-if-new-slot`
 /// stays that function's job.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn rebuild_if_entries(
-    root: &Path,
-    entries: &[GraphEntry],
-    unbuilt: bool,
-    new_rev: bool,
-    new_ver: bool,
-    rebuild_exclude: &[String],
-    rebuild_ignore: &[String],
-) -> Vec<GraphEntry> {
+pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEntry> {
+    let RebuildIfEntriesArgs {
+        root,
+        entries,
+        unbuilt,
+        new_rev,
+        new_ver,
+        rebuild_exclude,
+        rebuild_ignore,
+    } = args;
     if !(unbuilt || new_rev || new_ver) {
         return Vec::new();
     }

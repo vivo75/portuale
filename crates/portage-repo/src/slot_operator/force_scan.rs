@@ -10,6 +10,21 @@ pub(crate) type SlotOpForceScan = (
     BTreeSet<(String, String, String)>,
 );
 
+/// Arguments of [`slot_operator_update_force_scan`].
+pub(crate) struct SlotOperatorUpdateForceScanArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) already: &'a BTreeSet<(String, String)>,
+    pub(crate) undone: &'a BTreeSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) update: bool,
+    pub(crate) top_level_cps: &'a HashSet<(String, String)>,
+    pub(crate) excluded: &'a [String],
+}
+
 /// #236 A: the forcing half of real's slot-operator update probe
 /// (`_slot_operator_trigger_reinstalls` -> `_slot_operator_update_probe`
 /// -> `_slot_operator_update_backtrack`, `_emerge/depgraph.py:3089-3132`,
@@ -37,20 +52,22 @@ pub(crate) type SlotOpForceScan = (
 /// the atom is bound to, and a visible replacement ebuild exists. The
 /// `_select_atoms_probe` check (`||` choices) and `_too_deep` are not
 /// modelled; the consumer's atoms are flattened like the scan's.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn slot_operator_update_force_scan(
-    root: &Path,
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    entries: &[GraphEntry],
-    reachable: &HashSet<(String, String)>,
-    already: &BTreeSet<(String, String)>,
-    undone: &BTreeSet<(String, String)>,
-    with_bdeps: bool,
-    update: bool,
-    top_level_cps: &HashSet<(String, String)>,
-    excluded: &[String],
+    args: SlotOperatorUpdateForceScanArgs<'_>,
 ) -> SlotOpForceScan {
+    let SlotOperatorUpdateForceScanArgs {
+        root,
+        repos,
+        config,
+        entries,
+        reachable,
+        already,
+        undone,
+        with_bdeps,
+        update,
+        top_level_cps,
+        excluded,
+    } = args;
     let mut consumers: BTreeSet<(String, String)> = BTreeSet::new();
     let mut forced: BTreeSet<(String, String, String)> = BTreeSet::new();
     let mut in_graph: HashSet<(String, String)> = HashSet::new();
@@ -81,9 +98,16 @@ pub(crate) fn slot_operator_update_force_scan(
             .iter()
             .any(|a| matches_config_entry(a, &cpv, cat, pkg))
     };
-    let probe_parents = collect_probe_parents(
-        root, entries, reachable, &walked, &in_graph, already, with_bdeps, excluded,
-    );
+    let probe_parents = collect_probe_parents(CollectProbeParentsArgs {
+        root,
+        entries,
+        reachable,
+        walked: &walked,
+        in_graph: &in_graph,
+        already,
+        with_bdeps,
+        excluded,
+    });
     let mut scheduled: BTreeSet<(String, String)> = already.clone();
     let mut consumer_cps: Vec<&(String, String)> = installed_nodes.keys().collect();
     consumer_cps.sort();
@@ -225,6 +249,22 @@ pub(crate) fn slot_operator_update_force_scan(
     (consumers, forced)
 }
 
+/// Arguments of [`slot_operator_slot_change_probe`].
+pub(crate) struct SlotOperatorSlotChangeProbeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) undone: &'a BTreeSet<(String, String)>,
+    pub(crate) scheduled: &'a mut BTreeSet<(String, String)>,
+    pub(crate) excluded: &'a [String],
+    /// #212 (v2 `#24c`): every merge-bound binary the arm below finds
+    /// stale -- `(category, package, version)` triples for
+    /// `collect_feedback`'s `slot_operator_mask_built` records (real
+    /// `_slot_change_backtrack`, `depgraph.py:2381-2398`).
+    pub(crate) masked: &'a mut BTreeSet<(String, String, String)>,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Backlog #24 S5: real `_slot_change_probe` (`depgraph.py:2317-2359`),
 /// the first arm of `_slot_operator_trigger_reinstalls` (`3103-3107`).
 /// For an *unbuilt* slot-operator dep -- `:=` or `:S=`, real's
@@ -253,21 +293,17 @@ pub(crate) fn slot_operator_update_force_scan(
 /// visibility gate (`_pkg_visibility_check` 2347, #243).
 /// The binary arm (`dep.child` a binary package scheduled for merge) is
 /// v2 `#24c`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn slot_operator_slot_change_probe(
-    root: &Path,
-    repos: &[RepoConfig],
-    entries: &[GraphEntry],
-    undone: &BTreeSet<(String, String)>,
-    scheduled: &mut BTreeSet<(String, String)>,
-    excluded: &[String],
-    // #212 (v2 `#24c`): every merge-bound binary the arm below finds
-    // stale -- `(category, package, version)` triples for
-    // `collect_feedback`'s `slot_operator_mask_built` records (real
-    // `_slot_change_backtrack`, `depgraph.py:2381-2398`).
-    masked: &mut BTreeSet<(String, String, String)>,
-    config: &portage_profile::Config,
-) {
+pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeArgs<'_>) {
+    let SlotOperatorSlotChangeProbeArgs {
+        root,
+        repos,
+        entries,
+        undone,
+        scheduled,
+        excluded,
+        masked,
+        config,
+    } = args;
     const DEP_KEYS: [&str; 5] = ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
     for e in entries {
         // Real's `not dep.parent.built`: only an ebuild scheduled for

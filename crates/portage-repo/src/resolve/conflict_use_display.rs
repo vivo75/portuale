@@ -99,9 +99,26 @@ pub fn skipped_update_use_display_for(
         Some((_, uf)) => uf,
         None => return Vec::new(),
     };
-    assemble_tree_pkg_use_display(
-        &cand, &metadata, &use_flags, config, category, package, version,
-    )
+    assemble_tree_pkg_use_display(AssembleTreePkgUseDisplayArgs {
+        cand: &cand,
+        metadata: &metadata,
+        enabled: &use_flags,
+        config,
+        category,
+        package,
+        version,
+    })
+}
+
+/// Arguments of [`assemble_tree_pkg_use_display`].
+pub(crate) struct AssembleTreePkgUseDisplayArgs<'a> {
+    pub(crate) cand: &'a Candidate,
+    pub(crate) metadata: &'a std::sync::Arc<HashMap<String, String>>,
+    pub(crate) enabled: &'a HashSet<String>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
 }
 
 /// Shared assembly tail of [`skipped_update_use_display_for`] and the
@@ -113,16 +130,18 @@ pub fn skipped_update_use_display_for(
 /// `explicit` is the declared `IUSE` names (the disabled side),
 /// `force_mask` the unfiltered per-package force ∪ mask stack for the
 /// `( )` wraps.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn assemble_tree_pkg_use_display(
-    cand: &Candidate,
-    metadata: &std::sync::Arc<HashMap<String, String>>,
-    enabled: &HashSet<String>,
-    config: &portage_profile::Config,
-    category: &str,
-    package: &str,
-    version: &str,
+    args: AssembleTreePkgUseDisplayArgs<'_>,
 ) -> Vec<(String, String)> {
+    let AssembleTreePkgUseDisplayArgs {
+        cand,
+        metadata,
+        enabled,
+        config,
+        category,
+        package,
+        version,
+    } = args;
     let iuse_str = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
     let explicit: HashSet<String> = iuse_str
         .split_whitespace()

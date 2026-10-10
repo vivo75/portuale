@@ -10,14 +10,14 @@ fn replay_create_graph_fails_at_the_first_contradiction_in_lifo_order() {
     let order = ["c", "b", "a"];
     let entries = aub0_entries(&order);
     let use_of = aub0_use(&entries);
-    let r = replay_create_graph(
-        &entries,
-        &atoms(&order),
+    let r = replay_create_graph(ReplayCreateGraphArgs {
+        entries: &entries,
+        top_level_atoms: &atoms(&order),
         root,
-        true,
-        &HashMap::new(),
-        &use_of,
-    );
+        allow_flips: true,
+        needed_init: &HashMap::new(),
+        use_of: &use_of,
+    });
     assert_eq!(
         r.failure,
         Some(ReplayFailure {
@@ -34,14 +34,14 @@ fn replay_create_graph_fails_at_the_first_contradiction_in_lifo_order() {
     let order = ["a", "c", "b"];
     let entries = aub0_entries(&order);
     let use_of = aub0_use(&entries);
-    let r = replay_create_graph(
-        &entries,
-        &atoms(&order),
+    let r = replay_create_graph(ReplayCreateGraphArgs {
+        entries: &entries,
+        top_level_atoms: &atoms(&order),
         root,
-        true,
-        &HashMap::new(),
-        &use_of,
-    );
+        allow_flips: true,
+        needed_init: &HashMap::new(),
+        use_of: &use_of,
+    });
     assert_eq!(r.failure, None);
     assert_eq!(r.admitted, vec![0, 1, 2, 3, 4]);
     assert_eq!(
@@ -54,19 +54,26 @@ fn replay_create_graph_fails_at_the_first_contradiction_in_lifo_order() {
     assert_eq!(r.flip_origin[&d], (0, 0));
 
     // The next try carries `-foo` in: B's `d[foo]` now contradicts.
-    let r2 = replay_create_graph(&entries, &atoms(&order), root, true, &r.needed, &use_of);
+    let r2 = replay_create_graph(ReplayCreateGraphArgs {
+        entries: &entries,
+        top_level_atoms: &atoms(&order),
+        root,
+        allow_flips: true,
+        needed_init: &r.needed,
+        use_of: &use_of,
+    });
     assert!(r2.failure.is_some_and(|f| f.contradiction && f.parent == 2));
 
     // Real's clean pass (autounmask off): A's `d[-foo]` fails after
     // B and C admitted both instances.
-    let clean = replay_create_graph(
-        &entries,
-        &atoms(&order),
+    let clean = replay_create_graph(ReplayCreateGraphArgs {
+        entries: &entries,
+        top_level_atoms: &atoms(&order),
         root,
-        false,
-        &HashMap::new(),
-        &use_of,
-    );
+        allow_flips: false,
+        needed_init: &HashMap::new(),
+        use_of: &use_of,
+    });
     assert_eq!(
         clean.failure,
         Some(ReplayFailure {

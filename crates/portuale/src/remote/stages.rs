@@ -118,6 +118,16 @@ pub(crate) struct RegenReport {
     pub(crate) skipped_no_hooks: bool,
 }
 
+/// Arguments of [`run_postinst_regen_stage`].
+pub(crate) struct RunPostinstRegenStageArgs<'a> {
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) control: Option<&'a std::path::Path>,
+    pub(crate) unit_dir: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) features: Option<&'a str>,
+    pub(crate) locale: &'a [(String, String)],
+}
+
 /// Run the regen postinst script and print its log straight through.
 /// `Err` is a transport/command failure only -- a non-zero phase rc or
 /// a missing regen file is a warn-and-continue `RegenReport`, never a
@@ -125,15 +135,17 @@ pub(crate) struct RegenReport {
 /// own locale pairs for the client phase env (see
 /// `collect_server_locale`); the unit flow collects them from the
 /// process environment, tests inject them explicitly.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn run_postinst_regen_stage(
-    ctx: &RemoteContext,
-    control: Option<&std::path::Path>,
-    unit_dir: &str,
-    staged: &crate::remote_bundle::StagedBundle,
-    features: Option<&str>,
-    locale: &[(String, String)],
+    args: RunPostinstRegenStageArgs<'_>,
 ) -> Result<RegenReport, String> {
+    let RunPostinstRegenStageArgs {
+        ctx,
+        control,
+        unit_dir,
+        staged,
+        features,
+        locale,
+    } = args;
     let colormap = crate::color::phase_colormap_export();
     let workdir_parent = std::path::Path::new(&ctx.workdir)
         .parent()
@@ -434,6 +446,18 @@ pub(crate) fn old_hook_warn_message(cpv: &str, detail: &str) -> String {
     )
 }
 
+/// Arguments of [`ship_old_hook_envs`].
+pub(crate) struct ShipOldHookEnvsArgs<'a> {
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) control: Option<&'a std::path::Path>,
+    pub(crate) unit_dir: &'a str,
+    pub(crate) vdb: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) new_mainslot: &'a str,
+}
+
 /// Stage every same-slot installed version's saved env for the merge
 /// driver's `run_old_hook` (backlog #171): probe the client vdb for
 /// same-package versions, pull each `environment.bz2`, decompress it
@@ -443,17 +467,17 @@ pub(crate) fn old_hook_warn_message(cpv: &str, detail: &str) -> String {
 /// warns with both pull errors (and still hits the driver's own
 /// warn-and-skip). Best-effort throughout:
 /// every failure lands in `warnings` and the merge continues.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn ship_old_hook_envs(
-    ctx: &RemoteContext,
-    control: Option<&std::path::Path>,
-    unit_dir: &str,
-    vdb: &str,
-    category: &str,
-    pn: &str,
-    new_pf: &str,
-    new_mainslot: &str,
-) -> OldHookShipment {
+pub(crate) fn ship_old_hook_envs(args: ShipOldHookEnvsArgs<'_>) -> OldHookShipment {
+    let ShipOldHookEnvsArgs {
+        ctx,
+        control,
+        unit_dir,
+        vdb,
+        category,
+        pn,
+        new_pf,
+        new_mainslot,
+    } = args;
     let mut shipment = OldHookShipment {
         shipped: Vec::new(),
         warnings: Vec::new(),

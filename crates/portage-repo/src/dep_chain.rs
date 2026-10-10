@@ -2,6 +2,17 @@
 
 use crate::*;
 
+/// Arguments of [`chain_node_usedep_suffix`].
+pub(crate) struct ChainNodeUsedepSuffixArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) node: &'a GraphEntry,
+    pub(crate) version: &'a str,
+    pub(crate) installed: bool,
+    pub(crate) child: &'a (String, String),
+}
+
 /// Real `_get_dep_chain`'s affecting-USE `pkg[flag]` suffix for one chain
 /// node (`depgraph.py:6257+` via `portage.dep.extract_affecting_use`):
 /// the flags in the node's own dep strings whose `flag?` conditionals
@@ -31,16 +42,16 @@ use crate::*;
 /// Mask/force for an installed node reuses the same-version repo
 /// candidate's keywords for the stability decision, falling back to no
 /// exclusion when no such candidate exists.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn chain_node_usedep_suffix(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    root: &Path,
-    node: &GraphEntry,
-    version: &str,
-    installed: bool,
-    child: &(String, String),
-) -> String {
+pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> String {
+    let ChainNodeUsedepSuffixArgs {
+        repos,
+        config,
+        root,
+        node,
+        version,
+        installed,
+        child,
+    } = args;
     // Same-version repo candidate when one exists: metadata location for
     // merge-bound nodes, keyword source for the stability decision.
     let candidate = list_candidates(repos, &node.category, &node.package)
@@ -105,14 +116,14 @@ pub(crate) fn chain_node_usedep_suffix(
             "{}/{}-{}:{}/{}::{}",
             node.category, node.package, cand.version, cand.slot, cand.sub_slot, cand.repo_name
         );
-        let stable = is_stable(
-            &cand.keywords,
-            &candidate_str,
-            &node.category,
-            &node.package,
-            &config.accept_keywords,
-            &config.package_accept_keywords,
-        );
+        let stable = is_stable(IsStableArgs {
+            keywords: &cand.keywords,
+            candidate_str: &candidate_str,
+            category: &node.category,
+            package: &node.package,
+            accept_keywords: &config.accept_keywords,
+            package_accept_keywords: &config.package_accept_keywords,
+        });
         let mut untouchable = resolved_use_mask_or_force(
             MaskOrForce::Mask,
             config,
@@ -208,7 +219,15 @@ pub(crate) fn chain_node_line(
             },
         ),
     };
-    let suffix = chain_node_usedep_suffix(repos, config, root, entry, &version, installed, child);
+    let suffix = chain_node_usedep_suffix(ChainNodeUsedepSuffixArgs {
+        repos,
+        config,
+        root,
+        node: entry,
+        version: &version,
+        installed,
+        child,
+    });
     Some((
         format!(
             "{}/{}-{version}::{repo}{suffix}",
@@ -234,6 +253,27 @@ pub(crate) fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(S
         .collect()
 }
 
+/// Arguments of [`masked_dep_chain`].
+pub(crate) struct MaskedDepChainArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) atoms: &'a [String],
+    pub(crate) root: &'a Path,
+    /// Backlog #286: the disclosed miss atom. Direct parents are
+    /// restricted to those pulling this atom (real `_get_dep_chain`
+    /// starts from the one failing parent edge, not every puller of
+    /// the package): a built `:S/SS=` atom and a live `:=` atom on one
+    /// package have different pullers, and the aggregated chain would
+    /// blame both. A parent qualifies on an evaluated-or-raw edge-atom
+    /// match; when no direct parent matches (conditional-evaluated
+    /// edges, missing dep lists), the restriction is vacuous and every
+    /// direct parent stays, exactly as before.
+    pub(crate) atom: &'a str,
+}
+
 /// Real `_get_dep_chain` for one masked-dependency disclosure
 /// (`depgraph.py:6257+`): `(node, type)` pairs from the failed
 /// dependency's direct parents up to the top-level argument(s),
@@ -251,26 +291,17 @@ pub(crate) fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(S
 /// The affecting-USE suffix is real's own ([`chain_node_usedep_suffix`]
 /// documents its approximations); a node whose metadata can't be read
 /// keeps today's bare row.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn masked_dep_chain(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    entries: &[GraphEntry],
-    category: &str,
-    package: &str,
-    atoms: &[String],
-    root: &Path,
-    // Backlog #286: the disclosed miss atom. Direct parents are
-    // restricted to those pulling this atom (real `_get_dep_chain`
-    // starts from the one failing parent edge, not every puller of
-    // the package): a built `:S/SS=` atom and a live `:=` atom on one
-    // package have different pullers, and the aggregated chain would
-    // blame both. A parent qualifies on an evaluated-or-raw edge-atom
-    // match; when no direct parent matches (conditional-evaluated
-    // edges, missing dep lists), the restriction is vacuous and every
-    // direct parent stays, exactly as before.
-    atom: &str,
-) -> Vec<(String, String)> {
+pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, String)> {
+    let MaskedDepChainArgs {
+        repos,
+        config,
+        entries,
+        category,
+        package,
+        atoms,
+        root,
+        atom,
+    } = args;
     /// This `cp`'s chain node: the merge-bound entry first (it
     /// supersedes any same-cp `AlreadyInstalled` shadow, like everywhere
     /// else), else the installed one. `None` for a `NoVisibleCandidate`

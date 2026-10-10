@@ -6,15 +6,15 @@ fn masked_candidates_for_atom_reports_masked_only_matches() {
     // fires when every version-matching ebuild is masked, and stays
     // silent when something is visible or nothing matches at all.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
     let masked = masked_candidates_for_atom(&repos, "dev-libs/maskeddep", &config)
@@ -57,15 +57,15 @@ fn invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases() {
     // `[baz(+)?]` in RDEPEND -- a defaulted conditional is still
     // validated), `somercurial` (`soflag? ( … )` group in RDEPEND).
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
     for (cat, pkg, version, expected) in [
@@ -192,15 +192,15 @@ fn atom_all_use_unmasked_is_true_for_the_unsatuseor_alternative() {
     // alternative (dev-libs/doesnotexist-unsatuseor) has no visible
     // ebuild at all.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
     assert!(atom_all_use_unmasked(
@@ -220,15 +220,15 @@ fn atom_all_use_unmasked_is_false_when_the_violated_flag_is_in_use_mask() {
     // in the fixture profile (fixtures/repo/profiles/package.use.mask)
     // -- see the slotconflict fixture tests for the matching side.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
     // The 1.0 version keeps its +x default (unmasked) -- only the
@@ -248,26 +248,26 @@ fn highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild()
     // violated-flag list. The hard dep would find NO candidate
     // (`doesnotexist-unsatuseor`).
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
     let (candidate_str, keywords, iuse, use_flags, slot) =
-        highest_available_candidate_ignoring_use(
-            &repos,
-            "dev-libs/unsatusealt[unsatuseorflag]",
-            "dev-libs",
-            "unsatusealt",
-            &config,
-            &[],
-        )
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos: &repos,
+            atom_str: "dev-libs/unsatusealt[unsatuseorflag]",
+            category: "dev-libs",
+            package: "unsatusealt",
+            config: &config,
+            extra_constraints: &[],
+        })
         .expect("an ignoring-use candidate exists");
     assert_eq!(
         candidate_str, "dev-libs/unsatusealt-1.0:0/0::testrepo",
@@ -279,14 +279,14 @@ fn highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild()
     assert_eq!(slot, "0");
 
     assert!(
-        highest_available_candidate_ignoring_use(
-            &repos,
-            "dev-libs/doesnotexist-unsatuseor",
-            "dev-libs",
-            "doesnotexist-unsatuseor",
-            &config,
-            &[],
-        )
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos: &repos,
+            atom_str: "dev-libs/doesnotexist-unsatuseor",
+            category: "dev-libs",
+            package: "doesnotexist-unsatuseor",
+            config: &config,
+            extra_constraints: &[]
+        })
         .is_none()
     );
 }
@@ -301,38 +301,40 @@ fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
     // has two visible versions (1.0, 2.0); a negative constraint
     // excluding 2.0 must fall back to 1.0.
     let root = fixtures_root();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
-    let (unconstrained, ..) = highest_available_candidate_ignoring_use(
-        &repos,
-        "dev-libs/slotusetarget[x]",
-        "dev-libs",
-        "slotusetarget",
-        &config,
-        &[],
-    )
-    .expect("an ignoring-use candidate exists");
+    let (unconstrained, ..) =
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos: &repos,
+            atom_str: "dev-libs/slotusetarget[x]",
+            category: "dev-libs",
+            package: "slotusetarget",
+            config: &config,
+            extra_constraints: &[],
+        })
+        .expect("an ignoring-use candidate exists");
     assert_eq!(unconstrained, "dev-libs/slotusetarget-2.0:0/0::testrepo");
 
     let constraints = vec!["!=dev-libs/slotusetarget-2.0".to_string()];
-    let (constrained, ..) = highest_available_candidate_ignoring_use(
-        &repos,
-        "dev-libs/slotusetarget[x]",
-        "dev-libs",
-        "slotusetarget",
-        &config,
-        &constraints,
-    )
-    .expect("an ignoring-use candidate exists under the constraint");
+    let (constrained, ..) =
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos: &repos,
+            atom_str: "dev-libs/slotusetarget[x]",
+            category: "dev-libs",
+            package: "slotusetarget",
+            config: &config,
+            extra_constraints: &constraints,
+        })
+        .expect("an ignoring-use candidate exists under the constraint");
     assert_eq!(
         constrained, "dev-libs/slotusetarget-1.0:0/0::testrepo",
         "the highest UNMASKED candidate is returned once backtracking excludes 2.0"

@@ -56,35 +56,35 @@ fn build_use_expand_display_groups_and_hides() {
     // move into a `VIDEO_CARDS` group (prefix stripped), the plain
     // USE group is empty and so omitted entirely.
     assert_eq!(
-        build_use_expand_display(
-            &[
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[
                 ("video_cards_amdgpu".to_string(), false),
                 ("video_cards_nvidia".to_string(), true),
             ],
-            &config,
-            None,
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
-        ),
+            config: &config,
+            installed: None,
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
         vec![("VIDEO_CARDS".to_string(), "nvidia -amdgpu".to_string())]
     );
     // CPU_FLAGS_X86 is USE_EXPAND *and* USE_EXPAND_HIDDEN -> its group
     // is dropped from the display; a plain flag alongside it still
     // shows.
     assert_eq!(
-        build_use_expand_display(
-            &[
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[
                 ("cpu_flags_x86_sse2".to_string(), true),
                 ("plainflag".to_string(), true),
                 ("video_cards_nvidia".to_string(), true),
             ],
-            &config,
-            None,
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
-        ),
+            config: &config,
+            installed: None,
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
         vec![
             ("USE".to_string(), "plainflag".to_string()),
             ("VIDEO_CARDS".to_string(), "nvidia".to_string()),
@@ -92,8 +92,15 @@ fn build_use_expand_display_groups_and_hides() {
     );
     // No displayable flags -> no groups at all.
     assert!(
-        build_use_expand_display(&[], &config, None, &HashSet::new(), true, &HashSet::new())
-            .is_empty()
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[],
+            config: &config,
+            installed: None,
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        })
+        .is_empty()
     );
 }
 
@@ -120,20 +127,20 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
     // `-nvidia*`. Enabled (alpha, beta, gamma) render before the
     // disabled one (delta).
     assert_eq!(
-        build_use_expand_display(
-            &[
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[
                 ("alpha".to_string(), true),
                 ("beta".to_string(), true),
                 ("delta".to_string(), false),
                 ("gamma".to_string(), true),
                 ("video_cards_nvidia".to_string(), false),
             ],
-            &config,
-            Some(&installed),
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
-        ),
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
         vec![
             ("USE".to_string(), "alpha beta* gamma%* -delta%".to_string()),
             ("VIDEO_CARDS".to_string(), "-nvidia*".to_string()),
@@ -143,26 +150,26 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
     // the full `USE=` line under `all_flags` (real
     // `_create_use_string` returns `USE="alpha"`, non-empty).
     assert_eq!(
-        build_use_expand_display(
-            &[("alpha".to_string(), true)],
-            &config,
-            Some(&InstalledUseState {
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[("alpha".to_string(), true)],
+            config: &config,
+            installed: Some(&InstalledUseState {
                 old_iuse: HashSet::from(["alpha".to_string()]),
                 old_use: HashSet::from(["alpha".to_string()]),
             }),
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
-        ),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
         vec![("USE".to_string(), "alpha".to_string())]
     );
     // A flag the new ebuild dropped from IUSE renders `(-flag%)`,
     // `(-flag%*)` if it was enabled -- real `removed_iuse`.
     assert_eq!(
-        build_use_expand_display(
-            &[("keep".to_string(), true)],
-            &config,
-            Some(&InstalledUseState {
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[("keep".to_string(), true)],
+            config: &config,
+            installed: Some(&InstalledUseState {
                 old_iuse: HashSet::from([
                     "keep".to_string(),
                     "goneoff".to_string(),
@@ -170,10 +177,10 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
                 ]),
                 old_use: HashSet::from(["keep".to_string(), "goneon".to_string()]),
             }),
-            &HashSet::new(),
-            true,
-            &HashSet::new(),
-        ),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
         vec![(
             "USE".to_string(),
             "keep (-goneoff%) (-goneon%*)".to_string()
@@ -198,56 +205,56 @@ fn build_use_expand_display_force_shows_reinstall_trigger_flags_at_plain_p() {
     // line is empty (`keep` unchanged-disabled -> omitted, `gone`
     // removed -> omitted). With it, the dropped trigger flag shows.
     assert_eq!(
-        build_use_expand_display(
-            &display,
-            &config,
-            Some(&installed),
-            &HashSet::new(),
-            false,
-            &HashSet::new()
-        ),
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: false,
+            reinst_flags: &HashSet::new()
+        }),
         vec![]
     );
     assert_eq!(
-        build_use_expand_display(
-            &display,
-            &config,
-            Some(&installed),
-            &HashSet::new(),
-            false,
-            &reinst
-        ),
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: false,
+            reinst_flags: &reinst
+        }),
         vec![("USE".to_string(), "(-gone%*)".to_string())]
     );
     // `-pv` (`all_flags = true`) is unaffected -- it already showed
     // every flag regardless of the trigger set.
     assert_eq!(
-        build_use_expand_display(
-            &display,
-            &config,
-            Some(&installed),
-            &HashSet::new(),
-            true,
-            &HashSet::new()
-        ),
-        build_use_expand_display(
-            &display,
-            &config,
-            Some(&installed),
-            &HashSet::new(),
-            true,
-            &reinst
-        ),
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &reinst
+        }),
     );
     assert_eq!(
-        build_use_expand_display(
-            &display,
-            &config,
-            Some(&installed),
-            &HashSet::new(),
-            true,
-            &reinst
-        ),
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &reinst
+        }),
         vec![("USE".to_string(), "-keep (-gone%*)".to_string())]
     );
 }
@@ -268,19 +275,19 @@ fn build_use_expand_display_wraps_forced_and_masked_flags() {
     // mask-disabled, `video_cards_nvidia` force-enabled. Enabled
     // (forcedon, plain) render before the disabled (maskedoff).
     assert_eq!(
-        build_use_expand_display(
-            &[
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[
                 ("forcedon".to_string(), true),
                 ("maskedoff".to_string(), false),
                 ("plain".to_string(), true),
                 ("video_cards_nvidia".to_string(), true),
             ],
-            &config,
-            None,
-            &forced,
-            true,
-            &HashSet::new(),
-        ),
+            config: &config,
+            installed: None,
+            forced: &forced,
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
         vec![
             (
                 "USE".to_string(),
@@ -292,20 +299,20 @@ fn build_use_expand_display_wraps_forced_and_masked_flags() {
     // On a diff, a masked flag brand-new to IUSE renders `(-flag)`,
     // NOT `(-flag%)` (real: `if flag not in iuse_forced: += "%"`).
     assert_eq!(
-        build_use_expand_display(
-            &[
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[
                 ("maskednew".to_string(), false),
                 ("plainnew".to_string(), false)
             ],
-            &config,
-            Some(&InstalledUseState {
+            config: &config,
+            installed: Some(&InstalledUseState {
                 old_iuse: HashSet::new(),
                 old_use: HashSet::new(),
             }),
-            &HashSet::from(["maskednew".to_string()]),
-            true,
-            &HashSet::new(),
-        ),
+            forced: &HashSet::from(["maskednew".to_string()]),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
         vec![("USE".to_string(), "(-maskednew) -plainnew%".to_string())]
     );
 }

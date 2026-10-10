@@ -493,15 +493,15 @@ fn candidate_use_flags_display_resolves_use_expand_flags_for_a_resume_entry() {
     // fixture's `VIDEO_CARDS="nvidia"` -> `video_cards_nvidia` on.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let display = candidate_use_flags_display(&repos, &config, "dev-libs", "useexpandpkg", "1.0");
     assert_eq!(
@@ -528,15 +528,15 @@ fn candidate_effective_use_flags_treats_a_missing_iuse_key_as_empty_iuse() {
     // "S0 recon").
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     // `aubreaktop`'s cache has no `IUSE=` line.
     let flags = candidate_effective_use_flags(&repos, &config, "dev-libs", "aubreaktop", "1.0");

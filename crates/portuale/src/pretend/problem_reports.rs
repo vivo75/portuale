@@ -58,16 +58,16 @@ pub(crate) fn show_missing_args_and_aborts(
         } = &result.outcome
         && let Some(cycle) = result.circular_deps.first()
     {
-        print_circular_block(
+        print_circular_block(PrintCircularBlockArgs {
             cycle,
-            &portage_repo::cycle_edge_labels(&result.entries, cycle),
+            edge_labels: &portage_repo::cycle_edge_labels(&result.entries, cycle),
             color,
             repos,
             config,
-            &result.autounmask_use_changes,
-            &result.entries,
-            result.large_cycle_count,
-        );
+            autounmask_use_changes: &result.autounmask_use_changes,
+            entries: &result.entries,
+            large_cycle_count: result.large_cycle_count,
+        });
     }
 
     // Backlog #193: real `select_files`' `_virtual_cycle_error` handler
@@ -716,16 +716,16 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                     }
                     for &m in members {
                         let p = &classified[m];
-                        if let Some(why) = slot_conflict_need_rebuild(
-                            p.parent_cpv,
-                            &p.atom,
+                        if let Some(why) = slot_conflict_need_rebuild(SlotConflictNeedRebuildArgs {
+                            parent_cpv: p.parent_cpv,
+                            atom: &p.atom,
                             excluded,
-                            useoldpkg_atoms_render,
+                            useoldpkg_atoms: useoldpkg_atoms_render,
                             usepkgonly,
                             repos,
                             config,
-                            &installed_pkgs,
-                        ) {
+                            installed: &installed_pkgs,
+                        }) {
                             if !selected.contains(&m) {
                                 selected.push(m);
                             }

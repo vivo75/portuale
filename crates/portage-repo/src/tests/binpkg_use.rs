@@ -61,107 +61,107 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
 
     // Matching sets: kept.
     let ebuild = ebuild_at("match", "foo");
-    assert!(binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
 
     // The ebuild gained newflag: rejected by plain respect-use alone
     // (the IUSE-set difference), the regression pin.
     let ebuild = ebuild_at("newflag", "foo newflag");
-    assert!(!binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
     // ...and by --newuse even with respect-use off.
-    assert!(!binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        true,
-        false,
-        false
-    ));
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
     // --reinstall=changed-use (respect-use off) only counts enabled
     // differences: both sides enable foo -> kept.
-    assert!(binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        true,
-        false
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: true,
+        respect_use: false
+    }));
     // No gate (respect-use off, no reinstall form): nothing compared.
-    assert!(binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        false,
-        false
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: false
+    }));
     // No same-version ebuild: real `depgraph.py:8265-8271`
     // (`pkgsettings.setcpv(pkg)`) compares against the *profile's*
     // selection for the binary cpv over the binary's own IUSE. The
     // profile still selects foo here, so the binary is kept.
-    assert!(binpkg_respect_use_ok(
-        &binary(),
-        None,
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: None,
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
     // The profile no longer selects foo while the binary's baked USE
     // has it (the #69 R0 n1 shape) -> rejected, even though there is
     // no ebuild to compare against.
     config.conf_use_tokens.clear();
-    assert!(!binpkg_respect_use_ok(
-        &binary(),
-        None,
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: None,
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
 
     // Enabled-state flip: the profile no longer selects foo while
     // the binary was built with it -> rejected under respect-use.
     let ebuild = ebuild_at("flip", "foo");
     config.conf_use_tokens.clear();
-    assert!(!binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -194,16 +194,16 @@ fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
         ..Default::default()
     };
     let call = |config: &portage_profile::Config, binary_iuse: &str, baked: &[&str]| {
-        binpkg_respect_use_ok(
-            &binary(binary_iuse, baked),
-            Some(&ebuild),
-            "dev-libs",
-            "memo",
+        binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+            candidate: &binary(binary_iuse, baked),
+            ebuild_at_version: Some(&ebuild),
+            category: "dev-libs",
+            package: "memo",
             config,
-            false,
-            false,
-            true,
-        )
+            newuse: false,
+            changed_use: false,
+            respect_use: true,
+        })
     };
 
     // Unique inputs -> certainly a miss; the ebuild gained newflag, so
@@ -247,54 +247,54 @@ fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
         e
     };
     let keep = ebuild_at_same_iuse("keep", "foo");
-    assert!(binpkg_respect_use_ok(
-        &binary("foo", &["foo"]),
-        Some(&keep),
-        "dev-libs",
-        "memo",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary("foo", &["foo"]),
+        ebuild_at_version: Some(&keep),
+        category: "dev-libs",
+        package: "memo",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
     assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 3);
     let reject = ebuild_at_same_iuse("reject", "foo newflag");
-    assert!(!binpkg_respect_use_ok(
-        &binary("foo", &["foo"]),
-        Some(&reject),
-        "dev-libs",
-        "memo",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary("foo", &["foo"]),
+        ebuild_at_version: Some(&reject),
+        category: "dev-libs",
+        package: "memo",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
     assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 4);
     // Backlog #124 E3: the build identity separates instances -- the
     // same CPV at a different BUILD_ID is a miss, and a repeat hits.
     let mut other_build = binary("foo", &["foo"]);
     other_build.build_id = Some("2".to_string());
-    assert!(binpkg_respect_use_ok(
-        &other_build,
-        Some(&keep),
-        "dev-libs",
-        "memo",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &other_build,
+        ebuild_at_version: Some(&keep),
+        category: "dev-libs",
+        package: "memo",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
     assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 5);
-    assert!(binpkg_respect_use_ok(
-        &other_build,
-        Some(&keep),
-        "dev-libs",
-        "memo",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &other_build,
+        ebuild_at_version: Some(&keep),
+        category: "dev-libs",
+        package: "memo",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
     assert_eq!(
         binpkg_respect_use_ok_uncached_calls(),
         after_first + 5,
@@ -349,41 +349,41 @@ fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
     // Masked flag added to the ebuild's IUSE: presence difference is
     // subtracted, enabled states agree (disabled on both sides).
     let ebuild = ebuild_at("masked", "foo mflag");
-    assert!(binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        true,
-        false,
-        false
-    ));
-    assert!(binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
 
     // Forced flag added to the ebuild's IUSE: presence difference is
     // subtracted too, but the ebuild side now *enables* it, so the
     // enabled-within-IUSE term rejects -- exactly real's n3b cell.
     let ebuild = ebuild_at("forced", "foo fflag");
-    assert!(!binpkg_respect_use_ok(
-        &binary(),
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        true,
-        false,
-        false
-    ));
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
 
     // The no-ebuild arm passes the binary cpv's own force/mask set
     // (real's `pkgsettings.useforce ∪ usemask`), though its presence
@@ -392,16 +392,16 @@ fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
     let mut masked_binary = binary();
     masked_binary.iuse = "foo mflag".to_string();
     masked_binary.binary_use = Some(HashSet::from(["foo".to_string()]));
-    assert!(binpkg_respect_use_ok(
-        &masked_binary,
-        None,
-        "dev-libs",
-        "x",
-        &config,
-        true,
-        false,
-        false
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &masked_binary,
+        ebuild_at_version: None,
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -447,42 +447,42 @@ fn binpkg_respect_use_forgives_a_profile_masked_flag_the_ebuild_iuse_dropped() {
     // Real's subtraction forgives `removed` despite the IUSE
     // difference (binary had it, ebuild does not): the binary is
     // kept under --newuse and under respect-use alike.
-    assert!(binpkg_respect_use_ok(
-        &binary,
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        true,
-        false,
-        false
-    ));
-    assert!(binpkg_respect_use_ok(
-        &binary,
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config,
-        false,
-        false,
-        true
-    ));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary,
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary,
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
 
     // Control, the pre-D1 shape: without the profile masking the
     // flag the presence difference does reject -- the profile
     // masking, not the filter, is what carries the keep.
     let mut config_unmasked = config.clone();
     config_unmasked.use_mask_force_levels.clear();
-    assert!(!binpkg_respect_use_ok(
-        &binary,
-        Some(&ebuild),
-        "dev-libs",
-        "x",
-        &config_unmasked,
-        true,
-        false,
-        false
-    ));
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary,
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config_unmasked,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
     let mut enabled_binary = binary.clone();
     enabled_binary
         .binary_use
@@ -494,16 +494,16 @@ fn binpkg_respect_use_forgives_a_profile_masked_flag_the_ebuild_iuse_dropped() {
         (false, false, true),
         (false, true, true),
     ] {
-        assert!(!binpkg_respect_use_ok(
-            &enabled_binary,
-            Some(&ebuild),
-            "dev-libs",
-            "x",
-            &config,
+        assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+            candidate: &enabled_binary,
+            ebuild_at_version: Some(&ebuild),
+            category: "dev-libs",
+            package: "x",
+            config: &config,
             newuse,
             changed_use,
-            respect_use,
-        ));
+            respect_use
+        }));
     }
     let _ = fs::remove_dir_all(&dir);
 }
@@ -516,14 +516,14 @@ fn read_binary_metadata_any_falls_back_to_a_binrepo_index() {
     };
     // Not in the (empty) local index; found in the binrepo's cached
     // `Packages`, SIZE and REPO carried through.
-    let m = read_binary_metadata_any(
-        &config,
-        Path::new("/"),
-        &BinaryIndex::default(),
-        "dev-libs",
-        "remotebinpkg",
-        "1.0",
-    )
+    let m = read_binary_metadata_any(ReadBinaryMetadataAnyArgs {
+        config: &config,
+        root: Path::new("/"),
+        local: &BinaryIndex::default(),
+        category: "dev-libs",
+        package: "remotebinpkg",
+        version: "1.0",
+    })
     .expect("the binrepo index has dev-libs/remotebinpkg-1.0");
     assert_eq!(m.get("SIZE").map(String::as_str), Some("573440"));
     assert_eq!(m.get("REPO").map(String::as_str), Some("gentoo"));

@@ -194,21 +194,21 @@ pub(crate) fn collect_feedback(
     // a slot conflict -- so the ordinary settle path pays for one scan,
     // as it always did, not two.
     if !pass.slot_conflicts.is_empty() {
-        let (_, dropped) = reverse_dependency_constraints(
-            &ctx.repos,
-            ctx.root,
-            &pass.entries,
-            ctx.with_bdeps,
-            ctx.excluded,
-            &pass.slot_want,
-            &ctx.slot_op_reachable,
-            ctx.dynamic_deps,
-            ctx.ignore_built_slot_operator_deps,
-            &ctx.top_level_cps,
-            &ctx.world_reachable,
-            ctx.config,
-            ctx.complete,
-        );
+        let (_, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+            repos: &ctx.repos,
+            root: ctx.root,
+            entries: &pass.entries,
+            with_bdeps: ctx.with_bdeps,
+            excluded: ctx.excluded,
+            hard_want: &pass.slot_want,
+            reachable: &ctx.slot_op_reachable,
+            dynamic_deps: ctx.dynamic_deps,
+            ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
+            top_level_cps: &ctx.top_level_cps,
+            world_reachable: &ctx.world_reachable,
+            config: ctx.config,
+            complete: ctx.complete,
+        });
         for pin in dropped {
             if !grown.dropped_pins.contains(&pin) {
                 grown.dropped_pins.push(pin);

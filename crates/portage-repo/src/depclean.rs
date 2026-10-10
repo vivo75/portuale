@@ -438,36 +438,46 @@ pub(crate) fn unresolved_runtime_deps(
     out.sort();
     out
 }
+/// Arguments of [`depclean_cleanlist`].
+pub struct DepcleanCleanlistArgs<'a> {
+    pub root: &'a Path,
+    /// `(atom, set_label)` -- the `@world` closure's seeds and which set
+    /// token real `show_parents` would name as their parent (`@selected`
+    /// for a `world` file line, `@<name>` for a `world_sets` nested set).
+    /// The label is only used for the `--verbose` reverse-dep display.
+    pub world_seeds: &'a [(String, String)],
+    pub system_atoms: &'a [String],
+    pub args: &'a [String],
+    /// Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
+    /// "n"` (default `true`): in `args` mode, `if deselect:` empties the
+    /// `@selected`/`world` set (`actions.py:1037`) so a named package
+    /// that is *also* in `world` still gets removed. `--depclean <atoms>
+    /// --deselect=n` keeps `world` as a protection root instead, so a
+    /// world member named as an arg is kept. No effect without `args`
+    /// (the `world` seeds are always used then).
+    pub deselect: bool,
+    /// `--depclean-lib-check` feedback: installed packages the caller's
+    /// `NEEDED.ELF.2` soname scan found are still needed at link level by
+    /// a surviving consumer. Seeded as extra reachability roots. Empty on
+    /// the caller's first pass (and always when `--depclean-lib-check=n`).
+    pub lib_protected_providers: &'a [InstalledPackage],
+    /// `package.provided` (`config.package_provided`, real
+    /// `pkgsettings.pprovideddict`). See `pprovided_matches`'s own doc
+    /// comment for the real citations and the exact real behaviour this
+    /// mirrors.
+    pub package_provided: &'a [String],
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn depclean_cleanlist(
-    root: &Path,
-    // `(atom, set_label)` -- the `@world` closure's seeds and which set
-    // token real `show_parents` would name as their parent (`@selected`
-    // for a `world` file line, `@<name>` for a `world_sets` nested set).
-    // The label is only used for the `--verbose` reverse-dep display.
-    world_seeds: &[(String, String)],
-    system_atoms: &[String],
-    args: &[String],
-    // Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
-    // "n"` (default `true`): in `args` mode, `if deselect:` empties the
-    // `@selected`/`world` set (`actions.py:1037`) so a named package
-    // that is *also* in `world` still gets removed. `--depclean <atoms>
-    // --deselect=n` keeps `world` as a protection root instead, so a
-    // world member named as an arg is kept. No effect without `args`
-    // (the `world` seeds are always used then).
-    deselect: bool,
-    // `--depclean-lib-check` feedback: installed packages the caller's
-    // `NEEDED.ELF.2` soname scan found are still needed at link level by
-    // a surviving consumer. Seeded as extra reachability roots. Empty on
-    // the caller's first pass (and always when `--depclean-lib-check=n`).
-    lib_protected_providers: &[InstalledPackage],
-    // `package.provided` (`config.package_provided`, real
-    // `pkgsettings.pprovideddict`). See `pprovided_matches`'s own doc
-    // comment for the real citations and the exact real behaviour this
-    // mirrors.
-    package_provided: &[String],
-) -> DepcleanResult {
+pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
+    let DepcleanCleanlistArgs {
+        root,
+        world_seeds,
+        system_atoms,
+        args,
+        deselect,
+        lib_protected_providers,
+        package_provided,
+    } = args;
     let installed = all_installed_packages(root);
     // Candidate strings for `match_from_list`, one per installed package,
     // kept alongside the package itself.

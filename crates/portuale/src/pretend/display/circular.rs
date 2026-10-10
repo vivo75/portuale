@@ -2,6 +2,16 @@
 
 use crate::pretend::*;
 
+/// Arguments of [`circular_node_text`].
+pub(crate) struct CircularNodeTextArgs<'a> {
+    pub(crate) cpv: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) sub_slot: &'a str,
+    pub(crate) repo: &'a str,
+    pub(crate) type_name: &'a str,
+    pub(crate) color: &'a Colorizer,
+}
+
 /// Backlog #206 S1: real `_emerge/Package.py::Package.__str__` for a
 /// merge-bound package — the `(cpv:slot/sub_slot::repo, <type> scheduled
 /// for merge)` node text real
@@ -27,21 +37,33 @@ use crate::pretend::*;
 /// keep their own local closures (their unknown-member fallbacks differ
 /// from each other and carry no colour, so sharing this helper would move
 /// their pins).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn circular_node_text(
-    cpv: &str,
-    slot: &str,
-    sub_slot: &str,
-    repo: &str,
-    type_name: &str,
-    color: &Colorizer,
-) -> String {
+pub(crate) fn circular_node_text(args: CircularNodeTextArgs<'_>) -> String {
+    let CircularNodeTextArgs {
+        cpv,
+        slot,
+        sub_slot,
+        repo,
+        type_name,
+        color,
+    } = args;
     let head = format!("{cpv}:{slot}/{sub_slot}::{repo}");
     let head = match type_name {
         "binary" => color.c("PKG_BINARY_MERGE", &head),
         _ => color.c("PKG_MERGE", &head),
     };
     format!("({head}, {type_name} scheduled for merge)")
+}
+
+/// Arguments of [`print_circular_block`].
+pub(crate) struct PrintCircularBlockArgs<'a> {
+    pub(crate) cycle: &'a [String],
+    pub(crate) edge_labels: &'a [String],
+    pub(crate) color: &'a Colorizer,
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) autounmask_use_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) entries: &'a [portage_repo::GraphEntry],
+    pub(crate) large_cycle_count: bool,
 }
 
 /// Backlog #19 Slice 5: real `_show_circular_deps` (`depgraph.py:10425`)
@@ -67,17 +89,17 @@ pub(crate) fn circular_node_text(
 /// `entries` the message renders -- `labels[i]` is the edge
 /// `cycle[i] -> cycle[(i + 1) % len]`). All-buildtime cycles (every
 /// pin before #228) still render `(buildtime)` on every line.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn print_circular_block(
-    cycle: &[String],
-    edge_labels: &[String],
-    color: &Colorizer,
-    repos: &[portage_repo::RepoConfig],
-    config: &portage_profile::Config,
-    autounmask_use_changes: &[portage_repo::AutounmaskChange],
-    entries: &[portage_repo::GraphEntry],
-    large_cycle_count: bool,
-) {
+pub(crate) fn print_circular_block(args: PrintCircularBlockArgs<'_>) {
+    let PrintCircularBlockArgs {
+        cycle,
+        edge_labels,
+        color,
+        repos,
+        config,
+        autounmask_use_changes,
+        entries,
+        large_cycle_count,
+    } = args;
     let prefix = color.c("BAD", " * ");
     eprint!("\n\n\n{prefix}Error: circular dependencies:\n\n");
     // `_prepare_circular_dep_message`: `<node> depends on`, then each
@@ -115,9 +137,14 @@ pub(crate) fn print_circular_block(
     }
     let node = |cpv: &str| -> String {
         match by_cpv.get(cpv) {
-            Some((slot, sub_slot, repo, type_name)) => {
-                circular_node_text(cpv, slot, sub_slot, repo, type_name, color)
-            }
+            Some((slot, sub_slot, repo, type_name)) => circular_node_text(CircularNodeTextArgs {
+                cpv,
+                slot,
+                sub_slot,
+                repo,
+                type_name,
+                color,
+            }),
             None => cpv.to_string(),
         }
     };

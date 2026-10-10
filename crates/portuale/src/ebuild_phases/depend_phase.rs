@@ -57,16 +57,16 @@ pub(crate) fn run_depend_phase(
         .join(format!(".depend-metadata.{}", std::process::id()));
     let _ = std::fs::remove_file(&meta_path);
 
-    let mut vars = phase_env_vars(
+    let mut vars = phase_env_vars(PhaseEnvVarsArgs {
         env,
         root,
-        "depend",
+        ebuild_phase_value: "depend",
         debug,
-        &bin_dir,
-        &helpers_dir,
+        bin_dir: &bin_dir,
+        helpers_dir: &helpers_dir,
         config_root,
-        &[],
-    );
+        extra_env: &[],
+    });
     vars.push(("PORTAGE_PIPE_FD".to_string(), "9".to_string()));
 
     let mut cmd = std::process::Command::new("bash");

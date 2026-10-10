@@ -263,15 +263,15 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
                 .is_some_and(|old| live_miss_atom_supersedes(old, display_atom))
             {
                 let masked_rows = masked_candidates_for_atom(&ctx.repos, display_atom, config);
-                let use_rows = use_unsat_candidates_for_atom(
-                    &ctx.repos,
-                    ctx.root,
-                    &state.entries,
+                let use_rows = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+                    repos: &ctx.repos,
+                    root: ctx.root,
+                    entries: &state.entries,
                     display_atom,
-                    current_atom,
-                    owner.as_ref(),
+                    evaluated_atom: current_atom,
+                    owner: owner.as_ref(),
                     config,
-                );
+                });
                 state.nvc_dep_atoms.entry(key.clone()).and_modify(|old| {
                     if live_miss_atom_supersedes(old, display_atom) {
                         *old = display_atom.to_string();
@@ -365,18 +365,18 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             };
             let mut effective: HashMap<String, String> = HashMap::new();
             for k in portage_order_keys {
-                let s = installed_dep_string(
-                    atom_root,
-                    ctx.dynamic_deps,
-                    ctx.ignore_built_slot_operator_deps,
-                    &key.0,
-                    &key.1,
+                let s = installed_dep_string(InstalledDepStringArgs {
+                    root: atom_root,
+                    dynamic_deps: ctx.dynamic_deps,
+                    ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
+                    category: &key.0,
+                    package: &key.1,
                     version,
-                    Some(&metadata),
-                    k,
+                    live: Some(&metadata),
+                    key: k,
                     layer,
-                    &mut state.installed_meta_memo,
-                );
+                    memo: &mut state.installed_meta_memo,
+                });
                 if !s.trim().is_empty() {
                     effective.insert((*k).to_string(), s);
                 }
@@ -535,15 +535,15 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             // block before the masked one (`show_missing_use` wins),
             // and the caller renders it first. Computed every pass;
             // only the final pass's reports are rendered.
-            if let Some(rows) = use_unsat_candidates_for_atom(
-                &ctx.repos,
-                ctx.root,
-                &state.entries,
+            if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+                repos: &ctx.repos,
+                root: ctx.root,
+                entries: &state.entries,
                 display_atom,
-                current_atom,
-                owner.as_ref(),
+                evaluated_atom: current_atom,
+                owner: owner.as_ref(),
                 config,
-            ) {
+            }) {
                 // Backlog #286: live supersedes built (see
                 // `live_miss_atom_supersedes`); the rows were just
                 // computed for the new atom, so a supersede

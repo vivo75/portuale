@@ -2,6 +2,24 @@
 
 use crate::emerge_build::*;
 
+/// Arguments of [`run_buildpkgonly`].
+pub struct RunBuildpkgonlyArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub config: &'a portage_profile::Config,
+    pub repos: &'a [RepoConfig],
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub options: &'a PackageOptions,
+    pub keep_going: bool,
+    /// Backlog #197: the scheduler-display mode (background + Jobs
+    /// visibility). `--buildpkgonly` prints real's `Emerging (N of M)`
+    /// line through the same `_status_msg` path, so the blank rule
+    /// applies; its serial loop emits no `>>> Jobs:` events (a cut,
+    /// stated on `StatusDisplay`), so the mode only carries the blank
+    /// half here.
+    pub mode: StatusMode,
+}
+
 /// Actually builds a binary package (never merges) for every entry in
 /// `entries` that real `--buildpkgonly` would build -- see the module
 /// doc comment for the full scope. Without `keep_going`, returns the
@@ -20,23 +38,17 @@ use crate::emerge_build::*;
 /// invalidate for a later entry. Failures are collected and returned
 /// together at the end as a single combined error listing every one --
 /// `Ok(())` only once every entry has a real binary package on disk.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn run_buildpkgonly(
-    entries: &[GraphEntry],
-    config: &portage_profile::Config,
-    repos: &[RepoConfig],
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &PackageOptions,
-    keep_going: bool,
-    // Backlog #197: the scheduler-display mode (background + Jobs
-    // visibility). `--buildpkgonly` prints real's `Emerging (N of M)`
-    // line through the same `_status_msg` path, so the blank rule
-    // applies; its serial loop emits no `>>> Jobs:` events (a cut,
-    // stated on `StatusDisplay`), so the mode only carries the blank
-    // half here.
-    mode: StatusMode,
-) -> Result<(), String> {
+pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
+    let RunBuildpkgonlyArgs {
+        entries,
+        config,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        keep_going,
+        mode,
+    } = args;
     // The run-wide half of real `config.environ()`, once for the whole
     // run (`--buildpkgonly` has no `MergeOptions`; `entry_phase_env_tail`
     // adds the per-entry half). #37 S2.
@@ -111,8 +123,14 @@ pub fn run_buildpkgonly(
             }
         };
         let portage_tmpdir = entry_tmpdir.as_path();
-        let build_env =
-            buildpkgonly_entry_build_env(config, repos, entry, &candidate, &cpv_slot, &run_wide);
+        let build_env = buildpkgonly_entry_build_env(BuildpkgonlyEntryBuildEnvArgs {
+            config,
+            repos,
+            entry,
+            candidate: &candidate,
+            cpv_slot: &cpv_slot,
+            run_wide: &run_wide,
+        });
         let use_flags = build_env
             .iter()
             .find(|(k, _)| k == "USE")
@@ -126,16 +144,16 @@ pub fn run_buildpkgonly(
         // `_clean_exit` treats a failed clean as a failed build).
         // Backlog #42.
         let clean_failure = |phase: &str| -> Option<String> {
-            match ebuild_phases::run_clean(
-                &path,
+            match ebuild_phases::run_clean(ebuild_phases::RunCleanArgs {
+                ebuild_path: &path,
                 root,
                 portage_tmpdir,
-                &build_env,
-                options.debug,
-                &options.config_root,
-                options.shell,
-                None,
-            ) {
+                build_env: &build_env,
+                debug: options.debug,
+                config_root: &options.config_root,
+                shell: options.shell,
+                log_file: None,
+            }) {
                 Ok(0) => None,
                 Ok(status) => Some(format!(
                     "{}/{}-{version}: {phase} clean failed ({status})",
@@ -243,6 +261,16 @@ pub(crate) fn reloaded_config_protect(
     Some((probe.config_protect, probe.config_protect_mask))
 }
 
+/// Arguments of [`buildpkgonly_entry_build_env`].
+pub(crate) struct BuildpkgonlyEntryBuildEnvArgs<'a> {
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) cpv_slot: &'a str,
+    pub(crate) run_wide: &'a [(String, String)],
+}
+
 /// [`run_buildpkgonly`]'s per-entry `config.environ()` (backlog #129):
 /// `run_wide` plus `entry`'s matched `package.env` build vars
 /// ([`matched_package_env_vars`], layered before the tail so an
@@ -252,15 +280,17 @@ pub(crate) fn reloaded_config_protect(
 /// `USE_EXPAND` and `SLOT`/repo identity rows. A free function (not a
 /// closure in the loop) so it is directly unit-testable without a real
 /// build, the same way `entry_build_env` already is.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn buildpkgonly_entry_build_env(
-    config: &portage_profile::Config,
-    repos: &[RepoConfig],
-    entry: &GraphEntry,
-    candidate: &Candidate,
-    cpv_slot: &str,
-    run_wide: &[(String, String)],
+    args: BuildpkgonlyEntryBuildEnvArgs<'_>,
 ) -> Vec<(String, String)> {
+    let BuildpkgonlyEntryBuildEnvArgs {
+        config,
+        repos,
+        entry,
+        candidate,
+        cpv_slot,
+        run_wide,
+    } = args;
     // Backlog #332: a package task re-reads env.d (`env_d_reloaded`).
     // `run_wide` was computed once at the top of the run; when
     // `profile.env` changed since, recompute it from the reloaded config.

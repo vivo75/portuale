@@ -2,27 +2,40 @@
 
 use crate::merge_order::*;
 
+/// Arguments of [`find_smallest_cycle`].
+pub(crate) struct FindSmallestCycleArgs<'a> {
+    pub(crate) g: &'a Digraph,
+    pub(crate) frontier: Option<&'a mut SerializeFrontier>,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) range: &'a PriorityRange,
+    pub(crate) asap: &'a [usize],
+    pub(crate) prefer_asap: bool,
+    /// #142 S2 F4b: nodes temporarily ineligible for harvesting —
+    /// owners waiting on their unadmitted removal (real's validation
+    /// edge keeps them out of the leaf set, so real's cycle search
+    /// never sees them either). Empty everywhere else, including all
+    /// unit tests.
+    pub(crate) ineligible: &'a HashSet<usize>,
+}
+
 /// Real `find_smallest_cycle`: the smallest `gather_deps` closure among
 /// the currently-mergeable nodes, searched from the lowest
 /// `ignore_priority` rung upward so as few dependencies as possible are
 /// relaxed. "In the case of multiple runtime cycles, where some cycles
 /// may depend on smaller independent cycles, it's optimal to merge
 /// smaller independent cycles before other cycles that depend on them."
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn find_smallest_cycle(
-    g: &Digraph,
-    frontier: Option<&mut SerializeFrontier>,
-    entries: &[GraphEntry],
-    range: &PriorityRange,
-    asap: &[usize],
-    prefer_asap: bool,
-    // #142 S2 F4b: nodes temporarily ineligible for harvesting —
-    // owners waiting on their unadmitted removal (real's validation
-    // edge keeps them out of the leaf set, so real's cycle search
-    // never sees them either). Empty everywhere else, including all
-    // unit tests.
-    ineligible: &HashSet<usize>,
+    args: FindSmallestCycleArgs<'_>,
 ) -> Option<(HashSet<usize>, Option<Ignore>)> {
+    let FindSmallestCycleArgs {
+        g,
+        frontier,
+        entries,
+        range,
+        asap,
+        prefer_asap,
+        ineligible,
+    } = args;
     let mergeable: HashSet<usize> = leaves_via(frontier, g, range.ig_medium())
         .into_iter()
         .filter(|i| !ineligible.contains(i))

@@ -2,6 +2,19 @@
 
 use crate::*;
 
+/// Arguments of [`metadata_key_accepted`].
+pub(crate) struct MetadataKeyAcceptedArgs<'a> {
+    pub(crate) value_str: &'a str,
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) which: MetadataKey,
+    pub(crate) global_accept: &'a [String],
+    pub(crate) package_accept: &'a [(String, Vec<String>)],
+}
+
 /// Whether every token in `value_str` (a candidate's own real
 /// `PROPERTIES`/`RESTRICT` metadata) is accepted -- real
 /// `_getMissingProperties`/`_getMissingRestrict`, ported as a bool.
@@ -12,18 +25,18 @@ use crate::*;
 /// groups" -- every flattened token individually needs to be accepted,
 /// so this reuses `use_reduce_flat` directly instead of the bespoke
 /// `LicenseNode` tree (no `||`-structure to lose in the first place).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn metadata_key_accepted(
-    value_str: &str,
-    candidate: &Candidate,
-    category: &str,
-    package: &str,
-    candidate_str: &str,
-    config: &portage_profile::Config,
-    which: MetadataKey,
-    global_accept: &[String],
-    package_accept: &[(String, Vec<String>)],
-) -> bool {
+pub(crate) fn metadata_key_accepted(args: MetadataKeyAcceptedArgs<'_>) -> bool {
+    let MetadataKeyAcceptedArgs {
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        which,
+        global_accept,
+        package_accept,
+    } = args;
     if value_str.trim().is_empty() {
         return true;
     }
@@ -65,7 +78,7 @@ pub(crate) fn metadata_key_accepted(
     if let Some(hit) = MKA_CACHE.with(|c| c.borrow().get(&key).copied()) {
         return hit;
     }
-    let result = metadata_key_accepted_uncached(
+    let result = metadata_key_accepted_uncached(MetadataKeyAcceptedUncachedArgs {
         value_str,
         candidate,
         category,
@@ -74,7 +87,7 @@ pub(crate) fn metadata_key_accepted(
         config,
         global_accept,
         package_accept,
-    );
+    });
     MKA_CACHE.with(|c| {
         c.borrow_mut().insert(key, result);
     });
@@ -122,28 +135,39 @@ thread_local! {
 pub(crate) fn metadata_key_accepted_uncached_calls() -> u64 {
     MKA_UNCACHED_CALLS.with(std::cell::Cell::get)
 }
+/// Arguments of [`metadata_key_accepted_uncached`].
+pub(crate) struct MetadataKeyAcceptedUncachedArgs<'a> {
+    pub(crate) value_str: &'a str,
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) global_accept: &'a [String],
+    pub(crate) package_accept: &'a [(String, Vec<String>)],
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn metadata_key_accepted_uncached(
-    value_str: &str,
-    candidate: &Candidate,
-    category: &str,
-    package: &str,
-    candidate_str: &str,
-    config: &portage_profile::Config,
-    global_accept: &[String],
-    package_accept: &[(String, Vec<String>)],
-) -> bool {
-    #[cfg(test)]
-    MKA_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
-    let use_flags = use_flags_if_conditional(
+pub(crate) fn metadata_key_accepted_uncached(args: MetadataKeyAcceptedUncachedArgs<'_>) -> bool {
+    let MetadataKeyAcceptedUncachedArgs {
         value_str,
         candidate,
         category,
         package,
         candidate_str,
         config,
-    );
+        global_accept,
+        package_accept,
+    } = args;
+    #[cfg(test)]
+    MKA_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
+    let use_flags = use_flags_if_conditional(UseFlagsIfConditionalArgs {
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    });
     let accept_tokens = resolve_accept_tokens(
         global_accept,
         package_accept,
@@ -299,42 +323,42 @@ pub(crate) fn is_visible_uncached(
         return false;
     }
 
-    if !metadata_key_accepted(
-        &candidate.properties,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Properties,
-        &config.accept_properties,
-        &config.package_properties,
-    ) {
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
         return false;
     }
 
-    if !metadata_key_accepted(
-        &candidate.restrict,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Restrict,
-        &config.accept_restrict,
-        &config.package_accept_restrict,
-    ) {
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
         return false;
     }
 
-    if !keywords_accepted(
-        &candidate.keywords,
-        &candidate_str,
+    if !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    ) {
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
         return false;
     }
 
@@ -344,6 +368,17 @@ pub(crate) fn is_visible_uncached(
     // too. Not relaxable (real has no autounmask for it): see
     // `visible_with_relax`, which enforces it unconditionally as well.
     invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+}
+
+/// Arguments of [`visible_with_relax`].
+pub(crate) struct VisibleWithRelaxArgs<'a> {
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) relax_license: bool,
+    pub(crate) relax_keywords: bool,
+    pub(crate) relax_masks: bool,
 }
 
 /// Whether `candidate` would pass [`is_visible`] once the named masking
@@ -357,17 +392,16 @@ pub(crate) fn is_visible_uncached(
 /// sequence of these, re-scanning every version at each level, so a
 /// candidate blocked by *two* categories (e.g. `~arch` **and** `LICENSE`)
 /// still resolves once both relaxations are in play.
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn visible_with_relax(
-    candidate: &Candidate,
-    category: &str,
-    package: &str,
-    config: &portage_profile::Config,
-    relax_license: bool,
-    relax_keywords: bool,
-    relax_masks: bool,
-) -> bool {
+pub(crate) fn visible_with_relax(args: VisibleWithRelaxArgs<'_>) -> bool {
+    let VisibleWithRelaxArgs {
+        candidate,
+        category,
+        package,
+        config,
+        relax_license,
+        relax_keywords,
+        relax_masks,
+    } = args;
     let candidate_str = format!(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
@@ -391,31 +425,31 @@ pub(crate) fn visible_with_relax(
         return false;
     }
 
-    if !metadata_key_accepted(
-        &candidate.properties,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Properties,
-        &config.accept_properties,
-        &config.package_properties,
-    ) {
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
         return false;
     }
 
-    if !metadata_key_accepted(
-        &candidate.restrict,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Restrict,
-        &config.accept_restrict,
-        &config.package_accept_restrict,
-    ) {
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
         return false;
     }
 
@@ -427,14 +461,14 @@ pub(crate) fn visible_with_relax(
     }
 
     relax_keywords
-        || keywords_accepted(
-            &candidate.keywords,
-            &candidate_str,
+        || keywords_accepted(KeywordsAcceptedArgs {
+            keywords: &candidate.keywords,
+            candidate_str: &candidate_str,
             category,
             package,
-            &config.accept_keywords,
-            &config.package_accept_keywords,
-        )
+            accept_keywords: &config.accept_keywords,
+            package_accept_keywords: &config.package_accept_keywords,
+        })
 }
 
 /// `--autounmask`'s own keyword-suggestion sub-feature (real
@@ -474,42 +508,42 @@ pub(crate) fn keyword_masked_only(
         return false;
     }
 
-    if !metadata_key_accepted(
-        &candidate.properties,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Properties,
-        &config.accept_properties,
-        &config.package_properties,
-    ) {
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
         return false;
     }
 
-    if !metadata_key_accepted(
-        &candidate.restrict,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Restrict,
-        &config.accept_restrict,
-        &config.package_accept_restrict,
-    ) {
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
         return false;
     }
 
-    if keywords_accepted(
-        &candidate.keywords,
-        &candidate_str,
+    if keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    ) {
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
         return false;
     }
     // Backlog #153: "masked by X alone" also requires the candidate not
@@ -541,43 +575,43 @@ pub(crate) fn mask_masked_only(
     if !masked {
         return false;
     }
-    if !keywords_accepted(
-        &candidate.keywords,
-        &candidate_str,
+    if !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    ) {
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
         return false;
     }
     if !license_accepted(candidate, category, package, &candidate_str, config) {
         return false;
     }
-    if !metadata_key_accepted(
-        &candidate.properties,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Properties,
-        &config.accept_properties,
-        &config.package_properties,
-    ) {
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
         return false;
     }
-    if !metadata_key_accepted(
-        &candidate.restrict,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Restrict,
-        &config.accept_restrict,
-        &config.package_accept_restrict,
-    ) {
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
         return false;
     }
     // Backlog #153: "masked by X alone" also requires the candidate not
@@ -627,42 +661,42 @@ pub(crate) fn license_masked_only(
         return false;
     }
 
-    if !keywords_accepted(
-        &candidate.keywords,
-        &candidate_str,
+    if !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
         category,
         package,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-    ) {
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
         return false;
     }
 
-    if !metadata_key_accepted(
-        &candidate.properties,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Properties,
-        &config.accept_properties,
-        &config.package_properties,
-    ) {
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
         return false;
     }
 
-    if !metadata_key_accepted(
-        &candidate.restrict,
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
         candidate,
         category,
         package,
-        &candidate_str,
+        candidate_str: &candidate_str,
         config,
-        MetadataKey::Restrict,
-        &config.accept_restrict,
-        &config.package_accept_restrict,
-    ) {
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
         return false;
     }
 
@@ -779,6 +813,16 @@ pub(crate) fn use_masked_only(
     !portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
 }
 
+/// Arguments of [`keywords_accepted`].
+pub(crate) struct KeywordsAcceptedArgs<'a> {
+    pub(crate) keywords: &'a [String],
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) accept_keywords: &'a HashSet<String>,
+    pub(crate) package_accept_keywords: &'a [(String, Vec<String>)],
+}
+
 /// The keyword-matching half of `is_visible` (everything except the
 /// `package.mask`/`.unmask` check), factored out so `is_stable` below
 /// can reuse it against an artificially-unstabilized keyword list
@@ -840,15 +884,15 @@ pub(crate) fn use_masked_only(
 /// matching real `(hastesting and "~*" in pgroups) or (hasstable and
 /// "*" in pgroups)` exactly (the third real disjunct, `"**" in pgroups`,
 /// is the unconditional check already handled above).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn keywords_accepted(
-    keywords: &[String],
-    candidate_str: &str,
-    category: &str,
-    package: &str,
-    accept_keywords: &HashSet<String>,
-    package_accept_keywords: &[(String, Vec<String>)],
-) -> bool {
+pub(crate) fn keywords_accepted(args: KeywordsAcceptedArgs<'_>) -> bool {
+    let KeywordsAcceptedArgs {
+        keywords,
+        candidate_str,
+        category,
+        package,
+        accept_keywords,
+        package_accept_keywords,
+    } = args;
     let accepted = specificity_ordered_flags(
         package_accept_keywords,
         candidate_str,
@@ -886,6 +930,16 @@ pub(crate) fn keywords_accepted(
     (has_testing && accepted.contains("~*")) || (has_stable && accepted.contains("*"))
 }
 
+/// Arguments of [`is_stable`].
+pub(crate) struct IsStableArgs<'a> {
+    pub(crate) keywords: &'a [String],
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) accept_keywords: &'a HashSet<String>,
+    pub(crate) package_accept_keywords: &'a [(String, Vec<String>)],
+}
+
 /// Whether `keywords` (a candidate's own KEYWORDS) count as "stable"
 /// for the purposes of `use.stable.mask`/`.force`/`package.use.stable.
 /// mask`/`.force` -- ported from real `KeywordsManager.isStable`
@@ -900,15 +954,15 @@ pub(crate) fn keywords_accepted(
 /// itself uses for its own KEYWORDS half) against that artificially-
 /// unstabilized list rather than reimplementing keyword matching a
 /// second time.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn is_stable(
-    keywords: &[String],
-    candidate_str: &str,
-    category: &str,
-    package: &str,
-    accept_keywords: &HashSet<String>,
-    package_accept_keywords: &[(String, Vec<String>)],
-) -> bool {
+pub(crate) fn is_stable(args: IsStableArgs<'_>) -> bool {
+    let IsStableArgs {
+        keywords,
+        candidate_str,
+        category,
+        package,
+        accept_keywords,
+        package_accept_keywords,
+    } = args;
     let unstable: Vec<String> = keywords
         .iter()
         .map(|k| {
@@ -919,14 +973,14 @@ pub(crate) fn is_stable(
             }
         })
         .collect();
-    !keywords_accepted(
-        &unstable,
+    !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &unstable,
         candidate_str,
         category,
         package,
         accept_keywords,
         package_accept_keywords,
-    )
+    })
 }
 
 pub(crate) fn vercmp_ordering(a: &str, b: &str) -> Ordering {

@@ -271,34 +271,45 @@ pub(crate) fn refresh_one_entry_display(
         PretendOutcome::Reinstall { changed_flags, .. } => changed_flags.iter().cloned().collect(),
         _ => HashSet::new(),
     };
-    e.use_expand_display = build_use_expand_display(
-        &display,
+    e.use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
+        use_flags_display: &display,
         config,
-        installed.as_ref(),
-        &forced,
-        true,
-        &reinst_flags,
-    );
-    e.use_expand_display_p = build_use_expand_display(
-        &display,
+        installed: installed.as_ref(),
+        forced: &forced,
+        all_flags: true,
+        reinst_flags: &reinst_flags,
+    });
+    e.use_expand_display_p = build_use_expand_display(BuildUseExpandDisplayArgs {
+        use_flags_display: &display,
         config,
-        installed.as_ref(),
-        &forced,
-        false,
-        &reinst_flags,
-    );
+        installed: installed.as_ref(),
+        forced: &forced,
+        all_flags: false,
+        reinst_flags: &reinst_flags,
+    });
     e.use_flags_display = display;
 }
+/// Arguments of [`build_use_expand_display`].
+pub(crate) struct BuildUseExpandDisplayArgs<'a> {
+    pub(crate) use_flags_display: &'a [(String, bool)],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) installed: Option<&'a InstalledUseState>,
+    pub(crate) forced: &'a HashSet<String>,
+    pub(crate) all_flags: bool,
+    pub(crate) reinst_flags: &'a HashSet<String>,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn build_use_expand_display(
-    use_flags_display: &[(String, bool)],
-    config: &portage_profile::Config,
-    installed: Option<&InstalledUseState>,
-    forced: &HashSet<String>,
-    all_flags: bool,
-    reinst_flags: &HashSet<String>,
+    args: BuildUseExpandDisplayArgs<'_>,
 ) -> Vec<(String, String)> {
+    let BuildUseExpandDisplayArgs {
+        use_flags_display,
+        config,
+        installed,
+        forced,
+        all_flags,
+        reinst_flags,
+    } = args;
     let mut expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     expand_vars.sort();
     let hidden: HashSet<String> = config

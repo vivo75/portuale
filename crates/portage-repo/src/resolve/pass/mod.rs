@@ -796,14 +796,14 @@ pub(crate) fn run_pass(
             if let Some(version) = installed_version {
                 let dedup_key = (key.0.clone(), key.1.clone(), version.clone());
                 if state.changed_deps_report_seen.insert(dedup_key)
-                    && deps_changed(
-                        ctx.root,
-                        &ctx.repos,
-                        &key.0,
-                        &key.1,
-                        &version,
-                        ctx.with_bdeps,
-                    )
+                    && deps_changed(DepsChangedArgs {
+                        root: ctx.root,
+                        repos: &ctx.repos,
+                        category: &key.0,
+                        package: &key.1,
+                        version: &version,
+                        with_bdeps: ctx.with_bdeps,
+                    })
                     && let Ok(repo_candidates) = list_candidates(&ctx.repos, &key.0, &key.1)
                     && let Some(c) = repo_candidates.iter().find(|c| c.version == version)
                 {
@@ -994,15 +994,17 @@ pub(crate) fn run_pass(
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
-            let Some(metadata) = read_binary_metadata_any_instance(
-                config,
-                ctx.root,
-                &ctx.local_binpkg,
-                &key.0,
-                &key.1,
-                &version,
-                candidate_build_id.as_deref(),
-            ) else {
+            let Some(metadata) =
+                read_binary_metadata_any_instance(ReadBinaryMetadataAnyInstanceArgs {
+                    config,
+                    root: ctx.root,
+                    local: &ctx.local_binpkg,
+                    category: &key.0,
+                    package: &key.1,
+                    version: &version,
+                    build_id: candidate_build_id.as_deref(),
+                })
+            else {
                 continue;
             };
             std::sync::Arc::new(metadata)
@@ -1203,28 +1205,28 @@ pub(crate) fn run_pass(
     // (`depgraph.py:8919-9078`), and `--nodeps` is its only early exit
     // (`:8908-8910`).
     if !ctx.nodeps {
-        collect_unwalked_installed_blockers(
-            &ctx.repos,
-            ctx.root,
+        collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+            repos: &ctx.repos,
+            root: ctx.root,
             config,
-            ctx.dynamic_deps,
-            ctx.ignore_built_slot_operator_deps,
-            &union_constraints,
-            ctx.root_deps_running_root,
-            &state.entries,
-            &mut state.pending_blockers,
-            &mut state.installed_meta_memo,
-        );
+            dynamic_deps: ctx.dynamic_deps,
+            ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
+            disj_constraints: &union_constraints,
+            root_deps_running_root: ctx.root_deps_running_root,
+            entries: &state.entries,
+            pending_blockers: &mut state.pending_blockers,
+            installed_meta_memo: &mut state.installed_meta_memo,
+        });
     }
 
-    let conflicts = resolve_blockers_with_seeds(
-        ctx.root,
-        &state.pending_blockers,
-        &state.entries,
-        &ctx.blocker_retry_closure,
-        ctx.buildpkgonly,
-        &ctx.config.blocker_retry_seed_atoms,
-    );
+    let conflicts = resolve_blockers_with_seeds(ResolveBlockersWithSeedsArgs {
+        root: ctx.root,
+        pending: &state.pending_blockers,
+        entries: &state.entries,
+        blocker_retry_closure: &ctx.blocker_retry_closure,
+        buildpkgonly: ctx.buildpkgonly,
+        set_seed_atoms: &ctx.config.blocker_retry_seed_atoms,
+    });
     // Backlog #80: unresolved rows whose owner has no display entry
     // ride out on the result instead of being dropped.
     let mut orphan_blockers: Vec<OrphanBlocker> = Vec::new();

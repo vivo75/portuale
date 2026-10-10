@@ -15,6 +15,18 @@ pub(crate) struct ProbeParent {
     pub(crate) atom: String,
 }
 
+/// Arguments of [`collect_probe_parents`].
+pub(crate) struct CollectProbeParentsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) walked: &'a HashSet<(String, String)>,
+    pub(crate) in_graph: &'a HashSet<(String, String)>,
+    pub(crate) already: &'a BTreeSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) excluded: &'a [String],
+}
+
 /// Real `_slot_operator_check_reverse_dependencies`
 /// (`lib/_emerge/depgraph.py:2472-2573`) as the update probe's refusal
 /// gate on both scan arms (the `:2622` replacement-parent gate and the
@@ -48,17 +60,19 @@ pub(crate) struct ProbeParent {
 /// escape (no digraph here), and soname atoms (the parser rejects them,
 /// same direction as real's `continue`). `[use]` deps are not evaluated
 /// (the candidate carries no USE state -- allows, never blocks).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn collect_probe_parents(
-    root: &Path,
-    entries: &[GraphEntry],
-    reachable: &HashSet<(String, String)>,
-    walked: &HashSet<(String, String)>,
-    in_graph: &HashSet<(String, String)>,
-    already: &BTreeSet<(String, String)>,
-    with_bdeps: bool,
-    excluded: &[String],
+    args: CollectProbeParentsArgs<'_>,
 ) -> HashMap<(String, String), Vec<ProbeParent>> {
+    let CollectProbeParentsArgs {
+        root,
+        entries,
+        reachable,
+        walked,
+        in_graph,
+        already,
+        with_bdeps,
+        excluded,
+    } = args;
     let mut being_removed: HashSet<(String, String)> = HashSet::new();
     for e in entries {
         if matches!(e.outcome, PretendOutcome::Uninstall { .. }) {
@@ -182,6 +196,21 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
     split_cpv(cpv_part)
 }
 
+/// Arguments of [`slot_conflict_abi_probe`].
+pub(crate) struct SlotConflictAbiProbeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) conflicts: &'a [SlotConflict],
+    pub(crate) already: &'a BTreeSet<(String, String)>,
+    pub(crate) undone: &'a BTreeSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) walked: &'a HashSet<(String, String)>,
+    pub(crate) excluded: &'a [String],
+    pub(crate) probe_parents: &'a HashMap<(String, String), Vec<ProbeParent>>,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Backlog #214 (v2 `#24e`): real `_slot_conflict_backtrack_abi`
 /// (`lib/_emerge/depgraph.py:2282-2315`), the slot-conflict-fired half
 /// of the update probe (real `:2310`, via
@@ -237,20 +266,22 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
 /// Not gated on `rebuild_if_new_slot`: real's conflict path never is
 /// (the scan's call-site gate is the pre-existing narrowing for its own
 /// arms, not this one).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn slot_conflict_abi_probe(
-    root: &Path,
-    repos: &[RepoConfig],
-    entries: &[GraphEntry],
-    conflicts: &[SlotConflict],
-    already: &BTreeSet<(String, String)>,
-    undone: &BTreeSet<(String, String)>,
-    with_bdeps: bool,
-    walked: &HashSet<(String, String)>,
-    excluded: &[String],
-    probe_parents: &HashMap<(String, String), Vec<ProbeParent>>,
-    config: &portage_profile::Config,
+    args: SlotConflictAbiProbeArgs<'_>,
 ) -> BTreeSet<(String, String)> {
+    let SlotConflictAbiProbeArgs {
+        root,
+        repos,
+        entries,
+        conflicts,
+        already,
+        undone,
+        with_bdeps,
+        walked,
+        excluded,
+        probe_parents,
+        config,
+    } = args;
     // cp -> () for every merge-bound entry: a merging parent rebinds
     // through its own walk, so only installed parents probe.
     let merge_bound: HashSet<(String, String)> = entries
@@ -750,6 +781,16 @@ pub(crate) fn greedy_pin_survives_revision(
     !(hits(&h_blockers, &g_ref) || hits(&g_blockers, &h_ref))
 }
 
+/// Arguments of [`replacement_parent_accepts`].
+pub(crate) struct ReplacementParentAcceptsArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) consumer: (&'a str, &'a str, &'a str),
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) provider: (&'a str, &'a str),
+    pub(crate) candidate: &'a str,
+}
+
 /// Backlog #304: real `_slot_operator_update_probe`
 /// (`depgraph.py:2576`) only reports a new-slot update when some
 /// *replacement parent* -- another available package in the consumer's
@@ -772,15 +813,15 @@ pub(crate) fn greedy_pin_survives_revision(
 /// `replacement_candidates`) or one that cannot be read stays accepted, the
 /// pre-#304 behaviour, because the bare-ebuild unit fixtures and any tree
 /// whose metadata is incomplete would otherwise lose the probe entirely.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn replacement_parent_accepts(
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
-    consumer: (&str, &str, &str),
-    dep_keys: &[&str],
-    provider: (&str, &str),
-    candidate: &str,
-) -> bool {
+pub(crate) fn replacement_parent_accepts(args: ReplacementParentAcceptsArgs<'_>) -> bool {
+    let ReplacementParentAcceptsArgs {
+        repos,
+        config,
+        consumer,
+        dep_keys,
+        provider,
+        candidate,
+    } = args;
     let (cat, pkg, slot) = consumer;
     let Ok(cands) = list_candidates(repos, cat, pkg) else {
         return true;

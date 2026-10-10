@@ -8,15 +8,15 @@ use super::*;
 #[test]
 fn use_context_base_fingerprint_is_frozen_at_resolution_and_excludes_autounmask_use() {
     let root = fixtures_root();
-    let config = resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config must resolve");
     assert!(
         config.use_context_base.is_some(),
@@ -44,15 +44,15 @@ fn use_context_base_fingerprint_is_frozen_at_resolution_and_excludes_autounmask_
 #[test]
 fn is_visible_base_fingerprint_is_frozen_at_resolution_and_content_derived() {
     let root = fixtures_root();
-    let config = resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config must resolve");
     assert!(
         config.is_visible_base.is_some(),

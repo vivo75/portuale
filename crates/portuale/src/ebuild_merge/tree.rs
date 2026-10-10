@@ -71,6 +71,20 @@ pub(crate) fn mtime_secs(metadata: &std::fs::Metadata) -> Result<i64, String> {
         .as_secs() as i64)
 }
 
+/// Arguments of [`merge_tree`].
+pub(crate) struct MergeTreeArgs<'a> {
+    pub(crate) d: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) installed_instance_pf: Option<&'a str>,
+    pub(crate) protect_if_modified: bool,
+    pub(crate) config_protect: &'a str,
+    pub(crate) config_protect_mask: &'a str,
+    pub(crate) noconfmem: bool,
+    pub(crate) cfgfiledict: &'a mut BTreeMap<String, String>,
+    pub(crate) xattrs: &'a XattrPolicy,
+}
+
 /// Walks `d` (real `${D}`) and merges every entry into `root` (real
 /// `${ROOT}`), returning the accumulated real `CONTENTS` text (see this
 /// module's own doc comment for the exact line format and the v1 scope
@@ -78,19 +92,19 @@ pub(crate) fn mtime_secs(metadata: &std::fs::Metadata) -> Result<i64, String> {
 /// read once by the caller before this runs and written back once after
 /// -- real `vardbapi._conf_mem_file` semantics (a single, whole-merge
 /// read/update/write, not a per-file one).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn merge_tree(
-    d: &Path,
-    root: &Path,
-    category: &str,
-    installed_instance_pf: Option<&str>,
-    protect_if_modified: bool,
-    config_protect: &str,
-    config_protect_mask: &str,
-    noconfmem: bool,
-    cfgfiledict: &mut BTreeMap<String, String>,
-    xattrs: &XattrPolicy,
-) -> Result<String, String> {
+pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
+    let MergeTreeArgs {
+        d,
+        root,
+        category,
+        installed_instance_pf,
+        protect_if_modified,
+        config_protect,
+        config_protect_mask,
+        noconfmem,
+        cfgfiledict,
+        xattrs,
+    } = args;
     let mut contents = String::new();
     let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
     while let Some(relative_dir) = stack.pop() {
@@ -125,17 +139,17 @@ pub(crate) fn merge_tree(
                 let protected_path = is_protected(root, config_protect, config_protect_mask, &dest);
                 if protected_path {
                     let src_md5 = md5_hex_bytes(target_str.as_bytes());
-                    (write_dest, moveme) = protect_decision(
+                    (write_dest, moveme) = protect_decision(ProtectDecisionArgs {
                         root,
                         category,
                         installed_instance_pf,
                         protect_if_modified,
-                        &dest,
-                        &abs_path,
-                        &src_md5,
+                        dest: &dest,
+                        abs_path: &abs_path,
+                        src_md5: &src_md5,
                         cfgfiledict,
                         noconfmem,
-                    )?;
+                    })?;
                 }
                 // Real `mergeme()`'s own symlink-over-directory branch
                 // (`vartree.py`: `if mydmode is not None and S_ISDIR and
@@ -236,17 +250,17 @@ pub(crate) fn merge_tree(
                 let mut write_dest = dest.to_path_buf();
                 let mut moveme = true;
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
-                    (write_dest, moveme) = protect_decision(
+                    (write_dest, moveme) = protect_decision(ProtectDecisionArgs {
                         root,
                         category,
                         installed_instance_pf,
                         protect_if_modified,
-                        &dest,
-                        &abs_path,
-                        &src_md5,
+                        dest: &dest,
+                        abs_path: &abs_path,
+                        src_md5: &src_md5,
                         cfgfiledict,
                         noconfmem,
-                    )?;
+                    })?;
                 }
 
                 let mtime = mtime_secs(

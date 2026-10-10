@@ -407,15 +407,24 @@ fn stn(s: &[u8], length: usize) -> Vec<u8> {
     out
 }
 
-/// `TarInfo._create_header`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn create_header(
-    info: &Info,
+/// Arguments of [`create_header`].
+struct CreateHeaderArgs<'a> {
+    info: &'a Info,
     mode: u32,
-    magic: &[u8; 8],
-    prefix: &[u8],
+    magic: &'a [u8; 8],
+    prefix: &'a [u8],
     fmt: Fmt,
-) -> Result<Vec<u8>, String> {
+}
+
+/// `TarInfo._create_header`.
+fn create_header(args: CreateHeaderArgs<'_>) -> Result<Vec<u8>, String> {
+    let CreateHeaderArgs {
+        info,
+        mode,
+        magic,
+        prefix,
+        fmt,
+    } = args;
     let (devmajor, devminor) = if matches!(info.typeflag, b'3' | b'4') {
         (
             itn(i128::from(info.devmajor), 8, fmt)?,
@@ -455,7 +464,13 @@ fn gnu_long_header(name: &[u8], typeflag: u8) -> Result<Vec<u8>, String> {
     info.mode = 0;
     info.typeflag = typeflag;
     info.size = payload.len() as u64;
-    let mut out = create_header(&info, 0, GNU_MAGIC, b"", Fmt::Ustar)?;
+    let mut out = create_header(CreateHeaderArgs {
+        info: &info,
+        mode: 0,
+        magic: GNU_MAGIC,
+        prefix: b"",
+        fmt: Fmt::Ustar,
+    })?;
     out.extend(payload.iter());
     let rem = payload.len() % 512;
     if rem != 0 {
@@ -496,7 +511,13 @@ fn tobuf(info: &Info, fmt: Fmt) -> Result<Vec<u8>, String> {
                 prefix = p;
                 info.name = n;
             }
-            create_header(&info, mode, POSIX_MAGIC, &prefix, Fmt::Ustar)
+            create_header(CreateHeaderArgs {
+                info: &info,
+                mode,
+                magic: POSIX_MAGIC,
+                prefix: &prefix,
+                fmt: Fmt::Ustar,
+            })
         }
         Fmt::Gnu => {
             let mut buf = Vec::new();
@@ -506,7 +527,13 @@ fn tobuf(info: &Info, fmt: Fmt) -> Result<Vec<u8>, String> {
             if info.name.len() > LENGTH_NAME {
                 buf.extend(gnu_long_header(&info.name, b'L')?);
             }
-            buf.extend(create_header(&info, mode, GNU_MAGIC, b"", Fmt::Gnu)?);
+            buf.extend(create_header(CreateHeaderArgs {
+                info: &info,
+                mode,
+                magic: GNU_MAGIC,
+                prefix: b"",
+                fmt: Fmt::Gnu,
+            })?);
             Ok(buf)
         }
     }

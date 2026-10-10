@@ -35,7 +35,15 @@ pub fn ratio(a: &str, b: &str) -> f64 {
     for (j, &c) in b.iter().enumerate() {
         b2j.entry(c).or_default().push(j);
     }
-    let matches = matching_char_count(&a, &b, &b2j, 0, a.len(), 0, b.len());
+    let matches = matching_char_count(MatchingCharCountArgs {
+        a: &a,
+        b: &b,
+        b2j: &b2j,
+        alo: 0,
+        ahi: a.len(),
+        blo: 0,
+        bhi: b.len(),
+    });
     2.0 * matches as f64 / total as f64
 }
 
@@ -66,48 +74,94 @@ pub fn get_close_matches(
         .collect()
 }
 
-/// Real `get_matching_blocks()`'s recursion, summed: `find_longest_match`
-/// on the window, then recurse into the slice before it and the slice
-/// after it. Block *order* doesn't matter for the sum, so the explicit
-/// LIFO queue is just a recursion here.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn matching_char_count(
-    a: &[char],
-    b: &[char],
-    b2j: &HashMap<char, Vec<usize>>,
+/// Arguments of [`matching_char_count`].
+struct MatchingCharCountArgs<'a> {
+    a: &'a [char],
+    b: &'a [char],
+    b2j: &'a HashMap<char, Vec<usize>>,
     alo: usize,
     ahi: usize,
     blo: usize,
     bhi: usize,
-) -> usize {
-    let (i, j, k) = find_longest_match(a, b, b2j, alo, ahi, blo, bhi);
+}
+
+/// Real `get_matching_blocks()`'s recursion, summed: `find_longest_match`
+/// on the window, then recurse into the slice before it and the slice
+/// after it. Block *order* doesn't matter for the sum, so the explicit
+/// LIFO queue is just a recursion here.
+fn matching_char_count(args: MatchingCharCountArgs<'_>) -> usize {
+    let MatchingCharCountArgs {
+        a,
+        b,
+        b2j,
+        alo,
+        ahi,
+        blo,
+        bhi,
+    } = args;
+    let (i, j, k) = find_longest_match(FindLongestMatchArgs {
+        a,
+        b,
+        b2j,
+        alo,
+        ahi,
+        blo,
+        bhi,
+    });
     if k == 0 {
         return 0;
     }
     let mut total = k;
     if alo < i && blo < j {
-        total += matching_char_count(a, b, b2j, alo, i, blo, j);
+        total += matching_char_count(MatchingCharCountArgs {
+            a,
+            b,
+            b2j,
+            alo,
+            ahi: i,
+            blo,
+            bhi: j,
+        });
     }
     if i + k < ahi && j + k < bhi {
-        total += matching_char_count(a, b, b2j, i + k, ahi, j + k, bhi);
+        total += matching_char_count(MatchingCharCountArgs {
+            a,
+            b,
+            b2j,
+            alo: i + k,
+            ahi,
+            blo: j + k,
+            bhi,
+        });
     }
     total
+}
+
+/// Arguments of [`find_longest_match`].
+struct FindLongestMatchArgs<'a> {
+    a: &'a [char],
+    b: &'a [char],
+    b2j: &'a HashMap<char, Vec<usize>>,
+    alo: usize,
+    ahi: usize,
+    blo: usize,
+    bhi: usize,
 }
 
 /// Real `find_longest_match(alo, ahi, blo, bhi)` with no junk: the
 /// `j2len` dynamic-programming scan for the longest common contiguous
 /// run, ties broken toward the earliest `i` (then earliest `j`), then
 /// extended maximally on both ends.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn find_longest_match(
-    a: &[char],
-    b: &[char],
-    b2j: &HashMap<char, Vec<usize>>,
-    alo: usize,
-    ahi: usize,
-    blo: usize,
-    bhi: usize,
-) -> (usize, usize, usize) {
+fn find_longest_match(args: FindLongestMatchArgs<'_>) -> (usize, usize, usize) {
+    let FindLongestMatchArgs {
+        a,
+        b,
+        b2j,
+        alo,
+        ahi,
+        blo,
+        bhi,
+    } = args;
     let (mut besti, mut bestj, mut bestsize) = (alo, blo, 0usize);
     let mut j2len: HashMap<usize, usize> = HashMap::new();
     for (i, ai) in a.iter().enumerate().take(ahi).skip(alo) {

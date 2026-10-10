@@ -162,14 +162,14 @@ fn add_installed_dependency_closure_virtuals_only_expands_virtuals() {
         ],
     );
     let mut entries = vec![top];
-    add_installed_dependency_closure(
-        &mut entries,
-        &root,
-        &[],
-        &["dev-libs/systemseed".to_string()],
-        true,
-        true,
-    );
+    add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
+        entries: &mut entries,
+        root: &root,
+        repos: &[],
+        system_atoms: &["dev-libs/systemseed".to_string()],
+        virtuals_only: true,
+        dynamic_deps: true,
+    });
     let packages: Vec<&str> = entries.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(
         packages,
@@ -233,7 +233,14 @@ fn add_installed_dependency_closure_strips_the_injected_libc_dep() {
         "1.0",
         vec![runtime_edge("dev-libs/inj", "dev-libs", "inj")],
     )];
-    add_installed_dependency_closure(&mut entries, &root, &[], &[], false, true);
+    add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
+        entries: &mut entries,
+        root: &root,
+        repos: &[],
+        system_atoms: &[],
+        virtuals_only: false,
+        dynamic_deps: true,
+    });
     let inj = entries
         .iter()
         .find(|e| e.package == "inj")
@@ -265,7 +272,14 @@ fn add_installed_dependency_closure_strips_the_injected_libc_dep() {
         "1.0",
         vec![runtime_edge("dev-libs/inj", "dev-libs", "inj")],
     )];
-    add_installed_dependency_closure(&mut entries, &root, &[], &[], false, true);
+    add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
+        entries: &mut entries,
+        root: &root,
+        repos: &[],
+        system_atoms: &[],
+        virtuals_only: false,
+        dynamic_deps: true,
+    });
     let inj = entries.iter().find(|e| e.package == "inj").unwrap();
     assert!(
         inj.deps

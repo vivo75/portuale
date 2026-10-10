@@ -115,7 +115,14 @@ pub(crate) fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
 
     let mut atoms: Vec<String> = Vec::new();
     for lib in &all_preserved {
-        let consumers = match needed_elf::find_consumers(root, &map, &defpath, lib, None, false) {
+        let consumers = match needed_elf::find_consumers(needed_elf::FindConsumersArgs {
+            root,
+            map: &map,
+            defpath: &defpath,
+            obj: lib,
+            exclude_provider: None,
+            greedy: false,
+        }) {
             Ok(set) => set,
             Err(_) => {
                 let soname = lib.rsplit('/').next().unwrap_or(lib);
@@ -225,6 +232,17 @@ pub(crate) fn world_file_additions(
     added
 }
 
+/// Arguments of [`update_world_file`].
+pub(crate) struct UpdateWorldFileArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) target_atoms: &'a [&'a str],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) system_atoms: &'a [String],
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) oneshot: bool,
+    pub(crate) onlydeps: bool,
+}
+
 /// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
 /// a successful non-`--pretend` `emerge <atom>`, each directly-requested
 /// **plain** target atom (not a dependency, not a `@set`) is recorded in
@@ -246,16 +264,16 @@ pub(crate) fn world_file_additions(
 /// left alone; when anything is added the file is rewritten sorted +
 /// deduplicated (real `WorldSelectedPackagesSet.write`). Prints the real
 /// `>>> Recording <atom> in "world" favorites file...` line per addition.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn update_world_file(
-    root: &Path,
-    target_atoms: &[&str],
-    entries: &[GraphEntry],
-    system_atoms: &[String],
-    repos: &[portage_repo::RepoConfig],
-    oneshot: bool,
-    onlydeps: bool,
-) -> Result<(), String> {
+pub(crate) fn update_world_file(args: UpdateWorldFileArgs<'_>) -> Result<(), String> {
+    let UpdateWorldFileArgs {
+        root,
+        target_atoms,
+        entries,
+        system_atoms,
+        repos,
+        oneshot,
+        onlydeps,
+    } = args;
     if oneshot || onlydeps {
         return Ok(());
     }

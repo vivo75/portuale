@@ -507,29 +507,29 @@ pub fn run(args: &[String]) -> ExitCode {
                     "",
                 )
             } else if ebuild_phases::is_standalone_phase_command(cmd) {
-                ebuild_phases::run_single_phase(
+                ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
                     ebuild_path,
-                    cmd,
-                    &root,
-                    &portage_tmpdir,
+                    phase: cmd,
+                    root: &root,
+                    portage_tmpdir: &portage_tmpdir,
                     debug,
-                    &merge_options.config_root,
+                    config_root: &merge_options.config_root,
                     shell,
-                    &[],
-                    None,
-                )
+                    build_env: &[],
+                    log_file: None,
+                })
             } else {
-                ebuild_phases::run_commands(
+                ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
                     ebuild_path,
-                    &[cmd],
-                    &root,
-                    &portage_tmpdir,
-                    &distdir,
+                    commands: &[cmd],
+                    root: &root,
+                    portage_tmpdir: &portage_tmpdir,
+                    distdir: &distdir,
                     debug,
-                    &merge_options.config_root,
+                    config_root: &merge_options.config_root,
                     shell,
-                    &[],
-                )
+                    build_env: &[],
+                })
             };
             match result {
                 Ok(0) => {}

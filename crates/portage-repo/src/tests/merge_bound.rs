@@ -18,15 +18,15 @@ fn cross_root_depend_forms_the_running_root_cycle() {
     // (a parent in <ROOT> whose DEPEND resolves against the running
     // root, where the running-root choice forms a cycle).
     let running = TempDir::new("portuale-242-xb-empty-running-root").keep();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let result = ResolveRequest {
         root_deps_running_root: Some(running.to_path_buf()),
@@ -74,15 +74,15 @@ fn cross_root_depend_forms_the_running_root_cycle() {
 fn cross_root_bdepend_self_branch_backtrack0_reports_the_self_cycle() {
     let root = fixtures_root();
     let running = TempDir::new("portuale-242-xc-empty-running-root-b0").keep();
-    let config = portage_profile::resolve_config(
-        &root,
-        &root.join("repo"),
-        &[("overlay".to_string(), root.join("overlay"))],
-        &[],
-        "testrepo",
-        &HashMap::new(),
-        &root,
-    )
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
     .expect("fixture config resolves");
     let result = ResolveRequest {
         root_deps_running_root: Some(running.to_path_buf()),

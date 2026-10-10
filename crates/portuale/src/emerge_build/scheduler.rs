@@ -2,6 +2,19 @@
 
 use crate::emerge_build::*;
 
+/// Arguments of [`build_one_source_entry`].
+pub(crate) struct BuildOneSourceEntryArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a ebuild_merge::MergeOptions,
+    pub(crate) buildpkg: Option<&'a ebuild_package::PackageOptions>,
+    pub(crate) capture_log: bool,
+    pub(crate) progress: mrg_director::MergeProgress,
+    pub(crate) display: &'a StatusDisplay,
+}
+
 /// Real `_emerge/EbuildBuild` (+ `EbuildBinpkg`): the `install` phase
 /// chain and any `--buildpkg` binpkg for one source entry, WITHOUT the
 /// vdb merge. Returns the located ebuild path for `merge_one_built_entry`
@@ -12,18 +25,18 @@ use crate::emerge_build::*;
 /// stdout+stderr go to `${T}/build.log` instead of the terminal (real
 /// `PORTAGE_LOG_FILE`); on a build failure the tail of that log is folded
 /// into the returned error so the scheduler can show it.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn build_one_source_entry(
-    entry: &GraphEntry,
-    repos: &[RepoConfig],
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &ebuild_merge::MergeOptions,
-    buildpkg: Option<&ebuild_package::PackageOptions>,
-    capture_log: bool,
-    progress: mrg_director::MergeProgress,
-    display: &StatusDisplay,
-) -> Result<PathBuf, String> {
+pub(crate) fn build_one_source_entry(args: BuildOneSourceEntryArgs<'_>) -> Result<PathBuf, String> {
+    let BuildOneSourceEntryArgs {
+        entry,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        buildpkg,
+        capture_log,
+        progress,
+        display,
+    } = args;
     let (cp, version) = scheduler_cp_version(entry)?;
     let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
         return Err(format!(
@@ -75,31 +88,31 @@ pub(crate) fn build_one_source_entry(
     // before every build, unconditionally (`noclean` only skips the
     // post-merge clean) -- see `merge_one_source_entry`'s own call for
     // the full grounding. Backlog #42.
-    let clean_status = ebuild_phases::run_clean(
-        &path,
+    let clean_status = ebuild_phases::run_clean(ebuild_phases::RunCleanArgs {
+        ebuild_path: &path,
         root,
         portage_tmpdir,
-        &build_env,
-        options.debug,
-        &options.config_root,
+        build_env: &build_env,
+        debug: options.debug,
+        config_root: &options.config_root,
         shell,
-        log_path.as_deref(),
-    )?;
+        log_file: log_path.as_deref(),
+    })?;
     if clean_status != 0 {
         return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
     }
-    let status = ebuild_phases::run_commands_logged(
-        &path,
-        &["install"],
+    let status = ebuild_phases::run_commands_logged(ebuild_phases::RunCommandsLoggedArgs {
+        ebuild_path: &path,
+        commands: &["install"],
         root,
         portage_tmpdir,
-        &options.distdir,
-        options.debug,
-        &options.config_root,
+        distdir: &options.distdir,
+        debug: options.debug,
+        config_root: &options.config_root,
         shell,
-        log_path.as_deref(),
-        &build_env,
-    )?;
+        log_file: log_path.as_deref(),
+        build_env: &build_env,
+    })?;
     if status != 0 {
         let mut msg = format!("{cp}-{version}: build failed ({status})");
         if let Some(lp) = &log_path {
@@ -169,23 +182,35 @@ pub(crate) fn build_one_source_entry(
     Ok(path)
 }
 
+/// Arguments of [`merge_one_built_entry`].
+pub(crate) struct MergeOneBuiltEntryArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a ebuild_merge::MergeOptions,
+    pub(crate) progress: mrg_director::MergeProgress,
+    pub(crate) display: &'a StatusDisplay,
+}
+
 /// Real `_emerge/EbuildMerge` (always serialized -- only the build above
 /// runs in parallel): the vdb merge for a source entry whose `install`
 /// phase already ran. Reuses `run_qmerge` (which checks the same real
 /// `${PORTAGE_BUILDDIR}/.installed` marker `install` leaves behind and
 /// runs `merge_after_install`, including the same-slot replace of an
 /// upgraded/reinstalled version).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn merge_one_built_entry(
-    entry: &GraphEntry,
-    repos: &[RepoConfig],
-    ebuild_path: &Path,
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &ebuild_merge::MergeOptions,
-    progress: mrg_director::MergeProgress,
-    display: &StatusDisplay,
-) -> Result<(), String> {
+pub(crate) fn merge_one_built_entry(args: MergeOneBuiltEntryArgs<'_>) -> Result<(), String> {
+    let MergeOneBuiltEntryArgs {
+        entry,
+        repos,
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        options,
+        progress,
+        display,
+    } = args;
     let (cp, version) = scheduler_cp_version(entry)?;
     // `merge_after_install`'s `pkg_preinst`/`pkg_postinst` see this
     // entry's resolved `USE` too (see `merge_one_source_entry`).
@@ -244,16 +269,16 @@ pub(crate) fn merge_one_built_entry(
     // comment) -- so this is where the `emerge` scheduler/captured
     // build+merge split gets the real post-merge behavior. Backlog #42.
     if !ebuild_merge::feature_enabled(&per_entry, "noclean") {
-        ebuild_phases::run_clean(
+        ebuild_phases::run_clean(ebuild_phases::RunCleanArgs {
             ebuild_path,
             root,
             portage_tmpdir,
-            &per_entry.build_env,
-            per_entry.debug,
-            &per_entry.config_root,
-            per_entry.shell,
-            per_entry.log_file.as_deref(),
-        )?;
+            build_env: &per_entry.build_env,
+            debug: per_entry.debug,
+            config_root: &per_entry.config_root,
+            shell: per_entry.shell,
+            log_file: per_entry.log_file.as_deref(),
+        })?;
     }
     // Real `PackageMerge._install_exit`'s per-package line (backlog
     // #177): this is the `Completed (N of M) cpv::repo` real prints
@@ -307,6 +332,26 @@ pub(crate) fn system_loadavg_1min() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Arguments of [`run_build_scheduler`].
+pub(crate) struct RunBuildSchedulerArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a ebuild_merge::MergeOptions,
+    pub(crate) keep_going: bool,
+    pub(crate) buildpkg: Option<&'a ebuild_package::PackageOptions>,
+    pub(crate) buildpkg_exclude: &'a [String],
+    /// The `-jN` dispatch policy (real `_emerge/Scheduler.py`'s jobs +
+    /// `--load-average` gate): the director's `SchedulerPolicy` trait,
+    /// so a capped (`LoadAwarePolicy`) or uncapped (`UnlimitedPolicy`)
+    /// scheduler is one caller-side value, never a loop change here.
+    pub(crate) policy: &'a dyn mrg_director::SchedulerPolicy,
+    /// Backlog #197: the run's status display (the `>>> Jobs:` events
+    /// below plus the blank/`>>>` rule inside the build/merge halves).
+    pub(crate) display: &'a StatusDisplay,
+}
+
 /// KNOWN, DOCUMENTED CUTS (same "narrow v1" pattern as the rest of this
 /// module): each build's own phase output is inherited straight to the
 /// terminal and so interleaves under `-j` >1 (real portage captures
@@ -314,25 +359,19 @@ pub(crate) fn system_loadavg_1min() -> f64 {
 /// still spins up its own tokio runtime; a non-`--keep-going` failure
 /// returns immediately but still waits for already-running builds to
 /// finish (`thread::scope` join), it does not kill them.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_build_scheduler(
-    entries: &[GraphEntry],
-    repos: &[RepoConfig],
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &ebuild_merge::MergeOptions,
-    keep_going: bool,
-    buildpkg: Option<&ebuild_package::PackageOptions>,
-    buildpkg_exclude: &[String],
-    // The `-jN` dispatch policy (real `_emerge/Scheduler.py`'s jobs +
-    // `--load-average` gate): the director's `SchedulerPolicy` trait,
-    // so a capped (`LoadAwarePolicy`) or uncapped (`UnlimitedPolicy`)
-    // scheduler is one caller-side value, never a loop change here.
-    policy: &dyn mrg_director::SchedulerPolicy,
-    // Backlog #197: the run's status display (the `>>> Jobs:` events
-    // below plus the blank/`>>>` rule inside the build/merge halves).
-    display: &StatusDisplay,
-) -> Result<(), String> {
+pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(), String> {
+    let RunBuildSchedulerArgs {
+        entries,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        keep_going,
+        buildpkg,
+        buildpkg_exclude,
+        policy,
+        display,
+    } = args;
     use std::collections::{HashMap, HashSet};
     use std::sync::mpsc;
 
@@ -428,19 +467,11 @@ pub(crate) fn run_build_scheduler(
                     // SCHEDULER_REGISTRY`'s own doc comment.
                     let _guard = ebuild_phases::scope_scheduler_registry(registry);
                     let r = build_one_source_entry(
-                        entry,
-                        repos,
-                        root,
-                        portage_tmpdir,
-                        options,
-                        bp,
-                        // Capture each build's phase output to its own
+                        BuildOneSourceEntryArgs { entry, repos, root, portage_tmpdir, options, buildpkg: bp, capture_log: // Capture each build's phase output to its own
                         // `${T}/build.log` so parallel builds don't
                         // interleave on the terminal (real portage's
                         // `--quiet-build`, on by default under `--jobs`).
-                        true,
-                        entry_progress,
-                        display,
+                        true, progress: entry_progress, display },
                     );
                     let _ = tx.send((idx, r));
                 });
@@ -463,16 +494,16 @@ pub(crate) fn run_build_scheduler(
                     display.build_finished();
                     let entry = &entries[idx];
                     let entry_progress = progress[idx];
-                    let err = merge_one_built_entry(
+                    let err = merge_one_built_entry(MergeOneBuiltEntryArgs {
                         entry,
                         repos,
-                        &path,
+                        ebuild_path: &path,
                         root,
                         portage_tmpdir,
                         options,
-                        entry_progress,
+                        progress: entry_progress,
                         display,
-                    )
+                    })
                     .err();
                     if err.is_some() {
                         // Backlog #197: real `_merge_exit` /

@@ -145,15 +145,15 @@ fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
         world_entry("dev-libs", "adep", "0"),
     ];
     // `adep` isn't a requested atom -> not recorded; `wanted` is.
-    update_world_file(
-        &root,
-        &["dev-libs/wanted"],
-        &entries,
-        &[],
-        &[],
-        false,
-        false,
-    )
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/wanted"],
+        entries: &entries,
+        system_atoms: &[],
+        repos: &[],
+        oneshot: false,
+        onlydeps: false,
+    })
     .unwrap();
     assert_eq!(
         std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
@@ -161,25 +161,25 @@ fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
     );
 
     // A second run is idempotent, and `--oneshot` writes nothing.
-    update_world_file(
-        &root,
-        &["dev-libs/wanted"],
-        &entries,
-        &[],
-        &[],
-        false,
-        false,
-    )
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/wanted"],
+        entries: &entries,
+        system_atoms: &[],
+        repos: &[],
+        oneshot: false,
+        onlydeps: false,
+    })
     .unwrap();
-    update_world_file(
-        &root,
-        &["dev-libs/wanted2"],
-        &entries,
-        &[],
-        &[],
-        true,
-        false,
-    )
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/wanted2"],
+        entries: &entries,
+        system_atoms: &[],
+        repos: &[],
+        oneshot: true,
+        onlydeps: false,
+    })
     .unwrap();
     assert_eq!(
         std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
@@ -188,15 +188,15 @@ fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
 
     // An unslotted `@system` member is never recorded.
     std::fs::write(root.join("var/lib/portage/world"), "").unwrap();
-    update_world_file(
-        &root,
-        &["dev-libs/wanted"],
-        &entries,
-        &["dev-libs/wanted".to_string()],
-        &[],
-        false,
-        false,
-    )
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/wanted"],
+        entries: &entries,
+        system_atoms: &["dev-libs/wanted".to_string()],
+        repos: &[],
+        oneshot: false,
+        onlydeps: false,
+    })
     .unwrap();
     assert_eq!(
         std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
@@ -216,15 +216,15 @@ fn update_world_file_slot_qualifies_a_slotted_target() {
 
     // Slotted cp + `:1` arg -> `dev-libs/dualslotpkg:1`.
     let entries = vec![world_entry("dev-libs", "dualslotpkg", "1")];
-    update_world_file(
-        &root,
-        &["dev-libs/dualslotpkg:1"],
-        &entries,
-        &[],
-        &repos,
-        false,
-        false,
-    )
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/dualslotpkg:1"],
+        entries: &entries,
+        system_atoms: &[],
+        repos: &repos,
+        oneshot: false,
+        onlydeps: false,
+    })
     .unwrap();
     assert_eq!(
         std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
@@ -233,15 +233,15 @@ fn update_world_file_slot_qualifies_a_slotted_target() {
 
     // Bare arg for the same slotted cp -> plain `cat/pkg`.
     std::fs::write(root.join("var/lib/portage/world"), "").unwrap();
-    update_world_file(
-        &root,
-        &["dev-libs/dualslotpkg"],
-        &entries,
-        &[],
-        &repos,
-        false,
-        false,
-    )
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/dualslotpkg"],
+        entries: &entries,
+        system_atoms: &[],
+        repos: &repos,
+        oneshot: false,
+        onlydeps: false,
+    })
     .unwrap();
     assert_eq!(
         std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
@@ -251,15 +251,15 @@ fn update_world_file_slot_qualifies_a_slotted_target() {
     // Unslotted cp (SLOT="0" only) + `:0` arg -> still plain `cat/pkg`.
     std::fs::write(root.join("var/lib/portage/world"), "").unwrap();
     let pkg_entries = vec![world_entry("dev-libs", "packagepkg", "0")];
-    update_world_file(
-        &root,
-        &["dev-libs/packagepkg:0"],
-        &pkg_entries,
-        &[],
-        &repos,
-        false,
-        false,
-    )
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/packagepkg:0"],
+        entries: &pkg_entries,
+        system_atoms: &[],
+        repos: &repos,
+        oneshot: false,
+        onlydeps: false,
+    })
     .unwrap();
     assert_eq!(
         std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),

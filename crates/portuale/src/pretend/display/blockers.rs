@@ -306,24 +306,35 @@ pub(crate) fn format_blocker_row(
     )
 }
 
+/// Arguments of [`trailing_blocker_lines`].
+pub(crate) struct TrailingBlockerLinesArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) owner_index: usize,
+    pub(crate) include_mask: bool,
+    pub(crate) columns: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Backlog #221 (I5): the settling pass's recorded cycle edges (see
+    /// `kept_alt_for_display`): a wait chain through a demoted branch
+    /// dispositions like the walk took it.
+    pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+}
+
 /// The `[blocks …]` lines `print_entry_line` collects into the trailing
 /// group for `entries[owner_index]`: `Trailing` rows only, and satisfied
 /// ones are dropped under `--columns` (real `output.py:120`, `_blockers`
 /// appends a satisfied line to `print_msg` only when `not
 /// self.conf.columns`). Unresolved lines are never column-suppressed.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn trailing_blocker_lines(
-    entries: &[GraphEntry],
-    root: &Path,
-    owner_index: usize,
-    include_mask: bool,
-    columns: bool,
-    color: &Colorizer,
-    // Backlog #221 (I5): the settling pass's recorded cycle edges (see
-    // `kept_alt_for_display`): a wait chain through a demoted branch
-    // dispositions like the walk took it.
-    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
-) -> Vec<String> {
+pub(crate) fn trailing_blocker_lines(args: TrailingBlockerLinesArgs<'_>) -> Vec<String> {
+    let TrailingBlockerLinesArgs {
+        entries,
+        root,
+        owner_index,
+        include_mask,
+        columns,
+        color,
+        circular,
+    } = args;
     let entry = &entries[owner_index];
     // #84: one kept-branch derivation for this owner's rows -- and none
     // at all unless one of them is a `Replacement`, which is what keeps
@@ -354,6 +365,18 @@ pub(crate) fn trailing_blocker_lines(
         .collect()
 }
 
+/// Arguments of [`collect_inline_blocker_lines`].
+pub(crate) struct CollectInlineBlockerLinesArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) quiet: bool,
+    pub(crate) columns: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Backlog #221 (I5): the settling pass's recorded cycle edges (see
+    /// `kept_alt_for_display`).
+    pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+}
+
 /// The compiled inline rows for a whole display list: `(after, line)`
 /// pairs keyed by the display index of the replacement entry the line
 /// follows. Sorted by that index (stable, so several owners waiting on
@@ -361,17 +384,17 @@ pub(crate) fn trailing_blocker_lines(
 /// (satisfied lines are suppressed; the counters still count them -- real
 /// counts every `Blocker` node in the merge list, `get_display_list`
 /// `output.py:575-584`).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn collect_inline_blocker_lines(
-    entries: &[GraphEntry],
-    root: &Path,
-    quiet: bool,
-    columns: bool,
-    color: &Colorizer,
-    // Backlog #221 (I5): the settling pass's recorded cycle edges (see
-    // `kept_alt_for_display`).
-    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+    args: CollectInlineBlockerLinesArgs<'_>,
 ) -> Vec<(usize, String)> {
+    let CollectInlineBlockerLinesArgs {
+        entries,
+        root,
+        quiet,
+        columns,
+        color,
+        circular,
+    } = args;
     if columns {
         return Vec::new();
     }

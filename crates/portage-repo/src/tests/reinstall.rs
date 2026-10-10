@@ -93,85 +93,85 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
 
     // Identical build time -> never reinstalls, --update or not.
     assert!(
-        !binary_reinstall_warranted(
-            &root,
-            &repos,
-            &config,
-            "dev-libs",
-            "rebuiltbinarypkg",
-            "1.0",
-            Some(1000),
-            false,
-            None,
-            true,
-        ),
+        !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "rebuiltbinarypkg",
+            version: "1.0",
+            binary_build_time: Some(1000),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            update: true
+        }),
         "identical BUILD_TIME is identical_binary"
     );
     // Differing, ebuild gone, but no --update -> avoid_update keeps
     // the installed package.
     assert!(
-        !binary_reinstall_warranted(
-            &root,
-            &repos,
-            &config,
-            "dev-libs",
-            "rebuiltbinarypkg",
-            "1.0",
-            Some(2000),
-            false,
-            None,
-            false,
-        ),
+        !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "rebuiltbinarypkg",
+            version: "1.0",
+            binary_build_time: Some(2000),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            update: false
+        }),
         "without --update the installed instance is kept"
     );
     // Differing, ebuild gone, --update -> reinstall.
     assert!(
-        binary_reinstall_warranted(
-            &root,
-            &repos,
-            &config,
-            "dev-libs",
-            "rebuiltbinarypkg",
-            "1.0",
-            Some(2000),
-            false,
-            None,
-            true,
-        ),
+        binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "rebuiltbinarypkg",
+            version: "1.0",
+            binary_build_time: Some(2000),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            update: true
+        }),
         "differing BUILD_TIME + ebuild gone + --update reinstalls"
     );
     // Differing but the ebuild IS visible (newpkg) -> no reinstall
     // without --rebuilt-binaries, regardless of --update.
     assert!(
-        !binary_reinstall_warranted(
-            &root,
-            &repos,
-            &config,
-            "dev-libs",
-            "newpkg",
-            "1.0",
-            Some(2000),
-            false,
-            None,
-            true,
-        ),
+        !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "newpkg",
+            version: "1.0",
+            binary_build_time: Some(2000),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            update: true
+        }),
         "a visible ebuild keeps the installed instance"
     );
     // --rebuilt-binaries escalates: reinstall for a differing
     // BUILD_TIME even when the ebuild is visible.
     assert!(
-        binary_reinstall_warranted(
-            &root,
-            &repos,
-            &config,
-            "dev-libs",
-            "newpkg",
-            "1.0",
-            Some(2000),
-            true,
-            None,
-            true,
-        ),
+        binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "newpkg",
+            version: "1.0",
+            binary_build_time: Some(2000),
+            rebuilt_binaries: true,
+            rebuilt_binaries_timestamp: None,
+            update: true
+        }),
         "--rebuilt-binaries reinstalls regardless of ebuild visibility"
     );
     let _ = std::fs::remove_dir_all(&root);

@@ -452,14 +452,14 @@ fn collect_feedback_collects_a_dropped_pin_once() {
     // Leg C: with the mask trial's entries pre-covered, the pass
     // settles -- the second scan's dedup skips the retained pin.
     let sc = souprov_conflict_161();
-    let probe = slot_conflict_mask_choices(
-        &ctx.repos,
-        &[],
-        &BacktrackParams::default(),
-        &HashMap::new(),
-        &sc,
-        &config,
-    );
+    let probe = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
+        repos: &ctx.repos,
+        excluded: &[],
+        params: &BacktrackParams::default(),
+        slot_pullers: &HashMap::new(),
+        sc: &sc,
+        config: &config,
+    });
     let mut grown_c = BacktrackParams::default();
     for c in &probe {
         for ((cat, pkg, ver), parents) in c

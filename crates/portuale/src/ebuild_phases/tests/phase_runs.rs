@@ -693,17 +693,17 @@ fn install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer() {
     let thread_ebuild_path = ebuild_path.clone();
     let thread_portage_tmpdir = portage_tmpdir.to_path_buf();
     std::thread::spawn(move || {
-        let result = run_commands(
-            &thread_ebuild_path,
-            &["install"],
-            Path::new("/"),
-            &thread_portage_tmpdir,
-            &thread_portage_tmpdir.join("distfiles"),
-            false,
-            Path::new("/dev/null/no-config-root"),
-            ShellBackend::Brush,
-            &[],
-        );
+        let result = run_commands(RunCommandsArgs {
+            ebuild_path: &thread_ebuild_path,
+            commands: &["install"],
+            root: Path::new("/"),
+            portage_tmpdir: &thread_portage_tmpdir,
+            distdir: &thread_portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell: ShellBackend::Brush,
+            build_env: &[],
+        });
         let _ = tx.send(result);
     });
     // A generous deadline: this drives a full brush phase chain (many

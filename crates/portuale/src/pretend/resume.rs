@@ -31,6 +31,30 @@ pub(crate) fn entries_not_merged(
     out
 }
 
+/// Arguments of [`run_resume`].
+pub(crate) struct RunResumeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) skipfirst: bool,
+    pub(crate) pretend: bool,
+    pub(crate) color_opt: Option<bool>,
+    pub(crate) jobs: usize,
+    pub(crate) load_average: Option<f64>,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    /// Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): suppresses
+    /// the post-merge info-regen einfo lines like every other action's.
+    pub(crate) quiet: bool,
+    /// Backlog #231 (a/c): real `run_action` prints the pre-resolution
+    /// news notice (and offers the `--read-news` prompt) before
+    /// `action_build` -- which is where the resume handling lives -- so
+    /// resumed builds print both notices too.
+    pub(crate) ask: bool,
+    pub(crate) read_news: bool,
+}
+
 /// `emerge --resume [--skipfirst] [--pretend]`: replay
 /// `mtimedb["resume"]["mergelist"]` (real `_emerge/actions.py`'s resume
 /// handling). With `--pretend`, print the saved list and stop (merging
@@ -45,30 +69,23 @@ pub(crate) fn entries_not_merged(
 /// the same suppression the original run would have applied is
 /// honoured. On another failure the still-unmerged tail is re-saved
 /// with the same `myopts`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_resume(
-    root: &Path,
-    config_root: &Path,
-    config: &portage_profile::Config,
-    portage_tmpdir: &Path,
-    skipfirst: bool,
-    pretend: bool,
-    color_opt: Option<bool>,
-    jobs: usize,
-    load_average: Option<f64>,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    // Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): suppresses
-    // the post-merge info-regen einfo lines like every other action's.
-    quiet: bool,
-    // Backlog #231 (a/c): real `run_action` prints the pre-resolution
-    // news notice (and offers the `--read-news` prompt) before
-    // `action_build` -- which is where the resume handling lives -- so
-    // resumed builds print both notices too.
-    ask: bool,
-    read_news: bool,
-) -> ExitCode {
+pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
+    let RunResumeArgs {
+        root,
+        config_root,
+        config,
+        portage_tmpdir,
+        skipfirst,
+        pretend,
+        color_opt,
+        jobs,
+        load_average,
+        shell,
+        debug,
+        quiet,
+        ask,
+        read_news,
+    } = args;
     let color = Colorizer::new(color::resolve_havecolor(color_opt));
     let repos = match portage_repo::find_repos(config_root) {
         Ok(r) => r,
@@ -93,7 +110,12 @@ pub(crate) fn run_resume(
     // An interrupted news prompt (backlog #234) exits `128 + SIGINT`
     // before `action_build`, like real `UserQuery.query`'s own
     // `sys.exit` (`_emerge/UserQuery.py:74-76`).
-    if offer_news_reading(ask, read_news, resume_pre_printed, &color) {
+    if offer_news_reading(OfferNewsReadingArgs {
+        ask,
+        read_news,
+        notice_printed: resume_pre_printed,
+        color: &color,
+    }) {
         return ExitCode::from(130);
     }
     let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
@@ -135,12 +157,25 @@ pub(crate) fn run_resume(
             // binary pool, never from the ebuild repos (real
             // `depgraph.py::_loadResumeCommand`, backlog #186).
             let binary_repo = if source == portage_repo::CandidateSource::Binary {
-                emerge_build::resume_binary_repo(&resume_bin_index, &config.binrepos, root, c, p, v)
+                emerge_build::resume_binary_repo(emerge_build::ResumeBinaryRepoArgs {
+                    local: &resume_bin_index,
+                    binrepos: &config.binrepos,
+                    root,
+                    category: c,
+                    package: p,
+                    version: v,
+                })
             } else {
                 None
             };
-            let mut entry =
-                emerge_build::resume_entry(c, p, v, source, &repos, binary_repo.as_deref());
+            let mut entry = emerge_build::resume_entry(emerge_build::ResumeEntryArgs {
+                category: c,
+                package: p,
+                version: v,
+                source,
+                repos: &repos,
+                binary_repo: binary_repo.as_deref(),
+            });
             // The `mtimedb` resume list records only `cat/pkg-ver`, so the
             // resolver's own `use_flags_display` population is skipped.
             // Recompute it for a source build -- `emerge_build::
@@ -282,19 +317,19 @@ pub(crate) fn run_resume(
             Some(&config_features_string(config)),
             Some(config),
         );
-        emerge_getbinpkg::run_merge_plan(
-            &entries,
+        emerge_getbinpkg::run_merge_plan(emerge_getbinpkg::RunMergePlanArgs {
+            entries: &entries,
             config,
-            &repos,
+            repos: &repos,
             root,
-            &package_options.pkgdir,
+            pkgdir: &package_options.pkgdir,
             portage_tmpdir,
-            &merge_options,
-            false,
-            None,
-            &[],
-            resume_mode,
-        )
+            merge_options: &merge_options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            mode: resume_mode,
+        })
     };
     if let Err(e) = merge_result {
         let still = entries_not_merged(root, &entries);
@@ -333,15 +368,15 @@ pub(crate) fn run_resume(
     // Real `--resume` honours the recorded `--oneshot`/`--onlydeps`: the
     // saved `favorites` are only world-recorded when the original run
     // would have recorded them.
-    if let Err(e) = update_world_file(
+    if let Err(e) = update_world_file(UpdateWorldFileArgs {
         root,
-        &fav_refs,
-        &entries,
-        &[],
-        &repos,
-        opts.oneshot,
-        opts.onlydeps,
-    ) {
+        target_atoms: &fav_refs,
+        entries: &entries,
+        system_atoms: &[],
+        repos: &repos,
+        oneshot: opts.oneshot,
+        onlydeps: opts.onlydeps,
+    }) {
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }

@@ -25,14 +25,14 @@ fn interrupted_vdb_write_leaves_merging_and_no_final_entry() {
     assert!(tmp_dir.is_dir());
     assert!(!root.join("var/db/pkg/dev-libs/victimpkg-1.0").exists());
 
-    populate_vdb_tmp(
-        &root,
-        "dev-libs",
-        "victimpkg-1.0",
-        &build_info,
-        "0",
-        "testrepo",
-    )
+    populate_vdb_tmp(PopulateVdbTmpArgs {
+        root: &root,
+        category: "dev-libs",
+        pf: "victimpkg-1.0",
+        build_info_dir: &build_info,
+        slot: "0",
+        repository: "testrepo",
+    })
     .unwrap();
     write_vdb_tmp_contents(
         &root,

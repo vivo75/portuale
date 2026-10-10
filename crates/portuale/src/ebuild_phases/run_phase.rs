@@ -58,18 +58,18 @@ pub(crate) async fn run_one_phase(
             )
             .await
         }
-        ShellBackend::Bash => run_one_phase_bash(
+        ShellBackend::Bash => run_one_phase_bash(RunOnePhaseBashArgs {
             env,
             root,
             phase,
             debug,
             extra_env,
-            &bin_dir,
-            &helpers_dir,
+            bin_dir: &bin_dir,
+            helpers_dir: &helpers_dir,
             config_root,
             log_file,
             iso,
-        ),
+        }),
     }
 }
 
@@ -170,16 +170,16 @@ pub(crate) async fn run_one_phase_brush(
     let mut shell = new_brush_phase_shell().await?;
     let (params, pump) = brush_phase_params(&mut shell, log_file)?;
 
-    let setup = phase_setup_script(
+    let setup = phase_setup_script(PhaseSetupScriptArgs {
         env,
         root,
-        phase,
+        ebuild_phase_value: phase,
         debug,
         bin_dir,
         helpers_dir,
         config_root,
         extra_env,
-    );
+    });
     // The shell owns the pipe write ends (its fd table) and must drop
     // before `pump` joins (EOF then finish) -- see `open_log_file`'s
     // lifetime contract. No `?` may return between here and the drops
@@ -244,6 +244,20 @@ pub(crate) async fn run_one_phase_brush(
     outcome
 }
 
+/// Arguments of [`run_one_phase_bash`].
+pub(crate) struct RunOnePhaseBashArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) phase: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) iso: Isolation,
+}
+
 /// `--shell bash`: spawns a genuine `bash <bin_dir>/ebuild.sh <phase>`
 /// subprocess instead of the embedded `brush_core::Shell` `run_one_
 /// phase_brush` above uses -- see `ShellBackend`'s own doc comment for
@@ -258,29 +272,29 @@ pub(crate) async fn run_one_phase_brush(
 /// `tokio::process` one: matches `fetch.rs`'s own precedent for
 /// spawning a real subprocess (`wget`) from inside an `async fn`
 /// without pulling in tokio's own "process" feature.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_one_phase_bash(
-    env: &Environment,
-    root: &Path,
-    phase: &str,
-    debug: bool,
-    extra_env: &[(String, String)],
-    bin_dir: &Path,
-    helpers_dir: &Path,
-    config_root: &Path,
-    log_file: Option<&Path>,
-    iso: Isolation,
-) -> Result<i32, String> {
-    let vars = phase_env_vars(
+pub(crate) fn run_one_phase_bash(args: RunOnePhaseBashArgs<'_>) -> Result<i32, String> {
+    let RunOnePhaseBashArgs {
         env,
         root,
         phase,
+        debug,
+        extra_env,
+        bin_dir,
+        helpers_dir,
+        config_root,
+        log_file,
+        iso,
+    } = args;
+    let vars = phase_env_vars(PhaseEnvVarsArgs {
+        env,
+        root,
+        ebuild_phase_value: phase,
         debug,
         bin_dir,
         helpers_dir,
         config_root,
         extra_env,
-    );
+    });
     // The gzip pump guard must outlive `cmd` (see `open_log_file`'s
     // lifetime contract + the sink comment below): it joins the gzip
     // thread, which needs EOF, which needs `cmd`'s stored parent

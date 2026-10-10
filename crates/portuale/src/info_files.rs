@@ -195,6 +195,18 @@ fn fs_err(path: &Path, e: std::io::Error) -> String {
     format!("{}: {e}", path.display())
 }
 
+/// Arguments of [`chk_updated_info_files`].
+pub struct ChkUpdatedInfoFilesArgs<'a> {
+    pub root: &'a Path,
+    pub infodirs: &'a [String],
+    pub prev_mtimes: &'a mut BTreeMap<String, i64>,
+    pub quiet: bool,
+    pub color: &'a Colorizer,
+    pub install_info: &'a str,
+    pub out: &'a mut dyn Write,
+    pub err: &'a mut dyn Write,
+}
+
 /// Real `chk_updated_info_files(root, infodirs, prev_mtimes)`
 /// (`lib/portage/util/_info_files.py:14-141`): `prev_mtimes` is real
 /// `mtimedb["info"]` (mutated in place -- the caller commits it);
@@ -203,17 +215,17 @@ fn fs_err(path: &Path, e: std::io::Error) -> String {
 /// buffers so the `--quiet` suppression itself is pinned, not just the
 /// memo side-effect). Eight params (real's three + quiet/color/binary +
 /// the two sinks) -- arity-lint noise, not a design smell.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn chk_updated_info_files(
-    root: &Path,
-    infodirs: &[String],
-    prev_mtimes: &mut BTreeMap<String, i64>,
-    quiet: bool,
-    color: &Colorizer,
-    install_info: &str,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> Result<InfoReport, String> {
+pub fn chk_updated_info_files(args: ChkUpdatedInfoFilesArgs<'_>) -> Result<InfoReport, String> {
+    let ChkUpdatedInfoFilesArgs {
+        root,
+        infodirs,
+        prev_mtimes,
+        quiet,
+        color,
+        install_info,
+        out,
+        err,
+    } = args;
     let mut report = InfoReport::default();
     // Real line 15: without the host binary the whole function is a
     // silent no-op.
@@ -426,16 +438,16 @@ pub fn post_merge_info_update(
     // `eprintln!` emitted before the sink refactor).
     let mut out = std::io::stdout().lock();
     let mut err = std::io::stderr().lock();
-    let report = chk_updated_info_files(
+    let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
         root,
-        &infodirs,
-        &mut prev_mtimes,
+        infodirs: &infodirs,
+        prev_mtimes: &mut prev_mtimes,
         quiet,
         color,
-        INSTALL_INFO,
-        &mut out,
-        &mut err,
-    )?;
+        install_info: INSTALL_INFO,
+        out: &mut out,
+        err: &mut err,
+    })?;
     if prev_mtimes != before {
         crate::mtimedb::write_info_mtimes(root, &prev_mtimes)?;
     }
@@ -530,16 +542,16 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        let report = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
 
         assert!(report.ran);
@@ -580,31 +592,31 @@ mod tests {
         let mut prev = BTreeMap::new();
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let first = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let first = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
         assert_eq!(first.regenerated.len(), 1);
 
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let second = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let second = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
         // Real's own `GNU info directory index is up-to-date.` branch:
         // nothing regenerated, nothing counted -- and the line itself
@@ -636,16 +648,16 @@ mod tests {
         let mut prev = BTreeMap::new();
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let report = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            true,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: true,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
         assert!(report.ran);
         assert_eq!((report.icount, report.badcount), (1, 0));
@@ -689,16 +701,16 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        let report = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
 
         assert!(report.regenerated.is_empty());
@@ -717,16 +729,16 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        let report = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            "/nonexistent/install-info-for-test",
-            &mut out,
-            &mut err,
-        )
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: "/nonexistent/install-info-for-test",
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
 
         assert_eq!(report, InfoReport::default());

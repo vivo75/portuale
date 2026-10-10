@@ -24,6 +24,16 @@ pub(crate) struct SimilarMask {
     pub(crate) parents: Vec<((String, String, String), String)>,
 }
 
+/// Arguments of [`slot_conflict_mask_choices`].
+pub(crate) struct SlotConflictMaskChoicesArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) excluded: &'a [String],
+    pub(crate) params: &'a BacktrackParams,
+    pub(crate) slot_pullers: &'a SlotPullers,
+    pub(crate) sc: &'a SlotConflict,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Phase C3 (023): port of real
 /// `lib/_emerge/depgraph.py::_slot_confict_backtrack` (note the upstream
 /// one-`l` spelling), C4 extended with the `_iter_similar_available`
@@ -54,15 +64,15 @@ pub(crate) struct SimilarMask {
 /// treated as masked, absent from fixtures), and not already a conflict
 /// party. The ebuild-only listing moots real's installed-skip and its
 /// built/binpkg-visibility branches (no counterpart, documented cut).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn slot_conflict_mask_choices(
-    repos: &[RepoConfig],
-    excluded: &[String],
-    params: &BacktrackParams,
-    slot_pullers: &SlotPullers,
-    sc: &SlotConflict,
-    config: &portage_profile::Config,
-) -> Vec<MaskChoice> {
+pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) -> Vec<MaskChoice> {
+    let SlotConflictMaskChoicesArgs {
+        repos,
+        excluded,
+        params,
+        slot_pullers,
+        sc,
+        config,
+    } = args;
     // Every pulled version is a candidate, highest first (real's
     // `conflict_pkgs.sort(reverse=True)`).
     let mut versions: Vec<String> = sc.instances.iter().map(|i| i.version.clone()).collect();

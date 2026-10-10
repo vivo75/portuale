@@ -96,7 +96,15 @@ fn abort_outcome_masked_dep_aborts_with_the_merge_bound_requirer() {
         entry_163("dev-libs", "top", new_163("1.0"), &[]),
     ];
     let masked = vec![masked_163("dev-libs", "need", "dev-libs/need")];
-    match abort_outcome(&entries, &masked, &[], &[], &[], &HashMap::new(), &[]) {
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &masked,
+        circular_deps: &[],
+        cycle_display: &[],
+        cycle_display_idx: &[],
+        nvc_dep_atoms: &HashMap::new(),
+        virtual_cycle: &[],
+    }) {
         ResolveOutcome::Aborted {
             reason: AbortReason::MaskedDep { atom, parent_cpv },
             partial,
@@ -125,7 +133,15 @@ fn abort_outcome_ghost_requirer_completes_despite_a_same_category_merge() {
         entry_163("dev-libs", "top", new_163("1.0"), &[]),
     ];
     assert_eq!(
-        abort_outcome(&entries, &[], &[], &[], &[], &HashMap::new(), &[]),
+        abort_outcome(AbortOutcomeArgs {
+            entries: &entries,
+            masked_deps: &[],
+            circular_deps: &[],
+            cycle_display: &[],
+            cycle_display_idx: &[],
+            nvc_dep_atoms: &HashMap::new(),
+            virtual_cycle: &[]
+        }),
         ResolveOutcome::Complete
     );
 }
@@ -151,7 +167,15 @@ fn abort_outcome_installed_only_requirer_aborts_with_the_installed_cpv() {
         ("dev-libs".to_string(), "need".to_string()),
         ">=dev-libs/need-2.0".to_string(),
     );
-    match abort_outcome(&entries, &[], &[], &[], &[], &atoms, &[]) {
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &[],
+        circular_deps: &[],
+        cycle_display: &[],
+        cycle_display_idx: &[],
+        nvc_dep_atoms: &atoms,
+        virtual_cycle: &[],
+    }) {
         ResolveOutcome::Aborted {
             reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
             partial,
@@ -181,7 +205,15 @@ fn abort_outcome_ghost_requirer_completes_despite_a_same_category_installed_entr
         entry_163("dev-libs", "top", installed_163("1.0"), &[]),
     ];
     assert_eq!(
-        abort_outcome(&entries, &[], &[], &[], &[], &HashMap::new(), &[]),
+        abort_outcome(AbortOutcomeArgs {
+            entries: &entries,
+            masked_deps: &[],
+            circular_deps: &[],
+            cycle_display: &[],
+            cycle_display_idx: &[],
+            nvc_dep_atoms: &HashMap::new(),
+            virtual_cycle: &[]
+        }),
         ResolveOutcome::Complete
     );
 }
@@ -203,7 +235,15 @@ fn abort_outcome_masked_report_for_another_package_does_not_abort_as_masked() {
         entry_163("dev-libs", "top", new_163("1.0"), &[]),
     ];
     let masked = vec![masked_163("dev-libs", "other", "dev-libs/other")];
-    match abort_outcome(&entries, &masked, &[], &[], &[], &HashMap::new(), &[]) {
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &masked,
+        circular_deps: &[],
+        cycle_display: &[],
+        cycle_display_idx: &[],
+        nvc_dep_atoms: &HashMap::new(),
+        virtual_cycle: &[],
+    }) {
         ResolveOutcome::Aborted {
             reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
             partial,
@@ -231,7 +271,15 @@ fn abort_outcome_masked_report_for_the_same_package_in_another_category_does_not
         entry_163("dev-libs", "top", new_163("1.0"), &[]),
     ];
     let masked = vec![masked_163("sys-libs", "need", "sys-libs/need")];
-    match abort_outcome(&entries, &masked, &[], &[], &[], &HashMap::new(), &[]) {
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &masked,
+        circular_deps: &[],
+        cycle_display: &[],
+        cycle_display_idx: &[],
+        nvc_dep_atoms: &HashMap::new(),
+        virtual_cycle: &[],
+    }) {
         ResolveOutcome::Aborted {
             reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
             partial,
@@ -255,7 +303,15 @@ fn abort_outcome_nvc_entry_with_no_requirer_is_rescued() {
         &[],
     )];
     assert_eq!(
-        abort_outcome(&entries, &[], &[], &[], &[], &HashMap::new(), &[]),
+        abort_outcome(AbortOutcomeArgs {
+            entries: &entries,
+            masked_deps: &[],
+            circular_deps: &[],
+            cycle_display: &[],
+            cycle_display_idx: &[],
+            nvc_dep_atoms: &HashMap::new(),
+            virtual_cycle: &[]
+        }),
         ResolveOutcome::Complete
     );
 }
@@ -266,7 +322,15 @@ fn abort_outcome_nvc_entry_with_no_requirer_is_rescued() {
 fn abort_outcome_empty_graph_completes() {
     let entries = vec![entry_163("dev-libs", "top", new_163("1.0"), &[])];
     assert_eq!(
-        abort_outcome(&entries, &[], &[], &[], &[], &HashMap::new(), &[]),
+        abort_outcome(AbortOutcomeArgs {
+            entries: &entries,
+            masked_deps: &[],
+            circular_deps: &[],
+            cycle_display: &[],
+            cycle_display_idx: &[],
+            nvc_dep_atoms: &HashMap::new(),
+            virtual_cycle: &[]
+        }),
         ResolveOutcome::Complete
     );
 }
@@ -283,15 +347,15 @@ fn abort_outcome_cycle_members_collect_the_matching_partial_in_order() {
         entry_163("dev-libs", "c", new_163("3.0"), &[]),
     ];
     let display = vec!["dev-libs/b-2.0".to_string(), "dev-libs/a-1.0".to_string()];
-    match abort_outcome(
-        &entries,
-        &[],
-        &[vec!["x".to_string()]],
-        &display,
-        &[],
-        &HashMap::new(),
-        &[],
-    ) {
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &[],
+        circular_deps: &[vec!["x".to_string()]],
+        cycle_display: &display,
+        cycle_display_idx: &[],
+        nvc_dep_atoms: &HashMap::new(),
+        virtual_cycle: &[],
+    }) {
         ResolveOutcome::Aborted {
             reason: AbortReason::UnserializableCycle { members },
             partial,
@@ -313,15 +377,15 @@ fn abort_outcome_cycle_idx_keeps_both_root_instances_of_one_cpv() {
     running.targets_running_root = true;
     let entries = vec![target, running];
     let display = vec!["dev-lang/comp-1.0".to_string(); 2];
-    match abort_outcome(
-        &entries,
-        &[],
-        &[vec!["x".to_string()]],
-        &display,
-        &[0, 1],
-        &HashMap::new(),
-        &[],
-    ) {
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &[],
+        circular_deps: &[vec!["x".to_string()]],
+        cycle_display: &display,
+        cycle_display_idx: &[0, 1],
+        nvc_dep_atoms: &HashMap::new(),
+        virtual_cycle: &[],
+    }) {
         ResolveOutcome::Aborted { partial, .. } => {
             let flags: Vec<bool> = partial.iter().map(|e| e.targets_running_root).collect();
             assert_eq!(flags, vec![false, true]);
@@ -347,10 +411,27 @@ fn cfg_163() -> portage_profile::Config {
     }
 }
 
+/// Arguments of [`write_pkg_163_ru`].
+struct WritePkg163RuArgs<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    iuse: &'a str,
+    required_use: &'a str,
+}
+
 /// Same shape with a `REQUIRED_USE` line instead of `RDEPEND`
 /// (the S2 parent-flip legs' writer).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn write_pkg_163_ru(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str, required_use: &str) {
+fn write_pkg_163_ru(args: WritePkg163RuArgs<'_>) {
+    let WritePkg163RuArgs {
+        repo,
+        cp,
+        pv,
+        slot,
+        iuse,
+        required_use,
+    } = args;
     use md5::Digest as _;
     use std::fmt::Write as _;
     let (cat, pkg) = cp.split_once('/').expect("category/package");
@@ -385,7 +466,14 @@ fn write_pkg_163_ru(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str, req
 fn repo_pkgs_163_ru(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
     let repo = dir.join("repo");
     for (cp, pv, slot, iuse, required_use) in pkgs {
-        write_pkg_163_ru(&repo, cp, pv, slot, iuse, required_use);
+        write_pkg_163_ru(WritePkg163RuArgs {
+            repo: &repo,
+            cp,
+            pv,
+            slot,
+            iuse,
+            required_use,
+        });
     }
     vec![RepoConfig {
         name: "testrepo".to_string(),
@@ -432,14 +520,14 @@ fn use_unsat_parent_row_suggests_enabling_an_off_flag() {
     let config = cfg_163();
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
-        use_unsat_parent_row(
-            &repos,
-            dir.as_path(),
-            &entries,
-            "dev-libs/child[flipme=]",
-            Some(&owner_163("dev-libs", "parent")),
-            &config,
-        ),
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flipme=]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
             vec!["Change USE: +flipme".to_string()],
@@ -464,14 +552,14 @@ fn use_unsat_parent_row_suggests_disabling_an_on_flag() {
     let config = cfg_163();
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
-        use_unsat_parent_row(
-            &repos,
-            dir.as_path(),
-            &entries,
-            "dev-libs/child[keepoff?]",
-            Some(&owner_163("dev-libs", "parent")),
-            &config,
-        ),
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[keepoff?]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
             vec!["Change USE: -keepoff".to_string()],
@@ -503,14 +591,14 @@ fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag() {
     std::fs::write(vdb.join("IUSE"), "flip\n").unwrap();
     let entries = vec![entry_163("dev-libs", "parent", installed_163("1.0"), &[])];
     assert_eq!(
-        use_unsat_parent_row(
-            &repos,
-            dir.as_path(),
-            &entries,
-            "dev-libs/child[flip=]",
-            Some(&owner_163("dev-libs", "parent")),
-            &config,
-        ),
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flip=]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
             vec!["Change USE: +flip".to_string()],
@@ -550,16 +638,16 @@ fn chain_suffix_qualifies_a_flag_gated_merge_bound_edge() {
     ];
     let atoms: Vec<String> = Vec::new();
     assert_eq!(
-        masked_dep_chain(
-            &repos,
-            &config,
-            &entries,
-            "dev-libs",
-            "leaf",
-            &atoms,
-            dir.as_path(),
-            "",
-        ),
+        masked_dep_chain(MaskedDepChainArgs {
+            repos: &repos,
+            config: &config,
+            entries: &entries,
+            category: "dev-libs",
+            package: "leaf",
+            atoms: &atoms,
+            root: dir.as_path(),
+            atom: ""
+        }),
         vec![(
             "dev-libs/consumer-1.0::testrepo[qml]".to_string(),
             "ebuild".to_string(),
@@ -596,16 +684,16 @@ fn chain_suffix_stays_bare_on_an_ungated_edge() {
     ];
     let atoms: Vec<String> = Vec::new();
     assert_eq!(
-        masked_dep_chain(
-            &repos,
-            &config,
-            &entries,
-            "dev-libs",
-            "leaf",
-            &atoms,
-            dir.as_path(),
-            "",
-        ),
+        masked_dep_chain(MaskedDepChainArgs {
+            repos: &repos,
+            config: &config,
+            entries: &entries,
+            category: "dev-libs",
+            package: "leaf",
+            atoms: &atoms,
+            root: dir.as_path(),
+            atom: ""
+        }),
         vec![(
             "dev-libs/consumer-1.0::testrepo".to_string(),
             "ebuild".to_string(),
@@ -657,16 +745,16 @@ fn chain_suffix_qualifies_a_gated_installed_edge_from_the_vdb() {
     ];
     let atoms: Vec<String> = Vec::new();
     assert_eq!(
-        masked_dep_chain(
-            &repos,
-            &config,
-            &entries,
-            "dev-libs",
-            "leaf",
-            &atoms,
-            dir.as_path(),
-            "",
-        ),
+        masked_dep_chain(MaskedDepChainArgs {
+            repos: &repos,
+            config: &config,
+            entries: &entries,
+            category: "dev-libs",
+            package: "leaf",
+            atoms: &atoms,
+            root: dir.as_path(),
+            atom: ""
+        }),
         vec![(
             "dev-libs/parent-1.0::testrepo[qml]".to_string(),
             "installed".to_string(),
@@ -685,25 +773,25 @@ fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
     let config = cfg_163();
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
-        use_unsat_parent_row(
-            &repos,
-            dir.as_path(),
-            &entries,
-            "dev-libs/child[flipme?]",
-            None,
-            &config,
-        ),
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flipme?]",
+            owner: None,
+            config: &config
+        }),
         None
     );
     assert_eq!(
-        use_unsat_parent_row(
-            &repos,
-            dir.as_path(),
-            &entries,
-            "dev-libs/child[flipme]",
-            Some(&owner_163("dev-libs", "parent")),
-            &config,
-        ),
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flipme]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
         None
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -733,14 +821,7 @@ fn use_unsat_parent_row_notes_a_newly_violated_required_use() {
     let config = cfg_163();
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
-        use_unsat_parent_row(
-            &repos,
-            dir.as_path(),
-            &entries,
-            "dev-libs/child[flipme=]",
-            Some(&owner_163("dev-libs", "parent")),
-            &config,
-        ),
+        use_unsat_parent_row(UseUnsatParentRowArgs { repos: &repos, root: dir.as_path(), entries: &entries, display_atom: "dev-libs/child[flipme=]", owner: Some(&owner_163("dev-libs", "parent")), config: &config }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
             vec!["Change USE: +flipme, this change violates use flag constraints defined by dev-libs/parent-1.0: 'flipme? ( other )'".to_string()],
@@ -772,14 +853,14 @@ fn use_unsat_parent_row_omits_the_note_when_required_use_stays_satisfied() {
     let config = cfg_163();
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
-        use_unsat_parent_row(
-            &repos,
-            dir.as_path(),
-            &entries,
-            "dev-libs/child[flipme=]",
-            Some(&owner_163("dev-libs", "parent")),
-            &config,
-        ),
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flipme=]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
             vec!["Change USE: +flipme".to_string()],
@@ -787,20 +868,31 @@ fn use_unsat_parent_row_omits_the_note_when_required_use_stays_satisfied() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+/// Arguments of [`write_pkg_163`].
+struct WritePkg163Args<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    iuse: &'a str,
+    rdepend: &'a str,
+    keywords: &'a str,
+}
+
 /// One scratch ebuild plus its real md5-cache entry (the md5-cache
 /// validation guard fails otherwise), in the #161/#162 shape:
 /// `SLOT`, `KEYWORDS`, `IUSE`, `RDEPEND` lines in both the ebuild
 /// and the cache entry.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn write_pkg_163(
-    repo: &Path,
-    cp: &str,
-    pv: &str,
-    slot: &str,
-    iuse: &str,
-    rdepend: &str,
-    keywords: &str,
-) {
+fn write_pkg_163(args: WritePkg163Args<'_>) {
+    let WritePkg163Args {
+        repo,
+        cp,
+        pv,
+        slot,
+        iuse,
+        rdepend,
+        keywords,
+    } = args;
     use md5::Digest as _;
     use std::fmt::Write as _;
     let (cat, pkg) = cp.split_once('/').expect("category/package");
@@ -835,7 +927,15 @@ fn write_pkg_163(
 fn repo_pkgs_163(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
     let repo = dir.join("repo");
     for (cp, pv, slot, iuse, rdepend, keywords) in pkgs {
-        write_pkg_163(&repo, cp, pv, slot, iuse, rdepend, keywords);
+        write_pkg_163(WritePkg163Args {
+            repo: &repo,
+            cp,
+            pv,
+            slot,
+            iuse,
+            rdepend,
+            keywords,
+        });
     }
     vec![RepoConfig {
         name: "testrepo".to_string(),

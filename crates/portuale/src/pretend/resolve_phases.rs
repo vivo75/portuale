@@ -229,15 +229,15 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     // it only widens `--json` / `--changed-deps-report` / slot-op
     // accounting.
     let auto_enable = !nodeps
-        && portage_repo::complete_graph_auto_enable(
-            &result.entries,
-            complete_if_new_use,
-            complete_if_new_ver,
-            rebuild_if_new_slot,
+        && portage_repo::complete_graph_auto_enable(portage_repo::CompleteGraphAutoEnableArgs {
+            entries: &result.entries,
+            if_new_use: complete_if_new_use,
+            if_new_ver: complete_if_new_ver,
+            if_new_slot: rebuild_if_new_slot,
             root,
             repos,
             config,
-        );
+        });
     let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
     let result = if want_complete {
         match handle(run_resolve(true, &locked_merges, true).map_err(crate::error::Error::from)) {

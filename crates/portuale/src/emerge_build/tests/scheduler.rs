@@ -40,18 +40,18 @@ fn run_build_scheduler_single_failure_counts_failed_exactly_once() {
         crate::color::Colorizer::new(false),
     );
     let policy = mrg_director::LoadAwarePolicy::new(2, None);
-    let err = run_build_scheduler(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        false,
-        None,
-        &[],
-        &policy,
-        &display,
-    )
+    let err = run_build_scheduler(RunBuildSchedulerArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        policy: &policy,
+        display: &display,
+    })
     .expect_err("schedbad's own failure must fail the run");
     assert!(err.contains("schedbad-1.0"), "{err}");
     assert_eq!(

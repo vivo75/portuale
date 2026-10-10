@@ -90,42 +90,42 @@ fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
         Some(PretendOutcome::Upgrade { .. })
     ));
     assert!(!has_newpkg(&up));
-    assert!(complete_graph_auto_enable(
-        &up.entries,
-        true,
-        true,
-        true,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(complete_graph_auto_enable(
-        &up.entries,
-        false,
-        true,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        &up.entries,
-        true,
-        false,
-        true,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        &up.entries,
-        false,
-        false,
-        false,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &up.entries,
+        if_new_use: true,
+        if_new_ver: true,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &up.entries,
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &up.entries,
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &up.entries,
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
     // Even after the auto-enable re-walk, the missing deep dep is not
     // merged (2-pass, `completegraphpkg` is the only phase-1 merge).
     assert!(!has_newpkg(&resolve_cfg(
@@ -138,15 +138,15 @@ fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
 
     // An AlreadyInstalled-only graph never auto-enables.
     let noop = resolve("dev-libs/deeppkg2", false, Deep::NotRequested, false);
-    assert!(!complete_graph_auto_enable(
-        &noop.entries,
-        true,
-        true,
-        true,
-        std::path::Path::new(""),
-        &[],
-        &portage_profile::Config::default()
-    ));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &noop.entries,
+        if_new_use: true,
+        if_new_ver: true,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
 }
 
 #[test]
@@ -179,22 +179,22 @@ fn complete_graph_auto_enable_reasonless_reinstall_with_use_drift() {
         repo_name: Some("testrepo".to_string()),
         ..graph_entry("dev-libs", "cgp0x", "2.8.0")
     };
-    assert!(complete_graph_auto_enable(
-        std::slice::from_ref(&reasonless),
-        true,
-        false,
-        false,
-        &root,
-        &repos,
-        &portage_profile::Config::default()
-    ));
-    assert!(!complete_graph_auto_enable(
-        std::slice::from_ref(&reasonless),
-        false,
-        false,
-        false,
-        &root,
-        &repos,
-        &portage_profile::Config::default()
-    ));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: std::slice::from_ref(&reasonless),
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: &root,
+        repos: &repos,
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: std::slice::from_ref(&reasonless),
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: &root,
+        repos: &repos,
+        config: &portage_profile::Config::default()
+    }));
 }

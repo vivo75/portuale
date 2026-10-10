@@ -2,6 +2,18 @@
 
 use crate::*;
 
+/// Arguments of [`binpkg_respect_use_ok`].
+pub(crate) struct BinpkgRespectUseOkArgs<'a> {
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) ebuild_at_version: Option<&'a Candidate>,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) newuse: bool,
+    pub(crate) changed_use: bool,
+    pub(crate) respect_use: bool,
+}
+
 /// `--usepkg-exclude`/`--usepkg-include` (real `main.py`: "a space
 /// separated list of package names or slot atoms", real `WildcardSet`
 /// grammar, same "plain atom or `*`-wildcard" two-tier matcher
@@ -89,18 +101,17 @@ use crate::*;
 /// must still be forgiven: real keeps the binary (probed live against
 /// 3.0.82.2; `_reinstall_for_flags` returns `None`), so the presence
 /// term must lose it too.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn binpkg_respect_use_ok(
-    candidate: &Candidate,
-    ebuild_at_version: Option<&Candidate>,
-    category: &str,
-    package: &str,
-    config: &portage_profile::Config,
-    newuse: bool,
-    changed_use: bool,
-    respect_use: bool,
-) -> bool {
+pub(crate) fn binpkg_respect_use_ok(args: BinpkgRespectUseOkArgs<'_>) -> bool {
+    let BinpkgRespectUseOkArgs {
+        candidate,
+        ebuild_at_version,
+        category,
+        package,
+        config,
+        newuse,
+        changed_use,
+        respect_use,
+    } = args;
     let Some(binary_use) = &candidate.binary_use else {
         return true;
     };
@@ -200,7 +211,7 @@ pub(crate) fn binpkg_respect_use_ok(
     if let Some(hit) = BRU_CACHE.with(|c| c.borrow().get(&key).copied()) {
         return hit;
     }
-    let result = binpkg_respect_use_ok_uncached(
+    let result = binpkg_respect_use_ok_uncached(BinpkgRespectUseOkUncachedArgs {
         candidate,
         ebuild_at_version,
         category,
@@ -209,7 +220,7 @@ pub(crate) fn binpkg_respect_use_ok(
         newuse,
         changed_use,
         respect_use,
-    );
+    });
     BRU_CACHE.with(|c| {
         c.borrow_mut().insert(key, result);
     });
@@ -225,19 +236,29 @@ thread_local! {
 pub(crate) fn binpkg_respect_use_ok_uncached_calls() -> u64 {
     BRU_UNCACHED_CALLS.with(std::cell::Cell::get)
 }
+/// Arguments of [`binpkg_respect_use_ok_uncached`].
+pub(crate) struct BinpkgRespectUseOkUncachedArgs<'a> {
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) ebuild_at_version: Option<&'a Candidate>,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) newuse: bool,
+    pub(crate) changed_use: bool,
+    pub(crate) respect_use: bool,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn binpkg_respect_use_ok_uncached(
-    candidate: &Candidate,
-    ebuild_at_version: Option<&Candidate>,
-    category: &str,
-    package: &str,
-    config: &portage_profile::Config,
-    newuse: bool,
-    changed_use: bool,
-    respect_use: bool,
-) -> bool {
+pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArgs<'_>) -> bool {
+    let BinpkgRespectUseOkUncachedArgs {
+        candidate,
+        ebuild_at_version,
+        category,
+        package,
+        config,
+        newuse,
+        changed_use,
+        respect_use,
+    } = args;
     #[cfg(test)]
     BRU_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
     let Some(binary_use) = &candidate.binary_use else {
@@ -381,21 +402,52 @@ pub fn read_binary_metadata_instance(
     pick_binary_instance(index.entries(), &want, build_id).cloned()
 }
 
+/// Arguments of [`read_binary_metadata_any`].
+pub struct ReadBinaryMetadataAnyArgs<'a> {
+    pub config: &'a portage_profile::Config,
+    pub root: &'a Path,
+    pub local: &'a BinaryIndex,
+    pub category: &'a str,
+    pub package: &'a str,
+    pub version: &'a str,
+}
+
 /// `read_binary_metadata` extended to a `--getbinpkg` resolution: the
 /// local `$PKGDIR/Packages` first, then each `config.binrepos` binrepo's
 /// own cached `Packages` index (`BinRepo::packages_dir`). Used once a
 /// binary candidate -- local *or* remote -- has been chosen and its own
 /// dependency strings / `SIZE` are needed.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn read_binary_metadata_any(
-    config: &portage_profile::Config,
-    root: &Path,
-    local: &BinaryIndex,
-    category: &str,
-    package: &str,
-    version: &str,
+    args: ReadBinaryMetadataAnyArgs<'_>,
 ) -> Option<HashMap<String, String>> {
-    read_binary_metadata_any_instance(config, root, local, category, package, version, None)
+    let ReadBinaryMetadataAnyArgs {
+        config,
+        root,
+        local,
+        category,
+        package,
+        version,
+    } = args;
+    read_binary_metadata_any_instance(ReadBinaryMetadataAnyInstanceArgs {
+        config,
+        root,
+        local,
+        category,
+        package,
+        version,
+        build_id: None,
+    })
+}
+
+/// Arguments of [`read_binary_metadata_any_instance`].
+pub struct ReadBinaryMetadataAnyInstanceArgs<'a> {
+    pub config: &'a portage_profile::Config,
+    pub root: &'a Path,
+    pub local: &'a BinaryIndex,
+    pub category: &'a str,
+    pub package: &'a str,
+    pub version: &'a str,
+    pub build_id: Option<&'a str>,
 }
 
 /// [`read_binary_metadata_any`] for the build the resolver selected
@@ -403,16 +455,18 @@ pub fn read_binary_metadata_any(
 /// binrepo) is searched for exactly that `BUILD_ID` before falling back
 /// to the newest build of the version, so a chosen instance never walks
 /// another instance's dependency strings.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub fn read_binary_metadata_any_instance(
-    config: &portage_profile::Config,
-    root: &Path,
-    local: &BinaryIndex,
-    category: &str,
-    package: &str,
-    version: &str,
-    build_id: Option<&str>,
+    args: ReadBinaryMetadataAnyInstanceArgs<'_>,
 ) -> Option<HashMap<String, String>> {
+    let ReadBinaryMetadataAnyInstanceArgs {
+        config,
+        root,
+        local,
+        category,
+        package,
+        version,
+        build_id,
+    } = args;
     let lookup = |build_id: Option<&str>| {
         if let Some(m) = read_binary_metadata_instance(local, category, package, version, build_id)
         {

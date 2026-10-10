@@ -57,9 +57,14 @@ pub(crate) fn lib_consumer_scan(
             std::collections::BTreeSet<String>,
         > = std::collections::BTreeMap::new();
         for (lib_path, soname) in provided {
-            let Ok(consumers) =
-                needed_elf::find_consumers(root, &map, &defpath, lib_path, None, false)
-            else {
+            let Ok(consumers) = needed_elf::find_consumers(needed_elf::FindConsumersArgs {
+                root,
+                map: &map,
+                defpath: &defpath,
+                obj: lib_path,
+                exclude_provider: None,
+                greedy: false,
+            }) else {
                 continue;
             };
             for consumer_path in consumers {
@@ -204,6 +209,37 @@ pub(crate) fn depclean_unresolved_halt(
     Some(ExitCode::from(1))
 }
 
+/// Arguments of [`run_depclean_pretend`].
+pub(crate) struct RunDepcleanPretendArgs<'a> {
+    pub(crate) targets: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    /// The `repos.conf` repos -- threaded into the post-removal GLEP 42
+    /// count notice (backlog #196 fix round 1).
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) verbose: bool,
+    pub(crate) lib_check: bool,
+    /// Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
+    /// "n"` -- `--depclean <atoms> --deselect=n` keeps the `world` set as
+    /// a protection root (a world member named as an arg is kept). See
+    /// `depclean_cleanlist`'s own `deselect` param.
+    pub(crate) deselect: bool,
+    /// `false` for a real `emerge --depclean` (no `--pretend`): after the
+    /// preview, `run_unmerge_pretend` removes the cleanlist, and the stats
+    /// block reads `Number removed:` instead of `Number to remove:`
+    /// (real `action_depclean:908-911`).
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Threaded into the post-removal info-regen block (real `--quiet`
+    /// suppression + resolved-config `noinfo`); computed by the caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+}
+
 /// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
 /// `_calc_depclean`, no package arguments): the packages nothing in
 /// `@world` ∪ `@system` needs, at runtime, are the cleanlist. Real
@@ -224,37 +260,24 @@ pub(crate) fn depclean_unresolved_halt(
 /// else needs -- see `depclean_cleanlist`'s own doc comment. Real
 /// `action_depclean` only shows the `* ` advisory block with no args, so
 /// this doesn't either.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_depclean_pretend(
-    targets: &[&str],
-    root: &Path,
-    config_root: &Path,
-    config: &portage_profile::Config,
-    // The `repos.conf` repos -- threaded into the post-removal GLEP 42
-    // count notice (backlog #196 fix round 1).
-    repos: &[portage_repo::RepoConfig],
-    verbose: bool,
-    lib_check: bool,
-    // Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
-    // "n"` -- `--depclean <atoms> --deselect=n` keeps the `world` set as
-    // a protection root (a world member named as an arg is kept). See
-    // `depclean_cleanlist`'s own `deselect` param.
-    deselect: bool,
-    // `false` for a real `emerge --depclean` (no `--pretend`): after the
-    // preview, `run_unmerge_pretend` removes the cleanlist, and the stats
-    // block reads `Number removed:` instead of `Number to remove:`
-    // (real `action_depclean:908-911`).
-    pretend: bool,
-    ask: bool,
-    shell: ebuild_phases::ShellBackend,
-    debug: bool,
-    color: &Colorizer,
-    // Threaded into the post-removal info-regen block (real `--quiet`
-    // suppression + resolved-config `noinfo`); computed by the caller.
-    quiet: bool,
-    noinfo: bool,
-) -> ExitCode {
+pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode {
+    let RunDepcleanPretendArgs {
+        targets,
+        root,
+        config_root,
+        config,
+        repos,
+        verbose,
+        lib_check,
+        deselect,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        noinfo,
+    } = args;
     // Bare-name targets get their category from the vdb, then each atom
     // is checked against the vdb (real `action_depclean`, `:848-863`) --
     // shared with `--prune`.
@@ -365,15 +388,15 @@ pub(crate) fn run_depclean_pretend(
         .collect::<HashSet<_>>()
         .len();
 
-    let result = portage_repo::depclean_cleanlist(
+    let result = portage_repo::depclean_cleanlist(portage_repo::DepcleanCleanlistArgs {
         root,
-        &world_seeds,
-        &config.system_packages,
-        &args,
+        world_seeds: &world_seeds,
+        system_atoms: &config.system_packages,
+        args: &args,
         deselect,
-        &[],
-        &config.package_provided,
-    );
+        lib_protected_providers: &[],
+        package_provided: &config.package_provided,
+    });
     // Real `_calc_depclean`'s `unresolved_deps()` safety halt
     // (`actions.py:1247`) -- checked before the lib scan.
     if let Some(code) = depclean_unresolved_halt(&result.unresolved, false, color) {
@@ -384,15 +407,15 @@ pub(crate) fn run_depclean_pretend(
     // own deps with it, via a second `depclean_cleanlist` pass seeding
     // the protected providers as roots).
     let result = apply_depclean_lib_check(root, result, lib_check, color, |providers| {
-        portage_repo::depclean_cleanlist(
+        portage_repo::depclean_cleanlist(portage_repo::DepcleanCleanlistArgs {
             root,
-            &world_seeds,
-            &config.system_packages,
-            &args,
+            world_seeds: &world_seeds,
+            system_atoms: &config.system_packages,
+            args: &args,
             deselect,
-            providers,
-            &config.package_provided,
-        )
+            lib_protected_providers: providers,
+            package_provided: &config.package_provided,
+        })
     });
 
     // Real `create_cleanlist`'s own `elif "--verbose": show_parents(pkg)`
@@ -445,14 +468,14 @@ pub(crate) fn run_depclean_pretend(
     // Real `action_depclean`: `unmerge(root_config, myopts, "unmerge",
     // cleanlist, ordered=ordered)` -- the same `unmerge()` the `-C` path
     // uses. Without `--pretend`, `run_unmerge_pretend` removes them.
-    let unmerge_rc = run_unmerge_pretend(
-        &cpv_refs,
-        "unmerge",
+    let unmerge_rc = run_unmerge_pretend(RunUnmergePretendArgs {
+        targets: &cpv_refs,
+        action: "unmerge",
         root,
         config_root,
         config,
         repos,
-        result.ordered,
+        preserve_order: result.ordered,
         pretend,
         ask,
         shell,
@@ -460,7 +483,7 @@ pub(crate) fn run_depclean_pretend(
         color,
         quiet,
         noinfo,
-    );
+    });
     // Real `action_depclean` prints the stats block after `unmerge()`
     // returns (`Number removed:` without `--pretend`). A mid-removal
     // failure real-`sys.exit`s before this; portuale still prints it

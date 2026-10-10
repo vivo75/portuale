@@ -161,30 +161,30 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
     if portage_dep::match_from_list(evaluated, &[existing_match_str.as_str()])
         .is_none_or(|m| m.is_empty())
         || (bare_equals
-            && built_equals_shift_unrebuildable(
-                ctx.root,
-                &ctx.repos,
-                &key2.0,
-                &key2.1,
-                &existing_sub,
-                &state.slot_pullers,
-                ctx.excluded,
-            ))
+            && built_equals_shift_unrebuildable(BuiltEqualsShiftUnrebuildableArgs {
+                root: ctx.root,
+                repos: &ctx.repos,
+                category: &key2.0,
+                package: &key2.1,
+                existing_sub: &existing_sub,
+                pullers: &state.slot_pullers,
+                excluded: ctx.excluded,
+            }))
     {
         return false;
     }
     if bare_equals
         && let Some((inst_ver, _)) = built_equals_binding(ctx.root, &ctx.repos, &key2.0, &key2.1)
         && inst_ver != existing_version2
-        && built_equals_shift_unrebuildable(
-            ctx.root,
-            &ctx.repos,
-            &key2.0,
-            &key2.1,
-            &existing_sub,
-            &state.slot_pullers,
-            ctx.excluded,
-        )
+        && built_equals_shift_unrebuildable(BuiltEqualsShiftUnrebuildableArgs {
+            root: ctx.root,
+            repos: &ctx.repos,
+            category: &key2.0,
+            package: &key2.1,
+            existing_sub: &existing_sub,
+            pullers: &state.slot_pullers,
+            excluded: ctx.excluded,
+        })
     {
         // The pop site's bound-instance side record would fire. Queue it.
         return false;

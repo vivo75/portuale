@@ -159,21 +159,21 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
 
     // Not reachable, and `pinner` is not itself a graph entry -> the
     // consumer scan skips it entirely (real never walks to it either).
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &[],
-        &dir,
-        &entries,
-        false,
-        &[],
-        &hard_want,
-        &HashSet::new(),
-        true,
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &portage_profile::Config::default(),
-        false,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &[],
+        root: &dir,
+        entries: &entries,
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &HashSet::new(),
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
         "an unreachable installed consumer must yield no pin"
@@ -185,21 +185,21 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
     // only "found at all" matters here.
     let reachable: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &[],
-        &dir,
-        &entries,
-        false,
-        &[],
-        &hard_want,
-        &reachable,
-        true,
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &portage_profile::Config::default(),
-        false,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &[],
+        root: &dir,
+        entries: &entries,
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
     assert_eq!(
         enforced.len() + dropped.len(),
         1,
@@ -260,21 +260,21 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
         ("dev-libs".to_string(), "bound".to_string()),
     ]);
 
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &[],
-        &dir,
-        &[reinstall(true)],
-        false,
-        &[],
-        &hard_want,
-        &reachable,
-        true,
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &portage_profile::Config::default(),
-        false,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &[],
+        root: &dir,
+        entries: &[reinstall(true)],
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
     let mut atoms: Vec<String> = enforced
         .iter()
         .chain(dropped.iter())
@@ -290,21 +290,21 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
         "both pin flavours must fire on a slot-change reinstall, got enforced={enforced:?} dropped={dropped:?}"
     );
 
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &[],
-        &dir,
-        &[reinstall(false)],
-        false,
-        &[],
-        &hard_want,
-        &reachable,
-        true,
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &portage_profile::Config::default(),
-        false,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &[],
+        root: &dir,
+        entries: &[reinstall(false)],
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
         "a slot-unchanged reinstall must yield no pin"
@@ -370,21 +370,21 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
 
     // Requested but not world-reached: the no-op argument's pin is
     // skipped (real reinstalls silently here).
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &[],
-        &dir,
-        &entries,
-        false,
-        &[],
-        &hard_want,
-        &reachable,
-        true,
-        false,
-        &top_level,
-        &HashSet::new(),
-        &portage_profile::Config::default(),
-        false,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &[],
+        root: &dir,
+        entries: &entries,
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &top_level,
+        world_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
         "a no-op top-level argument must yield no pin, got enforced={enforced:?} dropped={dropped:?}"
@@ -394,21 +394,21 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
     // the pin fires.
     let world: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "consumer".to_string())]);
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &[],
-        &dir,
-        &entries,
-        false,
-        &[],
-        &hard_want,
-        &reachable,
-        true,
-        false,
-        &top_level,
-        &world,
-        &portage_profile::Config::default(),
-        false,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &[],
+        root: &dir,
+        entries: &entries,
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &top_level,
+        world_reachable: &world,
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
     assert_eq!(
         enforced.len() + dropped.len(),
         1,
@@ -455,21 +455,21 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
 
     // Complete mode off (`--complete-graph-if-new-use=n`, real rc 0):
     // no pin at all.
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &repos,
-        &root,
-        std::slice::from_ref(&entry),
-        false,
-        &[],
-        &hard_want,
-        &reachable,
-        true,
-        false,
-        &HashSet::new(),
-        &reachable,
-        &portage_profile::Config::default(),
-        false,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &repos,
+        root: &root,
+        entries: std::slice::from_ref(&entry),
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &reachable,
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
         "complete mode off must yield no USE-break pin, got enforced={enforced:?} dropped={dropped:?}"
@@ -477,21 +477,21 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
 
     // Complete mode on (real rc 1): the broken `[use]` pin drops for
     // the residual installed-instance report.
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &repos,
-        &root,
-        &[entry],
-        false,
-        &[],
-        &hard_want,
-        &reachable,
-        true,
-        false,
-        &HashSet::new(),
-        &reachable,
-        &portage_profile::Config::default(),
-        true,
-    );
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &repos,
+        root: &root,
+        entries: &[entry],
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &reachable,
+        config: &portage_profile::Config::default(),
+        complete: true,
+    });
     assert!(
         enforced.is_empty(),
         "a USE-break pin must never be enforced, got {enforced:?}"
@@ -508,10 +508,10 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
 
     // Unreachable consumer (the shared-world shape -- real rc 0 with
     // that world): still nothing.
-    let (enforced, dropped) = reverse_dependency_constraints(
-        &repos,
-        &root,
-        &[GraphEntry {
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &repos,
+        root: &root,
+        entries: &[GraphEntry {
             outcome: PretendOutcome::Reinstall {
                 version: "2.8.0".into(),
                 changed_flags: vec!["icu".to_string()],
@@ -525,17 +525,17 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
             sub_slot: Some("0".into()),
             ..graph_entry("dev-libs", "cgp0x", "2.8.0")
         }],
-        false,
-        &[],
-        &hard_want,
-        &HashSet::new(),
-        true,
-        false,
-        &HashSet::new(),
-        &HashSet::new(),
-        &portage_profile::Config::default(),
-        true,
-    );
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &HashSet::new(),
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: true,
+    });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
         "an unreachable consumer must yield no pin, got enforced={enforced:?} dropped={dropped:?}"

@@ -170,8 +170,22 @@ pub(crate) fn parent_use_flip(
             config,
         );
         let no_reinst = HashSet::new();
-        let pv_disp = build_use_expand_display(&disp, config, None, &forced, true, &no_reinst);
-        let p_disp = build_use_expand_display(&disp, config, None, &forced, false, &no_reinst);
+        let pv_disp = build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &disp,
+            config,
+            installed: None,
+            forced: &forced,
+            all_flags: true,
+            reinst_flags: &no_reinst,
+        });
+        let p_disp = build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &disp,
+            config,
+            installed: None,
+            forced: &forced,
+            all_flags: false,
+            reinst_flags: &no_reinst,
+        });
         if let Some(pe) = state
             .entries
             .iter_mut()

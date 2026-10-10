@@ -35,8 +35,16 @@ fn use_tokens_capture_the_ordered_raw_use_values_that_produced_use_flags() {
     std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
     fs::write(portage_dir.join("make.conf"), "USE=\"baz\"\n").unwrap();
 
-    let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-        .expect("config must resolve");
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
     assert_eq!(
         config.use_tokens,
         vec!["foo".to_string(), "-foo bar".to_string()]

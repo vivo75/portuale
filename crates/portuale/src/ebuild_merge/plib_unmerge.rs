@@ -116,28 +116,36 @@ pub(crate) fn preserve_libs_on_unmerge_into(
         let old_owner_is_owner = |p: &str| owns_path_pf(root, category, pf, p);
         let new_owner_is_owner = |_: &str| false;
 
-        crate::needed_elf::find_libs_to_preserve(
+        crate::needed_elf::find_libs_to_preserve(crate::needed_elf::FindLibsToPreserveArgs {
             root,
-            &map,
-            &defpath,
-            &old_contents,
-            &old_owner_is_owner,
-            &new_owner_is_owner,
-        )
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner_is_owner,
+            new_owner_is_owner: &new_owner_is_owner,
+        })
     };
 
-    register_preserved_libs(&mut registry, &cpv, category, pn, slot, &counter, &[]);
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: &cpv,
+        category,
+        pn,
+        slot,
+        counter: &counter,
+        paths: &[],
+    });
     if !is_replacement && !preserved.is_empty() {
         let paths_vec: Vec<String> = preserved.iter().cloned().collect();
-        register_preserved_libs(
-            &mut registry,
-            &cpv,
+        register_preserved_libs(RegisterPreservedLibsArgs {
+            registry: &mut registry,
+            cpv: &cpv,
             category,
             pn,
             slot,
-            &counter,
-            &paths_vec,
-        );
+            counter: &counter,
+            paths: &paths_vec,
+        });
     }
     match retire {
         Some(retire) => retire.registry = Some(registry),
@@ -270,7 +278,14 @@ pub(crate) fn find_unused_preserved_libs_in(
         if !exists(path) {
             continue;
         }
-        let indexed = crate::needed_elf::find_consumers(root, &map, &defpath, path, None, true);
+        let indexed = crate::needed_elf::find_consumers(crate::needed_elf::FindConsumersArgs {
+            root,
+            map: &map,
+            defpath: &defpath,
+            obj: path,
+            exclude_provider: None,
+            greedy: true,
+        });
         let mut consumers: BTreeSet<String> = match indexed {
             Ok(set) => set,
             // Not an indexed object (owning package gone) -- fall back to

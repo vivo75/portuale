@@ -109,15 +109,15 @@ pub(crate) fn step_top_level_unsatisfied(
             // after the masked block like real's own
             // `show_missing_use`-before-`masked_packages` precedence
             // (the dependency arm renders the same way).
-            if let Some(rows) = use_unsat_candidates_for_atom(
-                &ctx.repos,
-                ctx.root,
-                &state.entries,
-                unevaluated_atom.as_deref().unwrap_or(current_atom),
-                current_atom,
-                None,
+            if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+                repos: &ctx.repos,
+                root: ctx.root,
+                entries: &state.entries,
+                display_atom: unevaluated_atom.as_deref().unwrap_or(current_atom),
+                evaluated_atom: current_atom,
+                owner: None,
                 config,
-            ) {
+            }) {
                 let mut block = format!(
                     "there are no ebuilds built with USE flags to satisfy {current_atom:?}.\n\
                          !!! One of the following packages is required to complete your request:"

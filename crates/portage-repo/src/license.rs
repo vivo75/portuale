@@ -324,14 +324,14 @@ pub(crate) fn license_accepted(
     if candidate.license.trim().is_empty() {
         return true;
     }
-    let use_flags = use_flags_if_conditional(
-        &candidate.license,
+    let use_flags = use_flags_if_conditional(UseFlagsIfConditionalArgs {
+        value_str: &candidate.license,
         candidate,
         category,
         package,
         candidate_str,
         config,
-    );
+    });
     let accept_tokens = resolve_accept_tokens(
         &config.accept_license,
         &config.package_license,
@@ -366,14 +366,14 @@ pub(crate) fn missing_licenses(
     if candidate.license.trim().is_empty() {
         return Vec::new();
     }
-    let use_flags = use_flags_if_conditional(
-        &candidate.license,
+    let use_flags = use_flags_if_conditional(UseFlagsIfConditionalArgs {
+        value_str: &candidate.license,
         candidate,
         category,
         package,
         candidate_str,
         config,
-    );
+    });
     let accept_tokens = resolve_accept_tokens(
         &config.accept_license,
         &config.package_license,

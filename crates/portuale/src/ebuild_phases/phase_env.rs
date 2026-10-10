@@ -108,18 +108,29 @@ pub(crate) fn portage_python_value(bin_dir: &Path) -> String {
         bin_dir.join("portuale-python").display().to_string()
     }
 }
+/// Arguments of [`phase_env_vars`].
+pub(crate) struct PhaseEnvVarsArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) ebuild_phase_value: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) extra_env: &'a [(String, String)],
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn phase_env_vars(
-    env: &Environment,
-    root: &Path,
-    ebuild_phase_value: &str,
-    debug: bool,
-    bin_dir: &Path,
-    helpers_dir: &Path,
-    config_root: &Path,
-    extra_env: &[(String, String)],
-) -> Vec<(String, String)> {
+pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)> {
+    let PhaseEnvVarsArgs {
+        env,
+        root,
+        ebuild_phase_value,
+        debug,
+        bin_dir,
+        helpers_dir,
+        config_root,
+        extra_env,
+    } = args;
     // Real EPREFIX support is never enabled here (`EPREFIX=""`
     // unconditionally below), so real `ED="${D}"` (no prefix-relative
     // adjustment) collapses to exactly `D`'s own value -- no separate
@@ -480,6 +491,18 @@ pub(crate) fn phase_path(
     parts.join(":")
 }
 
+/// Arguments of [`phase_setup_script`].
+pub(crate) struct PhaseSetupScriptArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) ebuild_phase_value: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) extra_env: &'a [(String, String)],
+}
+
 /// `Brush`-backend-only: `phase_env_vars` formatted as real `export
 /// NAME=value` bash source text. Values are **single-quote escaped**
 /// (`shell_single_quote`, G6 of the #37 plan): since the resolved
@@ -491,18 +514,8 @@ pub(crate) fn phase_path(
 /// text at all -- `phase_env_vars`'s own pairs are passed directly as
 /// real subprocess environment variables instead, see
 /// `run_one_phase_bash`/`run_misc_functions_bash`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn phase_setup_script(
-    env: &Environment,
-    root: &Path,
-    ebuild_phase_value: &str,
-    debug: bool,
-    bin_dir: &Path,
-    helpers_dir: &Path,
-    config_root: &Path,
-    extra_env: &[(String, String)],
-) -> String {
-    let vars = phase_env_vars(
+pub(crate) fn phase_setup_script(args: PhaseSetupScriptArgs<'_>) -> String {
+    let PhaseSetupScriptArgs {
         env,
         root,
         ebuild_phase_value,
@@ -511,7 +524,17 @@ pub(crate) fn phase_setup_script(
         helpers_dir,
         config_root,
         extra_env,
-    );
+    } = args;
+    let vars = phase_env_vars(PhaseEnvVarsArgs {
+        env,
+        root,
+        ebuild_phase_value,
+        debug,
+        bin_dir,
+        helpers_dir,
+        config_root,
+        extra_env,
+    });
     let mut script = String::new();
     // The embedded brush shell starts from the inherited process env
     // (like the bash backend's subprocess). Real `doebuild` never

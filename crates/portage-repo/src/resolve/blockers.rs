@@ -67,6 +67,17 @@ pub struct OrphanBlocker {
     pub conflict: BlockerConflict,
 }
 
+/// Arguments of [`set_seed_holds_instance`].
+pub(crate) struct SetSeedHoldsInstanceArgs<'a> {
+    pub(crate) set_seed_atoms: &'a [String],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) sub_slot: &'a str,
+}
+
 /// #68 S1 (2026-09-16): an installed match whose slot is targeted by a
 /// merge-bound entry at a **different** version is dropped before any
 /// row is built -- real's package tracker discards an installed instance
@@ -112,16 +123,16 @@ pub struct OrphanBlocker {
 /// holds the slot-0 instance a slot-1 update would otherwise uninstall.
 /// Cut: only the set atoms themselves; an installed *holder* in the set
 /// (a vdb edge of a package the walk never visited) is not modelled.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn set_seed_holds_instance(
-    set_seed_atoms: &[String],
-    entries: &[GraphEntry],
-    category: &str,
-    package: &str,
-    version: &str,
-    slot: &str,
-    sub_slot: &str,
-) -> bool {
+pub(crate) fn set_seed_holds_instance(args: SetSeedHoldsInstanceArgs<'_>) -> bool {
+    let SetSeedHoldsInstanceArgs {
+        set_seed_atoms,
+        entries,
+        category,
+        package,
+        version,
+        slot,
+        sub_slot,
+    } = args;
     let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
     let merged: Vec<String> = entries
         .iter()
@@ -159,14 +170,32 @@ pub(crate) fn resolve_blockers(
     blocker_retry_closure: &HashSet<(String, String)>,
     buildpkgonly: bool,
 ) -> Vec<FiledBlocker> {
-    resolve_blockers_with_seeds(
+    resolve_blockers_with_seeds(ResolveBlockersWithSeedsArgs {
         root,
         pending,
         entries,
         blocker_retry_closure,
         buildpkgonly,
-        &[],
-    )
+        set_seed_atoms: &[],
+    })
+}
+
+/// Arguments of [`graph_has_parent`].
+pub(crate) struct GraphHasParentArgs<'a> {
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) sub_slot: &'a str,
+    pub(crate) exclude: &'a (String, String),
+    pub(crate) entries: &'a [GraphEntry],
+    /// #284: cp -> merge-bound slots this run. A merging parent rebinds a
+    /// bare `:=` through its own walk to the resolved (merge-bound) slot,
+    /// so such an edge no longer parents an installed instance in another
+    /// slot -- the post-rebind reality real's per-instance digraph test
+    /// (`depgraph.py:9218-9223`) sees. A pinned `:slot` (or built
+    /// `:slot/sub=`) atom never rebinds and still counts.
+    pub(crate) merge_slots: &'a HashMap<(String, String), HashSet<String>>,
 }
 
 /// #68 S3: real "we don't unmerge any package that has been pulled into
@@ -181,23 +210,17 @@ pub(crate) fn resolve_blockers(
 /// blocker owner itself. `DepEdge::atom` already carries the with-bdeps
 /// key choice the entry was built with, so a build-time-only edge is only
 /// present when build-time deps were walked.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn graph_has_parent(
-    category: &str,
-    package: &str,
-    version: &str,
-    slot: &str,
-    sub_slot: &str,
-    exclude: &(String, String),
-    entries: &[GraphEntry],
-    // #284: cp -> merge-bound slots this run. A merging parent rebinds a
-    // bare `:=` through its own walk to the resolved (merge-bound) slot,
-    // so such an edge no longer parents an installed instance in another
-    // slot -- the post-rebind reality real's per-instance digraph test
-    // (`depgraph.py:9218-9223`) sees. A pinned `:slot` (or built
-    // `:slot/sub=`) atom never rebinds and still counts.
-    merge_slots: &HashMap<(String, String), HashSet<String>>,
-) -> bool {
+pub(crate) fn graph_has_parent(args: GraphHasParentArgs<'_>) -> bool {
+    let GraphHasParentArgs {
+        category,
+        package,
+        version,
+        slot,
+        sub_slot,
+        exclude,
+        entries,
+        merge_slots,
+    } = args;
     let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
     entries.iter().any(|e| {
         if (&e.category, &e.package) == (&exclude.0, &exclude.1) {
@@ -445,6 +468,33 @@ pub(crate) fn file_blocker_conflicts(
     }));
 }
 
+/// Arguments of [`collect_unwalked_installed_blockers`].
+pub(crate) struct CollectUnwalkedInstalledBlockersArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+    pub(crate) disj_constraints: &'a HashMap<(String, String), Vec<String>>,
+    /// No `circular_dependency` map (backlogs #216/#221): this scan only
+    /// processes installed packages whose cp was never walked (the
+    /// walked-cp skip above), while both record sites key the map by
+    /// merge-bound cycle-node cps (`find_hard_cycles`' merge-bound cpvs
+    /// for #216's self-loops, `find_restart_cycles`' merge-bound indices
+    /// for #221's rings) -- and every merge-bound cp is walked by
+    /// definition. The demotion lookup therefore always misses here, so
+    /// threading the live map would be exactly equivalent to the empty
+    /// one real's per-parent `_select_atoms` would consult for a parent
+    /// real never walks. (Real has no equivalent scan: it discovers
+    /// installed blockers by walking installed packages in complete
+    /// mode, which is `enqueue_dependencies`' job -- and that site also
+    /// passes the empty map, per its own site decision below.)
+    pub(crate) root_deps_running_root: Option<&'a Path>,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) pending_blockers: &'a mut Vec<PendingBlocker>,
+    pub(crate) installed_meta_memo: &'a mut HashMap<(String, String, String, String), String>,
+}
+
 /// #77 A1: real `_validate_blockers`' collection step -- "Pull in blockers
 /// from all installed packages that haven't already been pulled into the
 /// depgraph, in order to ensure that they are respected (bug 128809)"
@@ -471,32 +521,19 @@ pub(crate) fn file_blocker_conflicts(
 /// tell two slots apart here), and only the target root is scanned (real
 /// iterates every tree; portuale's running-root split is the separate
 /// `root_deps_running_root` concern).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn collect_unwalked_installed_blockers(
-    repos: &[RepoConfig],
-    root: &Path,
-    config: &portage_profile::Config,
-    dynamic_deps: bool,
-    ignore_built_slot_operator_deps: bool,
-    disj_constraints: &HashMap<(String, String), Vec<String>>,
-    // No `circular_dependency` map (backlogs #216/#221): this scan only
-    // processes installed packages whose cp was never walked (the
-    // walked-cp skip above), while both record sites key the map by
-    // merge-bound cycle-node cps (`find_hard_cycles`' merge-bound cpvs
-    // for #216's self-loops, `find_restart_cycles`' merge-bound indices
-    // for #221's rings) -- and every merge-bound cp is walked by
-    // definition. The demotion lookup therefore always misses here, so
-    // threading the live map would be exactly equivalent to the empty
-    // one real's per-parent `_select_atoms` would consult for a parent
-    // real never walks. (Real has no equivalent scan: it discovers
-    // installed blockers by walking installed packages in complete
-    // mode, which is `enqueue_dependencies`' job -- and that site also
-    // passes the empty map, per its own site decision below.)
-    root_deps_running_root: Option<&Path>,
-    entries: &[GraphEntry],
-    pending_blockers: &mut Vec<PendingBlocker>,
-    installed_meta_memo: &mut HashMap<(String, String, String, String), String>,
-) {
+pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalledBlockersArgs<'_>) {
+    let CollectUnwalkedInstalledBlockersArgs {
+        repos,
+        root,
+        config,
+        dynamic_deps,
+        ignore_built_slot_operator_deps,
+        disj_constraints,
+        root_deps_running_root,
+        entries,
+        pending_blockers,
+        installed_meta_memo,
+    } = args;
     // #83: with nothing merge-bound in `entries` the scan cannot
     // contribute a single row, so it is skipped outright. Every blocker
     // it produces is `owner_installed`, i.e. `owner_merging == false` in
@@ -540,18 +577,18 @@ pub(crate) fn collect_unwalked_installed_blockers(
             } else {
                 InstalledMetaLayer::Raw
             };
-            depstr.push_str(&installed_dep_string(
+            depstr.push_str(&installed_dep_string(InstalledDepStringArgs {
                 root,
                 dynamic_deps,
                 ignore_built_slot_operator_deps,
-                &pkg.category,
-                &pkg.package,
-                &pkg.version,
-                live.as_deref(),
+                category: &pkg.category,
+                package: &pkg.package,
+                version: &pkg.version,
+                live: live.as_deref(),
                 key,
                 layer,
-                installed_meta_memo,
-            ));
+                memo: installed_meta_memo,
+            }));
             depstr.push(' ');
         }
         // #83: this loop exists only to find blocker tokens, and a
@@ -639,45 +676,56 @@ pub(crate) fn collect_unwalked_installed_blockers(
         }
     }
 }
+/// Arguments of [`resolve_blockers_with_seeds`].
+pub(crate) struct ResolveBlockersWithSeedsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) pending: &'a [PendingBlocker],
+    pub(crate) entries: &'a [GraphEntry],
+    /// #68 S3 follow-up / #72 B2c: cps in real's required-set graph even
+    /// when portuale's `entries` never carried their `deps` --
+    /// `ResolveCtx::blocker_retry_closure`, the `@world`/`@selected`/
+    /// `@system` forward-installed closure. Real seeds the required sets
+    /// even for a plain single-atom resolve (`--implicit-system-deps`
+    /// default y), so a blocked installed instance reachable from them is
+    /// a digraph node with the set as parent. L0's `sys-apps/systemd-utils`
+    /// probe needs it: installed `systemd` is in `@system`'s closure, real
+    /// prints `B`/rc 1, portuale satisfied without it. B2c adds the retry
+    /// half: when a block resolves by an uninstall, real re-runs the whole
+    /// serialization in complete mode (`depgraph.py:10365-10383`), whose
+    /// required-set walk is what makes B0's u4 (`--oneshot bparent`, world
+    /// `{bconsumer}`) `B`/rc 1. A target outside the sets (S0 cell d)
+    /// still sees no parents.
+    ///
+    /// #73 extends the same set test to the *owner* side of the nomerge
+    /// arm (see `owner_set_parent`): a nomerge owner that is set-reachable
+    /// is real's "digraph node with parents" even when portuale's
+    /// `entries` never carried the edge (S0 cell g; g3 proves the
+    /// closure-through-a-world-member half).
+    pub(crate) blocker_retry_closure: &'a HashSet<(String, String)>,
+    /// #143 S1: real's `--buildpkgonly` blocker gate
+    /// (`depgraph.py::_validate_blockers`: `depends_on_order.clear()`
+    /// for every blocker that is not hard-`!!` *and* buildtime, on top
+    /// of `_add_pkg_dep_string` blanking RDEPEND/PDEPEND/IDEPEND for a
+    /// non-built package). `true` drops soft and runtime-keyed blockers
+    /// silently (real's irrelevant-blockers arm) and keeps only
+    /// strong-buildtime ones, resolved by uninstall — the abort's rows.
+    pub(crate) buildpkgonly: bool,
+    /// #289: the set seed atoms (`@world`/`@selected` members) real adds as
+    /// `SetArg` parents in its complete graph; see [`set_seed_holds_instance`].
+    pub(crate) set_seed_atoms: &'a [String],
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn resolve_blockers_with_seeds(
-    root: &Path,
-    pending: &[PendingBlocker],
-    entries: &[GraphEntry],
-    // #68 S3 follow-up / #72 B2c: cps in real's required-set graph even
-    // when portuale's `entries` never carried their `deps` --
-    // `ResolveCtx::blocker_retry_closure`, the `@world`/`@selected`/
-    // `@system` forward-installed closure. Real seeds the required sets
-    // even for a plain single-atom resolve (`--implicit-system-deps`
-    // default y), so a blocked installed instance reachable from them is
-    // a digraph node with the set as parent. L0's `sys-apps/systemd-utils`
-    // probe needs it: installed `systemd` is in `@system`'s closure, real
-    // prints `B`/rc 1, portuale satisfied without it. B2c adds the retry
-    // half: when a block resolves by an uninstall, real re-runs the whole
-    // serialization in complete mode (`depgraph.py:10365-10383`), whose
-    // required-set walk is what makes B0's u4 (`--oneshot bparent`, world
-    // `{bconsumer}`) `B`/rc 1. A target outside the sets (S0 cell d)
-    // still sees no parents.
-    //
-    // #73 extends the same set test to the *owner* side of the nomerge
-    // arm (see `owner_set_parent`): a nomerge owner that is set-reachable
-    // is real's "digraph node with parents" even when portuale's
-    // `entries` never carried the edge (S0 cell g; g3 proves the
-    // closure-through-a-world-member half).
-    blocker_retry_closure: &HashSet<(String, String)>,
-    // #143 S1: real's `--buildpkgonly` blocker gate
-    // (`depgraph.py::_validate_blockers`: `depends_on_order.clear()`
-    // for every blocker that is not hard-`!!` *and* buildtime, on top
-    // of `_add_pkg_dep_string` blanking RDEPEND/PDEPEND/IDEPEND for a
-    // non-built package). `true` drops soft and runtime-keyed blockers
-    // silently (real's irrelevant-blockers arm) and keeps only
-    // strong-buildtime ones, resolved by uninstall — the abort's rows.
-    buildpkgonly: bool,
-    // #289: the set seed atoms (`@world`/`@selected` members) real adds as
-    // `SetArg` parents in its complete graph; see [`set_seed_holds_instance`].
-    set_seed_atoms: &[String],
+    args: ResolveBlockersWithSeedsArgs<'_>,
 ) -> Vec<FiledBlocker> {
+    let ResolveBlockersWithSeedsArgs {
+        root,
+        pending,
+        entries,
+        blocker_retry_closure,
+        buildpkgonly,
+        set_seed_atoms,
+    } = args;
     let mut conflicts = Vec::new();
     // #284: cp -> slots with a merge-bound entry this run. Real's
     // per-instance test (`depgraph.py:9218-9223`) holds an uninstall
@@ -994,25 +1042,25 @@ pub(crate) fn resolve_blockers_with_seeds(
                     .is_some_and(|slots| slots.iter().any(|s| s != slot));
                 merge_bound_match
                     || (installed_match
-                        && (graph_has_parent(
-                            &pb.target_category,
-                            &pb.target_package,
+                        && (graph_has_parent(GraphHasParentArgs {
+                            category: &pb.target_category,
+                            package: &pb.target_package,
                             version,
                             slot,
                             sub_slot,
-                            &pb.owner_key,
+                            exclude: &pb.owner_key,
                             entries,
-                            &merge_slots,
-                        ) || (blocker_retry_closure.contains(&target_key) && !cp_moves_slot)
-                            || set_seed_holds_instance(
-                                hold_seeds(),
+                            merge_slots: &merge_slots,
+                        }) || (blocker_retry_closure.contains(&target_key) && !cp_moves_slot)
+                            || set_seed_holds_instance(SetSeedHoldsInstanceArgs {
+                                set_seed_atoms: hold_seeds(),
                                 entries,
-                                &pb.target_category,
-                                &pb.target_package,
+                                category: &pb.target_category,
+                                package: &pb.target_package,
                                 version,
                                 slot,
                                 sub_slot,
-                            )))
+                            })))
             } else {
                 // A nomerge parent is uninstall-ordered; it is unresolved
                 // when the *owner* is a digraph node with parents
@@ -1027,28 +1075,28 @@ pub(crate) fn resolve_blockers_with_seeds(
                 let owner_has_parent = if pb.owner_installed {
                     let (slot, sub_slot) =
                         read_vdb_slot(root, &pb.owner_key.0, &pb.owner_key.1, &pb.owner_version);
-                    graph_has_parent(
-                        &pb.owner_key.0,
-                        &pb.owner_key.1,
-                        &pb.owner_version,
-                        &slot,
-                        &sub_slot,
-                        &pb.owner_key,
+                    graph_has_parent(GraphHasParentArgs {
+                        category: &pb.owner_key.0,
+                        package: &pb.owner_key.1,
+                        version: &pb.owner_version,
+                        slot: &slot,
+                        sub_slot: &sub_slot,
+                        exclude: &pb.owner_key,
                         entries,
-                        &merge_slots,
-                    )
+                        merge_slots: &merge_slots,
+                    })
                 } else {
                     owner_entry.is_some_and(|e| {
-                        graph_has_parent(
-                            &pb.owner_key.0,
-                            &pb.owner_key.1,
-                            &pb.owner_version,
-                            e.slot.as_deref().unwrap_or_default(),
-                            e.sub_slot.as_deref().unwrap_or_default(),
-                            &pb.owner_key,
+                        graph_has_parent(GraphHasParentArgs {
+                            category: &pb.owner_key.0,
+                            package: &pb.owner_key.1,
+                            version: &pb.owner_version,
+                            slot: e.slot.as_deref().unwrap_or_default(),
+                            sub_slot: e.sub_slot.as_deref().unwrap_or_default(),
+                            exclude: &pb.owner_key,
                             entries,
-                            &merge_slots,
-                        )
+                            merge_slots: &merge_slots,
+                        })
                     })
                 };
                 merge_bound_match

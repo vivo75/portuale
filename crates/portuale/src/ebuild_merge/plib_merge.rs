@@ -139,6 +139,17 @@ pub(crate) fn remove_from_contents_into(
     Ok(())
 }
 
+/// Arguments of [`register_preserved_libs`].
+pub(crate) struct RegisterPreservedLibsArgs<'a> {
+    pub(crate) registry: &'a mut PlibRegistry,
+    pub(crate) cpv: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) counter: &'a str,
+    pub(crate) paths: &'a [String],
+}
+
 /// Real `PreservedLibsRegistry.register`/`.unregister`
 /// (`lib/portage/util/_dyn_libs/PreservedLibsRegistry.py:142-176`): real
 /// `unregister(cpv, slot, counter) = register(cpv, slot, counter, [])`,
@@ -156,16 +167,16 @@ pub(crate) fn remove_from_contents_into(
 /// overwrites the `cps` entry (real `_normalize_counter` is just a
 /// whitespace-trim, not integer parsing, so a plain trimmed-string
 /// comparison already matches real behavior exactly).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn register_preserved_libs(
-    registry: &mut PlibRegistry,
-    cpv: &str,
-    category: &str,
-    pn: &str,
-    slot: &str,
-    counter: &str,
-    paths: &[String],
-) {
+pub(crate) fn register_preserved_libs(args: RegisterPreservedLibsArgs<'_>) {
+    let RegisterPreservedLibsArgs {
+        registry,
+        cpv,
+        category,
+        pn,
+        slot,
+        counter,
+        paths,
+    } = args;
     let cps = format!("{category}/{pn}:{slot}");
     let counter = counter.trim();
     if paths.is_empty() {
@@ -319,6 +330,16 @@ pub(crate) fn replacement_needed_entries(
     vec![(format!("{category}/{new_pf}"), entries)]
 }
 
+/// Arguments of [`find_preserve_paths_for_merge`].
+pub(crate) struct FindPreservePathsForMergeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) new_image_paths: &'a BTreeSet<String>,
+}
+
 /// Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
 /// computation (the `_linkmap_rebuild(include_file=needed)` +
 /// `_find_libs_to_preserve()` block): rebuild the system-wide
@@ -343,15 +364,17 @@ pub(crate) fn replacement_needed_entries(
 /// (real `include_file=needed`, backlog #229): without it a library
 /// owned by the replaced instance whose only consumer is the replacing
 /// package would not be preserved. Runs before `write_vdb_tmp_contents`.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn find_preserve_paths_for_merge(
-    root: &Path,
-    category: &str,
-    package: &str,
-    new_pf: &str,
-    main_slot: &str,
-    new_image_paths: &BTreeSet<String>,
+    args: FindPreservePathsForMergeArgs<'_>,
 ) -> Option<(BTreeSet<String>, String)> {
+    let FindPreservePathsForMergeArgs {
+        root,
+        category,
+        package,
+        new_pf,
+        main_slot,
+        new_image_paths,
+    } = args;
     let old_pf = installed_instance_pf(root, category, package, main_slot)?;
     let old_contents_text =
         read_entry_text(root, category, &old_pf, "CONTENTS").unwrap_or_default();
@@ -388,14 +411,14 @@ pub(crate) fn find_preserve_paths_for_merge(
     let new_owner_is_owner = |p: &str| new_image_paths.contains(p);
 
     Some((
-        crate::needed_elf::find_libs_to_preserve(
+        crate::needed_elf::find_libs_to_preserve(crate::needed_elf::FindLibsToPreserveArgs {
             root,
-            &map,
-            &defpath,
-            &old_contents,
-            &old_owner_is_owner,
-            &new_owner_is_owner,
-        ),
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner_is_owner,
+            new_owner_is_owner: &new_owner_is_owner,
+        }),
         old_contents_text,
     ))
 }
@@ -439,6 +462,16 @@ pub(crate) fn inject_preserved_libs_into_contents(
     (lines, surviving)
 }
 
+/// Arguments of [`register_merge_preserved_libs`].
+pub(crate) struct RegisterMergePreservedLibsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) preserve_paths: &'a BTreeSet<String>,
+}
+
 /// Real `dblink.treewalk()`'s own post-replace-loop registration
 /// (`vartree.py:5266-5272`): `register(self.mycpv, slot, counter,
 /// sorted(preserve_paths))` -- the one `cp:slot` record is **replaced**
@@ -451,30 +484,43 @@ pub(crate) fn inject_preserved_libs_into_contents(
 /// the replace loop's unregistration of the old record as the final
 /// state. Keep #167's serialisation and write-only-on-change rules
 /// intact: `register_preserved_libs` + `write_plib_registry` do that.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
 pub(crate) fn register_merge_preserved_libs(
-    root: &Path,
-    category: &str,
-    pn: &str,
-    new_pf: &str,
-    main_slot: &str,
-    preserve_paths: &BTreeSet<String>,
+    args: RegisterMergePreservedLibsArgs<'_>,
 ) -> Result<(), String> {
-    if preserve_paths.is_empty() {
-        return Ok(());
-    }
-    let new_counter =
-        read_entry_text(root, category, new_pf, "COUNTER").unwrap_or_else(|| "0".to_string());
-    let registry = merge_plib_registration(
+    let RegisterMergePreservedLibsArgs {
         root,
         category,
         pn,
         new_pf,
         main_slot,
         preserve_paths,
-        &new_counter,
-    );
+    } = args;
+    if preserve_paths.is_empty() {
+        return Ok(());
+    }
+    let new_counter =
+        read_entry_text(root, category, new_pf, "COUNTER").unwrap_or_else(|| "0".to_string());
+    let registry = merge_plib_registration(MergePlibRegistrationArgs {
+        root,
+        category,
+        pn,
+        new_pf,
+        main_slot,
+        preserve_paths,
+        new_counter: &new_counter,
+    });
     write_plib_registry(root, &registry)
+}
+
+/// Arguments of [`merge_plib_registration`].
+pub(crate) struct MergePlibRegistrationArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) preserve_paths: &'a BTreeSet<String>,
+    pub(crate) new_counter: &'a str,
 }
 
 /// The registry [`register_merge_preserved_libs`] stores, with the
@@ -482,27 +528,27 @@ pub(crate) fn register_merge_preserved_libs(
 /// merging package's `register(...)`. Split out so a database backend can
 /// store it in the publishing transaction (feat#157 S4.1), reading the
 /// counter from the still-pending entry.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn merge_plib_registration(
-    root: &Path,
-    category: &str,
-    pn: &str,
-    new_pf: &str,
-    main_slot: &str,
-    preserve_paths: &BTreeSet<String>,
-    new_counter: &str,
-) -> PlibRegistry {
+pub(crate) fn merge_plib_registration(args: MergePlibRegistrationArgs<'_>) -> PlibRegistry {
+    let MergePlibRegistrationArgs {
+        root,
+        category,
+        pn,
+        new_pf,
+        main_slot,
+        preserve_paths,
+        new_counter,
+    } = args;
     let new_cpv = format!("{category}/{new_pf}");
     let mut registry = read_plib_registry(root);
     let paths_vec: Vec<String> = preserve_paths.iter().cloned().collect();
-    register_preserved_libs(
-        &mut registry,
-        &new_cpv,
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: &new_cpv,
         category,
         pn,
-        main_slot,
-        new_counter,
-        &paths_vec,
-    );
+        slot: main_slot,
+        counter: new_counter,
+        paths: &paths_vec,
+    });
     registry
 }

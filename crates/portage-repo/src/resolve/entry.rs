@@ -553,16 +553,17 @@ pub(crate) fn topological_merge_order(
         let rank: Vec<usize> = (0..entries.len()).collect();
         return (entries, rank);
     }
-    let (order, insertion_rank) = merge_order::serialize_merge_order(
-        &entries,
-        top_level_atoms,
-        config,
-        root,
-        implicit_system_deps,
-        repos,
-        dynamic_deps,
-        circular,
-    );
+    let (order, insertion_rank) =
+        merge_order::serialize_merge_order(merge_order::SerializeMergeOrderArgs {
+            entries: &entries,
+            top_level_atoms,
+            config,
+            root,
+            implicit_system_deps,
+            repos,
+            dynamic_deps,
+            circular,
+        });
     let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
     let rank: Vec<usize> = order.iter().map(|&i| insertion_rank[i]).collect();
     let entries = order

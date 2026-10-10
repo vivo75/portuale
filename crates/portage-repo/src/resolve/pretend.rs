@@ -143,27 +143,27 @@ pub(crate) fn already_installed_or_reinstall(
         ..
     } = *opts;
     let changed_flags = if newuse || changed_use {
-        reinstall_flags_for_use_change(
+        reinstall_flags_for_use_change(ReinstallFlagsForUseChangeArgs {
             root,
-            &atom.category,
-            &atom.package,
-            installed_best,
+            category: &atom.category,
+            package: &atom.package,
+            candidate: installed_best,
             config,
             newuse,
-        )
+        })
         .unwrap_or_default()
     } else {
         Vec::new()
     };
     let deps_changed_flag = changed_deps
-        && deps_changed(
+        && deps_changed(DepsChangedArgs {
             root,
             repos,
-            &atom.category,
-            &atom.package,
-            &installed_best.version,
+            category: &atom.category,
+            package: &atom.package,
+            version: &installed_best.version,
             with_bdeps,
-        );
+        });
     let slot_changed_flag = changed_slot
         && slot_changed(
             root,
@@ -174,14 +174,14 @@ pub(crate) fn already_installed_or_reinstall(
         );
     let rebuilt_binary_flag = (usepkg || usepkgonly)
         && rebuilt_binaries
-        && rebuilt_binary_changed(
+        && rebuilt_binary_changed(RebuiltBinaryChangedArgs {
             root,
             binary_build_time,
-            &atom.category,
-            &atom.package,
-            &installed_best.version,
+            category: &atom.category,
+            package: &atom.package,
+            version: &installed_best.version,
             rebuilt_binaries_timestamp,
-        );
+        });
     let new_repo_flag = newrepo
         && new_repo_changed(
             root,
@@ -520,16 +520,16 @@ pub fn resolve_pretend(
                     .find(|e| e.source == CandidateSource::Ebuild && e.version == version)
             };
             binary_candidates.retain(|c| {
-                binpkg_respect_use_ok(
-                    c,
-                    ebuild_at_version(&c.version),
-                    &atom.category,
-                    &atom.package,
+                binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+                    candidate: c,
+                    ebuild_at_version: ebuild_at_version(&c.version),
+                    category: &atom.category,
+                    package: &atom.package,
                     config,
                     newuse,
                     changed_use,
-                    binpkg_respect_use,
-                )
+                    respect_use: binpkg_respect_use,
+                })
             });
         }
         // `--binpkg-changed-deps` (real `create_depgraph_params.py:196-203`:
@@ -543,7 +543,14 @@ pub fn resolve_pretend(
         // ordinary `--getbinpkg`) -- `binpkg_changed_deps_active`.
         if binpkg_changed_deps_active(usepkgonly) {
             binary_candidates.retain(|c| {
-                !binary_deps_changed(root, repos, c, &atom.category, &atom.package, with_bdeps)
+                !binary_deps_changed(BinaryDepsChangedArgs {
+                    root,
+                    repos,
+                    candidate: c,
+                    category: &atom.category,
+                    package: &atom.package,
+                    with_bdeps,
+                })
             });
         }
         // `_equiv_ebuild_visible` (real `depgraph.py:8015-8025`): once a
@@ -776,7 +783,17 @@ pub fn resolve_pretend(
         }
         visible = candidates
             .iter()
-            .filter(|c| visible_with_relax(c, &atom.category, &atom.package, config, rl, rk, rm))
+            .filter(|c| {
+                visible_with_relax(VisibleWithRelaxArgs {
+                    candidate: c,
+                    category: &atom.category,
+                    package: &atom.package,
+                    config,
+                    relax_license: rl,
+                    relax_keywords: rk,
+                    relax_masks: rm,
+                })
+            })
             .collect();
     }
     if need_fallback(&visible) {
@@ -1149,14 +1166,14 @@ pub fn resolve_pretend(
 
     if candidate_is_installed(best) {
         let changed_flags = if newuse || changed_use {
-            reinstall_flags_for_use_change(
+            reinstall_flags_for_use_change(ReinstallFlagsForUseChangeArgs {
                 root,
-                &atom.category,
-                &atom.package,
-                best,
+                category: &atom.category,
+                package: &atom.package,
+                candidate: best,
                 config,
                 newuse,
-            )
+            })
             .unwrap_or_default()
         } else {
             Vec::new()
@@ -1190,29 +1207,29 @@ pub fn resolve_pretend(
                 !portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
             });
         let deps_changed_flag = changed_deps
-            && deps_changed(
+            && deps_changed(DepsChangedArgs {
                 root,
                 repos,
-                &atom.category,
-                &atom.package,
-                &best.version,
+                category: &atom.category,
+                package: &atom.package,
+                version: &best.version,
                 with_bdeps,
-            );
+            });
         let slot_changed_flag =
             changed_slot && slot_changed(root, repos, &atom.category, &atom.package, &best.version);
         let rebuilt_binary_flag = (usepkg || usepkgonly)
-            && binary_reinstall_warranted(
+            && binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
                 root,
                 repos,
                 config,
-                &atom.category,
-                &atom.package,
-                &best.version,
-                best_binary_build_time(&candidates, &best.version),
+                category: &atom.category,
+                package: &atom.package,
+                version: &best.version,
+                binary_build_time: best_binary_build_time(&candidates, &best.version),
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
                 update,
-            );
+            });
         let new_repo_flag = newrepo
             && new_repo_changed(
                 root,

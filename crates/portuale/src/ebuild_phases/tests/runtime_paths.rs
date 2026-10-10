@@ -163,16 +163,16 @@ fn phase_setup_script_exports_extra_env_features_last() {
         .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
     let portage_tmpdir = TempDir::new("ebuild-phases-test-setup-script").keep();
     let env = compute_environment(&ebuild, &portage_tmpdir).unwrap();
-    let script = phase_setup_script(
-        &env,
-        Path::new("/"),
-        "install",
-        false,
-        bin_dir().unwrap(),
-        &bin_dir().unwrap().join("ebuild-helpers"),
-        Path::new("/dev/null/no-config-root"),
-        &[("FEATURES".to_string(), "resolved one".to_string())],
-    );
+    let script = phase_setup_script(PhaseSetupScriptArgs {
+        env: &env,
+        root: Path::new("/"),
+        ebuild_phase_value: "install",
+        debug: false,
+        bin_dir: bin_dir().unwrap(),
+        helpers_dir: &bin_dir().unwrap().join("ebuild-helpers"),
+        config_root: Path::new("/dev/null/no-config-root"),
+        extra_env: &[("FEATURES".to_string(), "resolved one".to_string())],
+    });
     let features: Vec<&str> = script
         .lines()
         .filter(|l| l.starts_with("export FEATURES="))

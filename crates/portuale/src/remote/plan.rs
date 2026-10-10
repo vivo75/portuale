@@ -153,6 +153,18 @@ pub(crate) fn drop_dependents(
     }
 }
 
+/// Arguments of [`run_remote_plan`].
+pub(crate) struct RunRemotePlanArgs<'a> {
+    pub(crate) entries: &'a [portage_repo::GraphEntry],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) root: &'a std::path::Path,
+    pub(crate) pkgdir: &'a std::path::Path,
+    pub(crate) portage_tmpdir: &'a std::path::Path,
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) keep_going: bool,
+}
+
 /// One resolved binary plan, executed remotely entry by entry in merge
 /// order (sequential; `--remote-jobs` stays a reserved knob). Report is
 /// per-unit trailers (the flow's `>>> Remote merged <cpv>` line, plus
@@ -164,17 +176,17 @@ pub(crate) fn drop_dependents(
 /// combined failed+skipped report. `AlreadyInstalled` stays a silent
 /// no-op like the local plan. Anything else non-`Binary` cannot occur
 /// (`check_binary_plan` gates first) and fails loudly.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_remote_plan(
-    entries: &[portage_repo::GraphEntry],
-    config: &portage_profile::Config,
-    repos: &[portage_repo::RepoConfig],
-    root: &std::path::Path,
-    pkgdir: &std::path::Path,
-    portage_tmpdir: &std::path::Path,
-    ctx: &RemoteContext,
-    keep_going: bool,
-) -> Result<(), String> {
+pub(crate) fn run_remote_plan(args: RunRemotePlanArgs<'_>) -> Result<(), String> {
+    let RunRemotePlanArgs {
+        entries,
+        config,
+        repos,
+        root,
+        pkgdir,
+        portage_tmpdir,
+        ctx,
+        keep_going,
+    } = args;
     use portage_repo::PretendOutcome;
     use std::collections::HashMap;
     // Backlog #322: every shipped unit carries the vendored phase runtime
@@ -285,23 +297,23 @@ pub(crate) fn run_remote_plan(
             println!(">>> Remote {cpv}: skipped ({culprit} failed)");
             continue;
         }
-        let unit = run_one_remote_unit(
+        let unit = run_one_remote_unit(RunOneRemoteUnitArgs {
             entry,
-            &version,
-            &cpv,
+            version: &version,
+            cpv: &cpv,
             config,
             repos,
             root,
             pkgdir,
             ctx,
             control,
-            &shadow,
-            &server_ledger_base,
-            &install_mask,
+            shadow: &shadow,
+            server_ledger_base: &server_ledger_base,
+            install_mask: &install_mask,
             install_mask_prunes_usr_share,
-            Some(&regen_features),
-            Some(&regen_bzip2),
-        );
+            regen_features: Some(&regen_features),
+            regen_bzip2: Some(&regen_bzip2),
+        });
         match unit {
             Ok(()) => {
                 // The flow's own `>>> Remote merged <cpv>` line is this
@@ -352,29 +364,48 @@ pub(crate) fn run_remote_plan(
     Err(msg)
 }
 
+/// Arguments of [`run_one_remote_unit`].
+pub(crate) struct RunOneRemoteUnitArgs<'a> {
+    pub(crate) entry: &'a portage_repo::GraphEntry,
+    pub(crate) version: &'a str,
+    pub(crate) cpv: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) root: &'a std::path::Path,
+    pub(crate) pkgdir: &'a std::path::Path,
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) control: Option<&'a std::path::Path>,
+    pub(crate) shadow: &'a VdbShadow,
+    pub(crate) server_ledger_base: &'a std::path::Path,
+    pub(crate) install_mask: &'a str,
+    pub(crate) install_mask_prunes_usr_share: bool,
+    pub(crate) regen_features: Option<&'a str>,
+    pub(crate) regen_bzip2: Option<&'a str>,
+}
+
 /// One merge-bound plan entry end to end: locate the binpkg (binhost
 /// download or local `$PKGDIR`), run it through the client
 /// (bundle → unpack → phases → merge → postinst, shadow pre-check
 /// before anything ships), then record the server ledger. `Err` is the
 /// unit's failure; the caller decides abort vs. keep-going.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn run_one_remote_unit(
-    entry: &portage_repo::GraphEntry,
-    version: &str,
-    cpv: &str,
-    config: &portage_profile::Config,
-    repos: &[portage_repo::RepoConfig],
-    root: &std::path::Path,
-    pkgdir: &std::path::Path,
-    ctx: &RemoteContext,
-    control: Option<&std::path::Path>,
-    shadow: &VdbShadow,
-    server_ledger_base: &std::path::Path,
-    install_mask: &str,
-    install_mask_prunes_usr_share: bool,
-    regen_features: Option<&str>,
-    regen_bzip2: Option<&str>,
-) -> Result<(), String> {
+pub(crate) fn run_one_remote_unit(args: RunOneRemoteUnitArgs<'_>) -> Result<(), String> {
+    let RunOneRemoteUnitArgs {
+        entry,
+        version,
+        cpv,
+        config,
+        repos,
+        root,
+        pkgdir,
+        ctx,
+        control,
+        shadow,
+        server_ledger_base,
+        install_mask,
+        install_mask_prunes_usr_share,
+        regen_features,
+        regen_bzip2,
+    } = args;
     let binpkg_path = if entry.remote_binary {
         let (binrepo, record) = portage_repo::find_remote_binpkg_instance(
             &config.binrepos,
@@ -391,12 +422,14 @@ pub(crate) fn run_one_remote_unit(
             )
         })?;
         crate::emerge_getbinpkg::download_and_verify(
-            &binrepo.sync_uri,
-            &record,
-            &entry.category,
-            &entry.package,
-            version,
-            pkgdir,
+            crate::emerge_getbinpkg::DownloadAndVerifyArgs {
+                sync_uri: &binrepo.sync_uri,
+                record: &record,
+                category: &entry.category,
+                package: &entry.package,
+                version,
+                pkgdir,
+            },
         )?
     } else {
         crate::emerge_getbinpkg::resolve_local_binpkg(
@@ -430,18 +463,18 @@ pub(crate) fn run_one_remote_unit(
         file: client_ledger_file(ctx),
         line: ledger_entry.line(),
     };
-    run_binpkg_flow(
+    run_binpkg_flow(RunBinpkgFlowArgs {
         ctx,
         control,
-        &binpkg_path,
-        Some(&ledger),
-        Some(&ledger_entry.repo),
-        Some(shadow),
+        binpkg_path: &binpkg_path,
+        ledger: Some(&ledger),
+        repo_override: Some(&ledger_entry.repo),
+        shadow: Some(shadow),
         install_mask,
         install_mask_prunes_usr_share,
         regen_features,
         regen_bzip2,
-    )?;
+    })?;
     record_server_ledger(server_ledger_base, &ctx.hostname, &ledger_entry)?;
     Ok(())
 }

@@ -143,14 +143,14 @@ fn unpack_script_rejects_a_truncated_bundle() {
     let tmp = TempDir::new("portuale-remote-trunc").keep();
     let staging = tmp.join("staging");
     std::fs::create_dir_all(&staging).unwrap();
-    let staged = crate::remote_bundle::build_bundle(
-        &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-        &staging,
-        None,
-        &crate::binpkg::GpgVerify::default(),
-        "",
-        false,
-    )
+    let staged = crate::remote_bundle::build_bundle(crate::remote_bundle::BuildBundleArgs {
+        binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+        staging_tmp: &staging,
+        repo_override: None,
+        gpg: &crate::binpkg::GpgVerify::default(),
+        install_mask: "",
+        install_mask_prunes_usr_share: false,
+    })
     .expect("fixture tbz2 stages");
     // Simulate the streamed file, truncated to half its bytes.
     let unit = tmp.join("work/packagepkg-1.0");
@@ -203,14 +203,14 @@ fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
     let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
     let staging = tmp.join("staging");
     std::fs::create_dir_all(&staging).unwrap();
-    let staged = crate::remote_bundle::build_bundle(
-        &binpkg,
-        &staging,
-        None,
-        &crate::binpkg::GpgVerify::default(),
-        "/usr/share/packagepkg",
-        false,
-    )
+    let staged = crate::remote_bundle::build_bundle(crate::remote_bundle::BuildBundleArgs {
+        binpkg_path: &binpkg,
+        staging_tmp: &staging,
+        repo_override: None,
+        gpg: &crate::binpkg::GpgVerify::default(),
+        install_mask: "/usr/share/packagepkg",
+        install_mask_prunes_usr_share: false,
+    })
     .expect("fixture tbz2 stages");
     // Deliver the bundle the way the stream would, then run the real
     // unpack driver.

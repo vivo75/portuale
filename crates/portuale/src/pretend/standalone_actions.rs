@@ -71,11 +71,11 @@ pub(crate) fn dispatch_standalone_actions(
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(config));
-        return Some(run_resume(
+        return Some(run_resume(RunResumeArgs {
             root,
             config_root,
             config,
-            &portage_tmpdir,
+            portage_tmpdir: &portage_tmpdir,
             skipfirst,
             pretend,
             color_opt,
@@ -86,14 +86,21 @@ pub(crate) fn dispatch_standalone_actions(
             quiet,
             ask,
             read_news,
-        ));
+        }));
     }
 
     // `--config <atom>`: a standalone action -- run `pkg_config` for one
     // installed package (real `action_config`). Needs nothing from the
     // resolved `config`; ignores `--pretend`.
     if config_action {
-        return Some(run_config_action(atom_args, root, shell, debug, ask, color));
+        return Some(run_config_action(RunConfigActionArgs {
+            atom_args,
+            root,
+            shell,
+            debug,
+            ask,
+            color,
+        }));
     }
 
     // `--search`/`-s` (`--searchdesc`/`-S` also matches DESCRIPTION): a
@@ -103,31 +110,31 @@ pub(crate) fn dispatch_standalone_actions(
     // `Description` block shows by default and `-q` makes it terse; `-v`
     // is irrelevant to search.
     if search_action {
-        return Some(run_search(
-            atom_args,
+        return Some(run_search(RunSearchArgs {
+            terms: atom_args,
             repos,
             root,
             searchdesc,
-            !quiet,
-            fuzzy_search,
-            regex_search_auto,
+            verbose: !quiet,
+            fuzzy: fuzzy_search,
+            regex_auto: regex_search_auto,
             search_similarity,
             color,
-        ));
+        }));
     }
 
     // `--check-news`: a standalone read-only query action (real
     // `actions.py`'s `count_unread_news` block). Real gates its output on
     // `"--quiet" not in myopts`.
     if check_news {
-        return Some(run_check_news(
+        return Some(run_check_news(RunCheckNewsArgs {
             repos,
             root,
             config_root,
             config,
             quiet,
             color,
-        ));
+        }));
     }
 
     // `--info`: a standalone read-only query action (real
@@ -153,25 +160,25 @@ pub(crate) fn dispatch_standalone_actions(
                 }
             }
         }
-        return Some(run_info(
+        return Some(run_info(RunInfoArgs {
             config,
             repos,
             root,
             atom_args,
             misspell_suggestions,
-            info_usepkg,
+            usepkg: info_usepkg,
             config_root,
             shell,
             debug,
             color,
-        ));
+        }));
     }
 
     // `--clean`: a standalone removal action -- keep only the newest
     // version per slot.
     if clean_action {
-        return Some(run_clean_pretend(
-            atom_args,
+        return Some(run_clean_pretend(RunCleanPretendArgs {
+            targets: atom_args,
             root,
             config_root,
             pretend,
@@ -180,29 +187,29 @@ pub(crate) fn dispatch_standalone_actions(
             debug,
             color,
             quiet,
-            config_features_list(config).iter().any(|t| t == "noinfo"),
+            noinfo: config_features_list(config).iter().any(|t| t == "noinfo"),
             repos,
             config,
-        ));
+        }));
     }
     // `--rage-clean`: a fast `--unmerge` (identical `--pretend` display).
     if rage_clean {
-        return Some(run_unmerge_pretend(
-            atom_args,
-            "rage-clean",
+        return Some(run_unmerge_pretend(RunUnmergePretendArgs {
+            targets: atom_args,
+            action: "rage-clean",
             root,
             config_root,
             config,
             repos,
-            false,
+            preserve_order: false,
             pretend,
             ask,
             shell,
             debug,
             color,
             quiet,
-            config_features_list(config).iter().any(|t| t == "noinfo"),
-        ));
+            noinfo: config_features_list(config).iter().any(|t| t == "noinfo"),
+        }));
     }
 
     // `--unmerge`/`-C`: a standalone action -- resolved config in hand
@@ -211,46 +218,46 @@ pub(crate) fn dispatch_standalone_actions(
     if unmerge {
         // `pretend` last: without it, `run_unmerge_pretend` really
         // removes the selected packages after the display.
-        return Some(run_unmerge_pretend(
-            atom_args,
-            "unmerge",
+        return Some(run_unmerge_pretend(RunUnmergePretendArgs {
+            targets: atom_args,
+            action: "unmerge",
             root,
             config_root,
             config,
             repos,
-            false,
+            preserve_order: false,
             pretend,
             ask,
             shell,
             debug,
             color,
             quiet,
-            config_features_list(config).iter().any(|t| t == "noinfo"),
-        ));
+            noinfo: config_features_list(config).iter().any(|t| t == "noinfo"),
+        }));
     }
     if depclean {
-        return Some(run_depclean_pretend(
-            atom_args,
+        return Some(run_depclean_pretend(RunDepcleanPretendArgs {
+            targets: atom_args,
             root,
             config_root,
             config,
             repos,
             verbose,
             lib_check,
-            !deselect_n,
+            deselect: !deselect_n,
             pretend,
             ask,
             shell,
             debug,
             color,
             quiet,
-            config_features_list(config).iter().any(|t| t == "noinfo"),
-        ));
+            noinfo: config_features_list(config).iter().any(|t| t == "noinfo"),
+        }));
     }
     if prune {
         if nodeps {
-            return Some(run_prune_nodeps_pretend(
-                atom_args,
+            return Some(run_prune_nodeps_pretend(RunPruneNodepsPretendArgs {
+                targets: atom_args,
                 root,
                 config_root,
                 pretend,
@@ -259,13 +266,13 @@ pub(crate) fn dispatch_standalone_actions(
                 debug,
                 color,
                 quiet,
-                config_features_list(config).iter().any(|t| t == "noinfo"),
+                noinfo: config_features_list(config).iter().any(|t| t == "noinfo"),
                 repos,
                 config,
-            ));
+            }));
         }
-        return Some(run_prune_pretend(
-            atom_args,
+        return Some(run_prune_pretend(RunPrunePretendArgs {
+            targets: atom_args,
             root,
             config_root,
             config,
@@ -278,8 +285,8 @@ pub(crate) fn dispatch_standalone_actions(
             debug,
             color,
             quiet,
-            config_features_list(config).iter().any(|t| t == "noinfo"),
-        ));
+            noinfo: config_features_list(config).iter().any(|t| t == "noinfo"),
+        }));
     }
     None
 }

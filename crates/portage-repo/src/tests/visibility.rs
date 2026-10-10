@@ -223,17 +223,17 @@ fn metadata_key_accepted_memo_does_not_leak_between_differing_accept_lists() {
     };
     let candidate_str = "dev-libs/memoaccept-1.0:0/0::test";
     let call = |config: &portage_profile::Config| {
-        metadata_key_accepted(
-            &c.properties,
-            &c,
-            "dev-libs",
-            "memoaccept",
+        metadata_key_accepted(MetadataKeyAcceptedArgs {
+            value_str: &c.properties,
+            candidate: &c,
+            category: "dev-libs",
+            package: "memoaccept",
             candidate_str,
             config,
-            MetadataKey::Properties,
-            &config.accept_properties,
-            &config.package_properties,
-        )
+            which: MetadataKey::Properties,
+            global_accept: &config.accept_properties,
+            package_accept: &config.package_properties,
+        })
     };
     assert!(call(&star));
     assert!(
@@ -263,17 +263,17 @@ fn metadata_key_accepted_memo_does_not_leak_between_differing_candidate_iuse() {
             properties: value.to_string(),
             ..candidate("1.0", &["amd64"])
         };
-        metadata_key_accepted(
-            &c.properties,
-            &c,
-            "dev-libs",
-            "memoiuse",
+        metadata_key_accepted(MetadataKeyAcceptedArgs {
+            value_str: &c.properties,
+            candidate: &c,
+            category: "dev-libs",
+            package: "memoiuse",
             candidate_str,
-            &config,
-            MetadataKey::Properties,
-            &config.accept_properties,
-            &config.package_properties,
-        )
+            config: &config,
+            which: MetadataKey::Properties,
+            global_accept: &config.accept_properties,
+            package_accept: &config.package_properties,
+        })
     };
     // IUSE="+test" enables the flag through its own default marker, so
     // `!test?` is false and the group is dropped -> true.
@@ -307,17 +307,17 @@ fn metadata_key_accepted_memo_hits_on_a_repeat_and_separates_metadata_keys() {
     let candidate_str = "dev-libs/memokey-1.0:0/0::test";
     let call =
         |which: MetadataKey, value: &str, global: &[String], package: &[(String, Vec<String>)]| {
-            metadata_key_accepted(
-                value,
-                &c,
-                "dev-libs",
-                "memokey",
+            metadata_key_accepted(MetadataKeyAcceptedArgs {
+                value_str: value,
+                candidate: &c,
+                category: "dev-libs",
+                package: "memokey",
                 candidate_str,
-                &config,
+                config: &config,
                 which,
-                global,
-                package,
-            )
+                global_accept: global,
+                package_accept: package,
+            })
         };
     let properties = || {
         call(

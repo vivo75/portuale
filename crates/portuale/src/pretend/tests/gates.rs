@@ -10,15 +10,69 @@ fn nonpretend_merge_list_shown_only_when_portage_shows_it() {
     // `--tree` or `--verbose`, and never with `--quiet` unless
     // `--ask` is also given. `--pretend` always shows it.
     // (pretend, ask, tree, verbose, quiet) -> shown
-    assert!(merge_list_shown(true, false, false, false, false));
-    assert!(merge_list_shown(true, false, false, false, true));
-    assert!(!merge_list_shown(false, false, false, false, false));
-    assert!(merge_list_shown(false, true, false, false, false));
-    assert!(merge_list_shown(false, false, true, false, false));
-    assert!(merge_list_shown(false, false, false, true, false));
-    assert!(!merge_list_shown(false, false, false, false, true));
-    assert!(!merge_list_shown(false, false, false, true, true));
-    assert!(merge_list_shown(false, true, false, false, true));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: true,
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: true,
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: true
+    }));
+    assert!(!merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: true,
+        tree: false,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: true,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: false
+    }));
+    assert!(!merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: true
+    }));
+    assert!(!merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: true
+    }));
+    assert!(merge_list_shown(MergeListShownArgs {
+        pretend: false,
+        ask: true,
+        tree: false,
+        verbose: false,
+        quiet: true
+    }));
 }
 
 #[test]
@@ -28,19 +82,61 @@ fn autounmask_only_reshows_the_merge_list_under_pretend() {
     // `:10488`) even on the `--autounmask-only` early-return path
     // (`actions.py:456-458`) -- whenever it has changes to report.
     // (pretend, autounmask_only, has_changes) -> re-shown.
-    assert!(autounmask_only_reshows_merge_list(true, true, true));
+    assert!(autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: true,
+            autounmask_only: true,
+            has_changes: true
+        }
+    ));
     // No changes (a plain package): still nothing, like real (no
     // `_show_merge_list` call fires from an empty change loop).
-    assert!(!autounmask_only_reshows_merge_list(true, true, false));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: true,
+            autounmask_only: true,
+            has_changes: false
+        }
+    ));
     // The control path shows the list through the normal gate, not
     // this carve-out.
-    assert!(!autounmask_only_reshows_merge_list(true, false, true));
-    assert!(!autounmask_only_reshows_merge_list(true, false, false));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: true,
+            autounmask_only: false,
+            has_changes: true
+        }
+    ));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: true,
+            autounmask_only: false,
+            has_changes: false
+        }
+    ));
     // Non-`--pretend` keeps the old suppression (unprobed this
     // slice; real has no pretend gate here, so this is a cut).
-    assert!(!autounmask_only_reshows_merge_list(false, true, true));
-    assert!(!autounmask_only_reshows_merge_list(false, true, false));
-    assert!(!autounmask_only_reshows_merge_list(false, false, true));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: false,
+            autounmask_only: true,
+            has_changes: true
+        }
+    ));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: false,
+            autounmask_only: true,
+            has_changes: false
+        }
+    ));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: false,
+            autounmask_only: false,
+            has_changes: true
+        }
+    ));
 }
 
 #[test]
@@ -71,19 +167,43 @@ fn selective_noop_deferred_only_for_selective_non_oneshot_world_runs() {
     // parameter is real's folded gate variable (`actions.py:257`:
     // `--oneshot` or `--onlydeps`), so one `true` covers both flags.
     // (selective, oneshot_or_onlydeps, has_world_candidates) -> deferred.
-    assert!(selective_noop_deferred(true, false, true));
+    assert!(selective_noop_deferred(SelectiveNoopDeferredArgs {
+        selective: true,
+        oneshot_or_onlydeps: false,
+        has_world_candidates: true
+    }));
     // `--oneshot` -- or `--onlydeps`, which real folds into the same
     // gate variable (`actions.py:257`) -- keeps the deferral at bay
     // (the #225 shape), with or without world candidates.
-    assert!(!selective_noop_deferred(true, true, true));
-    assert!(!selective_noop_deferred(true, true, false));
+    assert!(!selective_noop_deferred(SelectiveNoopDeferredArgs {
+        selective: true,
+        oneshot_or_onlydeps: true,
+        has_world_candidates: true
+    }));
+    assert!(!selective_noop_deferred(SelectiveNoopDeferredArgs {
+        selective: true,
+        oneshot_or_onlydeps: true,
+        has_world_candidates: false
+    }));
     // A non-selective all-noop run is the plain `Nothing to merge`
     // shape even with world candidates around.
-    assert!(!selective_noop_deferred(false, false, true));
+    assert!(!selective_noop_deferred(SelectiveNoopDeferredArgs {
+        selective: false,
+        oneshot_or_onlydeps: false,
+        has_world_candidates: true
+    }));
     // No world candidate (bare args, or only `@world`/`@system`) is
     // the plain `Nothing to merge` shape even when selective.
-    assert!(!selective_noop_deferred(true, false, false));
-    assert!(!selective_noop_deferred(false, true, false));
+    assert!(!selective_noop_deferred(SelectiveNoopDeferredArgs {
+        selective: true,
+        oneshot_or_onlydeps: false,
+        has_world_candidates: false
+    }));
+    assert!(!selective_noop_deferred(SelectiveNoopDeferredArgs {
+        selective: false,
+        oneshot_or_onlydeps: true,
+        has_world_candidates: false
+    }));
 }
 
 #[test]
@@ -97,11 +217,36 @@ fn nonpretend_resolution_display_splits_header_from_notice_under_nodeps() {
     // report are suppressed under `--nodeps` (QUIET spinner:
     // `end_notice()` reports nothing to complete) or `--quiet`.
     // (ask, tree, verbose, quiet) -> header shown.
-    assert!(resolution_header_shown(false, false, true, false));
-    assert!(!resolution_header_shown(false, false, true, true));
-    assert!(!resolution_header_shown(true, false, false, true));
-    assert!(resolution_header_shown(false, true, false, false));
-    assert!(!resolution_header_shown(false, false, false, false));
+    assert!(resolution_header_shown(ResolutionHeaderShownArgs {
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: false
+    }));
+    assert!(!resolution_header_shown(ResolutionHeaderShownArgs {
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: true
+    }));
+    assert!(!resolution_header_shown(ResolutionHeaderShownArgs {
+        ask: true,
+        tree: false,
+        verbose: false,
+        quiet: true
+    }));
+    assert!(resolution_header_shown(ResolutionHeaderShownArgs {
+        ask: false,
+        tree: true,
+        verbose: false,
+        quiet: false
+    }));
+    assert!(!resolution_header_shown(ResolutionHeaderShownArgs {
+        ask: false,
+        tree: false,
+        verbose: false,
+        quiet: false
+    }));
     // (quiet, nodeps) -> notice + timing shown.
     assert!(resolution_notice_shown(false, false));
     assert!(!resolution_notice_shown(false, true));
@@ -110,10 +255,25 @@ fn nonpretend_resolution_display_splits_header_from_notice_under_nodeps() {
     // The three review shapes (`--verbose` in each): `--nodeps`
     // non-pretend -> header shown, calc/timing hidden; plain ->
     // both shown; `--quiet` -> neither.
-    assert!(resolution_header_shown(false, false, true, false));
+    assert!(resolution_header_shown(ResolutionHeaderShownArgs {
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: false
+    }));
     assert!(!resolution_notice_shown(false, true));
-    assert!(resolution_header_shown(false, false, true, false));
+    assert!(resolution_header_shown(ResolutionHeaderShownArgs {
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: false
+    }));
     assert!(resolution_notice_shown(false, false));
-    assert!(!resolution_header_shown(false, false, true, true));
+    assert!(!resolution_header_shown(ResolutionHeaderShownArgs {
+        ask: false,
+        tree: false,
+        verbose: true,
+        quiet: true
+    }));
     assert!(!resolution_notice_shown(true, false));
 }

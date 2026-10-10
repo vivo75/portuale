@@ -307,7 +307,14 @@ fn news_state_files_get_the_group_write_bit_like_portage() {
     assert_eq!(mode(&dir) & 0o074, 0o074);
     let orig = HashSet::new();
     let updated = HashSet::from(["2026-09-01-a".to_string()]);
-    write_news_state_if_changed(&dir, "testrepo", "unread", &orig, &updated, &context);
+    write_news_state_if_changed(WriteNewsStateIfChangedArgs {
+        news_state_dir: &dir,
+        repo_name: "testrepo",
+        suffix: "unread",
+        orig: &orig,
+        updated: &updated,
+        context: &context,
+    });
     let file = dir.join("news-testrepo.unread");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "2026-09-01-a\n");
     assert_eq!(mode(&file) & 0o064, 0o064);

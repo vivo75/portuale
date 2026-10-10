@@ -862,19 +862,29 @@ fn type_error(prog: &str, names: &str, value: &str, func: &str) -> InstallOutcom
     )
 }
 
+/// Arguments of [`parse_install_shorts`].
+struct ParseInstallShortsArgs<'a> {
+    prog: &'a str,
+    rest: &'a [u8],
+    argv: &'a [Vec<u8>],
+    pos: &'a mut usize,
+    parsed: &'a mut InstallParsed,
+    remaining: &'a mut Vec<Vec<u8>>,
+}
+
 /// Parse one short-option cluster (without the leading dash).
 /// Unknown shorts put the token (or, mid-cluster, the `-tail`) in
 /// `remaining`, as argparse's extras do (`-vp` stays whole, `-pv`
 /// leaves `-v`).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn parse_install_shorts(
-    prog: &str,
-    rest: &[u8],
-    argv: &[Vec<u8>],
-    pos: &mut usize,
-    parsed: &mut InstallParsed,
-    remaining: &mut Vec<Vec<u8>>,
-) -> Result<(), InstallOutcome> {
+fn parse_install_shorts(args: ParseInstallShortsArgs<'_>) -> Result<(), InstallOutcome> {
+    let ParseInstallShortsArgs {
+        prog,
+        rest,
+        argv,
+        pos,
+        parsed,
+        remaining,
+    } = args;
     let mut off = 0;
     while off < rest.len() {
         let c = rest[off];
@@ -1078,9 +1088,14 @@ fn parse_install_options(
             }
             // Short cluster.
             let rest = tok[1..].to_vec();
-            if let Err(o) =
-                parse_install_shorts(prog, &rest, &split, &mut pos, &mut parsed, &mut remaining)
-            {
+            if let Err(o) = parse_install_shorts(ParseInstallShortsArgs {
+                prog,
+                rest: &rest,
+                argv: &split,
+                pos: &mut pos,
+                parsed: &mut parsed,
+                remaining: &mut remaining,
+            }) {
                 return o;
             }
             pos += 1;
@@ -3461,17 +3476,17 @@ mod tests {
     fn install_packagepkg(portage_tmpdir: &Path) {
         let ebuild = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild");
-        let status = crate::ebuild_phases::run_commands(
-            &ebuild,
-            &["install"],
-            Path::new("/"),
+        let status = crate::ebuild_phases::run_commands(crate::ebuild_phases::RunCommandsArgs {
+            ebuild_path: &ebuild,
+            commands: &["install"],
+            root: Path::new("/"),
             portage_tmpdir,
-            &portage_tmpdir.join("distfiles"),
-            false,
-            Path::new("/dev/null/no-config-root"),
-            crate::ebuild_phases::ShellBackend::default(),
-            &[],
-        )
+            distdir: &portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell: crate::ebuild_phases::ShellBackend::default(),
+            build_env: &[],
+        })
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
         let installed = portage_tmpdir

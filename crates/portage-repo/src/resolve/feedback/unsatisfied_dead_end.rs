@@ -80,19 +80,20 @@ pub(crate) fn step_unsatisfied_dead_end(
         // #236 A: the update probe's forcing half, for a child the walk
         // left installed (see the function's doc comment).
         let mut scheduled = scheduled;
-        let (force_consumers, forced) = slot_operator_update_force_scan(
-            ctx.root,
-            &ctx.repos,
-            config,
-            &pass.entries,
-            &ctx.slot_op_reachable,
-            &scheduled,
-            &grown.slot_operator_undone,
-            ctx.with_bdeps,
-            ctx.update,
-            &ctx.top_level_cps,
-            ctx.excluded,
-        );
+        let (force_consumers, forced) =
+            slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
+                root: ctx.root,
+                repos: &ctx.repos,
+                config,
+                entries: &pass.entries,
+                reachable: &ctx.slot_op_reachable,
+                already: &scheduled,
+                undone: &grown.slot_operator_undone,
+                with_bdeps: ctx.with_bdeps,
+                update: ctx.update,
+                top_level_cps: &ctx.top_level_cps,
+                excluded: ctx.excluded,
+            });
         scheduled.extend(force_consumers);
         let forced_new = !forced.is_subset(&grown.slot_operator_forced_upgrade);
         grown.slot_operator_forced_upgrade.extend(forced);
@@ -180,8 +181,14 @@ pub(crate) fn step_unsatisfied_dead_end(
             && !grown.slot_operator_replace_installed.is_empty()
             && pass.slot_conflicts.is_empty()
         {
-            let (skipped, missing, full) =
-                backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, grown, &[]);
+            let (skipped, missing, full) = backtrack_missed_updates(BacktrackMissedUpdatesArgs {
+                repos: &ctx.repos,
+                root: ctx.root,
+                config,
+                entries: &pass.entries,
+                params: grown,
+                missing_args: &[],
+            });
             if !skipped.is_empty()
                 || !missing.is_empty()
                 || !full.is_empty()
@@ -214,18 +221,18 @@ pub(crate) fn step_unsatisfied_dead_end(
         // present but no feedback fired) is exactly where that guard
         // matters.
         if pass.slot_conflicts.is_empty() {
-            let demoted = slot_operator_eliminate_rebuilds(
-                ctx.root,
-                &ctx.repos,
-                &pass.entries,
-                &grown.slot_operator_replace_installed,
-                &pass.slot_want,
+            let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+                root: ctx.root,
+                repos: &ctx.repos,
+                entries: &pass.entries,
+                replace: &grown.slot_operator_replace_installed,
+                slot_want: &pass.slot_want,
                 reverse_pins,
-                ctx.selective,
-                ctx.changed_slot,
-                &ctx.top_level_cps,
-                ctx.empty,
-            );
+                selective: ctx.selective,
+                changed_slot: ctx.changed_slot,
+                top_level_cps: &ctx.top_level_cps,
+                empty: ctx.empty,
+            });
             if !demoted.is_empty() {
                 for cp in &demoted {
                     grown.slot_operator_replace_installed.remove(cp);

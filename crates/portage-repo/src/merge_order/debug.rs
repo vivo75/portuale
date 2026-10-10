@@ -43,23 +43,35 @@ pub(crate) fn mo_sel_cpv(e: &GraphEntry, installed: bool) -> String {
     }
 }
 
+/// Arguments of [`mo_sel_trace_line`].
+pub(crate) struct MoSelTraceLineArgs<'a> {
+    pub(crate) iter: usize,
+    pub(crate) retlist: usize,
+    pub(crate) alive: usize,
+    pub(crate) asap: &'a [String],
+    pub(crate) prefer_asap: bool,
+    pub(crate) drop_satisfied: bool,
+    pub(crate) ig: Option<Ignore>,
+    pub(crate) pick: &'a [String],
+}
+
 /// One `MO_SEL ` line (`PORTUALE_MO_SEL`) -- pure so the format is
 /// unit-pinned. Field order is the shared harness contract:
 /// `iter retlist alive asap prefer_asap drop_satisfied ig pick`; `asap`
 /// is the bracketed list of `asap_nodes` cpvs (a count was not enough:
 /// firefox's clang-runtime divergence is exactly one extra lingering
 /// asap node on portuale's side).
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub(crate) fn mo_sel_trace_line(
-    iter: usize,
-    retlist: usize,
-    alive: usize,
-    asap: &[String],
-    prefer_asap: bool,
-    drop_satisfied: bool,
-    ig: Option<Ignore>,
-    pick: &[String],
-) -> String {
+pub(crate) fn mo_sel_trace_line(args: MoSelTraceLineArgs<'_>) -> String {
+    let MoSelTraceLineArgs {
+        iter,
+        retlist,
+        alive,
+        asap,
+        prefer_asap,
+        drop_satisfied,
+        ig,
+        pick,
+    } = args;
     format!(
         "MO_SEL iter={iter} retlist={retlist} alive={alive} asap=[{}] \
          prefer_asap={} drop_satisfied={} ig={} pick={}",

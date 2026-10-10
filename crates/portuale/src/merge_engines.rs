@@ -215,14 +215,16 @@ impl BinaryEngine<'_> {
         progress: mrg_director::MergeProgress,
     ) -> Result<(), String> {
         crate::emerge_getbinpkg::merge_one_binary_entry(
-            entry,
-            self.config,
-            self.root,
-            self.pkgdir,
-            self.portage_tmpdir,
-            self.options,
-            progress,
-            self.display,
+            crate::emerge_getbinpkg::MergeOneBinaryEntryArgs {
+                entry,
+                config: self.config,
+                root: self.root,
+                pkgdir: self.pkgdir,
+                portage_tmpdir: self.portage_tmpdir,
+                merge_options: self.options,
+                progress,
+                display: self.display,
+            },
         )
     }
 }

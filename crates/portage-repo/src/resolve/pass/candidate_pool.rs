@@ -73,21 +73,28 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
                     .find(|e| e.source == CandidateSource::Ebuild && e.version == version)
             };
             binary_candidates.retain(|c| {
-                binpkg_respect_use_ok(
-                    c,
-                    ebuild_at_version(&c.version),
-                    &key.0,
-                    &key.1,
+                binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+                    candidate: c,
+                    ebuild_at_version: ebuild_at_version(&c.version),
+                    category: &key.0,
+                    package: &key.1,
                     config,
-                    ctx.newuse,
-                    ctx.changed_use,
-                    ctx.binpkg_respect_use,
-                )
+                    newuse: ctx.newuse,
+                    changed_use: ctx.changed_use,
+                    respect_use: ctx.binpkg_respect_use,
+                })
             });
         }
         if binpkg_changed_deps_active(ctx.usepkgonly) {
             binary_candidates.retain(|c| {
-                !binary_deps_changed(ctx.root, &ctx.repos, c, &key.0, &key.1, ctx.with_bdeps)
+                !binary_deps_changed(BinaryDepsChangedArgs {
+                    root: ctx.root,
+                    repos: &ctx.repos,
+                    candidate: c,
+                    category: &key.0,
+                    package: &key.1,
+                    with_bdeps: ctx.with_bdeps,
+                })
             });
         }
         // `_equiv_ebuild_visible` (see `resolve_pretend`): a

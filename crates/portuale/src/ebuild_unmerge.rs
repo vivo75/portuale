@@ -857,17 +857,17 @@ pub fn run_unmerge(
         ));
     }
 
-    let prerm_status = ebuild_phases::run_single_phase(
+    let prerm_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
         ebuild_path,
-        "prerm",
+        phase: "prerm",
         root,
         portage_tmpdir,
-        options.debug,
-        &options.config_root,
-        options.shell,
-        &[],
-        None,
-    )?;
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &[],
+        log_file: None,
+    })?;
     if prerm_status != 0 {
         return Ok(prerm_status);
     }
@@ -888,17 +888,17 @@ pub fn run_unmerge(
         retire.as_mut(),
     )?;
 
-    let postrm_status = ebuild_phases::run_single_phase(
+    let postrm_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
         ebuild_path,
-        "postrm",
+        phase: "postrm",
         root,
         portage_tmpdir,
-        options.debug,
-        &options.config_root,
-        options.shell,
-        &[],
-        None,
-    )?;
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &[],
+        log_file: None,
+    })?;
     if postrm_status != 0 {
         return Ok(postrm_status);
     }

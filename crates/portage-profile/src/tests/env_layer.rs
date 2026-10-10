@@ -24,8 +24,16 @@ fn env_over_config_scalar_follows_the_calling_env_over_make_conf_chain() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
     let resolve = || {
-        resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
-            .expect("resolves")
+        resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves")
     };
 
     // No env: the `make.conf` value wins over the (absent) profile /

@@ -66,14 +66,14 @@ pub(crate) fn replay_walk(
     needed_init: &HashMap<(String, String), HashMap<String, bool>>,
 ) -> merge_order::WalkReplay {
     let use_of = |i: usize| replay_use_of(ctx, &entries[i]);
-    merge_order::replay_create_graph(
+    merge_order::replay_create_graph(merge_order::ReplayCreateGraphArgs {
         entries,
-        ctx.atoms,
-        ctx.root,
+        top_level_atoms: ctx.atoms,
+        root: ctx.root,
         allow_flips,
         needed_init,
-        &use_of,
-    )
+        use_of: &use_of,
+    })
 }
 
 /// Backlog #244: whether a pass carries any autounmask USE change -- the
@@ -279,13 +279,15 @@ pub(crate) fn replay_conflict_use_display(
         }
     }
     Some(assemble_tree_pkg_use_display(
-        &cand,
-        &metadata,
-        &modified,
-        ctx.config,
-        &entry.category,
-        &entry.package,
-        version,
+        AssembleTreePkgUseDisplayArgs {
+            cand: &cand,
+            metadata: &metadata,
+            enabled: &modified,
+            config: ctx.config,
+            category: &entry.category,
+            package: &entry.package,
+            version,
+        },
     ))
 }
 
@@ -443,22 +445,22 @@ pub(crate) fn apply_replay_flips(
             let forced =
                 forced_or_masked_flags(&cand.iuse, &cand.keywords, &cpv, &cp.0, &cp.1, ctx.config);
             let no_reinst = HashSet::new();
-            e.use_expand_display = build_use_expand_display(
-                &e.use_flags_display,
-                ctx.config,
-                None,
-                &forced,
-                true,
-                &no_reinst,
-            );
-            e.use_expand_display_p = build_use_expand_display(
-                &e.use_flags_display,
-                ctx.config,
-                None,
-                &forced,
-                false,
-                &no_reinst,
-            );
+            e.use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
+                use_flags_display: &e.use_flags_display,
+                config: ctx.config,
+                installed: None,
+                forced: &forced,
+                all_flags: true,
+                reinst_flags: &no_reinst,
+            });
+            e.use_expand_display_p = build_use_expand_display(BuildUseExpandDisplayArgs {
+                use_flags_display: &e.use_flags_display,
+                config: ctx.config,
+                installed: None,
+                forced: &forced,
+                all_flags: false,
+                reinst_flags: &no_reinst,
+            });
             let atom = autounmask_use_atom_form(cand, &cands, &cp.0, &cp.1, ctx.config);
             let token = new
                 .iter()

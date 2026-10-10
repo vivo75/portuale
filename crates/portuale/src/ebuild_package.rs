@@ -887,17 +887,17 @@ pub fn run_package(
     use_flags: &str,
 ) -> Result<i32, String> {
     require_signing_config(options)?;
-    let status = ebuild_phases::run_commands(
+    let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
         ebuild_path,
-        &["install"],
+        commands: &["install"],
         root,
         portage_tmpdir,
-        &options.distdir,
-        options.debug,
-        &options.config_root,
-        options.shell,
+        distdir: &options.distdir,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
         build_env,
-    )?;
+    })?;
     if status != 0 {
         return Ok(status);
     }
@@ -1467,17 +1467,17 @@ fn invoke_dyn_package(
         ));
     }
 
-    ebuild_phases::run_misc_function(
+    ebuild_phases::run_misc_function(ebuild_phases::RunMiscFunctionArgs {
         ebuild_path,
         portage_tmpdir,
         root,
-        "package",
-        "__dyn_package",
-        &extra_env,
-        options.debug,
-        &options.config_root,
-        options.shell,
-    )
+        ebuild_phase_value: "package",
+        dyn_command: "__dyn_package",
+        extra_env: &extra_env,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+    })
 }
 
 /// Real `dblink.quickpkg` + `_quickpkg_dblink` (`vartree.py:2307` /
@@ -2714,17 +2714,17 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status = ebuild_phases::run_commands(
-            &ebuild,
-            &["install"],
-            &root,
-            &portage_tmpdir,
-            &options.distdir,
-            options.debug,
-            &options.config_root,
-            options.shell,
-            &[],
-        )
+        let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
+            ebuild_path: &ebuild,
+            commands: &["install"],
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &options.distdir,
+            debug: options.debug,
+            config_root: &options.config_root,
+            shell: options.shell,
+            build_env: &[],
+        })
         .expect("install succeeds");
         assert_eq!(status, 0);
 
@@ -2772,17 +2772,17 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status = ebuild_phases::run_commands(
-            &ebuild,
-            &["install"],
-            &root,
-            &portage_tmpdir,
-            &options.distdir,
-            options.debug,
-            &options.config_root,
-            options.shell,
-            &[],
-        )
+        let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
+            ebuild_path: &ebuild,
+            commands: &["install"],
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &options.distdir,
+            debug: options.debug,
+            config_root: &options.config_root,
+            shell: options.shell,
+            build_env: &[],
+        })
         .expect("install succeeds");
         assert_eq!(status, 0);
 
