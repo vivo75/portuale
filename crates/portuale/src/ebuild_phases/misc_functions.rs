@@ -15,22 +15,11 @@ pub(crate) struct RunMiscFunctionsArgs<'a> {
     pub(crate) log_file: Option<&'a Path>,
 }
 
-/// Real `bin/misc-functions.sh`'s own invocation shape -- unlike
-/// `doebuild()` invokes commands like `"package"` as a *separate*
-/// script, `bin/misc-functions.sh __dyn_<mydo>` (real
-/// `lib/portage/package/ebuild/doebuild.py`'s own `misc_sh = ... +
-/// " __dyn_%s"`), not through `bin/ebuild.sh`'s own phase dispatch at
-/// all -- confirmed by reading it: `bin/phase-functions.sh`'s own
-/// `__ebuild_main` case statement has no `"package"` branch whatsoever.
-/// `misc-functions.sh` itself sources `bin/ebuild.sh` (inheriting the
-/// same environment/ebuild-sourcing portuale's own `run_one_phase`
-/// already relies on), captures its own positional args into
-/// `MISC_FUNCTIONS_ARGS` *before* sourcing (so `ebuild.sh`'s own arg
-/// handling never sees them), then its own tail unconditionally runs
-/// `for x in ${MISC_FUNCTIONS_ARGS}; do ${x}; done` -- i.e. sourcing it
-/// with `dyn_command` as a positional arg is enough to invoke it
-/// directly; no separate `invoke_function` call is needed the way
-/// `run_one_phase`'s own explicit `__ebuild_main` call is.
+/// Runs `bin/misc-functions.sh __dyn_<mydo>` directly: unlike `doebuild` commands
+/// like `"package"`, it never goes through `bin/ebuild.sh`'s phase dispatch
+/// (`__ebuild_main` has no `"package"` branch). Sourcing it with `dyn_command`
+/// as a positional arg is enough; no `invoke_function` call is needed.
+/// Portage: doebuild.py
 pub(crate) async fn run_misc_functions(args: RunMiscFunctionsArgs<'_>) -> Result<i32, String> {
     let RunMiscFunctionsArgs {
         env,
@@ -46,14 +35,8 @@ pub(crate) async fn run_misc_functions(args: RunMiscFunctionsArgs<'_>) -> Result
     let bin_dir = bin_dir()?.to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
-    // Real `_emerge.MiscFunctionsProcess`: `bin/misc-functions.sh` runs
-    // `sandbox`-wrapped by default (`free = False` unless
-    // `ld_preload_sandbox` says otherwise) -- but with its *own*
-    // `SANDBOX_LOG` (`sandbox-misc.log`) so a QA-check violation doesn't
-    // clobber the real phase's log. No `unshare` (real
-    // `_PostPhaseCommands` passes only `ld_preload_sandbox`, never
-    // `networked`). This forces the `Bash` backend, same as a
-    // `sandbox`-wrapped phase.
+    // Portage's `MiscFunctionsProcess`: sandbox-wrapped by default, with its own
+    // `SANDBOX_LOG` (`sandbox-misc.log`); never `unshare`. Forces `Bash`.
     let fs_sandbox =
         fs_sandbox_requested(&features_string(extra_env)) && sandbox_binary().is_some();
     let effective_shell = if fs_sandbox {
@@ -136,9 +119,7 @@ pub(crate) async fn run_misc_functions_brush(
         config_root,
         extra_env,
     });
-    // Same shell-before-pump drop discipline as
-    // `run_one_phase_brush`: capture the outcome, drop in order, then
-    // return -- see `open_log_file`.
+    // Drop shell before pump (see `open_log_file`): capture the outcome, then return.
     let outcome: Result<i32, String> = async {
         shell
             .run_string(&setup, &brush_core::SourceInfo::default(), &params)
@@ -176,11 +157,9 @@ pub(crate) struct RunMiscFunctionsBashArgs<'a> {
     pub(crate) fs_sandbox: bool,
 }
 
-/// `--shell bash`: spawns a genuine `bash <bin_dir>/misc-functions.sh
-/// <dyn_command>` subprocess -- matching real `doebuild.py`'s own
-/// `misc_sh = shlex.quote(misc_sh_binary) + " __dyn_%s"` invocation
-/// shape exactly. See `run_one_phase_bash`'s own doc comment for why a
-/// blocking `std::process::Command` here too.
+/// `Bash`: a genuine `bash <bin_dir>/misc-functions.sh <dyn_command>` subprocess,
+/// matching Portage's `misc_sh` invocation shape. Blocking `Command`, like `fetch.rs`.
+/// Portage: doebuild.py
 pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Result<i32, String> {
     let RunMiscFunctionsBashArgs {
         env,
@@ -206,10 +185,8 @@ pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Res
         extra_env,
     });
     if fs_sandbox {
-        // Real `MiscFunctionsProcess._spawn`: swap in a separate log so
-        // a misc-functions violation doesn't clobber the phase's own
-        // `sandbox.log`; enable the sandbox (`bin/misc-functions.sh`
-        // reads `SANDBOX_DISABLED` the same way `bin/ebuild.sh` does).
+        // Portage: MiscFunctionsProcess._spawn — separate log, sandbox enabled the
+        // way `bin/ebuild.sh` reads it (`SANDBOX_DISABLED`).
         for (k, v) in vars.iter_mut() {
             match k.as_str() {
                 "SANDBOX_LOG" => *v = env.t().join("sandbox-misc.log").display().to_string(),
@@ -222,22 +199,12 @@ pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Res
         fs_sandbox,
         ..Isolation::default()
     };
-    // The gzip pump guard must outlive `cmd` (same contract as
-    // `run_one_phase_bash`): declared BEFORE `cmd` so reverse drop
-    // order destroys it AFTER `cmd` on every path; filled from the
-    // sink below. The explicit `drop(cmd)` after the wait closes the
-    // parent write-end copies deterministically.
+    // The pump guard must outlive `cmd` (see `open_log_file`): declared first so
+    // drop order destroys it after `cmd`; `drop(cmd)` closes write ends deterministically.
     let mut pump_guard: Option<LogPump> = None;
     let mut cmd = sandbox_wrapped_command(&bin_dir.join("misc-functions.sh"), dyn_command, iso);
-    // Same curated environment real `MiscFunctionsProcess` gets (the
-    // phase env, not the inherited process env): `misc-functions.sh`
-    // sources `bin/ebuild.sh`, whose `__preprocess_ebuild_env` *saves*
-    // the live env back to `${T}/environment` when a binpkg's
-    // `environment.raw` marker is present -- so an unfiltered inherited
-    // env (the calling `cargo test`/shell process) would leak into the
-    // regenerated vdb env. See `run_one_phase_bash`'s own `env_clear`
-    // for the phase-side equivalent. #326 D6 also drops
-    // `PORTAGE_IPC_DAEMON` here (no IPC daemon).
+    // Curated env only (like the phase spawns): an unfiltered inherited env would
+    // leak into the regenerated vdb env via `${T}/environment`. No IPC daemon.
     cmd.env_clear();
     cmd.envs(
         std::env::vars()
@@ -252,30 +219,15 @@ pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Res
     let status = spawn_trackable(&mut cmd)
         .map_err(|e| format!("spawning real bash for {dyn_command} failed: {e}"))?;
     drop(cmd);
-    // Explicit (a pure-drop guard reads as unused otherwise): joins the
-    // gzip thread now that every write end is closed.
+    // Explicit: joins the gzip thread now that every write end is closed.
     drop(pump_guard);
     Ok(status.code().unwrap_or(1))
 }
 
-/// One process-wide multi-threaded tokio runtime (real `_emerge/
-/// Scheduler.py` runs its whole invocation -- every package's every
-/// phase -- on a single `asyncio` event loop; portuale's own sync entry
-/// points -- `run_misc_function`/`run_commands_logged`/
-/// `run_single_phase`/`run_phase_from_saved_env` -- each used to spin up
-/// and tear down their own fresh `Builder::new_multi_thread()` runtime,
-/// meaning a single `emerge` merging many packages paid that thread-pool
-/// setup/teardown cost once per phase per package, not once per
-/// invocation). `OnceLock` rather than a value threaded through every
-/// call site: none of these entry points are themselves called from
-/// inside an existing tokio context (`ebuild_phases::run_one_phase`'s
-/// own async body never calls back into any of the four), so lazily
-/// building this once and reusing it from everywhere is safe, and
-/// avoids turning this into a signature change touching every caller
-/// across `ebuild.rs`/`ebuild_merge.rs`/`ebuild_package.rs`/
-/// `emerge_build.rs`. Never torn down -- this is a CLI process, not a
-/// long-lived server; process exit reclaims the thread pool same as any
-/// other resource.
+/// One process-wide multi-threaded tokio runtime (Portage runs a whole invocation
+/// on a single asyncio loop; per-phase runtimes paid setup/teardown per package).
+/// `OnceLock`-shared: none of the entry points is called from inside an existing
+/// tokio context, so lazy reuse is safe. Never torn down (CLI process).
 pub(crate) fn shared_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
     use std::sync::OnceLock;
     static RUNTIME: OnceLock<Result<tokio::runtime::Runtime, String>> = OnceLock::new();
@@ -303,8 +255,8 @@ pub(crate) struct RunMiscFunctionArgs<'a> {
     pub(crate) shell: ShellBackend,
 }
 
-/// Synchronous entry point mirroring `run_single_phase`'s own shape, for
-/// `ebuild_package`'s own real `__dyn_package` call.
+/// Sync entry point for `ebuild_package`'s `__dyn_package` call; mirrors
+/// `run_single_phase`.
 pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, String> {
     let RunMiscFunctionArgs {
         ebuild_path,

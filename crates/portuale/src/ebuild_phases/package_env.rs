@@ -2,12 +2,10 @@
 
 use crate::ebuild_phases::*;
 
-/// Real `const.INCREMENTALS` (`3rdparty/portage/lib/portage/const.py:125`):
-/// a key in this list is appended to the container's current value by
-/// `_grab_pkg_env`, then folded onto the lower layers by `regenerate()`
-/// (`config.py:2778-2825`: `-*` clears the set, `-tok` removes, sorted
-/// union). Kept complete even though the acceptance gate below drops most
-/// of them, so a future gate change cannot silently lose the semantics.
+/// Portage's `INCREMENTALS`: appended by `_grab_pkg_env`, folded by `regenerate()`.
+/// Kept complete even though the gate below drops most, so a future gate change
+/// can't silently lose semantics.
+/// Portage: const.py, config.py
 pub(crate) const PACKAGE_ENV_INCREMENTALS: [&str; 12] = [
     "ACCEPT_KEYWORDS",
     "CONFIG_PROTECT",
@@ -27,43 +25,15 @@ pub(crate) fn is_package_env_incremental(key: &str) -> bool {
     PACKAGE_ENV_INCREMENTALS.contains(&key)
 }
 
-/// Real `_grab_pkg_env`'s per-key acceptance gate
-/// (`config.py:2269-2300`), minus the keys portuale's own phase pipeline
-/// owns:
-///
-/// * `USE` is real's special case (popped before the call, re-appended
-///   after `package.use`); portuale folds it via
-///   `Config::package_env_use`, so it must not also appear here.
-/// * `ENV_BLACKLIST` is real's `env_blacklist` (it already covers
-///   `PKGUSE`, the only `protected_pkg_keys` member).
-/// * `ENVIRON_FILTER` keys real accepts into the config but never exports
-///   to a phase (`config.environ()`, `config.py:3263-3350`); portuale's
-///   `package_env_vars` layer only exists in the phase env, so they are
-///   dropped.
-/// * `PORTUALE_COMPUTED` keys portuale's own phase runner computes and
-///   must always win (`FEATURES` and `PORTAGE_TMPDIR` are filed residues
-///   #98/#99; `PATH`, `DISTDIR`, `D`, … are owned by design).
-/// * `profile_only_variables` is the profile's dynamic
-///   `PROFILE_ONLY_VARIABLES` (`config.py:724-733`; `ARCH`, `ELIBC`,
-///   `IUSE_IMPLICIT`, `USE_EXPAND*`, …).
-///
-/// Everything else is accepted, including empty values (real blanks a
-/// variable with `VAR=""`) and `__`-prefixed names (real does not strip
-/// them here).
+/// Per-key acceptance gate: `USE` (folded via `Config::package_env_use`),
+/// `ENV_BLACKLIST`, `ENVIRON_FILTER` (a phase-env-only layer, dropped here),
+/// computed keys the phase runner owns, and profile-only variables are rejected.
+/// Everything else is accepted, including empty values and `__` names. The
+/// compression family (`BINPKG_COMPRESS[_FLAGS[_<NAME>]]`) is exempted.
+/// Portage: config.py, _grab_pkg_env
 pub(crate) fn package_env_key_allowed(key: &str, profile_only_variables: &[String]) -> bool {
-    // Real `_grab_pkg_env` (backlog #95) rejects `protected_keys` ∪
-    // `non_user_variables` (PROFILE_ONLY ∪ env_blacklist ∪
-    // CONFIG_PROTECT); portuale additionally rejects its
-    // `ENVIRON_FILTER` export-filter list here -- a deliberate
-    // conservative narrowing, except for the compression family below.
-    // Real honors a per-package `BINPKG_COMPRESS` (and its FLAGS
-    // sisters: `doebuild.py:697-750` reads all three from the
-    // package's own `mysettings`, and none is in real's
-    // `non_user_variables` -- S0 B-xpak proves gzip magic), so
-    // backlog #147 S2 exempts exactly that family; every other
-    // `ENVIRON_FILTER` key stays rejected. `PORTAGE_BZIP2_COMMAND` is
-    // listed for symmetry only: it is not on real's `environ_filter`,
-    // so accepting it here exempts nothing.
+    // Only the compression family is exempt (see fn doc); `PORTAGE_BZIP2_COMMAND`
+    // is listed for symmetry (not on Portage's filter, so it exempts nothing).
     fn is_compression_key(key: &str) -> bool {
         key == "BINPKG_COMPRESS"
             || key == "BINPKG_COMPRESS_FLAGS"
@@ -80,17 +50,11 @@ pub(crate) fn package_env_key_allowed(key: &str, profile_only_variables: &[Strin
         && !profile_only_variables.iter().any(|k| k == key)
 }
 
-/// Real `regenerate()`'s incremental fold (`config.py:2735`, `:2778-2825`)
-/// for one key, in real's layer order `[base-lower, pkg, calling-env]`:
-/// the already-folded lower layers' tokens, then the package.env value's
-/// tokens in order, then the calling environment's tokens in order
-/// (`-*` clears, `-tok` removes), sorted and space-joined. The calling
-/// env folds **last**, so a `-tok` there prunes a token a package.env
-/// file added (backlog #101, S0 cell B), while a package.env `-tok`
-/// cannot prune a calling-env token. Re-applying the calling-env tokens
-/// after a base that already folded them in is idempotent (set
-/// add/remove), so `base_lower` may be the caller's own already-folded
-/// value for the key (`""` when the run-wide env doesn't carry it).
+/// One key's incremental fold in layer order `[base-lower, pkg, calling-env]`:
+/// `-*` clears, `-tok` removes; sorted and space-joined. The calling env folds
+/// last, so its `-tok` prunes package.env tokens but not vice versa; re-applying
+/// is idempotent, so `base_lower` may be the already-folded value.
+/// Portage: config.py, regenerate
 pub(crate) fn fold_package_env_incremental(
     base_lower: &str,
     pkg: &str,
@@ -110,32 +74,13 @@ pub(crate) fn fold_package_env_incremental(
     set.into_iter().collect::<Vec<_>>().join(" ")
 }
 
-/// Atom-match `package_env_vars` (real `_grab_pkg_env` folding a
-/// matching `/etc/portage/package.env` entry's env file into
-/// `configdict["pkg"]`) against one `cat/pkg-ver:slot/sub` string.
-///
-/// The container follows real exactly: files of one entry in order,
-/// matching entries in list order (portuale keeps parse order; real
-/// applies `ordered_by_atom_specificity`, a pre-existing narrowing), an
-/// incremental appends, a scalar replaces, an empty value blanks.
-/// Incrementals are then folded in real's layer order
-/// `[base-lower, pkg, calling-env]` (`regenerate()`), and a package.env
-/// **scalar is dropped when the calling environment carries the same
-/// key**: real's `USE_ORDER` puts the `env` layer above `pkg`
-/// (`config.py:1031-1035`), so the process value wins (backlog #101, S0
-/// cell A). `calling_env` is the same source `phase_environ`'s step 2
-/// uses (`portage_profile::config_env_all()`), compared by key presence
-/// — *not* `base_env` as a whole, which also contains config scalars a
-/// package.env value legitimately outranks.
-///
-/// Shared by the merge path (`emerge_build::entry_package_env_vars`,
-/// matching a resolved graph entry and passing `options.build_env`) and
-/// the standalone path below (matching the ebuild's own md5-cache
-/// identity and passing the narrow base -- no resolved graph needed).
-/// Both paths thread the real calling environment, so the precedence
-/// rule holds on both: the S0 capture shows the standalone path is
-/// inverted today too, the same bug in this shared function (S2's base
-/// replacement is a separate change and is untouched here).
+/// Atom-matches `package_env_vars` against one `cpv_slot` string: files of one
+/// entry in order, matching entries in list order; an incremental appends, a
+/// scalar replaces, an empty value blanks. Incrementals fold in layer order; a
+/// scalar is dropped when the calling environment carries the same key (the
+/// process value wins). Shared by the merge and standalone paths, which thread
+/// the calling environment so the precedence holds on both.
+/// Portage: config.py, _grab_pkg_env
 pub(crate) fn match_package_env_vars(
     package_env_vars: &[(String, Vec<(String, String)>)],
     cpv_slot: &str,
@@ -186,9 +131,7 @@ pub(crate) fn match_package_env_vars(
                     .unwrap_or("");
                 Some((k, fold_package_env_incremental(base, &v, calling)))
             } else if calling_env.iter().any(|(ck, _)| *ck == k) {
-                // Real's `env` layer outranks `pkg` for a scalar: the
-                // process value (already in the caller's base env) wins,
-                // so the package.env value is dropped, not layered.
+                // The process value wins for a scalar: drop the package.env value.
                 None
             } else {
                 Some((k, v))
@@ -197,18 +140,10 @@ pub(crate) fn match_package_env_vars(
         .collect()
 }
 
-/// Atom-match a single `package.env` key against `cpv_slot` and return
-/// the container value with real `_grab_pkg_env`'s append semantics but
-/// WITHOUT the acceptance gate and WITHOUT folding: matching entries in
-/// list order, files of one entry in order.
-///
-/// Two flavours, mirroring real's container behaviour exactly: scalars
-/// replace (last matching file wins; `None` when nothing matched),
-/// incrementals append (`container[k] += " " + v`). The caller owns the
-/// key choice and the fold: `match_package_env_vars` (the gated,
-/// phase-env export path) keeps its own loop, while per-key recomputes
-/// a flat pair would corrupt — `PORTAGE_TMPDIR` (#99) and `FEATURES`
-/// (#98), both `PORTUALE_COMPUTED` — match raw and re-derive instead.
+/// One `package.env` key, raw: scalars replace (last match wins), incrementals
+/// append — matching entries in list order, files of one entry in order. No
+/// acceptance gate, no folding: for per-key recomputes a flat pair would corrupt.
+/// Portage: config.py, _grab_pkg_env
 pub(crate) fn match_package_env_scalar_raw(
     package_env_vars: &[(String, Vec<(String, String)>)],
     cpv_slot: &str,
@@ -250,15 +185,9 @@ pub(crate) fn match_package_env_incremental_raw(
     container
 }
 
-/// The resolved `Config` and `cat/pkg-ver:slot/sub` identity real
-/// `_grab_pkg_env` would match, for an ebuild with no resolved graph
-/// entry (standalone `ebuild <file>`/`qmerge`): the ebuild's own path
-/// gives the `category`/`pf`, [`resolve_standalone_config`] the
-/// `package_env_vars` table, [`standalone_cpv_slot`] the md5-cache
-/// `SLOT`. `None` outside a repo checkout or on an unparsable path --
-/// shared by [`resolve_standalone_portage_tmpdir`] (#99) and
-/// [`resolve_standalone_resolved_features`] (#130) so the path-parsing
-/// only happens once.
+/// The `Config` and `cpv_slot` identity for an ebuild with no resolved graph entry
+/// (standalone runs): the path gives `category`/`pf`, the md5-cache gives `SLOT`.
+/// `None` outside a repo or on an unparsable path; shared so path-parsing happens once.
 pub(crate) fn standalone_package_env_lookup(
     ebuild_path: &Path,
     config_root: &Path,

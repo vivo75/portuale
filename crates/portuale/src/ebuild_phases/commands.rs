@@ -2,7 +2,6 @@
 
 use crate::ebuild_phases::*;
 
-/// Arguments of [`run_commands_async`].
 pub(crate) struct RunCommandsAsyncArgs<'a> {
     pub(crate) ebuild_path: &'a Path,
     pub(crate) commands: &'a [&'a str],
@@ -14,41 +13,17 @@ pub(crate) struct RunCommandsAsyncArgs<'a> {
     pub(crate) shell: ShellBackend,
     pub(crate) log_file: Option<&'a Path>,
     /// Caller-supplied env, appended after portuale's own base vars so it
-    /// overrides them -- the `emerge <atom>` build/merge path passes the
-    /// resolved `USE` flags here (`bin/ebuild.sh`'s own `use()` reads the
-    /// `USE` var), which `phase_env_vars` otherwise leaves `""`. `&[]` for
-    /// a standalone `ebuild <file> <phase>` (no resolved graph entry).
+    /// overrides them. The build path passes the resolved `USE` flags here;
+    /// `&[]` for a standalone `ebuild <file> <phase>` run.
     pub(crate) build_env: &'a [(String, String)],
 }
 
-/// Drives `commands` against `ebuild_path` for real: computes the
-/// environment once, then for each of `commands` in order, runs its own
-/// `phase_prerequisites` chain, each phase in its own fresh embedded
-/// brush shell (see `run_one_phase`'s own doc comment for why a fresh
-/// shell per phase, not one shared across the whole invocation, is the
-/// real, not simplified, model here) sourcing real `bin/ebuild.sh` (see
-/// this module's own doc comment) and the ebuild file itself.
-///
-/// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check (see
-/// `fetch_sources`'s own doc comment) runs exactly once here, before
-/// the phase loop, whenever the combined prerequisite chain includes
-/// `unpack` -- matching real portage's own ordering (real `pkg_pretend`
-/// explicitly runs *before* fetching, PMS's whole point for that phase
-/// being a fast sanity check that shouldn't need network access at
-/// all; `setup` likewise precedes it). The resulting `A`/`AA` are
-/// exported into *every* phase this call runs, not just `unpack`
-/// itself, matching real portage's own environment (every phase sees
-/// the same `A`/`AA`, whether or not it happens to reference them).
-/// `DISTDIR` itself is always exported too (regardless of whether
-/// `unpack` is in the chain at all), matching real portage's own
-/// unconditional environment -- real `unpack` (a `bin/ebuild-helpers/`
-/// script, not reimplemented) resolves `${A}`'s own files relative to
-/// `${DISTDIR}` itself, not anything this Rust code passes it
-/// directly, so omitting the export here would silently break real
-/// unpacking even after a real, successful fetch (caught empirically:
-/// a real fetched-and-verified distfile still made `unpack` report
-/// `"either does not exist or is not a regular file"` before this was
-/// added).
+/// Drives `commands` against `ebuild_path`: environment once, then each
+/// command's `phase_prerequisites` chain in a fresh shell per phase.
+/// Fetch runs once up front when the chain includes `unpack`; a successful
+/// `install` is followed by post-install metadata, the `install_qa_check ...`
+/// sequence (`EBUILD_PHASE` still `"install"`), and the soname deps.
+// Portage: doebuild.py, EbuildPhase.py, config.py, bin/ebuild.sh
 pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result<i32, String> {
     let RunCommandsAsyncArgs {
         ebuild_path,
@@ -69,17 +44,13 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         .iter()
         .flat_map(|&c| phase_prerequisites(c))
         .collect();
-    // The real distdir goes in as `DISTDIR`; `phase_env_vars` remaps it the
-    // way real `config.environ()` does (`config.py:3403-3409`): the real
-    // directory becomes `PORTAGE_ACTUAL_DISTDIR` (`doins` passes it as
-    // `--distdir`, so absolute symlinks under `doins -r` stay symlinks) and
-    // `DISTDIR` the per-package fake `${PORTAGE_BUILDDIR}/distdir`, filled
-    // by `prepare_fake_distdir` below (#330).
+    // The actual distdir goes in as `DISTDIR`; `phase_env_vars` remaps it the
+    // way Portage's `config.environ` does: the actual directory becomes
+    // `PORTAGE_ACTUAL_DISTDIR` and `DISTDIR` the per-package fake.
     let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
     extra_env.extend(build_env.iter().cloned());
-    // The resolved `USE` threaded by the caller (last `USE` pair, the value
-    // the phases themselves see), so `A` names exactly the distfiles
-    // `use()` will expect.
+    // The resolved `USE` the caller threaded through, so `A` names exactly the
+    // distfiles `use()` will expect.
     let use_flags = extra_env
         .iter()
         .rev()
@@ -99,21 +70,15 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
             use_flags: &use_flags,
         })
         .await?;
-        // Real `config.environ()` exports `A` but pops `AA` for every
-        // EAPI >= 4 (`config.py:3331-3333`, `eapi_exports_AA`); the
-        // EAPI floor here is 5+, so `AA` is never exported (S0 finding
-        // `l2-env-aa-exported`).
+        // Portage exports `A` for EAPI 4+ but never `AA`; the floor here is EAPI 5+.
         extra_env.push(("A".to_string(), a.join(" ")));
         Some(a)
     } else {
         None
     };
-    // Real `doebuild.py:1463-1469`: the fake distdir is prepared when the
-    // requested `mydo` is not `setup` (unless `FEATURES=noauto`), or is
-    // `install`/`unpack`. The first test is over the *command*, not the
-    // chain: `setup`'s own prerequisite chain starts with `pretend`. The
-    // second looks at the whole chain, because portuale's `noauto` still
-    // runs the prerequisites and `unpack` needs `${DISTDIR}/<A>`.
+    // Portage: doebuild.py, doebuild — the fake distdir is prepared unless the
+    // command is bare `setup` (FEATURES=noauto excepted); `install`/`unpack`
+    // chains always need it. The first test is over the command, not the chain.
     if (commands.iter().any(|&c| c != "setup")
         && !features.split_whitespace().any(|f| f == "noauto"))
         || chain.iter().any(|&p| p == "install" || p == "unpack")
@@ -141,34 +106,16 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
             if status != 0 {
                 return Ok(status);
             }
-            // Real `_post_phase_cmds["install"]` (`EbuildPhase.py:424`/
-            // `442-461`): real, unconditional `bin/misc-functions.sh
-            // install_qa_check install_symlink_html_docs install_hooks`,
-            // run once right after a successful real `install` phase --
-            // not gated on any `FEATURES` flag, and (unlike `ebuild
-            // <file> package`'s own separate `__dyn_package` misc-
-            // functions call) never itself part of `phase_prerequisites`'
-            // own chain, so this is the one place it can run. `EBUILD_
-            // PHASE` stays `"install"` for this call, matching real
-            // portage's own behavior (`_PostPhaseCommands` reuses the
-            // exact same `settings` the install phase itself already
-            // used, never resetting it). Real `bin/misc-functions.sh`'s
-            // own `MISC_FUNCTIONS_ARGS="$@"` then unquoted `for x in
-            // ${MISC_FUNCTIONS_ARGS}` re-splits on whitespace regardless
-            // of how many real argv entries this arrived as, so passing
-            // all three names as one space-joined string here is exactly
-            // equivalent to real portage's own three separate positional
-            // args -- `run_misc_functions` needs no changes at all.
+            // Portage: EbuildPhase.py, _post_phase_cmds — after a successful
+            // `install`, run `install_qa_check install_symlink_html_docs
+            // install_hooks` here: unconditional, and never part of
+            // `phase_prerequisites`' own chain. `misc-functions.sh`
+            // re-splits its args on whitespace, so one space-joined string
+            // equals three argv entries.
             if phase == "install" {
-                // Real `EbuildPhase._ebuild_exit_unlocked` order
-                // (`EbuildPhase.py:424-438`): `_post_src_install_write_
-                // metadata` and `_post_src_install_uid_fix` run right
-                // after `bin/ebuild.sh install` returns and **before**
-                // the `install_qa_check` post-phase commands below. That
-                // ordering is load-bearing for `SIZE`: it is the
-                // *pre-transform* image (`ecompress`/`estrip` run later),
-                // real's own 807 bytes for `porttest/docs` against the
-                // 372 the compressed image would give.
+                // Portage: EbuildPhase.py, _ebuild_exit_unlocked — metadata and the
+                // uid fix run before the QA sequence, so `SIZE` describes the
+                // pre-transform image.
                 write_post_install_metadata(&env, root, build_env)?;
                 let qa_status = run_misc_functions(RunMiscFunctionsArgs {
                     env: &env,
@@ -185,13 +132,9 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
                 if qa_status != 0 {
                     return Ok(qa_status);
                 }
-                // Real `EbuildPhase._commands_exit` runs
-                // `_post_src_install_soname_symlinks` immediately after
-                // that same misc-function sequence (see its own doc
-                // comment): the 6-field `NEEDED.ELF.2` (from the
-                // post-`estrip` image), generated `PROVIDES`/
-                // `REQUIRES`, and `_inject_libc_dep`'s own implicit libc
-                // dependency (#39).
+                // Portage: EbuildPhase.py, _commands_exit — soname symlinks,
+                // `PROVIDES`/`REQUIRES` and the implicit libc dep run right
+                // after the QA sequence above.
                 write_post_install_soname_deps(&env, root)?;
             }
         }
@@ -199,7 +142,6 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
     Ok(0)
 }
 
-/// Arguments of [`run_commands`].
 pub struct RunCommandsArgs<'a> {
     pub ebuild_path: &'a Path,
     pub commands: &'a [&'a str],
@@ -212,25 +154,9 @@ pub struct RunCommandsArgs<'a> {
     pub build_env: &'a [(String, String)],
 }
 
-/// Synchronous entry point for `ebuild.rs` (which is not itself async --
-/// `emerge`'s own dispatch never needs an async runtime at all, so this
-/// portuale doesn't pay for one there; only this one code path does). Spins
-/// up a tokio runtime for the duration of the call -- MUST be
-/// multi-threaded (`new_multi_thread`, not `new_current_thread`):
-/// confirmed empirically (a single-threaded runtime deadlocks partway
-/// through a real multi-phase run -- brush-core's own `Cargo.toml`
-/// requires tokio's `rt-multi-thread` feature under unix, not just
-/// `rt`, which is the same thing portuale rediscovered the hard way).
-///
-/// `PORTAGE_TMPDIR` (real portage's own `make.globals` default:
-/// `/var/tmp`; the builddir adds `portage/<cat>/<pf>` on top) is read
-/// by the caller, not internally here --
-/// deliberately, so tests can pass a distinct value directly rather than
-/// mutating process-global environment state (`std::env::set_var` is
-/// unsound to call from parallel test threads), the same "env var read
-/// once at the CLI boundary" shape `emerge`'s own `pretend.rs` already
-/// uses for `ROOT`/`PORTAGE_CONFIGROOT` via `root_from_env`/
-/// `config_root_from_env`.
+/// Synchronous entry point for `ebuild.rs`: spins up a multi-threaded tokio
+/// runtime for the call (a single-threaded one deadlocks mid-run).
+/// `PORTAGE_TMPDIR` is read by the caller, so tests can pass it directly.
 pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
     let RunCommandsArgs {
         ebuild_path,
@@ -257,7 +183,6 @@ pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
     })
 }
 
-/// Arguments of [`run_commands_logged`].
 pub struct RunCommandsLoggedArgs<'a> {
     pub ebuild_path: &'a Path,
     pub commands: &'a [&'a str],
@@ -271,12 +196,9 @@ pub struct RunCommandsLoggedArgs<'a> {
     pub build_env: &'a [(String, String)],
 }
 
-/// Like `run_commands`, but when `log_file` is `Some`, every phase (and
-/// its post-phase `misc-functions.sh`) has its stdout+stderr captured to
-/// that file (append) instead of the terminal -- real portage's
-/// `PORTAGE_LOG_FILE` (default `${T}/build.log`). `run_build_scheduler`
-/// passes it so a parallel `--jobs` build's output doesn't interleave;
-/// the scheduler dumps the file on a build failure.
+/// Like `run_commands`, but every phase appends stdout+stderr to `log_file`
+/// instead of the terminal, so parallel builds don't interleave.
+// Portage: _emerge/EbuildPhase.py (`PORTAGE_LOG_FILE`)
 pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, String> {
     let RunCommandsLoggedArgs {
         ebuild_path,
@@ -305,31 +227,11 @@ pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, Strin
     }))
 }
 
-/// Opens `log_file` for append (creating it and its parent dir),
-/// returning the two write ends a phase's stdout+stderr go to plus the
-/// gzip pump guard when the path ends in `.gz`
-/// (`FEATURES=compress-build-logs`, whose `.gz`-suffixed paths
-/// `emerge_build::build_log_path` produces).
-///
-/// Real `EbuildPhase._open_log` (`_emerge/EbuildPhase.py`): the log
-/// file is opened `ab` and, when its name ends `.gz`, wrapped in a
-/// `gzip.GzipFile(mode="ab")` -- every phase appends one gzip member to
-/// the same file, and the failure-tail / QA readers wrap it in
-/// `gzip.GzipFile(mode="rb")` back. The pump thread below is that
-/// wrapper: the phase (a real bash child, or the embedded brush shell
-/// writing its fd table) writes plain bytes into two pipes, and the
-/// thread gzip-encodes them into the `.gz` file -- one member per
-/// `open_log_file` call, exactly like real's one `GzipFile` per
-/// `_open_log` call. A phase that writes nothing appends no member at
-/// all (real's header is deferred to the first write too).
-///
-/// Lifetime: the guard MUST drop after the phase's write ends close
-/// (child waited + parent `Command` dropped, or brush `Shell`
-/// dropped), otherwise its join hangs waiting for EOF. Declare the
-/// sink early and `drop` the writer holder explicitly -- see the call
-/// sites. Joining first also guarantees the `.gz` member is finished
-/// before any reader (failure tail, next phase's append, QA scan)
-/// touches the file.
+/// Opens `log_file` for append (creating parents): directly, or through a gzip
+/// pump thread (one member per call; an empty phase appends nothing) for `.gz`.
+/// The guard must drop after the phase's write ends close, or the join hangs
+/// on EOF; joining first also finishes the member before any reader sees it.
+// Portage: _emerge/EbuildPhase.py, _open_log
 pub(crate) struct LogSink {
     pub(crate) out: std::fs::File,
     pub(crate) err: std::fs::File,
@@ -348,10 +250,7 @@ impl Drop for LogPump {
     }
 }
 
-/// One pipe's read end drained into the shared gzip encoder; returns
-/// bytes forwarded. Both pipes' pumps share one `GzEncoder` (under a
-/// mutex -- stdout/stderr chunk interleaving was never deterministic),
-/// and the member is finished only when at least one byte flowed.
+/// Drains one pipe's read end into the shared gzip encoder; returns bytes forwarded.
 pub(crate) fn pump_one_pipe(
     mut read_end: std::fs::File,
     encoder: &std::sync::Arc<std::sync::Mutex<flate2::write::GzEncoder<std::fs::File>>>,
@@ -405,9 +304,8 @@ pub(crate) fn open_log_file(log_file: &Path) -> Result<LogSink, String> {
         .map_err(|e| format!("{}: {e}", log_file.display()))?;
     let pipe = |what: &str| -> Result<(std::fs::File, std::fs::File), String> {
         let mut fds = [0; 2];
-        // `O_CLOEXEC`: the pump's read ends must not leak into the
-        // phase child across fork/exec (hygiene only -- EOF keys off
-        // the write ends).
+        // `O_CLOEXEC`: the pump's read ends must not leak into the phase child.
+        // (EOF keys off the write ends, so this is hygiene only.)
         if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
             return Err(format!(
                 "pipe for {what}: {}",
@@ -436,15 +334,12 @@ pub(crate) fn open_log_file(log_file: &Path) -> Result<LogSink, String> {
         if out_bytes + err_bytes > 0
             && let Ok(mut enc) = encoder.lock()
         {
-            // Trailer for this phase's member; the next phase
-            // appends a fresh member (real's per-`_open_log`
-            // `GzipFile` does the same).
+            // Trailer for this phase's member; the next phase appends a fresh one.
             let _ = enc.try_finish();
             let _ = enc.get_mut().sync_all();
         }
-        // Else: drop the encoder unfinished -- nothing was ever
-        // written, so no header went out either, and the file is left
-        // exactly as found (real's deferred header behaves the same).
+        // Else: drop the encoder unfinished — nothing was ever written, so no
+        // header went out either, and the file is left exactly as found.
     });
     Ok(LogSink {
         out: out_w,

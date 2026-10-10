@@ -2,43 +2,17 @@
 
 use crate::ebuild_phases::*;
 
-/// Real `doebuild.py::_post_src_install_write_metadata`
-/// (`lib/portage/package/ebuild/doebuild.py:2700-2782`), run right after
-/// a successful `src_install` (real portage calls it from
-/// `doebuild(mydo="install")`): write the USE-conditional-evaluated
-/// dependency / `LICENSE` / `PROPERTIES` / `RESTRICT` / `IUSE`
-/// (+ `IUSE_EFFECTIVE`) metadata files into `${PORTAGE_BUILDDIR}/build-
-/// info`. `bin/phase-functions.sh __dyn_install`'s own build-info loop
-/// (run unmodified, before this) writes `CATEGORY`/`SLOT`/`KEYWORDS`/
-/// `IUSE`/`USE`/`EAPI`/`DEFINED_PHASES`/… but *not* these keys -- real
-/// portage's Python side fills them in. Without this the merged vdb
-/// entry and the `xpak`/`gpkg` a `$PKGDIR` scan later reads carry no
-/// dependency metadata at all (found via the `binpkg.rs` scan buildout).
-///
-/// Source is the ebuild's own `metadata/md5-cache` entry (the same
-/// already-trusted source `fetch_sources` reads `SRC_URI` from) --
-/// `settings.configdict["pkg"]` in real portage. USE-conditionals are
-/// evaluated against `use_flags` -- the resolved `USE` for this package
-/// (`build_phase_use` pulls it out of the `emerge <atom>` build path's
-/// own `build_env`; empty for a standalone `ebuild <file>` run, which
-/// resolves no graph) -- via `use_reduce_structured` (real
-/// `paren_enclose(use_reduce(v, uselist=use))`, the bracket/`||`-
-/// preserving normalized token stream).
-///
-/// Real `_slot_operator._eval_deps`'s own per-atom step: an atom with a
-/// `:=` slot operator (`slot_operator == "="`) is rewritten to
-/// `:<slot>/<sub-slot>=` taken from the highest installed version in
-/// `<root>/var/db/pkg` that satisfies it (`vardb.match(x)[-1]`). A
-/// non-atom token, a non-`:=` atom, or a `:=` dep with nothing installed
-/// is returned unchanged (real "just leave it as-is for now ... keeping
-/// the information in vdb").
-///
-/// The rewrite is string surgery on the atom's own slot-dep substring
-/// (`:=` / `:2=` / `:2/3=`, all reconstructable from the parsed
-/// `slot`/`sub_slot`) rather than reserialising the whole atom -- that
-/// substring is distinctive enough to appear exactly once in a
-/// well-formed atom, so `replacen(.., 1)` is safe (a version can't
-/// contain `:`, `::repo` carries no `=`, a `[usedep]` carries no `:`).
+/// Writes the USE-evaluated `*DEPEND`/`LICENSE`/`PROPERTIES`/`RESTRICT`/`IUSE`
+/// (+ `IUSE_EFFECTIVE`) metadata into `${PORTAGE_BUILDDIR}/build-info`, right after
+/// a successful `src_install`. Without it the vdb entry and later binpkgs carry no
+/// dependency metadata. Source is the md5-cache entry; conditionals reduce against
+/// the resolved `USE` (empty for standalone runs). `*DEPEND` atoms also bind `:=`.
+/// Portage: doebuild.py, _post_src_install_write_metadata, _slot_operator.py
+/// Binds one `:=` atom to `<slot>/<sub-slot>=` of the highest installed version
+/// satisfying it. Non-atoms, non-`:=` atoms, and unresolvable `:=` pass through.
+/// String surgery on the slot-dep substring (`replacen` once: no version carries
+/// `:`, and neither `::repo` nor `[usedep]` can collide).
+/// Portage: _slot_operator.py, _eval_deps
 pub(crate) fn bind_slot_operator(token: &str, root: &Path) -> String {
     let Some(atom) = portage_dep::parse_atom(token) else {
         return token.to_string();
@@ -71,28 +45,8 @@ pub(crate) fn bind_slot_operator(token: &str, root: &Path) -> String {
     token.replacen(&old_slotdep, &format!(":{slot}/{sub_slot}="), 1)
 }
 
-/// Real portage, for an EAPI with slot operators (every EAPI 5+), skips
-/// the `*DEPEND` keys in this loop and writes them from
-/// `evaluate_slot_operator_equal_deps` (`portage/dep/_slot_operator.py`)
-/// instead: every `:=` slot-operator atom is bound to the actual
-/// `<slot>/<sub-slot>=` of the highest installed version that satisfies
-/// it (`vardb.match(x)[-1]`), leaving an unresolvable one bare. This
-/// portuale now does the same, `bind_slot_operator` per `*DEPEND` token
-/// (`_eval_deps`'s own per-atom loop) -- so a package portuale merges
-/// records `dev-libs/foo:2/3=` in its vdb/binpkg build-info, the data a
-/// later sub-slot rebuild check needs. An ebuild with no `:=` operator,
-/// or one whose `:=` dep isn't installed, is byte-identical to before.
-///
-/// v1 cut still: real `_eval_deps` walks `RDEPEND`/`PDEPEND` against the
-/// target `ROOT` vdb and `DEPEND`/`BDEPEND` against the target/running
-/// vdb respectively -- portuale's own single-root world binds every
-/// `*DEPEND` key against the one `<root>/var/db/pkg` (same simplification
-/// `--root-deps` documents); and the real `|| ( A:= B:= )` "record
-/// sub-slot on A only" TODO (bug #455904) is moot without disjunctive
-/// `:=` handling anywhere.
-/// The `USE=` value from a `run_commands_async` `build_env` slice as a
-/// flag set -- what the `emerge <atom>` build path resolved for this
-/// package. Empty for a standalone `ebuild <file>` run (no `build_env`).
+/// The resolved `USE` for this package, from the `build_env` slice (empty for
+/// standalone runs).
 pub(crate) fn build_phase_use(build_env: &[(String, String)]) -> std::collections::HashSet<String> {
     build_env
         .iter()
@@ -108,14 +62,8 @@ pub(crate) fn write_post_install_metadata(
 ) -> Result<(), String> {
     let build_info = env.build_info();
 
-    // Real `_post_src_install_write_metadata` (`doebuild.py:2727-2732`)
-    // writes `int(time.time())` into `build-info/BUILD_TIME` before any
-    // metadata key, unconditionally (backlog #47). The vdb entry copies
-    // it (`populate_vdb_tmp`) and `_consolidate_to_metadata_file`
-    // folds it into the consolidated `metadata` body -- real's own
-    // reader (`versions.py:413`) and binpkg multi-instance logic compare
-    // against it, and omitting it made every portuale vdb entry differ
-    // from real's by the `BUILD_TIME` file *and* the `metadata` field.
+    // `BUILD_TIME` first, unconditionally: the vdb copy and consolidated metadata
+    // both carry it, and omitting it skews every entry against Portage's.
     let build_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("system clock before epoch: {e}"))?
@@ -137,8 +85,7 @@ pub(crate) fn write_post_install_metadata(
         return Ok(());
     };
 
-    // real `_vdb_use_conditional_keys` = `Package._dep_keys` + LICENSE /
-    // PROPERTIES / RESTRICT.
+    // Portage's conditional-key set: dep keys plus LICENSE/PROPERTIES/RESTRICT.
     for key in [
         "DEPEND",
         "RDEPEND",
@@ -154,9 +101,7 @@ pub(crate) fn write_post_install_metadata(
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
         else {
-            // real portage unlinks a stale build-info/<k> when the value
-            // is empty; `bin/phase-functions.sh` never wrote these, so
-            // there is nothing to unlink here.
+            // Empty: skip (nothing to unlink; bash never wrote these keys).
             continue;
         };
         let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
@@ -166,20 +111,8 @@ pub(crate) fn write_post_install_metadata(
             portage_use_reduce::MatchMode::Normal,
         )
         .map_err(|e| format!("{}: build-info/{key}: {e}", env.pkg_dir.display()))?;
-        // Real `_post_src_install_write_metadata` with `token_class=Atom`
-        // (`doebuild.py:2749`): every dependency-atom token's own USE
-        // deps are evaluated against this package's effective USE before
-        // the result is stored -- `Atom.evaluate_conditionals`,
-        // `lib/portage/dep/__init__.py:1387`; an unknown/disabled
-        // `flag?` use-dep is *dropped* (bug #386829's canonicalisation),
-        // while a `flag?` group conditional was already handled by
-        // `use_reduce_structured` above. `evaluate_atom_conditionals` is
-        // the port; a token that isn't an atom (a `||` marker, a bare
-        // paren) passes through unchanged.
-        //
-        // Then the `*DEPEND` keys go through real
-        // `evaluate_slot_operator_equal_deps`: bind every `:=` atom to
-        // the installed dependency's `<slot>/<sub-slot>=`.
+        // Dependency atoms evaluate their own USE deps against the package USE
+        // (non-atoms pass through); `*DEPEND` then binds `:=` to the installed slot.
         let value = if key.ends_with("DEPEND") {
             reduced
                 .into_iter()
@@ -200,16 +133,8 @@ pub(crate) fn write_post_install_metadata(
             .map_err(|e| format!("{}: {e}", build_info.join(key).display()))?;
     }
 
-    // Real `_post_src_install_write_metadata` (`doebuild.py:2720-2744`):
-    // `IUSE` is written verbatim from the package config ("in case it's
-    // corrupted due to local environment settings", bug #386829) and is
-    // *always* present -- a no-IUSE ebuild gets an empty
-    // `metadata/IUSE`, which is exactly what real archives carry.
-    // `IUSE_EFFECTIVE` (EAPI 5+) is the profile's own
-    // `_calc_iuse_effective` result, threaded here as an ordinary phase
-    // env key by #37 S1 (`portage_profile::phase_environ`); absent for a
-    // standalone `ebuild <file>` run with no resolved config, in which
-    // case real's `configdict` has no such key either.
+    // `IUSE` verbatim (always written, even empty); `IUSE_EFFECTIVE` when the
+    // config supplied one (absent for standalone runs, as in Portage).
     let iuse = metadata.get("IUSE").map(|s| s.trim()).unwrap_or("");
     std::fs::write(build_info.join("IUSE"), format!("{iuse}\n"))
         .map_err(|e| format!("{}: {e}", build_info.join("IUSE").display()))?;
@@ -221,41 +146,18 @@ pub(crate) fn write_post_install_metadata(
         .map_err(|e| format!("{}: {e}", build_info.join("IUSE_EFFECTIVE").display()))?;
     }
 
-    // Real `_post_src_install_uid_fix` (`doebuild.py:2997-3004`): the
-    // package's own installed size, summed over `${D}` -- regular files
-    // only, and hardlinked inodes counted exactly once (the same
-    // `counted_inodes` dedup real uses). Written into `build-info/SIZE`,
-    // which both the archive metadata (`metadata/SIZE`, #39) and the vdb
-    // copy.
+    // `SIZE`: regular files under `${D}`, one inode once. Both the archive
+    // metadata and the vdb copy read it.
     let size = dir_size_bytes(&env.d())?;
     std::fs::write(build_info.join("SIZE"), format!("{size}\n"))
         .map_err(|e| format!("{}: {e}", build_info.join("SIZE").display()))?;
     Ok(())
 }
 
-/// Real `_post_src_install_soname_symlinks` (`doebuild.py:3069-3300`),
-/// run where real runs it: after the `install_qa_check
-/// install_symlink_html_docs install_hooks` misc-function sequence, in
-/// `_emerge/EbuildPhase._commands_exit`. Four things, all #39:
-///
-/// 1. Rewrite `build-info/NEEDED.ELF.2` with the 6th, trailing multilib
-///    category field -- real reads each object's own ELF header
-///    (`ELFHeader.read`) and writes `NeededEntry.__str__`'s
-///    `arch;obj;soname;rpaths;needed;category` line back. A line whose
-///    object no longer reads as ELF keeps an empty category (real's
-///    `multilib_category = None`).
-/// 2. Generate `build-info/REQUIRES`/`PROVIDES` from the recognized
-///    entries (`SonameDepsProcessor`, `PROVIDES_EXCLUDE`/
-///    `REQUIRES_EXCLUDE` aware); real writes each file only when the
-///    corresponding map is non-empty.
-/// 3. Report a `QA Notice: Missing soname symlink(s):` block when a
-///    library's own soname symlink is missing (real only *reports*;
-///    it never creates the link here).
-/// 4. Append `_inject_libc_dep`'s implicit `>=<installed libc>` to
-///    `build-info/RDEPEND` (bug #753500). Real reaches this function
-///    only when `NEEDED.ELF.2` exists, so a package with no ELF gets
-///    neither `PROVIDES`/`REQUIRES` nor the libc dep -- matched by the
-///    early return below.
+/// Rewrites `build-info/NEEDED.ELF.2` with the trailing multilib category, generates
+/// `REQUIRES`/`PROVIDES` (each only when non-empty), reports missing soname symlinks,
+/// and appends the implicit libc dep. Packages with no ELF return early with neither.
+/// Portage: doebuild.py, _post_src_install_soname_symlinks
 pub(crate) fn write_post_install_soname_deps(env: &Environment, root: &Path) -> Result<(), String> {
     let build_info = env.build_info();
     let needed_path = build_info.join("NEEDED.ELF.2");
@@ -274,8 +176,7 @@ pub(crate) fn write_post_install_soname_deps(env: &Environment, root: &Path) -> 
             entry.multilib_category = Some(cat);
             recognized.push(entry.clone());
         }
-        // Real's own symlink QA: only for an entry with an soname in a
-        // real libdir, and never created -- reported only.
+        // Report-only QA, for soname entries in an actual libdir; never created here.
         if !entry.soname.is_empty() {
             let obj_dir = obj_path.parent();
             let parent_rel = std::path::Path::new(&entry.filename)
@@ -338,15 +239,9 @@ pub(crate) fn write_post_install_soname_deps(env: &Environment, root: &Path) -> 
     inject_libc_dep(env, root)
 }
 
-/// Real `_inject_libc_dep` (`doebuild.py:3026-3067`, bug #753500): every
-/// ELF-bearing package records an implicit `>=<provider>` runtime dep on
-/// the installed libc, so a binpkg merge cannot silently downgrade the
-/// libc it was built against. `find_libc_deps(..., realized=True)`:
-/// expand `virtual/libc`'s installed `RDEPEND` to its provider cps
-/// (`portage_repo::libc_provider_cps`), take each provider's lowest
-/// installed version (real `portdb.match(atom)[0]`), skip entirely when
-/// this package *is* a libc provider (real's own `pkgcmp` self-check),
-/// then append the `>=` atoms to the existing `build-info/RDEPEND`.
+/// Appends an implicit `>=<provider>` dep on the installed libc to `RDEPEND`
+/// (lowest installed provider version; skipped when this package is itself one).
+/// Portage: doebuild.py, _inject_libc_dep
 pub(crate) fn inject_libc_dep(env: &Environment, root: &Path) -> Result<(), String> {
     let current_cp = (env.category.clone(), env.split.pn.clone());
     let mut providers: Vec<(String, String)> =
@@ -381,10 +276,9 @@ pub(crate) fn inject_libc_dep(env: &Environment, root: &Path) -> Result<(), Stri
     Ok(())
 }
 
-/// Real `_post_src_install_uid_fix`'s own size accumulation: every
-/// regular file under `dir`, once per inode (`counted_inodes`), summed
-/// by `st_size`. Directory and symlink entries contribute nothing;
-/// unreadable entries are an error (real would raise the same way).
+/// Sums regular files under `dir` by size, one inode once; dirs/symlinks
+/// contribute nothing, unreadable entries error.
+/// Portage: doebuild.py, _post_src_install_uid_fix
 pub(crate) fn dir_size_bytes(dir: &Path) -> Result<u64, String> {
     use std::os::unix::fs::MetadataExt;
     fn walk(dir: &Path, seen: &mut std::collections::HashSet<u64>) -> Result<u64, String> {

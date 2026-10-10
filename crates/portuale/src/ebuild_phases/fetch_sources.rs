@@ -2,20 +2,11 @@
 
 use crate::ebuild_phases::*;
 
-/// The config-`USE` set the `depend` phase reduces `RESTRICT`/
-/// `PROPERTIES` on: real `doebuild(mydo="depend")` runs with the
-/// `setcpv` config `USE` (profile + `make.conf` + user `package.use`,
-/// no per-package IUSE resolution -- the phase *generates* IUSE), and
-/// `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` come from that same
-/// already-USE-reduced `_pkg` accessor (`_flatten` over
-/// `settings["PORTAGE_USE"]`). Portuale's equivalent is
-/// `Config::use_flags` (the same config-global set, no per-candidate
-/// layer). Empty when no repo checkout or config load is available --
-/// the pre-existing empty-set behavior, not an error. Atom-matched
-/// `package.use` / `package.env` entries for the depend target are NOT
-/// folded in (matching needs the target's `cat/pkg-ver:slot/sub`
-/// identity, which the `depend` path deliberately doesn't resolve --
-/// metadata extraction stays on the config-global set).
+/// The config-`USE` set the `depend` phase reduces `RESTRICT`/`PROPERTIES` on:
+/// Portage runs `doebuild(mydo="depend")` with the config-global `USE` (no
+/// per-package layer — the phase generates IUSE). Empty when no repo or config
+/// is available. Atom-matched `package.use`/`package.env` entries stay out.
+/// Portage: doebuild.py, config.py
 pub(crate) fn depend_use_set(
     env: &Environment,
     config_root: &Path,
@@ -57,12 +48,10 @@ pub(crate) fn depend_use_set(
     .unwrap_or_default()
 }
 
-/// The resolved config for the distfile fetch path: real `fetch.py` reads
-/// `FETCHCOMMAND`/`RESUMECOMMAND` (and the `_<PROTO>` variants) and
-/// `PORTAGE_SSH_OPTS` out of the same `mysettings` the phases run with,
-/// so portuale resolves the same chain once here (the `depend_use_set`
-/// resolution above is kept as a sibling rather than factored, since
-/// this needs the whole `Config`, not just `use_flags`).
+/// The resolved config for the fetch path (`FETCHCOMMAND`/`RESUMECOMMAND`,
+/// `PORTAGE_SSH_OPTS`): Portage reads them from the same settings the phases
+/// use, so this resolves that chain once. Sibling of `depend_use_set`, which
+/// needs only `use_flags`.
 pub(crate) fn resolved_fetch_config(
     env: &Environment,
     config_root: &Path,
@@ -96,9 +85,8 @@ pub(crate) fn resolved_fetch_config(
     .ok()
 }
 
-/// Real `fetch.py:1055-1059`: `shlex.split(PORTAGE_RO_DISTDIRS)` filtered
-/// to directories that exist (each candidate is re-checked at fetch
-/// time, but real filters the list up front).
+/// Portage's `PORTAGE_RO_DISTDIRS`, filtered to directories that exist.
+/// Portage: fetch.py
 pub(crate) fn resolved_ro_distdirs(
     env: &Environment,
     config_root: &Path,
@@ -145,10 +133,9 @@ pub(crate) fn resolved_ro_distdirs(
     .unwrap_or_default()
 }
 
-/// The distfile names `src_uri` lists once each, in first-seen order, for
-/// the `flag?` groups `active` keeps (real `_parse_uri_map`'s keys). The
-/// one place both `AA` (every group) and `A` (the phase `USE`) are read
-/// from.
+/// The distfile names `src_uri` lists once each, in first-seen order, for the
+/// `flag?` groups `active` keeps. The one place both `AA` and `A` are read from.
+/// Portage: fetch.py, _parse_uri_map
 pub(crate) fn distfile_names(
     env: &Environment,
     src_uri: &str,
@@ -165,11 +152,9 @@ pub(crate) fn distfile_names(
     Ok(names)
 }
 
-/// The package's own `A` without fetching anything: its md5-cache
-/// `SRC_URI` reduced against the phase `USE` (real `A` is the
-/// `use_reduce(SRC_URI, uselist=USE)` distfile list, the same set
-/// `fetch_src_uri` returns). Empty for an ebuild outside any repo or with
-/// no `SRC_URI`. Feeds `prepare_fake_distdir` on chains with no `unpack`.
+/// The package's `A` without fetching: md5-cache `SRC_URI` reduced against the
+/// phase `USE`. Empty outside a repo or without `SRC_URI`; feeds
+/// `prepare_fake_distdir` on chains with no `unpack`.
 pub(crate) fn package_a(env: &Environment, use_flags: &str) -> Result<Vec<String>, String> {
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok(Vec::new());
@@ -183,7 +168,6 @@ pub(crate) fn package_a(env: &Environment, use_flags: &str) -> Result<Vec<String
         flags.contains(flag) != negated
     })
 }
-/// Arguments of [`fetch_sources()`].
 pub(crate) struct FetchSourcesArgs<'a> {
     pub(crate) env: &'a Environment,
     pub(crate) root: &'a Path,
@@ -229,10 +213,8 @@ pub(crate) async fn fetch_sources(
     let restrict_primaryuri = restrict
         .map(|r| restrict_primaryuri_from_restrict(r))
         .unwrap_or(false);
-    // Real `AA`: the keys of `_parse_uri_map` -- each distfile once.
     let aa = distfile_names(env, &src_uri, |_, _| true)?;
-    // Real `fetch.py` reads its commands and `PORTAGE_SSH_OPTS` out of
-    // the same settings object the phases use; resolve the chain once.
+    // The fetch commands come from the same resolved settings the phases use.
     let fetch_config = resolved_fetch_config(env, config_root, root);
     let a = fetch::fetch_src_uri(
         &env.pkg_dir,
@@ -240,36 +222,23 @@ pub(crate) async fn fetch_sources(
         &FetchOptions {
             distdir: distdir.to_path_buf(),
             gentoo_mirrors: fetch::gentoo_mirrors_from_env(),
-            // Real PORTAGE_CONFIGROOT (real default: "/" when unset) --
-            // consulted only for real `custommirrors`, see
-            // `FetchOptions::config_root`'s own doc comment.
+            // Consulted only for `custommirrors`; see `FetchOptions::config_root`.
             config_root: portage_repo::config_root_from_env(),
-            // Real `"distlocks" in self.settings.features` -- same
-            // env-var-not-full-config-resolution shortcut
-            // `collision_protect`/`protect_owned`/`unmerge_orphans`
-            // already use, defaulting to real `true` (see
-            // `FetchOptions::distlocks`'s own doc comment).
+            // Env-var shortcut for `"distlocks" in features` (defaults on).
             distlocks: features.split_whitespace().any(|tok| tok == "distlocks"),
             restrict_mirror,
             restrict_fetch,
             restrict_primaryuri,
-            // Real `FEATURES=force-mirror` -- same env-var shortcut as
-            // `distlocks` above (no full config resolution on this
-            // path), defaulting to real `false`.
+            // Same env-var shortcut as `distlocks` (defaults off).
             force_mirror: features.split_whitespace().any(|tok| tok == "force-mirror"),
             use_flags: use_flags.split_whitespace().map(String::from).collect(),
-            // Real `fetch.py:1652-1700`'s command family out of the same
-            // settings object the phases use.
             fetch_commands: fetch_config.as_ref().map(fetch::fetch_commands_from_config),
-            // Real `mysettings.get("PORTAGE_SSH_OPTS")` (`fetch.py:1806`).
             portage_ssh_opts: fetch_config
                 .as_ref()
                 .and_then(fetch::portage_ssh_opts_from_config),
-            // Real `fetch.py:1055-1059`: existing directories only.
             ro_distdirs: resolved_ro_distdirs(env, config_root, root),
             mirror_cache_now: None,
-            // Real `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` -- same env-var
-            // shortcut as `distlocks` above.
+            // Same env-var shortcut as `distlocks`.
             checksum_failure_max_tries: {
                 let value = std::env::var("PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS").ok();
                 let (tries, warnings) = fetch::checksum_failure_max_tries(value.as_deref());
@@ -283,11 +252,9 @@ pub(crate) async fn fetch_sources(
     let a = match a {
         Ok(a) => a,
         Err(e) => {
-            // Real `fetch.py`: when a distfile can't be fetched, run the
-            // ebuild's own `pkg_nofetch` phase -- it prints custom "get it
-            // from <URL> and drop it in <DISTDIR>" instructions -- then
-            // fail. Best-effort: the phase not being defined (or its own
-            // failure) never masks the real fetch error.
+            // Unfetchable: run the ebuild's own `pkg_nofetch` phase for its custom
+            // instructions (best-effort; never masks the fetch error), then fail.
+            // Portage: fetch.py
             let ebuild = env.pkg_dir.join(format!("{}.ebuild", env.split.pf));
             if ebuild.is_file() {
                 let _ = run_one_phase(RunOnePhaseArgs {
