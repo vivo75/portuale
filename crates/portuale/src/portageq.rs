@@ -1081,7 +1081,9 @@ mod tests {
     #[test]
     fn matches_portageq_on_the_fixture_root() {
         if std::env::var_os("PORTUALE_COMPARE_PORTAGEQ").as_deref() != Some("1".as_ref()) {
-            eprintln!("skipped: set PORTUALE_COMPARE_PORTAGEQ=1 to compare with real portageq");
+            eprintln!(
+                "skipped: set PORTUALE_COMPARE_PORTAGEQ=1 to compare with Portage's portageq"
+            );
             return;
         }
         let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../3rdparty/portage");

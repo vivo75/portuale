@@ -1356,7 +1356,7 @@ fn extract_gpkg_metadata(gpkg: &Path, dest: &Path, metadata: InnerMetadata) -> R
     for entry in &metadata.entries {
         if entry.key.contains('/') {
             return Err(format!(
-                "{}: inner metadata member {:?} is nested, which real's writer never emits",
+                "{}: inner metadata member {:?} is nested, which Portage's writer never emits",
                 gpkg.display(),
                 entry.key
             ));

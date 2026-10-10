@@ -3117,7 +3117,7 @@ fn run_binpkg_flow(
                     println!(">>> Remote postinst {cpv}: ok");
                 } else {
                     println!(
-                        ">>> Remote postinst {cpv}: FAILED (exit {}) -- merge kept (real _postinst_failure)",
+                        ">>> Remote postinst {cpv}: FAILED (exit {}) -- merge kept (as Portage's _postinst_failure)",
                         report.phase_rc
                     );
                 }

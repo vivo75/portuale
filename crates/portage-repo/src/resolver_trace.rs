@@ -581,7 +581,7 @@ pub(crate) fn dump_resolution_walk(
         }
     };
     out(format_args!(
-        "\n# resolution walk (portuale BFS order, not real's LIFO _create_graph order)\n"
+        "\n# resolution walk (portuale BFS order, not Portage's LIFO _create_graph order)\n"
     ));
     let mut consumed: std::collections::BTreeSet<(String, String, String, bool)> =
         std::collections::BTreeSet::new();

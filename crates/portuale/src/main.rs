@@ -107,7 +107,7 @@ fn print_applets() {
         "   ebuild   run individual build phases (unpack/compile/install/merge/unmerge/...) on one ebuild file"
     );
     println!(
-        "   mrg      the real emerge option surface via clap, driving portuale's emerge codepath -- a relaxed re-take"
+        "   mrg      Portage's emerge option surface via clap, driving portuale's emerge codepath -- a relaxed re-take"
     );
     println!(
         "   vdb      convert or verify the installed-package database between backends (files, sqlite)"

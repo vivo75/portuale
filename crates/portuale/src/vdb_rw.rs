@@ -1588,7 +1588,7 @@ mod tests {
             assert_eq!(
                 env.db.entry_stat(&k).unwrap().unwrap().metadata_stamp,
                 MetadataStamp::Valid,
-                "{}: the stamp real appended matches the staged dir mtime",
+                "{}: the stamp Portage appended matches the staged dir mtime",
                 env.label
             );
             assert!(
@@ -1782,7 +1782,7 @@ mod tests {
             assert!(!env.db.has_entry(&env.seeded).unwrap());
             assert!(
                 resolve(&v, "dev-libs").is_ok(),
-                "the emptied category stays until real removes it"
+                "the emptied category stays until Portage removes it"
             );
             apply_rw(&v, &ops[rmdir_at + 1..]);
             assert_eq!(resolve(&v, "dev-libs"), Err(ViewError::NoEnt));
