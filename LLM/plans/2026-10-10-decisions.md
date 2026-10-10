@@ -247,3 +247,12 @@ The owner approved items 1-27 and commented on two of them: item 2
     step keeps `EmergeOpts`/`ResolvePlan` whole, and each function takes
     `&EmergeOpts` (destructured with `let &EmergeOpts { .. } = opts;`, so
     bodies don't change) instead of repeating the fields.
+
+34. **Long checks run once, at the end of #336.** The owner, 2026-10-10,
+    for #336 only: checks over 3-4 minutes (the contract suite, L0,
+    fixture-oracle, L1/L2, the glibc/bash merge gate, l31b) run only at
+    the end of the work. Every step still runs fmt, clippy, the release
+    build and the unit tests of the touched crate; the full workspace
+    `cargo test` runs once per phase. Commits stay one per step, so a
+    failure at the end is found with `git bisect` over them. Nothing
+    merges to `main` before the final pass is green.

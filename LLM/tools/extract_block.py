@@ -3,6 +3,7 @@
 (#336 Phase 6.3: `pretend::run` phases D-S and the other function cuts).
 
 Usage: extract_block.py SRC START END FNAME TARGET_RS [--doc TEXT] [--crate PKG]
+                        [--try ERR] [--keep]
 
 SRC lines START..END (1-based, inclusive) must be whole statements of the
 host function's top-level block (4-space indent). They move verbatim into
@@ -33,7 +34,9 @@ comes from the compiler:
 
 A `return X` in the range ends the host: the function returns
 `Option<ExitCode>` (no outputs) or `Result<outputs, ExitCode>`, and the call
-site returns the code. On success `cargo clippy --fix` and `cargo fmt` run;
+site returns the code. With `--try ERR` (the host returns `Result<_, ERR>`),
+a range using `?` returns `Result<outputs, ERR>` and the call site keeps
+the `?`. On success `cargo clippy --fix` and `cargo fmt` run;
 leftover errors are printed and nothing is reverted.
 """
 
@@ -123,12 +126,12 @@ def wrap_returns(text, ctor):
     return "".join(out)
 
 
-def find_type(name):
+def find_type(name, skip="portuale"):
     """`use <crate>::Name;` for a pub type defined in exactly one library
     crate of the workspace (the crates re-export their types at the root)."""
     hits = set()
     for d in os.listdir("crates"):
-        if d == "portuale":
+        if d == skip:
             continue
         for dirpath, _, files in os.walk(os.path.join("crates", d, "src")):
             for f in files:
@@ -152,7 +155,7 @@ def code_only(text):
 
 
 class Cut:
-    def __init__(self, src, start, end, fname, target, doc, pkg):
+    def __init__(self, src, start, end, fname, target, doc, pkg, err=None):
         self.src, self.start, self.end = src, start, end
         self.fname, self.target, self.doc, self.pkg = fname, target, doc, pkg
         self.orig_src = open(src).read()
@@ -166,6 +169,10 @@ class Cut:
         body = "\n".join(self.region)
         self.returns = wrap_returns(body, "Some") != body
         self.raw_body = body
+        # `?` in the range: the function returns `Result<_, err>` and the
+        # call site keeps the `?` (needs --try ERR, the host's error type)
+        self.err = err if err and "?" in code_only(body) else None
+        assert not (self.err and self.returns), "`return` and `?` in one range"
         # outputs: top-level `let` names of the range read after it
         host_end = next(i for i in range(self.end, len(lines)) if lines[i] == "}")
         after = code_only("\n".join(lines[self.end:host_end]))
@@ -190,6 +197,14 @@ class Cut:
             lines.insert((after[-1] if after else idx[0] - 1) + 1, text)
             return idx
 
+        if not any(re.match(r"^mod \w+;$", l) for l in lines):
+            # first child module: `mod` + glob re-export after the imports
+            at = max(i for i, l in enumerate(lines[:self.start]) if l.startswith("use ")) + 1
+            lines[at:at] = ["", f"mod {stem};", f"pub(crate) use {stem}::*;"]
+            self.start += 3
+            self.end += 3
+            self.orig_src = "\n".join(lines)
+            return
         uses = place(r"^pub(\(crate\))? use \w+::\*;$", f"pub(crate) use {stem}::*;")
         place(r"^mod \w+;$", f"mod {stem};")
         assert uses[-1] + 1 < self.start - 1
@@ -202,6 +217,10 @@ class Cut:
         return d[d.index("/src") + 5:].replace("/", "::")
 
     def ret_type(self, typed):
+        if self.err:
+            ts = [t if typed and t else "()" for _, t in self.outs]
+            o = "()" if not ts else ts[0] if len(ts) == 1 else pascal(self.fname) + "Out"
+            return f"Result<{o}, {self.err}>"
         if self.outs:
             ts = [t if typed and t else "()" for _, t in self.outs]
             o = ts[0] if len(ts) == 1 else pascal(self.fname) + "Out"
@@ -228,7 +247,9 @@ class Cut:
         pat = (onames[0] if len(onames) == 1 else oname + " { " + ", ".join(onames) + " }") if onames else None
         mpat = (("mut " + onames[0]) if len(onames) == 1
                 else oname + " { " + ", ".join("mut " + n for n in onames) + " }") if onames else None
-        if onames and self.returns:
+        if self.err:
+            site = [f"    let {mpat} = {call}?;"] if onames else [f"    {call}?;"]
+        elif onames and self.returns:
             site = [f"    let {mpat} = match {call} {{", "        Ok(out) => out,",
                     "        Err(code) => return code,", "    };"]
         elif onames:
@@ -242,6 +263,10 @@ class Cut:
         ret = f" -> {rt}" if rt else ""
         writeback = "".join(f"    *{n}_out = {n};\n" for n, _, _ in ps if n in copy_mut)
         if probe:
+            tail = "\n" + "".join(f"    let _: () = {n};\n" for n in onames) + "    todo!()\n"
+        elif self.err:
+            tail = "\n" + writeback + "    Ok(" + (pat or "()") + ")\n"
+        elif probe:
             tail = "\n" + "".join(f"    let _: () = {n};\n" for n in onames) + "    todo!()\n"
         elif onames:
             tail = "\n" + writeback + ("    Ok(" + pat + ")\n" if self.returns else "    " + pat + "\n")
@@ -289,7 +314,7 @@ class Cut:
             for n, _, m in ps:
                 if m == "mut" and n not in copy_mut:
                     body = re.sub(rf"(?m)^(\s*){n}(\s*[+\-]?=[^=])", rf"\1*{n}\2", body)
-                    body = re.sub(rf"&mut\s+{n}\b", f"&mut *{n}", body)
+                    body = re.sub(rf"&mut\s+{n}\b(?![.\[])", f"&mut *{n}", body)
         doc = f"/// {self.doc}\n" if self.doc else ""
         fn = f"{struct}{doc}{sig} {{\n{prologue}{body}{tail}}}\n"
         glob = f"use crate::{self.module_path()}::*;\n"
@@ -337,13 +362,29 @@ class Cut:
                     expr = t0["text"][t0["highlight_start"] - 1:t0["highlight_end"] - 1]
                     yield s, expr, c["message"]
 
+    def mode_fixes(self, errs):
+        """Turn the parameters rustc says are written or moved into `&mut`
+        or `&`; True when a mode changed."""
+        changed = False
+        for m in errs:
+            code = (m.get("code") or {}).get("code")
+            mm = re.search(r"`(\w+)", m["message"])
+            p = next((p for p in self.params if mm and p[0] == mm.group(1)), None)
+            if p and code in ("E0594", "E0596", "E0384") and p[2] != "mut":
+                p[2] = "mut"
+                changed = True
+            elif p and code == "E0382" and p[2] == "val":
+                p[2] = "ref"
+                changed = True
+        return changed
+
     def add_imports(self, errs):
         added = False
         for m in errs:
             mt = re.search(r"cannot find type `(\w+)`", m["message"])
             if mt:
                 mm = re.search(r"^\s*\d*\s*\+ (use [\w:]+;)$", m["rendered"], re.M)
-                u = mm.group(1) if mm else find_type(mt.group(1))
+                u = mm.group(1) if mm else find_type(mt.group(1), self.pkg)
                 if u and u not in self.imports:
                     self.imports.append(u)
                     added = True
@@ -451,28 +492,24 @@ class Cut:
             for o in self.outs:
                 if o[1] is None:
                     sys.exit(f"no type for output {o[0]}")
-        # 4. modes and imports
-        for _ in range(8):
-            self.render(typed=True)
-            errs = self.check()
-            changed = self.add_imports(errs)
-            for m in errs:
-                code = (m.get("code") or {}).get("code")
-                mm = re.search(r"`(\w+)", m["message"])
-                p = next((p for p in self.params if mm and p[0] == mm.group(1)), None)
-                if p and code in ("E0594", "E0596", "E0384") and p[2] != "mut":
-                    p[2] = "mut"
-                    changed = True
-                elif p and code == "E0382" and p[2] == "val":
-                    p[2] = "ref"
-                    changed = True
-            if not changed:
-                break
-        # 5. rustc's own fixes inside the new fn: `&x` -> `x` where `x` is
-        # already a reference, `x` -> `*x` where a value is expected
-        for _ in range(6):
-            errs = self.check()
-            if not self.apply_suggestions(errs):
+        # 4-5 repeat: borrow errors (E0594/E0596) only show once the type
+        # errors step 5 fixes are gone, and a new mode re-renders the body
+        for _round in range(3):
+            # 4. modes and imports
+            for _ in range(8):
+                self.render(typed=True)
+                errs = self.check()
+                changed = self.add_imports(errs)
+                changed = self.mode_fixes(errs) or changed
+                if not changed:
+                    break
+            # 5. rustc's own fixes inside the new fn: `&x` -> `x` where `x` is
+            # already a reference, `x` -> `*x` where a value is expected
+            for _ in range(6):
+                errs = self.check()
+                if not self.apply_suggestions(errs):
+                    break
+            if not self.mode_fixes(self.check()):
                 break
         left = [m["rendered"] for m in self.check()]
         print(f"{self.fname}: {len(self.params)} params "
@@ -492,7 +529,8 @@ def main():
     a = sys.argv[1:]
     doc = a[a.index("--doc") + 1] if "--doc" in a else ""
     pkg = a[a.index("--crate") + 1] if "--crate" in a else "portuale"
-    cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg)
+    err = a[a.index("--try") + 1] if "--try" in a else None
+    cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg, err)
     try:
         cut.run()
     except SystemExit as e:
