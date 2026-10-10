@@ -26,8 +26,8 @@ pub(crate) struct DependencyAvoidUpdateCandidateArgs<'a> {
 /// dependency satisfied only by a masked-but-installed version never spuriously hits
 /// `NoVisibleCandidate`), and once more from the ordinary `!update` shortcut (the only
 /// place still reachable with `--exclude`).
-// Portage: lib/_emerge/depgraph.py, _select_pkg_highest_available_imp ~8440;
-// _want_update_pkg; _iter_match_pkgs; dbapi._iuse_implicit_cnstr (bug #640318)
+// Portage: lib/_emerge/depgraph.py, _select_pkg_highest_available_imp;
+// _want_update_pkg; _iter_match_pkgs; dbapi._iuse_implicit_cnstr
 pub(crate) fn dependency_avoid_update_candidate<'a>(
     args: DependencyAvoidUpdateCandidateArgs<'a>,
 ) -> Option<&'a Candidate> {
@@ -68,7 +68,7 @@ pub(crate) fn dependency_avoid_update_candidate<'a>(
                     read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "USE");
                 // Portage's `dbapi._iuse_implicit_cnstr` domain for a *built* package: recorded
                 // `IUSE` ∪ profile `IUSE_EFFECTIVE` (via `valid_iuse`) ∪ the package's own
-                // recorded `USE` (bug #640318: a built package's own `USE` is authoritative,
+                // recorded `USE` (a built package's own `USE` is authoritative,
                 // e.g. an ebuild that has since dropped a flag from `IUSE`). Portuale
                 // recomputes rather than reading a persisted `IUSE_EFFECTIVE` file.
                 let mut valid = valid_iuse(&vdb_iuse, config);
@@ -117,7 +117,7 @@ pub(crate) fn already_installed_or_reinstall(
         // the deep tree resolves to a merge. The pool is already tree-only, so `empty`
         // forces the would-be `AlreadyInstalled` fallback to a bare `Reinstall`
         // (Portage's reasonless `[ebuild R]`).
-        // Portage: create_depgraph_params.py:176; depgraph.py:7889; output.py attr_display
+        // Portage: create_depgraph_params.py; depgraph.py; output.py attr_display
         empty,
         ..
     } = *opts;
@@ -404,7 +404,7 @@ pub fn resolve_pretend(
         autounmask_masks,
         extra_constraints,
     } = *opts;
-    // Portage: create_depgraph_params.py:179 (`--emptytree` pops `selective`).
+    // Portage: create_depgraph_params.py (`--emptytree` pops `selective`).
     let selective = selective && !empty;
     let atom = portage_dep::parse_atom(atom_str).ok_or_else(|| Error::InvalidAtom {
         atom: atom_str.to_string(),
@@ -445,7 +445,7 @@ pub fn resolve_pretend(
         // (`by_str`), so a mismatched binary left in the pool would take the
         // same-version ebuild with it. `--newuse`/`--reinstall` open the gate on
         // their own; a same-version ebuild is the comparison's `cur_` side.
-        // Portage: depgraph.py:8259-8288; gate reinstall_use or (not installed and respect_use)
+        // Portage: depgraph.py; gate reinstall_use or (not installed and respect_use)
         if binpkg_respect_use || newuse || changed_use {
             let ebuild_at_version = |version: &str| {
                 candidates
@@ -469,7 +469,7 @@ pub fn resolve_pretend(
         // binhost binary whose recorded `*DEPEND` differs from the current ebuild's,
         // so a stale build is rebuilt from source. Explicit `=y|n` forces the check
         // on or off (`binpkg_changed_deps_active`).
-        // Portage: create_depgraph_params.py:196-203; depgraph.py:8288 ignored_binaries
+        // Portage: create_depgraph_params.py; depgraph.py ignored_binaries
         if binpkg_changed_deps_active(usepkgonly) {
             binary_candidates.retain(|c| {
                 !binary_deps_changed(BinaryDepsChangedArgs {
@@ -487,7 +487,7 @@ pub fn resolve_pretend(
         // package whose ebuild left the tree or gained a mask is not merged stale).
         // Skipped for a binhost-only atom and under `--usepkgonly`;
         // `--use-ebuild-visibility` overrides both skips.
-        // Portage: depgraph.py:8015-8025,8027
+        // Portage: depgraph.py
         let uev = use_ebuild_visibility();
         if (!usepkgonly || uev) && !binary_candidates.is_empty() {
             let ebuild_visible_at = |ver: &str| {
@@ -583,7 +583,7 @@ pub fn resolve_pretend(
     // `--emptytree` skips installed packages as candidates entirely, so the
     // dependency `avoid_update` early return below can never fire (its pool holds no
     // installed instance).
-    // Portage: depgraph.py:7888-7899,8453-8458
+    // Portage: depgraph.py
     if !update && !empty && !is_top_level && excluded.is_empty() {
         let installed = installed_candidates(root, &atom.category, &atom.package);
         if let Some(installed_best) =
@@ -645,7 +645,7 @@ pub fn resolve_pretend(
     // at the first level with a satisfying candidate. A later level relaxes `LICENSE`
     // only if level 1 was allowed to. The `missing keywords` steps are skipped (no
     // `**` suggestion). `(relax_license, relax_keywords, relax_masks)`:
-    // Portage: depgraph.py:7446
+    // Portage: depgraph.py
     let mut levels: Vec<(bool, bool, bool)> = Vec::new();
     let mut relax_license = false;
     if autounmask_license {
@@ -656,7 +656,7 @@ pub fn resolve_pretend(
         levels.push((relax_license, true, false)); // 2. +~arch (+license)
     }
     if autounmask_masks {
-        // 4. +masks, keywords still respected (Portage bug #463394).
+        // 4. +masks, keywords still respected.
         levels.push((relax_license, false, true));
         if autounmask_keywords {
             // 5. +~arch +masks (+license).
@@ -802,7 +802,7 @@ pub fn resolve_pretend(
     // `--useoldpkg-atoms`: for a matching package prefer a *built* (binary) candidate
     // over any newer *unbuilt* ebuild, so every downstream check sees only the old
     // binaries. Empty (the default) or a pool with no binaries is a strict no-op.
-    // Portage: depgraph.py:7936 matched_oldpkg/visible_matches
+    // Portage: depgraph.py matched_oldpkg/visible_matches
     let matched: Vec<&str> = {
         let oldpkg: Vec<&str> = matched
             .iter()
@@ -890,7 +890,7 @@ pub fn resolve_pretend(
     // keeps its own `!is_top_level` branch (same broader lookup) for that one
     // combination. Under `--emptytree` the dependency branch is skipped too (no
     // installed candidates at all).
-    // Portage: depgraph.py:7888-7899
+    // Portage: depgraph.py
     if !update && ((!is_top_level && !empty) || selective) {
         let installed_best = if !is_top_level {
             // Same `extra_constraints` gate as the early shortcut above.
@@ -945,7 +945,7 @@ pub fn resolve_pretend(
         .max_by(|a, b| {
             // At the winning version a surviving `--usepkg`/`--getbinpkg` binary beats
             // the same-version ebuild ("ebuild type is the last resort").
-            // Portage: depgraph.py:8492 matched_packages[-1]
+            // Portage: depgraph.py matched_packages[-1]
             let src_rank = |c: &Candidate| match c.source {
                 CandidateSource::Binary => 1u8,
                 CandidateSource::Ebuild => 0,

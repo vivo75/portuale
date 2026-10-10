@@ -28,6 +28,7 @@ Fail-fast replay of the best pass.
 
 ## fn replay_slot_conflicts
 - Backlog #244. A slot-conflict block as Portage's package tracker holds it after the replayed walk (see `merge_order::replay_create_graph`): includes a requester whose use-dep the instance no longer satisfies once a later requester's autounmask change flipped it (Portage keeps the edge; the conflict block lists and marks both). Each instance's `USE="…"` is the flip-applied `pkg_use_display` (backlog #264: Portage's `_pkg_use_enabled` through `UseFlagDisplay.pkg_use_display`, grouped, not the merge row's `_create_use_string`).
+- The block is built after the walk `r` replayed over `entries` (see `merge_order::replay_create_graph`): instances in admission order, each instance's parents every edge that landed on it in walk order. Conflicts or instances the replay cannot place are left as they are.
 
 ## fn apply_replay_flips
 - Backlog #244. `r.needed` beyond the ones `base` already carried in from earlier passes. The row's and the slot-conflict block's `USE="…"` show the changed state (Portage's `_pkg_use_enabled`). Portuale's walk skips the flip when the requester's atom first lands on another instance of the slot, hence the `changes` recording.

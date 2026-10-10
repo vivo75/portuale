@@ -57,3 +57,39 @@ A resolve request: the atoms and the emerge options.
 
 ## fn ResolveRequest::resolve
 - Resolves with the `active_resolver`.
+
+## field ResolveRequest::onlydeps
+- The resolver itself walks every dep class for the root (Portage selects the root node with `onlydeps=True` and still traverses its deps); the root's own merge-list suppression is display-layer (`pretend.rs` `onlydeps`/`top_level_pkgs`).
+
+## field ResolveRequest::onlydeps_with_ideps
+- `--onlydeps-with-ideps <y|n>` (Portage `main.py` `true_y_or_n`, default disabled -- `man emerge.1` "This option is disabled by default", and only consulted "when `--onlydeps` and `--onlydeps-with-rdeps=n` are both specified"): include install-time deps for an onlydeps root whose run-time deps are disabled.
+
+## field ResolveRequest::empty
+- The net effect matches Portage `emerge -e`: the entire deep dependency tree is (re)merged.
+- Original comment citations: Portage: create_depgraph_params.py:176-179
+
+## field ResolveRequest::getbinpkg
+- A remote-only candidate that wins resolution renders the Portage `g` bracket column and contributes its download `SIZE` to `Size of downloads:`.
+
+## field ResolveRequest::ignore_built_slot_operator_deps
+- Same net effect here: when set, the `slot_operator_rebuild_entries` post-pass is skipped entirely.
+- Original comment citations: Portage: main.py:470; FakeVartree strips := from installed *DEPEND
+
+## field ResolveRequest::backtrack_max
+- `--backtrack=0` disables backtracking entirely -- no feedback node is explored, so a slot conflict is reported without any retry, exactly the pre-backtracking behavior.
+
+## field ResolveRequest::reinstall_atoms
+- Same two-tier `matches_config_entry` matcher `excluded` uses.
+- Empty (`&[]`) at every call site that doesn't pass `--reinstall-atoms`.
+- Original comment citations: Portage: main.py append; depgraph.py:363-365,4547,4643,8331
+
+## field ResolveRequest::rebuild_exclude
+- `--rebuild-exclude ATOMS` (parent skipped) / `--rebuild-ignore ATOMS` (dep never triggers) -- same repeatable atom-list shape as `--exclude`.
+
+## field ResolveRequest::complete
+- `--complete-graph` (Portage `create_depgraph_params.py:169-175`: `--complete-graph` / `--rebuild-if-{unbuilt,new-rev,new-ver}` all set `myparams["complete"] = True`) plus the `--complete-graph-if-new-use` / `-if-new-ver` auto-enable, both resolved by the CLI layer (see `complete_graph_auto_enable` and `pretend.rs`'s two-pass).
+- In a `--pretend` that never removes or downgrades an installed package, the first three are provably inert -- a consistent installed set stays consistent, and portuale's `--rebuild-if-*` / slot-operator (`:=`) auto-rebuild passes already scan *every* installed package (`all_installed_packages`), both firing only for a dep that actually merges this run (which installed-only selection never adds).
+- Original comment citations: Portage: create_depgraph_params.py:169-175; depgraph.py _complete_graph
+
+## field ResolveRequest::set_args
+- Original comment citations: Portage: SetArg world/selected; depgraph.py:5577-5605

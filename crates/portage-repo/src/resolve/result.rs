@@ -27,25 +27,24 @@ pub struct ChangedDepsReportEntry {
 /// There is deliberately no "autounmask + cycle" variant: autounmask changes with a
 /// cycle only cut the backtrack loop at try 0, and the list shown is still the stuck
 /// remainder plus the autounmask block (an `UnserializableCycle` with non-empty
-/// `autounmask_*_changes`, per the oracle's spec §4d).
-// Portage: depgraph.py _create_graph:3254-3271, _serialize_tasks:10262-10294;
-// actions.py:460-462; backlog #19, docs/history/abort-path-spec.md
+/// `autounmask_*_changes`, per the oracle).
+// Portage: depgraph.py _create_graph, _serialize_tasks; actions.py action_build
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbortReason {
-    /// A dependency atom matching masked-only ebuilds (spec §4a): the disclosure half
+    /// A dependency atom matching masked-only ebuilds: the disclosure half
     /// ships as [`MaskedDepReport`]; the abort half suppresses the merge list and
     /// exits 1. `atom` is the report's display atom, `parent_cpv` the first
     /// merge-bound requirer.
     MaskedDep { atom: String, parent_cpv: String },
-    /// A dependency atom no visible package satisfies for any other reason (spec §4b):
+    /// A dependency atom no visible package satisfies for any other reason:
     /// same abort shape, different error block. `atom` is the unevaluated dep atom as
     /// queued.
-    // Portage: depgraph.py:3479-3483 no-ebuilds-with-USE-flags flavour
+    // Portage: depgraph.py no-ebuilds-with-USE-flags flavour
     UnsatisfiedAtom { atom: String, parent_cpv: String },
-    /// `_serialize_tasks` drained everything serializable and got stuck (spec §4c):
+    /// `_serialize_tasks` drained everything serializable and got stuck:
     /// the display is the stuck remainder only. `members` are `cat/pkg-version` CPVs
     /// in leaf-drain remainder order; tree nesting/`[nomerge]` rows stay a deliberate
-    /// cut (dedup-by-design, Gate G0.2).
+    /// cut (dedup-by-design).
     UnserializableCycle { members: Vec<String> },
     /// A merge-bound `virtual/` package (transitively) requires itself through selected
     /// virtual providers, so it can never resolve. Portage raises out of the walk and
@@ -56,10 +55,10 @@ pub enum AbortReason {
 }
 
 /// Whether the resolve ran to completion or was abandoned: Portage's `select_files`
-/// falsy-success paths as data. The `Aborted` partial list is what Slice 4 renders
+/// falsy-success paths as data. The `Aborted` partial list is what the renderer shows
 /// *instead of* `entries` (masked/unsat shapes carry an empty partial; the cycle
 /// shape carries the stuck remainder, one entry per `cycle_display` CPV in order).
-// Portage: depgraph.py:5676-5683
+// Portage: depgraph.py
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveOutcome {
     Complete,
@@ -69,8 +68,8 @@ pub enum ResolveOutcome {
     },
 }
 
-/// Rollout gate for the abort path (Gate G0.4, flag-gated): unset or any value but
-/// `0` enables the Slice-5 abort rendering + exit codes; `PORTUALE_ABORT_PATH=0`
+/// Rollout gate for the abort path (flag-gated): unset or any value but
+/// `0` enables the abort rendering + exit codes; `PORTUALE_ABORT_PATH=0`
 /// keeps the legacy "report, don't enforce" list and exit 0. Read off the environment
 /// at the use site, so neither `ResolveRequest` nor the marshaller grows a parameter.
 pub fn abort_path_enabled() -> bool {
@@ -93,7 +92,7 @@ pub struct AbortOutcomeArgs<'a> {
 
 /// Derives the abort outcome from the settled graph: Portage's three abandon sites
 /// as a post-loop classification (portuale rebuilds `entries` per pass; the final
-/// pass is the one Portage would display, spec §6).
+/// pass is the one Portage would display).
 ///
 /// Precedence follows Portage's control flow: a walk-time failure wins over a
 /// serialize-time one, so a masked/unsat dependency beats a cycle in the same graph.
@@ -221,7 +220,7 @@ pub struct GraphResult {
     pub entries: Vec<GraphEntry>,
     /// [`abort_outcome`] over the settled graph: `Aborted` exactly when Portage would
     /// have abandoned the resolve, `Complete` otherwise. `entries` is still the full
-    /// graph either way; the renderer switches to `partial` in Slice 4.
+    /// graph either way; the renderer switches to `partial` when aborted.
     pub outcome: ResolveOutcome,
     /// Portage's `_backtrack_depgraph` `backtracked` counter: loop restarts
     /// (`passes - 1`), reported as `(backtrack: N/M)`. The wall-clock timing half
@@ -254,7 +253,7 @@ pub struct GraphResult {
     /// binary without merging it, so every dependency of a to-be-built package must
     /// already be installed; otherwise it refuses to resolve at all. Always `false`
     /// when `buildpkgonly` wasn't requested.
-    // Portage: lib/_emerge/depgraph.py:5706-5717; display_problems
+    // Portage: lib/_emerge/depgraph.py; display_problems
     pub buildpkgonly_deps_unsatisfied: bool,
     /// The best-run pass still carries a non-empty replace set with missed updates and
     /// no prune latch: Portage wants the `prune_rebuilds` restart, cannot take it, and
@@ -266,12 +265,12 @@ pub struct GraphResult {
     /// package.provided:` block for these, in requested order. A *dependency* atom
     /// matching `package.provided` is silently dropped from the walk instead, never
     /// recorded here.
-    // Portage: depgraph.py:5497-5615 _pprovided_args; :11192-11235; dep_check.py:1052
+    // Portage: depgraph.py _pprovided_args; dep_check.py
     pub pprovided_atoms: Vec<String>,
     /// Top-level `@world`/`@selected` set members that selected no package on the
     /// settled pass. The caller prints the world-file notice plus the
     /// masked-or-don't-exist list from these, in requested order.
-    // Portage: depgraph.py:5577-5605 _missing_args; display_problems
+    // Portage: depgraph.py _missing_args; display_problems
     pub missing_args: Vec<String>,
     /// Portage `--autounmask` keyword changes applied to make the graph resolve: one
     /// per entry that only became visible because `autounmask_suggest_keywords`
@@ -315,7 +314,7 @@ pub struct GraphResult {
     /// The reported graph comes from a pass Portage runs with backtracking still
     /// allowed (the loop ended early on `need_config_change`), so the slot-conflict
     /// advisory omits its `--backtrack=30` hint (shown only when backtracking is off).
-    // Portage: depgraph.py:12228-12234,1750-1759
+    // Portage: depgraph.py
     pub settled_with_backtracking: bool,
     /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator auto-rebuild:
     /// the consumer got a `Reinstall { slot_operator_rebuild: true }` entry because
@@ -422,7 +421,7 @@ impl GraphResult {
 pub struct AutounmaskChange {
     /// The left-hand atom of the change line, op prefix included: `=<cpv>` for a
     /// keyword change, `>=<cpv>` / `>=<cpv>:<slot>` / `=<cpv>` for a USE change.
-    // Portage: autounmask_unrestricted_atoms default n; check_if_latest (bug #536392)
+    // Portage: autounmask_unrestricted_atoms default n; check_if_latest
     pub atom: String,
     /// The token(s) to add after `atom`: a `~<arch>` keyword, or a space-joined
     /// `flag`/`-flag` list for a USE change.

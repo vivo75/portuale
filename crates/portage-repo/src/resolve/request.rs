@@ -53,7 +53,7 @@ pub struct ResolveRequest {
     pub distdir: PathBuf,
     /// `--emptytree`/`-e`: forces `deep` on and every atom resolves to a bare
     /// `Reinstall` instead of `AlreadyInstalled`, so the whole deep tree merges.
-    // Portage: create_depgraph_params.py:176-179
+    // Portage: create_depgraph_params.py
     pub empty: bool,
     /// `--getbinpkg`/`-g`: also consider *remote* binary candidates from
     /// `config.binrepos`. A remote-only winner renders the `g` bracket column
@@ -62,7 +62,7 @@ pub struct ResolveRequest {
     pub getbinpkg: bool,
     /// `--ignore-built-slot-operator-deps`: skip the slot-operator auto-rebuild
     /// scan entirely. Intended only for debugging.
-    // Portage: main.py:470; FakeVartree strips := from installed *DEPEND
+    // Portage: main.py; FakeVartree strips := from installed *DEPEND
     pub ignore_built_slot_operator_deps: bool,
     /// `--backtrack=COUNT`: max retries for the backtracking search. `0`
     /// disables backtracking (a slot conflict is reported without retry).
@@ -73,7 +73,7 @@ pub struct ResolveRequest {
     /// `--reinstall-atoms ATOMS`: an installed `cat/pkg-version` matching one
     /// of these is treated as not installed (a scoped `--emptytree`). Same
     /// matcher `excluded` uses; empty at call sites that pass no flag.
-    // Portage: main.py append; depgraph.py:363-365,4547,4643,8331
+    // Portage: main.py append; depgraph.py
     pub reinstall_atoms: Vec<String>,
     /// `--rebuild-if-new-slot` (default on): the slot-operator (`:=`)
     /// auto-rebuild pass. `false` skips it.
@@ -100,13 +100,13 @@ pub struct ResolveRequest {
     /// `--complete-graph`: the only observable delta is the forced deep walk
     /// (installed-/graph-only selection is a documented `excluded_pkgs` cut;
     /// the auto-rebuild scans already cover every installed package).
-    // Portage: create_depgraph_params.py:169-175; depgraph.py _complete_graph
+    // Portage: create_depgraph_params.py; depgraph.py _complete_graph
     pub complete: bool,
     /// Top-level atoms expanded from a `@world`/`@selected` set argument. A
     /// member selecting no package lands in the missing-args report instead of
     /// failing the run. Empty for direct resolver callers (unit tests), which
     /// keeps the fatal top-level miss everywhere.
-    // Portage: SetArg world/selected; depgraph.py:5577-5605
+    // Portage: SetArg world/selected; depgraph.py
     pub set_args: std::collections::HashSet<String>,
     /// Portuale-only `--solver=` selection (see [`SolverKind`]).
     pub solver: SolverKind,

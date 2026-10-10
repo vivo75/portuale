@@ -3,6 +3,7 @@ The walk queue.
 
 ## enum Deep
 - Portage's `lib/_emerge/main.py` `"--deep": valid_integers`, `create_depgraph_params.py`'s `myparams["deep"]`, `depgraph.py`'s `_too_deep`/`_add_pkg`. Portage's default (`deep` absent from `myparams`, only set when `--deep` is present and non-zero) never walks an AlreadyInstalled package's deps -- portuale's pre-existing hardcoded behavior (see `resolve_pretend_graph`'s "A package's dependencies are only walked if..."), so `NotRequested` needed no new code. A bare `--deep` stores Python `True` (unlimited); `--deep=N` the integer `N`, rejected by Portage's `parser.error()` if negative. CLI parsing lives in `portuale/src/pretend.rs`.
+- A bare `--deep` stores real Python `True` (unlimited depth); `--deep=N` stores the integer `N`, rejected by Portage `parser.error()` if negative -- `--deep=0` parses fine but is indistinguishable from not passing `--deep` at all, since `create_depgraph_params.py`'s own `!= 0` check excludes it from `myparams` either way (`Bounded(0)` is never constructed here for the same reason -- see the CLI parsing in `portuale/src/pretend.rs`).
 
 ## fn Deep::recurses_at
 - Mirrors Portage's `recurse = deep is True or not self._too_deep(self._depth_increment(depth, n=1))`. A dependency discovered at `depth` lands at `depth + 1 <= n`.
@@ -19,6 +20,7 @@ The walk queue.
 
 ## fn or_group_universe
 - Backlog #90 (S1). `enqueue_flat_deps` needs the split because the flattened list no longer says which tokens a `||` produced. Pathological overlap (a token both inside and outside) is documented, not handled.
+- Original comment citations: Portage: depgraph.py:3257-3268
 
 ## fn dep_running_tags
 - Track X Slice B (#242). Native builds: `ESYSROOT` collapses to the running root, and the pre-EAPI-7 `DEPEND`-against-running-root branch lands in the same place, so no EAPI gate is needed. Scope-backlog's permanent non-gap for the running-rooted `PDEPEND` case, not reopened.
@@ -36,3 +38,14 @@ The walk queue.
 - Track X Slice C (#242): a non-self bootstrap ring keeps Slice B's terminating scope.
 - Portage's `blocker.priority.buildtime` (#143 S1): evaluated against the same raw text `buildtime_hard` uses (bound before `tok` moves into `atom_str`).
 - `owner_installed: false`: the vdb-scan producer is `collect_unwalked_installed_blockers`.
+- `parent_use` (the owning package's own already-computed effective USE -- the exact same set passed as `use_reduce_flat`'s own `uselist` argument for this same dependency string) evaluates each token's own PMS 8.3.4 conditional use-deps (`flag?`/`!flag?`/`flag=`/`!flag=`) before it's ever queued or classified as a blocker -- Portage `use_reduce`'s own per-token integration point (see `portage_dep::evaluate_atom_conditionals`'s own doc comment), applied uniformly to every token the same way Portage does, blockers included (a blocker atom can syntactically carry use-deps too, e.g. `!foo/bar[baz=]`). A token that fails to re-evaluate (shouldn't happen for anything `use_reduce_flat` itself already accepted, but treated the same "can't tell, so pass it through as-is" way an unparseable-at-all token already silently falls through to the `parse_atom` check below) is queued unevaluated rather than dropped.
+- `evaluate_atom_conditionals` returns `Some(...)` even when nothing changed (the common case: no conditional use-deps at all) -- only `None` on a genuinely unparseable atom.
+- So "was this atom actually rewritten" has to compare the before/after text, not just match on `Option` -- a Portage rewrite is exactly what `unevaluated` (the Portage "unevaluated_atom" `_show_unsatisfied_dep` consults) should ever be populated for.
+- Original comment citations: Portage: depgraph.py:10262
+
+## field QueueItem::buildtime_hard
+- The edge from `owner` to this atom's `cat/pkg` is an unsatisfied **build-time** dep (`DEPEND`/`BDEPEND`) with no run-time alternative -- Portage `DepPriority` `buildtime && !runtime`.
+- Such an edge is unbreakable in `topological_merge_order`'s cycle fallback, and a cycle made entirely of them is the fatal `* Error: circular dependencies:` Portage reports (`_serialize_tasks`'s `ignore_priority` scan can drop an unsatisfied run-time edge but never an unsatisfied build-time one).
+
+## field EnqueueFlatDepsArgs::running_atoms
+- Track X Slice B (#242): `dep_running_tags` over the same dependency string -- an atom in this set resolves against the running root (its `QueueItem::targets_running_root`).

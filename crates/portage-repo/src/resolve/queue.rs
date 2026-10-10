@@ -77,7 +77,7 @@ pub(crate) type SlotPullers = HashMap<(String, String), Vec<(String, String, Str
 /// after every plain dep, including ones declared *after* the group. `flag? ( ... )`
 /// bodies are NOT `||` groups (their members stay plain); a token occurring both
 /// inside and outside classifies as group-chosen.
-// Portage: depgraph.py:3257-3268
+// Portage: depgraph.py
 pub(crate) fn or_group_universe(tokens: &[String]) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut stack: Vec<bool> = Vec::new();
@@ -249,7 +249,7 @@ pub(crate) fn enqueue_flat_deps(args: EnqueueFlatDepsArgs<'_>) {
         // The running-`BDEPEND`-soft exception does not apply to a self-naming
         // atom (Portage never relaxes a build-time edge in `_serialize_tasks`,
         // so a self loop dead-ends and aborts either way).
-        // Portage: depgraph.py:10262
+        // Portage: depgraph.py
         let self_naming = portage_dep::parse_atom(&tok).is_some_and(|at| {
             at.blocker == portage_dep::Blocker::None && at.category == key.0 && at.package == key.1
         });

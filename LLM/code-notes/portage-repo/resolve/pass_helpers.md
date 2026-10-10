@@ -7,6 +7,7 @@ Small helpers of the resolver pass.
 ## fn onlydeps_walk_dep_key
 - Backlog #194. Portage's `bin/ebuild.sh` `depend` phase unsets `IDEPEND` below EAPI 8 (`portage/eapi.py:135`), so a stale or hand-written cache entry can still *carry* `IDEPEND` under EAPI 7 (Portage's `egencache` never emits one). Portage's `depgraph.py:4186-4193` blanks an `--onlydeps` root's `RDEPEND`/`PDEPEND` under `--onlydeps-with-rdeps=n`, and its `IDEPEND` too unless `--onlydeps-with-ideps` is `y`/`True`.
 - Extracted (rather than left as `run_pass`'s inline closure) so the adversarial-cache path stays pinned after the fixtures stopped carrying one.
+- Original comment citations: Portage: eapi.py:135; depgraph.py:4186-4193
 
 ## fn onlydeps_runtime_keys
 - Backlog #194. Portage's `DepPriority`: an atom in a build-time key but no walked run-time key is `buildtime_hard`, an unbreakable merge-order edge. Under `--onlydeps --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on EAPI 8, `IDEPEND` is still walked, so it still classifies.
@@ -24,3 +25,7 @@ Small helpers of the resolver pass.
 - Portuale's reversed queue order (#90 S1): the consumer's dep resolves before the pinning argument. A missing cache key means uncomputed; the replace set and every other `BacktrackParams` input can change the verdict per pass.
 - Same-`slot_atom` requirement: a pin in another slot never diverts an upgrade (e.g. `=mmprov-1` still upgrades slot 1). Portage iterates the tracker descending. The `[use]` check is the same one `dependency_avoid_update_candidate` runs. `resolve_pretend` writes no global state, so the speculative resolutions are side-effect free.
 - "Ebuild type is the last resort", then repo priority (the pop site's `resolved` pick).
+- Portage consults the packages already added to the graph before picking the highest available one: for the current db's first match it looks up `_package_tracker.match(root, pkg.slot_atom, installed=False)` (`:8180-8215`) -- the in-graph nodes in that (main-)`slot_atom` (`slot_atom` is `cp:slot`, `_emerge/Package.py:139`, so `1/1` and `1/2` share it) -- and reuses the node when the dep atom matches it (`atom.match(e_pkg)`), unless a higher version is available in a *different* slot (then the node is "irrelevant" and the highest wins).
+- For every same-cp top-level atom (blockers skipped) the helper speculatively re-resolves it exactly as the walk would (`is_top_level = true`, same flags and constraints) and keeps its `AlreadyInstalled` verdicts as `(version, main slot)` pairs -- the instances the arguments pin in the graph, whatever the walk order.
+- Portage only keeps it when it satisfies the dep atom (the "only keeps it when it satisfies the dep atom" half of `atom.match`).
+- The dep atom matching the pinned `cat/pkg-ver:slot/sub` string (Portage's `atom.match`, the "only keeps it when it satisfies the dep atom" half), and -- for `[use]` deps -- the pinned instance's own recorded vdb `USE` satisfying them (the same check [`dependency_avoid_update_candidate`] runs).

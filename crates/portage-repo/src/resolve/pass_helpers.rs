@@ -31,7 +31,7 @@ pub(crate) struct OnlydepsWalkDepKeyArgs<'a> {
 /// stale `IDEPEND` under EAPI 8, and blanks an `--onlydeps` root's `RDEPEND`/
 /// `PDEPEND` (plus `IDEPEND` unless kept) the same way. Extracted so the
 /// adversarial-cache path stays pinned.
-// Portage: eapi.py:135; depgraph.py:4186-4193
+// Portage: eapi.py; depgraph.py
 pub(crate) fn onlydeps_walk_dep_key(args: OnlydepsWalkDepKeyArgs<'_>) -> bool {
     let OnlydepsWalkDepKeyArgs {
         key,
