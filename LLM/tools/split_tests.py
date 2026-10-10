@@ -56,7 +56,8 @@ def main(path, src_dir, dry, helper_topics_path=None):
     tests, keep = [], []
     for s, e, kind, name in its:
         span = lines[s - 1:e]
-        is_test = kind == "fn" and any(l.strip() == "#[test]" for l in span[:15])
+        head = span[:next((i for i, l in enumerate(span) if re.match(r"(pub(\([^)]*\))?\s+)?(async\s+)?fn\b", l)), len(span))]
+        is_test = kind == "fn" and any(l.strip() == "#[test]" for l in head)
         (tests if is_test else keep).append((s, e, kind, name))
         if not is_test and kind == "fn":
             m = re.match(r"(?:pub(?:\([^)]*\))?\s+)?fn\s+(\w+)", name)
