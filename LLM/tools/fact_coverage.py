@@ -25,6 +25,7 @@ def git(*a):
 def norm(s):
     # "real" (meaning Portage) became "Portage" in the pass; match either
     s = re.sub(r"\s+", " ", s.replace("`", "")).strip().lower()
+    s = re.sub(r"\breal portage\b", "portage", s)
     return re.sub(r"\breal\b", "portage", s)
 
 
