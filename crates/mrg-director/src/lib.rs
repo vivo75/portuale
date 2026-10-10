@@ -354,7 +354,7 @@ pub trait BinpkgIndex {
     ) -> Option<(String, std::collections::HashMap<String, String>)>;
 
     /// [`Self::metadata_with_source`] for the build the resolver planned
-    /// (binpkg-multi-instance, backlog #301). The default ignores
+    /// (binpkg-multi-instance; see notes). The default ignores
     /// `build_id`, so single-instance backends need no change.
     fn metadata_with_source_instance(
         &self,

@@ -6,6 +6,9 @@ Portage SRC_URI flattening, Manifest digest parsing, and content-digest verifica
 - The network half (the `wget` subprocess invocation) lives in `portuale/src/fetch.rs`; kept out of this crate so its logic stays 100% testable offline.
 - SRC_URI grammar: PMS 3.1.6 plus Portage extensions (`mirror://` resolution, `mirror+`/`fetch+` prefixes from `fetch.py:1103-1106`, a Portage extension, not PMS). PMS's own local-filename override is the "arrow" rename. No `||` groups: PMS 8.2.6.5 ("any-of dependencies (`||`) are not allowed" in SRC_URI), a grammar restriction, not a simplification. Portage's own `use_reduce(is_src_uri=True)` likewise leaves a bare `||` token alone rather than parsing it as a group opener the way DEPEND strings do.
 - Manifest2 format (`_manifest_re`, confirmed by reading `lib/portage/manifest.py`): `DIST <filename> <size> <HASH1> <hex1> [<HASH2> <hex2> ...]`, one unmodified `blake2b`-hashers hex digest plus a `sha512` one; `MANIFEST2_HASH_DEFAULTS = frozenset(("BLAKE2B", "SHA512"))` (`lib/portage/const.py`). Verified via the standard BLAKE2b-512 and SHA-512 algorithms (`blake2`/`sha2` crates), not reimplemented from scratch.
+- Portage Manifest2 format (`lib/portage/manifest.py`'s own `_manifest_re`, confirmed by reading it): `DIST <filename> <size> <HASH1> <hex1> [<HASH2> <hex2> ...]`, one Portage, unmodified `blake2b`-hashers hex digest, plus a `sha512` one -- verified here via the Portage, standard BLAKE2b-512 and SHA-512 algorithms (`blake2`/`sha2` crates), not reimplemented from scratch.
+- KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own "narrow v1, document the cut" pattern): `mirror://` resolution and the fetch-command family below are ported narrowed, with each cut documented at its item.
+- Portage's `grabdict(..., recursive=1)`'s own directory-form (`/etc/portage/mirrors/` as a directory of drop-in files) isn't reproduced, only the plain-file form, the same narrowing `profiles/thirdpartymirrors` itself already has.
 - `mirror://` scope cuts: resolution consults the ebuild's own repo's `profiles/thirdpartymirrors` (via `ebuild_phases::repo_root_for` at the call site in `portuale/src/fetch.rs`) and admin-configured `custommirrors` (`${PORTAGE_CONFIGROOT}/etc/portage/mirrors`, plain-file form only; Portage's `grabdict(..., recursive=1)` directory form `/etc/portage/mirrors/` as drop-in files isn't reproduced, the same narrowing `profiles/thirdpartymirrors` itself already has). Portage's `custommirrors["local"]` filesystem-path/local-network fast-path lookup (`fetch.py:1017-1029`, the `fsmirrors`/`local_mirrors` split) isn't reproduced either; a `mirror://local/...` token still resolves normally through `resolve_mirror_candidates` (Portage's own `if mirrorname in custommirrors:` check doesn't treat `"local"` specially), and the fetch loop (`portuale/src/fetch.rs`) handles the local meaning. Portage `random.shuffle`s the `thirdpartymirrors` half of the candidate list (load-balancing); not replicated: portuale's "pinned, reproducible" test philosophy rules out non-determinism, and shuffling only affects which mirror is tried first, not correctness (every candidate is digest-verified after fetching regardless).
 - Mirror roots become file URLs through the mirror's own `layout.conf` (Portage's `async_mirror_url`): `layout` (the `flat`/`filename-hash`/`content-hash` path math) and `mirror_cache` (`.mirror-cache.json`, URL quoting) here, the download and caching in `portuale/src/fetch.rs::mirror_url`. Flat is NOT a safe default: `distfiles.gentoo.org` publishes only `0=filename-hash BLAKE2B 8` and 404s the flat path (checked 2026-09-14).
 - Fetch ordering is `assemble_candidates`' shape (`portuale/src/fetch.rs`, Portage `fetch.py:1099-1192`): one list per distfile however many SRC_URI entries name it -- local mirrors, public `GENTOO_MIRRORS`, inline `mirror://` expansions, then the literals last-listed first plus the third-party expansions (appended, or prepended under `RESTRICT=primaryuri`), each location attempted once (Portage's `tried_locations`); pinned against Portage's `fetch(..., listonly=1)` output. Still cut: Portage shuffles the `thirdpartymirrors` half (load-balancing; portuale stays deterministic).
@@ -14,21 +17,45 @@ Portage SRC_URI flattening, Manifest digest parsing, and content-digest verifica
 - A missing `Manifest` (or missing `thirdpartymirrors`) file is an empty map, not an error: the same "nothing recorded yet" tolerance `portage_repo::list_candidates` gives a missing repo directory.
 
 ## struct SrcUriEntry
+- `override_mirror` (Portage `fetch.py:1103`): this URI token had a `mirror+` prefix. Portage `file_restrict_mirror = (restrict_fetch or restrict_mirror) and not override_mirror` -- so a `mirror+` URI re-permits the public mirror list for its file even under `RESTRICT=mirror`. Implies `override_fetch` too.
+- `override_fetch` (Portage `fetch.py:1104`): `mirror+` or `fetch+` prefix, exempting this one URI under `RESTRICT=fetch`.
 - `override_mirror`: Portage `file_restrict_mirror = (restrict_fetch or restrict_mirror) and not override_mirror`.
 - `override_fetch`: Portage `if (restrict_fetch and not override_fetch)` skips a normal URI entirely under `RESTRICT=fetch`; `fetch+` exempts this one URI. Portuale's fetch path doesn't model `RESTRICT=fetch` yet, so today this only guarantees the `fetch+` prefix is stripped so the URL is valid (see `portuale/src/fetch.rs`); what each override relaxes is decided there.
 
 ## fn parse_list
 - Callers pass a USE membership check for SRC_URI itself (portuale's always-empty USE set, the same v1 cut every other execution slice already has), or an always-true closure to compute the `AA` variable (every file SRC_URI could ever reference, regardless of USE -- PMS's own definition of `AA`).
+- A `mirror+`/`fetch+` prefix is stripped off the URI token and records which restriction(s) it overrides (Portage `fetch.py:1103-1106`). `mirror+` implies `fetch+` (Portage `override_fetch = override_mirror or ...`).
 
 ## fn parse_thirdpartymirrors
 - Comment rule is Portage's `grabdict` per-token truncation (not just whole-line): any token from the first `#`-prefixed one onward is dropped. Bare names with zero URLs (and blank lines) are skipped: Portage's `empty=0` default.
+- A whole line starting with `#`, or any token from the first `#`-prefixed one onward, is a comment (Portage `grabdict`'s own per-token truncation, not just whole-line).
 
 ## fn resolve_mirror_candidates
+- Portage `fetch.py:1136-1160`: `<name>` is looked up in `custommirrors` first, then `thirdpartymirrors`, expanding to `<mirror_root>/<path>` per root (Portage's comment: "Try user-defined mirrors first", `fetch.py:1143`).
+- A `mirror://` token whose name isn't known to either map, or that's malformed (`mirror://` with no further `/` at all), yields no candidates -- Portage's own `writemsg` warning, not a hard error; the caller still fails loudly if this leaves a file with no working candidate at all, the same Portage end result.
 - Order is Portage's exact order (its comment: "Try user-defined mirrors first"): `custommirrors` roots for the name, then `thirdpartymirrors` roots; each side string-built identically (`cmirr.rstrip("/") + "/" + path` / `locmirr.rstrip("/") + "/" + path`). Portage `random.shuffle`s the `thirdpartymirrors` half only (deliberately not replicated; see module notes).
 - Usable uniformly for every `SrcUriEntry.uri`: a non-`mirror://` URI returns unchanged as its own single candidate.
 
 ## fn digests_variable
+- Portage `fetch.py:1797-1803`: `" ".join(f"{k.lower()}:{v}")` over every hash (the `size` entry excluded), e.g. `blake2b:<hex> sha512:<hex>`.
 - Portage preserves the `Manifest` line's hash order (`portage.manifest`'s parser builds an insertion-ordered dict); portuale's `DistfileDigests` carries a `HashMap`, so the names are sorted instead. The shipped tree's `BLAKE2B`-then-`SHA512` order matches the sort (200/200 sampled `DIST` lines, 2026-09-16); a hand-written reverse-order Manifest would differ. Recorded in `docs/history/02.68-74.md` §6.
+
+## struct FetchCommands
+- Portage `fetch.py:1652-1700`'s fetch-command family, resolved from the config (`FETCHCOMMAND`, `RESUMECOMMAND`, and the per-protocol `FETCHCOMMAND_<PROTO>` / `RESUMECOMMAND_<PROTO>` variants). `None` (and an absent protocol key) means the `make.globals` default.
+- The `select` method mirrors Portage's selection (`fetch.py:1652-1662` for fetch, `:1680-1690` for resume): the protocol variant first, then the plain name.
+
+## struct FetchCommandVars
+- Portage `fetch.py:1795-1811`'s non-path substitution inputs: the distfile's `DIGESTS` string and the `PORTAGE_SSH_OPTS` setting.
+
+## fn expand_and_split
+- Portage `varexpand` + `shlex.split` over the selected command (`fetch.py:1813-1820`): variables are substituted, then the string is split into argv with POSIX quoting rules -- never run through a shell.
+
+## struct PlannedFetch
+- Portage `fetch.py:1652-1716` through `:1830`: select `FETCHCOMMAND` (or its protocol variant) and `RESUMECOMMAND` (both are selected and checked, regardless of which one this attempt runs), warn about a command without `${FILE}`, substitute `${URI}`/`${FILE}`/`${DIGESTS}`/`${DISTDIR}`/`${PORTAGE_SSH_OPTS}`, and spawn the subprocess (never an in-process HTTP client).
+- A failed fresh fetch removes whatever partial file it left behind; a failed resume keeps it for the next candidate -- the split `portuale::fetch::fetch_src_uri`'s candidate loop relies on.
+
+## fn verify_digests_reader
+- The bytes come from a reader -- the gpkg outer-container member stream (`#58` S5), so a large member is neither buffered in memory nor copied to a scratch file. `name` labels the member in the error messages (the `path` field the file variant fills with the on-disk path).
 
 ## fn plan_fetch_command
 - Both `FETCHCOMMAND` and `RESUMECOMMAND` are selected and `${FILE}`-checked regardless of which one this attempt runs (`fetch.py:1667-1716`).
@@ -46,7 +73,7 @@ Portage SRC_URI flattening, Manifest digest parsing, and content-digest verifica
 - `expand_and_split_varexpand_unknown_vars_and_escapes_match_portage`: captured with the same python command; `['cp', 'x']` for the unknown-vars line.
 - `download_with_commands_warns_for_both_commands_and_aborts_only_when_renamed` (#70 R3): the abort's messages travel in the `Err` (where this crate's callers surface command diagnostics).
 - `flatten_src_uri_negated_conditional_is_active_when_the_flag_is_unset`: `is_set` here stands in for the always-empty USE set (every flag unset).
-- `verify_digests_accepts_a_real_matching_file` / `verify_digests_reader_matches_verify_digests_on_the_same_bytes`: the digests are the standard test-vector values for the literal bytes "hello world", not invented.
+- `verify_digests_accepts_a_real_matching_file` / `verify_digests_reader_matches_verify_digests_on_the_same_bytes`: the digests are the standard test-vector values for the literal bytes "hello world", not invented. The gpkg outer-container path (`#58` S5) streams a member through the reader variant; the bytes and the two digests are the same "hello world" vectors as the file tests.
 - `parse_thirdpartymirrors_reads_a_real_grabdict_style_file`: `bare-name-no-urls` pins the `empty=0` skip.
 - `resolve_mirror_candidates_tries_custommirrors_before_thirdpartymirrors`: Portage's "Try user-defined mirrors first".
 - `shell_split`: inside double quotes only `\"`/`\\` lose the backslash; `\$`, `` \` ``, `\ ` keep it (fetch commands run through `shlex.split`, not a shell).

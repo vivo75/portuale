@@ -151,11 +151,11 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<HashMap<String, DistfileDi
 pub struct SrcUriEntry {
     pub uri: String,
     pub filename: String,
-    /// Portage `override_mirror` (`fetch.py:1103`): this URI token had a
+    /// Portage `override_mirror` (`fetch.py`): this URI token had a
     /// `mirror+` prefix, re-permitting the public mirror list even under
     /// `RESTRICT=mirror`. Implies `override_fetch` too.
     pub override_mirror: bool,
-    /// Portage `override_fetch` (`fetch.py:1104`): `mirror+` or `fetch+`
+    /// Portage `override_fetch` (`fetch.py`): `mirror+` or `fetch+`
     /// prefix, exempting this one URI under `RESTRICT=fetch`. (See notes.)
     pub override_fetch: bool,
 }
@@ -202,7 +202,7 @@ fn parse_list(
             });
         } else {
             *pos += 1;
-            // Portage `fetch.py:1103-1106`: strip a `mirror+`/`fetch+`
+            // Portage `fetch.py`: strip a `mirror+`/`fetch+`
             // prefix and record the override (`mirror+` implies `fetch+`).
             let (uri, override_mirror, override_fetch) =
                 if let Some(rest) = tok.strip_prefix("mirror+") {
@@ -283,7 +283,7 @@ pub fn parse_thirdpartymirrors(path: &Path) -> Result<HashMap<String, Vec<String
     Ok(out)
 }
 
-/// Portage `mirror://<name>/<path>` resolution (Portage `fetch.py:1136-1160`):
+/// Portage `mirror://<name>/<path>` resolution (Portage `fetch.py`):
 /// `<name>` is looked up in `custommirrors` first, then
 /// `thirdpartymirrors`, expanding to `<mirror_root>/<path>` per root.
 /// Unknown names and malformed tokens yield no candidates (Portage warns;
@@ -334,7 +334,7 @@ pub const DEFAULT_RESUMECOMMAND: &str = concat!(
     "distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\""
 );
 
-/// Portage `fetch.py:1652-1700`'s fetch-command family, resolved from the
+/// Portage `fetch.py`'s fetch-command family, resolved from the
 /// config. `None` (and an absent protocol key) means the `make.globals` default.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchCommands {
@@ -366,7 +366,7 @@ pub fn default_commands() -> &'static FetchCommands {
     &DEFAULT
 }
 
-/// Portage `fetch.py:1795-1811`'s non-path substitution inputs: the
+/// Portage `fetch.py`'s non-path substitution inputs: the
 /// distfile's `DIGESTS` string and the `PORTAGE_SSH_OPTS` setting.
 /// `None` and `Some("")` expand identically (both to empty).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -379,8 +379,8 @@ pub struct FetchCommandVars<'a> {
     pub portage_ssh_opts: Option<&'a str>,
 }
 
-/// The `DIGESTS` fetch-command variable for one Manifest entry, Portage
-/// `fetch.py:1797-1803`: `" ".join(f"{k.lower()}:{v}")` over every hash
+/// The `DIGESTS` fetch-command variable for one Manifest entry (Portage
+/// `fetch.py`): `" ".join(f"{k.lower()}:{v}")` over every hash
 /// (the `size` entry excluded), e.g. `blake2b:<hex> sha512:<hex>`.
 /// Names are sorted (see notes); the shipped tree's order matches the sort.
 pub fn digests_variable(digests: &DistfileDigests) -> String {
@@ -394,8 +394,8 @@ pub fn digests_variable(digests: &DistfileDigests) -> String {
 }
 
 impl FetchCommands {
-    /// Portage's selection (`fetch.py:1652-1662` for fetch, `:1680-1690`
-    /// for resume): the protocol variant first, then the plain name.
+    /// Portage's selection (Portage `fetch.py`): the protocol variant
+    /// first, then the plain name.
     fn select(&self, proto: &str, resume: bool) -> Result<(String, String), String> {
         let (plain_var, plain, proto_var, proto_map) = if resume {
             (
@@ -426,7 +426,7 @@ impl FetchCommands {
 }
 
 /// Portage `varexpand` + `shlex.split` over the selected command
-/// (`fetch.py:1813-1820`): variables are substituted, then the string is
+/// (Portage `fetch.py`): variables are substituted, then the string is
 /// split into argv with POSIX quoting rules -- never run through a shell.
 pub fn expand_and_split(command: &str, vars: &HashMap<String, String>) -> Vec<String> {
     shell_split(&portage_util::varexpand(command, |name| {
@@ -510,7 +510,7 @@ fn shell_split(s: &str) -> Vec<String> {
     args
 }
 
-/// Portage `fetch.py:1652-1716` through `:1830`: select `FETCHCOMMAND`
+/// Portage `fetch.py`: select `FETCHCOMMAND`
 /// (or its protocol variant) and `RESUMECOMMAND`, substitute the
 /// variables, and spawn the subprocess (never an in-process HTTP
 /// client). A failed fresh fetch removes its partial; a failed resume
@@ -868,7 +868,7 @@ mod tests {
     use std::fs;
 
     /// Serialises stub-script creation against every stub spawn across
-    /// the parallel test threads (see notes for the `ETXTBSY` story, #128).
+    /// the parallel test threads (see notes for the `ETXTBSY` story).
     static SPAWN_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -879,7 +879,7 @@ mod tests {
 
     fn tempdir() -> std::path::PathBuf {
         // Unique per call across parallel test threads (pid + counter);
-        // the timestamp is a run marker only (see notes, #128).
+        // the timestamp is a run marker only (see notes).
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = TempDir::new(&format!("portage_fetch_test_{}_{}", std::process::id(), n)).keep();
@@ -914,8 +914,7 @@ mod tests {
             )
         );
         // A default-constructed family selects the shipped make.globals
-        // templates: an absent config key means "default", never "unset"
-        // (#70 R2 / T2).
+        // templates: an absent config key means "default", never "unset".
         let defaults = FetchCommands::default();
         assert_eq!(
             defaults.select("HTTPS", false).unwrap(),
@@ -979,9 +978,8 @@ mod tests {
         assert_eq!(argv, vec!["cp", "file:///src/foo", "/d/foo"]);
     }
 
-    /// #70 R4 oracle: Portage's `FETCHCOMMAND_SSH` expanded with the fetch
-    /// variables (captured 2026-09-16, portage 3.0.82.2; see notes for
-    /// the verbatim vectors).
+    /// Oracle: Portage's `FETCHCOMMAND_SSH` expanded with the fetch
+    /// variables (see notes for the verbatim vectors).
     #[test]
     fn expand_and_split_matches_portage_varexpand_on_fetchcommand_ssh() {
         let command = r#"bash -c "x=\${2#ssh://} ; host=\${x%%/*} ; port=\${host##*:} ; host=\${host%:*} ; [[ \${host} = \${port} ]] && port= ; exec rsync --rsh=\"ssh \${port:+-p\${port}} \${3}\" -avP \"\${host}:/\${x#*/}\" \"\$1\"" rsync "${DISTDIR}/${FILE}" "${URI}" "${PORTAGE_SSH_OPTS}""#;
@@ -1165,7 +1163,7 @@ mod tests {
         assert!(dest2.exists());
     }
 
-    /// #70 R3: Portage checks both fetch and resume commands for `${FILE}`
+    /// Portage checks both fetch and resume commands for `${FILE}`
     /// and aborts only when the distfile name differs from the URL
     /// basename (see notes).
     #[test]
@@ -1577,7 +1575,7 @@ mod tests {
 
     #[test]
     fn resolve_mirror_candidates_tries_custommirrors_before_thirdpartymirrors() {
-        // Portage "Try user-defined mirrors first" (fetch.py:1143).
+        // Portage "Try user-defined mirrors first".
         let mut custommirrors = HashMap::new();
         custommirrors.insert(
             "gentoo".to_string(),
