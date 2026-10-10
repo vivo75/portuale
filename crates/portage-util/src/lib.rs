@@ -1,12 +1,8 @@
 //! Filesystem helpers shared by the portage-* crates.
 //!
-//! `read_dir_entries` is the single directory-listing seam the whole
-//! workspace reads through (`docs/history/second_python_copy_removal.md` §9's
-//! second half, backlog #51): sorted by file name by default, and
-//! deliberately shuffled when `PORTUALE_SHUFFLE_DIRS` is set, so the
-//! determinism test can prove no consumer depends on readdir order.
-//! The shuffle is test/CI-only, seeded, and reproducible per
-//! (seed, directory); production never sets the variable.
+//! `read_dir_entries` is the single directory-listing seam: sorted by file
+//! name, or seeded-shuffled when `PORTUALE_SHUFFLE_DIRS` is set (test/CI
+//! only, so the determinism test proves no readdir-order dependence).
 
 use std::fs::DirEntry;
 use std::io;
@@ -17,13 +13,8 @@ mod varexpand;
 pub use temp_dir::{TEMP_DIR_PREFIX, TempDir};
 pub use varexpand::varexpand;
 
-/// The seed from `PORTUALE_SHUFFLE_DIRS` (test/CI-only), if set.
-///
-/// Read once at first use and frozen for the life of the process
-/// (backlog #113): the variable is fixed per process in test/CI use, so
-/// caching it removes a `std::env::var` and a `String` allocation from
-/// every directory read, and removes the `set_var` race surface
-/// `cleanroom/parallelism.md` §1.6 names from the hot path.
+/// The seed from `PORTUALE_SHUFFLE_DIRS` (test/CI-only), if set. Read
+/// once at first use and frozen for the life of the process.
 pub fn shuffle_seed() -> Option<u64> {
     use std::sync::OnceLock;
     static SEED: OnceLock<Option<u64>> = OnceLock::new();
@@ -36,9 +27,8 @@ pub fn shuffle_seed() -> Option<u64> {
     })
 }
 
-/// Every entry of `dir`, sorted by file name; shuffled (Fisher-Yates,
-/// seeded by `PORTUALE_SHUFFLE_DIRS` and the directory path) when that
-/// test variable is set.
+/// Every entry of `dir`, sorted by file name (shuffled when the test
+/// variable is set).
 pub fn read_dir_entries(dir: &Path) -> io::Result<Vec<DirEntry>> {
     let mut entries: Vec<DirEntry> = std::fs::read_dir(dir)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
@@ -54,7 +44,6 @@ pub fn read_dir_entries(dir: &Path) -> io::Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
-/// `read_dir_entries` reduced to the entry paths.
 pub fn read_dir_paths(dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(read_dir_entries(dir)?
         .into_iter()
@@ -62,44 +51,31 @@ pub fn read_dir_paths(dir: &Path) -> io::Result<Vec<PathBuf>> {
         .collect())
 }
 
-/// Real `MERGING_IDENTIFIER` (`lib/portage/const.py`): the
-/// `"-MERGING-"` prefix real `dblink.dbtmpdir` uses for its own
-/// temporary, not-yet-finalized vdb entry directory, a sibling of the
-/// real vdb entry under the same `<category>` directory. Real readers
-/// skip such names (`vartree.py` `vardbapi._excluded_dirs`).
+/// The `"-MERGING-"` prefix of a not-yet-finalized vdb entry directory.
+// Portage: lib/portage/const.py, MERGING_IDENTIFIER
 pub const MERGING_IDENTIFIER: &str = "-MERGING-";
 
-/// Whether a vdb directory name is an in-progress merge entry real
-/// readers skip (the `MERGING_IDENTIFIER` arm of real
-/// `vardbapi._excluded_dirs`; the dotfile/`CVS`/`lost+found` arms are a
-/// separate concern and stay unported).
+/// Whether a vdb directory name is an in-progress merge entry Portage
+/// readers skip.
 pub fn is_merging_vdb_entry(name: &str) -> bool {
     name.starts_with(MERGING_IDENTIFIER)
 }
 
-/// Portage's `VCS_DIRS` (`lib/portage/const.py:278`): directory names
-/// `_recursive_file_list` never descends into.
+/// Directory names Portage's `_recursive_file_list` never descends into.
+// Portage: lib/portage/const.py, VCS_DIRS
 pub const VCS_DIRS: &[&str] = &["CVS", "RCS", "SCCS", ".bzr", ".git", ".hg", ".svn"];
 
-/// Real `_recursive_basename_filter` (`lib/portage/util/__init__.py`):
-/// dot-prefixed names and `~`-suffixed backups are never config.
+/// Dot-prefixed names and `~`-suffixed backups are never config.
+// Portage: lib/portage/util/__init__.py, _recursive_basename_filter
 pub fn recursive_basename_allowed(name: &str) -> bool {
     !name.starts_with('.') && !name.ends_with('~')
 }
 
-/// Real `_recursive_file_list` (`lib/portage/util/__init__.py`) as a file
-/// list: `path` may be a regular file or a directory. Directories are
-/// walked to arbitrary depth, depth-first, with one ascending sort per
-/// directory over files and subdirectories together and each subdirectory
-/// expanded in place (stack DFS pushing children in reverse). A directory
-/// whose own basename is a `VCS_DIRS` entry or fails
-/// `recursive_basename_allowed` is skipped entirely, **including the root
-/// path itself**; a regular file is yielded when its basename passes the
-/// filter (VCS names are only a directory rule in real). `os.stat` is
-/// followed, so symlinked files and directories are both traversed and a
-/// dangling/missing path yields nothing rather than erroring. Each
-/// directory level is listed through `read_dir_entries`, so the
-/// `PORTUALE_SHUFFLE_DIRS` test hook keeps working through this path.
+/// Portage's `_recursive_file_list` as a file list: depth-first with one
+/// ascending sort per directory, `VCS_DIRS`/dotfile/`~`-filtered
+/// (**including the root itself**). Symlinks are traversed; a
+/// dangling/missing path yields nothing. Listed via `read_dir_entries`.
+// Portage: lib/portage/util/__init__.py, _recursive_file_list
 pub fn recursive_config_files(path: &Path) -> io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     let mut stack: Vec<PathBuf> = vec![path.to_path_buf()];
@@ -110,8 +86,7 @@ pub fn recursive_config_files(path: &Path) -> io::Result<Vec<PathBuf>> {
         };
         if meta.is_dir() {
             let dominated = match current.file_name().and_then(|s| s.to_str()) {
-                // `Path::file_name` is `None` for `/`: real splits that to
-                // `""`, which passes both filters, so the root is walked.
+                // `/` has no file name; it passes both filters, so it is walked.
                 None => false,
                 Some(name) => VCS_DIRS.contains(&name) || !recursive_basename_allowed(name),
             };
@@ -122,9 +97,7 @@ pub fn recursive_config_files(path: &Path) -> io::Result<Vec<PathBuf>> {
                 Ok(e) => e,
                 Err(_) => continue,
             };
-            // Reverse: the stack pops from the end, so this restores the
-            // ascending per-directory order with directories expanded in
-            // place alongside files.
+            // Reversed: the stack pops from the end.
             for entry in entries.into_iter().rev() {
                 stack.push(entry.path());
             }
@@ -137,8 +110,7 @@ pub fn recursive_config_files(path: &Path) -> io::Result<Vec<PathBuf>> {
                 out.push(current);
             }
         }
-        // Sockets, fifos, devices: real checks `S_ISDIR` then `S_ISREG`
-        // and ignores everything else.
+        // Sockets, fifos, devices are ignored.
     }
     Ok(out)
 }
@@ -164,18 +136,8 @@ mod tests {
             .collect()
     }
 
-    // One test for the whole seam: cargo runs tests in parallel and the
-    // shuffle is process-global, so a second env-mutating test could
-    // race the default-order assertion.
-    //
-    // #113 freezes the value at first use, so a mid-process `set_var` is
-    // ignored -- the candidate value can only be *changed* before the
-    // binary's first `shuffle_seed()` call, which this test cannot
-    // control. The first call here pins `None` (the harness never sets
-    // the variable), which is also what keeps this test from leaking a
-    // shuffled order into the sibling traversal test. The seeded half
-    // lives in `tests/shuffle_seed_freeze.rs`, where a fresh process owns
-    // the variable from its first instruction.
+    // One test for the whole seam (the shuffle is process-global); the
+    // seeded half lives in `tests/shuffle_seed_freeze.rs`.
     #[test]
     fn shuffle_seed_is_frozen_at_first_use_and_read_dir_is_sorted_by_default() {
         let dir = TempDir::new("portage-util").keep();
@@ -184,8 +146,7 @@ mod tests {
         }
 
         let first = shuffle_seed();
-        // SAFETY: this is the only test touching the variable, and a
-        // value set after the first read is ignored by the freeze.
+        // SAFETY: a value set after the first read is ignored.
         unsafe { std::env::set_var("PORTUALE_SHUFFLE_DIRS", "7") };
         let second = shuffle_seed();
         unsafe { std::env::remove_var("PORTUALE_SHUFFLE_DIRS") };
@@ -206,9 +167,7 @@ mod tests {
             .collect()
     }
 
-    // Backlog #89 S0: mirrors real `_recursive_file_list` on the staged
-    // oracle tree (nested fragments, backups, dotfiles, VCS dirs at every
-    // level, interleaved file/dir sort, symlinked file and directory).
+    // Expected value from Portage's `_recursive_file_list` (staged oracle tree).
     #[test]
     fn recursive_config_files_matches_portages_traversal_and_filters() {
         let root = TempDir::new("portage-util-recursive").keep();
@@ -253,7 +212,7 @@ mod tests {
         let expected = vec!["00-first", "aa/inner", "nn-mid", "zz/inner", "zz-last"];
         assert_eq!(rels(&root), expected);
 
-        // A single file path yields itself; a filtered name yields nothing.
+
         assert_eq!(
             recursive_config_files(&root.join("00-first")).unwrap(),
             vec![root.join("00-first")]
@@ -263,8 +222,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        // The root path itself is filtered too: a `~`-suffixed directory
-        // yields nothing, like real.
+        // A `~`-suffixed root directory also yields nothing.
         let tilted = root.join("tilted~");
         std::fs::create_dir_all(&tilted).unwrap();
         std::fs::write(tilted.join("frag"), "x").unwrap();

@@ -1,23 +1,13 @@
-//! Generic copy and comparison between two [`InstalledDb`]s
-//! (plan S2.7, `docs/vdb_to_db.md` §11).
+//! Generic copy and comparison between two [`InstalledDb`]s.
 //!
-//! # Transaction and batching
-//!
-//! [`copy_all`] writes the whole copy in **one** destination transaction.
-//! One SQLite transaction for a ~2,000-entry VDB (a few MB of rows, one
-//! WAL growth) is cheap, and it makes the conversion all-or-nothing: an
-//! error leaves a database destination unchanged. (`files` applies each
-//! call as it is made, so a failed `files` copy is partial; the CLI says
-//! so.) Only one [`EntryImage`] is in memory at a time.
-//!
-//! # `verify` approach
+//! [`copy_all`] writes the whole copy in **one** destination transaction,
+//! so a failed copy leaves a database destination unchanged (a failed
+//! `files` copy is partial; the CLI says so). Only one [`EntryImage`] is
+//! in memory at a time.
 //!
 //! [`verify`] compares the two backends **directly** through
-//! [`InstalledDb::entry_image`], not by converting back into a temporary
-//! `files` backend as design §11 sketches. `entry_image` already
-//! normalises both sides (bytes, modes, mtimes, stamp *state*), so a
-//! temporary copy would only add a second conversion whose own bugs could
-//! mask the first one's. The round trip files -> sqlite -> files is
+//! [`InstalledDb::entry_image`], which already normalises both sides, so
+//! no temporary copy is needed. The round trip files -> sqlite -> files is
 //! still checked by running `verify` on the two ends.
 
 use crate::types::DIR_MODE_MASK;
@@ -46,16 +36,10 @@ pub struct CopyReport {
 
 /// Copy every live entry and the neighbouring stores of `src` into `dst`.
 ///
-/// `dst` must hold no live entry unless `force`; with `force` the result
-/// is an exact copy: same-key entries are replaced and destination
-/// entries the source lacks are deleted. Entries go in `(category, pf)`
-/// order. Pending (`merging`) source entries are not copied, only
-/// reported. `world`, `world_sets`, `config_memory` are always written;
-/// `preserved_libs` is written whenever it differs from the destination's
-/// current state (the skip-if-unchanged rule compares `entries` with
-/// `loaded`, so `loaded` is set to the destination's own current registry,
-/// not the source's); the counter is set last, to the source's value,
-/// never renumbered (each `COUNTER` file travels inside its image).
+/// `dst` must hold no live entry unless `force`; with `force` same-key
+/// entries are replaced and extras deleted. Entries go in `(category, pf)`
+/// order; pending (`merging`) entries are reported, not copied. The
+/// counter is set last, to the source's value, never renumbered.
 pub fn copy_all(src: &dyn InstalledDb, dst: &dyn InstalledDb, force: bool) -> Result<CopyReport> {
     let mut dst_keys = dst.entries()?;
     dst_keys.sort();
@@ -85,7 +69,6 @@ pub fn copy_all(src: &dyn InstalledDb, dst: &dyn InstalledDb, force: bool) -> Re
     let src_vdb_dir = src.vdb_dir();
 
     let mut txn = dst.begin_write()?;
-    // Record import mark when copying from a files backend to a non-files backend
     if src.kind() == crate::BackendKind::Files
         && dst.kind() != crate::BackendKind::Files
         && let Some(vdb_path) = src_vdb_dir
@@ -154,14 +137,11 @@ impl VerifyReport {
     }
 }
 
-/// Compare `a` and `b` logically (see the module doc for why directly):
-/// same live entry set; per entry the same file set, bytes, modes, file
-/// mtimes, directory mode and mtime and the same `metadata` stamp
-/// *state*; and the same `world`, `world_sets`, `preserved_libs` entries,
-/// `config_memory` and counter. When the stamp is [`MetadataStamp::Valid`]
-/// on both sides the `#dir_mtime=` line of `metadata` is left out of the
-/// byte comparison (a writer restamps it); a stale stamp's bytes are
-/// compared exactly. Pending entries are not compared.
+/// Compare `a` and `b` logically: same live entry set; per entry the same
+/// file set, bytes, modes, mtimes and `metadata` stamp *state*; same
+/// `world`, `world_sets`, `preserved_libs`, `config_memory` and counter.
+/// A [`MetadataStamp::Valid`] stamp on both sides skips the `#dir_mtime=`
+/// line (a writer restamps it); stale bytes compare exactly.
 pub fn verify(a: &dyn InstalledDb, b: &dyn InstalledDb) -> Result<VerifyReport> {
     let mut rep = VerifyReport::default();
     let mut ka = a.entries()?;
@@ -234,8 +214,8 @@ fn without_stamp(data: &[u8]) -> Vec<u8> {
 
 fn compare_images(rep: &mut VerifyReport, a: &EntryImage, b: &EntryImage) {
     let k = &a.key;
-    // Permission bits only: a database converted before #307 holds the full
-    // `st_mode` (`0o40755`) a `files` reader used to report.
+    // Permission bits only: an older converted database may hold the full
+    // `st_mode` a `files` reader used to report.
     if a.dir_mode & DIR_MODE_MASK != b.dir_mode & DIR_MODE_MASK {
         rep.push(format!(
             "{k}: directory mode {:o} != {:o}",

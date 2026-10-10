@@ -1,21 +1,17 @@
-//! `FilesDb`'s write side (S1.4): the merge's `-MERGING-<pf>` entry, the
+//! `FilesDb`'s write side: the merge's `-MERGING-<pf>` entry, the
 //! `counter` store, the preserved-libs registry and the config-protect
 //! memory.
 //!
-//! Every function here is the code `portuale::ebuild_merge` ran before
-//! S1.4, moved without changing a syscall: the same paths (joined, never
-//! canonicalised), the same `std::fs` calls in the same order, the same
-//! error texts (`"<path>: <io error>"` via [`Error::Io`]). Nothing is
-//! atomic and nothing is locked, exactly as before: [`FilesTxn`] applies
+//! The code `portuale::ebuild_merge` ran before, moved without changing a
+//! syscall. Nothing is atomic and nothing is locked: [`FilesTxn`] applies
 //! every call when it is made and [`WriteTxn::commit`] is only an ordering
-//! point (module doc of the crate, item 20).
+//! point.
 //!
 //! The on-disk formats of the registry and the config memory live here
 //! too, because the database backends store the parsed values and a
-//! converter must read and write the `files` bytes (S2.6): the registry is
-//! real `PreservedLibsRegistry.store()`'s `json.dumps(..., ensure_ascii=
-//! False, indent="\t", sort_keys=True)`, the config memory real
-//! `grabdict`/`writedict`'s `"path value\n"` lines.
+//! converter must read and write the `files` bytes: the registry is
+//! Portage's `PreservedLibsRegistry.store()` JSON, the config memory its
+//! `grabdict`/`writedict` `"path value\n"` lines.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -30,16 +26,17 @@ use crate::{
     WorldSets, WriteTxn,
 };
 
-/// Real `const.py` `CACHE_PATH` + `vartree.py:420`: the counter store
-/// under a root.
+/// The counter store under a root.
+// Portage: lib/portage/const.py, CACHE_PATH
 const COUNTER_PATH: &str = "var/cache/edb/counter";
-/// Real `PRIVATE_PATH` + `PreservedLibsRegistry`'s hardcoded file name.
+/// The preserved-libs registry under a root.
 const PRESERVED_LIBS_PATH: &str = "var/lib/portage/preserved_libs_registry";
-/// Real `PRIVATE_PATH` + `CONFIG_MEMORY_FILE` (`vardbapi._conf_mem_file`).
+/// The config-protect memory under a root.
 const CONFIG_MEMORY_PATH: &str = "var/lib/portage/config";
-/// Real `const.py` `WORLD_FILE` under a root.
+/// The world file under a root.
+// Portage: lib/portage/const.py, WORLD_FILE
 const WORLD_PATH: &str = "var/lib/portage/world";
-/// Real `const.py` `WORLD_SETS_FILE` under a root.
+/// The world-sets file under a root.
 const WORLD_SETS_PATH: &str = "var/lib/portage/world_sets";
 
 impl FilesDb {
@@ -52,8 +49,7 @@ impl FilesDb {
         ))
     }
 
-    /// `<root>/<rel>` for a D4 store; [`Error::Unsupported`] on a bare
-    /// VDB directory ([`FilesDb::open_vdb_dir`] has no stores).
+    /// `<root>/<rel>` for a D4 store; [`Error::Unsupported`] on a bare one.
     fn store_path(&self, rel: &str) -> Result<PathBuf> {
         match self.root() {
             Some(root) => Ok(root.join(rel)),
@@ -70,9 +66,7 @@ impl FilesDb {
         self.root().map(|root| root.join(rel))
     }
 
-    /// [`InstalledDb::read_pending_file`](crate::InstalledDb::read_pending_file):
-    /// one `open` of `-MERGING-<pf>/<name>`, no existence `stat`. A
-    /// missing pending entry and a missing file are both `Ok(None)`.
+    /// One `open` of `-MERGING-<pf>/<name>`; a missing entry or file is `Ok(None)`.
     pub(crate) fn read_pending(&self, key: &EntryKey, name: &str) -> Result<Option<Vec<u8>>> {
         let path = self.pending_dir(key).join(name);
         match fs::read(&path) {
@@ -92,10 +86,8 @@ impl FilesDb {
             .map(Counter)
     }
 
-    /// Moved from `pretend::read_world_atoms`: one `read_to_string` of
-    /// `<root>/var/lib/portage/world`; a missing file (`NotFound` only) is
-    /// an empty world, any other failure is [`Error::Io`]. Lines are
-    /// trimmed; blank, `#` and `@` lines are dropped.
+    /// One `read_to_string` of the world file; missing is empty, any other
+    /// failure is [`Error::Io`]. Blank, `#` and `@` lines are dropped.
     pub(crate) fn read_world(&self) -> Result<World> {
         let Some(path) = self.store_path_opt(WORLD_PATH) else {
             return Ok(World::default());
@@ -115,8 +107,8 @@ impl FilesDb {
         })
     }
 
-    /// Moved from `pretend::read_world_sets`: as [`FilesDb::read_world`],
-    /// keeping only `@` lines and stripping every leading `@`.
+    /// As [`FilesDb::read_world`], keeping only `@` lines and stripping
+    /// every leading `@`.
     pub(crate) fn read_world_sets(&self) -> Result<WorldSets> {
         let Some(path) = self.store_path_opt(WORLD_SETS_PATH) else {
             return Ok(WorldSets::default());
@@ -138,10 +130,8 @@ impl FilesDb {
         })
     }
 
-    /// The registry as read (moved from `ebuild_merge::read_plib_registry`):
-    /// one read; a missing, unreadable, non-UTF-8 or unparsable file is an
-    /// empty registry (real `load()`'s graceful degrade). Not pruned: the
-    /// `lstat`-based `pruneNonExisting` stays with the caller (N6).
+    /// The registry as read: missing/unreadable/non-UTF-8/unparsable is
+    /// empty. Not pruned (that stays with the caller).
     pub(crate) fn read_preserved_libs(&self) -> PreservedLibs {
         let entries = self
             .store_path_opt(PRESERVED_LIBS_PATH)
@@ -154,8 +144,7 @@ impl FilesDb {
         }
     }
 
-    /// The config memory as read (moved from `ebuild_merge::read_cfgfiledict`):
-    /// one read; missing or unreadable is empty.
+    /// The config memory as read: one read; missing or unreadable is empty.
     pub(crate) fn read_config_memory(&self) -> ConfigMemory {
         let mut entries = BTreeMap::new();
         if let Some(text) = self
@@ -173,14 +162,12 @@ impl FilesDb {
     }
 }
 
-/// `files`' [`WriteTxn`]: every call goes straight to the filesystem, in
-/// call order; [`WriteTxn::commit`] does nothing and dropping the
-/// transaction undoes nothing.
+/// `files`' [`WriteTxn`]: every call goes straight to the filesystem;
+/// [`WriteTxn::commit`] does nothing and dropping undoes nothing.
 pub(crate) struct FilesTxn<'a> {
     pub(crate) db: &'a FilesDb,
-    /// `var/lib/portage` was already created by an earlier world write of
-    /// this transaction, so the next one skips its `create_dir_all` (the
-    /// `emerge --deselect` rewrite of both files made it once).
+    /// Set by the first world write of this transaction, so the next one
+    /// skips its `create_dir_all`.
     portage_dir_made: bool,
 }
 
@@ -192,10 +179,9 @@ impl<'a> FilesTxn<'a> {
         }
     }
 
-    /// The shared body of `set_world` / `set_world_sets`, moved from
-    /// `pretend`: `create_dir_all` of the parent (once per transaction),
-    /// then the lines joined by `\n` with a trailing `\n` unless there
-    /// are none, one plain `std::fs::write`.
+    /// The shared body of `set_world` / `set_world_sets`: `create_dir_all`
+    /// once per transaction, then the lines joined by `\n` with a trailing
+    /// `\n`, one plain `std::fs::write`.
     fn write_world_store(&mut self, rel: &str, lines: Vec<String>) -> Result<()> {
         let path = self.db.store_path(rel)?;
         if !self.portage_dir_made {
@@ -210,15 +196,13 @@ impl<'a> FilesTxn<'a> {
     }
 }
 
-/// `st_mtime_ns` of a `stat`.
 fn mtime_ns_of(st: &fs::Metadata) -> i128 {
     st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128
 }
 
-/// Set the access and modification time of a file or directory to
-/// `ns` (nanoseconds since the epoch, signed) with `futimens` on a
-/// read-only descriptor (works on directories; the owner needs no write
-/// permission). Never touches the directory entry of `path` itself.
+/// Set the access and modification time of a file or directory to `ns`
+/// (nanoseconds since the epoch) with `futimens` on a read-only
+/// descriptor. Never touches the directory entry of `path` itself.
 fn set_mtime_ns(path: &Path, ns: i128) -> Result<()> {
     let secs = ns.div_euclid(1_000_000_000);
     let nanos = ns.rem_euclid(1_000_000_000) as u32;
@@ -334,16 +318,12 @@ impl FilesTxn<'_> {
 }
 
 /// `std::fs::create_dir_all` of `path`'s parent, error on the parent.
-/// Real `lockdir(<vdb>)` (`locks.py:167`, `lockfile(..., wantnewlockfile=1)`):
-/// a blocking exclusive `flock(2)` on `<parent>/.<basename>.portage_lockfile`
-/// (for `/var/db/pkg`, `/var/db/.pkg.portage_lockfile`). `wantnewlockfile`
-/// implies `unlinkfile` (`locks.py:247-251`), so the file is removed again
-/// on release; because a waiter may hold an fd on the removed inode, the
-/// acquirer re-checks, once it has the lock, that the path still names the
-/// file it locked and starts over when it does not. Scoped here to one
-/// counter tick; real's `vardbapi.lock()` is reentrant and held across a
-/// whole merge, which `files` does not model (no other portuale holder of
-/// this lock exists, so this cannot self-deadlock).
+/// Portage's `lockdir(<vdb>)`: a blocking exclusive `flock(2)` on
+/// `<parent>/.<basename>.portage_lockfile`, unlinked again on release.
+/// Because a waiter may hold an fd on the removed inode, the acquirer
+/// re-checks that the path still names the file it locked and starts over
+/// when it does not. Scoped here to one counter tick.
+// Portage: lib/portage/locks.py, lockdir
 struct VdbLock {
     _file: fs::File,
     path: PathBuf,
@@ -380,17 +360,17 @@ impl VdbLock {
 }
 
 impl Drop for VdbLock {
-    /// Unlink while still holding the lock (real `unlockfile` with
-    /// `unlinkfile`), then the fd closes and the lock is released.
+    /// Unlink while still holding the lock, then the fd closes and the
+    /// lock is released.
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
 }
 
-/// Real `write_atomic` (`util/__init__.py`, `atomic_ofstream`): follow
-/// symlinks, write a temporary file (`<basename>` + suffix) in the same
-/// directory, copy the mode of the file it replaces (a new file keeps the
-/// umask-derived default), then `rename` over the target.
+/// Portage's `write_atomic`: follow symlinks, write a temporary file in
+/// the same directory, copy the mode of the file it replaces, then
+/// `rename` over the target.
+// Portage: lib/portage/util/__init__.py, atomic_ofstream
 fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write as _;
     let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -435,12 +415,8 @@ fn create_parent(path: &Path) -> Result<()> {
 }
 
 impl WriteTxn for FilesTxn<'_> {
-    /// Moved from `ebuild_merge::create_vdb_tmp` (real `treewalk()`'s
-    /// `self.dbdir = self.dbtmpdir; self.delete(); ensure_dirs(...)`):
-    /// `stat` the pending dir, `remove_dir_all` a stale one a killed merge
-    /// left, then `create_dir_all` it (and the category dir). The category
-    /// dir of a removed stale entry is not `rmdir`ed (real does; S0.1 row
-    /// 3).
+    /// Remove a stale `-MERGING-<pf>` a killed merge left, then create the
+    /// pending dir (and the category dir).
     fn begin_entry(&mut self, key: &EntryKey) -> Result<()> {
         let tmp_dir = self.db.pending_dir(key);
         if tmp_dir.exists() {
@@ -465,35 +441,30 @@ impl WriteTxn for FilesTxn<'_> {
     }
 
     /// `std::fs::write` into the pending dir (truncate in place, mode from
-    /// the umask), as `populate_vdb_tmp` / `write_vdb_tmp_contents` did.
+    /// the umask).
     fn put_entry_file(&mut self, key: &EntryKey, name: &str, data: &[u8]) -> Result<()> {
         let path = self.db.pending_dir(key).join(name);
         fs::write(&path, data).map_err(|e| Error::io(path, e))
     }
 
-    /// `std::fs::copy(src, <pending>/<name>)` (mode copied, mtime not), as
-    /// `populate_vdb_tmp` did. The error names `src`, like before.
+    /// `std::fs::copy(src, <pending>/<name>)` (mode copied, mtime not).
+    /// The error names `src`.
     fn copy_entry_file(&mut self, key: &EntryKey, name: &str, src: &Path) -> Result<()> {
         fs::copy(src, self.db.pending_dir(key).join(name)).map_err(|e| Error::io(src, e))?;
         Ok(())
     }
 
-    /// Real `counter_tick_core` (`vartree.py:1372-1397`) over
-    /// `get_counter_tick_core` (`1304-1370`): under the VDB lock
-    /// (`vardbapi.lock()` -> `lockdir(<vdb>)`, a `.<basename>.portage_lockfile`
-    /// sibling, [`VdbLock`]), the next value is **the larger of the
-    /// `counter` file (`-1` when missing or unparsable) and every installed
-    /// entry's `COUNTER`**, plus one -- a counter file that fell behind
-    /// (corrupt, restored, lost) cannot hand out a value below an installed
-    /// package's, which would trip AUTOCLEAN -- and the file is replaced
-    /// atomically ([`write_atomic`], real `write_atomic`), no newline.
+    /// Portage's `counter_tick_core`: under the VDB lock, the next value
+    /// is the larger of the `counter` file (`-1` when missing or
+    /// unparsable) and every installed entry's `COUNTER`, plus one, written
+    /// back atomically with no newline.
+    // Portage: lib/portage/vartree.py, counter_tick_core
     fn next_counter(&mut self) -> Result<Counter> {
         let counter_path = self.db.store_path(COUNTER_PATH)?;
         let _lock = VdbLock::acquire(self.db.vdb_path())?;
         let mut max = self.db.read_counter().map_or(-1, |c| c.0);
         for key in self.db.entries()? {
-            // Real: `int(aux_get(cpv, ["COUNTER"])[0])`, skipping a missing
-            // entry, field or a value that is not an integer.
+            // Skip a missing entry, field, or a value that is not an integer.
             if let Some(Ok(c)) = self
                 .db
                 .aux_get_field(&key, "COUNTER")
@@ -507,21 +478,17 @@ impl WriteTxn for FilesTxn<'_> {
         Ok(Counter(next))
     }
 
-    /// Moved from `ebuild_merge::write_consolidated_metadata_file` (real
-    /// `_write_metadata_file` + `_stamp_metadata_file`, `vartree.py:
-    /// 188-229`, `not delete_individual`): every [`METADATA_FILE_FIELDS`]
-    /// file in the pending dir that reads as UTF-8, whitespace-normalised,
-    /// sorted, under `#format=1`, written with `std::fs::write`; then a
-    /// `stat` of the dir and `#dir_mtime=<st_mtime_ns>` appended in a
-    /// second open. No-op when no field file exists.
+    /// Write the consolidated `metadata` file of the pending entry: every
+    /// [`METADATA_FILE_FIELDS`] file present, whitespace-normalised and
+    /// sorted under `#format=1`, then `#dir_mtime=<st_mtime_ns>` appended
+    /// in a second open. No-op when no field file exists.
     fn seal_entry(&mut self, key: &EntryKey) -> Result<()> {
         let dbdir = self.db.pending_dir(key);
         let mut data: Vec<(String, String)> = Vec::new();
         for &field in METADATA_FILE_FIELDS {
             let path = dbdir.join(field);
-            // Real `_consolidate_to_metadata_file` opens with
-            // `errors="replace"` (`vartree.py:268`), so a non-UTF-8 field
-            // is sealed as its lossy text, like an unsealed read (#309).
+            // A non-UTF-8 field is sealed as its lossy text, like an
+            // unsealed read.
             let Ok(raw) = fs::read(&path) else {
                 continue;
             };
@@ -543,10 +510,9 @@ impl WriteTxn for FilesTxn<'_> {
         }
         fs::write(&metadata_path, &body).map_err(|e| Error::io(&metadata_path, e))?;
 
-        // Real appends `#dir_mtime=` in a separate `open(..., "a")` step,
-        // *after* the body is on disk, so `st_mtime_ns` reflects the body
-        // write (the last dir change) and the append itself -- no new dir
-        // entry -- leaves it untouched.
+        // `#dir_mtime=` is appended after the body is on disk, so the
+        // stamp reflects the body write and the append itself leaves it
+        // untouched (no new dir entry).
         let st = fs::metadata(&dbdir).map_err(|e| Error::io(&dbdir, e))?;
         let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
         let mut f = fs::OpenOptions::new()
@@ -558,13 +524,10 @@ impl WriteTxn for FilesTxn<'_> {
         Ok(())
     }
 
-    /// Moved from `ebuild_merge::publish_vdb_tmp` (real `self.dbdir =
-    /// self.dbpkgdir; self.delete(); _movefile(dbtmpdir, dbpkgdir)`):
-    /// `stat` the live `<pf>`, `remove_dir_all` it when present (the
-    /// same-`pf` reinstall), then `rename` the pending dir onto it. Both
-    /// sit in the same category dir, so the rename is atomic and keeps the
-    /// pending dir's own mtime (and so the `metadata` stamp). Rename
-    /// errors name the live path, like before.
+    /// Publish the pending entry: `remove_dir_all` a live same-`pf` entry
+    /// when present, then `rename` the pending dir onto it. Same category
+    /// dir, so the rename is atomic and keeps the `metadata` stamp. Rename
+    /// errors name the live path.
     fn finish_entry(&mut self, key: &EntryKey) -> Result<()> {
         let tmp_dir = self.db.pending_dir(key);
         let final_dir = self.db.vdb_path().join(&key.category).join(&key.pf);
@@ -575,24 +538,12 @@ impl WriteTxn for FilesTxn<'_> {
         Ok(())
     }
 
-    /// Whole-entry write for converters (S2.6; plan 0.7: directory mtimes
-    /// before the stamp, stale stays stale, no `metadata` file is added).
-    /// Order, in the pending `-MERGING-<pf>` dir (`begin_entry`):
-    ///
-    /// 1. every file written with its bytes (`metadata`: Valid = stored
-    ///    bytes without any `#dir_mtime=` line; Stale = the stored bytes
-    ///    as they are);
-    /// 2. every non-`metadata` file: mtime, then mode;
-    /// 3. the directory's mtime = `image.dir_mtime_ns` (`futimens`);
-    /// 4. `metadata`: mode 0600 for the append; Valid: `stat` the
-    ///    directory, append `#dir_mtime=<st_mtime_ns>` (nothing creates a
-    ///    dirent now); Stale: if the stored stamp equals the directory's
-    ///    mtime, rewrite it in place as that value minus one; then its
-    ///    mtime and mode;
-    /// 5. the directory's mode (`chmod`, ctime only);
-    /// 6. `finish_entry` (remove a live same-`pf` entry, `rename`).
-    ///
-    /// Any failure removes the pending directory.
+    /// Whole-entry write for converters: directory mtimes before the
+    /// stamp, stale stays stale, no `metadata` file is ever added. Order,
+    /// in the pending `-MERGING-<pf>` dir: files with their bytes; file
+    /// mtimes and modes; the directory mtime; the stamp last; the
+    /// directory mode; then `finish_entry`. Any failure removes the
+    /// pending directory.
     fn insert_entry(&mut self, image: &EntryImage) -> Result<()> {
         let key = &image.key;
         for f in &image.files {
@@ -625,10 +576,8 @@ impl WriteTxn for FilesTxn<'_> {
         r
     }
 
-    /// Moved from `ebuild_unmerge::delete_vdb_dir` (real `dblink.delete()`):
     /// `remove_dir_all` of the live entry (its error is returned), then a
-    /// best-effort `remove_dir` of the category directory, ignored when
-    /// another entry still lives there (N14).
+    /// best-effort `remove_dir` of the category directory.
     fn delete_entry(&mut self, key: &EntryKey) -> Result<()> {
         let dir = self.db.vdb_path().join(&key.category).join(&key.pf);
         fs::remove_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
@@ -638,8 +587,7 @@ impl WriteTxn for FilesTxn<'_> {
         Ok(())
     }
 
-    /// Moved from `remove_from_contents`' two `std::fs::write` calls: a
-    /// plain `std::fs::write` of `<entry>/<name>` (truncate in place, no
+    /// A plain `std::fs::write` of `<entry>/<name>` (truncate in place, no
     /// temporary file, no rename), so the entry directory's mtime and the
     /// `metadata` stamp are untouched.
     fn replace_file(&mut self, key: &EntryKey, name: &str, data: &[u8]) -> Result<()> {
@@ -652,12 +600,10 @@ impl WriteTxn for FilesTxn<'_> {
         fs::write(&path, data).map_err(|e| Error::io(path, e))
     }
 
-    /// Moved from `pretend` (`update_world_file`, `deselect_from_world`,
-    /// `run_deselect`): the caller sorts and de-duplicates. `create_dir_all`
-    /// of `var/lib/portage` (skipped when this transaction already did
-    /// it), the atoms joined by newlines plus a trailing newline (an empty
-    /// list writes an empty file), a plain `std::fs::write`: no temporary
-    /// file, no lock.
+    /// The caller sorts and de-duplicates. `create_dir_all` of
+    /// `var/lib/portage` (once per transaction), the atoms joined by
+    /// newlines plus a trailing newline, a plain `std::fs::write`: no
+    /// temporary file, no lock.
     fn set_world(&mut self, world: &World) -> Result<()> {
         self.write_world_store(WORLD_PATH, world.atoms.clone())
     }
@@ -670,12 +616,9 @@ impl WriteTxn for FilesTxn<'_> {
         )
     }
 
-    /// Moved from `ebuild_merge::write_plib_registry`: nothing at all
-    /// (not even the parent directory) when `entries == loaded` (real
-    /// `store()`'s `_data == _data_orig`, backlog #167); otherwise the
-    /// `json.dumps` bytes ([`format_preserved_libs`]), `create_dir_all` of
-    /// the parent and a plain `std::fs::write` (not real's
-    /// `atomic_ofstream`).
+    /// Writes nothing at all (not even the parent directory) when
+    /// `entries == loaded`; otherwise the [`format_preserved_libs`] bytes
+    /// with a plain `std::fs::write`.
     fn set_preserved_libs(&mut self, libs: &PreservedLibs) -> Result<()> {
         if libs.entries == libs.loaded {
             return Ok(());
@@ -686,9 +629,8 @@ impl WriteTxn for FilesTxn<'_> {
         fs::write(&path, out).map_err(|e| Error::io(path, e))
     }
 
-    /// Moved from `ebuild_merge::write_cfgfiledict`: `create_dir_all` of
-    /// the parent, then `"<path> <md5>\n"` per entry in key order with a
-    /// plain `std::fs::write`, unconditionally.
+    /// `create_dir_all` of the parent, then `"<path> <md5>\n"` per entry
+    /// in key order, unconditionally.
     fn set_config_memory(&mut self, memory: &ConfigMemory) -> Result<()> {
         let path = self.db.store_path(CONFIG_MEMORY_PATH)?;
         create_parent(&path)?;
@@ -714,10 +656,8 @@ impl WriteTxn for FilesTxn<'_> {
     }
 }
 
-/// A minimal JSON string-literal reader (the `\"`/`\\`/`\/`/`\n`/`\t`/
-/// `\r`/`\b`/`\f`/`\uXXXX` escapes real `json.dumps` may emit for a
-/// path), used only by [`parse_preserved_libs`]: narrow by design, not a
-/// general JSON parser. Moved from `ebuild_merge::parse_json_string`.
+/// A minimal JSON string-literal reader for the registry: narrow by
+/// design, not a general parser.
 fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> {
     if chars.next()? != '"' {
         return None;
@@ -778,10 +718,9 @@ fn parse_json_string_array(
     }
 }
 
-/// Parses exactly the shape real `PreservedLibsRegistry.store()` writes:
-/// `{"cp:slot": [cpv, counter, [paths...]], ...}`. `None` on any
-/// deviation; readers treat that like a missing file (real `load()`'s
-/// graceful degrade to `{}`). Moved from `ebuild_merge::parse_plib_registry`.
+/// Parses exactly the shape Portage's `PreservedLibsRegistry.store()`
+/// writes: `{"cp:slot": [cpv, counter, [paths...]], ...}`. `None` on any
+/// deviation; readers treat that like a missing file.
 pub fn parse_preserved_libs(text: &str) -> Option<BTreeMap<String, PreservedLibsEntry>> {
     let mut chars = text.chars().peekable();
     let mut entries = BTreeMap::new();
@@ -840,9 +779,7 @@ pub fn parse_preserved_libs(text: &str) -> Option<BTreeMap<String, PreservedLibs
 }
 
 fn json_quote(s: &str) -> String {
-    // Real `json.dumps(..., ensure_ascii=False)`: `"` and `\` escaped,
-    // C0 controls as the short forms (`\b \t \n \f \r`) or `\u00xx`,
-    // everything else (including non-ASCII and DEL) raw UTF-8.
+    // Portage's `json.dumps(..., ensure_ascii=False)` quoting.
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -862,10 +799,8 @@ fn json_quote(s: &str) -> String {
     out
 }
 
-/// Real `store()`'s `json.dumps(..., ensure_ascii=False, indent="\t",
-/// sort_keys=True)` layout (the `BTreeMap` keeps keys sorted). An empty
-/// dict is exactly `{}`, and there is no trailing newline, byte for byte
-/// Python's output. Moved from `ebuild_merge::write_plib_registry`.
+/// Portage's `store()` JSON layout (sorted keys); `{}` when empty, no
+/// trailing newline.
 pub fn format_preserved_libs(entries: &BTreeMap<String, PreservedLibsEntry>) -> String {
     if entries.is_empty() {
         return String::from("{}");
@@ -910,10 +845,8 @@ mod tests {
         root
     }
 
-    /// The merge sequence on `files`: pending entry hidden from readers,
-    /// the counter ticks from a missing store to 0, the stamp is the last
-    /// write and survives the rename, and a same-`pf` live entry is
-    /// replaced.
+    /// The merge sequence on `files`: the stamp is the last write and
+    /// survives the rename, and a same-`pf` live entry is replaced.
     #[test]
     fn merge_sequence_publishes_a_stamped_entry() {
         let root = scratch("merge");
@@ -951,7 +884,6 @@ mod tests {
         assert_eq!(db.counter().unwrap(), Some(Counter(1)));
         let meta = fs::read_to_string(live.join("metadata")).unwrap();
         assert!(meta.starts_with("#format=1\nCOUNTER=1\nSLOT=0\n#dir_mtime="));
-        // The stamp is valid: aux_get serves from the snapshot.
         assert_eq!(db.aux_get(&key, "SLOT").unwrap().as_deref(), Some("0"));
         let st = fs::metadata(&live).unwrap();
         let ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
@@ -974,12 +906,10 @@ mod tests {
         c.0
     }
 
-    /// Real `get_counter_tick_core` (`vartree.py:1304-1370`): the next
-    /// counter is above every installed entry's `COUNTER` even when the
-    /// `counter` file is behind (or missing), and entries whose `COUNTER`
-    /// is absent or not an integer are skipped (`except (KeyError,
-    /// OverflowError, ValueError): continue`). Value derived from the real
-    /// source (`max_counter + 1`), checked by hand against it.
+    /// The next counter is above every installed entry's `COUNTER` even
+    /// when the `counter` file is behind (or missing); absent or
+    /// non-integer `COUNTER`s are skipped.
+    // Portage: lib/portage/vartree.py, get_counter_tick_core
     #[test]
     fn next_counter_is_above_every_installed_entry_counter() {
         let root = scratch("counter-max");
@@ -997,7 +927,7 @@ mod tests {
         // ...one ahead of them wins.
         fs::write(root.join("var/cache/edb/counter"), "100\n").unwrap();
         assert_eq!(tick(&db), 101);
-        // An unparsable counter file counts as -1, like real.
+        // An unparsable counter file counts as -1, like Portage's.
         fs::write(root.join("var/cache/edb/counter"), "corrupt").unwrap();
         assert_eq!(tick(&db), 42);
         let _ = fs::remove_dir_all(&root);
@@ -1023,8 +953,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// The tick takes real's VDB lock (`<vdb parent>/.<basename>.portage_lockfile`):
-    /// while another holder has it, `next_counter` blocks.
+    /// The tick takes Portage's VDB lock: while another holder has it,
+    /// `next_counter` blocks.
     #[test]
     fn next_counter_waits_for_the_vdb_lock() {
         let root = scratch("counter-lock");
@@ -1045,13 +975,13 @@ mod tests {
         drop(held);
         assert_eq!(rx.recv_timeout(Duration::from_secs(30)).unwrap(), 0);
         t.join().unwrap();
-        // Real unlinks it on release (`wantnewlockfile` implies `unlinkfile`).
+        // Portage unlinks it on release.
         assert!(!lockfile.exists());
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Concurrent ticks (threads here, processes in real) never hand out
-    /// the same value: the read-max-write is one critical section.
+    /// Concurrent ticks (threads here, processes in Portage) never hand
+    /// out the same value: the read-max-write is one critical section.
     #[test]
     fn concurrent_ticks_are_unique() {
         let root = scratch("counter-race");
@@ -1104,7 +1034,6 @@ mod tests {
             "dev-libs/a\ndev-libs/b:2\n"
         );
         assert!(!root.join("var/lib/portage/world_sets").exists());
-        // Reading drops blanks, comments and `@` lines.
         fs::write(&path, "# c\n\n @x \n dev-libs/a \n").unwrap();
         assert_eq!(db.world().unwrap().atoms, vec!["dev-libs/a".to_string()]);
         let mut txn = db.begin_write().unwrap();
@@ -1132,7 +1061,6 @@ mod tests {
         assert_eq!(db.preserved_libs().unwrap(), PreservedLibs::default());
         let mut libs = db.preserved_libs().unwrap();
         let mut txn = db.begin_write().unwrap();
-        // Unchanged: not even the parent directory is created.
         txn.set_preserved_libs(&libs).unwrap();
         assert!(!root.join("var/lib/portage").exists());
         libs.entries.insert(
@@ -1190,7 +1118,7 @@ mod tests {
     }
 
     /// `delete_entry` removes the entry, and the category only when it is
-    /// then empty; a missing entry is the `remove_dir_all` error.
+    /// then empty.
     #[test]
     fn delete_entry_removes_the_empty_category_only() {
         let root = scratch("delete");
@@ -1214,8 +1142,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// `replace_file` rewrites in place (same inode) and leaves the entry
-    /// directory's mtime alone.
+    /// `replace_file` rewrites in place and leaves the entry directory's
+    /// mtime alone.
     #[test]
     fn replace_file_rewrites_in_place() {
         use std::os::unix::fs::MetadataExt as _;
@@ -1238,9 +1166,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// `read_file_all` lists every live entry (a missing file is `None`),
-    /// skips `-MERGING-`; `owners` matches with one leading `/` ignored,
-    /// in listing then `CONTENTS` order; `categories` lists directories.
+    /// `read_file_all`, `owners` and `categories` scan the tree.
     #[test]
     fn bulk_reads_and_owners_scan_the_tree() {
         let root = scratch("bulk");
