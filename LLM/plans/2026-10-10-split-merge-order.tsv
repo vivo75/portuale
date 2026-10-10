@@ -1,0 +1,17 @@
+# #336 Phase 6: crates/portage-repo/src/merge_order/mod.rs split spec (split_module.py).
+pub struct DepPriority	priority	Dependency priorities, the edges they label and the ignore rungs.
+struct Digraph	digraph	The merge-order digraph and the serialize frontier.
+fn mo_sel_enabled	debug	`--debug` merge-order dumps and node-selection traces.
+fn leaves_via(	digraph
+fn edge_satisfied_with(	installed_closure	Installed packages pulled into the merge-order graph.
+struct DigraphPrelude	prelude	Per-run lookups shared by the digraph build.
+fn suppressed_alt_edges(	alt_edges	Which `||` branches contribute edges.
+fn build_digraph(	build	Building the digraph and biasing it toward Portage's order.
+pub(crate) fn entry_version	=lib
+fn find_smallest_cycle(	cycles	Cycle search and the circular-dependency report.
+struct TreeStuck	tree_display	`--tree` display order and stuck-node handling.
+fn select_nodes(	select_nodes	Choosing the next nodes to merge (Portage `_serialize_tasks`).
+impl std::fmt::Display for DepPriority	=priority
+fn debug_dump_cycle(	debug
+pub(crate) fn serialize_merge_order(	lib
+type Cp	replay	Replaying `_create_graph` for fail-fast passes.
