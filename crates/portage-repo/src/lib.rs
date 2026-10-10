@@ -26503,17 +26503,86 @@ pub struct ResolveRequest {
     pub buildpkgonly: bool,
     pub root_deps_running_root: Option<PathBuf>,
     pub distdir: PathBuf,
+    /// `--emptytree`/`-e` (real `create_depgraph_params.py:176-179`).
+    /// Forces `deep` on (`myparams["deep"] = True`) and is threaded into
+    /// every `resolve_pretend` call so an already-installed atom -- top
+    /// level *or* a dependency reached by the now-mandatory deep walk --
+    /// resolves to a bare `Reinstall` instead of `AlreadyInstalled`. The
+    /// net effect matches real `emerge -e`: the entire deep dependency
+    /// tree is (re)merged. Useful for byte-for-byte comparison against
+    /// real portage and for debugging resolution.
     pub empty: bool,
+    /// `--getbinpkg`/`-g` (real `main.py` -- distinct from `--usepkg`/
+    /// `-k`). The caller folds `--getbinpkgonly`/`-G` into `usepkgonly`
+    /// (real: `--getbinpkgonly` implies binary-only) and into this flag,
+    /// so `getbinpkg` here means "also consider *remote* binary-package
+    /// candidates from `config.binrepos`" (`list_remote_binary_candidates`
+    /// -- each binrepo's own on-disk `Packages` index). A remote-only
+    /// candidate that wins resolution renders the real `g` bracket column
+    /// and contributes its download `SIZE` to `Size of downloads:`.
     pub getbinpkg: bool,
+    /// `--ignore-built-slot-operator-deps` (real `main.py:470`, `y_or_n`,
+    /// default `"n"`). Real portage feeds this into `FakeVartree`, which
+    /// then strips the slot/sub-slot `:=` operator parts out of every
+    /// installed package's recorded `*DEPEND` (`_slot_operator.
+    /// ignore_built_slot_operator_deps`) -- so the slot-operator
+    /// auto-rebuild scan (`_slot_operator_trigger_reinstalls`) finds
+    /// nothing to trigger. Same net effect here: when set, the
+    /// `slot_operator_rebuild_entries` post-pass is skipped entirely.
+    /// "Intended only for debugging purposes" per the real `--help`.
     pub ignore_built_slot_operator_deps: bool,
+    /// `--backtrack=COUNT` (real `main.py`, `type=int`, `valid_integers`).
+    /// The maximum number of retries for the backtracking search.
+    /// max_depth is computed as `max(1, (COUNT + 1) / 2)`, and a total
+    /// restart cap is enforced: the search stops when restarts >= COUNT.
+    /// Portuale's CLI default is 10 (flag absent); real's own default is
+    /// `--backtrack=20` (depth 10). `--backtrack=0` disables backtracking
+    /// entirely -- no feedback node is explored, so a slot conflict is
+    /// reported without any retry, exactly the pre-backtracking behavior.
+    /// The one exception is backlog #209's reverse-dependency feed: real
+    /// `_resolve_conflicts` runs `_complete_graph` with no backtracking
+    /// gate, so satisfiable installed-consumer pins re-run the pass
+    /// in-process (a feed loop,
+    /// never a counted restart) instead of settling.
+    /// Config-growth retries never counted against this budget (real's
+    /// `_feedback_config` doesn't count toward `--backtrack=N` either).
     pub backtrack_max: u32,
+    /// `--reinstall-atoms ATOMS` (real `main.py`, `action: "append"` ->
+    /// `depgraph.py:363-365`: `WildcardPackageSet(atoms)`). An
+    /// already-installed package whose `cat/pkg-version` matches one of
+    /// these atoms is treated as if not installed -- real `depgraph.py:
+    /// 4547`/`4643`/`8331` drop it from every `inst_pkgs` satisfaction
+    /// list, forcing a re-merge. In portuale's model that is exactly a
+    /// scoped `--emptytree`: `resolve_pretend`'s own
+    /// `AlreadyInstalled` -> `Reinstall` rewrite (see `empty`), applied
+    /// per matching atom right after resolution. Same two-tier
+    /// `matches_config_entry` matcher `excluded` uses. Empty (`&[]`) at
+    /// every call site that doesn't pass `--reinstall-atoms`.
     pub reinstall_atoms: Vec<String>,
+    /// `--rebuild-if-new-slot` (real `y_or_n`, default `"y"`): the
+    /// slot-operator (`:=`) auto-rebuild pass. `false` (`=n`) skips it,
+    /// like `--ignore-built-slot-operator-deps` already does.
     pub rebuild_if_new_slot: bool,
+    /// `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` /
+    /// `--rebuild-if-new-ver` (real `true_y_or_n`, all OFF by default):
+    /// rebuild an installed package whose build-time dep is being merged
+    /// this run -- see `rebuild_if_entries`'s own doc comment. The caller
+    /// resolves the real `unbuilt > new_rev > new_ver` precedence, so at
+    /// most one is `true` here.
     pub rebuild_if_unbuilt: bool,
     pub rebuild_if_new_rev: bool,
     pub rebuild_if_new_ver: bool,
+    /// `--rebuild-exclude ATOMS` (parent skipped) / `--rebuild-ignore
+    /// ATOMS` (dep never triggers) -- same repeatable atom-list shape as
+    /// `--exclude`. `&[]` at every call site that passes neither.
     pub rebuild_exclude: Vec<String>,
     pub rebuild_ignore: Vec<String>,
+    /// `--dynamic-deps` (real `create_depgraph_params.py`, ON by default
+    /// for a source install): `true` walks an AlreadyInstalled package's
+    /// deps from the current ebuild (portuale's own long-standing
+    /// behaviour); `false` (`--dynamic-deps=n`) walks its vdb snapshot --
+    /// see `enqueue_dependencies`'s own doc comment. Only reachable under
+    /// `--deep`.
     pub dynamic_deps: bool,
     /// `--implicit-system-deps[=y|n]` (real `y_or_n`, default `y`): only
     /// `=n` disables, which skips `merge_order::merge_order_bias`'s
@@ -26521,6 +26590,27 @@ pub struct ResolveRequest {
     /// `depgraph._merge_order_bias`'s own `implicit_system_deps` early
     /// return) -- the `--pretend` merge list then stays in discovery order.
     pub implicit_system_deps: bool,
+    /// `--complete-graph` (real `create_depgraph_params.py:169-175`:
+    /// `--complete-graph` / `--rebuild-if-{unbuilt,new-rev,new-ver}` all
+    /// set `myparams["complete"] = True`) plus the
+    /// `--complete-graph-if-new-use` / `-if-new-ver` auto-enable, both
+    /// resolved by the CLI layer (see `complete_graph_auto_enable` and
+    /// `pretend.rs`'s two-pass). Real `depgraph.py::_complete_graph`
+    /// (8562-8670) then does four things: loads the vdb, restricts package
+    /// selection to installed-/already-graphed packages, seeds
+    /// `args ∪ @system ∪ @world`, and toggles `myparams["deep"] = True`
+    /// (8668-8670). In a `--pretend` that never removes or downgrades an
+    /// installed package, the first three are provably inert -- a
+    /// consistent installed set stays consistent, and portuale's
+    /// `--rebuild-if-*` / slot-operator (`:=`) auto-rebuild passes already
+    /// scan *every* installed package (`all_installed_packages`), both
+    /// firing only for a dep that actually merges this run (which
+    /// installed-only selection never adds). So the whole observable delta
+    /// is the forced deep walk. The one case the deep walk still surfaces
+    /// that real complete mode would suppress -- an already-broken
+    /// installed dep shown as `[ebuild N]` -- is existing `--deep`
+    /// behaviour, and complete mode's stricter installed-/graph-only
+    /// selection is already a documented `excluded_pkgs` scope cut.
     pub complete: bool,
     /// Top-level atoms expanded from a `@world`/`@selected` set argument
     /// (real `SetArg` named `"world"`/`"selected"`, `depgraph.py:5577-5605`).
@@ -26535,6 +26625,82 @@ pub struct ResolveRequest {
     /// backtracking walk; the other two run lu-zero's bridges over the
     /// same repo facts (see `solver_bridge.rs`).
     pub solver: SolverKind,
+}
+
+impl ResolveRequest {
+    /// A request to resolve `atoms` as `emerge` does with no options:
+    /// `--with-bdeps`, `--selective`, `--rebuild-if-new-slot` and
+    /// `--dynamic-deps` on, `--backtrack=10` (portuale's default; Portage's
+    /// is 20), everything else off. Set fields with struct-update syntax:
+    ///
+    /// ```ignore
+    /// ResolveRequest { update: true, deep: Deep::Unlimited, ..ResolveRequest::new(..) }
+    /// ```
+    pub fn new(
+        config_root: &Path,
+        root: &Path,
+        atoms: &[String],
+        config: &portage_profile::Config,
+        distdir: &Path,
+    ) -> Self {
+        Self {
+            config_root: config_root.to_path_buf(),
+            root: root.to_path_buf(),
+            atoms: atoms.to_vec(),
+            config: config.clone(),
+            newuse: false,
+            changed_use: false,
+            nodeps: false,
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
+            update: false,
+            deep: Deep::NotRequested,
+            excluded: Vec::new(),
+            with_bdeps: true,
+            changed_deps: false,
+            changed_slot: false,
+            with_test_deps: false,
+            changed_deps_report: false,
+            selective: true,
+            autounmask_suggest_keywords: false,
+            autounmask_suggest_use: false,
+            autounmask_suggest_license: false,
+            autounmask_suggest_masks: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: Vec::new(),
+            usepkg_include: Vec::new(),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            buildpkgonly: false,
+            root_deps_running_root: None,
+            distdir: distdir.to_path_buf(),
+            empty: false,
+            getbinpkg: false,
+            ignore_built_slot_operator_deps: false,
+            backtrack_max: 10,
+            reinstall_atoms: Vec::new(),
+            rebuild_if_new_slot: true,
+            rebuild_if_unbuilt: false,
+            rebuild_if_new_rev: false,
+            rebuild_if_new_ver: false,
+            rebuild_exclude: Vec::new(),
+            rebuild_ignore: Vec::new(),
+            dynamic_deps: true,
+            implicit_system_deps: true,
+            complete: false,
+            set_args: std::collections::HashSet::new(),
+            solver: SolverKind::Portage,
+        }
+    }
+
+    /// Resolves this request with the [`active_resolver`].
+    pub fn resolve(&self) -> Result<GraphResult, Error> {
+        active_resolver().resolve(self)
+    }
 }
 
 /// Which dependency-solving algorithm answers a [`ResolveRequest`].
@@ -35389,224 +35555,6 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     Ok(result)
 }
 
-/// Historical entry point, kept at its original 44-argument signature so
-/// every call site is untouched: assembles a [`ResolveRequest`] and
-/// hands it to [`active_resolver`]. New code should build a
-/// `ResolveRequest` and call a [`Resolver`] directly.
-///
-/// The 44 args trip `clippy::too_many_arguments`; folding them into the
-/// struct at every call site (production + ~55 tests) is its own churn,
-/// deferred -- the struct now exists (`ResolveRequest`), so the migration
-/// can happen call-site by call-site later.
-#[allow(clippy::too_many_arguments)]
-pub fn resolve_pretend_graph(
-    config_root: &Path,
-    root: &Path,
-    atoms: &[String],
-    config: &portage_profile::Config,
-    newuse: bool,
-    changed_use: bool,
-    nodeps: bool,
-    update: bool,
-    deep: Deep,
-    excluded: &[String],
-    with_bdeps: bool,
-    changed_deps: bool,
-    changed_slot: bool,
-    with_test_deps: bool,
-    changed_deps_report: bool,
-    selective: bool,
-    autounmask_suggest_keywords: bool,
-    autounmask_suggest_use: bool,
-    autounmask_suggest_license: bool,
-    autounmask_suggest_masks: bool,
-    usepkg: bool,
-    usepkgonly: bool,
-    binpkg_respect_use: bool,
-    usepkg_exclude: &[String],
-    usepkg_include: &[String],
-    rebuilt_binaries: bool,
-    rebuilt_binaries_timestamp: Option<u64>,
-    newrepo: bool,
-    buildpkgonly: bool,
-    root_deps_running_root: Option<&Path>,
-    distdir: &Path,
-    // `--emptytree`/`-e` (real `create_depgraph_params.py:176-179`).
-    // Forces `deep` on (`myparams["deep"] = True`) and is threaded into
-    // every `resolve_pretend` call so an already-installed atom -- top
-    // level *or* a dependency reached by the now-mandatory deep walk --
-    // resolves to a bare `Reinstall` instead of `AlreadyInstalled`. The
-    // net effect matches real `emerge -e`: the entire deep dependency
-    // tree is (re)merged. Useful for byte-for-byte comparison against
-    // real portage and for debugging resolution.
-    empty: bool,
-    // `--getbinpkg`/`-g` (real `main.py` -- distinct from `--usepkg`/
-    // `-k`). The caller folds `--getbinpkgonly`/`-G` into `usepkgonly`
-    // (real: `--getbinpkgonly` implies binary-only) and into this flag,
-    // so `getbinpkg` here means "also consider *remote* binary-package
-    // candidates from `config.binrepos`" (`list_remote_binary_candidates`
-    // -- each binrepo's own on-disk `Packages` index). A remote-only
-    // candidate that wins resolution renders the real `g` bracket column
-    // and contributes its download `SIZE` to `Size of downloads:`.
-    getbinpkg: bool,
-    // `--ignore-built-slot-operator-deps` (real `main.py:470`, `y_or_n`,
-    // default `"n"`). Real portage feeds this into `FakeVartree`, which
-    // then strips the slot/sub-slot `:=` operator parts out of every
-    // installed package's recorded `*DEPEND` (`_slot_operator.
-    // ignore_built_slot_operator_deps`) -- so the slot-operator
-    // auto-rebuild scan (`_slot_operator_trigger_reinstalls`) finds
-    // nothing to trigger. Same net effect here: when set, the
-    // `slot_operator_rebuild_entries` post-pass is skipped entirely.
-    // "Intended only for debugging purposes" per the real `--help`.
-    ignore_built_slot_operator_deps: bool,
-    // `--backtrack=COUNT` (real `main.py`, `type=int`, `valid_integers`).
-    // The maximum number of retries for the backtracking search.
-    // max_depth is computed as `max(1, (COUNT + 1) / 2)`, and a total
-    // restart cap is enforced: the search stops when restarts >= COUNT.
-    // Portuale's CLI default is 10 (flag absent); real's own default is
-    // `--backtrack=20` (depth 10). `--backtrack=0` disables backtracking
-    // entirely -- no feedback node is explored, so a slot conflict is
-    // reported without any retry, exactly the pre-backtracking behavior.
-    // The one exception is backlog #209's reverse-dependency feed: real
-    // `_resolve_conflicts` runs `_complete_graph` with no backtracking
-    // gate, so satisfiable installed-consumer pins re-run the pass
-    // in-process (a feed loop,
-    // never a counted restart) instead of settling.
-    // Config-growth retries never counted against this budget (real's
-    // `_feedback_config` doesn't count toward `--backtrack=N` either).
-    backtrack_max: u32,
-    // `--reinstall-atoms ATOMS` (real `main.py`, `action: "append"` ->
-    // `depgraph.py:363-365`: `WildcardPackageSet(atoms)`). An
-    // already-installed package whose `cat/pkg-version` matches one of
-    // these atoms is treated as if not installed -- real `depgraph.py:
-    // 4547`/`4643`/`8331` drop it from every `inst_pkgs` satisfaction
-    // list, forcing a re-merge. In portuale's model that is exactly a
-    // scoped `--emptytree`: `resolve_pretend`'s own
-    // `AlreadyInstalled` -> `Reinstall` rewrite (see `empty`), applied
-    // per matching atom right after resolution. Same two-tier
-    // `matches_config_entry` matcher `excluded` uses. Empty (`&[]`) at
-    // every call site that doesn't pass `--reinstall-atoms`.
-    reinstall_atoms: &[String],
-    // `--rebuild-if-new-slot` (real `y_or_n`, default `"y"`): the
-    // slot-operator (`:=`) auto-rebuild pass. `false` (`=n`) skips it,
-    // like `--ignore-built-slot-operator-deps` already does.
-    rebuild_if_new_slot: bool,
-    // `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` /
-    // `--rebuild-if-new-ver` (real `true_y_or_n`, all OFF by default):
-    // rebuild an installed package whose build-time dep is being merged
-    // this run -- see `rebuild_if_entries`'s own doc comment. The caller
-    // resolves the real `unbuilt > new_rev > new_ver` precedence, so at
-    // most one is `true` here.
-    rebuild_if_unbuilt: bool,
-    rebuild_if_new_rev: bool,
-    rebuild_if_new_ver: bool,
-    // `--rebuild-exclude ATOMS` (parent skipped) / `--rebuild-ignore
-    // ATOMS` (dep never triggers) -- same repeatable atom-list shape as
-    // `--exclude`. `&[]` at every call site that passes neither.
-    rebuild_exclude: &[String],
-    rebuild_ignore: &[String],
-    // `--dynamic-deps` (real `create_depgraph_params.py`, ON by default
-    // for a source install): `true` walks an AlreadyInstalled package's
-    // deps from the current ebuild (portuale's own long-standing
-    // behaviour); `false` (`--dynamic-deps=n`) walks its vdb snapshot --
-    // see `enqueue_dependencies`'s own doc comment. Only reachable under
-    // `--deep`.
-    dynamic_deps: bool,
-    // `--complete-graph` (real `create_depgraph_params.py:169-175`:
-    // `--complete-graph` / `--rebuild-if-{unbuilt,new-rev,new-ver}` all
-    // set `myparams["complete"] = True`) plus the
-    // `--complete-graph-if-new-use` / `-if-new-ver` auto-enable, both
-    // resolved by the CLI layer (see `complete_graph_auto_enable` and
-    // `pretend.rs`'s two-pass). Real `depgraph.py::_complete_graph`
-    // (8562-8670) then does four things: loads the vdb, restricts package
-    // selection to installed-/already-graphed packages, seeds
-    // `args ∪ @system ∪ @world`, and toggles `myparams["deep"] = True`
-    // (8668-8670). In a `--pretend` that never removes or downgrades an
-    // installed package, the first three are provably inert -- a
-    // consistent installed set stays consistent, and portuale's
-    // `--rebuild-if-*` / slot-operator (`:=`) auto-rebuild passes already
-    // scan *every* installed package (`all_installed_packages`), both
-    // firing only for a dep that actually merges this run (which
-    // installed-only selection never adds). So the whole observable delta
-    // is the forced deep walk. The one case the deep walk still surfaces
-    // that real complete mode would suppress -- an already-broken
-    // installed dep shown as `[ebuild N]` -- is existing `--deep`
-    // behaviour, and complete mode's stricter installed-/graph-only
-    // selection is already a documented `excluded_pkgs` scope cut.
-    complete: bool,
-) -> Result<GraphResult, Error> {
-    let req = ResolveRequest {
-        config_root: config_root.to_path_buf(),
-        root: root.to_path_buf(),
-        atoms: atoms.to_vec(),
-        config: config.clone(),
-        newuse,
-        changed_use,
-        nodeps,
-        // The legacy marshaller only ever answers with onlydeps off:
-        // real's `pkg.onlydeps` is set exactly when `--onlydeps` is in
-        // myopts, and every legacy caller resolves without it (the one
-        // production `--onlydeps` path builds a `ResolveRequest`
-        // directly). The with-* defaults are real's own
-        // (`man emerge.1`: rdeps enabled, ideps disabled).
-        onlydeps: false,
-        onlydeps_with_rdeps: true,
-        onlydeps_with_ideps: false,
-        update,
-        deep,
-        excluded: excluded.to_vec(),
-        with_bdeps,
-        changed_deps,
-        changed_slot,
-        with_test_deps,
-        changed_deps_report,
-        selective,
-        autounmask_suggest_keywords,
-        autounmask_suggest_use,
-        autounmask_suggest_license,
-        autounmask_suggest_masks,
-        usepkg,
-        usepkgonly,
-        binpkg_respect_use,
-        usepkg_exclude: usepkg_exclude.to_vec(),
-        usepkg_include: usepkg_include.to_vec(),
-        rebuilt_binaries,
-        rebuilt_binaries_timestamp,
-        newrepo,
-        buildpkgonly,
-        root_deps_running_root: root_deps_running_root.map(std::path::Path::to_path_buf),
-        distdir: distdir.to_path_buf(),
-        empty,
-        getbinpkg,
-        ignore_built_slot_operator_deps,
-        backtrack_max,
-        reinstall_atoms: reinstall_atoms.to_vec(),
-        rebuild_if_new_slot,
-        rebuild_if_unbuilt,
-        rebuild_if_new_rev,
-        rebuild_if_new_ver,
-        rebuild_exclude: rebuild_exclude.to_vec(),
-        rebuild_ignore: rebuild_ignore.to_vec(),
-        dynamic_deps,
-        // The legacy marshaller only ever answers with defaults: real's
-        // own default is on (`myopts.get(..., "y") != "n"`), and anything
-        // else arrives via a direct `ResolveRequest`. See the `solver`
-        // comment below.
-        implicit_system_deps: true,
-        complete,
-        // No set expansion here (legacy marshaller / unit helper pass
-        // explicit atoms only), so no argument can drop as a missing set
-        // member -- see `ResolveRequest::set_args`.
-        set_args: std::collections::HashSet::new(),
-        // `resolve_pretend_graph` is the legacy 44-arg marshaller: it only
-        // ever answers with the default solver. New code builds a
-        // `ResolveRequest` (setting `solver`) and calls
-        // `active_resolver_for` directly.
-        solver: SolverKind::Portage,
-    };
-    active_resolver().resolve(&req)
-}
-
 /// Real `Package._raw_metadata` vs `Package._metadata` for an installed
 /// package. `Raw` is the vdb record verbatim. `Effective` is what real
 /// `FakeVartree._apply_dynamic_deps` (`_emerge/FakeVartree.py:146-191`)
@@ -40307,53 +40255,19 @@ mod tests {
         changed_deps_report: bool,
     ) -> GraphResult {
         let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
+        ResolveRequest {
             changed_deps,
-            false,
-            false,
             changed_deps_report,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &[atom_str.to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
     }
 
     #[test]
@@ -41171,54 +41085,21 @@ mod tests {
         )
         .expect("fixture config resolves");
         config.complete_seed_atoms = vec!["dev-libs/r25consumer".to_string()];
-        #[allow(clippy::fn_params_excessive_bools)]
-        let result = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/r25target".to_string()],
-            &config,
-            true,
-            false,
-            false,
-            true,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            0,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph(r25target) failed: {e}"));
+        let result = ResolveRequest {
+            newuse: true,
+            update: true,
+            deep: Deep::Unlimited,
+            backtrack_max: 0,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/r25target".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving r25target failed: {e}"));
         // The lib upgrade is withheld: no merge of any r25lib version.
         assert!(
             result.entries.iter().all(|e| {
@@ -43107,59 +42988,30 @@ mod tests {
         );
     }
 
-    fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    fn graph_with(
+        atom_str: &str,
+        tweak: impl FnOnce(&mut ResolveRequest),
+    ) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(
+        let mut request = ResolveRequest::new(
             &root,
             &root,
             &[atom_str.to_string()],
             &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        );
+        tweak(&mut request);
+        request
+            .resolve()
+            .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+            .entries
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
+    }
+
+    fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        graph_with(atom_str, |_| {})
     }
 
     /// Backlog #194: resolve one atom as an `--onlydeps` root with the
@@ -43481,53 +43333,18 @@ mod tests {
     fn graph_update_entries(atoms: &[&str], config: &portage_profile::Config) -> Vec<GraphEntry> {
         let root = fixtures_root();
         let owned: Vec<String> = atoms.iter().map(|a| a.to_string()).collect();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &owned,
-            config,
-            false,
-            false,
-            false,
-            true,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({owned:?}) failed: {e}"))
+        ResolveRequest {
+            update: true,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &owned,
+                config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {owned:?} failed: {e}"))
         .entries
     }
 
@@ -43646,116 +43463,14 @@ mod tests {
 
     /// Like `graph`, but with `--nodeps` enabled.
     fn graph_nodeps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
-        let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            true,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        graph_with(atom_str, |r| r.nodeps = true)
     }
 
     /// Like `graph`, but with `--update` enabled -- proves `update` threads
     /// through the whole BFS, not just a top-level atom (see
     /// `resolve_pretend_graph`'s own doc comment).
     fn graph_update(atom_str: &str) -> Vec<(String, PretendOutcome)> {
-        let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            true,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        graph_with(atom_str, |r| r.update = true)
     }
 
     #[test]
@@ -43767,52 +43482,18 @@ mod tests {
         // resolve_pretend_graph's own doc comment), not just a
         // top-level atom.
         let root = fixtures_root();
-        let entries: Vec<(String, PretendOutcome)> = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/withdeps".to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            true,
-            Deep::NotRequested,
-            &["dev-libs/upgradepkg".to_string()],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let entries: Vec<(String, PretendOutcome)> = ResolveRequest {
+            update: true,
+            excluded: vec!["dev-libs/upgradepkg".to_string()],
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/withdeps".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
         .into_iter()
@@ -43846,53 +43527,18 @@ mod tests {
     /// Like `graph`, but with a specific `Deep` value.
     fn graph_deep(atom_str: &str, deep: Deep) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
+        ResolveRequest {
             deep,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &[atom_str.to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
@@ -43907,53 +43553,19 @@ mod tests {
     ) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
         let ra: Vec<String> = reinstall_atoms.iter().map(|s| s.to_string()).collect();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &ra,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        ResolveRequest {
+            deep: Deep::Unlimited,
+            reinstall_atoms: ra.to_vec(),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &[atom_str.to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
@@ -44029,53 +43641,23 @@ mod tests {
         let root = fixtures_root();
         let ex: Vec<String> = rebuild_exclude.iter().map(|s| s.to_string()).collect();
         let ig: Vec<String> = rebuild_ignore.iter().map(|s| s.to_string()).collect();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            true, // --update
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true, // rebuild_if_new_slot
-            unbuilt,
-            new_rev,
-            new_ver,
-            &ex,
-            &ig,
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        ResolveRequest {
+            update: true,
+            rebuild_if_unbuilt: unbuilt,
+            rebuild_if_new_rev: new_rev,
+            rebuild_if_new_ver: new_ver,
+            rebuild_exclude: ex.to_vec(),
+            rebuild_ignore: ig.to_vec(),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &[atom_str.to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
@@ -44110,52 +43692,19 @@ mod tests {
         // under --rebuild-if-new-ver / -new-rev.
         let root = fixtures_root();
         for (nr, nv) in [(true, false), (false, true)] {
-            let g = resolve_pretend_graph(
-                &root,
-                &root,
-                &["dev-libs/rebuildnochange".to_string()],
-                &test_config(),
-                false,
-                false,
-                false,
-                false,
-                Deep::NotRequested,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                None,
-                &fixtures_root().join("distfiles"),
-                false,
-                false,
-                false,
-                10,
-                &["dev-libs/rebuildnochange".to_string()], // --reinstall-atoms
-                true,
-                false,
-                nr,
-                nv,
-                &[],
-                &[],
-                true,
-                false,
-            )
+            let g = ResolveRequest {
+                reinstall_atoms: vec!["dev-libs/rebuildnochange".to_string()],
+                rebuild_if_new_rev: nr,
+                rebuild_if_new_ver: nv,
+                ..ResolveRequest::new(
+                    &root,
+                    &root,
+                    &["dev-libs/rebuildnochange".to_string()],
+                    &test_config(),
+                    &fixtures_root().join("distfiles"),
+                )
+            }
+            .resolve()
             .unwrap()
             .entries
             .into_iter()
@@ -44208,52 +43757,18 @@ mod tests {
         // enqueue_dependencies.
         let root = fixtures_root();
         let call = |dynamic_deps: bool| -> Vec<String> {
-            resolve_pretend_graph(
-                &root,
-                &root,
-                &["dev-libs/changeddepspkg".to_string()],
-                &test_config(),
-                false,
-                false,
-                false,
-                false,
-                Deep::Unlimited,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                None,
-                &fixtures_root().join("distfiles"),
-                false,
-                false,
-                false,
-                10,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
+            ResolveRequest {
+                deep: Deep::Unlimited,
                 dynamic_deps,
-                false,
-            )
+                ..ResolveRequest::new(
+                    &root,
+                    &root,
+                    &["dev-libs/changeddepspkg".to_string()],
+                    &test_config(),
+                    &fixtures_root().join("distfiles"),
+                )
+            }
+            .resolve()
             .unwrap()
             .entries
             .into_iter()
@@ -44527,52 +44042,19 @@ mod tests {
         // append broke both #24 pins, Phase 5 S1 S0.)
         let root = fixtures_root();
         let call = |dynamic_deps: bool, ignore_built: bool| -> Vec<String> {
-            resolve_pretend_graph(
-                &root,
-                &root,
-                &["dev-libs/builtbindpkg".to_string()],
-                &test_config(),
-                false,
-                false,
-                false,
-                false,
-                Deep::Unlimited,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                None,
-                &fixtures_root().join("distfiles"),
-                false,
-                false,
-                ignore_built,
-                10,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
+            ResolveRequest {
+                deep: Deep::Unlimited,
+                ignore_built_slot_operator_deps: ignore_built,
                 dynamic_deps,
-                false,
-            )
+                ..ResolveRequest::new(
+                    &root,
+                    &root,
+                    &["dev-libs/builtbindpkg".to_string()],
+                    &test_config(),
+                    &fixtures_root().join("distfiles"),
+                )
+            }
+            .resolve()
             .unwrap()
             .entries
             .into_iter()
@@ -44629,52 +44111,17 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        let names: Vec<String> = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/deepvdbuseconsumer".to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let names: Vec<String> = ResolveRequest {
+            deep: Deep::Unlimited,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/deepvdbuseconsumer".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap()
         .entries
         .into_iter()
@@ -44710,56 +44157,23 @@ mod tests {
         )
         .expect("fixture config resolves");
         let running_root = root.clone();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom.to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            if root_deps {
+        ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: (if root_deps {
                 Some(running_root.as_path())
             } else {
                 None
-            },
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+            })
+            .map(std::path::Path::to_path_buf),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &[atom.to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap()
         .entries
         .into_iter()
@@ -44899,52 +44313,18 @@ mod tests {
     fn root_deps_build_entry_displays_the_rebuild_use_column() {
         let root = fixtures_root();
         let config = test_config();
-        let entries = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/deeprootdepconsumer".to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&root),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let entries = ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: Some(root.to_path_buf()),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/deeprootdepconsumer".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
 
@@ -45032,53 +44412,20 @@ mod tests {
          -> GraphResult {
             let mut cfg = test_config();
             cfg.complete_locked_merges = locked.iter().map(|s| s.to_string()).collect();
-            resolve_pretend_graph(
-                &root,
-                &root,
-                &[atom.to_string()],
-                &cfg,
-                false,
-                false,
-                false,
+            ResolveRequest {
                 update,
                 deep,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                None,
-                &fixtures_root().join("distfiles"),
-                false,
-                false,
-                false,
-                10,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                true,
                 complete,
-            )
-            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom}) failed: {e}"))
+                ..ResolveRequest::new(
+                    &root,
+                    &root,
+                    &[atom.to_string()],
+                    &cfg,
+                    &fixtures_root().join("distfiles"),
+                )
+            }
+            .resolve()
+            .unwrap_or_else(|e| panic!("resolving {atom} failed: {e}"))
         };
         let resolve = |atom: &str, update: bool, deep: Deep, complete: bool| -> GraphResult {
             resolve_cfg(atom, update, deep, complete, &[])
@@ -45201,58 +44548,7 @@ mod tests {
     /// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
     /// (`deep` forced on, every installed atom -> a bare Reinstall).
     fn graph_empty(atom_str: &str) -> Vec<(String, PretendOutcome)> {
-        let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            /* empty: */ true,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        graph_with(atom_str, |r| r.empty = true)
     }
 
     #[test]
@@ -45362,53 +44658,19 @@ mod tests {
 
     fn graph_deep_with_bdeps(atom_str: &str, with_bdeps: bool) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
+        ResolveRequest {
+            deep: Deep::Unlimited,
             with_bdeps,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &[atom_str.to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
@@ -45521,53 +44783,19 @@ mod tests {
         root_deps_running_root: Option<&Path>,
     ) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            root_deps_running_root,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: root_deps_running_root.map(std::path::Path::to_path_buf),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &[atom_str.to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
@@ -45736,52 +44964,18 @@ mod tests {
     #[test]
     fn root_deps_adds_a_real_build_entry_for_an_unsatisfied_bdepend_with_a_visible_ebuild() {
         let root = fixtures_root();
-        let entries = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/rootdepsbuildpkg".to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&root),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let entries = ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: Some(root.to_path_buf()),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/rootdepsbuildpkg".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
 
@@ -45828,52 +45022,18 @@ mod tests {
     #[test]
     fn root_deps_recursion_walks_a_build_entrys_own_build_and_runtime_deps() {
         let root = fixtures_root();
-        let entries = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/rdrapp".to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&root),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let entries = ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: Some(root.to_path_buf()),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/rdrapp".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
 
@@ -45924,52 +45084,18 @@ mod tests {
     #[test]
     fn root_deps_recursion_walks_a_build_entrys_own_idepend() {
         let root = fixtures_root();
-        let names: Vec<(String, bool)> = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/rdriapp".to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&root),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let names: Vec<(String, bool)> = ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: Some(root.to_path_buf()),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/rdriapp".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
         .iter()
@@ -46000,52 +45126,18 @@ mod tests {
     fn root_deps_top_level_idepend_resolves_against_the_running_root() {
         let root = fixtures_root();
         let run = |root_deps_running_root: Option<&Path>| -> Vec<(String, bool)> {
-            resolve_pretend_graph(
-                &root,
-                &root,
-                &["dev-libs/topidepapp".to_string()],
-                &test_config(),
-                false,
-                false,
-                false,
-                false,
-                Deep::Unlimited,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                root_deps_running_root,
-                &fixtures_root().join("distfiles"),
-                false,
-                false,
-                false,
-                10,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                true,
-                false,
-            )
+            ResolveRequest {
+                deep: Deep::Unlimited,
+                root_deps_running_root: root_deps_running_root.map(std::path::Path::to_path_buf),
+                ..ResolveRequest::new(
+                    &root,
+                    &root,
+                    &["dev-libs/topidepapp".to_string()],
+                    &test_config(),
+                    &fixtures_root().join("distfiles"),
+                )
+            }
+            .resolve()
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
             .entries
             .iter()
@@ -46101,54 +45193,19 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        #[allow(clippy::fn_params_excessive_bools)]
-        let result = resolve_pretend_graph(
-            &root,
-            &root,
-            &["=dev-libs/cyc0z-1".to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&running),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            20,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph(=dev-libs/cyc0z-1) failed: {e}"));
+        let result = ResolveRequest {
+            root_deps_running_root: Some(running.to_path_buf()),
+            backtrack_max: 20,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["=dev-libs/cyc0z-1".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving =dev-libs/cyc0z-1 failed: {e}"));
         // Real starts the printed cycle at `cyc0z-3`, reached from
         // `cyc0y-1` -- the argument version is not a cycle member.
         // (`cat/pkg-version` CPVs: `cyc0z-3` is version 3 of `cyc0z`.)
@@ -46202,54 +45259,19 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        #[allow(clippy::fn_params_excessive_bools)]
-        let result = resolve_pretend_graph(
-            &root,
-            &root,
-            &["app-misc/g216top".to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&running),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            20,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph(app-misc/g216top) failed: {e}"));
+        let result = ResolveRequest {
+            root_deps_running_root: Some(running.to_path_buf()),
+            backtrack_max: 20,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["app-misc/g216top".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving app-misc/g216top failed: {e}"));
         // Real spends its single backtrack retry on the serialize abort.
         assert!(result.backtrack_restarts >= 1);
         assert!(matches!(result.outcome, ResolveOutcome::Complete));
@@ -46296,54 +45318,19 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        #[allow(clippy::fn_params_excessive_bools)]
-        let result = resolve_pretend_graph(
-            &root,
-            &root,
-            &["app-misc/g216top".to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&running),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            0,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph(app-misc/g216top) failed: {e}"));
+        let result = ResolveRequest {
+            root_deps_running_root: Some(running.to_path_buf()),
+            backtrack_max: 0,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["app-misc/g216top".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving app-misc/g216top failed: {e}"));
         assert!(matches!(result.outcome, ResolveOutcome::Aborted { .. }));
         // The pass-1 graph strands on the running-root self loop: four
         // merge rows (dual `g216comp`) behind the self block. The cycle
@@ -46370,52 +45357,18 @@ mod tests {
     #[test]
     fn root_deps_recursion_terminates_on_a_mutual_bdepend_cycle() {
         let root = fixtures_root();
-        let names: Vec<String> = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/rdrcyc".to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&root),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let names: Vec<String> = ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: Some(root.to_path_buf()),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/rdrcyc".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
         .iter()
@@ -46439,52 +45392,18 @@ mod tests {
     #[test]
     fn root_deps_recursion_surfaces_an_unbuildable_build_dep() {
         let root = fixtures_root();
-        let entry = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/rdrmiss".to_string()],
-            &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            Some(&root),
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let entry = ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: Some(root.to_path_buf()),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/rdrmiss".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
         .into_iter()
@@ -46504,52 +45423,18 @@ mod tests {
         // "recurse" out of myparams outright, which the dependency walk
         // itself checks for before `deep` is ever consulted.
         let root = fixtures_root();
-        let entries: Vec<(String, PretendOutcome)> = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/deeppkg".to_string()],
-            &test_config(),
-            false,
-            false,
-            true,
-            false,
-            Deep::Unlimited,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let entries: Vec<(String, PretendOutcome)> = ResolveRequest {
+            nodeps: true,
+            deep: Deep::Unlimited,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/deeppkg".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .expect("resolve_pretend_graph must succeed")
         .entries
         .into_iter()
@@ -46819,52 +45704,17 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        let entries = resolve_pretend_graph(
-            &root,
-            &root,
-            &["dev-libs/useflagpkg".to_string()],
-            &config,
-            false,
-            false,
-            true,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let entries = ResolveRequest {
+            nodeps: true,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/useflagpkg".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .expect("resolve_pretend_graph must succeed")
         .entries;
         assert_eq!(entries.len(), 1);
@@ -47155,52 +46005,14 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        let entry = resolve_pretend_graph(
+        let entry = ResolveRequest::new(
             &root,
             &root,
             &["dev-libs/hiddenexpandpkg".to_string()],
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
+        .resolve()
         .expect("resolve_pretend_graph must succeed")
         .entries
         .remove(0);
@@ -47295,53 +46107,15 @@ mod tests {
 
     fn full_graph(atom_str: &str) -> Vec<GraphEntry> {
         let root = fixtures_root();
-        resolve_pretend_graph(
+        ResolveRequest::new(
             &root,
             &root,
             &[atom_str.to_string()],
             &test_config(),
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
         .entries
     }
 
@@ -48681,53 +47455,14 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        #[allow(clippy::fn_params_excessive_bools)]
-        let err = resolve_pretend_graph(
+        let err = ResolveRequest::new(
             &root,
             &root,
             &["dev-libs/fucyclec".to_string()],
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
+        .resolve()
         .expect_err("fucyclec must fail: its only candidate is masked invalid");
         let Error::Detail(report) = err else {
             panic!("expected the all-masked report, got: {err:?}");
@@ -49403,52 +48138,14 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        let entries = resolve_pretend_graph(
+        let entries = ResolveRequest::new(
             &root,
             &root,
             &["dev-libs/useflagpkg".to_string()],
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
+        .resolve()
         .expect("resolve_pretend_graph must succeed")
         .entries;
         let full_names: Vec<String> = entries
@@ -49605,7 +48302,10 @@ mod tests {
         assert_eq!(full_names, vec!["dev-libs/unstableusepkg"]);
     }
 
-    fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    fn graph_real_with(
+        atom_str: &str,
+        tweak: impl FnOnce(&mut ResolveRequest),
+    ) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
             &root,
@@ -49617,123 +48317,30 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        resolve_pretend_graph(
+        let mut request = ResolveRequest::new(
             &root,
             &root,
             &[atom_str.to_string()],
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        );
+        tweak(&mut request);
+        request
+            .resolve()
+            .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+            .entries
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
+    }
+
+    fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        graph_real_with(atom_str, |_| {})
     }
 
     /// Like `graph_real`, but with `--with-test-deps` enabled.
     fn graph_real_with_test_deps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
-        let root = fixtures_root();
-        let config = portage_profile::resolve_config(
-            &root,
-            &root.join("repo"),
-            &[("overlay".to_string(), root.join("overlay"))],
-            &[],
-            "testrepo",
-            &HashMap::new(),
-            &root,
-        )
-        .expect("fixture config resolves");
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            true,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        graph_real_with(atom_str, |r| r.with_test_deps = true)
     }
 
     #[test]
@@ -49808,52 +48415,14 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        resolve_pretend_graph(
+        ResolveRequest::new(
             &root,
             &root,
             &[atom_str.to_string()],
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
+        .resolve()
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
         ))
@@ -49862,200 +48431,17 @@ mod tests {
 
     /// Like `graph_real`, but with `--newuse` enabled.
     fn graph_real_newuse(atom_str: &str) -> Vec<(String, PretendOutcome)> {
-        let root = fixtures_root();
-        let config = portage_profile::resolve_config(
-            &root,
-            &root.join("repo"),
-            &[("overlay".to_string(), root.join("overlay"))],
-            &[],
-            "testrepo",
-            &HashMap::new(),
-            &root,
-        )
-        .expect("fixture config resolves");
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &config,
-            true,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        graph_real_with(atom_str, |r| r.newuse = true)
     }
 
     /// Like `graph_real`, but with `--changed-use` enabled.
     fn graph_real_changed_use(atom_str: &str) -> Vec<(String, PretendOutcome)> {
-        let root = fixtures_root();
-        let config = portage_profile::resolve_config(
-            &root,
-            &root.join("repo"),
-            &[("overlay".to_string(), root.join("overlay"))],
-            &[],
-            "testrepo",
-            &HashMap::new(),
-            &root,
-        )
-        .expect("fixture config resolves");
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &config,
-            false,
-            true,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        graph_real_with(atom_str, |r| r.changed_use = true)
     }
 
     /// Like `graph_real`, but with `--nodeps` enabled.
     fn graph_real_nodeps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
-        let root = fixtures_root();
-        let config = portage_profile::resolve_config(
-            &root,
-            &root.join("repo"),
-            &[("overlay".to_string(), root.join("overlay"))],
-            &[],
-            "testrepo",
-            &HashMap::new(),
-            &root,
-        )
-        .expect("fixture config resolves");
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &config,
-            false,
-            false,
-            true,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .entries
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        graph_real_with(atom_str, |r| r.nodeps = true)
     }
 
     #[test]
@@ -50308,7 +48694,7 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        let err = resolve_pretend_graph(
+        let err = ResolveRequest::new(
             &root,
             &root,
             &[
@@ -50316,47 +48702,9 @@ mod tests {
                 "dev-libs/requiredusebadpkg2".to_string(),
             ],
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
+        .resolve()
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
             err.to_string(),
@@ -50397,52 +48745,14 @@ mod tests {
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/autounmaskkeywordpkg".to_string()];
-        let err_without_suggestion = resolve_pretend_graph(
+        let err_without_suggestion = ResolveRequest::new(
             &root,
             &root,
             &atoms,
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
+        .resolve()
         .expect_err("no visible candidate at all");
         // Keyword-masked-only -> real `_show_unsatisfied_dep`'s "All
         // ebuilds … have been masked" block (`~amd64 keyword`), not the
@@ -50506,52 +48816,18 @@ mod tests {
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/autounmaskdepconsumer".to_string()];
-        let result = resolve_pretend_graph(
-            &root,
-            &root,
-            &atoms,
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let result = ResolveRequest {
+            autounmask_suggest_keywords: true,
+            autounmask_suggest_use: true,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &atoms,
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
             .entries
@@ -50599,52 +48875,14 @@ mod tests {
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
-        let err = resolve_pretend_graph(
+        let err = ResolveRequest::new(
             &root,
             &root,
             &atoms,
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
+        .resolve()
         .expect_err("no visible candidate at all");
         assert_eq!(
             err.to_string(),
@@ -50678,52 +48916,14 @@ mod tests {
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
-        let err_without_suggestion = resolve_pretend_graph(
+        let err_without_suggestion = ResolveRequest::new(
             &root,
             &root,
             &atoms,
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
+        .resolve()
         .expect_err("no visible candidate at all");
         assert_eq!(
             err_without_suggestion.to_string(),
@@ -50915,7 +49115,9 @@ mod tests {
         graph_result_real_backtrack(atom_str, 10)
     }
 
-    fn graph_result_empty(atom_str: &str) -> GraphResult {
+    /// Resolves `atom_str` over the fixture tree's own resolved config,
+    /// after `tweak` adjusts the request.
+    fn graph_result_with(atom_str: &str, tweak: impl FnOnce(&mut ResolveRequest)) -> GraphResult {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
             &root,
@@ -50927,54 +49129,21 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        #[allow(clippy::fn_params_excessive_bools)]
-        resolve_pretend_graph(
+        let mut request = ResolveRequest::new(
             &root,
             &root,
             &[atom_str.to_string()],
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            /* empty: */ true,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        );
+        tweak(&mut request);
+        request
+            .resolve()
+            .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+    }
+
+    fn graph_result_empty(atom_str: &str) -> GraphResult {
+        graph_result_with(atom_str, |r| r.empty = true)
     }
 
     #[test]
@@ -51580,53 +49749,18 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        resolve_pretend_graph(
-            &root,
-            &root,
-            atoms,
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
+        ResolveRequest {
             backtrack_max,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                atoms,
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
     }
 
     fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
@@ -51650,54 +49784,15 @@ mod tests {
         )
         .expect("fixture config resolves");
         config.blocker_retry_seed_atoms = seeds.iter().map(|s| s.to_string()).collect();
-        #[allow(clippy::fn_params_excessive_bools)]
-        resolve_pretend_graph(
+        ResolveRequest::new(
             &root,
             &root,
             &[atom_str.to_string()],
             &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
             &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
         )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
         .entries
     }
 
@@ -51753,116 +49848,27 @@ mod tests {
     ) -> GraphResult {
         let atom_str = atoms.join(" ");
         let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            atoms,
-            config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            true,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        ResolveRequest {
+            autounmask_suggest_keywords: true,
+            autounmask_suggest_use: true,
+            autounmask_suggest_license: true,
+            autounmask_suggest_masks: true,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                atoms,
+                config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
     }
 
     /// `graph_result_autounmask` with `autounmask_suggest_use` forced off
     /// (an explicit `--autounmask-use=n`).
     fn graph_result_autounmask_use_n(atom_str: &str) -> GraphResult {
-        let root = fixtures_root();
-        let config = portage_profile::resolve_config(
-            &root,
-            &root.join("repo"),
-            &[("overlay".to_string(), root.join("overlay"))],
-            &[],
-            "testrepo",
-            &HashMap::new(),
-            &root,
-        )
-        .expect("fixture config resolves");
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        graph_result_with(atom_str, |r| r.autounmask_suggest_keywords = true)
     }
 
     #[test]
@@ -59937,53 +57943,22 @@ mod tests {
         .expect("fixture config resolves");
         config.autounmask_backtrack = true;
         config.complete_seed_atoms = vec!["dev-libs/abk0b".to_string()];
-        resolve_pretend_graph(
-            &fixture_root,
-            root,
-            &["dev-libs/abk0d".to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            true,
-            true,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
+        ResolveRequest {
+            autounmask_suggest_keywords: true,
+            autounmask_suggest_use: true,
+            autounmask_suggest_license: true,
+            autounmask_suggest_masks: true,
             backtrack_max,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph(dev-libs/abk0d) failed: {e}"))
+            ..ResolveRequest::new(
+                &fixture_root,
+                root,
+                &["dev-libs/abk0d".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving dev-libs/abk0d failed: {e}"))
     }
 
     fn graph_result_abk0_worldb(backtrack_max: u32) -> GraphResult {
@@ -63056,55 +61031,21 @@ mod tests {
         mk("slotbindconsumer-1.0", "0", "dev-libs/slotbindtarget:2/2=");
 
         let resolve = |ignore: bool| {
-            resolve_pretend_graph(
-                &cfg_root,
-                &dir,
-                &["dev-libs/slotbindtarget".to_string()],
-                &config,
-                false,
-                false,
-                false,
-                false,
-                Deep::NotRequested,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                false,
+            ResolveRequest {
                 // selective = false: a directly-named installed atom
                 // with a higher version still upgrades (matching real
                 // `emerge <atom>` without `--noreplace`).
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                false,
-                None,
-                false,
-                false,
-                None,
-                &fixtures_root().join("distfiles"),
-                false,
-                false,
-                ignore,
-                10,
-                &[],
-                true,
-                false,
-                false,
-                false,
-                &[],
-                &[],
-                true,
-                false,
-            )
+                selective: false,
+                ignore_built_slot_operator_deps: ignore,
+                ..ResolveRequest::new(
+                    &cfg_root,
+                    &dir,
+                    &["dev-libs/slotbindtarget".to_string()],
+                    &config,
+                    &fixtures_root().join("distfiles"),
+                )
+            }
+            .resolve()
             .expect("resolves")
         };
 
@@ -63199,52 +61140,17 @@ mod tests {
         fs::write(d.join("SLOT"), "2\n").unwrap();
         fs::write(d.join("repository"), "testrepo\n").unwrap();
 
-        let result = resolve_pretend_graph(
-            &cfg_root,
-            &dir,
-            &["dev-libs/avoidslotconsumer".to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
+        let result = ResolveRequest {
+            selective: false,
+            ..ResolveRequest::new(
+                &cfg_root,
+                &dir,
+                &["dev-libs/avoidslotconsumer".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
         .expect("resolves");
 
         let dep = result
@@ -63293,64 +61199,7 @@ mod tests {
     }
 
     fn graph_result_buildpkgonly(atom_str: &str) -> GraphResult {
-        let root = fixtures_root();
-        let config = portage_profile::resolve_config(
-            &root,
-            &root.join("repo"),
-            &[("overlay".to_string(), root.join("overlay"))],
-            &[],
-            "testrepo",
-            &HashMap::new(),
-            &root,
-        )
-        .expect("fixture config resolves");
-        resolve_pretend_graph(
-            &root,
-            &root,
-            &[atom_str.to_string()],
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            true,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-            false,
-            10,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            true,
-            false,
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        graph_result_with(atom_str, |r| r.buildpkgonly = true)
     }
 
     #[test]
