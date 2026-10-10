@@ -13,36 +13,9 @@ pub(crate) struct RootDepsSatisfiedAtomsArgs<'a> {
     pub(crate) empty_groups_always_true: bool,
 }
 
-/// Real `--root-deps`'s own `DEPEND`/`BDEPEND`-vs-`ESYSROOT` distinction
-/// (see `running_root_satisfies_atom`'s own doc comment for the full real
-/// grounding), factored out so both real dep-walk sites in this file
-/// (the main New/Upgrade/Reinstall flatten and `enqueue_dependencies`'s
-/// own AlreadyInstalled-recursion path) share one implementation rather
-/// than drifting apart. Reads `metadata`'s own `dep_keys` (real
-/// `["DEPEND", "BDEPEND", "IDEPEND"]` at both ordinary dep-walk sites --
-/// `DEPEND`/`BDEPEND` are the classic `ESYSROOT` build deps, and
-/// `IDEPEND` *always* targets the running root for every package, not
-/// just recursed build entries -- `depgraph.py:4247-4252`),
-/// flattens them the exact same way (`use_flags`/`repos`/`config`) the
-/// caller already flattened its own combined dep string with, *except*
-/// for one deliberate branch-selection difference: the disjunctive
-/// (`||`) closure passed to `use_reduce_flat_disjunctive` here accepts a
-/// branch when every atom in it is either ordinarily satisfiable
-/// (`atom_currently_satisfiable`, tree-visibility) *or* running-root-
-/// satisfied (`running_root_satisfies_atom`) -- so a `DEPEND`/`BDEPEND`
-/// `||` group with no branch visible in the fixture tree at all still
-/// flattens correctly here as long as some branch is already installed
-/// on the running root, matching real portage's own effective behavior
-/// (a build-time tool that's already present on the host never needs a
-/// *visible* ebuild candidate to satisfy a real `--root-deps` build).
-/// The returned tokens are evaluated against `use_flags` (#133: real
-/// evaluates at every producer), so callers compare evaluated forms.
-/// Returns only the tokens satisfied by `running_root`'s own real vdb
-/// (`running_root_satisfies_atom`) -- callers drop these from their own
-/// already-flattened `flat_deps` before queueing (real "no separate
-/// graph node needed for an already-satisfied dep"). Degrades to an
-/// empty set on any flatten failure -- never a false negative that
-/// could silently drop a dep portuale actually needed to walk.
+/// The `--root-deps` build-vs-running-root split, shared by both dep-walk sites
+/// so they cannot drift apart. Returns only the tokens already satisfied by
+/// the running root's vdb (evaluated); empty on any flatten failure.
 pub(crate) fn root_deps_satisfied_atoms(args: RootDepsSatisfiedAtomsArgs<'_>) -> HashSet<String> {
     let RootDepsSatisfiedAtomsArgs {
         metadata,
@@ -66,16 +39,10 @@ pub(crate) fn root_deps_satisfied_atoms(args: RootDepsSatisfiedAtomsArgs<'_>) ->
             tokens: &build_tokens,
             uselist: use_flags,
             mode: portage_use_reduce::MatchMode::Normal,
-            empty_groups_always_true, // No "prefer an upgrade" question here either -- Available-vs-
-            // Unsatisfiable never ties on more than one selectable
-            // alternative in a way this call site's own logic distinguishes,
-            // so the trivial "first tied wins" shim is a strict no-op.
+            empty_groups_always_true, // First tied wins: no multi-way tie here.
             tie_break: &mut |_: &[Vec<String>]| 0,
         },
         &mut |atoms: &[String]| {
-            // `--root-deps` only needs the satisfiable-or-not split here
-            // (there's no "prefer the installed branch" question for a
-            // build-time `||` group resolved against the running root).
             if atoms.iter().all(|a| {
                 atom_currently_satisfiable(repos, a, config, &[])
                     || running_root_satisfies_atom(a, running_root, config)
@@ -89,16 +56,8 @@ pub(crate) fn root_deps_satisfied_atoms(args: RootDepsSatisfiedAtomsArgs<'_>) ->
     .map(|flat| {
         flat.into_iter()
             .filter(|t| t != "||")
-            // #133: real evaluates every token's conditional use-deps at
-            // the producer itself (`use_reduce(..., token_class=Atom)`'s
-            // own per-token `token.evaluate_conditionals(uselist)` step,
-            // before any branch selection or split) -- without this the
-            // raw `[flip=]` form reached the satisfied check below, where
-            // a conditional form imposes no state constraint at all, and
-            // every conditional build dep was vacuously
-            // running-root-satisfied. Unparseable tokens pass through
-            // as-is (today's tolerance, the same pass-through both
-            // dep-walk loops' own post-passes use).
+            // Evaluated against the producer's USE first; unparseable tokens
+            // pass through as-is.
             .map(|t| {
                 portage_dep::evaluate_atom_conditionals(&t, use_flags).unwrap_or_else(|| t.clone())
             })
@@ -119,29 +78,12 @@ pub(crate) struct UnsatisfiedRootDepsAtomsArgs<'a> {
     pub(crate) empty_groups_always_true: bool,
 }
 
-/// The complement of `root_deps_satisfied_atoms`: real `DEPEND`/
-/// `BDEPEND` atoms (or, for the recursive walk into a package that is
-/// *itself* being built against the running root, `RDEPEND` + `IDEPEND`
-/// too -- see `dep_keys` and `resolve_root_deps_build_entries`'s own doc
-/// comment) that flatten out of `metadata` but are *not* already
-/// satisfied by `running_root`'s own vdb -- the set real portage would
-/// need to recursively resolve (and potentially build) against the
-/// running root itself, rather than the target `ROOT`. `dep_keys` is
-/// `["DEPEND", "BDEPEND", "IDEPEND"]` at the two ordinary dep-walk sites
-/// (real `DEPEND`/`BDEPEND`-vs-`ESYSROOT`, plus `IDEPEND` which always
-/// targets the running root for every package), and `["DEPEND",
-/// "BDEPEND", "RDEPEND", "IDEPEND"]` when recursing into an already-
-/// `targets_running_root` entry (real `_add_pkg_deps`'s own `deps`
-/// tuple: a package whose own `pkg.root` is the running root has its
-/// `RDEPEND` resolved there too, and `IDEPEND` *always* targets the
-/// running root regardless -- `depgraph.py:4247-4252`).
-/// A blocker atom (`!foo/bar`) is never a real build target, so it's
-/// excluded here the same way `enqueue_flat_deps`/`enqueue_dependencies`
-/// already exclude one from their own ordinary queueing. Computed as its
-/// own separate flatten (duplicating `root_deps_satisfied_atoms`'s own
-/// work) rather than refactoring that already-shipped, already-tested
-/// function to return both halves at once -- deliberately additive/
-/// isolated, minimizing risk to it.
+/// The complement of `root_deps_satisfied_atoms`: flattened atoms *not* already
+/// satisfied by the running root's vdb, needing recursive resolution there. A
+/// blocker atom is never a build target, so it is excluded like in the
+/// ordinary queueing. Computed as its own separate flatten rather than
+/// refactoring the shipped function to return both halves.
+// Portage: depgraph.py, _add_pkg_deps (dep_root tuple)
 pub(crate) fn unsatisfied_root_deps_atoms(args: UnsatisfiedRootDepsAtomsArgs<'_>) -> Vec<String> {
     let UnsatisfiedRootDepsAtomsArgs {
         metadata,
@@ -165,16 +107,10 @@ pub(crate) fn unsatisfied_root_deps_atoms(args: UnsatisfiedRootDepsAtomsArgs<'_>
             tokens: &build_tokens,
             uselist: use_flags,
             mode: portage_use_reduce::MatchMode::Normal,
-            empty_groups_always_true, // No "prefer an upgrade" question here either -- Available-vs-
-            // Unsatisfiable never ties on more than one selectable
-            // alternative in a way this call site's own logic distinguishes,
-            // so the trivial "first tied wins" shim is a strict no-op.
+            empty_groups_always_true, // First tied wins: no multi-way tie here.
             tie_break: &mut |_: &[Vec<String>]| 0,
         },
         &mut |atoms: &[String]| {
-            // `--root-deps` only needs the satisfiable-or-not split here
-            // (there's no "prefer the installed branch" question for a
-            // build-time `||` group resolved against the running root).
             if atoms.iter().all(|a| {
                 atom_currently_satisfiable(repos, a, config, &[])
                     || running_root_satisfies_atom(a, running_root, config)
@@ -188,9 +124,7 @@ pub(crate) fn unsatisfied_root_deps_atoms(args: UnsatisfiedRootDepsAtomsArgs<'_>
     .map(|flat| {
         flat.into_iter()
             .filter(|t| t != "||")
-            // #133: same producer-side evaluation as
-            // `root_deps_satisfied_atoms` above -- real evaluates at every
-            // producer, so the complement set is evaluated-keyed too.
+            // Same producer-side evaluation, so this set is evaluated-keyed too.
             .map(|t| {
                 portage_dep::evaluate_atom_conditionals(&t, use_flags).unwrap_or_else(|| t.clone())
             })
@@ -203,17 +137,9 @@ pub(crate) fn unsatisfied_root_deps_atoms(args: UnsatisfiedRootDepsAtomsArgs<'_>
     .unwrap_or_default()
 }
 
-/// Metadata (md5-cache) and effective USE flags for `category/package`'s
-/// own `version`, resolved against `repos` -- the highest-`repo_priority`
-/// candidate providing that exact version (the same re-lookup
-/// `slot_changed`/`deps_changed` already use; theoretically imprecise if
-/// the highest-priority provider of that version is masked while a
-/// lower-priority visible one exists, an accepted edge case those two
-/// functions share). `None` if the version is no longer in the tree or
-/// its metadata is unreadable, the same tolerant "can't tell, don't
-/// crash" fallback. Used by `resolve_root_deps_build_entries` to walk a
-/// freshly-pulled running-root build entry's own dependency strings with
-/// that package's *own* effective USE, not its requester's.
+/// Metadata and effective USE for `category/package`'s own `version`: the
+/// highest-`repo_priority` candidate with that version. `None` when
+/// gone/unreadable; callers walk its deps with its own USE.
 pub(crate) fn resolved_version_meta_and_use(
     repos: &[RepoConfig],
     category: &str,
@@ -229,8 +155,7 @@ pub(crate) fn resolved_version_meta_and_use(
     let pf = format!("{package}-{version}");
     let metadata = repo_aux_metadata(&resolved.repo_location, category, &pf).ok()?;
     let (_iuse, use_flags) = candidate_iuse_and_use(resolved, category, package, config)?;
-    // Cold path (`--root-deps` only); the shared `Rc` isn't worth
-    // threading through `unsatisfied_root_deps_atoms`'s `&HashMap`.
+    // Cold path; the shared `Rc` isn't worth threading through.
     Some(((*metadata).clone(), use_flags.as_ref().clone()))
 }
 
@@ -242,65 +167,20 @@ pub(crate) struct ResolveRootDepsBuildEntriesArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) owner: (String, String),
     pub(crate) seen: &'a mut HashSet<(String, String)>,
-    /// Threaded through to `resolve_pretend` (backlog #123); unconsulted
-    /// here since `usepkg`/`usepkgonly` are both `false` below.
     pub(crate) local_binpkg: &'a std::sync::Arc<BinaryIndex>,
 }
 
-/// Real "recursively pull in and build new packages against the running
-/// root" (`--root-deps`, `depgraph.py:4207-4271`'s own `depend_root`
-/// selection + `_add_pkg_deps`'s per-key `dep_root` tuple). Resolves
-/// `atom_str` against `running_root` the same way any dependency atom is
-/// resolved -- reusing `resolve_pretend` wholesale, `is_top_level: false`/
-/// `selective: true`, `usepkg`/`usepkgonly` both `false` (a build-time
-/// tool needed to actually perform a build is never satisfied by a
-/// `--usepkg` binary, and portuale's `--root-deps` scope has never
-/// touched binary packages) -- and then walks the resolved package's
-/// *own* `DEPEND` + `BDEPEND` + `RDEPEND` + `IDEPEND` against the running
-/// root too, recursively: real portage resolves all four of those
-/// against the running root when `pkg.root` is the running root (a
-/// package pulled in as a build tool is installed *there*, so its
-/// runtime + install-time deps must be present there as well, not under
-/// the target `ROOT`; `IDEPEND` in real portage always targets the
-/// running root regardless -- `depgraph.py:4247-4252`). Still not
-/// walked: this entry's own `PDEPEND` (real portage keeps it a
-/// target-`ROOT` concern) -- a documented cut, not an oversight.
-///
-/// `seen` (the shared `root_deps_build_seen` set, threaded through the
-/// whole graph resolution) is both the cross-package dedup key *and* the
-/// cycle guard: a `(category, package)` is inserted *before* its own
-/// dependencies are walked, so two build tools whose `BDEPEND`s point at
-/// each other (an unremarkable bootstrap pattern) terminate cleanly --
-/// the second edge back into an in-progress package just yields no
-/// further entry. One `required_by` edge is therefore lost at whichever
-/// point a cycle is cut (real portage's own bidirectional digraph keeps
-/// both); a bounded, documented imprecision, the same best-effort
-/// `required_by` tracking already has elsewhere.
-///
-/// Per outcome: `New`/`Upgrade`/`Downgrade`/`Reinstall` -> a real
-/// `GraphEntry` (`targets_running_root: true`, `required_by` naming the
-/// *immediate* requester) plus the recursion into its own deps;
-/// `NoVisibleCandidate` -> a real `NoVisibleCandidate` entry too, so an
-/// unbuildable, not-installed build dependency is surfaced by the
-/// renderer's own `!!! no visible ebuild for dependency` note exactly as
-/// it is without `--root-deps` (before this slice, `--root-deps` silently
-/// swallowed it), no recursion; `AlreadyInstalled` -> nothing (the
-/// running root already has it -- `unsatisfied_root_deps_atoms` and
-/// `resolve_pretend` disagreeing in some USE-dep edge the former's
-/// narrower check misses), no recursion; a `resolve_pretend` error ->
-/// nothing.
-///
-/// `blockers` stay empty (a running-root build entry's blockers are the
-/// recursion's business, already walked). Since #141 the display fields
-/// (`use_flags_display` / `use_expand_display` / `use_expand_display_p`)
-/// and the slot/repo identity are **populated** through the same
-/// `refresh_entry_use_display` seam the main walk uses, so a running-root
-/// rebuild row prints real's `USE="-flip*"` column instead of skipping
-/// the display -- real's row is `[ebuild   R    ] … to <root>
-/// USE="-flip*"` (bed `l0-fx-20260922T192350Z`). `oldbest` stays empty:
-/// real's `[oldver]` bracket is an Upgrade-row concern and S0's capture
-/// shows none on this shape (`findings/l0.md` "## #141/#135/#138/#134/#136
-/// S0").
+/// Resolves `atom_str` against the running root and walks the resolved
+/// package's own `DEPEND` + `BDEPEND` + `RDEPEND` + `IDEPEND` there too,
+/// recursively (`--root-deps`: a build tool is installed on the running root,
+/// so its runtime deps must be present there as well). `PDEPEND` stays a
+/// target-`ROOT` concern, a documented cut.
+/// `seen` dedups cross-package and guards cycles (inserted before recursing;
+/// one `required_by` edge is lost where a cycle is cut).
+/// Per outcome: merge-bound outcomes gain an entry plus recursion;
+/// `AlreadyInstalled` and errors yield nothing.
+/// `blockers` stay empty, and the display fields reuse the main walk's seam.
+// Portage: depgraph.py, _add_pkg_deps (depend_root / dep_root selection)
 pub(crate) fn resolve_root_deps_build_entries(
     args: ResolveRootDepsBuildEntriesArgs<'_>,
 ) -> Vec<GraphEntry> {
@@ -329,17 +209,10 @@ pub(crate) fn resolve_root_deps_build_entries(
         },
         atom_str,
         &SelectOptions {
-            // `--emptytree` deliberately does not reach `--root-deps`
-            // running-root build entries -- a narrow, documented
-            // non-interaction (this resolver is its own path, and
-            // `-e --root-deps` is an exotic combination).
+            // `--emptytree`, `--getbinpkg` and `--autounmask` never reach
+            // running-root build entries.
             empty: false,
-            // Likewise `--getbinpkg`: a `--root-deps` build entry is always
-            // an ebuild built against the running root.
             getbinpkg: false,
-            // `--autounmask` keyword / USE resolution is a target-`ROOT`
-            // concern (`resolve_pretend_graph`); a `--root-deps` running-root
-            // build entry never applies either.
             autounmask_keywords: false,
             ..SelectOptions::default()
         },
@@ -357,14 +230,12 @@ pub(crate) fn resolve_root_deps_build_entries(
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
             Some(to.clone())
         }
-        // #72 B3: a removal is never walked (it has no deps).
+    // A removal is never walked (it has no deps).
         PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
         PretendOutcome::AlreadyInstalled { .. } => return Vec::new(),
     };
 
-    // `usepkg`/`usepkgonly` are both `false` in the `resolve_pretend`
-    // call above, so `outcome` can only ever have come from an ebuild
-    // candidate (real `dbs` never grows a binary entry in that case).
+    // Both `false` above, so the outcome can only come from an ebuild.
     let mut entry = GraphEntry {
         discovery: 0,
         category: atom.category.clone(),
@@ -395,12 +266,7 @@ pub(crate) fn resolve_root_deps_build_entries(
         build_id: None,
         deps: Vec::new(),
     };
-    // #141: the slot/repo identity and the USE-display fields the
-    // renderer's `USE="…"` column reads. `refresh_entry_use_display`
-    // diffs the tree candidate's effective USE against the *running*
-    // root's vdb record (the root `resolve_pretend` just resolved
-    // against), so a Reinstall whose flag flipped renders real's
-    // `-flag*` marker exactly like the non-`--root-deps` rebuild row.
+    // Slot/repo identity plus USE display, diffed against the running vdb.
     if let Some(version) = recurse_version.as_ref() {
         let (sub, repo, slot) = slot_conflict_meta(repos, &atom.category, &atom.package, version);
         entry.slot = Some(slot);

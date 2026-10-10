@@ -10,48 +10,24 @@ pub(crate) struct DeltaAtomCleanlyReusesResolvedSlotArgs<'a> {
     pub(crate) state: &'a PassState,
     pub(crate) bp: &'a BacktrackParams,
     pub(crate) evaluated: &'a str,
-    /// Track X Slice B (#242): this delta atom's own resolving root (its
-    /// queue tag) -- the speculative selection and the slot lookup both
-    /// run against it, so a running-root atom never reuses a target-root
-    /// slot (and vice versa).
+    /// This delta atom's own resolving root (its queue tag): selection and slot
+    /// lookup both run against it, so a running-root atom never reuses a
+    /// target-root slot (and vice versa).
     pub(crate) atom_running: bool,
 }
 
-/// Backlog #218 (L0 20260928T063310Z): eager clean-reuse classification
-/// for delta atoms.
-///
-/// Real's rule (`3rdparty/portage`, `lib/_emerge/depgraph.py`): the
-/// flipped package was already *walked* pre-flip, so a newly-gated atom
-/// that names an already-graphed slot never re-enters real's `_dep_stack`
-/// (`if not previously_added: dep_stack.append(pkg)`, `_add_pkg`, :3820)
-/// and records no `_add_parent_atom` owner row (`:3583-3604`).
-/// Live-verified on `gui-libs/gtk:4`: real walks freetype with `harfbuzz`
-/// off (its `Children` are bzip2 + libpng only) and the `harfbuzz` flip
-/// lands later via pango's `freetype-2.5.0.1:2[harfbuzz,...]` atom -- so
-/// real's graph carries no freetype -> harfbuzz edge at all.
-///
-/// Portuale's delta queues through the normal machinery, so without this
-/// filter a delta atom that merely re-names a settled slot still pops:
-/// the pop folds the flipped package into `required_by_map` (plus the
-/// edge-kind map, slot want-lists and pullers), and `build_digraph`'s
-/// `required_by` fallback then synthesizes exactly the phantom edge real
-/// never has -- reordering Kahn's walk for unrelated packages (gtk:4 went
-/// set-identical but #30 -> #22 with findings byte-identical, and even
-/// dropping the narrowed new-target `deps` edges did not move it).
-///
-/// So each text-new delta atom is pre-resolved here with the pop site's
-/// own arguments and dropped -- never queued, so no puller row and no
-/// pop-time bookkeeping at all -- when the pop is provably
-/// bookkeeping-only: a merge-bound outcome for the already-resolved
-/// version of an already-resolved slot, with the atom's slot and use-dep
-/// constraints satisfied (or absent). Anything else -- a genuinely new
-/// slot, a version or slot conflict, unsatisfied use-deps that may fold a
-/// further (nested-cascade) flip, an installed or unsatisfiable outcome, a
-/// blocker -- queues exactly as before. `resolve_pretend` writes no
-/// global state (the unparsed-token counter fires at the pop site, not
-/// inside it), so the speculative resolution is side-effect free; and its
-/// inputs are all pass-fixed (`ctx`, `config`, `union_constraints`), so
-/// the verdict cannot drift between here and the pop.
+/// Drops a text-new delta atom before queueing when the pop is provably
+/// bookkeeping-only: it speculatively re-resolves to the already-resolved
+/// version of an already-resolved slot, with slot and use-dep constraints
+/// satisfied. Without this the pop folds the flipped package into the puller
+/// maps and synthesizes a phantom merge-order edge Portage never has (a
+/// newly-gated atom naming an already-graphed slot never re-enters its
+/// `_dep_stack`). Anything else -- a new slot, a version/slot conflict,
+/// unsatisfied use-deps, an installed/unsatisfiable outcome, a blocker --
+/// queues exactly as before. Side-effect free: `resolve_pretend` writes no
+/// global state, and all inputs are pass-fixed.
+/// Never second-guesses complete mode's graph-or-installed branch.
+// Portage: depgraph.py, _add_pkg (previously-added check)
 pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
     args: DeltaAtomCleanlyReusesResolvedSlotArgs<'_>,
 ) -> bool {
@@ -71,8 +47,8 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
         return false;
     }
     let key2 = (atom.category.clone(), atom.package.clone());
-    // Complete mode diverts dependency atoms around `resolve_pretend`
-    // (graph-or-installed only); never second-guess that branch.
+    // Complete mode diverts dependency atoms around `resolve_pretend`; never
+    // second-guess that branch.
     if ctx.complete
         && !ctx.complete_locked_merges.is_empty()
         && !ctx.complete_locked_merges.contains(&key2)
@@ -102,9 +78,8 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
     ) else {
         return false;
     };
-    // Only a merge-bound outcome can hit the already-resolved branch
-    // below; an installed or unsatisfiable outcome takes the pop site's
-    // own installed/NVC paths, which this filter must not swallow.
+    // Only a merge-bound outcome can hit the already-resolved branch below;
+    // installed/unsatisfiable outcomes take the pop site's own paths.
     let version = match &outcome {
         PretendOutcome::New { version } => version.clone(),
         PretendOutcome::Upgrade { to, .. } => to.clone(),
@@ -112,8 +87,7 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
         PretendOutcome::Reinstall { version, .. } => version.clone(),
         _ => return false,
     };
-    // The same winning-candidate pick the pop site resolves the slot
-    // from ("ebuild type is the last resort", then repo priority).
+    // The same winning-candidate pick as the pop site.
     let repo_candidates = list_candidates(&ctx.repos, &key2.0, &key2.1).unwrap_or_default();
     let Some(resolved) = repo_candidates
         .iter()
@@ -137,7 +111,6 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
         atom_running,
     );
     let Some(&existing_idx2) = state.resolved_slots.get(&slot_key2) else {
-        // A genuinely new slot: the aucascleaf case. Queue it.
         return false;
     };
     let existing_version2 = match &state.entries[existing_idx2].outcome {
@@ -145,17 +118,13 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
         PretendOutcome::Upgrade { to, .. } => to.clone(),
         PretendOutcome::Downgrade { to, .. } => to.clone(),
         PretendOutcome::Reinstall { version, .. } => version.clone(),
-        // `resolved_slots` only ever indexes these four (the pop site's
-        // own `unreachable!`); conservative here, never a drop.
+        // `resolved_slots` only ever indexes the four merge-bound outcomes.
         _ => return false,
     };
     if version != existing_version2 {
-        // A version conflict: the pop site records it. Queue it.
         return false;
     }
-    // Include the already-resolved version's own sub-slot, exactly like
-    // the pop site (a built `cat/pkg:0/2=` puller matches no `:slot`-only
-    // string).
+    // Include the already-resolved version's own sub-slot, like the pop site.
     let existing_sub = slot_conflict_meta(&ctx.repos, &key2.0, &key2.1, &existing_version2).0;
     let existing_match_str = if existing_sub.is_empty() {
         format!(
@@ -199,13 +168,10 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
             excluded: ctx.excluded,
         })
     {
-        // The pop site's bound-instance side record would fire. Queue it.
         return false;
     }
-    // `match_from_list` matched version + slot only: a `[flag]` use-dep
-    // still has to be satisfied by the settled package, else the pop
-    // site folds a flip (possibly a nested cascade). Only a satisfied
-    // atom is a clean reuse.
+    // Version + slot matched; the `[flag]` use-deps must also hold against the
+    // settled package, else the pop site folds a flip. Only then a clean reuse.
     if let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) {
         let all_cands = list_candidates(&ctx.repos, &key2.0, &key2.1).unwrap_or_default();
         let Some(existing_cand) = all_cands.iter().find(|c| c.version == existing_version2) else {
@@ -250,44 +216,14 @@ pub(crate) struct ExpandResolvedSlotWithFlippedUseArgs<'a> {
     pub(crate) new_use: &'a HashSet<String>,
 }
 
-/// Backlog #218: in-pass delta re-expansion for an already-resolved
-/// slot's `--autounmask-use` flip.
-///
-/// Real's rule (`3rdparty/portage`, `lib/_emerge/depgraph.py`): `_add_dep`
-/// only pushes onto `_dep_stack` (`_add_pkg`, :3820: `if not
-/// previously_added: dep_stack.append(pkg)`), and `_create_graph`
-/// (:3254-3271) pops that stack LIFO -- so `aucasctop`'s two deps are
-/// both *added* before either is *walked*, `aucasclate` pops first, and
-/// its `aucascmid[cascade]` atom flips the still-unwalked `aucascmid`
-/// through `_pkg_use_enabled(pkg, target_use)` (:7669), which records
-/// `_needed_use_config_changes` synchronously. When `aucascmid` then pops,
-/// `_add_pkg_deps` (:4151) reduces `cascade? ( dev-libs/aucascleaf )`
-/// with the flip already in force, so `aucascleaf` joins the graph in the
-/// same attempt (live-verified: `fixtures/abort-captures/
-/// dev-libs_aucasctop.pretend-debug.stdout` shows one continuous walk --
-/// `aucascmid` added `USE="-cascade"`, flipped by `aucasclate`'s dep,
-/// then walked with `cascade?` live).
-///
-/// Portuale fuses resolve+expand at pop time (FIFO), so the flipped
-/// package's `flag?`-gated deps were already flattened pre-flip by the
-/// time the later atom's already-resolved-slot re-check folds the flip.
-/// This helper restores real's observable ordering within the same pass:
-/// it re-flattens the already-resolved package's dependency strings under
-/// the flipped USE and queues every genuinely new atom through the normal
-/// `enqueue_flat_deps` machinery (owner, depth, disjunction preference,
-/// pullers, merge-order edges), exactly as if the flip had landed before
-/// the package's walk. Only with `--autounmask-backtrack=y` does the
-/// driver additionally re-drive the whole walk (`autounmask_grew`); the
-/// default keeps real's single attempt.
-///
-/// Additive only, by design: atoms the pre-flip expansion already queued
-/// stay queued (a flag turned *off* cannot unqueue them mid-pass -- the
-/// narrowing half is reconciled by the next whole-walk pass, same as the
-/// pre-#218 behaviour), and merge-order edges are added only for
-/// newly-queued targets -- never re-derived for already-graphed ones
-/// (a whole-flatten union over-constrained Kahn's walk and reordered
-/// unrelated packages on L0). A no-op unless the flip actually reveals
-/// new atoms, so every non-autounmask walk is untouched.
+/// In-pass delta re-expansion for an already-resolved slot's
+/// `--autounmask-use` flip: re-flattens the resolved package's dependency
+/// strings under the flipped USE and queues every genuinely new atom through
+/// the normal machinery, as if the flip had landed before the package's walk.
+/// Additive only: pre-flip atoms stay queued, and merge-order edges are added
+/// only for newly-queued targets. A no-op unless the flip reveals new atoms.
+/// Only with `--autounmask-backtrack=y` does the driver re-drive the walk.
+// Portage: depgraph.py, _add_pkg / _create_graph (dep-stack ordering)
 pub(crate) fn expand_resolved_slot_with_flipped_use(
     args: ExpandResolvedSlotWithFlippedUseArgs<'_>,
 ) {
@@ -303,12 +239,8 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
         existing_version,
         new_use,
     } = args;
-    // Real never flips a built package (`_pkg_use_enabled` returns the
-    // baked USE for `pkg.built`, `depgraph.py:7676`; `can_adjust_use =
-    // not pkg.built`, `:8131`): the delta only ever applies to a fresh
-    // ebuild entry, which is also the only shape whose md5-cache
-    // metadata this re-reads below. (`resolved_slots` only ever indexes
-    // New/Upgrade/Downgrade/Reinstall outcomes, so no outcome check.)
+    // Portage never flips a built package: the delta only ever applies to a
+    // fresh ebuild entry, the only shape re-read below.
     if state.entries[existing_idx].source != CandidateSource::Ebuild || ctx.nodeps {
         return;
     }
@@ -316,17 +248,14 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     let Ok(delta_meta) = repo_aux_metadata(&existing_cand.repo_location, &key.0, &pf) else {
         return;
     };
-    // The flipped package's own depth (real `pkg.depth`): the delta atoms
-    // queue one deeper, exactly where the fresh expansion put its own.
+    // The delta atoms queue one deeper than the flipped package's own depth.
     let slot = state.entries[existing_idx].slot.clone().unwrap_or_default();
     let existing_depth = state
         .resolved_depths
         .get(&(key.0.clone(), key.1.clone(), slot))
         .copied()
         .unwrap_or(0);
-    // The same key-inclusion rule as the fresh expansion above (an
-    // ebuild source, so only the `--buildpkgonly`-without-`--deep`
-    // runtime blanking applies).
+    // Same key-inclusion rule as the fresh expansion.
     let buildpkgonly_narrow = ctx.buildpkgonly && matches!(ctx.deep, Deep::NotRequested);
     let dep_keys: &[&str] = if buildpkgonly_narrow {
         &["DEPEND", "BDEPEND"]
@@ -341,17 +270,14 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
         }
     }
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
-    // Real `RDEPEND`-first discovery order for the merge-order edges,
-    // same `portage_order_keys` as the fresh expansion above. Applied
-    // below, after the genuinely-new filter: only edges pointing at a
-    // newly-queued atom are added (see the narrowing note there).
+    // `RDEPEND`-first discovery order for the merge-order edges below, which
+    // only point at newly-queued atoms.
     let portage_order_keys: &[&str] = if buildpkgonly_narrow {
         &["DEPEND", "BDEPEND"]
     } else {
         &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
     };
-    // The same build-time/run-time classification as the fresh expansion
-    // above (an ebuild source always classifies from both key sets).
+    // Same build-time/run-time classification as the fresh expansion.
     let flatten_keys = |keys: &[&str]| -> HashSet<String> {
         let joined: String = keys
             .iter()
@@ -366,13 +292,11 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     };
     let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"]);
     let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
-    // Track X Slice B fix (#242): `BDEPEND` alone, for the same
-    // running-`BDEPEND`-soft rule the fresh expansion applies (see
-    // `enqueue_flat_deps`'s own `bdepend_atoms` doc comment).
+    // `BDEPEND` alone, for the same running-`BDEPEND`-soft rule as the fresh
+    // expansion.
     let bdepend_atoms = flatten_keys(&["BDEPEND"]);
-    // Track X Slice B (#242): the flipped entry's own per-group roots --
-    // same rule as the fresh expansion (a flipped running-root entry
-    // re-resolves its build groups against the running root).
+    // The flipped entry's own per-group roots, same rule as the fresh
+    // expansion.
     let cross_running_root: Option<&Path> = ctx.cross_root();
     let running_tags: HashSet<String> = cross_running_root
         .map(|_| {
@@ -460,10 +384,8 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
                     .collect()
             });
             let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
-            // Track X Slice C (#242): the node key carries the flipped
-            // entry's own root (real's node-identity keying); the gate
-            // reads the whole graph (same slices the bins would see on
-            // a same-root run).
+            // The node key carries the flipped entry's own root; the gate reads
+            // the whole graph.
             let self_node: RootCp = (
                 state.entries[existing_idx].targets_running_root,
                 key.0.clone(),
@@ -488,13 +410,12 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     ) else {
         return;
     };
-    // The same `--root-deps` running-root split as the fresh expansion
-    // above (Track X Slice B: flag-on coinciding-roots only -- the unified
-    // per-group walk owns every cross-root atom).
+    // Same `--root-deps` running-root split as the fresh expansion (flag-on
+    // coinciding-roots only).
     let root_deps_split: Option<&Path> = ctx
         .root_deps_running_root
         .filter(|_| cross_running_root.is_none());
-    // above (both no-ops unless `root_deps_split` is set).
+    // (No-ops unless `root_deps_split` is set.)
     let root_deps_satisfied: HashSet<String> = root_deps_split
         .map(|root| {
             root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
@@ -553,11 +474,8 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
             ));
         }
     }
-    // Only genuinely new atoms flow: anything the pre-flip expansion
-    // already visited or queued keeps its single resolution (re-queueing
-    // it would duplicate puller rows and re-resolve a settled atom).
-    // Compared in evaluated form, the same text `visited_atoms` and the
-    // queue itself carry.
+    // Only genuinely new atoms flow, compared in evaluated form: re-queueing a
+    // visited/queued atom would duplicate puller rows and re-resolve it.
     let queued_atoms: HashSet<&str> = state.queue.iter().map(|q| q.atom.as_str()).collect();
     let mut new_toks: Vec<String> = Vec::new();
     for tok in &flat_deps {
@@ -571,17 +489,14 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     if new_toks.is_empty() {
         return;
     }
-    // L0 20260928T063310Z: a text-new atom that cleanly re-resolves to
-    // its already-settled slot (`delta_atom_cleanly_reuses_resolved_slot`)
-    // is dropped before any bookkeeping -- queueing it would record the
-    // flipped package as an owner at pop and synthesize the phantom edge
-    // real never has. The genuinely-new survivors below are untouched.
+    // A text-new atom that cleanly re-resolves to its settled slot is dropped
+    // before any bookkeeping, or the pop would synthesize the phantom edge.
     let mut kept_toks: Vec<String> = Vec::new();
     for tok in &new_toks {
         let evaluated =
             portage_dep::evaluate_atom_conditionals(tok, new_use).unwrap_or_else(|| tok.clone());
-        // Track X Slice B (#242): the tag is raw-keyed -- `tok` here is
-        // still the raw survivor (evaluated only for the lookup below).
+        // The tag is raw-keyed: `tok` is still raw here (evaluated only for
+        // the lookup).
         if delta_atom_cleanly_reuses_resolved_slot(DeltaAtomCleanlyReusesResolvedSlotArgs {
             ctx,
             config,
@@ -630,15 +545,10 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
         running_atoms: &running_tags,
         owner_targets_running_root: state.entries[existing_idx].targets_running_root,
     });
-    // Narrowing (L0 20260928T054625Z): merge-order edges are added ONLY
-    // for newly-queued targets. Unioning the whole flipped flatten here
-    // also re-added edges for already-graphed targets (a `||` re-choice
-    // under the later queue state, an evaluated-form difference), which
-    // over-constrained Kahn's walk and reordered unrelated packages
-    // (gui-libs/gtk:4 went set-identical but order-shifted). Pre-flip
-    // edges stay exactly as the fresh expansion left them -- the
-    // additive approximation; the flipped package's genuinely new deps
-    // still get their real edge (and cycle classification) below.
+    // Merge-order edges are added ONLY for newly-queued targets: unioning the
+    // whole flipped flatten would re-add edges for already-graphed targets and
+    // over-constrain the walk. Pre-flip edges stay as the fresh expansion left
+    // them.
     let new_targets: HashSet<(String, String)> = new_toks
         .iter()
         .filter_map(|tok| {
@@ -658,9 +568,8 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
             }
         }
     }
-    // `--with-test-deps` follow-up, same gating as the fresh expansion
-    // above (top-level packages only): the flipped USE may newly enable
-    // `test?` deps the pre-flip `use_flags` hid.
+    // `--with-test-deps` follow-up (top-level only): the flip may newly enable
+    // `test?` deps the pre-flip USE hid.
     if ctx.with_test_deps && existing_depth == 0 && !new_use.contains("test") {
         let iuse_flags: HashSet<String> = delta_meta
             .get("IUSE")
@@ -692,11 +601,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
                 portage_use_reduce::MatchMode::Normal,
                 &subset,
             ) {
-                // Same genuinely-new filter as the main delta above: the
-                // pre-flip expansion already queued this package's test
-                // deps under the old USE (evaluated here against the
-                // flipped test uselist, like the fresh path evaluates at
-                // queue time).
+                // Same genuinely-new filter as the main delta above.
                 let queued_now: HashSet<&str> =
                     state.queue.iter().map(|q| q.atom.as_str()).collect();
                 let new_test_deps: Vec<String> = test_deps
@@ -719,8 +624,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
                     buildtime_atoms: &HashSet::new(),
                     runtime_atoms: &HashSet::new(),
                     bdepend_atoms: &HashSet::new(),
-                    or_universe: &HashSet::new(), // Track X Slice B (#242): a `test?` dep stays
-                    // target-rooted (same gate as the fresh expansion).
+                    or_universe: &HashSet::new(), // A `test?` dep stays target-rooted.
                     running_atoms: &HashSet::new(),
                     owner_targets_running_root: state.entries[existing_idx].targets_running_root,
                 });

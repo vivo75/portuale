@@ -2,18 +2,10 @@
 
 use crate::*;
 
-/// Backlog #90 (S2): one withheld upgrade for real's
-/// `WARNING: One or more updates/rebuilds have been skipped due to a
-/// dependency conflict:` block (`depgraph.py`'s `_conflict_missed_update[
-/// "slot conflict"]`, rendered after the merge list, rc 0). Two
-/// producers feed it: the direct solve below (a formed slot conflict
-/// whose non-forced instance is removed) and the reverse-pin withhold
-/// (an enforced holdable pin that settles the installed version while a
-/// higher visible candidate exists). Both render through the same
-/// `pretend.rs` block, suppressed under `--quiet` unless `--debug`
-/// (real `_show_missed_update`, `depgraph.py:1576-1581`); `--json`
-/// returns before the block and `--columns` has no gate. The rc stays
-/// 0 either way since no `SlotConflict` survives).
+/// One withheld upgrade for Portage's skipped-update block: same shape for the
+/// direct solve's removal rows and the reverse-pin withholds. Rendered by
+/// `pretend.rs`; the rc stays 0 either way.
+// Portage: depgraph.py, _conflict_missed_update
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedUpdate {
     pub category: String,
@@ -27,26 +19,16 @@ pub struct SkippedUpdate {
     pub consumer_cpv: String,
     pub consumer_installed: bool,
     pub consumer_use: Vec<(String, String)>,
-    /// Backlog #242 Slice D: whether the missed instance resolves in the
-    /// running root (real's per-node `to '<root>'` + per-root USE paint,
-    /// [`skipped_update_roots`]). `false` on every single-root run and on
-    /// the target-walk-only withhold path.
+    /// Whether the missed instance resolves in the running root.
     pub missed_targets_running_root: bool,
-    /// Backlog #242 Slice D: whether a merge consumer resolves in the
-    /// running root (its entry's root; installed consumers always resolve
-    /// from the walk root's own vdb — the target walk — so `false`).
+    /// Whether a merge consumer resolves in the running root.
     pub consumer_targets_running_root: bool,
 }
 
-/// Backlog #129 (S1): one slot real reports through the abbreviated
-/// `!!! The following update(s) have been skipped due to unsatisfied
-/// dependencies / !!! triggered by backtracking:` tail
-/// (`depgraph.py:1638-1649`) -- a masked version higher than the chosen
-/// one whose missing-dependency mask still bites at settle time (real's
-/// `check_backtrack` probe raises `_backtrack_mask`). Only the slot
-/// renders (no versions, no parents); the full per-update form real
-/// prints when the probe does *not* raise is out of scope (see
-/// `backtrack_missed_updates`: those records are skipped, not rendered).
+/// One slot for the abbreviated skipped-update tail: a masked version higher
+/// than the chosen one whose missing-dependency mask still bites at settle
+/// time. Only the slot renders.
+// Portage: depgraph.py, _show_missed_update (check_backtrack probe)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedMissingDep {
     pub category: String,
@@ -54,42 +36,25 @@ pub struct SkippedMissingDep {
     pub slot: String,
 }
 
-/// Backlog #198: one update real reports through the full per-update
-/// form of `_show_missed_update_unsatisfied_dep`
-/// (`lib/_emerge/depgraph.py:1592-1636`) -- a masked version higher
-/// than the chosen one whose missing-dependency mask no longer bites
-/// at settle time (real's `check_backtrack` probe does *not* raise
-/// `_backtrack_mask`, i.e. the missing atom names no backtrack-masked
-/// version). Renders the `cat/pkg:slot` header, the `selected:` /
-/// `skipped: ... (see unsatisfied dependency below)` rows (real
-/// `str(Package)`, destinations omitted like every other portuale
-/// notice row), then the missing atom's own disclosure -- the masked
-/// block or the plain-miss block, with a single-parent
-/// `(dependency required by ...)` chain: the skipped package is not in
-/// the settled graph, so real's `_get_dep_chain` stops there
-/// (`depgraph.py:6397`, "not in the graph ... break") with no
-/// `(argument)` line.
+/// One update for the full per-update form: a masked higher version whose
+/// missing-dependency mask no longer bites at settle time. Renders the
+/// `selected:` / `skipped:` rows plus the missing atom's disclosure, with the
+/// chain pinned to the single skipped parent (no `(argument)` line).
+// Portage: depgraph.py, _show_missed_update_unsatisfied_dep
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedMissingDepFull {
     pub category: String,
     pub package: String,
     pub slot: String,
-    /// `(cpv:slot/sub::repo, ebuild scheduled for merge)` for a
-    /// merge-bound selected entry, `(cpv:slot/sub::repo, installed)`
-    /// for an installed one (vdb repo, `__unknown__` fallback).
+    /// The selected entry's display row (merge-bound) or installed instance.
     pub selected_display: String,
-    /// `(cpv:slot/sub::repo, ebuild scheduled for merge)` for the
-    /// masked higher version (never installed: real excludes
-    /// `pkg.installed` from missed updates, `:1539-1542`).
+    /// The masked higher version's display row (always merge-scheduled).
     pub skipped_display: String,
-    /// The missing atom's disclosure: masked-only candidates, or the
-    /// plain miss when the atom names nothing at all.
+    /// The missing atom's disclosure: masked candidates, or the plain miss.
     pub dep: SkippedDepDisclosure,
 }
 
-/// The missing atom's disclosure inside [`SkippedMissingDepFull`]:
-/// reuses the settled-pass report shapes, with the chain pinned to the
-/// single skipped parent (see above).
+/// The missing atom's disclosure inside [`SkippedMissingDepFull`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkippedDepDisclosure {
     Masked(MaskedDepReport),
@@ -111,14 +76,8 @@ pub(crate) struct MissingDepFullRowArgs<'a> {
     pub(crate) atom: &'a str,
 }
 
-/// Backlog #198: build the full-form row for a missing-dependency mask
-/// whose atom bites nothing backtrack-masked at settle time (real
-/// `_show_missed_update_unsatisfied_dep`, `depgraph.py:1592-1636`).
-/// `cat/pkg` at `slot` is the masked higher version `ver` (tree
-/// sub-slot `sub`, tree repo `repo`); `atom` is the missing atom text
-/// as queued. Returns `None` when no settled entry holds the slot
-/// (real's `any_selected` gate) or the masked version's tree metadata
-/// cannot name the skipped node.
+/// Builds the full-form row for the masked higher version `ver` of `cat/pkg`
+/// at `slot`. `None` when no settled entry holds the slot or metadata fails.
 pub(crate) fn missing_dep_full_row(
     args: MissingDepFullRowArgs<'_>,
 ) -> Option<SkippedMissingDepFull> {
@@ -135,8 +94,7 @@ pub(crate) fn missing_dep_full_row(
         repo,
         atom,
     } = args;
-    // Real's `selected_pkg`: the tracker's match for the slot -- a
-    // merge-bound entry first, else the installed instance.
+    // The tracker's slot match: merge-bound entry first, else installed.
     let mut selected_merge: Option<(&str, &str, &str, &str)> = None;
     let mut selected_installed: Option<&str> = None;
     for e in entries {
@@ -182,14 +140,8 @@ pub(crate) fn missing_dep_full_row(
         let r = installed_pkg_repo(root, cat, pkg, v);
         format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
     } else {
-        // Backlog #286: no settled entry holds the slot, but the vdb
-        // holds the masked version itself in it -- the dropped set-arg
-        // shape (real's tracker still selects the installed instance:
-        // the `@world` argument is dropped from the graph, but the
-        // installed package stays visible through the complete walk).
-        // Scoped to version equality: any other installed version has
-        // no proven graph presence (real's `any_selected` gate), so it
-        // stays silent like before.
+        // No settled entry holds the slot, but the vdb holds the masked version
+        // itself: fall back to it, scoped to version equality only.
         let v = installed_candidates(root, cat, pkg)
             .into_iter()
             .find(|(iv, _, _)| iv.as_str() == ver && read_vdb_slot(root, cat, pkg, iv).0 == slot)
@@ -200,8 +152,7 @@ pub(crate) fn missing_dep_full_row(
     };
     let skipped_display =
         format!("({cat}/{pkg}-{ver}:{slot}/{sub}::{repo}, ebuild scheduled for merge)");
-    // The skipped package is not in the settled graph, so the chain is
-    // the single skipped node (real stops there, no `(argument)` line).
+    // The chain is the single skipped node (not in the settled graph).
     let chain = vec![(format!("{cat}/{pkg}-{ver}::{repo}"), "ebuild".to_string())];
     let dep = match masked_candidates_for_atom(repos, atom, config) {
         Some(masked) => {
@@ -238,24 +189,11 @@ pub(crate) fn missing_dep_full_row(
     })
 }
 
-/// Backlog #129 (review): real `_get_missed_updates` chains
-/// `_runtime_pkg_mask` before `_conflict_missed_update`
-/// (`lib/_emerge/depgraph.py:1533-1536`) and keeps per
-/// `(root, slot_atom)` the highest missed pkg (`:1553-1562`).
-/// Portuale's two `SkippedUpdate` sources -- the backtrack-mask rows
-/// (first-seen order) and the direct-solve/withhold rows (sorted) --
-/// collapse the same way: per `(category, package, slot)` (a single
-/// root, so root is constant) keep only the rows naming the highest
-/// `skipped_version` (`vercmp_ordering`, the same comparison the
-/// derivation uses). Equal versions all stay (the established
-/// one-row-per-parent shape -- real keeps one record per slot with
-/// every parent inside, portuale one row per parent, grouped into
-/// one block at render by [`group_skipped_updates`]); exact
-/// duplicates collapse to one. Relative order is preserved: mask
-/// rows lead, then the direct solve's rows in first-seen block order,
-/// then the pin withholds (sorted) -- except that a slot's surviving
-/// rows sit at the position of the slot's first row (#292, real's dict
-/// key order), however the higher version arrived later.
+/// Collapses rows per `(category, package, slot)` to the highest
+/// `skipped_version`; equal versions all stay, exact duplicates collapse to
+/// one. A slot's survivors sit at the position of the slot's first row, and
+/// the mask-rows-then-direct-rows-then-withholds relative order is preserved.
+// Portage: depgraph.py, _get_missed_updates
 pub(crate) fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
     let mut best: HashMap<(String, String, String), String> = HashMap::new();
     for s in &rows {
@@ -268,13 +206,7 @@ pub(crate) fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedU
             best.insert(key, s.skipped_version.clone());
         }
     }
-    // Backlog #292: real's `missed_updates[k] = ...` overwrites the value
-    // of an existing `(root, slot_atom)` key, and a Python dict keeps the
-    // key's *first* insertion position (`_get_missed_updates`,
-    // `depgraph.py:1544-1560`): a higher pkg replacing a lower one of the
-    // same slot renders where the lower was first recorded, not where the
-    // higher row sits. Record each slot's first row index over the
-    // pre-collapse rows and order the survivors by it (stable).
+    // A replacing version renders where the lower was first recorded.
     let mut first_pos: HashMap<(String, String, String), usize> = HashMap::new();
     for (i, s) in rows.iter().enumerate() {
         first_pos
@@ -314,22 +246,8 @@ pub(crate) fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedU
         .collect()
 }
 
-/// Backlog #129 (review round 2): real `_get_missed_updates` keeps one
-/// entry per `(root, slot_atom)`
-/// (`lib/_emerge/depgraph.py:1553-1562`) -- the highest missed pkg with
-/// its whole `(parent, atom)` set (`:2090-2106` accumulates into a set
-/// per pkg) -- and `_show_missed_update_slot_conflicts` (`:1650+`)
-/// renders one block per entry with every parent line inside.
-/// Portuale's rows stay one per rejecting parent (the established #90
-/// S2 shape, which `collapse_skipped_updates` also assumes), so the
-/// renderer groups rows naming the same missed pkg into one block
-/// (`GraphResult::skipped_updates` order is preserved: groups keep
-/// first-seen order, parents keep row order -- mask rows arrive in
-/// first-seen mask order, direct rows in first-seen block order). Real itself iterates an
-/// unordered set -- `Package` keeps identity hash
-/// (`_emerge/Package.py:27`) -- so its within-block order is hash
-/// order; the `blk0b blk0c blk0a` oracle's b-then-c order is what the
-/// sorted direct rows give here.
+/// Groups rows naming the same missed package into one block, preserving
+/// first-seen group order and row order within.
 pub fn group_skipped_updates(rows: &[SkippedUpdate]) -> Vec<Vec<&SkippedUpdate>> {
     type MissedPkgKey = (
         (String, String, String, String, String, String),
@@ -361,13 +279,9 @@ pub fn group_skipped_updates(rows: &[SkippedUpdate]) -> Vec<Vec<&SkippedUpdate>>
     groups
 }
 
-/// Backlog #129 (S1): real `_show_unsatisfied_dep(..., check_backtrack=
-/// True)` (`depgraph.py:6471-6484`) -- no output, just the verdict:
-/// `true` when the atom matches a version the settled backtrack state
-/// still masks (real raises `_backtrack_mask`, and the missed update
-/// renders in the abbreviated tail). USE-deps are stripped for the
-/// match, exactly like the missed-update recording's plain-match form
-/// (`direct_solve_atom_matches`' `for_skipped` arm, `:2083-2094`).
+/// Whether `atom` (USE-deps stripped) matches a version the settled backtrack
+/// state still masks: then the missed update renders in the abbreviated tail.
+// Portage: depgraph.py, _show_unsatisfied_dep (check_backtrack probe)
 pub(crate) fn backtrack_masked_match(
     repos: &[RepoConfig],
     params: &BacktrackParams,
