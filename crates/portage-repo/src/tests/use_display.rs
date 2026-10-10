@@ -28,9 +28,8 @@ fn alnum_sort_key_orders_digit_runs_numerically() {
             "python3_12",
         ]
     );
-    // Structure: alternating Str / Num, leading empty Str for a
-    // digit-initial string (real `re.split(r"(\d+)", "1a")` ->
-    // `["", "1", "a"]`).
+    // Alternating Str / Num; a leading digit run starts with an empty Str.
+    // Portage: output_helpers.py, _alnum_sort_key
     assert_eq!(
         alnum_sort_key("1a"),
         vec![
@@ -53,8 +52,7 @@ fn build_use_expand_display_groups_and_hides() {
         ..Default::default()
     };
     // VIDEO_CARDS is a USE_EXPAND var: the two video_cards_* flags
-    // move into a `VIDEO_CARDS` group (prefix stripped), the plain
-    // USE group is empty and so omitted entirely.
+    // move into a `VIDEO_CARDS` group; the empty USE group is omitted.
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &[
@@ -69,9 +67,8 @@ fn build_use_expand_display_groups_and_hides() {
         }),
         vec![("VIDEO_CARDS".to_string(), "nvidia -amdgpu".to_string())]
     );
-    // CPU_FLAGS_X86 is USE_EXPAND *and* USE_EXPAND_HIDDEN -> its group
-    // is dropped from the display; a plain flag alongside it still
-    // shows.
+    // CPU_FLAGS_X86 is USE_EXPAND *and* USE_EXPAND_HIDDEN, so its
+    // group is dropped; a plain flag alongside it still shows.
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &[
@@ -111,8 +108,8 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
         ..Default::default()
     };
     let installed = InstalledUseState {
-        // installed with `alpha` enabled, `beta` in IUSE but off;
-        // video_cards had `nvidia` enabled.
+        // Installed with `alpha` on and `beta` off; video_cards had
+        // `nvidia` on.
         old_iuse: HashSet::from([
             "alpha".to_string(),
             "beta".to_string(),
@@ -120,12 +117,8 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
         ]),
         old_use: HashSet::from(["alpha".to_string(), "video_cards_nvidia".to_string()]),
     };
-    // `all_flags` is always on for `emerge -pv`: alpha unchanged ->
-    // `alpha` (plain), beta newly enabled -> `beta*`, gamma brand-new
-    // IUSE and enabled -> `gamma%*`, delta brand-new IUSE and
-    // disabled -> `-delta%`, video_cards_nvidia now off (was on) ->
-    // `-nvidia*`. Enabled (alpha, beta, gamma) render before the
-    // disabled one (delta).
+    // `all_flags` is always on for `emerge -pv`: every flag shows
+    // (`*` = changed vs installed, `%` = new to IUSE).
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &[
@@ -146,9 +139,8 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
             ("VIDEO_CARDS".to_string(), "-nvidia*".to_string()),
         ]
     );
-    // Even an Upgrade whose USE is completely unchanged still shows
-    // the full `USE=` line under `all_flags` (real
-    // `_create_use_string` returns `USE="alpha"`, non-empty).
+    // Even an Upgrade whose USE is unchanged still shows the full
+    // `USE=` line (Portage returns `USE="alpha"`, non-empty).
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &[("alpha".to_string(), true)],
@@ -164,7 +156,7 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
         vec![("USE".to_string(), "alpha".to_string())]
     );
     // A flag the new ebuild dropped from IUSE renders `(-flag%)`,
-    // `(-flag%*)` if it was enabled -- real `removed_iuse`.
+    // `(-flag%*)` if it was enabled.
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &[("keep".to_string(), true)],
@@ -191,9 +183,8 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
 #[test]
 fn build_use_expand_display_force_shows_reinstall_trigger_flags_at_plain_p() {
     let config = portage_profile::Config::default();
-    // Installed with IUSE `gone keep`, `gone` enabled. The current
-    // ebuild dropped `gone` from IUSE -> a `--newuse` reinstall whose
-    // trigger set is `{gone}`.
+    // Installed with IUSE `gone keep`, `gone` on; the ebuild dropped
+    // `gone` -> a `--newuse` reinstall triggered by `{gone}`.
     let installed = InstalledUseState {
         old_iuse: HashSet::from(["gone".to_string(), "keep".to_string()]),
         old_use: HashSet::from(["gone".to_string()]),
@@ -202,8 +193,7 @@ fn build_use_expand_display_force_shows_reinstall_trigger_flags_at_plain_p() {
     let reinst = HashSet::from(["gone".to_string()]);
 
     // Plain `-p` (`all_flags = false`): without the trigger set the
-    // line is empty (`keep` unchanged-disabled -> omitted, `gone`
-    // removed -> omitted). With it, the dropped trigger flag shows.
+    // line is empty; with it, the dropped trigger flag shows.
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &display,
@@ -226,8 +216,8 @@ fn build_use_expand_display_force_shows_reinstall_trigger_flags_at_plain_p() {
         }),
         vec![("USE".to_string(), "(-gone%*)".to_string())]
     );
-    // `-pv` (`all_flags = true`) is unaffected -- it already showed
-    // every flag regardless of the trigger set.
+    // `-pv` (`all_flags = true`) already shows every flag regardless
+    // of the trigger set.
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &display,
@@ -270,10 +260,8 @@ fn build_use_expand_display_wraps_forced_and_masked_flags() {
         "maskedoff".to_string(),
         "video_cards_nvidia".to_string(),
     ]);
-    // New install: forced/masked flags are wrapped in ( ), everything
-    // else plain. `forcedon` is force-enabled, `maskedoff`
-    // mask-disabled, `video_cards_nvidia` force-enabled. Enabled
-    // (forcedon, plain) render before the disabled (maskedoff).
+    // New install: forced/masked flags are wrapped in `( )`, the
+    // rest plain; enabled render before disabled.
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &[
@@ -296,8 +284,8 @@ fn build_use_expand_display_wraps_forced_and_masked_flags() {
             ("VIDEO_CARDS".to_string(), "(nvidia)".to_string()),
         ]
     );
-    // On a diff, a masked flag brand-new to IUSE renders `(-flag)`,
-    // NOT `(-flag%)` (real: `if flag not in iuse_forced: += "%"`).
+    // A masked flag brand-new to IUSE renders `(-flag)`, not
+    // `(-flag%)` (Portage skips `%` for forced flags).
     assert_eq!(
         build_use_expand_display(BuildUseExpandDisplayArgs {
             use_flags_display: &[

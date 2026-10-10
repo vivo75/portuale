@@ -2,7 +2,6 @@
 
 use crate::*;
 
-/// Arguments of [`use_unsat_parent_row`].
 pub(crate) struct UseUnsatParentRowArgs<'a> {
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
@@ -12,20 +11,12 @@ pub(crate) struct UseUnsatParentRowArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
 }
 
-/// Real `_show_unsatisfied_dep`'s parent-conditional row (`depgraph.py:
-/// 6768-6858`): when a `[use]`-dep is `opt?`-conditional on the requirer
-/// and the child's violation is entirely conditional, real appends the
-/// *requirer* to `missing_use_reasons` with its own `Change USE:` flip,
-/// and the display shows it after the latest child row. The involved
-/// flags are real `violated_conditionals`' parent-side partition (the
-/// same narrowing [`suggested_parent_use_candidate`] uses, via
-/// [`viable_parent_flip_targets`]: only parent-active violated
-/// conditionals of a version-matching visible child that passes the
-/// untouchable-child `continue`), gated on the flip being settable and
-/// not newly violating the parent's own REQUIRED_USE (real's warning
-/// text is reproduced when it would). `None` when no child yields a
-/// viable flip, the parent's state can't be read, or a flip is pinned
-/// by `use.mask`/`use.force`.
+/// The parent-conditional row: when a `[use]`-dep is `opt?`-conditional
+/// on the requirer and the child's violation is entirely conditional,
+/// the requirer is appended with its own `Change USE:` flip, shown after
+/// the latest child row. `None` when no child yields a viable flip, the
+/// parent state can't be read, or a flip is pinned by mask/force.
+/// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
 pub(crate) fn use_unsat_parent_row(
     args: UseUnsatParentRowArgs<'_>,
 ) -> Option<(String, Vec<String>)> {
@@ -40,9 +31,8 @@ pub(crate) fn use_unsat_parent_row(
     let owner = owner?;
     let unevaluated = portage_dep::parse_atom(display_atom)?;
     // Merge-bound parents resolve through `parent_use_state`; installed
-    // ones (the live `qtdeclarative` row, the r135 fixture) through the
-    // vdb-backed twin -- the abort block is display-only, so the
-    // autounmask repair path keeps the merge-bound shape.
+    // ones through the vdb-backed twin (display-only; the repair path
+    // keeps the merge-bound shape).
     let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
         parent_use_state(repos, entries, owner, config)
             .or_else(|| installed_parent_use_state(repos, root, entries, owner, config))?;
@@ -112,7 +102,6 @@ pub(crate) fn use_unsat_parent_row(
     ))
 }
 
-/// Arguments of [`use_unsat_candidates_for_atom`].
 pub(crate) struct UseUnsatCandidatesForAtomArgs<'a> {
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
@@ -123,30 +112,20 @@ pub(crate) struct UseUnsatCandidatesForAtomArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
 }
 
-/// Real `_show_unsatisfied_dep`'s "no ebuilds built with USE flags to
-/// satisfy" candidate scan (`depgraph.py:6619` collects `missing_use`,
-/// `:6714-6873` turns it into `unmasked_use_reasons` /
-/// `unmasked_iuse_reasons`): the version/slot-matching, *visible* ebuilds
-/// whose own IUSE is missing a required no-default flag (unconditional
-/// *or* conditional -- real `use.required`, #265(a)), or whose
-/// effective USE cannot satisfy the atom's unconditional use-deps.
-/// `None` when the atom carries no use-deps or no visible candidate
-/// misses on USE -- real's plain masked / "no ebuilds to satisfy" paths
-/// own those.
+/// The "no ebuilds built with USE flags to satisfy" candidate scan:
+/// the version/slot-matching visible ebuilds whose IUSE lacks a
+/// required no-default flag (unconditional or conditional), or whose
+/// effective USE cannot satisfy the unconditional use-deps. `None` when
+/// the atom carries no use-deps or no visible candidate misses on USE.
 ///
-/// Display order mirrors real exactly: when any candidate can be fixed by
-/// a `Change USE:`, that path owns the block and only the **latest** such
-/// candidate is listed ("Only show the latest version", `:6876-6890`),
-/// followed by the requirer's own row when the dep is
-/// `opt?`-conditional ([`use_unsat_parent_row`]); only when there is none
-/// do all `Missing IUSE:` candidates print (`:6896-6907`), in
-/// descending-version order.
+/// Display order: when any candidate can be fixed by a `Change USE:`,
+/// only the latest such candidate is listed, followed by the requirer's
+/// own row when the dep is conditional; otherwise all `Missing IUSE:`
+/// candidates print, in descending-version order.
 ///
-/// Documented narrowings (same family as `masked_candidates_for_atom`'s):
-/// the parent row is the all-conditional approximation
-/// [`use_unsat_parent_row`] documents; real's `Missing IUSE:` fallback can
-/// be suppressed by a *masked* candidate that has the flag
-/// (`:6897-6907`), which this visibility-filtered scan cannot express.
+/// Narrowing: a `Missing IUSE:` fallback that Portage suppresses via a
+/// masked flag-carrying candidate can't be expressed by this scan.
+/// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
 pub(crate) fn use_unsat_candidates_for_atom(
     args: UseUnsatCandidatesForAtomArgs<'_>,
 ) -> Option<Vec<(String, Vec<String>)>> {
@@ -174,8 +153,8 @@ pub(crate) fn use_unsat_candidates_for_atom(
         })
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
-    // Real `db.match(atom.without_use)`: version/slot filter, USE and
-    // visibility ignored.
+    // Version/slot filter, USE and visibility ignored (like Portage's
+    // `db.match(atom.without_use)`).
     let matched: std::collections::HashSet<&str> =
         portage_dep::match_from_list(portage_dep::without_use(display_atom), &refs)?
             .into_iter()
@@ -186,7 +165,7 @@ pub(crate) fn use_unsat_candidates_for_atom(
         .filter(|(_, s)| matched.contains(s.as_str()))
         .map(|(c, _)| c)
         .collect();
-    // Real `cpv_list.reverse()` -> descending version.
+    // Descending version (Portage's `cpv_list.reverse()`).
     cands.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
 
     let flags_of = |atom: &portage_dep::Atom, op: portage_dep::UseDepOp| -> Vec<String> {
@@ -198,13 +177,9 @@ pub(crate) fn use_unsat_candidates_for_atom(
             .map(|d| d.flag.clone())
             .collect()
     };
-    // Real `atom.unevaluated_atom.use.required` -- `no_default`, i.e.
-    // every token *without* a `(+)`/`(-)` default marker, conditionals
-    // (`flag?`, `flag=`, `!flag?`, …) included, in declaration order
-    // here (`lib/portage/dep/__init__.py:1363` `self.required =
-    // frozenset(no_default)`; backlog #265(a)). A default-marked token
-    // is not a `required` flag in real's parser (it has a fallback when
-    // missing from IUSE).
+    // Every no-default token (conditionals included), in declaration
+    // order; a default-marked token is not required (it has a fallback
+    // when missing from IUSE).
     let required_of = |atom: &portage_dep::Atom| -> Vec<String> {
         atom.use_deps
             .as_deref()
@@ -215,16 +190,14 @@ pub(crate) fn use_unsat_candidates_for_atom(
             .collect()
     };
     let required = required_of(&display);
-    // Real `atom.use.enabled` / `.disabled` -- the *evaluated* atom's own
-    // unconditional deps.
+    // The evaluated atom's own unconditional deps.
     let enabled = flags_of(&evaluated, portage_dep::UseDepOp::Enabled);
     let disabled = flags_of(&evaluated, portage_dep::UseDepOp::Disabled);
 
     let mut change_rows: Vec<(String, Vec<String>)> = Vec::new();
     let mut iuse_rows: Vec<(String, Vec<String>)> = Vec::new();
     for c in cands {
-        // Real `unmasked_use_reasons` / `unmasked_iuse_reasons`: masked
-        // instances never reach the displayed rows.
+        // Masked instances never reach the displayed rows.
         if !is_visible(c, &display.category, &display.package, config) {
             continue;
         }
@@ -234,7 +207,7 @@ pub(crate) fn use_unsat_candidates_for_atom(
             continue;
         };
         let valid = valid_iuse(&declared, config);
-        // Real `pkg.iuse.get_missing_iuse(required_flags)`.
+        // Portage's `pkg.iuse.get_missing_iuse(required_flags)`.
         let missing: Vec<String> = required
             .iter()
             .filter(|f| !valid.contains(*f))
@@ -251,8 +224,8 @@ pub(crate) fn use_unsat_candidates_for_atom(
             ));
             continue;
         }
-        // Real `need_enable`/`need_disable` (`:6729-6730`), sorted and
-        // restricted to flags this candidate's own IUSE declares.
+        // `need_enable`/`need_disable`, sorted and restricted to flags
+        // this candidate's own IUSE declares.
         let mut need_enable: Vec<String> = enabled
             .iter()
             .filter(|f| !use_flags.contains(*f) && valid.contains(*f))
@@ -270,9 +243,8 @@ pub(crate) fn use_unsat_candidates_for_atom(
         if need_enable.is_empty() && need_disable.is_empty() {
             continue;
         }
-        // Real `:6732-6736`: a flag this candidate's own `use.mask`/
-        // `use.force` pins is not adjustable -- no row at all, and the
-        // candidate also stays out of `missing_use_adjustable`.
+        // A flag pinned by this candidate's own `use.mask`/`use.force`
+        // is not adjustable: no row, and the candidate stays out.
         let candidate_str = format!(
             "{}/{}-{}:{}/{}::{}",
             display.category, display.package, c.version, c.slot, c.sub_slot, c.repo_name
@@ -285,8 +257,7 @@ pub(crate) fn use_unsat_candidates_for_atom(
             accept_keywords: &config.accept_keywords,
             package_accept_keywords: &config.package_accept_keywords,
         });
-        // Owned union of the two shared sets (display path; the union
-        // is small).
+        // Owned union of the two shared sets (small on this path).
         let mut untouchable = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
             which: MaskOrForce::Mask,
             config,
@@ -324,9 +295,8 @@ pub(crate) fn use_unsat_candidates_for_atom(
         ));
     }
     if !change_rows.is_empty() {
-        // Real `:6877-6887`: "Only show the latest version" -- the first
-        // (highest-version) unmasked `Change USE:` candidate, then the
-        // requirer's own row when the dep is conditional.
+        // "Only show the latest version": the first (highest-version)
+        // `Change USE:` candidate, then the requirer's row when conditional.
         let mut rows = vec![change_rows.remove(0)];
         if let Some(parent_row) = use_unsat_parent_row(UseUnsatParentRowArgs {
             repos,

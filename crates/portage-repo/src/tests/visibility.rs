@@ -31,11 +31,7 @@ fn license_not_in_the_acceptable_set_is_masked() {
 #[test]
 fn license_eula_style_negation_masks_a_matching_license() {
     // accept_license here is the already-@group-expanded form
-    // portage-profile's own resolve_config would have produced from
-    // real "* -@EULA" with license_groups EULA="SomeEula" --
-    // portage-repo itself never expands groups, only consumes the
-    // already-expanded tokens (see accept_license's own doc
-    // comment, portage-profile).
+    // resolve_config would have produced from `"* -@EULA"`.
     let config = portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
         accept_license: vec!["*".to_string(), "-SomeEula".to_string()],
@@ -204,10 +200,8 @@ fn restrict_multiple_tokens_all_need_accepting() {
     assert!(!is_visible(&c, "dev-libs", "foo", &config));
 }
 
-/// #110: the memo key must distinguish two configs that differ only
-/// in their accept lists -- the fields `use_context_fingerprint` does
-/// not cover. Two configs with the same USE context, candidate and
-/// value but opposite `accept_properties` must not collide.
+/// The memo key distinguishes configs that differ only in their
+/// accept lists (outside the USE-context fingerprint).
 #[test]
 fn metadata_key_accepted_memo_does_not_leak_between_differing_accept_lists() {
     let base = |accept: &str| portage_profile::Config {
@@ -242,12 +236,8 @@ fn metadata_key_accepted_memo_does_not_leak_between_differing_accept_lists() {
     );
 }
 
-/// #110 (review fix): the memo key must include the candidate's own
-/// `IUSE`/`KEYWORDS` -- `use_flags_if_conditional` derives the USE set
-/// from them whenever the value is conditional, and `candidate_str`
-/// does **not** encode them (a binary candidate from a `Packages`
-/// index and the ebuild for the same CPV can share it). Same reason
-/// `EUF_CACHE` hashes `iuse`/`keywords` into its key.
+/// The memo key includes the candidate's own `IUSE`/`KEYWORDS`
+/// (`candidate_str` does not encode them).
 #[test]
 fn metadata_key_accepted_memo_does_not_leak_between_differing_candidate_iuse() {
     let config = portage_profile::Config {
@@ -287,10 +277,8 @@ fn metadata_key_accepted_memo_does_not_leak_between_differing_candidate_iuse() {
     );
 }
 
-/// #110: a repeated call with identical arguments is served from the
-/// memo (the uncached body runs once), and the explicit `MetadataKey`
-/// discriminant keeps `PROPERTIES` and `RESTRICT` apart even when the
-/// value string and every other key component are identical.
+/// A repeated call with identical arguments hits the memo, and the
+/// `MetadataKey` discriminant keeps `PROPERTIES`/`RESTRICT` apart.
 #[test]
 fn metadata_key_accepted_memo_hits_on_a_repeat_and_separates_metadata_keys() {
     let config = portage_profile::Config {
@@ -384,9 +372,8 @@ fn package_unmask_cancels_a_matching_mask() {
     ));
 }
 
-/// #114: the `is_visible` memo is transparent (a repeat runs the body
-/// once) and must distinguish the candidate's own metadata and the
-/// config's visibility fields.
+/// The `is_visible` memo is transparent and separates candidate
+/// metadata and config visibility fields.
 #[test]
 fn is_visible_memo_hits_on_repeat_and_separates_its_inputs() {
     let config = portage_profile::Config {
@@ -492,11 +479,8 @@ fn package_accept_keywords_double_star_accepts_unconditionally() {
 
 #[test]
 fn package_accept_keywords_negation_revokes_a_globally_accepted_keyword() {
-    // Globally "amd64" is accepted, but a package.accept_keywords
-    // "-amd64" entry revokes it for this one package specifically --
-    // real KeywordsManager._getEgroups folds "-token" removals over
-    // the combined global+package list, not just unions everything
-    // a matching entry ever mentions.
+    // Globally "amd64" is accepted, but a `-amd64` entry revokes it
+    // for this one package (folded `-token` removals).
     let config = portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
         package_accept_keywords: vec![(
@@ -543,13 +527,8 @@ fn package_accept_keywords_dash_star_clears_every_globally_accepted_keyword() {
 
 #[test]
 fn package_accept_keywords_entries_fold_in_source_order() {
-    // `package.accept_keywords` entries fold in file / profile-chain
-    // order (real `stack_lists(incremental=True)` over the per-source
-    // lists) -- a later `-amd64` revoke wins over an earlier exact-
-    // version `amd64` grant, whichever atom is "more specific". See
-    // `specificity_ordered_flags`'s own doc comment for the
-    // deliberate "plain source order, not a global specificity sort"
-    // choice.
+    // Entries fold in file / profile-chain order: a later `-amd64`
+    // revoke wins over an earlier grant, whatever the specificity.
     let config = portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
         package_accept_keywords: vec![
@@ -689,8 +668,8 @@ fn package_accept_keywords_negative_keyword_never_counts_toward_star() {
     ));
 }
 
-/// Backlog #121 (audit O6): same post-freeze guard on the visibility
-/// path -- mutating a mask field trips instead of poisoning `IV_CACHE`.
+/// Same post-freeze guard on the visibility path: mutating a mask
+/// field trips instead of poisoning the memo.
 #[test]
 #[should_panic(expected = "mutated after resolve_config")]
 #[cfg(debug_assertions)]

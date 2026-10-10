@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn use_unsat_candidates_classify_change_use_and_missing_iuse() {
-    // Backlog #20: real `_show_unsatisfied_dep`'s two reason kinds and
-    // its "Only show the latest version" rule, direct on the fixture
-    // repo -- the same rows the contract pins.
+    // Two reason kinds and the "latest version only" rule, direct on
+    // the fixture repo -- the same rows the contract pins.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -53,23 +52,14 @@ fn use_unsat_candidates_classify_change_use_and_missing_iuse() {
     // A satisfiable use-dep (flag is off, `-flag` required) is not
     // this disclosure at all.
     assert_eq!(one("dev-libs/unsatusealt[-unsatuseorflag]"), None);
-    // No use-deps at all: real's other paths own the atom.
+    // No use-deps at all: Portage's other paths own the atom.
     assert_eq!(one("dev-libs/unsatusealt"), None);
 }
 
 #[test]
 fn use_unsat_candidates_count_conditional_flags_toward_missing_iuse() {
-    // Backlog #265(a): real `use.required` is every no-default flag,
-    // conditionals included (`lib/portage/dep/__init__.py:1363`
-    // `self.required = frozenset(no_default)`), so a conditional flag
-    // a visible candidate's own IUSE lacks is `Missing IUSE:`, never
-    // a `Change USE:` row and never a plain miss. Live real 3.0.82.2
-    // staged-fixture probes
-    // (`LLM/evidence/2026-09-30-265/real/mia0a-{1,2}.txt`):
-    // `=dev-libs/mia0a-1` (`mia0b[foo?]`) prints the block with
-    // `- dev-libs/mia0b-1::testrepo (Missing IUSE: foo)`, and
-    // `=dev-libs/mia0a-2` (`mia0b[foo?,bar]`) prints the same row
-    // (not portuale's `Change USE: +bar`).
+    // Conditional flags count toward `Missing IUSE`: a conditional a
+    // visible candidate's IUSE lacks is never a `Change USE:` row.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,

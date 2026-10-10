@@ -2,9 +2,9 @@ use super::*;
 
 #[test]
 fn use_expand_star_wildcard_strips_the_pseudo_flag_from_the_effective_set() {
-    // `effective_use_flags` never returns a `_*`-suffixed token (real
-    // config.py strips them from PORTAGE_USE). Exercised directly
-    // with the fixture's own `linguas_*` package.use entry against
+    // `effective_use_flags` never returns a `_*`-suffixed token
+    // (Portage strips them from PORTAGE_USE). Exercised with the
+    // fixture's own `linguas_*` package.use entry against
     // wildexpandpkg's declared IUSE.
     let use_flags = euf_flat(EufFlatArgs {
         iuse: "linguas_en linguas_de",
@@ -92,16 +92,8 @@ fn effective_use_flags_lets_use_tokens_add_alongside_a_plus_iuse_default() {
 
 #[test]
 fn effective_use_flags_lets_use_tokens_explicitly_cancel_a_plus_iuse_default() {
-    // The gap portuale's own IUSE-defaults slice originally left
-    // open, now closed: real regenerate() runs ONE continuous
-    // incremental walk (pkginternal -> defaults -> conf -> pkg), so
-    // a genuine "-foo" in profile/make.conf really does cancel an
-    // earlier "+foo" IUSE default -- not just fail to add on top of
-    // it. `use_tokens` here is two separate raw USE= values
-    // ("foo" then "-foo bar"), exactly what `resolve_config` would
-    // produce from two profile levels -- replayed via
-    // apply_incremental, not unioned as a pre-flattened set, so the
-    // "-foo" genuinely reaches back and cancels IUSE's own "+foo".
+    // A genuine `-foo` in profile/make.conf cancels an earlier
+    // `+foo` IUSE default: one continuous incremental walk.
     let use_tokens = vec!["foo".to_string(), "-foo bar".to_string()];
     let use_flags = euf_flat(EufFlatArgs {
         iuse: "+foo",
@@ -127,11 +119,8 @@ fn effective_use_flags_lets_use_tokens_explicitly_cancel_a_plus_iuse_default() {
 
 #[test]
 fn effective_use_flags_applies_a_use_prefix_wildcard() {
-    // #67 S2: conf-tier USE_EXPAND folding produces
-    // `-video_cards_*`; it shares real's USE loop with the IUSE
-    // defaults, so it cancels an ebuild's `+video_cards_dummy`
-    // default, and the same level's plain `video_cards_intel` token
-    // still lands.
+    // Conf-tier USE_EXPAND folding produces `-video_cards_*`, which
+    // cancels an ebuild `+video_cards_dummy` default in the same loop.
     let mut config = test_config();
     config.conf_use_tokens = vec!["-video_cards_* video_cards_intel".to_string()];
     let flags = effective_use_flags(EffectiveUseFlagsArgs {
@@ -172,11 +161,8 @@ fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
 
 #[test]
 fn effective_use_flags_defaults_walk_is_per_profile_level() {
-    // Two chain levels: the parent's package.use enables `foo` for
-    // this package; the child's make.defaults disables it. Real
-    // portage walks make.defaults-then-package.use one profile at a
-    // time, so the child's `-foo` (applied after the parent's
-    // package.use) wins.
+    // The defaults walk is per profile level: a child's
+    // make.defaults can cancel a parent's package.use.
     let layers = vec![
         portage_profile::ProfileUseLayer {
             make_defaults_use: vec![],
@@ -323,10 +309,8 @@ fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() 
 
 #[test]
 fn effective_use_flags_repo_package_use_is_weaker_than_an_iuse_default() {
-    // real `configdict["repo"]` is applied BEFORE `pkginternal`, so
-    // an ebuild's own explicit IUSE default overrides a repo-level
-    // `package.use` -- the divergence the old flat model had (it
-    // applied every `package.use` source last, strongest).
+    // Portage applies `repo` before `pkginternal`, so an ebuild IUSE
+    // default overrides repo `package.use`.
     let a = euf_layers(EufLayersArgs {
         iuse: "-foo",
         use_tokens: &[],
@@ -369,10 +353,7 @@ fn effective_use_flags_repo_package_use_is_weaker_than_an_iuse_default() {
 
 #[test]
 fn effective_use_flags_profile_package_use_loses_to_make_conf() {
-    // profile `package.use` is real `configdict["defaults"]` --
-    // applied BEFORE `conf`. So `make.conf USE="-foo"` wins over a
-    // profile `package.use` line enabling `foo` (the old flat model
-    // applied profile `package.use` after make.conf, so `foo` won).
+    // Profile `package.use` sits below `conf`, so make.conf wins.
     let flags = euf_layers(EufLayersArgs {
         iuse: "foo",
         use_tokens: &[],
@@ -389,10 +370,8 @@ fn effective_use_flags_profile_package_use_loses_to_make_conf() {
 
 #[test]
 fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_use() {
-    // package.env's own USE= sits in the `pkg` layer, applied just
-    // before user `/etc/portage/package.use` (real _grab_pkg_env
-    // fills pkg_configdict, then self.puse is appended after). So it
-    // beats make.conf...
+    // package.env USE sits in the `pkg` layer: beats make.conf but
+    // loses to user package.use.
     let with_env = {
         let cfg = portage_profile::Config {
             conf_use_tokens: vec!["-foo".to_string()],
@@ -439,8 +418,7 @@ fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_us
 
 #[test]
 fn effective_use_flags_env_use_is_the_highest_tier_and_beats_user_package_use() {
-    // Real `configdict["env"]` is above `pkg`: `USE="-foo"` in the
-    // process env overrides a user `/etc/portage/package.use foo`.
+    // Env USE is the highest tier: beats user package.use.
     let with_env_use = |env_tokens: &[String], user_pu: &[(String, Vec<String>)]| {
         let cfg = portage_profile::Config {
             package_use_user: user_pu.to_vec(),
@@ -467,9 +445,7 @@ fn effective_use_flags_env_use_is_the_highest_tier_and_beats_user_package_use() 
 
 #[test]
 fn effective_use_flags_envd_is_the_lowest_tier() {
-    // Real `configdict["env.d"]` (from `/etc/profile.env`) is the
-    // bottom of `USE_ORDER` -- it enables a flag nothing else touches,
-    // but any higher tier (here a repo `package.use -foo`) overrides.
+    // env.d is the lowest tier: anything higher overrides it.
     let euf = |envd: &[String], repo_pu: &[(String, Vec<String>)]| {
         let cfg = portage_profile::Config {
             package_use_repo: repo_pu.to_vec(),
@@ -497,8 +473,7 @@ fn effective_use_flags_envd_is_the_lowest_tier() {
 
 #[test]
 fn effective_use_flags_user_package_use_wins_over_make_conf() {
-    // user `/etc/portage/package.use` is real `configdict["pkg"]` --
-    // applied AFTER `conf`, the strongest layer before force/mask.
+    // User package.use sits above `conf`.
     let flags = euf_layers(EufLayersArgs {
         iuse: "foo",
         use_tokens: &[],
@@ -620,8 +595,8 @@ fn effective_use_flags_matches_a_wildcard_package_use_entry() {
     assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
 }
 
-/// Backlog #104 S3: the `resolved_use_mask_or_force` memo is
-/// transparent -- a second identical call shares the allocation.
+/// The `resolved_use_mask_or_force` memo is transparent: a second
+/// identical call shares the allocation.
 #[test]
 fn resolved_use_mask_or_force_memo_shares_the_allocation() {
     let config = portage_profile::Config::default();
@@ -652,9 +627,8 @@ fn resolved_use_mask_or_force_memo_shares_the_allocation() {
         stable: true,
     });
     assert!(!Rc::ptr_eq(&a, &c));
-    // Backlog #122: `category`/`package` are key components, not
-    // merely implied by `candidate_str` -- the same string with a
-    // different package is a different entry with its own value.
+    // `category`/`package` are key components on their own, not
+    // merely implied by `candidate_str`.
     let config = portage_profile::Config {
         use_mask_force_levels: vec![portage_profile::UseMaskForceLevel {
             package_use_mask: vec![("dev-libs/pkg".to_string(), vec!["special".to_string()])],
@@ -713,10 +687,8 @@ fn effective_use_flags_applies_package_use_force_and_mask() {
 
 #[test]
 fn effective_use_flags_package_use_mask_wins_over_force_on_conflict() {
-    // Same flag both forced and masked by two entries at the SAME
-    // specificity tier -- mask must win, matching real portage's own
-    // force-then-mask application order (see effective_use_flags's
-    // own doc comment).
+    // Same flag forced and masked at the same tier: mask wins
+    // (force-then-mask order).
     let base: Vec<String> = Vec::new();
     let package_use_force = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
     let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
@@ -744,13 +716,8 @@ fn effective_use_flags_package_use_mask_wins_over_force_on_conflict() {
 
 #[test]
 fn effective_use_flags_global_use_force_wins_over_a_package_use_disable() {
-    // Real regenerate() applies self.useforce (global use.force
-    // combined with per-package getUseForce(pkg)) as the literal
-    // last step of its own incremental USE walk, strictly after the
-    // "pkg" (package.use) tier -- so a package.use "-flag" entry can
-    // NEVER turn off a globally use.force'd flag, unlike an earlier
-    // version of portuale which folded use_force into `base` too
-    // early, letting package.use incorrectly win.
+    // Global use.force applies last in the walk, so a package.use
+    // `-flag` can never turn off a globally forced flag.
     let use_force = HashSet::from(["forceflag".to_string()]);
     let package_use = vec![("dev-libs/bar".to_string(), vec!["-forceflag".to_string()])];
     let use_flags = euf_flat(EufFlatArgs {
@@ -777,10 +744,7 @@ fn effective_use_flags_global_use_force_wins_over_a_package_use_disable() {
 
 #[test]
 fn effective_use_flags_global_use_mask_wins_over_a_package_use_enable() {
-    // Mirror of the force case above: global use.mask (folded into
-    // real self.usemask, applied via difference_update as the
-    // literal last operation of all) beats a package.use "+flag"
-    // entry trying to turn it on.
+    // Mirror: global use.mask beats a package.use `+flag`.
     let use_mask = HashSet::from(["maskflag".to_string()]);
     let package_use = vec![("dev-libs/bar".to_string(), vec!["maskflag".to_string()])];
     let use_flags = euf_flat(EufFlatArgs {
@@ -807,11 +771,8 @@ fn effective_use_flags_global_use_mask_wins_over_a_package_use_enable() {
 
 #[test]
 fn effective_use_flags_applies_stable_force_and_mask_only_when_stable() {
-    // "amd64" (no "~") is stable in this synthetic config: converting
-    // it to "~amd64" would fall outside accept_keywords={"amd64"},
-    // so is_stable's own "would masking every keyword make this
-    // invisible" check is true. use_stable_force/package_use_stable_force
-    // and use_stable_mask/package_use_stable_mask should all apply.
+    // `amd64` is stable in this synthetic config, so the stable-only
+    // sources all apply.
     let base: Vec<String> = Vec::new();
     let use_stable_force = HashSet::from(["globalstableforce".to_string()]);
     let use_stable_mask = HashSet::from(["globalstablemask".to_string()]);
@@ -854,10 +815,7 @@ fn effective_use_flags_applies_stable_force_and_mask_only_when_stable() {
 
 #[test]
 fn effective_use_flags_skips_stable_force_and_mask_when_not_stable() {
-    // "~amd64" (already unstable) is NOT stable: replacing it with
-    // its own already-"~"-prefixed form changes nothing, so it stays
-    // visible either way -- is_stable's own check is false. None of
-    // the stable-only sources should apply at all.
+    // `~amd64` is not stable, so no stable-only source applies.
     let base: Vec<String> = Vec::new();
     let use_stable_force = HashSet::from(["globalstableforce".to_string()]);
     let accept_keywords = HashSet::from(["~amd64".to_string()]);
@@ -885,12 +843,8 @@ fn effective_use_flags_skips_stable_force_and_mask_when_not_stable() {
 
 #[test]
 fn specificity_ordered_flags_processes_entries_in_source_order() {
-    // Entries arrive already in profile-chain / source order. A
-    // `-flag` in a *later* source cancels a `flag` from an *earlier*
-    // one, regardless of the two atoms' relative specificity -- this
-    // is the real `stack_lists(incremental=True)` over `[src0, src1]`
-    // and the `targets/*` un-mask pattern (a broad child `cat/pkg
-    // -flag` overriding a narrow parent `>=cat/pkg-N flag`).
+    // Entries fold in source order: a later `-flag` cancels an
+    // earlier `flag`, regardless of relative specificity.
     let parent_masks_child_unmasks = vec![
         (">=dev-libs/bar-1".to_string(), vec!["flag".to_string()]),
         ("dev-libs/bar".to_string(), vec!["-flag".to_string()]),
@@ -927,11 +881,8 @@ fn specificity_ordered_flags_processes_entries_in_source_order() {
 #[test]
 fn resolved_use_mask_interleaves_per_level_across_sources() {
     use portage_profile::UseMaskForceLevel;
-    // Real `getUseMask`'s per-level interleave: level 0's
-    // `package.use.mask` masks `xmc` for the candidate, a *later*
-    // level's *global* `use.mask` un-masks it with `-xmc`. The flat
-    // union (global stack {} ∪ per-package {xmc}) would keep it
-    // masked; the interleave must not.
+    // Per-level interleave: a later level's global `-xmc` cancels an
+    // earlier level's `package.use.mask xmc`.
     let config = portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
         use_mask_force_levels: vec![
@@ -1006,11 +957,8 @@ fn atom_specificity_ranks_exact_version_above_bare_above_wildcard() {
 
 #[test]
 fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
-    // The `use_context_fingerprint` cache key must distinguish two
-    // configs that differ only in a *middle* `package_use` entry
-    // (same length, same first + last). Same candidate / iuse /
-    // keywords, so only the config content can produce a different
-    // answer.
+    // The fingerprint must see a differing middle `package_use`
+    // entry (same length, same first + last).
     let base = |mid_flag: &str| portage_profile::Config {
         package_use: vec![
             ("dev-libs/other".to_string(), vec!["x".to_string()]),
@@ -1048,11 +996,8 @@ fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
     );
 }
 
-/// #105: the composed fingerprint uses a frozen `use_context_base`
-/// when one is present (the production path, set by `resolve_config`)
-/// and still separates `autounmask_use` -- the one field the
-/// backtracking loop mutates on a clone. A hand-built config without
-/// a base falls back to the full content hash.
+/// The fingerprint uses the frozen `use_context_base` when present
+/// (the production path) and still separates `autounmask_use`.
 #[test]
 fn use_context_fingerprint_uses_the_frozen_base_and_separates_autounmask_use() {
     let base_config = portage_profile::Config::default();
@@ -1078,9 +1023,8 @@ fn use_context_fingerprint_uses_the_frozen_base_and_separates_autounmask_use() {
     assert_ne!(before, use_context_fingerprint(&unfrozen));
 }
 
-/// Backlog #121 (audit O6): mutating a USE-context field after
-/// `resolve_config` froze its digest trips the frozen-base
-/// `debug_assert_eq!` instead of silently poisoning the memo.
+/// The fingerprint debug-asserts on post-freeze mutation instead of
+/// silently poisoning the memo.
 #[test]
 #[should_panic(expected = "mutated after resolve_config")]
 #[cfg(debug_assertions)]

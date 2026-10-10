@@ -1,24 +1,11 @@
-/// Backlog #184: the shadowed-arm order legs for
-/// `direct_solve_instance_use`/`direct_solve_atom_matches`, in the
-/// #166 scratch style. Kept self-contained (own scratch repo helpers
-/// copied from `tests_166`) so the other Track U branches' blocks
-/// rebase mechanically.
+/// Shadowed-arm order legs for `direct_solve_instance_use` /
+/// `direct_solve_atom_matches` (self-contained scratch helpers).
 use crate::*;
 use portage_util::TempDir;
 
-// ---- #184: the shadowed (no-entry) arm of
-// `direct_solve_instance_use` returned `slot_conflict_flag_sets`'s
-// `(iuse, use_flags)` = `(declared, enabled)` pair as-is against the
-// documented `(enabled, declared)` contract (the installed and entry
-// arms both return `(enabled, declared)`, and the caller
-// `direct_solve_atom_matches` destructures `let (enabled, declared) =
-// ...`). Real evaluates the atom's USE deps against the package's
-// enabled USE with its IUSE as the valid set: `Package.with_use`
-// (`3rdparty/portage/lib/_emerge/Package.py:870`) applied to
-// `depgraph._pkg_use_enabled`
-// (`3rdparty/portage/lib/_emerge/depgraph.py:7669`). The swap
-// evaluated them against the IUSE as if every declared flag were
-// enabled. ----
+// Shadowed arm: evaluate the atom's USE deps against the package's
+// enabled USE with its IUSE as the valid set.
+// Portage: lib/_emerge/Package.py, with_use; lib/_emerge/depgraph.py
 
 /// Fresh unique scratch dir per test (vdb lives under it, so the
 /// per-root aux caches never see a reused path).
@@ -26,7 +13,7 @@ fn dir_184(tag: &str) -> std::path::PathBuf {
     TempDir::new(&format!("portuale-184-{tag}")).keep()
 }
 
-/// One scratch ebuild plus its real md5-cache entry (the md5-cache
+/// One scratch ebuild plus a valid md5-cache entry (the md5-cache
 /// validation guard fails otherwise).
 fn write_pkg_184(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str) {
     use md5::Digest as _;
@@ -133,11 +120,7 @@ fn conflict_184() -> SlotConflict {
 }
 
 /// A shadowed merge instance (no entry, not installed) reads the
-/// tree candidate effectively in `(enabled, declared)` order: IUSE
-/// `+fa fb` enables only `fa` (the `+` default) while declaring
-/// both. Before the fix the arm returned
-/// `slot_conflict_flag_sets` as-is, i.e. `(enabled, declared) =
-/// ({fa, fb}, {fa})`.
+/// tree candidate in `(enabled, declared)` order.
 #[test]
 fn direct_solve_instance_use_184_shadowed_reads_tree_effectively() {
     let root = dir_184("iu-shadowed");
@@ -159,12 +142,8 @@ fn direct_solve_instance_use_184_shadowed_reads_tree_effectively() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A `[fb(+)]` use-dep is not satisfied by the shadowed instance:
-/// `fb` is declared but not enabled. Before the fix the swapped arm
-/// put the whole IUSE in the enabled position, so the dep wrongly
-/// matched. (Plain `[fb]` cannot discriminate: the
-/// `use_deps_satisfied` valid-set gate rejects a default-less flag
-/// outside IUSE either way.)
+/// A `[fb(+)]` use-dep is not satisfied by the shadowed instance
+/// (`fb` declared but not enabled).
 #[test]
 fn direct_solve_atom_matches_184_shadowed_rejects_disabled_flag() {
     let root = dir_184("am-shadowed");

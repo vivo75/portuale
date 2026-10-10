@@ -2,52 +2,19 @@
 
 use crate::*;
 
-// ===========================================================================
-// profiles/updates/ package moves  (SCOPE_BACKLOG Part 2 Section H item 2)
-// ===========================================================================
-//
-// Real `portage.update` + `portage._global_updates._do_global_updates`: each
-// repo's `profiles/updates/<quarter>` files hold `move cat/old cat/new` and
-// `slotmove cat/pkg <oldslot> <newslot>` directives that a sync applies, once
-// and permanently, to the vdb, world file, binary packages and config files,
-// and that ebuild metadata regeneration bakes into `metadata/md5-cache`.
-//
-// Portuale never syncs and never mutates the vdb, so it applies the
-// directives at *read* time instead: `apply_updates_to_atom` (command-line and
-// world atoms), `apply_updates_to_dep_string` (each `*DEPEND` string read from
-// md5-cache -- real `update_dbentry`), and `apply_updates_to_cp` /
-// `apply_updates_to_slot` (an installed package's identity as the resolver
-// sees it). `installed_cp_sources` runs the `move` map *backwards* so a query
-// for the new name still finds the not-yet-renamed vdb directory.
-//
-// DELIBERATE CUTS (all no-ops for a `--pretend` that never writes):
-//   - the actual on-disk vdb category rename / `*DEPEND` rewrite, the world /
-//     world_sets file rewrite, binary-package (`%`/`S`) updates, and the
-//     `/etc/portage/package.*` (`p`) rewrite -- `--pretend` mutates none of
-//     these, so applying the moves in memory on read is equivalent.
-//   - real `grab_updates`' `os.scandir` file order (+ `prev_mtimes`
-//     incremental logic): portuale sorts the quarter files by `(year,
-//     quarter)` parsed from the `NQ-YYYY` name (non-matching names last, by
-//     name) and re-reads them every run. Deterministic, and strictly better
-//     than real portage's arbitrary order for a chained move that spans two
-//     quarter files.
-//   - a `slotmove` whose atom carries a version/operator: real
-//     `update_dbentry` acts only on the unversioned case
-//     (`orig_atom.version is None`), so portuale just drops the qualified
-//     form at parse time (same net effect).
+// `profiles/updates/` package moves, applied at read time.
+// Portage: portage.update, _global_updates._do_global_updates
 
-/// One validated `profiles/updates/` directive (real
-/// `portage.update.parse_updates`).
+/// One validated `profiles/updates/` directive.
+/// Portage: portage.update.parse_updates
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateCmd {
-    /// `move <old cat/pkg> <new cat/pkg>` -- both bare `cat/pkg` (real
-    /// `parse_updates` rejects a blocker or any `atom != atom.cp`).
+    /// `move <old cat/pkg> <new cat/pkg>` -- both bare `cat/pkg`.
     Move {
         old: (String, String),
         new: (String, String),
     },
-    /// `slotmove <cat/pkg> <origslot> <newslot>` -- only the unversioned
-    /// `cat/pkg` form is kept (see the module cut note).
+    /// `slotmove <cat/pkg> <origslot> <newslot>` -- unversioned form only.
     SlotMove {
         cp: (String, String),
         old_slot: String,
@@ -55,9 +22,8 @@ pub enum UpdateCmd {
     },
 }
 
-/// A bare `cat/pkg` (no version/slot/operator/blocker/use/repo), else `None`
-/// -- real `parse_updates`' `Atom(x)` + `atom.blocker or atom != atom.cp`
-/// rejection.
+/// A bare `cat/pkg` (no version/slot/operator/blocker/use/repo), else `None`.
+/// Portage: portage.update.parse_updates
 pub(crate) fn bare_cp(s: &str) -> Option<(String, String)> {
     let a = portage_dep::parse_atom(s)?;
     if a.blocker != portage_dep::Blocker::None
@@ -73,7 +39,8 @@ pub(crate) fn bare_cp(s: &str) -> Option<(String, String)> {
     Some((a.category, a.package))
 }
 
-/// Real `_get_slot_re`: a slot name is `[A-Za-z0-9_][A-Za-z0-9+_.-]*`.
+/// A slot name is `[A-Za-z0-9_][A-Za-z0-9+_.-]*`.
+/// Portage: portage.update, _get_slot_re
 pub(crate) fn valid_slot_name(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
@@ -83,9 +50,9 @@ pub(crate) fn valid_slot_name(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '_' | '.' | '-'))
 }
 
-/// Real `portage.update.parse_updates`: one directive per non-blank line,
-/// `move`/`slotmove` only, wrong arity or a malformed atom/slot skips that
-/// line (real appends to `errors` -- never fatal).
+/// One directive per non-blank line, `move`/`slotmove` only; a
+/// malformed line is skipped, never fatal.
+/// Portage: portage.update.parse_updates
 pub fn parse_updates_content(text: &str) -> Vec<UpdateCmd> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -96,8 +63,7 @@ pub fn parse_updates_content(text: &str) -> Vec<UpdateCmd> {
                     out.push(UpdateCmd::Move { old, new });
                 }
             }
-            // A version/operator-qualified slotmove atom is a no-op in real
-            // `update_dbentry`; `bare_cp` already drops it.
+            // A versioned slotmove atom is a no-op; `bare_cp` drops it.
             ["slotmove", pkg, os, ns]
                 if valid_slot_name(os) && valid_slot_name(ns) && bare_cp(pkg).is_some() =>
             {
@@ -113,8 +79,7 @@ pub fn parse_updates_content(text: &str) -> Vec<UpdateCmd> {
     out
 }
 
-/// `(year, quarter)` from a `NQ-YYYY` updates-file name, for the quarter
-/// sort. A name that doesn't match sorts last (`year = i32::MAX`), by name.
+/// Sort key for `NQ-YYYY` names; a non-matching name sorts last, by name.
 pub(crate) fn quarter_sort_key(name: &str) -> (i32, i32, String) {
     if let Some((q, y)) = name.split_once("Q-")
         && let (Ok(q), Ok(y)) = (q.parse::<i32>(), y.parse::<i32>())
@@ -125,9 +90,8 @@ pub(crate) fn quarter_sort_key(name: &str) -> (i32, i32, String) {
     (i32::MAX, 0, name.to_string())
 }
 
-/// Every directive from one repo's `profiles/updates/`, quarter files in
-/// `(year, quarter)` order (real `grab_updates` + `parse_updates`, minus the
-/// scandir order / `prev_mtimes` logic -- see the module cut note).
+/// Every directive from one repo's `profiles/updates/`, quarter files
+/// in `(year, quarter)` order.
 pub(crate) fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
     let updpath = repo_location.join("profiles").join("updates");
     let Ok(rd) = portage_util::read_dir_entries(&updpath) else {
@@ -175,11 +139,10 @@ pub fn global_package_updates() -> &'static [UpdateCmd] {
     })
 }
 
-/// Real `update_dbentry` for a single `move`, applied to one atom token:
-/// if the token parses as an atom whose `cp` is `old`, rewrite just the
-/// `cat/pkg` part (first occurrence, real `token.replace(old, new, 1)`),
-/// preserving every version/slot/use/blocker part. Chained moves are
+/// Apply one `move` to one atom token: if its `cp` is `old`, rewrite
+/// just the `cat/pkg` part, preserving the rest. Chained moves are
 /// handled by the caller applying every command in order.
+/// Portage: portage.update, update_dbentry
 pub(crate) fn apply_move_to_token(
     token: &str,
     old: &(String, String),
@@ -199,11 +162,10 @@ pub(crate) fn apply_move_to_token(
     token.replacen(&old_cp, &new_cp, 1)
 }
 
-/// Real `update_dbentry` for a single `slotmove` (`orig_atom.version is
-/// None` branch), applied to one atom token: an atom on `cp` whose
-/// `:slot` (ignoring sub-slot / operator) is `old_slot` gets it rewritten
-/// to `new_slot`. Versioned atoms are left alone (real's own
-/// restriction).
+/// Apply one `slotmove` to one atom token: an atom on `cp` whose
+/// `:slot` is `old_slot` gets it rewritten to `new_slot`. Versioned
+/// atoms are left alone.
+/// Portage: portage.update, update_dbentry
 pub(crate) fn apply_slotmove_to_token(
     token: &str,
     cp: &(String, String),
@@ -220,10 +182,8 @@ pub(crate) fn apply_slotmove_to_token(
     if atom.version.is_some() {
         return token.to_string();
     }
-    // Documented micro-cut: a slotmove target token that also carries a
-    // `::repo` or `[usedeps]` part is left alone rather than risk a
-    // corrupt splice (real `Atom.with_slot` rebuilds every part -- no
-    // fixture exercises this combination).
+    // A slotmove target carrying `::repo` or `[usedeps]` is left alone
+    // rather than risk a corrupt splice (no fixture covers it).
     if atom.repo.is_some() || atom.use_deps.is_some() {
         return token.to_string();
     }
@@ -231,8 +191,8 @@ pub(crate) fn apply_slotmove_to_token(
         Some(s) if s == old_slot => {}
         _ => return token.to_string(),
     }
-    // Rebuild the `:slot` part. Real `with_slot` keeps a differing
-    // sub-slot but rewrites a sub-slot that equalled the old slot.
+    // Rebuild the `:slot` part, keeping a differing sub-slot but
+    // rewriting one that equalled the old slot.
     let sub = match &atom.sub_slot {
         Some(ss) if ss == old_slot => new_slot.to_string(),
         Some(ss) => ss.clone(),
@@ -248,22 +208,13 @@ pub(crate) fn apply_slotmove_to_token(
     } else {
         format!("{new_slot}/{sub}{op}")
     };
-    // Splice the new slot expression in place of the old `:...` run.
     let prefix = token.split(':').next().unwrap_or(token);
     format!("{prefix}:{new_slotpart}")
 }
 
-/// Apply every `move`/`slotmove` (in order, so chains resolve) to one atom
-/// string -- for a command-line or world atom.
-/// Every `cat/pkg` that *could* be the first command in the loop to
-/// touch an atom -- the union of every `move` command's `old` and every
-/// `slotmove`'s `cp`, grouped `category -> package names`. Grouping keeps
-/// the hot per-token check two **borrowed** lookups (`#119`: the flat
-/// `HashSet<(String, String)>`'s `contains` demanded a
-/// `(category.clone(), package.clone())` tuple, two `String` allocations
-/// per token of every rewritten dep string). On a real tree
-/// `profiles/updates/` holds thousands of accumulated commands, and this
-/// walk runs per token per dep string.
+/// Every `cat/pkg` that could be the first command to touch an atom:
+/// the union of every `move`'s `old` and every `slotmove`'s `cp`,
+/// grouped `category -> package names` for borrow-only lookups.
 pub(crate) fn update_move_targets() -> &'static HashMap<String, HashSet<String>> {
     static TARGETS: OnceLock<HashMap<String, HashSet<String>>> = OnceLock::new();
     TARGETS.get_or_init(|| {
@@ -279,14 +230,15 @@ pub(crate) fn update_move_targets() -> &'static HashMap<String, HashSet<String>>
     })
 }
 
+/// Apply every `move`/`slotmove` (in order, so chains resolve) to one
+/// atom string -- for a command-line or world atom.
 pub fn apply_updates_to_atom(atom: &str) -> String {
     apply_updates_to_atom_with(atom, global_package_updates(), update_move_targets())
         .unwrap_or_else(|| atom.to_string())
 }
 
-/// Backlog #119: `Some(rewritten)` only when a command actually changed
-/// the token, `None` when it is byte-identical to the input -- the
-/// unchanged case costs no `String`.
+/// `Some(rewritten)` only when a command actually changed the token,
+/// `None` when byte-identical (no `String` allocated).
 pub(crate) fn apply_updates_to_atom_with(
     atom: &str,
     cmds: &[UpdateCmd],
@@ -295,10 +247,8 @@ pub(crate) fn apply_updates_to_atom_with(
     if targets.is_empty() {
         return None;
     }
-    // Fast path: if the atom's own `cp` isn't the `old`/`cp` of any
-    // command, nothing in the loop below can ever rewrite it. Both
-    // lookups borrow (`HashMap<String,_>::get(&str)`,
-    // `HashSet<String>::contains(&str)`), so this costs no allocation.
+    // Fast path: if the atom's own `cp` is no command's target,
+    // nothing below can rewrite it (borrowed lookups, no allocation).
     if let Some(parsed) = portage_dep::parse_atom(atom.trim_start_matches('!'))
         && !targets
             .get(parsed.category.as_str())
@@ -317,22 +267,14 @@ pub(crate) fn apply_updates_to_atom_with(
             } => apply_slotmove_to_token(&cur, cp, old_slot, new_slot),
         };
     }
-    // A command that matched the cp but left the token unchanged (a
-    // slotmove on another slot, a versioned atom) is reported as
-    // unchanged, exactly like the old `updated != *dep` comparison.
+    // A cp-matching but token-identical command still reports unchanged.
     if cur == atom { None } else { Some(cur) }
 }
 
-/// Real `update_dbentry`'s whitespace-preserving `re.split(r"(\s+)")` pass
-/// over a `*DEPEND` string: rewrite every atom token, leave separators and
-/// non-atom tokens (`||`, `(`, `)`, `use?`) untouched.
-///
-/// Backlog #119: `Some(rewritten)` only when at least one token changed;
-/// `None` means the input is returned as-is, so the caller can skip its
-/// insert and the unchanged case allocates no output at all. The old
-/// shape `format!`ed every chunk and `collect`ed unconditionally, even
-/// when no `profiles/updates/` command matched -- 7.5 % of the reference
-/// workload across the md5-cache misses' dep strings.
+/// Whitespace-preserving pass over a `*DEPEND` string: rewrite every
+/// atom token, leave separators and non-atom tokens untouched.
+/// `Some(rewritten)` only when a token changed, else `None`.
+/// Portage: portage.update, update_dbentry
 pub fn apply_updates_to_dep_string(dep: &str) -> Option<String> {
     if global_package_updates().is_empty() || dep.trim().is_empty() {
         return None;
@@ -370,16 +312,7 @@ pub(crate) fn apply_updates_to_dep_string_with(
 }
 
 /// Every `move` chain fully resolved once: `old cat/pkg` -> final
-/// `cat/pkg`. Real portage bakes package moves into the vdb + metadata
-/// cache at sync time; portuale applies them at read time instead, but a
-/// linear replay of all ~500 `profiles/updates/` `move` commands *per
-/// lookup* -- and `apply_updates_to_cp` runs once per installed package at
-/// ~10 resolver call sites -- was ~15% of a deep `emerge -pu`. Built by
-/// replaying the command list once per distinct `old` cp, so a chain
-/// (`a/x -> b/x -> c/x`) resolves exactly as the old per-cp loop did.
-/// Same `OnceLock`-over-`global_package_updates()` shape as
-/// `update_move_targets` (so `--package-moves=n` -> empty list -> empty
-/// map -> identity, matching the old loop's no-op).
+/// `cat/pkg` (a chain resolves as the old per-cp loop did).
 pub(crate) fn move_chain_map_with(
     cmds: &[UpdateCmd],
 ) -> HashMap<(String, String), (String, String)> {
@@ -412,9 +345,8 @@ pub(crate) fn move_chain_map() -> &'static HashMap<(String, String), (String, St
     MAP.get_or_init(|| move_chain_map_with(global_package_updates()))
 }
 
-/// The forward `move` destination for a `cat/pkg` (chains applied), for an
-/// installed package's identity as the resolver should see it -- one
-/// [`move_chain_map`] lookup, identity when nothing moved it.
+/// The forward `move` destination for a `cat/pkg` (chains applied):
+/// one [`move_chain_map`] lookup, identity when nothing moved it.
 pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
     match move_chain_map().get(&(category.to_string(), package.to_string())) {
         Some(dest) => dest.clone(),
@@ -422,27 +354,18 @@ pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
     }
 }
 
-/// Inverted `move` map: fully-resolved destination -> the `Move`
-/// commands' `old` cps that land on it, in command order.
 pub(crate) type InstalledCpSourcesMap = HashMap<(String, String), Vec<(String, String)>>;
 
-/// Inverted [`move_chain_map`]: `installed_cp_sources` used to replay the
-/// whole `profiles/updates/` list (one `apply_updates_to_cp` per command)
-/// on every call -- 6 M calls on a deep `emerge -pu`; this is built once,
-/// so the lookup is a single `HashMap` get. Same
-/// `OnceLock`-over-`global_package_updates()` shape as `move_chain_map`
-/// (so `--package-moves=n` -> empty list -> empty map).
+/// Inverted [`move_chain_map`]: destination -> the `Move` commands'
+/// `old` cps landing on it, in command order. Built once, so the
+/// lookup is a single `HashMap` get.
 pub(crate) fn installed_cp_sources_map_with(cmds: &[UpdateCmd]) -> InstalledCpSourcesMap {
     let chain = move_chain_map_with(cmds);
     let mut map: InstalledCpSourcesMap = HashMap::new();
     for cmd in cmds {
         if let UpdateCmd::Move { old, .. } = cmd {
-            // `installed_cp_sources` pushes `old` exactly when its
-            // fully-resolved chain lands on the queried cp; group by
-            // that destination up front, in command order, deduped.
-            // A `move` cycle replays back to its start (`dest == old`);
-            // the target is already `out[0]`, so skipping keeps the old
-            // per-call loop's `!out.contains(old)` invariant.
+            // Group by resolved destination, in command order, deduped
+            // (a cycle's target is already `out[0]`).
             let dest = chain.get(old).cloned().unwrap_or_else(|| old.clone());
             if dest == *old {
                 continue;
@@ -461,10 +384,8 @@ pub(crate) fn installed_cp_sources_map() -> &'static InstalledCpSourcesMap {
     MAP.get_or_init(|| installed_cp_sources_map_with(global_package_updates()))
 }
 
-/// Every `cat/pkg` whose forward-`move` chain lands on `(category,
-/// package)` -- including `(category, package)` itself. Lets a vdb query
-/// for the *new* name also scan the *old*, not-yet-renamed directory
-/// (real global-updates renames it on disk; portuale doesn't).
+/// Every `cat/pkg` whose `move` chain lands here (including itself),
+/// so a vdb query for the new name also scans the old directory.
 pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, String)> {
     let target = (category.to_string(), package.to_string());
     let mut out = vec![target.clone()];
@@ -474,10 +395,8 @@ pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, Strin
     out
 }
 
-/// Test seam for [`installed_cp_sources`] (the
-/// `apply_updates_to_dep_string_with` precedent): the same lookup against
-/// an explicit command list, so a synthetic `move` cycle can be tested
-/// without global state.
+/// Test seam for [`installed_cp_sources`]: the same lookup against
+/// an explicit command list.
 #[cfg(test)]
 pub(crate) fn installed_cp_sources_with(
     category: &str,
@@ -492,13 +411,10 @@ pub(crate) fn installed_cp_sources_with(
     out
 }
 
-/// `cat/pkg` -> its `slotmove`s (`old_slot`, `new_slot`), in command order.
 pub(crate) type SlotMoveMap = HashMap<(String, String), Vec<(String, String)>>;
 
-/// Every `slotmove` grouped by its `cat/pkg`, in command order -- the
-/// `slotmove` counterpart to [`move_chain_map`], so `apply_updates_to_slot`
-/// is a single `HashMap` lookup plus a walk of just that package's own
-/// handful of slot moves rather than the whole `profiles/updates/` list.
+/// Every `slotmove` grouped by its `cat/pkg`, in command order, so
+/// `apply_updates_to_slot` walks only that package's own moves.
 pub(crate) fn slot_move_map() -> &'static SlotMoveMap {
     static MAP: OnceLock<SlotMoveMap> = OnceLock::new();
     MAP.get_or_init(|| {

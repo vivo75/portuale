@@ -1,25 +1,14 @@
 use super::*;
 
-/// Backlog #215 (v2 `#24f`): real `_slot_operator_unsatisfied_probe`
-/// (`_emerge/depgraph.py:2817`, fired at `:3447-3458`) -- a dead-end
-/// pass whose `NoVisibleCandidate` entry is an installed owner's
-/// unsatisfiable built `:=` dep seeds that owner when a replacement
-/// parent (same slot, visible, unmasked per instance like real's
-/// `_iter_similar_available` `:3036-3040`) carries a satisfiable
-/// live `:=` on the same child cp. Guards: only an owner whose own
-/// recorded want is the built atom seeds (real probes one dep edge,
-//  so a plain-atom co-owner never does), the atom must be
-/// built-form (a plain `:=` never qualifies), the owner must be
-/// installed, an already masked installed instance stays dead (else
-/// the restart would loop), an `--exclude`d owner refuses, and with
-/// no (or a different-slot, or a fully masked) replacement the pass
-/// stays a dead end.
+/// Dead-end pass whose `NoVisibleCandidate` entry is an installed
+/// owner's unsatisfiable built `:=` dep seeds that owner when a
+/// replacement parent carries a satisfiable live `:=` on the same child.
+/// Portage: lib/_emerge/depgraph.py, _slot_operator_unsatisfied_probe
 #[test]
 fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     use md5::Digest as _;
     // One scratch root per shape: vdb owner(s) plus a repo holding
-    // `unsatprov-2` (slot 2/2) and the requested parent ebuilds
-    // (each carrying the satisfiable live `:=`).
+    // `unsatprov-2` and the requested parent ebuilds.
     fn unsat_base(
         tag: &str,
         vdb: &[(&str, &str)],
@@ -73,8 +62,7 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         (base, repos)
     }
     // The dead-end pass: the provider cp resolves to
-    // `NoVisibleCandidate`, pulled by the installed parent's own
-    // built want (`>=app-misc/unsatprov-1:0/1=`).
+    // `NoVisibleCandidate`, pulled by the installed parent's built want.
     type UnsatInputs = (
         Vec<GraphEntry>,
         HashMap<(String, String), Vec<String>>,
@@ -134,9 +122,8 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         BTreeSet::from([par.clone()]),
         "installed owner with an unsatisfiable built dep and a live replacement seeds"
     );
-    // Real probes one dep edge: a co-owner pulling the same cp via a
-    // plain atom never seeds, even installed with its own live
-    // replacement.
+    // A co-owner pulling the same cp via a plain atom never seeds,
+    // even installed with its own live replacement.
     let (base_x, repos_x) = unsat_base(
         "cross",
         &[("unsatpar", built), ("unsatcona", plain)],
@@ -182,7 +169,7 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         "unbuilt atoms are not probe fuel"
     );
     // An already-masked installed instance stays dead (else the
-    // restart loops, real `:3447-3448`).
+    // restart loops).
     let mut masked_owner = masked.clone();
     masked_owner.insert(
         par.clone(),
@@ -206,10 +193,8 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         .is_empty(),
         "masked owners never re-seed"
     );
-    // A masked replacement candidate yields no seed either (real
-    // `_iter_similar_available` `:3036-3040`), while the installed
-    // instance itself stays probed: masking only the v2 candidate
-    // still seeds through v1.
+    // A masked replacement candidate yields no seed; masking only
+    // one version still seeds through the other.
     let (base_m, repos_m) = unsat_base(
         "maskedcand",
         &[("unsatpar", built)],
@@ -260,7 +245,7 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         .is_empty(),
         "a masked replacement yields no seed"
     );
-    // An `--exclude`d owner refuses, like real `:2818-2824`.
+    // An `--exclude`d owner refuses.
     assert!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base,
@@ -331,11 +316,8 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         .is_empty(),
         "uninstalled owners never seed"
     );
-    // #257: a non-installed built (binary) parent. No vdb owner, the
-    // parent is a merge-bound binary graph entry; real's
-    // `_slot_operator_unsatisfied_backtrack` masks it
-    // (`slot_operator_mask_built`, `_emerge/depgraph.py:2896-2903`)
-    // instead of seeding a reinstall.
+    // A non-installed built (binary) parent is masked, not seeded
+    // as a reinstall.
     let (base_b, repos_b) = unsat_base("binary", &[], &[("unsatpar", "1", "0")]);
     let (mut entries_b, slot_want_b, pullers_b) = unsat_inputs(&[("unsatpar", built)]);
     let mut bin_par = graph_entry("app-misc", "unsatpar", "1");
@@ -367,8 +349,7 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         )]),
         "the stale binary parent is masked"
     );
-    // Already masked as a binary: real's `dep.parent not in
-    // _runtime_pkg_mask` gate (`:3447-3448`) stops the loop.
+    // An already-masked binary stops the loop.
     let mut masked_b = masked.clone();
     masked_b.insert(
         par.clone(),

@@ -2,79 +2,20 @@
 
 use crate::*;
 
-/// Real `output.py::_display_use` + `map_to_use_expand` +
-/// The installed version's own recorded `USE` / `IUSE` (both bare flag
-/// names, `USE` already intersected with `IUSE`), for
-/// `build_use_expand_display`'s own `*`/`%` diff markers -- real
-/// `_display_use`'s `old_use` / `old_iuse`. `None` at the call site for a
-/// `New` entry (no installed side) -> no markers, every flag shown plain.
+/// The installed version's recorded `USE` / `IUSE` (both bare flag
+/// names, `USE` already intersected with `IUSE`), for the `*`/`%`
+/// diff markers. `None` for a `New` entry -> no markers.
 pub(crate) struct InstalledUseState {
     pub(crate) old_use: HashSet<String>,
     pub(crate) old_iuse: HashSet<String>,
 }
 
-/// `output_helpers.py::_create_use_string`, for `emerge --pretend -v`'s
-/// own `USE="…" VAR="…"` line.
+/// Natural sort key: split on runs of digits and compare those as
+/// numbers, so `python3_9` sorts before `python3_12`.
+/// Portage: output_helpers.py, _alnum_sort_key
 ///
-/// Splits `use_flags_display` (already IUSE-declared, enabled-resolved,
-/// and `alnum_sort_key`-ordered -- real `_create_use_string`'s own
-/// `any_iuse.sort(key=_alnum_sort_key)`, a *natural* sort so `python3_9`
-/// precedes `python3_12`) into the plain `USE` group plus one group per
-/// `config.use_expand` variable whose `lowercase(name)_` prefixes the
-/// flag -- the prefix is stripped from the grouped flag (real
-/// `map_to_use_expand`: `val[len(exp) + 1:]`). `config.use_expand_hidden`
-/// groups are dropped (real `remove_hidden`). Within each group the
-/// enabled flags render first, then the disabled ones, each keeping that
-/// natural order -- real `_create_use_string`'s own
-/// `" ".join(enabled + disabled)`. `emerge --alphabetical` collapses
-/// the two back into one interleaved list (still `alnum_sort_key`); that
-/// is applied at render time (`pretend.rs::use_suffix`), not here, since
-/// it needs no resolver state.
-///
-/// When `installed` is `Some` (an `Upgrade`/`Downgrade`/`Reinstall` entry
-/// -- i.e. real `pkg_info.previous_pkg is not None`, `is_new` false),
-/// each flag is diffed against the installed version's own recorded
-/// `USE`/`IUSE`. Real `_DisplayConfig` sets `verbosity = 3` whenever
-/// `--verbose` is given (`output_helpers.py:180-187`), so `all_flags =
-/// (verbosity == 3)` is **always true** for `emerge -pv` -- meaning the
-/// diff shows *every* flag, not just the changed ones: an enabled flag
-/// not in old IUSE renders `flag%*`; enabled + in old IUSE + not in old
-/// USE renders `flag*`; enabled + unchanged renders `flag` (plain); a
-/// disabled flag not in old IUSE renders `-flag%`; disabled + was in old
-/// USE renders `-flag*`; disabled + unchanged renders `-flag` (plain);
-/// and a flag that was in old IUSE but is gone from the current ebuild's
-/// IUSE renders `(-flag%)`, or `(-flag%*)` if it was enabled -- real
-/// `_create_use_string`'s own `removed` list. `reinst_flags` (the extra
-/// per-flag "this flag triggered the reinstall" force) is still not
-/// modelled -- it only widens what `all_flags` already shows here.
-///
-/// `forced` (full flag names -- real `_display_use`'s `self.forced_flags`
-/// = `pkg.use.force | pkg.use.mask`, see `forced_or_masked_flags`) is any
-/// flag the user can't actually control: real `_create_use_string` wraps
-/// its rendered token in `( … )`, and skips the trailing `%` on a
-/// `-flag%` (a masked flag brand-new to IUSE renders `(-flag)`, not
-/// `(-flag%)`).
-///
-/// Deliberately NOT ported (separate cut): real ANSI colorization.
-///
-/// Returns `[(VAR_NAME, "rendered")]` with `USE` first, then the
-/// `USE_EXPAND` vars in sorted order (real `sorted(self.use_expand)` with
-/// `"USE"` inserted at position 0). An empty group produces no entry at
-/// all (real `_create_use_string`'s own `if ret:` guard), so an
-/// `Upgrade` whose USE didn't actually change shows *no* `USE=` line, and
-/// a package with no displayable flags returns `[]`.
-/// Real `output_helpers.py::_alnum_sort_key`: split a string on runs of
-/// digits (`re.split(r"(\d+)", x)` -- so the result alternates
-/// non-digit / digit / non-digit / …), and compare the digit runs as
-/// numbers rather than lexically. `python3_9` then sorts before
-/// `python3_12` (`9 < 12`), not after (`"9" > "12"`). Used for the
-/// `emerge -pv` `USE="…"` flag list -- real `_create_use_string`'s own
-/// `any_iuse.sort(key=_alnum_sort_key)` (and the `--alphabetical` combined
-/// list, and the removed-from-IUSE list).
-///
-/// A digit run longer than `u128` can hold (~39 digits) is kept as a
-/// `Str` part instead of overflowing -- no real USE flag has one, and
-/// `Str` vs `Str` still orders it deterministically.
+/// A digit run longer than `u128` holds is kept as `Str`, still
+/// deterministic.
 pub fn alnum_sort_key(s: &str) -> Vec<AlnumKey> {
     let mut out = Vec::new();
     let mut rest = s;
@@ -102,24 +43,17 @@ pub fn alnum_sort_key(s: &str) -> Vec<AlnumKey> {
     out
 }
 
-/// One segment of an `alnum_sort_key` -- a non-digit run (`Str`) or a
-/// digit run parsed as a number (`Num`). `Str` is ordered before `Num`
-/// so a shorter key sorts before a longer one that extends it with a
-/// number (the two variants never meet at the same position between two
-/// well-formed keys -- the split always alternates `Str`/`Num`).
+/// One segment of an `alnum_sort_key`: a non-digit run (`Str`) or a
+/// digit run as a number (`Num`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AlnumKey {
     Str(String),
     Num(u128),
 }
 
-/// Re-render the USE-display fields of every merge entry for `cp` using
-/// `config` -- the `--autounmask-backtrack` off path uses this to reflect
-/// an accumulated `package.use` change on a package the loop did not
-/// re-walk (real `_pkg_use_enabled` consulting `_needed_use_config_
-/// changes` for the display only). Mirrors the main walk's own entry-
-/// display block; a no-op for an entry with no on-disk IUSE / no matching
-/// candidate / a non-merge outcome.
+/// Re-render the USE-display fields of every merge entry for `cp`
+/// (used to reflect an accumulated `package.use` change the loop did
+/// not re-walk); a no-op for entries with no matching candidate.
 pub(crate) fn refresh_entry_use_display(
     entries: &mut [GraphEntry],
     repos: &[RepoConfig],
@@ -149,17 +83,10 @@ pub(crate) fn refresh_entry_use_display(
     }
 }
 
-/// Backlog #242 Slice D: repaint every running-rooted merge entry's USE
-/// displays from the running root's own profile (`running_config`) — real
-/// `_display_use` reads the package's own `root_config` (`output.py:822`),
-/// so a cross-root row's `USE=`/`VAR=` groups come from its own root, not
-/// the target's. The CLI layer calls this once per resolve when the run
-/// is genuinely cross-root (running root differs from target); single-root
-/// runs never reach here (no entry is running-rooted there). Candidate
-/// lookups reuse the shared `repos` (both roots resolve the same trees —
-/// Track X Slice B/C); old-USE diffs read the running root's own vdb,
-/// like real's per-root `vardb`. A no-op for entries the candidate lookup
-/// misses (same tolerance as [`refresh_entry_use_display`]).
+/// Repaint every running-rooted merge entry's USE displays from the
+/// running root's own profile (cross-root rows use their own root).
+/// A no-op for entries the candidate lookup misses.
+/// Portage: output.py, _display_use (per-root config)
 pub fn repaint_running_root_entry_displays(
     entries: &mut [GraphEntry],
     repos: &[RepoConfig],
@@ -235,12 +162,8 @@ pub(crate) fn refresh_one_entry_display(
         category: &cat,
         package: &pkg,
     });
-    // Real builds the USE display from `sorted(pkg.iuse.all)`, where
-    // `iuse.all` is a `frozenset` (`Package.py`) -- so a flag that
-    // `IUSE` names more than once (an eclass and the ebuild both
-    // declaring it, e.g. gnome-extra/gnome-color-manager's
-    // `IUSE="test test"`) still renders exactly once. Dedup by bare
-    // name, keeping the first spelling.
+    // IUSE may name a flag more than once (eclass plus ebuild); it
+    // still renders exactly once, like Portage's `sorted(iuse.all)`.
     let mut iuse_seen: HashSet<String> = HashSet::new();
     let mut display: Vec<(String, bool)> = cand
         .iuse
@@ -289,7 +212,6 @@ pub(crate) fn refresh_one_entry_display(
     });
     e.use_flags_display = display;
 }
-/// Arguments of [`build_use_expand_display`].
 pub(crate) struct BuildUseExpandDisplayArgs<'a> {
     pub(crate) use_flags_display: &'a [(String, bool)],
     pub(crate) config: &'a portage_profile::Config,
@@ -299,6 +221,12 @@ pub(crate) struct BuildUseExpandDisplayArgs<'a> {
     pub(crate) reinst_flags: &'a HashSet<String>,
 }
 
+/// `emerge --pretend -v`'s `USE="…" VAR="…"` line: split the display
+/// flags into `USE` plus one group per USE_EXPAND variable (prefix
+/// stripped, hidden groups dropped), diffed against `installed` with
+/// `*`/`%` markers when present. `all_flags` shows every flag (`-pv`);
+/// otherwise only changed and reinstall-trigger flags show.
+/// Portage: output_helpers.py, _create_use_string
 pub(crate) fn build_use_expand_display(
     args: BuildUseExpandDisplayArgs<'_>,
 ) -> Vec<(String, String)> {
@@ -318,8 +246,8 @@ pub(crate) fn build_use_expand_display(
         .map(|s| s.to_uppercase())
         .collect();
 
-    // One flag's polarity in `_create_use_string`'s own `enabled` /
-    // `disabled` / `removed` split (rendered in that order).
+    // One flag's polarity: enabled / disabled / removed, rendered
+    // in that order.
     #[derive(Clone, Copy, PartialEq)]
     enum FlagState {
         Enabled,
@@ -327,20 +255,9 @@ pub(crate) fn build_use_expand_display(
         Removed,
     }
 
-    // Real `_create_use_string`'s per-flag marker + `( … )`-wrap logic
-    // (see this function's own doc comment). Returns the rendered
-    // `flag`/`-flag`/`(-flag%)` token with any `*`/`%` suffix and `( )`
-    // wrap, or `None` when this flag isn't shown at this verbosity: real
-    // `_create_use_string` leaves `flag_str = None` (so the flag is
-    // omitted) for an *unchanged* flag -- and for a removed-from-IUSE
-    // flag -- unless `conf.all_flags` (`verbosity == 3`, i.e. `emerge
-    // -pv`) OR `reinst_flag` (this flag is in the reinstall's own
-    // `_reinstall_for_flags` trigger set -- real `reinst_flags_map`).
-    // The one case this actually changes at plain `-p`: a flag the new
-    // ebuild dropped from IUSE that nonetheless triggered a
-    // `--newuse`/`--changed-use` reinstall now shows in the `(-flag%)`
-    // removed list (its enabled-state / IUSE-presence *change* markers
-    // already carried the still-present trigger flags).
+    // Render one flag token with its `*`/`%` suffix and `( )` wrap,
+    // or `None` when it isn't shown at this verbosity (unchanged
+    // flags only show under `all_flags` or as reinstall triggers).
     let render_flag = |bare: &str, full: &str, state: FlagState| -> Option<String> {
         let is_forced = forced.contains(full);
         let reinst = reinst_flags.contains(full);
@@ -348,8 +265,7 @@ pub(crate) fn build_use_expand_display(
             if !all_flags && !reinst {
                 return None;
             }
-            // Real: `yellow("-" + flag) + "%"`, `+ "*"` if it was on,
-            // always `"(" + ... + ")"`.
+            // A removed flag always renders `(-flag%[*])`.
             let in_old_use = installed.is_some_and(|inst| inst.old_use.contains(full));
             return Some(format!("(-{bare}%{})", if in_old_use { "*" } else { "" }));
         }
@@ -368,15 +284,14 @@ pub(crate) fn build_use_expand_display(
                     } else if !in_old_use {
                         format!("{bare}*")
                     } else if all_flags || reinst {
-                        // An unchanged enabled flag: shown plain only
-                        // under `-pv`'s `all_flags` (or if it's a
-                        // reinstall trigger); omitted at plain `-p`.
+                        // Unchanged flags only show under `-pv` (or as
+                        // reinstall triggers).
                         bare.to_string()
                     } else {
                         return None;
                     }
                 } else if !in_old_iuse {
-                    // real: `if flag not in iuse_forced: flag_str += "%"`
+                    // A forced flag skips the trailing `%`.
                     if is_forced {
                         format!("-{bare}")
                     } else {
@@ -385,8 +300,7 @@ pub(crate) fn build_use_expand_display(
                 } else if in_old_use {
                     format!("-{bare}*")
                 } else if all_flags || reinst {
-                    // Unchanged disabled flag -- `-pv` only (or a
-                    // reinstall trigger).
+                    // Unchanged disabled flag: same `-pv`/trigger gate.
                     format!("-{bare}")
                 } else {
                     return None;
@@ -396,9 +310,8 @@ pub(crate) fn build_use_expand_display(
         Some(if is_forced { format!("({core})") } else { core })
     };
 
-    // Group key: empty string == the plain "USE" group. Entries keep the
-    // FULL flag name; the prefix is stripped only at render time (markers
-    // are computed against the full name).
+    // Empty key is the plain "USE" group; entries keep the full flag
+    // name until render time.
     let mut groups: Vec<(String, Vec<(String, FlagState)>)> = vec![(String::new(), Vec::new())];
     for var in &expand_vars {
         groups.push((var.to_uppercase(), Vec::new()));
@@ -431,11 +344,8 @@ pub(crate) fn build_use_expand_display(
             },
         );
     }
-    // Real `removed_iuse = set(old_iuse).difference(cur_iuse)` -- flags
-    // the current ebuild dropped from IUSE, shown as `(-flag%)` inside
-    // `_create_use_string`'s `if conf.all_flags or reinst_flag` branch.
-    // Route them whenever *either* could apply; `render_flag` drops a
-    // removed flag that isn't a reinstall trigger when `!all_flags`.
+    // Flags the current ebuild dropped from IUSE render `(-flag%)`;
+    // routed whenever either display mode could show them.
     if let Some(inst) = installed.filter(|_| all_flags || !reinst_flags.is_empty()) {
         let cur: HashSet<&str> = use_flags_display.iter().map(|(f, _)| f.as_str()).collect();
         let mut removed: Vec<&String> = inst
@@ -443,10 +353,7 @@ pub(crate) fn build_use_expand_display(
             .iter()
             .filter(|f| !cur.contains(f.as_str()))
             .collect();
-        // Natural sort, same key as the `display` list above (real
-        // `_alnum_sort_key`). Real portage sorts `cur ∪ old` as one list;
-        // portuale keeps its own cur-then-removed routing, a
-        // pre-existing structural difference -- only the key changes here.
+        // Natural sort, same key as the display list above.
         removed.sort_by_key(|f| alnum_sort_key(f));
         for flag in removed {
             route(&mut groups, flag, FlagState::Removed);
@@ -459,11 +366,8 @@ pub(crate) fn build_use_expand_display(
             continue;
         }
         let prefix = format!("{}_", name.to_lowercase());
-        // Real `_create_use_string`: `" ".join(enabled + disabled +
-        // removed)` -- in that polarity order, each group already in the
-        // incoming bare-name order. `--alphabetical` (which collapses
-        // them into one interleaved list) is applied later, at render
-        // time in `pretend.rs`, since it needs no resolver state.
+        // Enabled, then disabled, then removed; `--alphabetical` is
+        // applied later at render time in `pretend.rs`.
         let mut rendered_pairs: Vec<(u8, String)> = flags
             .iter()
             .filter_map(|(full, state)| {

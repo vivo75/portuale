@@ -1,8 +1,7 @@
 use super::*;
 
-/// Backlog #102 S1: the inverted `installed_cp_sources` map answers
-/// exactly what the old per-call command loop did, on whatever
-/// `profiles/updates/` the ambient repos carry (possibly none).
+/// The inverted `installed_cp_sources` map answers what the old
+/// per-call command loop did, on whatever `profiles/updates/` exist.
 #[test]
 fn installed_cp_sources_map_matches_the_command_loop() {
     for (cat, pkg) in [
@@ -23,10 +22,8 @@ fn installed_cp_sources_map_matches_the_command_loop() {
     }
 }
 
-/// Backlog #120 (audit O1): a two-command `move` cycle replays back
-/// to its start, so neither side files the other as a source -- the
-/// target is already `out[0]`, and emitting it again would scan the
-/// same vdb entry twice.
+/// A two-command `move` cycle replays back to its start, so neither
+/// side files the other as a source.
 #[test]
 fn installed_cp_sources_cycle_emits_no_duplicate() {
     let cmds = vec![
@@ -110,8 +107,8 @@ fn apply_move_and_slotmove_to_a_token_preserve_the_other_atom_parts() {
         apply_slotmove_to_token("dev-libs/baz:0/0=", &cp, "0", "1"),
         "dev-libs/baz:1/1="
     );
-    // A versioned atom or a non-matching slot is left alone (real
-    // update_dbentry's own restriction).
+    // A versioned atom or a non-matching slot is left alone.
+    // Portage: portage.update, update_dbentry
     assert_eq!(
         apply_slotmove_to_token("=dev-libs/baz-1.0:0", &cp, "0", "1"),
         "=dev-libs/baz-1.0:0"
@@ -122,11 +119,8 @@ fn apply_move_and_slotmove_to_a_token_preserve_the_other_atom_parts() {
     );
 }
 
-/// #119: the dep-string rewrite is lazy -- `None` when no
-/// `move`/`slotmove` touched a token (so the caller can skip its
-/// insert and no output is allocated), `Some(rewritten)` otherwise,
-/// with the surrounding whitespace, `||`/`(`/`)` and `use?` tokens
-/// preserved byte-for-byte.
+/// The dep-string rewrite is lazy: `None` when no move touched a
+/// token, `Some(rewritten)` otherwise, whitespace preserved.
 #[test]
 fn apply_updates_to_dep_string_reports_unchanged_and_rewrites_only_moved_tokens() {
     let old = ("dev-libs".to_string(), "oldname".to_string());
