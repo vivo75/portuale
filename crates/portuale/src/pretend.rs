@@ -1,5 +1,5 @@
 // `emerge --pretend <category/package>`: the v1 slice (see
-// rust/portage-repo/src/lib.rs for the full scope writeup --
+// crates/portage-repo/src/lib.rs for the full scope writeup --
 // candidates come from every repos.conf repo, main + overlays). USE/
 // ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use come from
 // the real profile chain + make.conf + package.* (see portage-profile's

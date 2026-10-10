@@ -64,7 +64,7 @@ capture() {
 }
 
 # Real `emerge` / `ebuild` inside the scratch image, against the fixture
-# tree copied to /fixtures (see fixtures/ and rust/portage-repo).
+# tree copied to /fixtures (see fixtures/ and crates/portage-repo).
 run_emerge() {
     "${ENGINE}" run --rm --entrypoint /bin/emerge \
         -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
@@ -147,15 +147,16 @@ assert_rc() {
     return 0
 }
 
-# Build context: rust/, the vendored phase runtime (bin/, cnf/ -- embedded
-# into the binary by build.rs, #322) plus the fixture tree. `fixtures/` is a symlink to
+# Build context: the Cargo workspace (Cargo.toml, Cargo.lock, .cargo/,
+# crates/), the vendored phase runtime (bin/, cnf/ -- embedded into the
+# binary by build.rs, #322) plus the fixture tree. `fixtures/` is a symlink to
 # ../pmtest/fixtures, outside any build context rooted at the repo, so the
 # Containerfile's `COPY fixtures/` would fail on it (#311). Stage a real
 # copy: `cp -a fixtures/.` follows the top-level link but keeps the tree's
 # own inner symlinks (e.g. make.profile) as they are.
 CONTEXT="$(mktemp -d "${TMPDIR:-/var/tmp}/musl-smoke-ctx.XXXXXX")"
 trap 'rm -rf "${CONTEXT}"' EXIT
-tar -C "${REPO_DIR}" --exclude=rust/target -cf - rust bin cnf | tar -C "${CONTEXT}" -xf -
+tar -C "${REPO_DIR}" --exclude=./target -cf - Cargo.toml Cargo.lock .cargo crates bin cnf | tar -C "${CONTEXT}" -xf -
 mkdir "${CONTEXT}/fixtures"
 cp -a "${REPO_DIR}/fixtures/." "${CONTEXT}/fixtures/"
 

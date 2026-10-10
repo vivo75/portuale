@@ -15,11 +15,11 @@ dist
 MANIFEST
 
 # Portuale
-rust/target
+/target
 .pytest_cache/
 .claude/settings.local.json
 # Local scratch (owner's untracked notes/scripts), not source: scoped to
-# these paths so the `rust/portuale/src/helpers` module (#326 S2) stays
+# these paths so the `crates/portuale/src/helpers` module (#326 S2) stays
 # tracked (a bare `helpers` would match it too).
 /helpers
 .claude/helpers

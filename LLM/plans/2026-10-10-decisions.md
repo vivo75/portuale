@@ -59,3 +59,34 @@ Every entry can be overridden by a follow-up commit. Newest last.
 13. **`.claude/skills/rust-refactor-pro/SKIL.md`** (typo; the owner's untracked
     file): not touched. Read as guidance anyway. The owner may want to rename
     it to `SKILL.md`.
+
+## 2026-10-10, Phase 0/1 findings
+
+14. **Hidden test-order dependency (pre-existing).** About 300 unit tests in
+    `crates/portuale` exec `target/release/portuale`, which `cargo test` does
+    not build. The Phase 0 baseline passed only because the old `rust/target`
+    still held a binary from earlier builds. The first run in the fresh root
+    `target/` failed 298 of them until the binary existed. `LLM/tools/gate.sh`
+    now runs `cargo build --release` before `cargo test`. Not a Phase 1
+    regression: with the binary present the result is 2477/2478, the same as
+    the baseline. Worth a real fix later: have those tests build or locate
+    the binary themselves.
+15. **Load-sensitive tests.** Both pass alone 3/3 and fail only under the
+    full-workspace parallel run.
+    - `pretend::tests::ask_config_select_sigint_…` failed in Phase 0.
+    - `emerge_build::tests::a_hard_failure_kills_still_running_builds_…`
+      failed in Phase 1: run_source_merge took 121 s, so the slow sibling's
+      `sleep` was not killed under load.
+
+    The second may be a real kill race, not just slowness. Filed as residue
+    #340.
+16. **Phase 3 inventory.** The subagent classification is in
+    `2026-10-10-real-inventory.tsv`: 270 identifiers, of which 139 get
+    renamed. I settled the doubtful rows:
+    - `PORTUALE_REAL_PORTAGEQ` → `PORTUALE_COMPARE_PORTAGEQ`;
+    - `exec_real_chmod_lite` kept (real-mode family of the frozen
+      `PORTUALE_PYTHON_HELPERS=real` value);
+    - `getlibpaths_…_real_defaults` and `sandbox_…_real_addrconfig_…` kept as
+      ambiguous;
+    - `graph_real*` / `resolve_real*` fixture helpers kept, because they mean
+      "the fixture's actual config" (contrasted with `*_empty`).

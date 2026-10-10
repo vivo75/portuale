@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/portage-versions",
+    "crates/portage-util",
+    "crates/portage-vdb",
+    "crates/portage-dep",
+    "crates/portage-use-reduce",
+    "crates/portage-profile",
+    "crates/portage-repo",
+    "crates/portage-required-use",
+    "crates/portage-fetch",
+    "crates/harness-common",
+    "crates/mrg-director",
+    "crates/versions-harness",
+    "crates/atom-harness",
+    "crates/use-reduce-harness",
+    "crates/required-use-harness",
+    "crates/portuale",
+]
+# Vendored upstream checkouts carry their own Cargo.toml files; they are
+# not workspace members.
+exclude = ["3rdparty"]
+
+[workspace.package]
+edition = "2024"
+# The MSRV floor, not a preference: portage-atom* / gentoo-interner /
+# portage-solver declare rust-version = 1.95 (pubgrub 1.92, smol_str
+# 1.89 behind them). Each member inherits via
+# `rust-version.workspace = true`, so an older toolchain gets Cargo's
+# own "requires rustc 1.95" message instead of a downstream compile or
+# link error (backlog #61: the musl builder drifted to 1.87).
+rust-version = "1.95"
+
+[profile.release]
+panic = "abort"
+lto = "thin"
+codegen-units = 1

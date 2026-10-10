@@ -14,7 +14,7 @@
 # Update this file in the same commit that changes a pin.
 
 [portage]
-description = "Upstream Gentoo Portage. portuale vendors the whole bash phase runtime into ./bin/ (see bin/README.md) and answers every portage-importing .py helper natively (rust/portuale/src/helpers/, #326 S2-S7), so nothing at runtime comes from this checkout any more. It remains: the PORTUALE_PYTHON_HELPERS=real oracle (bin_dir() overlays bin/ on <checkout>/bin/), the D4 fixture generators' source (pmtest fixtures/helpers/generate*.sh), the bin/ + cnf/sets/portage.conf re-sync source, and the real portage.versions / portage.dep modules the primitive harnesses (pmtest python-harness/) import."
+description = "Upstream Gentoo Portage. portuale vendors the whole bash phase runtime into ./bin/ (see bin/README.md) and answers every portage-importing .py helper natively (crates/portuale/src/helpers/, #326 S2-S7), so nothing at runtime comes from this checkout any more. It remains: the PORTUALE_PYTHON_HELPERS=real oracle (bin_dir() overlays bin/ on <checkout>/bin/), the D4 fixture generators' source (pmtest fixtures/helpers/generate*.sh), the bin/ + cnf/sets/portage.conf re-sync source, and the real portage.versions / portage.dep modules the primitive harnesses (pmtest python-harness/) import."
 url = "https://github.com/gentoo/portage"
 kind = "reference-checkout"
 checkout_path = "3rdparty/portage"
@@ -52,7 +52,7 @@ kind = "cargo-git-dependency"
 checkout_path = "3rdparty/brush"
 ref = "main"
 commit = "eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33"
-pinned_in = "rust/portuale/Cargo.toml"
+pinned_in = "crates/portuale/Cargo.toml"
 pinned_at = "2026-09-23"
 tracking_doc = "docs/brush-pin.md"
 # Thin fork (since 2026-09-05): vivo75/brush `main` = upstream

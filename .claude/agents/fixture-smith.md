@@ -39,7 +39,7 @@ through the symlink.
 
 ## Hard rules
 
-- Do not touch product code in `rust/`. Do not adjust an oracle, a threshold or
+- Do not touch product code in `crates/`. Do not adjust an oracle, a threshold or
   an existing pin to accommodate your fixture.
 - Do not commit; report the file list so the operator can stage the pmtest
   commit separately from the portuale one.

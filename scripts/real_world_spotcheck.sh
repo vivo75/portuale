@@ -39,7 +39,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-RUST_DIR="${REPO_DIR}/rust"
+RUST_DIR="${REPO_DIR}"
 PILOT_BIN="${RUST_DIR}/target/release/portuale"
 
 REAL_EMERGE="$(command -v emerge || true)"

@@ -57,7 +57,8 @@ Portage bash phase runtime (see [`bin/README.md`](bin/README.md) and
 [`3rdparty/README.md`](3rdparty/README.md)).
 
 ```
-rust/                      Rust workspace
+Cargo.toml                 Rust workspace root (cargo runs from the repo root)
+crates/                    the workspace crates
   portage-versions/        shared lib: vercmp / ververify
   portage-dep/             shared lib: Atom + match_from_list (v1 subset) + wildcard matcher
   portage-use-reduce/      shared lib: use_reduce(flat=True)
@@ -82,10 +83,10 @@ live") for the old-path → new-home map.
 ## Build
 
 ```sh
-cd rust && cargo build --release
+cargo build --release
 ```
 
-Produces `rust/target/release/portuale`; create `emerge` and `ebuild`
+Produces `target/release/portuale`; create `emerge` and `ebuild`
 symlinks next to it for multicall dispatch (the tests do this
 automatically).
 
@@ -93,10 +94,10 @@ automatically).
 
 ```sh
 # in this repo: the whole Rust workspace (reads ./fixtures -> ../pmtest/fixtures)
-cd rust && cargo test --release
+cargo test --release
 
 # in the sibling pmtest repo: the black-box contract suite
-cd ../../pmtest && python3 -m pytest pytests-contract-suite -q
+cd ../pmtest && python3 -m pytest pytests-contract-suite -q
 ```
 
 The contract suite, the container differential bed, the benchmark and
@@ -116,8 +117,8 @@ Live-verified per-slice examples are in
 [`docs/what-this-proves.md`](docs/what-this-proves.md). Quick taste:
 
 ```sh
-rust/target/release/portuale emerge --pretend sys-apps/portage
-rust/target/release/versions-harness vercmp 1.0-r1 1.0
+target/release/portuale emerge --pretend sys-apps/portage
+target/release/versions-harness vercmp 1.0-r1 1.0
 ```
 
 ## Documentation

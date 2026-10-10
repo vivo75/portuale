@@ -205,7 +205,7 @@ fn no_hand_built_vdb_paths() {
         .parent()
         .unwrap()
         .to_path_buf();
-    let rust_root = workspace_root.join("rust");
+    let crates_root = workspace_root.join("crates");
 
     let allowlist = get_allowlist();
     let allowlist_set: HashSet<&str> = allowlist.iter().map(|(s, _)| *s).collect();
@@ -214,7 +214,13 @@ fn no_hand_built_vdb_paths() {
 
     // Collect all .rs files
     let mut rs_files = Vec::new();
-    collect_rs_files(&rust_root, &mut rs_files);
+    collect_rs_files(&crates_root, &mut rs_files);
+    // A wrong root yields no files, and an empty walk would pass vacuously.
+    assert!(
+        !rs_files.is_empty(),
+        "no .rs files under {}",
+        crates_root.display()
+    );
 
     for path in rs_files {
         // Skip target/, portage-vdb/ itself and tests/ directories.
@@ -265,7 +271,7 @@ fn no_hand_built_vdb_paths() {
                 // Check if this line is in the allowlist
                 let is_allowed = allowlist_set.iter().any(|substr| line.contains(substr));
                 if !is_allowed {
-                    let rel_path = path.strip_prefix(&rust_root).unwrap_or(&path);
+                    let rel_path = path.strip_prefix(&crates_root).unwrap_or(&path);
                     violations.push(format!(
                         "{}:{}: {}",
                         rel_path.display(),
@@ -279,7 +285,7 @@ fn no_hand_built_vdb_paths() {
 
     if !violations.is_empty() {
         panic!(
-            "Found code outside rust/portage-vdb/ that builds installed-database paths by hand.\n\
+            "Found code outside crates/portage-vdb/ that builds installed-database paths by hand.\n\
              Use portage_vdb::for_root(root) instead.\n\n{}",
             violations.join("\n")
         );

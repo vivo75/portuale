@@ -89,7 +89,7 @@ Ship `emerge` and `ebuild` as **one multicall binary** (busybox-style),
 dispatching behavior based on `argv[0]` via symlinks/hardlinks pointing at
 a single executable. This is both a good minimal-Linux fit (one static
 binary, no duplicated code) and drop-in compatible with tooling that
-invokes `emerge`/`ebuild` by name directly. **Shipped**: `rust/portuale`.
+invokes `emerge`/`ebuild` by name directly. **Shipped**: `crates/portuale`.
 A bare `portuale` (or `portuale --help`/`-h`) lists the applets with a
 one-line description and exits 0; an unrecognized applet name still
 errors. `emerge --help` is a grouped tour of every action/option portuale
@@ -373,7 +373,7 @@ Live. `ebuild <file> install|merge|unmerge|package` and non-`--pretend`
 `emerge <atom>` / `--getbinpkg[only]` / `--buildpkg[only]` / `-C` /
 `--depclean` / `--prune` / `--config` / `--deselect` / `@set` all run
 real ebuild phases (via `brush` over unmodified `bin/*.sh`) and mutate
-the filesystem + VDB for real — `rust/portuale/src/{ebuild_phases,
+the filesystem + VDB for real — `crates/portuale/src/{ebuild_phases,
 ebuild_merge,ebuild_unmerge,ebuild_package,emerge_build,emerge_getbinpkg}.rs`.
 Real eclass `inherit()`, real `SRC_URI` fetch (Manifest digests,
 `mirror://`, `RESTRICT`), real `CONFIG_PROTECT` / preserve-libs /
