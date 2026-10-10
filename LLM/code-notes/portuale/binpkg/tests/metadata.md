@@ -10,8 +10,9 @@ Metadata reader tests: gpkg scalars, xpak index, error classes.
 - An xpak trailer pointing at a segment that is not an xpak: Portage's `tbz2.scan()` returns falsy, `get_data()` returns None, and `None.get` raises `AttributeError`, i.e. Fatal.
 
 ## fn read_xpak_metadata_reads_a_real_ebuild_package_tbz2
-- Reads a genuine `.tbz2` checked in at `fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2`, built once by portuale's own `ebuild <file> package` on `dev-libs/packagepkg` (Portage's `bin/misc-functions.sh` through unmodified `xpak-helper.py recompose` to Portage's `xpak.py`). Kept as a committed fixture rather than rebuilt per-test: the read side doesn't need reproducible bytes, and driving `run_package` (the full brush phase chain) here would add parallel-load pressure to the suite's brush-heavy tests for no reader-coverage gain.
+- Reads a genuine `.tbz2` checked in at `fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2`, built once by portuale's own `ebuild <file> package` on `dev-libs/packagepkg` (Portage's `bin/misc-functions.sh` -> unmodified `xpak-helper.py recompose` -> Portage's `xpak.py`). Kept as a committed fixture rather than rebuilt per-test: the read side doesn't need reproducible bytes, and driving `run_package` (the full brush phase chain) here would add parallel-load pressure to the suite's brush-heavy tests for no reader-coverage gain.
 - The fixture ebuild's `RDEPEND` came through via Portage's `build-info` (`ebuild_phases::write_post_install_metadata`), no `Packages` index involved. The bundled `<pf>.ebuild` source is a member too. An xpak never carries CONTENTS (Portage's `xpak()` skips it; generated at merge time). `environment.bz2` is binary, lossy-decoded but present as a key.
+- The fixture ebuild's `RDEPEND="dev-libs/samepkg"` came through via Portage's `build-info` (`ebuild_phases::write_post_install_metadata`), no `Packages` index involved.
 
 ## fn read_gpkg_metadata_reads_a_crafted_inner_tar_in_process
 - S0 cell i2: an in-archive symlink yields the target member's bytes (the old extracted-tree walk followed the symlink too, but it could equally follow one out of the archive -- next test).

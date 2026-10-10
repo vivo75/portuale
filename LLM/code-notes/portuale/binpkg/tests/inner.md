@@ -34,3 +34,6 @@ Inner-tar reader tests: links, types, names, duplicates.
 
 ## fn read_inner_metadata_reads_unknown_entry_types_as_regular_files
 - Portage: `tarinfo.isreg() or tarinfo.type not in SUPPORTED_TYPES` reads bytes.
+
+## fn read_inner_metadata_decompresses_through_the_pipe
+- A failing decompressor is still an error (the old path reported zstd's own `({status})`).

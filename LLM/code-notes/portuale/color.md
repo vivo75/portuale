@@ -12,7 +12,7 @@ ANSI colour for `emerge --pretend` output.
 - Ports Portage's `_styles` map (`output.py:126-154`), narrowed to the keys the pretend renderer's `colorize()` calls reach; each maps to exactly one colour-name (Portage's `_styles` values are 1-tuples for all of these). Covers the `PORTAGE_COLORMAP` phase-env export (`colormap()`'s 10 `PORTAGE_COLOR_*` keys), the `EOutput` `e*` prefixes (`output.py:128-135`, the elog `echo` module in `elog::echo_summary`), and `UserQuery.query`'s default `[Yes/No]` colours (`output.py:154-155`, used by `pretend.rs`'s `ask_confirm`).
 
 ## const STYLE_KEYS
-- Every `_styles` key name, so `color_map_overrides` can validate a `color.map` `KEY=` (Portage's `_parse_color_map`: `if k not in _styles and k not in codes: ParseError`).
+- Every `_styles` key name, so `color_map_overrides` can validate a `color.map` `KEY=` (Portage's `_parse_color_map`: `if k not in _styles and k not in codes: ParseError`). Kept in sync with `style()`.
 
 ## fn color_map_overrides
 - Ports Portage's `output.py::_parse_color_map` (`output.py:158-230`): parses `<config_root>/etc/portage/color.map` (`$PORTAGE_CONFIGROOT` here, read the same env-first way `resolve_havecolor` reads `$NO_COLOR`). A line is `KEY = VALUE` (`#` starts a comment); `KEY` must be a known `_styles`/`codes` name; `VALUE` is either a raw ANSI code (`^[0-9;]*m$` becomes `\x1b[` plus it) or a space-separated list of `codes` names (concatenated). A malformed line is skipped with a warning (portuale's `onerror`), never fatal. Cached once per process (Portage's own `_color_map_loaded` one-shot).
