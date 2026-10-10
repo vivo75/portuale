@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development or
 > superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
 
-Status: in progress 2026-10-10 · branch `refactor/readability` (portuale + pmtest)
+Status: in progress 2026-10-10 · branch `refactor/readability` (portuale + pmtest) · Phases 0-4 done; Phase 5 started (5.1 + resolve_pretend_graph/resolve_pretend); Phase 6 awaiting owner sign-off on `2026-10-10-split-map.md`; Phase 7 piloted on portage-dep (see `2026-10-10-decisions.md` 21-25)
 · v1 reviewed in `2026-10-10-readability-refactor.review.md` · owner-away
 decisions in `2026-10-10-decisions.md` · renames recorded in `LLM/renames.tsv`.
 

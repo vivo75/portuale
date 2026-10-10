@@ -13964,6 +13964,7 @@ pub struct SelectSource<'a> {
     pub repos: &'a [RepoConfig],
     pub root: &'a Path,
     pub config: &'a portage_profile::Config,
+    /// The run's already-built local `$PKGDIR` binary index (backlog #123).
     pub local_binpkg: &'a std::sync::Arc<BinaryIndex>,
 }
 
@@ -14033,6 +14034,17 @@ impl ResolveCtx<'_> {
     /// The selection options this walk passes for every atom, with
     /// `bp`'s autounmask switches; callers set `is_top_level` and
     /// `extra_constraints` per atom.
+    /// The options [`enqueue_dependencies`] reads from this walk.
+    fn enqueue_options(&self) -> EnqueueOptions<'_> {
+        EnqueueOptions {
+            dynamic_deps: self.dynamic_deps,
+            ignore_built_slot_operator_deps: self.ignore_built_slot_operator_deps,
+            with_bdeps: self.with_bdeps,
+            root_deps_running_root: self.root_deps_running_root,
+            update: self.update,
+        }
+    }
+
     fn select_options(&self, bp: &BacktrackParams) -> SelectOptions<'_> {
         SelectOptions {
             newuse: self.newuse,
@@ -30493,29 +30505,29 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     );
                 }
                 enqueue_dependencies(
-                    &ctx.repos,
-                    atom_root,
-                    ctx.root,
-                    ctx.dynamic_deps,
-                    ctx.ignore_built_slot_operator_deps,
-                    &key.0,
-                    &key.1,
-                    version,
-                    config,
-                    depth + 1,
-                    &mut state.queue,
-                    &mut state.pending_blockers,
-                    key.clone(),
-                    version.clone(),
-                    ctx.with_bdeps,
-                    ctx.root_deps_running_root,
-                    &mut state.entries,
-                    &mut state.root_deps_build_seen,
-                    &mut state.installed_meta_memo,
-                    &mut state.slot_pullers,
+                    &SelectSource {
+                        repos: &ctx.repos,
+                        root: atom_root,
+                        config,
+                        local_binpkg: &ctx.local_binpkg,
+                    },
+                    &DepOwner {
+                        target_root: ctx.root,
+                        category: &key.0,
+                        package: &key.1,
+                        version,
+                        child_depth: depth + 1,
+                    },
+                    &ctx.enqueue_options(),
+                    EnqueueSinks {
+                        queue: &mut state.queue,
+                        pending_blockers: &mut state.pending_blockers,
+                        entries: &mut state.entries,
+                        root_deps_build_seen: &mut state.root_deps_build_seen,
+                        installed_meta_memo: &mut state.installed_meta_memo,
+                        slot_pullers: &mut state.slot_pullers,
+                    },
                     &union_constraints,
-                    ctx.update,
-                    &ctx.local_binpkg,
                 );
             }
             // `--autounmask`'s own keyword-suggestion sub-feature,
@@ -35798,6 +35810,64 @@ pub(crate) fn installed_dep_string(
     result
 }
 
+/// The installed or newly selected package whose dependencies
+/// [`enqueue_dependencies`] queues.
+#[derive(Clone, Copy)]
+struct DepOwner<'a> {
+    /// Track X Slice B (#242): the walk's target root, so an installed
+    /// parent's own deps resolve per group like every other owner (real
+    /// `_add_pkg_deps` attributes the owner to its root first). `root`
+    /// stays this parent's own vdb root for every metadata read.
+    pub target_root: &'a Path,
+    pub category: &'a str,
+    pub package: &'a str,
+    pub version: &'a str,
+    pub child_depth: u32,
+}
+
+/// The emerge options [`enqueue_dependencies`] consults.
+#[derive(Clone, Copy)]
+struct EnqueueOptions<'a> {
+    pub dynamic_deps: bool,
+    pub ignore_built_slot_operator_deps: bool,
+    pub with_bdeps: bool,
+    pub root_deps_running_root: Option<&'a Path>,
+    /// No `circular_dependency` map (backlogs #216/#221 reconciliation):
+    /// this deep-walk's parents are `AlreadyInstalled` entries only (see
+    /// the call site -- merge-bound upgrades go through the main
+    /// New/Upgrade loop), while recorded nodes are merge-bound-only on
+    /// both sides: real records serialize-digraph nodes that stranded on
+    /// unmet buildtime deps (an installed node is always a leaf), keyed
+    /// by node identity (`Package.__hash__ = Task.__hash__`), and
+    /// portuale's two record sites only link merge-bound entries. Real's
+    /// lookup for such a parent therefore always misses -- and portuale's
+    /// cp-keying would over-demote on an installed-v1/merging-v2 cp
+    /// collision real never exhibits -- so the empty map is exactly
+    /// faithful here, like the unwalked-installed scan above.
+    /// Backlog #90 (S1): `--update`, for the downgrade-guard's
+    /// queued-update lookahead (same feed as the main walk's
+    /// `ctx.update` at its own `disjunction_preference` call).
+    pub update: bool,
+}
+
+/// The pass state [`enqueue_dependencies`] appends to.
+struct EnqueueSinks<'a> {
+    pub queue: &'a mut VecDeque<QueueItem>,
+    pub pending_blockers: &'a mut Vec<PendingBlocker>,
+    pub entries: &'a mut Vec<GraphEntry>,
+    pub root_deps_build_seen: &'a mut HashSet<(String, String)>,
+    /// Per-pass `installed_dep_string` memo (see its own doc comment):
+    /// keyed `(category, package, version, key)`, Effective results only.
+    pub installed_meta_memo: &'a mut HashMap<(String, String, String, String), String>,
+    /// A4 (#27): this installed package's own flattened non-blocker atoms
+    /// become slot-conflict pullers, exactly like the main
+    /// New/Upgrade/Reinstall loop's own flat-deps recording. Without it an
+    /// installed parent's built `:S/SS=` atom never reaches
+    /// `SlotConflict::parents`, so `slot_conflict_need_rebuild` can never
+    /// see the parent real's `_parent_atoms` would show.
+    pub slot_pullers: &'a mut SlotPullers,
+}
+
 /// Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+PDEPEND+
 /// IDEPEND metadata (from whichever repo actually carries this exact
 /// version) and enqueues each flattened dependency token -- into
@@ -35845,66 +35915,47 @@ pub(crate) fn installed_dep_string(
 /// `root_deps_satisfied_atoms` reports as running-root-satisfied is
 /// dropped from the queue entirely (real portage's own "no separate
 /// graph node needed for an already-satisfied dep").
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn enqueue_dependencies(
-    repos: &[RepoConfig],
-    root: &Path,
-    // Track X Slice B (#242): the walk's target root, so an installed
-    // parent's own deps resolve per group like every other owner (real
-    // `_add_pkg_deps` attributes the owner to its root first). `root`
-    // stays this parent's own vdb root for every metadata read.
-    target_root: &Path,
-    dynamic_deps: bool,
-    ignore_built_slot_operator_deps: bool,
-    category: &str,
-    package: &str,
-    version: &str,
-    config: &portage_profile::Config,
-    child_depth: u32,
-    queue: &mut VecDeque<QueueItem>,
-    pending_blockers: &mut Vec<PendingBlocker>,
-    owner_key: (String, String),
-    owner_version: String,
-    with_bdeps: bool,
-    root_deps_running_root: Option<&Path>,
-    entries: &mut Vec<GraphEntry>,
-    root_deps_build_seen: &mut HashSet<(String, String)>,
-    // Per-pass `installed_dep_string` memo (see its own doc comment):
-    // keyed `(category, package, version, key)`, Effective results only.
-    installed_meta_memo: &mut HashMap<(String, String, String, String), String>,
-    // A4 (#27): this installed package's own flattened non-blocker atoms
-    // become slot-conflict pullers, exactly like the main
-    // New/Upgrade/Reinstall loop's own flat-deps recording. Without it an
-    // installed parent's built `:S/SS=` atom never reaches
-    // `SlotConflict::parents`, so `slot_conflict_need_rebuild` can never
-    // see the parent real's `_parent_atoms` would show.
-    slot_pullers: &mut SlotPullers,
+    source: &SelectSource,
+    owner: &DepOwner,
+    opts: &EnqueueOptions,
+    sinks: EnqueueSinks,
     // The `'backtrack` loop's accumulated per-`cat/pkg` `runtime_pkg_mask`
     // (`slot_constraints`), consulted by this walk's `||` branch
     // selection the same way the main New/Upgrade loop's is -- empty on
     // the first pass, so a strict no-op there.
     disj_constraints: &HashMap<(String, String), Vec<String>>,
-    // No `circular_dependency` map (backlogs #216/#221 reconciliation):
-    // this deep-walk's parents are `AlreadyInstalled` entries only (see
-    // the call site -- merge-bound upgrades go through the main
-    // New/Upgrade loop), while recorded nodes are merge-bound-only on
-    // both sides: real records serialize-digraph nodes that stranded on
-    // unmet buildtime deps (an installed node is always a leaf), keyed
-    // by node identity (`Package.__hash__ = Task.__hash__`), and
-    // portuale's two record sites only link merge-bound entries. Real's
-    // lookup for such a parent therefore always misses -- and portuale's
-    // cp-keying would over-demote on an installed-v1/merging-v2 cp
-    // collision real never exhibits -- so the empty map is exactly
-    // faithful here, like the unwalked-installed scan above.
-    // Backlog #90 (S1): `--update`, for the downgrade-guard's
-    // queued-update lookahead (same feed as the main walk's
-    // `ctx.update` at its own `disjunction_preference` call).
-    update: bool,
-    // The run's already-built local `$PKGDIR` binary index (backlog #123),
-    // threaded through to `resolve_root_deps_build_entries`.
-    local_binpkg: &std::sync::Arc<BinaryIndex>,
 ) {
+    let SelectSource {
+        repos,
+        root,
+        config,
+        local_binpkg,
+    } = *source;
+    let DepOwner {
+        target_root,
+        category,
+        package,
+        version,
+        child_depth,
+    } = *owner;
+    let owner_key = (category.to_string(), package.to_string());
+    let owner_version = version.to_string();
+    let EnqueueOptions {
+        dynamic_deps,
+        ignore_built_slot_operator_deps,
+        with_bdeps,
+        root_deps_running_root,
+        update,
+    } = *opts;
+    let EnqueueSinks {
+        queue,
+        pending_blockers,
+        entries,
+        root_deps_build_seen,
+        installed_meta_memo,
+        slot_pullers,
+    } = sinks;
     // Backlog #86: the walk reads the vdb-recorded repo's current
     // metadata (never a priority search); `None` when the version is
     // gone there, same tolerance as the old search miss.
@@ -73182,31 +73233,36 @@ mod tests_165 {
         let mut memo = HashMap::new();
         let mut pullers = HashMap::new();
         enqueue_dependencies(
-            repos,
-            root,
-            // Same-root test walk: target root coincides with the vdb
-            // root (Track X Slice B: no cross-root routing here).
-            root,
-            false,
-            false,
-            cat,
-            pkg,
-            ver,
-            config,
-            1,
-            queue,
-            pending,
-            (cat.to_string(), pkg.to_string()),
-            ver.to_string(),
-            with_bdeps,
-            None,
-            entries,
-            &mut seen,
-            &mut memo,
-            &mut pullers,
+            &SelectSource {
+                repos,
+                root,
+                config,
+                local_binpkg: &std::sync::Arc::new(BinaryIndex::default()),
+            },
+            &DepOwner {
+                // Same-root test walk: no cross-root routing here.
+                target_root: root,
+                category: cat,
+                package: pkg,
+                version: ver,
+                child_depth: 1,
+            },
+            &EnqueueOptions {
+                dynamic_deps: false,
+                ignore_built_slot_operator_deps: false,
+                with_bdeps,
+                root_deps_running_root: None,
+                update: false,
+            },
+            EnqueueSinks {
+                queue,
+                pending_blockers: pending,
+                entries,
+                root_deps_build_seen: &mut seen,
+                installed_meta_memo: &mut memo,
+                slot_pullers: &mut pullers,
+            },
             &HashMap::new(),
-            false,
-            &std::sync::Arc::new(BinaryIndex::default()),
         );
         pullers
     }

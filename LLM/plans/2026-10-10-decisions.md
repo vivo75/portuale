@@ -125,3 +125,49 @@ Every entry can be overridden by a follow-up commit. Newest last.
     Phase 4 folds the rest: varexpand, `assert_same_reads`
     (sqlite/redb), the two overlay package.use tests, the `ask_*` pty
     test pairs, the changed_slot pair, and the two lib.rs closures.
+
+## 2026-10-10, Phase 5 progress
+
+21. **Lint limits: more than 5 arguments or more than 2 bool parameters**
+    (Task 5.1, `clippy.toml`). That flags 286 functions, each tagged
+    `#[allow(<lint>, reason = "#336 Phase 5 worklist")]`. The tag is
+    greppable, and clippy stays clean while the worklist shrinks.
+22. **How a positional-argument function is fixed** (5a, 5b): group the
+    options into a named struct with a `Default` (or a `new`) that means
+    "emerge with no option given". Callers use struct-update syntax and
+    list only what they change. The function body destructures the
+    struct into the old local names, so it is not edited. Production
+    callers that copy a context get one mapping method, for example
+    `ResolveCtx::select_options`. Calls are rewritten by scripts that map
+    arguments positionally (`LLM/tools/migrate_*_calls.py`), never by
+    hand.
+23. **Done so far:**
+    - `resolve_pretend_graph` (44 args) is deleted; its 55 calls build
+      `ResolveRequest` with named fields.
+    - `resolve_pretend` (29 args) takes `SelectSource` + `SelectOptions`.
+
+    284 worklist functions remain. Biggest: `enqueue_dependencies` (41),
+    `print_entry_line` (34), `print_tree` (24),
+    `already_installed_or_reinstall` (23), `euf_flat` (23),
+    `run_phase_from_saved_env` (22), `run_unmerge_pretend` (22).
+24. **Phase 6 waits for the owner.** The split map is
+    `2026-10-10-split-map.md`, with six open questions at its end.
+25. **Phase 7 starts with a pilot**, `crates/portage-dep/src/lib.rs`. The
+    owner reviews it as the style template before the comment pass runs
+    over 229k lines. `LLM/tools/strip_comments_eq.py` proves each such
+    commit is comment-only.
+26. **`enqueue_dependencies` (23 args) is fixed the same way.**
+    - It takes `&SelectSource` + `&DepOwner` + `&EnqueueOptions` (built by
+      `ResolveCtx::enqueue_options`) + `EnqueueSinks` (the six `&mut`
+      pass-state sinks).
+    - `owner_key`/`owner_version` were always `(category, package)` and
+      `version` again, so they are derived inside.
+    - The parameter comments became field docs.
+27. **The display functions in `pretend.rs` wait for Phase 6.**
+    `print_entry_line` (24), `print_tree` (24) and the `run_*_pretend`
+    family share ~18 per-run display settings. Four of the six
+    `print_entry_line` calls sit in different branches of the 6,000-line
+    `pretend::run`. A clean `DisplayCtx` belongs to the `run` split
+    (`split-map.md`, the `Session` / `EmergeOpts` / `ResolvePlan`
+    contexts). Doing it now would add four repeated 18-field literals
+    that Phase 6 would rewrite.
