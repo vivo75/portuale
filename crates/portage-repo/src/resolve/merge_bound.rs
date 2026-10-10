@@ -2,10 +2,8 @@
 
 use crate::*;
 
-/// The version a merge-bound `PretendOutcome` would install, or `None`
-/// for `AlreadyInstalled`/`NoVisibleCandidate`/`Uninstall` (which merge
-/// nothing). Exactly the four outcomes `PassState::resolved_slots` ever
-/// indexes; a #72 B3 removal is deliberately not one of them.
+/// The version a merge-bound outcome would install, or `None` for the outcomes
+/// that merge nothing. Exactly the four outcomes `PassState::resolved_slots` indexes.
 pub(crate) fn merge_bound_version(outcome: &PretendOutcome) -> Option<&String> {
     match outcome {
         PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
@@ -18,21 +16,16 @@ pub(crate) fn merge_bound_version(outcome: &PretendOutcome) -> Option<&String> {
     }
 }
 
-/// The `category/package-version` a merge-bound `GraphEntry` would
-/// install, or `None` for `AlreadyInstalled`/`NoVisibleCandidate` (which
-/// never participate in a build-time cycle).
+/// The `category/package-version` a merge-bound entry would install, or `None` for
+/// entries that never participate in a build-time cycle.
 pub(crate) fn merge_bound_cpv(entry: &GraphEntry) -> Option<String> {
     let version = merge_bound_version(&entry.outcome)?;
     Some(format!("{}/{}-{version}", entry.category, entry.package))
 }
 
-/// Lowest-index merge-bound entry per `(category, package)` -- the merge
-/// list is already in dependency order, so the first is the instance an
-/// edge belongs to. Shared by `find_hard_cycles` (cycle nodes) and
-/// `cycle_edge_labels` (owner lookup), so the two cannot disagree on
-/// which instance an edge belongs to. (It no longer picks the rendered
-/// start node: since backlog #278 that follows real's
-/// `shortest_cycle[0]`, i.e. `discovery` order.)
+/// Lowest-index merge-bound entry per `(category, package)` -- the merge list is
+/// already in dependency order, so the first is the instance an edge belongs to.
+/// Shared by cycle nodes and owner lookup, so the two cannot disagree.
 pub(crate) fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
     let mut cp_index: HashMap<(&str, &str), usize> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
@@ -45,11 +38,9 @@ pub(crate) fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str),
     cp_index
 }
 
-/// Track X Slice C (#242): merge-bound entry indices keyed by
-/// [`RootCp`] -- first index per (root, cp). `merge_bound_index` stays
-/// the cp-level view (render order starts at the first scheduled
-/// instance); this is the edge-resolution view (real's package-keyed
-/// digraph never merges two roots' instances).
+/// First merge-bound index per (root, cp): the edge-resolution view (Portage's
+/// package-keyed digraph never merges two roots' instances). `merge_bound_index`
+/// stays the cp-level view for render order.
 pub(crate) fn merge_bound_root_index(entries: &[GraphEntry]) -> HashMap<(bool, &str, &str), usize> {
     let mut index: HashMap<(bool, &str, &str), usize> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
@@ -66,11 +57,9 @@ pub(crate) fn merge_bound_root_index(entries: &[GraphEntry]) -> HashMap<(bool, &
     index
 }
 
-/// Track X Slice C (#242): resolve one root-qualified map endpoint to
-/// its entry index -- the exact-root instance first, falling back to the
-/// cp-level first index (the pre-slice behaviour) when this graph holds
-/// no such instance in that root (same-root graphs, synthetic entries,
-/// the `--root-deps` sidecar shapes the walk never root-splits).
+/// Resolve one root-qualified map endpoint to its entry index -- the exact-root
+/// instance first, falling back to the cp-level first index when this graph holds
+/// no such instance in that root.
 pub(crate) fn root_cp_lookup(
     root_index: &HashMap<(bool, &str, &str), usize>,
     cp_index: &HashMap<(&str, &str), usize>,
@@ -82,11 +71,9 @@ pub(crate) fn root_cp_lookup(
         .copied()
 }
 
-/// Track X Slice C (#242): resolve a `deps` edge to its child instance
-/// -- the resolving-root instance (`dep_child_root` from the owner's own
-/// root and the edge's dep key) when one is merge-bound, else the legacy
-/// cp-level first index. The walk always resolved the atom in the
-/// resolving root, so the filter only ever removes a provably-wrong
+/// Resolve a `deps` edge to its child instance -- the resolving-root instance when
+/// one is merge-bound, else the legacy cp-level first index. The walk always resolved
+/// the atom in the resolving root, so the filter only ever removes a provably-wrong
 /// same-cp other-root sibling.
 pub(crate) fn dep_child_lookup(
     root_index: &HashMap<(bool, &str, &str), usize>,

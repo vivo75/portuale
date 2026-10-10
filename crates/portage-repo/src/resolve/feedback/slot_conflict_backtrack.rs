@@ -10,13 +10,8 @@ pub(crate) fn step_slot_conflict_backtrack(
     grown: &mut BacktrackParams,
     config: &Config,
 ) -> Option<PassDecision> {
-    // C3: real `_slot_confict_backtrack` (one node per ranked choice,
-    // first conflicting slot only -- real `_feedback_slot_conflicts`
-    // takes `conflicts_data[0]`). The old bundled trial (highest child +
-    // every lower-alternative puller) is gone: puller-masking now happens
-    // only through a later pass's own missing-dep feedback, exactly like
-    // real, where a downgraded parent is abandoned via its unsatisfiable
-    // atom rather than pre-masked.
+    // One node per ranked choice, first conflicting slot only. Puller-masking now
+    // happens only through a later pass's own missing-dep feedback, never pre-masked.
     if !pass.slot_conflicts.is_empty() {
         let choices = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
             repos: &ctx.repos,
@@ -26,11 +21,9 @@ pub(crate) fn step_slot_conflict_backtrack(
             sc: &pass.slot_conflicts[0],
             config,
         });
-        // Novelty mirrors the old trial-dedup, compared on the full
-        // entry (neg + reason, the same granularity the node-dedup
-        // uses): at least one group member new to the search state. A
-        // repeat with recomputed parents is a distinct state and
-        // explores -- the mask budget still caps it.
+        // Novelty is compared on the full entry (neg + reason): at least one group
+        // member new to the search state. A repeat with recomputed parents is a
+        // distinct state and explores -- the mask budget still caps it.
         let added = choices.iter().any(|c| {
             c.similar
                 .iter()
@@ -50,11 +43,8 @@ pub(crate) fn step_slot_conflict_backtrack(
                 })
         });
         if added {
-            // #297: real's `_process_slot_conflicts` also runs
-            // `_slot_operator_trigger_reinstalls` in the same pass, so
-            // the replace set rides the conflict's node (`infos` carries
-            // `config` and `slot conflict` together) instead of costing a
-            // separate restart once the masks settle.
+            // Portage runs the slot-operator trigger reinstalls in the same pass, so
+            // the replace set rides the conflict's node instead of costing a restart.
             let nvc = pass.suppressed_nvc
                 || pass
                     .entries

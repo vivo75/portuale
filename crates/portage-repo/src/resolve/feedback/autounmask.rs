@@ -8,13 +8,9 @@ pub(crate) fn step_autounmask(
     pass: &mut PassResult,
     ctx: &ResolveCtx<'_>,
 ) -> Option<PassDecision> {
-    // Real `_autounmask_breakage` (depgraph.py:12262-12280): an
-    // accumulated autounmask USE change made another use-dep
-    // unsatisfiable and the two can't be reconciled (a flag wanted
-    // both ways). Drop every autounmask change, turn suggestion fully
-    // off, and re-resolve one final clean pass -- exactly real's
-    // `myparams["autounmask"] = False` retry. The `autounmask_disabled`
-    // latch keeps it to a single extra pass.
+    // Portage: depgraph.py, _autounmask_breakage. An accumulated autounmask
+    // USE change broke another use-dep irreconcilably: drop every change and
+    // re-resolve one final clean pass. Latched to a single extra pass.
     if grown.autounmask_use_broke && !grown.autounmask_disabled {
         grown.autounmask_disabled = true;
         grown.autounmask_suggest_keywords = false;
@@ -29,14 +25,8 @@ pub(crate) fn step_autounmask(
         }));
     }
 
-    // Backtracking slice: this pass folded a new `--autounmask-use`
-    // flip into `autounmask_use_config` (real `_feedback_config`
-    // growing `_needed_use_config_changes`). Re-run the whole walk
-    // with the grown config so the flipped package is re-resolved
-    // with the flag on and its `flag?`-gated deps appear. Converges
-    // because `autounmask_grew` is only set on a *newly*-added
-    // `(cp, flag)` entry. Config feedback is budget-free (real's
-    // `_feedback_config` doesn't count toward `--backtrack=N`).
+    // A newly-folded --autounmask-use flip: re-run the walk with the grown
+    // config. Budget-free; converges because the flag is set on new entries only.
     if pass.autounmask_grew {
         let mut c = ctx.config.clone();
         c.autounmask_use = autounmask_use_tier(&grown.autounmask_use_config);

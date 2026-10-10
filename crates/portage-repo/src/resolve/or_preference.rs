@@ -15,34 +15,14 @@ pub(crate) struct AlternativeDowngradeDemotedArgs<'a> {
     pub(crate) update: bool,
 }
 
-/// Real `dep_zapdeps`'s two bug-531656 guards (`dep_check.py` soft 476-490
-/// `conflict_downgrade`, 531-541 `installed_downgrade`): an otherwise
-/// available `||` alternative is demoted to the `other` bin when one of its
-/// atoms would pull in a *lower* version of a package whose slot the live
-/// graph already holds at a higher version, unless that downgrade is
-/// desirable ([`downgrade_probe`]). This is what makes
-/// `|| ( dev-ml/labltk:= <dev-lang/ocaml-4.02 )` take `labltk` once the
-/// `ocaml-4.02.1` update is in the graph (upstream
-/// `test_or_choices.py::testConflictMissedUpdate`) instead of the
-/// `<ocaml-4.02` arm that forces the update back out.
+/// An otherwise-available `||` alternative is demoted when one of its atoms would pull
+/// in a *lower* version of a package whose slot the live graph already holds at a
+/// higher version, unless that downgrade is desirable (`downgrade_probe`).
+/// Portage: dep_check.py, dep_zapdeps (conflict_downgrade / installed_downgrade, bug 531656).
 ///
-/// Real's `graph_db` is the depgraph's live package set; portuale's is the
-/// resolver's in-progress `entries` (both `||` call sites pass
-/// `state.entries`/`entries` as they stand at that instant), which is the
-/// same set real consults at the same moment.
-///
-/// Port notes, each a deliberate narrowing:
-///   - `avail_pkg` is the highest visible tree match of the atom without its
-///     `[use]` block (real then re-selects with USE when that succeeds; the
-///     version compared below can only differ when a USE-satisfying lower
-///     version exists, not a shape this guard targets).
-///   - `highest_in_slot` counts only as "in graph" when an entry for that
-///     `cat/pkg` slot exists (merge-bound, or an `AlreadyInstalled` node).
-///     Real's `_select_package` would also return a bare installed instance
-///     that is not yet a graph node when `--update` is off; that variant
-///     needs the update mode threaded to this depth and is left out.
-///   - `replacing` (`will_replace_child`): an atom of the entry's own
-///     `cat/pkg` (`self_cp`) is never demoted.
+/// Portage's `graph_db` is the live package set; portuale's is the in-progress `entries`,
+/// the same set at the same moment. `avail_pkg` ignores `[use]`; `highest_in_slot` needs
+/// a graph node holding the slot; an atom of the entry's own `cat/pkg` never demotes.
 pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArgs<'_>) -> bool {
     let AlternativeDowngradeDemotedArgs {
         repos,
@@ -73,8 +53,8 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         else {
             return false;
         };
-        // Graph nodes in `cat/pkg:avail_slot`: merge-bound versions, and the
-        // installed version when an `AlreadyInstalled` node holds the slot.
+        // Merge-bound versions, plus the installed version when an `AlreadyInstalled`
+        // node holds the slot.
         let mut in_slot: Vec<String> = entries
             .iter()
             .filter(|e| {
@@ -89,20 +69,13 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
                 PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
                     Some(to.clone())
                 }
-                // #72 B3: a removal installs nothing into the slot.
+                // A removal installs nothing into the slot.
                 PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
             })
             .collect();
-        // Backlog #90 (S1): real selects every world/argv atom inline
-        // and forward before walking anything, so by the time a
-        // `||` alternative is judged the pending update is already a
-        // graph node. Portuale walks last-declared-first and judges
-        // eagerly: a queued atom on the same cp stands in for the
-        // not-yet-graphed selection. The hypothetical is what that
-        // selection would pick -- tree-best under `--update`
-        // (the update real already graphed), installed-best otherwise
-        // (real selected the installed instance) -- evaluated against
-        // the queued atom's own text, with that cp's hard constraints.
+        // Portage selects world/argv atoms before walking, so the pending update is already
+        // a graph node at judgement time. Portuale judges eagerly: a queued same-cp atom
+        // stands in (tree-best under `--update`, installed-best otherwise).
         if in_slot.is_empty() {
             let mut hypothetical: Vec<String> = Vec::new();
             for q in queued {
@@ -147,10 +120,8 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
             return false;
         }
         let slot_atom = format!("{}/{}:{avail_slot}", at.category, at.package);
-        // `conflict_downgrade` (two or more graph packages in the slot) and
-        // `installed_downgrade` (the slot's highest is in the graph) share the
-        // same "lower than what the graph holds, and not a desirable
-        // downgrade" test once `highest_in_slot` is a graph node.
+        // Both downgrade guards share one test once `highest_in_slot` is a graph node:
+        // lower than what the graph holds, and not a desirable downgrade.
         !downgrade_probe(repos, config, &slot_atom, &avail_version, extra)
     })
 }
@@ -168,76 +139,31 @@ pub(crate) struct DisjunctionPreferenceArgs<'a> {
     pub(crate) atoms: &'a [String],
     pub(crate) queued: &'a [QueueItem],
     pub(crate) update: bool,
-    /// Track X Slice C (#242): the whole-graph views for the
-    /// circular-self-dep gate below. `entries`/`queued` above are the
-    /// group's own root scope (real's group-rooted `graph_db` match);
-    /// the gate asks whether the owner's cp is in play *at all* (real
-    /// has no self-exclusion -- the package is already graphed when its
-    /// own `||` group pops, whichever root it sits in), so it reads
-    /// these unscoped views instead. Same slices as `entries`/`queued`
-    /// on every same-root call -- a strict no-op there.
+    /// The whole-graph views for the circular-self-dep gate below. `entries`/`queued`
+    /// above are the group's own root scope; the gate asks whether the owner's cp is in
+    /// play *at all*, so it reads these unscoped views instead. Same slices on every
+    /// same-root call -- a strict no-op there.
     pub(crate) gate_entries: &'a [GraphEntry],
     pub(crate) gate_queued: &'a [QueueItem],
 }
 
-/// The single probe closure `use_reduce_flat_disjunctive` calls for every
-/// `||` alternative -- real `dep_zapdeps`'s whole choice-bin
-/// classification (`dep_check.py` soft 449-523, 599-618) collapsed into
-/// one [`AltPreference`](portage_use_reduce::AltPreference) rank. Shared
-/// by both of portuale's `||`-resolution call sites (the main New/
-/// Upgrade/Reinstall walk in `backtracking_resolve`, and the `--deep`
-/// AlreadyInstalled recursion in `enqueue_dependencies`) so a fix to one
-/// can never silently miss the other again (2026-09-11 review finding
-/// F1/F2: `enqueue_dependencies` had kept its own, unfixed copy of this
-/// closure after the fine `unsat_use_*` bins shipped).
+/// The single probe closure `use_reduce_flat_disjunctive` calls for every `||`
+/// alternative -- Portage's whole choice-bin classification collapsed into one rank.
+/// Shared by both of portuale's `||`-resolution call sites so a fix to one can never
+/// silently miss the other again. Portage: dep_check.py, dep_zapdeps.
 ///
-/// `constraints` is the `'backtrack`-loop's accumulated per-`cat/pkg`
-/// `runtime_pkg_mask` (empty at every non-disjunctive call site, a strict
-/// no-op) -- kept as the raw map rather than a `constraints_for(atom)`
-/// closure parameter (as first drafted): a `&dyn Fn(&str) -> &[String]`
-/// trait object needs the elided-lifetime signature `for<'a> Fn(&'a str)
-/// -> &'a [String]`, which a closure whose return actually borrows a
-/// captured map (not the input `&str`) can't satisfy without the borrow
-/// checker extending the map's borrow for the trait object's whole
-/// lifetime -- exactly the `slot_constraints` "does not live long enough"
-/// / "also borrowed as mutable" conflict this hit against the
-/// `'backtrack` loop's later `slot_constraints.entry(...)` mutations.
-/// `self_cp` is the entry currently being resolved, for the
-/// circular-self-dep check; `circular_dependency` is the `'backtrack`
-/// loop's map (owner `cat/pkg` → circular-child records; empty on the
-/// first pass, a strict no-op) -- real `dep_zapdeps`' `circular_atom`
-/// demotion (`dep_check.py:673-691`), backlogs #216/#221. `root_deps_running_root` is the `--root-deps`
-/// feed-in (`None` = strict no-op). See `atom_currently_satisfiable`'s,
-/// `atom_all_use_unmasked`'s, `atom_cp_installed`'s and
-/// `atom_installed_in_slot_of`'s own doc comments for the per-predicate
-/// grounding; this function only sequences them the way real
-/// `dep_zapdeps`'s per-atom loop does.
+/// `constraints` is the backtrack loop's per-`cat/pkg` mask (kept as the raw map: the
+/// closure's borrowed return can't satisfy the loop's later mutations).
+/// `circular_dependency` is the loop's map for this pass (empty on the first attempt).
+/// `root_deps_running_root` is the `--root-deps` feed-in (`None` = no-op).
 ///
-/// `circular_dependency` is backlog #221's `backtrack_infos["config"]
-/// ["circular_dependency"] for this pass (empty on the first attempt):
-/// the previous attempt's cycle edges, parent `cat/pkg` to in-cycle
-/// children. An alternative with an atom matching one of `self_cp`'s
-/// recorded children -- real's `circular_atom`
-/// (`lib/portage/dep/dep_check.py:673-691`) -- ranks `Other`, so the
-/// re-walk takes the branch that breaks the cycle (bugs 703440, 705986).
-/// The installed-walk call sites (`collect_unwalked_installed_blockers`,
-/// `enqueue_dependencies`) pass an empty map: real keys exact package
-/// nodes (`Package.__hash__ = Task.__hash__`, no `__eq__` override), so
-/// an installed parent -- never a merge-bound cycle node -- can never
-/// hit. The argument is node-identity keying, not cp-disjointness:
-/// portuale's cp-keying would over-demote on an installed-v1/merging-v2
-/// cp collision real never exhibits (the blocker scan skips walked cps,
-/// but `enqueue_dependencies` parents are `AlreadyInstalled` entries
-/// whose cp may coincide with a merging cp).
+/// `circular_dependency` demotes an alternative matching one of `self_cp`'s recorded
+/// children to `other`, so the re-walk breaks the cycle. Installed-walk call sites pass
+/// an empty map (an installed parent is never a merge-bound cycle node).
 ///
-/// Real's per-atom loop probes each atom's availability once and
-/// short-circuits (`if not avail_pkg: ... break`, soft 469): review
-/// finding F3 -- for an atom with no `[use]` block (the overwhelming
-/// majority), `atom.without_use` and `atom` are the same string, so
-/// real's separate `all_available`/`all_use_satisfied` probes would do
-/// byte-identical candidate-listing work twice. This loop computes each
-/// atom's availability once and reuses it for both facts when there is no
-/// `[use]` block to strip.
+/// Each atom's availability is probed once and reused for both facts when there is no
+/// `[use]` block to strip (for such an atom the two probes would do byte-identical
+/// candidate-listing work twice).
 pub(crate) fn disjunction_preference(
     args: DisjunctionPreferenceArgs<'_>,
 ) -> portage_use_reduce::AltPreference {
@@ -264,27 +190,15 @@ pub(crate) fn disjunction_preference(
     let mut all_available = true;
     let mut all_use_satisfied = true;
     let mut all_use_unmasked = true;
-    // Portuale's own bolt-on (real has no equivalent): once true, the
-    // alternative is hard `Unsatisfiable` in BOTH passes below, never
-    // promoted into one of the `other_*` bins the way a genuine
-    // `!all_available` atom is.
+    // Once true, the alternative is hard `Unsatisfiable` in BOTH passes below, never
+    // promoted into an `other_*` bin the way a genuine `!all_available` atom is.
     //
-    // Backlog #216: narrowed to real's actual pass-1 rule. Real has no
-    // self-exclusion at all -- `_create_graph` adds the package to the
-    // digraph before walking its deps (`_add_pkg` at select time), so by
-    // the time the owner's own `||` group pops off
-    // `_dep_disjunctive_stack` the self-naming atom matches an in-graph
-    // node and the alternative ranks `preferred_in_graph` (bin 0): the
-    // cycle forms, then `_serialize_tasks` dead-ends and the
-    // `circular_dependency` map re-resolves it (see
-    // `BacktrackParams::circular_dependency`). Only a self atom matching
-    // nothing in-graph (and nothing installed) stays `Unsatisfiable` --
-    // selecting it even as a last resort would let a package
-    // self-satisfy its own not-yet-resolved atom.
+    // Narrowed to Portage's actual pass-1 rule (no self-exclusion): the self-naming atom
+    // matches an in-graph node and ranks bin 0; the cycle forms, serialization dead-ends,
+    // and the map re-resolves it. Only a self atom matching nothing stays `Unsatisfiable`.
     let mut circular = false;
-    // Backlog #90 (S1)'s drain-state approximation (see
-    // `atoms_all_in_graph`), built lazily: only a self-naming atom needs
-    // it, and most alternatives have none.
+    // The drain-state approximation (see `atoms_all_in_graph`), built lazily for
+    // self-naming atoms only.
     let mut queued_cps: Option<HashSet<(String, String)>> = None;
     for a in atoms {
         let self_naming = portage_dep::parse_atom(a).is_some_and(|at| {
@@ -315,9 +229,7 @@ pub(crate) fn disjunction_preference(
         }
         let stripped = portage_dep::without_use(a);
         let extra_constraints = constraints_for(a);
-        // Real `all_available`'s per-atom probe: `mydbapi_match_pkgs(
-        // atom.without_use)` -- USE settings never affect `||` preference
-        // evaluation at this stage (dep_check.py soft 469).
+        // USE settings never affect `||` preference evaluation at this stage.
         let avail = atom_currently_satisfiable(repos, stripped, config, extra_constraints)
             || root_deps_running_root
                 .is_some_and(|running_root| running_root_satisfies_atom(a, running_root, config));
@@ -326,38 +238,21 @@ pub(crate) fn disjunction_preference(
             all_use_satisfied = false;
             break;
         }
-        // No `[use]` block: real's `if atom.use:` is false, so this atom
-        // trivially satisfies its own (nonexistent) use-deps -- reuse
-        // `avail` (`== true`) instead of re-probing the identical
-        // candidate list a second time (F3).
+        // No `[use]` block: reuse `avail` instead of re-probing the identical list.
         let use_ok = if stripped.len() == a.len() {
             true
         } else {
             atom_currently_satisfiable(repos, a, config, extra_constraints)
-                // #74 S1 (T10): real's `mydbapi_match_pkgs(atom)` in
-                // `dep_zapdeps` is `_dep_check_composite_db` over the
-                // graph/installed/ebuild dbs, and a *built* package's
-                // `[use]` deps are matched against its recorded vdb USE
-                // (`dbapi._match_use`'s `not self._use_mutable` branch,
-                // `portage/dbapi/__init__.py:298-327`) -- not against
-                // the tree candidate's profile-derived USE. Without this
-                // disjunct an alternative satisfied by an installed
-                // instance whose flag the current profile does not
-                // enable (`dev-lang/rust:1.94.1[llvm_slot_21]`,
-                // `dev-libs/altprov:1.1[flip]`) failed
-                // `all_use_satisfied`, was demoted to `unsat_use_*`,
-                // and lost bin 0 to the *uninstalled* slot's cp-level
-                // `Installed` -- real keeps the installed alternative
-                // (fixture `altprov`/`altconsumer` and the #74 host
-                // probe).
+                // A *built* package's `[use]` deps match its recorded vdb USE, not the
+                // tree candidate's profile USE; without this, installed-satisfied
+                // alternatives are wrongly demoted.
                 || atom_matches_installed(root, a, config)
                 || root_deps_running_root
                     .is_some_and(|running_root| running_root_satisfies_atom(a, running_root, config))
         };
         if !use_ok {
             all_use_satisfied = false;
-            // Real's bug-515584 probe: only evaluated for an atom whose
-            // own USE-match actually failed (dep_check.py soft 493-523).
+            // Only evaluated for an atom whose own USE-match actually failed.
             if !atom_all_use_unmasked(repos, a, config, extra_constraints) {
                 all_use_unmasked = false;
             }
@@ -367,12 +262,8 @@ pub(crate) fn disjunction_preference(
         if circular {
             return portage_use_reduce::AltPreference::Unsatisfiable;
         }
-        // Real's `other_installed`/`other_installed_some`/
-        // `other_installed_any_slot`/`other` classification
-        // (dep_check.py soft 715-724): reached when some atom has no
-        // tree candidate at all, even ignoring USE. Blockers are
-        // excluded from the fold entirely (real's own `if not
-        // atom.blocker:` guard), not merely vacuously satisfied.
+        // Reached when some atom has no tree candidate at all, even ignoring USE.
+        // Blockers are excluded from the fold entirely, not merely satisfied.
         let non_blocker: Vec<&String> = atoms
             .iter()
             .filter(|a| {
@@ -392,10 +283,8 @@ pub(crate) fn disjunction_preference(
         if some_installed {
             return portage_use_reduce::AltPreference::OtherInstalledSome;
         }
-        // Real's own fuzzy cp-level fallback (soft 720-724, bug 522652)
-        // -- plain `vardb.match(Atom(atom.cp))`, deliberately NOT
-        // `atom_cp_installed` (that helper's `virtual/` zero-cost
-        // exemption doesn't apply to this specific real code path).
+        // Portage's own fuzzy cp-level fallback -- plain vdb match, deliberately NOT
+        // `atom_cp_installed` (that helper's `virtual/` exemption doesn't apply here).
         let any_cp_installed = non_blocker.iter().any(|a| {
             portage_dep::parse_atom(a)
                 .is_some_and(|at| !installed_candidates(root, &at.category, &at.package).is_empty())
@@ -406,11 +295,8 @@ pub(crate) fn disjunction_preference(
             portage_use_reduce::AltPreference::Other
         };
     }
-    // Real demotes an otherwise-`all_available` choice straight to `other`
-    // (skipping bin 0/1 entirely) when `conflict_downgrade` or
-    // `installed_downgrade` fires (dep_check.py soft 634, bug 531656) --
-    // backlog #35, see `alternative_downgrade_demoted`. `entries` is the
-    // resolver's live in-progress set at both call sites.
+    // An otherwise-`all_available` choice demoted straight to `other` on a downgrade
+    // guard (see `alternative_downgrade_demoted`).
     if alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
         repos,
         root,
@@ -424,21 +310,11 @@ pub(crate) fn disjunction_preference(
     }) {
         return portage_use_reduce::AltPreference::Other;
     }
-    // Backlog #221: real's `circular_atom` demotion
-    // (`lib/portage/dep/dep_check.py:673-691`, bugs 703440, 705986): on a
-    // backtrack restart after a stranded merge-order walk, an alternative
-    // with an atom matching one of the resolving parent's recorded
-    // in-cycle children ranks `other`, so the re-walk takes the branch
-    // that breaks the cycle. Before the USE binning below because real
-    // demotes regardless of USE-satisfaction (`if circular_atom is not
-    // None: other.append(this_choice)` ahead of the `all_use_satisfied`
-    // split). Two exemptions straight from real: blocker atoms never
-    // match, and an atom satisfied by an installed version is not a
-    // circular dep (`if vardb.match(atom): continue`). The
-    // `parent.onlydeps` half of the `circular_atom` site (soft 649-671)
-    // stays a documented cut: `--onlydeps` is not threaded to this call
-    // depth, and its demotion (avoiding the direct self-cycle for
-    // `--onlydeps` arguments) is independent of this backtracking one.
+    // Backtrack restart after a stranded walk: an alternative matching one of the
+    // parent's recorded in-cycle children ranks `other`, breaking the cycle on re-walk.
+    // Before USE binning (Portage demotes regardless of USE-satisfaction). Exemptions:
+    // blockers never match; installed-satisfied atoms aren't circular. The
+    // `parent.onlydeps` half stays cut: `--onlydeps` isn't threaded to this depth.
     if let Some(children) = circular_dependency.get(self_cp) {
         let circular_hit = atoms.iter().any(|a| {
             let Some(atom) = portage_dep::parse_atom(a) else {
@@ -461,17 +337,9 @@ pub(crate) fn disjunction_preference(
         }
     }
     if all_use_satisfied {
-        // Real `dep_zapdeps` choice bin 0 -- the single list
-        // `preferred_in_graph` / `preferred_installed` / `preferred_any_slot`
-        // all alias to when `graph_db` is present. An alternative every
-        // non-blocker atom of which is either already installed
-        // (`all_installed`, cp-level -- makes `virtual/wine`'s
-        // `|| ( wine-vanilla wine-staging … )` pick the installed
-        // `wine-staging`) OR already a merge-bound node this run
-        // (`all_in_graph`, `[use]`-checked -- makes `virtual/secret-service`
-        // pick the KDE-stack-pulled `kwallet-runtime[keyring]` over the
-        // first-listed `gnome-keyring`) ranks above one that would need a
-        // fresh merge.
+        // Choice bin 0: an alternative every non-blocker atom of which is either
+        // already installed (cp-level) OR already a merge-bound node this run
+        // (`[use]`-checked) ranks above one that would need a fresh merge.
         return if atoms.iter().all(|a| atom_cp_installed(root, a))
             || atoms_all_in_graph(atoms, entries, config, queued)
         {
@@ -480,25 +348,17 @@ pub(crate) fn disjunction_preference(
             portage_use_reduce::AltPreference::Available
         };
     }
-    // `!all_use_satisfied`: real's `unsat_use_*` bins -- the alternative
-    // exists but can only be merged with USE changes. First the
-    // bug-515584 gate (soft 705): if the flags that would have to change
-    // sit in `use.mask` / `use.force`, the choice is demoted to plain
-    // `other` (dep_check.py soft 705-706 -- no installed-variant
-    // sub-classification, unlike the `!all_available` branch above);
-    // otherwise it keeps the fine-bin ordering `unsat_use_in_graph` >
-    // `unsat_use_installed` > `unsat_use_non_installed`.
+    // `!all_use_satisfied`: the alternative needs USE changes. If the flags to change
+    // sit in `use.mask` / `use.force`, demote to plain `other`; otherwise keep the
+    // `unsat_use_in_graph` > `unsat_use_installed` > `unsat_use_non_installed` order.
     if !all_use_unmasked {
         return portage_use_reduce::AltPreference::Other;
     }
     if atoms_all_in_graph(atoms, entries, config, queued) {
         return portage_use_reduce::AltPreference::UnsatUseInGraph;
     }
-    // Real `unsat_use_installed`'s `all_installed_slots` (dep_check.py
-    // soft 599-607): cp-level installed is not enough -- the *slot* the
-    // best USE-ignoring candidate would pull in must also be installed
-    // (F4). A cp installed only in a different slot than this alternative
-    // targets still counts as `unsat_use_non_installed`.
+    // Cp-level installed is not enough: the *slot* the best USE-ignoring candidate
+    // pulls in must also be installed, else `unsat_use_non_installed`.
     if atoms.iter().all(|a| atom_cp_installed(root, a))
         && atoms
             .iter()
@@ -510,11 +370,8 @@ pub(crate) fn disjunction_preference(
     }
 }
 
-/// Real `mydbapi_match_pkgs(atom.without_use)[-1]`'s `version` field,
-/// parsed back out of a `highest_available_candidate_ignoring_use`
-/// candidate string (`"{cp}-{version}:{slot}/{sub_slot}::{repo}"`) --
-/// the per-atom seed of a `||` alternative's own `cp_map`
-/// (`promote_tied_alternative`'s slice-2 in-bin ordering).
+/// The `version` field of one `highest_available_candidate_ignoring_use` candidate
+/// string: the per-atom seed of an alternative's `cp_map`.
 pub(crate) fn candidate_version(
     candidate_str: &str,
     category: &str,
@@ -535,47 +392,14 @@ pub(crate) struct PromoteTiedAlternativeArgs<'a> {
     pub(crate) queued: &'a [QueueItem],
 }
 
-/// Real `dep_zapdeps`'s in-bin upgrade-preference ordering pass
-/// (`dep_check.py` soft 738-802), plugged in as `use_reduce_flat_disjunctive`'s
-/// `tie_break` -- called only when 2+ alternatives tie at the best
-/// selectable [`AltPreference`](portage_use_reduce::AltPreference) rank
-/// (`disjunction_preference`'s own return). Real processes `choices[1:]`
-/// (by object identity, in original left-to-right order) against the
-/// CURRENT, being-mutated bin list, promoting `choice_1` in front of the
-/// first `choice_2` it beats and stopping the moment it would reach its
-/// own current position unpromoted; ported as a literal remove+insert
-/// over an `id`-tagged `Vec` (not simplified to a stable sort -- the
-/// promotion isn't transitive/associative in general, which is the
-/// whole point of real's own "sorting is done separately for each bin,
-/// so as not to interfere with the ordering ... specified in the
-/// ebuild" comment) so this matches real byte-for-byte rather than an
-/// approximation of it. Returns the WINNING alternative's original
-/// index into `alts` (`tie_break`'s own contract).
+/// Portage's in-bin upgrade-preference pass as `use_reduce_flat_disjunctive`'s
+/// `tie_break` (2+ tied alternatives only). A literal remove+insert over an `id`-tagged
+/// `Vec`, not a stable sort -- the promotion isn't transitive. Returns the WINNING
+/// alternative's original index. Portage: dep_check.py, dep_zapdeps.
 ///
-/// Two of real's per-choice facts are deliberate, documented cuts (§2 of
-/// the design brief, `docs/history/022-agent-task-22-zapdeps.fable.md`):
-/// `minimize_slots` (only applies after `_overlap_dnf`'s DNF rewrite,
-/// which portuale doesn't do -- skipped entirely, matching the brief's
-/// own "cut it and document" fallback for slice 2) and `want_update`
-/// (`graph_interface.want_update_pkg`, needing the `--update`/`--newuse`
-/// "wanted" set threaded down to this call depth, which portuale
-/// doesn't do) -- pinned to real's own default (`False`), which only
-/// ever WIDENS when the `all_installed_slots` promotion applies (a true
-/// `want_update` on `choice_2` would SUPPRESS it): never picks a
-/// DIFFERENT winner than real would for a fixture where `want_update` is
-/// genuinely false, only potentially a fixture real would need
-/// `want_update` to decide -- none of which are targeted here.
-///
-/// Also deliberately simplified vs `dep_check.py`'s own `cp_map`
-/// construction (soft 552-568, "bug 600346"): when an alternative's OWN
-/// atoms name the SAME `cp` more than once, real re-checks whether the
-/// higher-version candidate still satisfies every atom that already
-/// matched the previous one before overwriting `cp_map[cp]` (internal
-/// consistency); this always just keeps the higher version. A narrow
-/// cut -- it only differs from real when a single `||` alternative
-/// contains two atoms on the identical package where the higher version
-/// satisfies one atom but not the other, which the brief's own slice-2
-/// fixtures don't exercise -- documented in `scope-backlog.md`.
+/// `minimize_slots` and `want_update` are pinned to Portage's default (`False`), which
+/// only ever WIDENS the installed-slots promotion; and a same-`cp` repeat inside one
+/// alternative always just keeps the higher version (see notes).
 pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> usize {
     let PromoteTiedAlternativeArgs {
         repos,
@@ -645,8 +469,7 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
     if choices.len() < 2 {
         return 0;
     }
-    // Real `for choice_1 in choices[1:]:` -- a snapshot of every choice
-    // BUT the first, by identity, taken before any mutation.
+    // Snapshot of every choice BUT the first, by identity, before mutation.
     let snapshot_ids: Vec<usize> = choices[1..].iter().map(|c| c.id).collect();
     for id1 in snapshot_ids {
         let Some(pos1) = choices.iter().position(|c| c.id == id1) else {
@@ -658,8 +481,7 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
         let mut promote_before: Option<usize> = None;
         for (pos2, choice2) in choices.iter().enumerate() {
             if choice2.id == id1 {
-                // Reached choice_1's own current position without a
-                // promotion firing -- real's `if choice_1 is choice_2: break`.
+                // Own position reached with no promotion: stop.
                 break;
             }
             if choice1_all_installed_slots && !choice2.all_installed_slots {
@@ -687,8 +509,7 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
             }
         }
         if let Some(pos2) = promote_before {
-            // `pos2 < pos1` always (the scan breaks the moment it would
-            // reach `pos1`), so removing `pos1` first never shifts `pos2`.
+            // `pos2 < pos1` always, so removing `pos1` first never shifts `pos2`.
             let choice1 = choices.remove(pos1);
             choices.insert(pos2, choice1);
         }

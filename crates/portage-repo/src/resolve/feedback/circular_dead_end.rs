@@ -8,37 +8,24 @@ pub(crate) fn step_circular_dead_end(
     ctx: &ResolveCtx<'_>,
     grown: &mut BacktrackParams,
 ) -> Option<PassDecision> {
-    // Backlog #216: real `_serialize_tasks`' circular dead-end
-    // (`depgraph.py:10262-10289`). The walk finished but the merge-bound
-    // graph does not serialize: a hard build-time cycle -- now including
-    // a true self-loop (see `find_hard_cycles`) -- leaves nodes
-    // unselectable. Real records every (node → its predecessor in the
-    // cycle) edge into the `circular_dependency` backtrack map and
-    // retries, and the next pass's `dep_zapdeps` demotes the matching
-    // `||` branch to `other` (see `disjunction_preference`'s
-    // `circular_dependency` argument). A cycle that adds nothing new is
-    // unsolved (real's `unsolved_cycle` → `_skip_restart`): a dead end,
-    // reported from the best run, not retried.
+    // Portage: depgraph.py, _serialize_tasks (circular dead-end). The walk finished
+    // but the graph does not serialize; record every (node -> in-cycle predecessor)
+    // edge into the circular map and retry, on which `||` demotion breaks the cycle.
+    // A cycle adding nothing new is unsolved: a dead end reported from the best run.
     //
-    // Scope (`cycle_restartable`): only the fresh self-pick shape
-    // retries HERE. Every other hard cycle falls through to the later
-    // arms exactly as before (a walk-time NVC still beats it below;
-    // multi-node rings reach backlog #221's general restart arm, which
-    // shares this map), so their reports are byte-identical with and
-    // without this slice.
+    // Only the fresh self-pick shape retries here; every other hard cycle falls
+    // through to the later arms, so their reports are byte-identical either way.
     //
-    // Placed before the slot-conflict arms: a deadlocked graph pre-empts
-    // conflict repair (real never reaches conflict processing with a
-    // failed serialize); a re-pass whose demotion clears the cycle
-    // re-runs those arms normally.
+    // Placed before the slot-conflict arms: a deadlocked graph pre-empts conflict
+    // repair (Portage never reaches conflict processing with a failed serialize).
     let hard_cycles = find_hard_cycles(
         &pass.entries,
         &pass.edge_kind_map,
         ctx.root,
         &grown.circular_dependency,
-        // Pre-sort pass: only the single-node `cycle_restartable` gate
-        // reads the result, so the insertion rank (a post-sort notion)
-        // is meaningless here; `None` falls back to `discovery` order.
+        // Only the single-node `cycle_restartable` gate reads the result, so the
+        // insertion rank (a post-sort notion) is meaningless here; `None` falls
+        // back to `discovery` order.
         None,
     );
     if hard_cycles.len() == 1
@@ -55,15 +42,9 @@ pub(crate) fn step_circular_dead_end(
                 let Some((node_cat, node_pkg, _)) = split_cpv(node_cpv) else {
                     continue;
                 };
-                // Track X Slice C (#242): the cycle cpv may name two
-                // merge-bound instances (one per root) -- real records
-                // the node that actually dead-ends
-                // (`circular_dependency.setdefault(node, ...)` keyed by
-                // package object). The true cycler is the instance with
-                // the hard self edge in the root-qualified walk map;
-                // the other instance's self pick resolves to it, not to
-                // itself. No hard self pair (the slot-op-only shapes)
-                // keeps the legacy target-root key.
+                // The cycle cpv may name two merge-bound instances (one per root):
+                // record the one with the hard self edge in the root-qualified walk
+                // map. With no hard self pair, keep the legacy target-root key.
                 let cycler_running = pass
                     .edge_kind_map
                     .get(&(
@@ -71,8 +52,8 @@ pub(crate) fn step_circular_dead_end(
                         (true, node_cat.clone(), node_pkg.clone()),
                     ))
                     .is_some_and(|(has_hard, _)| *has_hard);
-                // Real's own predecessor formula: `cycle[-1]` for index
-                // 0, `cycle[index-1]` otherwise.
+                // Portage's own predecessor formula: `cycle[-1]` for index 0,
+                // `cycle[index-1]` otherwise.
                 let child_cpv = if index == 0 {
                     &cycle[cycle.len() - 1]
                 } else {
@@ -81,16 +62,14 @@ pub(crate) fn step_circular_dead_end(
                 let Some((child_cat, child_pkg, child_ver)) = split_cpv(child_cpv) else {
                     continue;
                 };
-                // An empty version builds a `cat/pkg-` candidate that no
-                // atom ever matches (M1): skip the record instead of
-                // recording a dead edge that would still count as
-                // `new_info` and force a futile retry.
+                // An empty version builds a `cat/pkg-` candidate that no atom ever
+                // matches (M1): skip instead of recording a dead edge that would
+                // still count as new info and force a futile retry.
                 if child_ver.is_empty() {
                     continue;
                 }
-                // Slot fidelity like #221's ring records below: the
-                // merge-bound entry behind the child cpv carries the
-                // slot/sub-slot an atom's `:slot` pin matches against.
+                // The merge-bound entry behind the child cpv carries the slot/sub-slot
+                // an atom's `:slot` pin matches against.
                 let (child_slot, child_sub_slot) = pass
                     .entries
                     .iter()

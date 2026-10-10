@@ -10,22 +10,10 @@ pub(crate) fn step_slot_conflict_abi(
     grown: &mut BacktrackParams,
     config: &Config,
 ) -> Option<PassDecision> {
-    // Backlog #214 (v2 `#24e`): real `_slot_conflict_backtrack_abi`
-    // (`lib/_emerge/depgraph.py:2282-2315`) runs inside
-    // `_process_slot_conflict`, BEFORE the masking backtrack below --
-    // a built parent whose soname/`:=` conflict atom the update probe
-    // can resolve is rebuilt instead of reported. Same order here: the
-    // probe below fires before the solvability/mask arms, and its
-    // restart carries no masks (real's `remaining` skip). Gated on a
-    // live search like the scan's own call site (`backtrack_max > 0`
-    // is real's `_allow_backtracking`; `ignore_built_slot_operator_deps`
-    // drops the built atoms the probe reads; no unsatisfiable
-    // dependency outstanding, like the `has_nvc` dead-end arm below --
-    // real never reaches conflict processing with a failed
-    // `_create_graph`).
-    // Deliberately NOT gated on `rebuild_if_new_slot` (real's conflict
-    // path never is -- the scan's call-site gate is the pre-existing
-    // narrowing for its own arms, not this one).
+    // Runs inside conflict processing, before the masking backtrack: a built parent
+    // whose soname/`:=` conflict atom the update probe can resolve is rebuilt
+    // instead of reported. Its restart carries no masks. Gated on a live search,
+    // visible built atoms, and no unsatisfiable dependency outstanding.
     if !pass.slot_conflicts.is_empty()
         && ctx.backtrack_max > 0
         && !ctx.ignore_built_slot_operator_deps
@@ -35,7 +23,7 @@ pub(crate) fn step_slot_conflict_abi(
             .iter()
             .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate))
     {
-        // Same inputs the scan builds for its own refusal map: every
+        // Same inputs the rebuild scan builds for its own refusal map: every
         // cp this pass walked, the merge-bound set, and the R2 parents.
         let walked: HashSet<(String, String)> = pass
             .entries

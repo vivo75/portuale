@@ -10,30 +10,15 @@ pub(crate) fn step_missing_dep(
     grown: &mut BacktrackParams,
     config: &Config,
 ) -> Option<PassDecision> {
-    // Real `backtracking.py::_feedback_missing_dep`: this pass hit a
-    // dependency with no matching package; mask its parent (`!=cpv` in
-    // `runtime_pkg_mask`, latched in `missing_dep_masked` so the
-    // same parent is never re-masked) and re-run. Combined with the
-    // `||` closure honouring `slot_constraints`, a `|| ( a b )` whose
-    // `a` has an unsatisfiable subtree now yields to `b`. A trigger the
-    // latch already covers, or a top-level/USE-only mismatch with no
-    // trigger at all, falls through below (dead end unless other
+    // Portage: backtracking.py, _feedback_missing_dep. Mask the parent (`!=cpv` in
+    // `runtime_pkg_mask`, latched so the same parent is never re-masked) and re-run;
+    // with the `||` closure honouring slot constraints, a branch whose `a` has an
+    // unsatisfiable subtree now yields to `b`. A latched trigger, or a top-level /
+    // USE-only mismatch with no trigger, falls through (dead end unless other
     // feedback fired first).
     if let Some(((pc, pp), neg, dep_atom)) = pass.missing_dep_trigger.take() {
-        // #257 + #276: real tries the whole
-        // `_slot_operator_unsatisfied_probe` before the
-        // missing-dependency mask for a built slot-operator atom
-        // (`_emerge/depgraph.py:3447-3455` returns ahead of the
-        // `runtime_pkg_mask` fallback at `:3456-3470`): a hit seeds the
-        // replace set (an installed parent with a resolving
-        // replacement) or masks the binary (a non-installed built
-        // parent, `slot_operator_mask_built`), and the restart takes
-        // the replacement; only a miss falls through to the mask
-        // below. Filed through the shared helper (one expansion point,
-        // no new restart bookkeeping). Under `--usepkgonly` real's
-        // `_iter_similar_available` yields binaries only, so no ebuild
-        // replacement exists and the probe is skipped (the
-        // missing-dependency path below stands).
+        // A built slot-operator atom probes for a resolving replacement first; only
+        // a miss falls through to the mask below. Skipped under `--usepkgonly`.
         if ctx.backtrack_max > 0
             && !ctx.usepkgonly
             && portage_dep::parse_atom(&dep_atom).is_some_and(|a| is_built_slot_op(&a))
@@ -56,8 +41,8 @@ pub(crate) fn step_missing_dep(
                 }));
             }
         }
-        // C2: the latch moves into the node with the mask (see
-        // `Backtracker::feedback`); the trigger here only packages.
+        // The latch moves into the node with the mask (see `Backtracker::feedback`);
+        // the trigger here only packages.
         return Some(PassDecision::Feedback(BacktrackFeedback::MissingDep {
             base: Box::new(std::mem::take(grown)),
             owner: (pc.clone(), pp.clone()),

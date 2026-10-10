@@ -8,37 +8,18 @@ pub(crate) fn step_reverse_dep_pins(
     pass: &mut PassResult,
     grown: &mut BacktrackParams,
 ) -> ControlFlow<PassDecision, Vec<RevDepPin>> {
-    // Real `_complete_graph`'s installed-universe walk reaching
-    // `_slot_operator_check_reverse_dependencies`: an upgrade this
-    // pass picked breaks a dependency an *installed* package -- one
-    // nowhere near the requested atom's own tree -- already records
-    // against it. Real sees such an atom because complete mode
-    // (auto-enabled by any installed-package version/USE change)
-    // deep-walks `@world`/`@selected`/`@system` and pulls every
-    // *reachable* installed package into the graph as a nomerge node
-    // (#54: not the whole installed universe -- see
-    // `reverse_dependency_constraints`'s doc comment), contributing its
-    // recorded atoms to `_parent_atoms`;
-    // portuale finds them with a direct vdb reverse scan instead and
-    // feeds them back here as positive enforcement atoms (C1: they stay
-    // in the positives bucket -- they are not masks), which is
-    // precisely what parent atoms are. The re-resolve then picks the
-    // highest candidate satisfying them -- normally the installed
-    // version, so the entry settles as `AlreadyInstalled` -- and
-    // drops whatever the rejected version had dragged into the
-    // graph. `reverse_dep_masked` latches every constraint already
-    // added, so a pass that finds nothing new falls through and the
-    // loop terminates.
+    // Portage: depgraph.py, _complete_graph reaching _slot_operator_check_reverse_dependencies.
+    // An upgrade this pass picked breaks a dep an *installed* package records against
+    // it. Portuale finds those atoms with a direct vdb reverse scan and feeds them back
+    // here as positive enforcement atoms (they stay in the positives bucket, not masks);
+    // the re-resolve then picks the highest candidate satisfying them -- normally the
+    // installed version -- and drops whatever the rejected version had dragged in.
+    // Latched, so a pass finding nothing new falls through and the loop terminates.
     //
-    // A pin jointly unsatisfiable with this pass's hard requirements
-    // (an explicit versioned request, or a dependency only a newer
-    // version satisfies) is dropped instead of enforced: real merges
-    // the hard-required version anyway and reports the broken
-    // consumer against the installed instance. Dropped pins
-    // accumulate in `dropped_pins` for that residual report (see
-    // `build_residual_slot_conflicts`); they never enter
-    // `slot_constraints`, so the hard-required version is never
-    // masked into invisibility.
+    // A pin jointly unsatisfiable with this pass's hard requirements is dropped
+    // instead of enforced: Portage merges the hard-required version anyway and reports
+    // the broken consumer against the installed instance. Dropped pins accumulate for
+    // that residual report; they never enter `slot_constraints`.
     let mut added = false;
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
         repos: &ctx.repos,
@@ -55,16 +36,14 @@ pub(crate) fn step_reverse_dep_pins(
         config: ctx.config,
         complete: ctx.complete,
     });
-    // #24 S4: rule 4 of `_eliminate_rebuilds` checks every parent atom of
-    // the rebuilt pkg, and real's complete-graph nomerge consumers are
-    // part of `_parent_atoms`; these are the pins carrying their atoms.
-    // Cloned before the loops consume the vectors.
+    // Rule 4 of `_eliminate_rebuilds` reads every parent atom of the rebuilt pkg, and
+    // the complete-graph nomerge consumers are part of `_parent_atoms`; these pins
+    // carry their atoms. Cloned before the loops consume the vectors.
     let reverse_pins: Vec<RevDepPin> = enforced.iter().chain(dropped.iter()).cloned().collect();
     for pin in enforced {
-        // Backlog #90 (S2) + #92: retain every enforced pin (deduped
-        // like `dropped_pins`) so `assemble_result` can report the
-        // upgrades they withhold -- no conflict ever forms on that
-        // path, so without this the withhold would stay silent.
+        // Every enforced pin is retained (deduped) so the settle path can report the
+        // upgrades they withhold -- no conflict ever forms on that path, so without
+        // this the withhold would stay silent.
         if !grown.reverse_dep_pins.contains(&pin) {
             grown.reverse_dep_pins.push(pin.clone());
         }
@@ -72,17 +51,12 @@ pub(crate) fn step_reverse_dep_pins(
             .reverse_dep_masked
             .insert((pin.cp.clone(), pin.atom.clone()))
         {
-            // Backlog #205: real's "Record missed updates" tail
-            // (`lib/_emerge/depgraph.py:2085-2106`) -- a version the
-            // re-resolve drops for the enforced pin is reported
-            // through `_show_missed_update_slot_conflicts`. Record the
-            // rejection as a slot-conflict-style mask on the chosen
-            // version (parents = the enforcing consumer), so the
-            // existing `backtrack_missed_updates` derivation renders
-            // the `WARNING` row. The positive pin above still drives
-            // selection; the negative excludes nothing the pin does
-            // not already exclude. Gated on a live search like every
-            // mask (real `_allow_backtracking`); budget-free like the
+            // Portage's "Record missed updates" tail: a version the re-resolve drops
+            // for the enforced pin is recorded as a slot-conflict-style mask on the
+            // chosen version (parents = the enforcing consumer), so the existing
+            // derivation renders the WARNING row. The positive pin still drives
+            // selection; the negative excludes nothing the pin does not already
+            // exclude. Gated on a live search like every mask; budget-free like the
             // RevDep feedback it rides.
             if ctx.backtrack_max > 0 {
                 for e in &pass.entries {
@@ -125,10 +99,8 @@ pub(crate) fn step_reverse_dep_pins(
                     }
                 }
             }
-            // C1: enforced pins are positive enforcement atoms (the
-            // consumer's recorded atom must keep matching), not
-            // masks -- they stay in the positives bucket, exactly
-            // like the solvable-conflict wants above.
+            // Enforced pins are positive enforcement atoms, not masks -- exactly like
+            // the solvable-conflict wants above.
             grown
                 .slot_constraints
                 .entry(pin.cp)
@@ -143,9 +115,8 @@ pub(crate) fn step_reverse_dep_pins(
         }
     }
     if added {
-        // Backlog #209: a distinct variant (see its doc comment) so the
-        // driver can feed these pins back in-pass under `--backtrack=0`,
-        // where every other feedback kind still settles.
+        // A distinct variant so the driver can feed these pins back in-pass under
+        // `--backtrack=0`, where every other feedback kind still settles.
         return ControlFlow::Break(PassDecision::Feedback(BacktrackFeedback::RevDep {
             params: Box::new(std::mem::take(grown)),
         }));

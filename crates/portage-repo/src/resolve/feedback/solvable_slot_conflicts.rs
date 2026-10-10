@@ -10,14 +10,9 @@ pub(crate) fn step_solvable_slot_conflicts(
     config: &Config,
     grown: &mut BacktrackParams,
 ) -> Option<PassDecision> {
-    // Backtracking (real `backtracking.py` retry loop driven by
-    // `_process_slot_conflicts`): if this attempt left any slot conflicts,
-    // check each one for solvability -- is there a single version of the
-    // conflicted `cat/pkg` that satisfies *every* atom text that targeted
-    // it this pass? If so, the whole atom set becomes a config-feedback
-    // node for the conflicted package. Unsolvable conflicts fall through
-    // to the mask node below; anything still conflicting when the search
-    // is exhausted is reported from the best run, exactly as before.
+    // Portage: backtracking.py, _process_slot_conflicts. For each conflict, if one
+    // version satisfies every atom text that targeted it, the atom set becomes a
+    // config-feedback node. Unsolvable conflicts fall through to the mask arm.
     if !pass.slot_conflicts.is_empty() {
         let mut progressed = false;
         for sc in &pass.slot_conflicts {
@@ -26,18 +21,9 @@ pub(crate) fn step_solvable_slot_conflicts(
                 Some(w) if w.len() >= 2 => w.clone(),
                 _ => continue,
             };
-            // Solvability pre-check against the raw candidate list (real
-            // `_select_pkg_highest_available` over the full atom set). This
-            // deliberately ignores keyword/mask visibility -- the rare case
-            // where the one satisfying version is itself masked resolves to a
-            // plain `NoVisibleCandidate` on the retry, which is
-            // acceptable and documented for this slice. It does NOT
-            // ignore USE-deps (real enforces them in selection): a
-            // version only counts when every want-atom matches it on
-            // version, slot, *and* USE, so a USE-mismatching slot reuse
-            // falls through to the mask trial and the notice instead of
-            // constraining a retry that can only end in swallowed
-            // "no visible ebuild" lines.
+            // Ignores keyword/mask visibility (a masked sole satisfier resolves to a
+            // plain NVC on retry); enforces USE deps so a USE-mismatching reuse falls
+            // through to the mask trial instead of constraining a doomed retry.
             let candidates =
                 list_candidates(&ctx.repos, &pkg_key.0, &pkg_key.1).unwrap_or_default();
             let solvable = candidates.iter().any(|c| {
