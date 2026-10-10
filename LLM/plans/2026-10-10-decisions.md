@@ -96,3 +96,32 @@ Every entry can be overridden by a follow-up commit. Newest last.
     `PermissionError`, which turned all 2285 tests into setup errors. The
     product is not involved. `gate.sh` now uses a fresh `$OUT/pytest` per
     run. Old gate dirs need `sudo rm -rf`.
+
+## 2026-10-10, Phase 4 scope
+
+18. **`cargo dupes` must run with `-p crates`.** From the repo root it also
+    scans the vendored `3rdparty/` checkouts (rsync, coreutils, …), which
+    inflated the report to 39 exact groups. `LLM/tools/dupes.py` wraps it.
+    Over `crates/` the function-level picture is unchanged from Phase 0: 5
+    exact and 6 near groups. Production code alone has 0 exact groups and
+    1 near pair (`portage-fetch::varexpand` / `portage-profile::substitute`,
+    0.974).
+19. **Sub-function groups are not folded** (#338). cargo-dupes reports a
+    sub-function member's *enclosing* function span: a group's members
+    all read `pretend.rs:10081-16150`, which is all of `pretend::run`. So
+    the duplicated blocks can be neither located nor ranked. They are
+    small normalised AST shapes (guards, early returns, match arms) whose
+    folding would add indirection, not remove knowledge. Large duplicated
+    blocks surface as function-level groups anyway once Phase 6 splits
+    the giant functions. Re-run after Phase 6.
+20. **The `graph*` / `graph_result*` test-helper groups move to Phase 5.**
+    Four of the eleven function groups exist only because
+    `resolve_pretend_graph` takes ~44 positional arguments and each helper
+    re-spells them all with one bool flipped. A `ResolveRequest` struct
+    already exists, and its doc comment defers the call-site migration
+    (85 calls, all in `portage-repo/src/lib.rs`). Migrating those calls to
+    named-field `ResolveRequest` construction is Phase 5's explicit-
+    arguments work, and it collapses the helper groups as a side effect.
+    Phase 4 folds the rest: varexpand, `assert_same_reads`
+    (sqlite/redb), the two overlay package.use tests, the `ask_*` pty
+    test pairs, the changed_slot pair, and the two lib.rs closures.

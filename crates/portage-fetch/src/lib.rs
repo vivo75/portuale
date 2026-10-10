@@ -552,111 +552,14 @@ impl FetchCommands {
     }
 }
 
-/// Real `varexpand` (`portage/util/__init__.py:885-1015`) over a
-/// fetch-command template, with `mydict = variables`
-/// (`fetch.py:1795-1820`): `${VARNAME}`/`$VARNAME` expand from `vars`
-/// and an **unknown name expands to empty** (the shell's unset-variable
-/// default), an escaped `\$` is a literal `$`, `\\` is a literal `\`
-/// (plus real's bug-compatible extra character when the next one is a
-/// quote or `$`), an escaped newline disappears, any other `\x` keeps
-/// both characters, and a surviving single quote suspends expansion.
-///
-/// Same algorithm as `portage_profile`'s config-value `substitute`
-/// (R1); the difference is the lookup: no process-environment fallback
-/// here, matching real's fetch-time `mydict`.
-fn varexpand(template: &str, vars: &HashMap<String, String>) -> String {
-    let chars: Vec<char> = template.chars().collect();
-    let mut out = String::new();
-    let mut pos = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    while pos < chars.len() {
-        let current = chars[pos];
-        match current {
-            '\'' => {
-                out.push('\'');
-                if !in_double {
-                    in_single = !in_single;
-                }
-                pos += 1;
-            }
-            '"' => {
-                out.push('"');
-                if !in_single {
-                    in_double = !in_double;
-                }
-                pos += 1;
-            }
-            '\\' if !in_single => {
-                if pos + 1 >= chars.len() {
-                    out.push('\\');
-                    break;
-                }
-                let next = chars[pos + 1];
-                pos += 2;
-                match next {
-                    '$' => out.push('$'),
-                    '\\' => {
-                        out.push('\\');
-                        if pos < chars.len() && matches!(chars[pos], '\'' | '"' | '$') {
-                            out.push(chars[pos]);
-                            pos += 1;
-                        }
-                    }
-                    '\n' => {}
-                    other => {
-                        out.push('\\');
-                        out.push(other);
-                    }
-                }
-            }
-            '$' if !in_single => {
-                pos += 1;
-                if pos == chars.len() {
-                    out.push('$');
-                    continue;
-                }
-                let braced = chars[pos] == '{';
-                if braced {
-                    pos += 1;
-                    if pos == chars.len() {
-                        return String::new();
-                    }
-                }
-                let start = pos;
-                while pos < chars.len() && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_')
-                {
-                    pos += 1;
-                }
-                let name: String = chars[start..pos].iter().collect();
-                if braced {
-                    if pos == chars.len() || chars[pos] != '}' {
-                        return String::new();
-                    }
-                    pos += 1;
-                }
-                if name.is_empty() {
-                    return String::new();
-                }
-                if let Some(value) = vars.get(&name) {
-                    out.push_str(value);
-                }
-            }
-            _ => {
-                out.push(current);
-                pos += 1;
-            }
-        }
-    }
-    out
-}
-
 /// Real `varexpand` + `shlex.split` over the selected command
 /// (`fetch.py:1813-1820`): the variables are substituted, then the string
 /// is split into argv with POSIX quoting rules -- real never runs it
 /// through a shell.
 pub fn expand_and_split(command: &str, vars: &HashMap<String, String>) -> Vec<String> {
-    shell_split(&varexpand(command, vars))
+    shell_split(&portage_util::varexpand(command, |name| {
+        vars.get(name).cloned()
+    }))
 }
 
 /// POSIX-ish argv splitting, public for callers parsing a config value

@@ -1339,114 +1339,6 @@ mod tests {
             .collect()
     }
 
-    /// Read `name` as `files` shows the live and the pending file.
-    const PROBE_FILES: &[&str] = &[
-        "CONTENTS",
-        "SLOT",
-        "EMPTY",
-        "BIN",
-        "NUL",
-        "metadata",
-        "NEEDED.ELF.2",
-        "nope",
-        "extra",
-        "DESCRIPTION",
-        "RDEPEND",
-    ];
-
-    fn assert_same_reads(fdb: &FilesDb, sdb: &SqliteDb, keys: &[EntryKey]) {
-        assert_eq!(sdb.entries().unwrap(), fdb.entries().unwrap(), "entries");
-        assert_eq!(
-            sdb.categories().unwrap(),
-            fdb.categories().unwrap(),
-            "categories"
-        );
-        let mut cats: Vec<String> = keys.iter().map(|k| k.category.clone()).collect();
-        cats.push("nope-cat".into());
-        for c in &cats {
-            assert_eq!(
-                sdb.category_entries(c).unwrap(),
-                fdb.category_entries(c).unwrap(),
-                "category_entries {c}"
-            );
-        }
-        for k in keys {
-            assert_eq!(
-                sdb.has_entry(k).unwrap(),
-                fdb.has_entry(k).unwrap(),
-                "has_entry {k}"
-            );
-            assert_eq!(
-                sdb.list_files(k).unwrap(),
-                fdb.list_files(k).unwrap(),
-                "list_files {k}"
-            );
-            for f in METADATA_FILE_FIELDS {
-                assert_eq!(
-                    sdb.aux_get(k, f).unwrap(),
-                    fdb.aux_get(k, f).unwrap(),
-                    "aux_get {k} {f}"
-                );
-            }
-            for n in PROBE_FILES {
-                assert_eq!(
-                    sdb.read_file(k, n).unwrap(),
-                    fdb.read_file(k, n).unwrap(),
-                    "read_file {k} {n}"
-                );
-                assert_eq!(
-                    sdb.file_meta(k, n).unwrap(),
-                    fdb.file_meta(k, n).unwrap(),
-                    "file_meta {k} {n}"
-                );
-                assert_eq!(
-                    sdb.read_pending_file(k, n).unwrap(),
-                    fdb.read_pending_file(k, n).unwrap(),
-                    "read_pending_file {k} {n}"
-                );
-            }
-        }
-        for n in ["CONTENTS", "NEEDED.ELF.2", "nope"] {
-            assert_eq!(
-                sdb.read_file_all(n).unwrap(),
-                fdb.read_file_all(n).unwrap(),
-                "read_file_all {n}"
-            );
-        }
-        let q: &[&[u8]] = &[
-            b"/usr/bin/x",
-            b"usr/bin/y",
-            b"/usr",
-            b"/usr/z",
-            b"/nope",
-            b"/usr/bin/x",
-        ];
-        assert_eq!(sdb.owners(q).unwrap(), fdb.owners(q).unwrap(), "owners");
-        assert_eq!(sdb.owners(&[]).unwrap(), fdb.owners(&[]).unwrap());
-        assert_eq!(sdb.world().unwrap(), fdb.world().unwrap(), "world");
-        assert_eq!(
-            sdb.world_sets().unwrap(),
-            fdb.world_sets().unwrap(),
-            "world_sets"
-        );
-        assert_eq!(
-            sdb.preserved_libs().unwrap(),
-            fdb.preserved_libs().unwrap(),
-            "preserved_libs"
-        );
-        assert_eq!(
-            sdb.config_memory().unwrap(),
-            fdb.config_memory().unwrap(),
-            "config_memory"
-        );
-        assert_eq!(sdb.counter().unwrap(), fdb.counter().unwrap(), "counter");
-        for bad in ["CONTENTS", "NEEDED.ELF.2"] {
-            let k = &keys[0];
-            assert!(matches!(sdb.aux_get(k, bad), Err(Error::Invalid(_))));
-            assert!(matches!(fdb.aux_get(k, bad), Err(Error::Invalid(_))));
-        }
-    }
-
     const BAD: &[u8] = b"caf\xe9 x\n";
 
     struct Fixture {
@@ -1640,7 +1532,7 @@ mod tests {
     #[test]
     fn every_read_matches_filesdb() {
         let f = fixture();
-        assert_same_reads(&f.fdb, &f.sdb, &f.keys);
+        crate::test_support::assert_same_reads(&f.fdb, &f.sdb, &f.keys);
         // The pending entry is invisible to live reads, visible to its own.
         let p = &f.keys[6];
         assert!(!f.sdb.has_entry(p).unwrap());
@@ -1694,7 +1586,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let fdb = FilesDb::new(&root);
         let sdb = SqliteDb::open(t.db()).unwrap();
-        assert_same_reads(&fdb, &sdb, &[EntryKey::new("a", "b-1")]);
+        crate::test_support::assert_same_reads(&fdb, &sdb, &[EntryKey::new("a", "b-1")]);
         assert_eq!(sdb.generation().unwrap(), 0);
         assert_eq!(sdb.counter().unwrap(), None);
         assert!(sdb.snapshot().unwrap().entries.is_empty());
@@ -1826,7 +1718,7 @@ mod tests {
     fn empty_preserved_libs_and_a_readonly_handle_read_too() {
         let f = fixture();
         let ro = SqliteDb::open_readonly(f.sdb.path()).unwrap();
-        assert_same_reads(&f.fdb, &ro, &f.keys);
+        crate::test_support::assert_same_reads(&f.fdb, &ro, &f.keys);
     }
 
     // ------------------------------------------------------------------

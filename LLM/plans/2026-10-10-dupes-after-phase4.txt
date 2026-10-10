@@ -1,0 +1,22 @@
+{
+ "total_code_units": 933,
+ "total_lines": 99414,
+ "exact_duplicate_groups": 3,
+ "exact_duplicate_units": 12,
+ "near_duplicate_groups": 3,
+ "near_duplicate_units": 7,
+ "exact_duplicate_lines": 717,
+ "near_duplicate_lines": 388,
+ "exact_duplicate_percent": 0.7212263866256262,
+ "near_duplicate_percent": 0.3902870823022914,
+ "sub_exact_groups": 895,
+ "sub_exact_units": 3936,
+ "sub_near_groups": 54,
+ "sub_near_units": 112
+}
+EXACT 1.000: graph_real portage-repo/src/lib.rs:49608-49671, graph_real_with_test_deps portage-repo/src/lib.rs:49674-49737, graph_real_newuse portage-repo/src/lib.rs:49864-49927, graph_real_changed_us
+EXACT 1.000: graph portage-repo/src/lib.rs:43110-43163, graph_nodeps portage-repo/src/lib.rs:43648-43701, graph_update portage-repo/src/lib.rs:43706-43759, graph_empty portage-repo/src/lib.rs:45203-45
+EXACT 1.000: graph_result_empty portage-repo/src/lib.rs:50918-50978, graph_result_autounmask_use_n portage-repo/src/lib.rs:51807-51866, graph_result_buildpkgonly portage-repo/src/lib.rs:63295-63354
+NEAR 0.949: graph_deep portage-repo/src/lib.rs:43847-43900, graph_deep_with_bdeps portage-repo/src/lib.rs:45363-45416, graph_root_deps portage-repo/src/lib.rs:45519-45575
+NEAR 0.907: changed_slot_does_not_fire_for_a_package_with_no_recorded_difference portage-repo/src/lib.rs:40624-40677, changed_deps_and_changed_slot_combine_in_one_reinstall_outcome portage-repo/src/li
+NEAR 0.906: closure at crates/portage-repo/src/lib.rs:44210 portage-repo/src/lib.rs:44210-44262, closure at crates/portage-repo/src/lib.rs:44529 portage-repo/src/lib.rs:44529-44581

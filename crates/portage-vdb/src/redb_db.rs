@@ -1677,113 +1677,6 @@ mod tests {
             .collect()
     }
 
-    const PROBE_FILES: &[&str] = &[
-        "CONTENTS",
-        "SLOT",
-        "EMPTY",
-        "BIN",
-        "NUL",
-        "metadata",
-        "NEEDED.ELF.2",
-        "nope",
-        "extra",
-        "DESCRIPTION",
-        "RDEPEND",
-    ];
-
-    fn assert_same_reads(fdb: &FilesDb, rdb: &RedbDb, keys: &[EntryKey]) {
-        assert_eq!(rdb.entries().unwrap(), fdb.entries().unwrap(), "entries");
-        assert_eq!(
-            rdb.categories().unwrap(),
-            fdb.categories().unwrap(),
-            "categories"
-        );
-        let mut cats: Vec<String> = keys.iter().map(|k| k.category.clone()).collect();
-        cats.push("nope-cat".into());
-        for c in &cats {
-            assert_eq!(
-                rdb.category_entries(c).unwrap(),
-                fdb.category_entries(c).unwrap(),
-                "category_entries {c}"
-            );
-        }
-        for k in keys {
-            assert_eq!(
-                rdb.has_entry(k).unwrap(),
-                fdb.has_entry(k).unwrap(),
-                "has_entry {k}"
-            );
-            assert_eq!(
-                rdb.list_files(k).unwrap(),
-                fdb.list_files(k).unwrap(),
-                "list_files {k}"
-            );
-            for f in FIELDS {
-                assert_eq!(
-                    rdb.aux_get(k, f).unwrap(),
-                    fdb.aux_get(k, f).unwrap(),
-                    "aux_get {k} {f}"
-                );
-            }
-            for n in PROBE_FILES {
-                assert_eq!(
-                    rdb.read_file(k, n).unwrap(),
-                    fdb.read_file(k, n).unwrap(),
-                    "read_file {k} {n}"
-                );
-                assert_eq!(
-                    rdb.file_meta(k, n).unwrap(),
-                    fdb.file_meta(k, n).unwrap(),
-                    "file_meta {k} {n}"
-                );
-                assert_eq!(
-                    rdb.read_pending_file(k, n).unwrap(),
-                    fdb.read_pending_file(k, n).unwrap(),
-                    "read_pending_file {k} {n}"
-                );
-            }
-        }
-        for n in ["CONTENTS", "NEEDED.ELF.2", "nope"] {
-            assert_eq!(
-                rdb.read_file_all(n).unwrap(),
-                fdb.read_file_all(n).unwrap(),
-                "read_file_all {n}"
-            );
-        }
-        let q: &[&[u8]] = &[
-            b"/usr/bin/x",
-            b"usr/bin/y",
-            b"/usr",
-            b"/usr/z",
-            b"/nope",
-            b"/usr/bin/x",
-        ];
-        assert_eq!(rdb.owners(q).unwrap(), fdb.owners(q).unwrap(), "owners");
-        assert_eq!(rdb.owners(&[]).unwrap(), fdb.owners(&[]).unwrap());
-        assert_eq!(rdb.world().unwrap(), fdb.world().unwrap(), "world");
-        assert_eq!(
-            rdb.world_sets().unwrap(),
-            fdb.world_sets().unwrap(),
-            "world_sets"
-        );
-        assert_eq!(
-            rdb.preserved_libs().unwrap(),
-            fdb.preserved_libs().unwrap(),
-            "preserved_libs"
-        );
-        assert_eq!(
-            rdb.config_memory().unwrap(),
-            fdb.config_memory().unwrap(),
-            "config_memory"
-        );
-        assert_eq!(rdb.counter().unwrap(), fdb.counter().unwrap(), "counter");
-        for bad in ["CONTENTS", "NEEDED.ELF.2"] {
-            let k = &keys[0];
-            assert!(matches!(rdb.aux_get(k, bad), Err(Error::Invalid(_))));
-            assert!(matches!(fdb.aux_get(k, bad), Err(Error::Invalid(_))));
-        }
-    }
-
     const BAD: &[u8] = b"caf\xe9 x\n";
 
     struct Fixture {
@@ -1960,7 +1853,7 @@ mod tests {
     #[test]
     fn every_read_matches_filesdb() {
         let f = fixture();
-        assert_same_reads(&f.fdb, &f.rdb, &f.keys);
+        crate::test_support::assert_same_reads(&f.fdb, &f.rdb, &f.keys);
         // The pending entry is invisible to live reads, visible to its own.
         let p = &f.keys[6];
         assert!(!f.rdb.has_entry(p).unwrap());
@@ -2008,7 +1901,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let fdb = FilesDb::new(&root);
         let rdb = RedbDb::open(t.db()).unwrap();
-        assert_same_reads(&fdb, &rdb, &[EntryKey::new("a", "b-1")]);
+        crate::test_support::assert_same_reads(&fdb, &rdb, &[EntryKey::new("a", "b-1")]);
         assert_eq!(rdb.generation().unwrap(), 0);
         assert!(rdb.snapshot().unwrap().entries.is_empty());
     }
@@ -2020,7 +1913,7 @@ mod tests {
         let Fixture { fdb, rdb, keys, _t } = f;
         drop(rdb);
         let ro = RedbDb::open_readonly(&path).unwrap();
-        assert_same_reads(&fdb, &ro, &keys);
+        crate::test_support::assert_same_reads(&fdb, &ro, &keys);
     }
 
     #[test]

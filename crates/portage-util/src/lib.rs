@@ -13,7 +13,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 mod temp_dir;
+mod varexpand;
 pub use temp_dir::{TEMP_DIR_PREFIX, TempDir};
+pub use varexpand::varexpand;
 
 /// The seed from `PORTUALE_SHUFFLE_DIRS` (test/CI-only), if set.
 ///

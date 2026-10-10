@@ -17106,23 +17106,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(stubdir);
     }
 
-    #[test]
+    /// Runs `emerge <ask_flags> --oneshot dev-libs/schedok` on a pty and
+    /// answers "No" to both the news prompt and the merge prompt. Asserts
+    /// the shared outcome (exit 130, one news notice, no eselect spawn)
+    /// and returns stdout for the caller's own checks.
     #[cfg(unix)]
-    fn ask_read_news_no_skips_eselect_and_continues() {
-        // Backlog #231 (c), the "No" arm: real's `== "Yes"` check
-        // fails, so no spawn happens and the run continues into the
-        // resolve -- the stub marker never appears, while the notice
-        // still printed once and the declined merge prompt still
-        // exits 130.
+    fn ask_read_news_declined(label: &str, ask_flags: [&str; 2]) -> String {
         use std::io::Write;
         let portuale_bin = built_portuale_bin();
-        let (stubdir, marker) = eselect_stub("no");
+        let (stubdir, marker) = eselect_stub(label);
         let path = format!(
             "{}:{}",
             stubdir.display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        let base = TempDir::new("ask_read_news_no").keep();
+        let base = TempDir::new(&format!("ask_read_news_{label}")).keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let mut env = news_resolve_env(&root, &base.join("pt"));
@@ -17131,8 +17129,8 @@ mod tests {
         let child = std::process::Command::new(&portuale_bin)
             .args([
                 "emerge",
-                "--ask",
-                "--read-news",
+                ask_flags[0],
+                ask_flags[1],
                 "--oneshot",
                 "dev-libs/schedok",
             ])
@@ -17170,6 +17168,16 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(stubdir);
+        stdout.into_owned()
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_no_skips_eselect_and_continues() {
+        // Backlog #231 (c), the "No" arm: Portage's `== "Yes"` check
+        // fails, so eselect is never spawned and the run continues into
+        // the resolve; the declined merge prompt still exits 130.
+        ask_read_news_declined("no", ["--ask", "--read-news"]);
     }
 
     #[test]
@@ -17368,45 +17376,35 @@ mod tests {
         (child, master, stdout_pipe, err_handle)
     }
 
-    #[test]
+    /// Spawns `args` on a pty with the env `make_env` builds, waits for
+    /// `prompt` on stdout, then sends `^C` through the pty. Asserts what
+    /// every interrupted prompt shares with Portage's `UserQuery.query`
+    /// (`_emerge/UserQuery.py:74-76`): exit 130 by exit, not by signal,
+    /// one `Interrupted.` and no `Quitting.`. Returns stdout.
+    ///
+    /// The `^C` goes out only after the prompt text is seen, so it cannot
+    /// strike during startup or the resolve, where SIGINT must still kill
+    /// the process. Delivery needs the foreground group from
+    /// `pty_foreground_pre_exec`.
     #[cfg(unix)]
-    fn ask_merge_sigint_prints_interrupted_and_exits_130_like_portage() {
-        // Backlog #240: real `_emerge/UserQuery.query`
-        // (`_emerge/UserQuery.py:74-76`) catches `KeyboardInterrupt`
-        // out of `input()`, prints `Interrupted.`, and exits
-        // `128 + SIGINT` from inside `query` -- the merge prompt's
-        // `== "No"` comparison and its `Quitting.` never run. A `^C`
-        // byte written to the pty master makes the slave line
-        // discipline raise a real SIGINT in the child (delivery needs
-        // the foreground group from `pty_foreground_pre_exec`; probed:
-        // without it the byte is swallowed). The child must exit 130
-        // *by exit* (`code() == Some(130)` with no signal -- before
-        // the fix it died by signal), print `Interrupted.` exactly
-        // once, and never print `Quitting.`. The `^C` goes out only
-        // after the prompt text is seen on stdout, so it cannot strike
-        // during startup or the resolve, where SIGINT must keep
-        // killing the process as today.
+    fn ctrl_c_at_prompt(
+        label: &str,
+        args: &[&str],
+        make_env: fn(&std::path::Path, &std::path::Path) -> Vec<(String, String)>,
+        prompt: &[u8],
+    ) -> String {
         use std::io::Write;
         use std::os::unix::process::ExitStatusExt;
         let portuale_bin = built_portuale_bin();
-        let base = TempDir::new("ask_merge_sigint").keep();
+        let base = TempDir::new(label).keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
-        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let env = make_env(&root, &base.join("pt"));
         let (master, slave_stdio) = pty_pair();
-        let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
-            &portuale_bin,
-            &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
-            env,
-            master,
-            slave_stdio,
-        );
-        let mut stdout = read_stdout_until_marker(
-            &mut stdout_pipe,
-            b"Would you like to merge these packages?",
-            "the merge prompt",
-        );
-        master.write_all(b"\x03").expect("Ctrl-C the merge prompt");
+        let (child, mut master, mut stdout_pipe, err_handle) =
+            sigint_prompt_child(&portuale_bin, args, env, master, slave_stdio);
+        let mut stdout = read_stdout_until_marker(&mut stdout_pipe, prompt, label);
+        master.write_all(b"\x03").expect("Ctrl-C the prompt");
         let out_handle = std::thread::spawn(move || {
             let mut v = Vec::new();
             std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
@@ -17428,37 +17426,38 @@ mod tests {
             None,
             "SIGINT at the prompt must exit 130, not die by signal"
         );
-        let text = String::from_utf8_lossy(&stdout);
+        let text = String::from_utf8_lossy(&stdout).into_owned();
         assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
         assert!(
             !text.contains("Quitting."),
-            "an interrupted merge prompt must not print `Quitting.` like real: {text}"
+            "an interrupted prompt must not print `Quitting.`: {text}"
         );
         let _ = std::fs::remove_dir_all(&base);
+        text
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_merge_sigint_prints_interrupted_and_exits_130_like_portage() {
+        // Backlog #240: a `^C` at the merge prompt exits from inside
+        // `query`, so the prompt's `== "No"` check and its `Quitting.`
+        // never run.
+        ctrl_c_at_prompt(
+            "ask_merge_sigint",
+            &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
+            fixture_resolve_env,
+            b"Would you like to merge these packages?",
+        );
     }
 
     #[test]
     #[cfg(unix)]
     fn ask_read_news_sigint_exits_before_resolve_like_portage() {
-        // Backlog #240, the news prompt (`_emerge/actions.py:4266-4288`
-        // through `_emerge/UserQuery.py:74-76`): a `^C` at the "read
-        // the news items while calculating dependencies?" prompt
-        // prints `Interrupted.` and exits `128 + SIGINT` before
-        // `action_build` -- by exit (`Some(130)`, no signal), exactly
-        // like the #234 EOF arm, and with no `eselect` spawn and no
-        // resolve (`Calculating dependencies` stays absent). Same
-        // `^C`-through-the-pty delivery and prompt-synchronized timing
-        // as the merge-prompt test above.
-        use std::io::Write;
-        use std::os::unix::process::ExitStatusExt;
-        let portuale_bin = built_portuale_bin();
-        let base = TempDir::new("ask_read_news_sigint").keep();
-        let root = base.join("root");
-        std::fs::create_dir_all(&root).unwrap();
-        let env = news_resolve_env(&root, &base.join("pt"));
-        let (master, slave_stdio) = pty_pair();
-        let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
-            &portuale_bin,
+        // Backlog #240, the news prompt (`_emerge/actions.py:4266-4288`):
+        // a `^C` there exits before `action_build`, like the #234 EOF arm,
+        // with no eselect spawn and no resolve.
+        let text = ctrl_c_at_prompt(
+            "ask_read_news_sigint",
             &[
                 "emerge",
                 "--ask",
@@ -17466,49 +17465,14 @@ mod tests {
                 "--oneshot",
                 "dev-libs/schedok",
             ],
-            env,
-            master,
-            slave_stdio,
-        );
-        let mut stdout = read_stdout_until_marker(
-            &mut stdout_pipe,
+            news_resolve_env,
             b"Would you like to read the news items",
-            "the news prompt",
-        );
-        master.write_all(b"\x03").expect("Ctrl-C the news prompt");
-        let out_handle = std::thread::spawn(move || {
-            let mut v = Vec::new();
-            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
-            v
-        });
-        let status = wait_pty_status(child);
-        drop(master);
-        stdout.extend(out_handle.join().expect("stdout drain"));
-        let stderr = err_handle.join().expect("stderr drain");
-        assert_eq!(
-            status.code(),
-            Some(130),
-            "stdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&stdout),
-            String::from_utf8_lossy(&stderr)
-        );
-        assert_eq!(
-            status.signal(),
-            None,
-            "SIGINT at the prompt must exit 130, not die by signal"
-        );
-        let text = String::from_utf8_lossy(&stdout);
-        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
-        assert!(
-            !text.contains("Quitting."),
-            "an interrupted news prompt must not print `Quitting.` like real: {text}"
         );
         assert_eq!(text.matches("news items need reading").count(), 1, "{text}");
         assert!(
             !text.contains("Calculating dependencies"),
             "an interrupted news prompt must exit before the resolve: {text}"
         );
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -17896,70 +17860,12 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn ask_read_news_true_spellings_prompt_like_portage() {
-        // Backlog #234 (b): real `true_y_or_n` (`main.py:321-322,625`)
-        // accepts `--ask=True` / `--read-news=True` (a bare flag inserts
-        // `"True"` via `insert_optional_args`, the choices admit it, and
-        // `in true_y` normalizes it at `main.py:802-805,950-953`). The
-        // `=True` pair prompts exactly like the bare flags: "No" to the
-        // news prompt skips eselect, "No" to the merge prompt exits 130
-        // with `Quitting.`.
-        use std::io::Write;
-        let portuale_bin = built_portuale_bin();
-        let (stubdir, marker) = eselect_stub("true_spellings");
-        let path = format!(
-            "{}:{}",
-            stubdir.display(),
-            std::env::var("PATH").unwrap_or_default()
-        );
-        let base = TempDir::new("ask_read_news_true").keep();
-        let root = base.join("root");
-        std::fs::create_dir_all(&root).unwrap();
-        let mut env = news_resolve_env(&root, &base.join("pt"));
-        env.push(("PATH".to_string(), path));
-        let (mut master, slave_stdio) = pty_pair();
-        let child = std::process::Command::new(&portuale_bin)
-            .args([
-                "emerge",
-                "--ask=True",
-                "--read-news=True",
-                "--oneshot",
-                "dev-libs/schedok",
-            ])
-            .stdin(slave_stdio)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .envs(env)
-            .spawn()
-            .expect("portuale emerge spawns");
-        master.write_all(b"No\n").expect("decline the news prompt");
-        master.write_all(b"No\n").expect("decline the merge prompt");
-        let output = wait_pty_output(child);
-        drop(master);
-        assert_eq!(
-            output.status.code(),
-            Some(130),
-            "stdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout
-                .contains("Would you like to read the news items while calculating dependencies?"),
-            "{stdout}"
-        );
-        assert_eq!(
-            stdout.matches("news items need reading").count(),
-            1,
-            "{stdout}"
-        );
+        // Backlog #234 (b): Portage's `true_y_or_n` (`main.py:321-322,625`)
+        // accepts `--ask=True` / `--read-news=True` and normalises them to
+        // the bare flags (`main.py:802-805,950-953`), so the pair prompts
+        // exactly like `--ask --read-news`.
+        let stdout = ask_read_news_declined("true_spellings", ["--ask=True", "--read-news=True"]);
         assert!(stdout.contains("Quitting."), "{stdout}");
-        assert!(
-            !marker.exists(),
-            "a declined news prompt must not spawn eselect"
-        );
-        let _ = std::fs::remove_dir_all(&base);
-        let _ = std::fs::remove_dir_all(stubdir);
     }
 
     #[test]

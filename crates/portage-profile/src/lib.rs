@@ -1443,97 +1443,12 @@ fn shlex_token(raw: &str) -> String {
 /// relocatable `PKGDIR="${PORTAGE_CONFIGROOT}/pkgdir"` instead of an
 /// absolute path.
 fn substitute(value: &str, scalars: &HashMap<String, String>) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    let mut out = String::new();
-    let mut pos = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    while pos < chars.len() {
-        let current = chars[pos];
-        match current {
-            '\'' => {
-                out.push('\'');
-                if !in_double {
-                    in_single = !in_single;
-                }
-                pos += 1;
-            }
-            '"' => {
-                out.push('"');
-                if !in_single {
-                    in_double = !in_double;
-                }
-                pos += 1;
-            }
-            '\\' if !in_single => {
-                if pos + 1 >= chars.len() {
-                    out.push('\\');
-                    break;
-                }
-                let next = chars[pos + 1];
-                pos += 2;
-                match next {
-                    '$' => out.push('$'),
-                    '\\' => {
-                        out.push('\\');
-                        // Real's bug-compatible tail (`varexpand`'s own
-                        // "BUG" comment): after `\\` it also emits a
-                        // following quote or `$` (which then cannot
-                        // start a reference).
-                        if pos < chars.len() && matches!(chars[pos], '\'' | '"' | '$') {
-                            out.push(chars[pos]);
-                            pos += 1;
-                        }
-                    }
-                    '\n' => {}
-                    other => {
-                        out.push('\\');
-                        out.push(other);
-                    }
-                }
-            }
-            '$' if !in_single => {
-                pos += 1;
-                if pos == chars.len() {
-                    // Shells handle a trailing `$` like an escaped one.
-                    out.push('$');
-                    continue;
-                }
-                let braced = chars[pos] == '{';
-                if braced {
-                    pos += 1;
-                    if pos == chars.len() {
-                        return String::new();
-                    }
-                }
-                let start = pos;
-                while pos < chars.len() && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_')
-                {
-                    pos += 1;
-                }
-                let name: String = chars[start..pos].iter().collect();
-                if braced {
-                    if pos == chars.len() || chars[pos] != '}' {
-                        return String::new();
-                    }
-                    pos += 1;
-                }
-                if name.is_empty() {
-                    return String::new();
-                }
-                if let Some(v) = scalars.get(&name) {
-                    out.push_str(v);
-                } else if let Ok(v) = std::env::var(&name) {
-                    out.push_str(&v);
-                }
-            }
-            _ => {
-                out.push(current);
-                pos += 1;
-            }
-        }
-    }
-    out
+    portage_util::varexpand(value, |name| {
+        scalars
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+    })
 }
 
 /// Parses one `KEY="value"` / `KEY='value'` / `KEY=value` line, returning
@@ -5401,36 +5316,31 @@ sync-uri = https://plain.example.org/amd64/
         );
     }
 
-    #[test]
-    fn overlay_package_use_mask_and_force_are_scoped_with_no_masters_merge() {
-        // Unlike package.mask, real UseManager.py never merges an
-        // overlay's own package.use.mask/.force with its master's own at
-        // load time (see resolve_config's own doc comment) -- so the
-        // main repo's entry for "dev-libs/a" stays unscoped (applies
-        // everywhere) and the overlay's own entry for "dev-libs/b" gets
-        // "::overlay"-scoped, with no cross-stacking between the two.
-        let root = TempDir::new("portage-profile-test-overlay-package-use-mask-force").keep();
+    type PackageFlags = Vec<(String, Vec<String>)>;
+
+    /// Writes `package.use{infix}.mask`/`.force` into a main repo
+    /// (`dev-libs/a`) and an overlay (`dev-libs/b`) and checks the resolved
+    /// lists that `fields` selects: Portage's UseManager never merges an
+    /// overlay's own lists with its master's, so the main repo's entry stays
+    /// unscoped and the overlay's gets `::overlay`.
+    fn check_overlay_package_use_scoping(
+        infix: &str,
+        fields: impl Fn(&Config) -> (&PackageFlags, &PackageFlags),
+    ) {
+        let root = TempDir::new("portage-profile-test-overlay-package-use-scoping").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
         fs::create_dir_all(overlay.join("profiles")).unwrap();
-
-        fs::write(repo.join("profiles/package.use.mask"), "dev-libs/a maska\n").unwrap();
-        fs::write(
-            overlay.join("profiles/package.use.mask"),
-            "dev-libs/b maskb\n",
-        )
-        .unwrap();
-        fs::write(
-            repo.join("profiles/package.use.force"),
-            "dev-libs/a forcea\n",
-        )
-        .unwrap();
-        fs::write(
-            overlay.join("profiles/package.use.force"),
-            "dev-libs/b forceb\n",
-        )
-        .unwrap();
+        for (dir, atom, kind, flag) in [
+            (&repo, "dev-libs/a", "mask", "maska"),
+            (&overlay, "dev-libs/b", "mask", "maskb"),
+            (&repo, "dev-libs/a", "force", "forcea"),
+            (&overlay, "dev-libs/b", "force", "forceb"),
+        ] {
+            let file = dir.join(format!("profiles/package.use{infix}.{kind}"));
+            fs::write(file, format!("{atom} {flag}\n")).unwrap();
+        }
 
         let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let config = resolve_config(
@@ -5443,85 +5353,34 @@ sync-uri = https://plain.example.org/amd64/
             &root,
         )
         .expect("config must resolve");
+        let entry = |atom: &str, flag: &str| (atom.to_string(), vec![flag.to_string()]);
+        let (mask, force) = fields(&config);
         assert_eq!(
-            config.package_use_mask,
+            *mask,
             vec![
-                ("dev-libs/a".to_string(), vec!["maska".to_string()]),
-                ("dev-libs/b::overlay".to_string(), vec!["maskb".to_string()]),
+                entry("dev-libs/a", "maska"),
+                entry("dev-libs/b::overlay", "maskb")
             ]
         );
         assert_eq!(
-            config.package_use_force,
+            *force,
             vec![
-                ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
-                (
-                    "dev-libs/b::overlay".to_string(),
-                    vec!["forceb".to_string()]
-                ),
+                entry("dev-libs/a", "forcea"),
+                entry("dev-libs/b::overlay", "forceb")
             ]
         );
     }
 
     #[test]
+    fn overlay_package_use_mask_and_force_are_scoped_with_no_masters_merge() {
+        check_overlay_package_use_scoping("", |c| (&c.package_use_mask, &c.package_use_force));
+    }
+
+    #[test]
     fn overlay_package_use_stable_mask_and_force_get_the_same_scoping() {
-        // Mirrors overlay_package_use_mask_and_force_are_scoped_with_no_masters_merge
-        // exactly, for the .stable. variant.
-        let root =
-            TempDir::new("portage-profile-test-overlay-package-use-stable-mask-force").keep();
-        let repo = root.join("repo");
-        let overlay = root.join("overlay");
-        fs::create_dir_all(repo.join("profiles")).unwrap();
-        fs::create_dir_all(overlay.join("profiles")).unwrap();
-
-        fs::write(
-            repo.join("profiles/package.use.stable.mask"),
-            "dev-libs/a maska\n",
-        )
-        .unwrap();
-        fs::write(
-            overlay.join("profiles/package.use.stable.mask"),
-            "dev-libs/b maskb\n",
-        )
-        .unwrap();
-        fs::write(
-            repo.join("profiles/package.use.stable.force"),
-            "dev-libs/a forcea\n",
-        )
-        .unwrap();
-        fs::write(
-            overlay.join("profiles/package.use.stable.force"),
-            "dev-libs/b forceb\n",
-        )
-        .unwrap();
-
-        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
-        let config = resolve_config(
-            &root,
-            &repo,
-            &overlay_repos,
-            &[],
-            "testrepo",
-            &HashMap::new(),
-            &root,
-        )
-        .expect("config must resolve");
-        assert_eq!(
-            config.package_use_stable_mask,
-            vec![
-                ("dev-libs/a".to_string(), vec!["maska".to_string()]),
-                ("dev-libs/b::overlay".to_string(), vec!["maskb".to_string()]),
-            ]
-        );
-        assert_eq!(
-            config.package_use_stable_force,
-            vec![
-                ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
-                (
-                    "dev-libs/b::overlay".to_string(),
-                    vec!["forceb".to_string()]
-                ),
-            ]
-        );
+        check_overlay_package_use_scoping(".stable", |c| {
+            (&c.package_use_stable_mask, &c.package_use_stable_force)
+        });
     }
 
     #[test]
