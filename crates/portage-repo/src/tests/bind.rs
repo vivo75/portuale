@@ -1,11 +1,7 @@
 use super::*;
 
-/// Backlog #213 (v2 `#24d`): [`apply_prune_rebuilds`] latches the
-/// flag, clears the whole replace set, and drops only the
-/// `slot_operator_mask_built` steers (plus their `mask_order`
-/// slots); other masks, the undone latch and the rest of the
-/// search state survive. Real
-/// `resolver/backtracking.py::_feedback_config:247-257`.
+/// `apply_prune_rebuilds` latches the flag, clears the replace set, and drops
+/// only the built steers; other masks and search state survive.
 #[test]
 fn slot_operator_prune_rebuilds_clears_replace_and_built_masks() {
     let mut params = BacktrackParams::default();
@@ -64,10 +60,8 @@ fn slot_operator_prune_rebuilds_clears_replace_and_built_masks() {
     );
 }
 
-/// Backlog #161 S1: one token of the S4 binder. A same-category
-/// entry for another package never binds this token; `New` and
-/// `Reinstall` entries bind before the installed fallback; and of
-/// several same-cp entries the greatest version wins.
+/// One token of the S4 binder: another package never binds, graph entries beat
+/// the installed fallback, and the greatest same-cp version wins.
 #[test]
 fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
     let dir = slotundo_temp_dir("161-bind");
@@ -86,18 +80,14 @@ fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
         sub_slot: Some(sub.into()),
         ..graph_entry("dev-libs", package, version)
     };
-    // Same category, other package: skipped, so the installed
-    // `bar-1.0` (0/3) binds.
     assert_eq!(
         bind_slot_operator_token("dev-libs/bar:=", &[new_entry("baz", "2.0", "9", "9")], &dir),
         "dev-libs/bar:0/3="
     );
-    // Graph entries beat the installed instance ...
     assert_eq!(
         bind_slot_operator_token("dev-libs/bar:=", &[new_entry("bar", "2.0", "5", "5")], &dir),
         "dev-libs/bar:5/5="
     );
-    // ... and the greatest same-cp version wins.
     assert_eq!(
         bind_slot_operator_token(
             "dev-libs/bar:=",
@@ -109,7 +99,6 @@ fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
         ),
         "dev-libs/bar:2/2="
     );
-    // A `Reinstall` entry binds the same way a `New` one does.
     let reinstall = GraphEntry {
         discovery: 0,
         category: "dev-libs".into(),
@@ -147,11 +136,8 @@ fn bind_slot_operator_deps_binds_against_entries_then_installed() {
     });
     let provider = slotundo_provider_entry();
 
-    // Merge-bound entry wins over the installed instance (real
-    // `_graph_trees` models the post-merge vdb): the bare `:=` binds
-    // to the tree's 0/2. An explicit stale `:0/1=` doesn't match the
-    // 0/2 entry (real `vardb.match(x)` enforces the built atom's own
-    // sub-slot), so it falls back to the installed 0/1 -- unchanged.
+    // Merge-bound entry wins (Portage models the post-merge vdb); a stale
+    // `:0/1=` falls back to installed (Portage enforces the built sub-slot).
     assert_eq!(
         bind_slot_operator_deps(
             "dev-libs/souprov:= dev-libs/souprov:0/1=",
@@ -160,13 +146,11 @@ fn bind_slot_operator_deps_binds_against_entries_then_installed() {
         ),
         "dev-libs/souprov:0/2= dev-libs/souprov:0/1="
     );
-    // No merge-bound entry -> the installed instance is the binder.
     assert_eq!(
         bind_slot_operator_deps("dev-libs/souprov:=", &[], &dir),
         "dev-libs/souprov:0/1="
     );
-    // A version constraint the entry doesn't satisfy falls back to
-    // nothing -> left as-is ("keeping the information in vdb").
+    // Left as-is when nothing satisfies the constraint (keeps the vdb information).
     assert_eq!(
         bind_slot_operator_deps(
             ">=dev-libs/souprov-3:=",
@@ -175,7 +159,6 @@ fn bind_slot_operator_deps_binds_against_entries_then_installed() {
         ),
         ">=dev-libs/souprov-3:="
     );
-    // A non-slot-operator atom and a non-atom token pass through.
     assert_eq!(
         bind_slot_operator_deps("dev-libs/souprov ( || )", &[], &dir),
         "dev-libs/souprov ( || )"

@@ -2,12 +2,8 @@ use super::*;
 
 #[test]
 fn fixture_backtrack_max_zero_disables_slot_conflict_reconciliation() {
-    // Same solvable fixture, but `backtrack_max == 0` (real
-    // `--backtrack=0`): Backlog #90 (S1) -- no conflict forms at all
-    // (the old consumer graphs 1.0 first, the bare dep reuses it),
-    // so bt0 settles silently on 1.0 with rc 0, exactly real's S0
-    // matrix row. The pre-S1 expectation (one recorded conflict) is
-    // retired: that conflict was the forward-order phantom.
+    // `backtrack_max == 0` (Portage `--backtrack=0`): no conflict forms, so bt0
+    // settles silently on 1.0 with rc 0.
     let result = graph_result_real_backtrack("dev-libs/slotconflictparent", 0);
     assert_eq!(result.slot_conflicts, vec![]);
     let target = result
@@ -21,17 +17,15 @@ fn fixture_backtrack_max_zero_disables_slot_conflict_reconciliation() {
             version: "1.0".to_string()
         }
     );
-    // A single retry is enough to reconcile this one-step conflict.
+    // A single retry reconciles this one-step conflict.
     let one = graph_result_real_backtrack("dev-libs/slotconflictparent", 1);
     assert_eq!(one.slot_conflicts, vec![]);
 }
 
 #[test]
 fn check_runtime_pkg_mask_discards_fully_masked_parent_sets() {
-    // Real `Backtracker._check_runtime_pkg_mask` (bug 375573),
-    // C3 oracle for the discard predicate itself (no fixture can
-    // reach it end to end yet -- needs a 3-pass parent-masking
-    // chain, see `docs/history/023-oracle.md`).
+    // Portage `Backtracker._check_runtime_pkg_mask` (bug 375573): oracle for the
+    // discard predicate itself.
     let entry = |neg: &str, reason: MaskReason| MaskEntry {
         neg: neg.to_string(),
         reason,
@@ -44,7 +38,7 @@ fn check_runtime_pkg_mask_discards_fully_masked_parent_sets() {
             atom.to_string(),
         )
     };
-    // A mask whose every parent is itself masked is discarded.
+    // Every parent masked: discarded.
     let mut masks: HashMap<(String, String), Vec<MaskEntry>> = HashMap::new();
     masks.insert(
         ("dev-libs".to_string(), "a".to_string()),
@@ -69,14 +63,13 @@ fn check_runtime_pkg_mask_discards_fully_masked_parent_sets() {
             slot(vec![parent(("dev-libs", "d", "1.0"), "dev-libs/d")]),
         )],
     );
-    // `c-1.0`'s parent `d` is unmasked, but `a`'s parent `b-2.0` is
-    // still fully masked -- still discarded.
+    // `c-1.0`'s parent `d` is free but `b-2.0` is still fully masked.
     assert!(!check_runtime_pkg_mask(&masks));
-    // Unmask `b-2.0` by dropping its entry: `a`'s parent is free.
+    // Unmask `b-2.0`: `a`'s parent is free.
     masks.insert(("dev-libs".to_string(), "b".to_string()), vec![]);
     assert!(check_runtime_pkg_mask(&masks));
-    // Masks with no parents (real's 692746 arm) never disqualify,
-    // and missing-dependency entries are skipped entirely.
+    // Parentless masks never disqualify (Portage's 692746 arm); missing-dependency
+    // entries are skipped entirely.
     let mut masks2: HashMap<(String, String), Vec<MaskEntry>> = HashMap::new();
     masks2.insert(
         ("dev-libs".to_string(), "e".to_string()),
@@ -94,14 +87,8 @@ fn check_runtime_pkg_mask_discards_fully_masked_parent_sets() {
     assert!(check_runtime_pkg_mask(&masks2));
 }
 
-/// #249: real `dep_zapdeps` chains `circular_dependency.get(parent)`
-/// and `.get(virt_parent)` (`portage/dep/dep_check.py:673-678`); a
-/// virtual's `||` is expanded inline under the package that pulled it,
-/// so the puller's circular record demotes the cycle-closing branch.
-/// The pmtest fixture `dev-util/u249make` (bug 703440's cycle with the
-/// `||` inside `virtual/u249make`): real's ResolverPlayground merges the
-/// bootstrap after one circular restart and aborts under
-/// `--backtrack=0` (portuale `LLM/evidence/2026-09-30-249/u249.txt`).
+/// A virtual's `||` demotes through its puller's circular record: the merge order
+/// below holds, and `--backtrack=0` keeps the cycle.
 #[test]
 fn virtual_or_choice_is_demoted_through_its_pullers_circular_record() {
     let ok = graph_result_real("dev-util/u249make");
@@ -133,14 +120,8 @@ fn virtual_or_choice_is_demoted_through_its_pullers_circular_record() {
     );
 }
 
-/// Backlog #221: circular `||` backtracking (upstream
-/// `test_circular_choices.py`, bugs 703440 and 705986). Each cell's
-/// first pass takes the in-graph `||` branch and strands the
-/// merge-order walk; the restart demotes the cycle-closing branch
-/// (`circular_atom`) and merges real's exact set in real's exact
-/// order. `--backtrack=0` keeps real's circular failure everywhere
-/// (probed against 3rdparty/portage 3.0.82.2's `ResolverPlayground`,
-/// which fails all three cells with `{"--backtrack": 0}`).
+/// Circular `||` backtracking: the restart demotes the cycle-closing branch and
+/// merges Portage's set in Portage's order; `--backtrack=0` keeps the failure.
 #[test]
 fn circular_choices_backtrack_to_the_cycle_breaking_branch() {
     let names_of = |result: &GraphResult| {
@@ -150,7 +131,7 @@ fn circular_choices_backtrack_to_the_cycle_breaking_branch() {
             .map(|e| e.package.clone())
             .collect::<Vec<_>>()
     };
-    // pg1 (bug 703440): `[bootstrap, jsoncpp, cmake]`.
+    // pg1 (bug 703440).
     let result = graph_result_real("dev-libs/ccd1c");
     assert!(matches!(result.outcome, ResolveOutcome::Complete));
     assert!(
@@ -164,7 +145,7 @@ fn circular_choices_backtrack_to_the_cycle_breaking_branch() {
             .circular_deps
             .is_empty()
     );
-    // pg4 (bug 705986): `[exe-bin, pypy]`, no `+low-memory` rescue.
+    // pg4 (bug 705986).
     let result = graph_result_real("dev-libs/ccd4a");
     assert!(matches!(result.outcome, ResolveOutcome::Complete));
     assert!(
@@ -179,13 +160,11 @@ fn circular_choices_backtrack_to_the_cycle_breaking_branch() {
             .circular_deps
             .is_empty()
     );
-    // pg4 requesting the exe itself: real merges it after its own
-    // buildtime dep (`[exe-bin, pypy, exe]`).
+    // pg4 requesting the exe itself.
     let result = graph_result_real("dev-libs/ccd4b");
     assert!(matches!(result.outcome, ResolveOutcome::Complete));
     assert_eq!(names_of(&result), vec!["ccd4c", "ccd4a", "ccd4b"]);
-    // pg5 (`testDirectVirtualCircularDependency`): the
-    // runtime-closing ring still backtracks to `-bin` first.
+    // pg5: the runtime-closing ring still backtracks to `-bin` first.
     let result = graph_result_real("dev-libs/ccd5a");
     assert!(matches!(result.outcome, ResolveOutcome::Complete));
     assert!(
@@ -201,19 +180,8 @@ fn circular_choices_backtrack_to_the_cycle_breaking_branch() {
     );
 }
 
-/// g221c (L0 `dev-lang/rust` regression): a slot-pinned `||` build
-/// dep over an older slot of the package itself vs the `-bin`
-/// package, the older slot carrying its own self buildtime edge.
-/// The first pass self-picks and strands; the retry demotes the
-/// recorded self branch and must take `-bin` -- real's exact set in
-/// real's exact order after exactly one retry (grounded in
-/// 3rdparty/portage 3.0.82.2 `ResolverPlayground`,
-/// `/tmp/opencode/g221c/probe_slcirc.py`: backtracking on merges
-/// `[slcirc-bin-2.0, slcirc-2.0]` after `backtracking try 1`,
-/// `--backtrack=0` fails circular). The g221b reconciliation broke
-/// this: the slot-blind in-graph check ranked the older-slot branch
-/// `Installed`, beating `-bin` and re-closing the cycle through the
-/// older slot's self edge (rc 1, `slcirc-1.0 depends on slcirc-1.0`).
+/// Slot-pinned `||` over the package's own older slot vs `-bin`: the retry must
+/// take `-bin` after exactly one retry.
 #[test]
 fn circular_slot_pinned_branch_prefers_bin_over_older_slot() {
     let result = graph_result_real("dev-libs/slcirc");
@@ -251,18 +219,8 @@ fn circular_slot_pinned_branch_prefers_bin_over_older_slot() {
     );
 }
 
-/// Backlog #221 (I3): the unsolved-cycle-with-backtracking-ON
-/// leg of `assemble_result`'s persisting-ring report. `dev-libs/sbrA`
-/// BDEPENDs+RDEPENDs on `dev-libs/sbrB` (the dual edge softens the
-/// hard reporter's arm to `(true, true)`) while `sbrB` BDEPENDs back,
-/// so the hard reporter stays empty but the walk strands: the retry
-/// re-strands identically (no `||` branch to switch to -- the
-/// demotion has nothing to demote), the ring is unsolved, and the
-/// settled pass reports it through the persisting-ring leg instead
-/// of settling `Complete`. Grounded in real runs
-/// (`/tmp/opencode/g221b/probe_sbr.py`, 3rdparty portage 3.0.82.2
-/// `ResolverPlayground`, debug `backtracking try` count): backtracking
-/// on fails after exactly 1 retry, `--backtrack=0` fails with none.
+/// Unsolved ring with backtracking on: the retry re-strands identically (nothing
+/// to demote), and the settled pass reports the persisting ring.
 #[test]
 fn softened_ring_reports_the_persisting_cycle_with_backtracking_on() {
     let result = graph_result_real("dev-libs/sbrA");
@@ -279,7 +237,7 @@ fn softened_ring_reports_the_persisting_cycle_with_backtracking_on() {
         "{:?}",
         result.circular_deps
     );
-    // `--backtrack=0` fails the same way (real never retries there).
+    // `--backtrack=0` fails the same way.
     assert!(
         !graph_result_real_backtrack("dev-libs/sbrA", 0)
             .circular_deps
@@ -287,11 +245,8 @@ fn softened_ring_reports_the_persisting_cycle_with_backtracking_on() {
     );
 }
 
-/// Backlog #161 S2: `params_equal` is real's parameter-only `__eq__`
-/// (every accumulator agrees; `backtrack_config`, `depth` and
-/// `mask_steps` are search position, not state). Each conjunct is
-/// load-bearing: one differing field must make two params unequal,
-/// while the excluded position fields never do.
+/// `params_equal` compares accumulator state only; search position never compares
+/// unequal, and every conjunct is load-bearing.
 #[test]
 fn backtrack_params_equal_compares_every_accumulator() {
     let base = BacktrackParams::default();
@@ -384,18 +339,14 @@ fn backtrack_params_equal_compares_every_accumulator() {
     let mut p = base.clone();
     p.mask_steps = 3;
     assert!(params_equal(&base, &p), "mask_steps excluded");
-    // Backlog #129 (S1): first-seen mask order is render order,
-    // not search state -- same masks in any arrival order dedup.
+    // First-seen mask order is render order, not state.
     let mut p = base.clone();
     p.mask_order
         .push((("a".to_string(), "b".to_string()), "!=a/b-1.0".to_string()));
     assert!(params_equal(&base, &p), "mask_order excluded");
 }
 
-/// Backlog #129 (S1): the missed-update derivation only runs on a
-/// clean settle. At `--backtrack=0` the mg2top root pass keeps its
-/// slot conflicts (highest-first picks the `-2`s), so no mask
-/// trial state exists and neither notice may fire.
+/// The missed-update derivation runs only on a clean settle.
 #[test]
 fn backtrack_missed_updates_stays_silent_without_a_clean_settle() {
     let result = graph_result_real_backtrack("dev-libs/mg2top", 0);

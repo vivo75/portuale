@@ -2,12 +2,8 @@ use super::*;
 
 #[test]
 fn direct_solve_removes_the_unforced_merge_and_reports_the_skip() {
-    // The 2-atom old/new shape (S0 matrix): `oldconsumer`'s `<2.0`
-    // singles out 1.0 while `newconsumer`'s bare atom matches both
-    // (an `or_tuple`); 1.0 is forced through the old edge, so the
-    // tuple is satisfied without 2.0 and 2.0 drops with a skip row
-    // against oldconsumer's pin -- real's `remove: 2.0 /
-    // keep: 1.0` verdict and `WARNING` text (staged oracle).
+    // Old/new shape: `<2.0` forces 1.0, so the bare tuple drops 2.0 with a skip
+    // row (Portage's staged-oracle verdict).
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = test_config();
@@ -66,29 +62,14 @@ fn direct_solve_removes_the_unforced_merge_and_reports_the_skip() {
 
 #[test]
 fn direct_solve_reports_an_argument_parent_with_the_cli_text() {
-    // Backlog #230 fix round 1 (review Important 3): real's
-    // `PackageArg`/`AtomArg` arm (`depgraph.py:1681-1686`) prints
-    // `str(parent)` -- the CLI argument -- with no atom and no `^`
-    // marker. The direct-solve producer is the one path that can
-    // supply it: a top-level argument puller is recorded with
-    // empty parent fields and the argument text as its atom (see
-    // `slot_pullers`' depth-0 ownerless push), so when that atom
-    // rejects the removed instance the skip row carries the CLI
-    // text in `atom` with an empty `consumer_cpv`, and the
-    // renderer printing `s.atom` bare reproduces real's arm
-    // exactly. (The reverse-pin producer always builds a non-empty
-    // consumer cpv; the backtrack-mask rows skip empty-category
-    // pullers outright.) No contract or bed cell grounds an
-    // Argument parent end to end (blk0 parents are all Packages),
-    // so this producer-level pin is the only coverage -- the
-    // renderer arm beyond it stays unpinned.
+    // Portage prints the CLI argument bare (no atom, no marker); the direct-solve
+    // producer supplies it via an ownerless depth-0 puller.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = test_config();
     let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
     let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
-    // A versioned CLI argument pinning the kept instance: it
-    // rejects the removed 2.0 exactly like oldconsumer's pin.
+    // Versioned argument pinning the kept instance rejects 2.0 the same way.
     let arg = "=dev-libs/slotconflicttarget-1.0";
     let conflicts = [s2_conflict(vec![
         (
@@ -148,9 +129,7 @@ fn direct_solve_reports_an_argument_parent_with_the_cli_text() {
 
 #[test]
 fn direct_solve_keeps_an_unsolvable_conflict_untouched() {
-    // Both instances singly forced (newpin's `>=2.0`, oldpin's
-    // `<2.0`): nothing is unforced, the conflict survives with no
-    // skip rows -- rc 1, like real.
+    // Both instances forced: the conflict survives with no skip rows.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = test_config();
@@ -189,9 +168,7 @@ fn direct_solve_keeps_an_unsolvable_conflict_untouched() {
 
 #[test]
 fn direct_solve_skips_slot_operator_rebuild_conflicts() {
-    // Same shape as the unsolvable cell, but keyed in
-    // `slot_operator_replace_installed`: real never feeds those to
-    // the direct solve (`:1784-1788`) -- #24 territory, not #90.
+    // Rebuild conflicts never reach the direct solve (Portage).
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = test_config();
@@ -235,11 +212,8 @@ fn direct_solve_skips_slot_operator_rebuild_conflicts() {
 
 #[test]
 fn direct_solve_arg_parents_protect_the_triangle() {
-    // The #57 triangle: the installed 1.0 is excluded from every
-    // argv parent's match list (`is_arg_parent`: top-level pull
-    // with an update wanted), so `othermod`'s `<2.0` matches
-    // nothing and protects the whole conflict -- rc 1, like real
-    // (staged oracle both argv orders).
+    // Installed 1.0 excluded from argv parents' matches, so the conflict is
+    // protected (staged oracle, both argv orders).
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = test_config();
@@ -298,9 +272,7 @@ fn direct_solve_arg_parents_protect_the_triangle() {
     assert_eq!(out.surviving.len(), 1);
 }
 
-/// Backlog #161 S5: an installed instance ranks after every merge
-/// instance for the `or_tuple` first-pulled rule, and an installed
-/// survivor is always kept.
+/// Installed instances rank after merge instances; an installed survivor is kept.
 #[test]
 fn direct_solve_orders_merge_instances_before_installed() {
     let root = fixtures_root();
@@ -308,9 +280,7 @@ fn direct_solve_orders_merge_instances_before_installed() {
     let config = test_config();
     let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
     let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
-    // Same pulls as the S0 shape, but 1.0 is installed and no
-    // top-level arg names the conflict (so `arg_mode` stays off and
-    // the installed instance matches normally).
+    // 1.0 installed and no arg names the conflict: normal matching.
     let conflicts = [s2_conflict(vec![
         (
             "2.0",
@@ -323,8 +293,7 @@ fn direct_solve_orders_merge_instances_before_installed() {
             vec![(old_cpv, "<dev-libs/slotconflicttarget-2.0", false)],
         ),
     ])];
-    // Walk order names 1.0 first: the merge instance must still
-    // outrank the installed one.
+    // Walk order names 1.0 first; merge must still outrank installed.
     let entries = s2_entries(vec!["1.0", "2.0"]);
     let top: HashSet<(String, String)> = HashSet::new();
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
@@ -349,8 +318,7 @@ fn direct_solve_orders_merge_instances_before_installed() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: tuple order follows walk order -- with 1.0
-/// walked first, an ambiguous bare/bare conflict drops 2.0.
+/// Tuple order follows walk order.
 #[test]
 fn direct_solve_tuple_order_follows_walk_order() {
     let root = fixtures_root();
@@ -358,8 +326,7 @@ fn direct_solve_tuple_order_follows_walk_order() {
     let config = test_config();
     let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
     let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
-    // Both parents pull bare: nothing forces either version, so the
-    // walk order decides.
+    // Both pull bare: walk order decides.
     let conflicts = [s2_conflict(vec![
         (
             "2.0",
@@ -396,8 +363,7 @@ fn direct_solve_tuple_order_follows_walk_order() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: a parent naming a package outside the conflict
-/// draws a package-to-package edge, never an instance edge.
+/// Outside parents draw package edges, never instance edges.
 #[test]
 fn direct_solve_ignores_parents_outside_the_conflict() {
     let root = fixtures_root();
@@ -422,8 +388,7 @@ fn direct_solve_ignores_parents_outside_the_conflict() {
         repos: &repos,
         config: &config,
     }));
-    // The S0 verdict stands: the outside parent changes no edge that
-    // matters.
+    // The outside parent changes no edge that matters.
     assert_eq!(
         out.removed,
         vec![(
@@ -436,8 +401,7 @@ fn direct_solve_ignores_parents_outside_the_conflict() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: a non-built parent atom never arms the
-/// slot-operator-rebuild gate, so the solve proceeds past it.
+/// A non-built parent atom never arms the rebuild gate.
 #[test]
 fn direct_solve_solves_past_a_non_built_parent() {
     let root = fixtures_root();
@@ -465,8 +429,7 @@ fn direct_solve_solves_past_a_non_built_parent() {
         repos: &repos,
         config: &config,
     }));
-    // A slot-only atom is not a built op: the gate stays shut and
-    // the S0 verdict stands.
+    // Slot-only atom: the gate stays shut.
     assert_eq!(
         out.removed,
         vec![(
@@ -479,9 +442,7 @@ fn direct_solve_solves_past_a_non_built_parent() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: the rebuild gate needs the parent installed at
-/// the pulled version -- and the pulled version installed, not just
-/// some other version of the same cp.
+/// The rebuild gate needs the parent installed at the pulled version.
 #[test]
 fn direct_solve_solves_past_an_uninstalled_parent() {
     let root = fixtures_root();
@@ -489,8 +450,7 @@ fn direct_solve_solves_past_an_uninstalled_parent() {
     let config = test_config();
     let (conflicts, entries, top) = ds_s0_161();
     let mut conflict = conflicts[0].clone();
-    // `paired-9.9` is not installed (the fixture vdb holds
-    // `paired-1.0`), so the gate stays shut either way.
+    // `paired-9.9` is not installed, so the gate stays shut either way.
     conflict.instances[0].parents.push(SlotConflictParent {
         parent_cpv: "dev-libs/paired-9.9:0/0::testrepo".to_string(),
         atom: "dev-libs/slotconflicttarget:0/0=".to_string(),
@@ -523,8 +483,7 @@ fn direct_solve_solves_past_an_uninstalled_parent() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: `--exclude` alone arms the rebuild gate -- the
-/// `useoldpkg` alternative need not match too.
+/// `--exclude` alone arms the rebuild gate.
 #[test]
 fn direct_solve_exclude_alone_arms_the_rebuild_gate() {
     let root = fixtures_root();
@@ -552,23 +511,19 @@ fn direct_solve_exclude_alone_arms_the_rebuild_gate() {
         repos: &repos,
         config: &config,
     }));
-    // The installed `paired-1.0` parent with a built `=` atom is
-    // `--exclude`d: real's rebuild-path residue, not remove-path
-    // material -- the conflict survives.
+    // Excluded built-`=` parent is rebuild residue: the conflict survives.
     assert!(out.removed.is_empty());
     assert_eq!(out.surviving.len(), 1);
 }
 
-/// Backlog #161 S5: naming the conflict in the replace set holds it
-/// without solving, even when no rebuild parent exists.
+/// The replace set holds the conflict without solving.
 #[test]
 fn direct_solve_replace_set_holds_the_conflict() {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = test_config();
     let (conflicts, entries, _) = ds_s0_161();
-    // No top-level args: nothing else in the solve can protect the
-    // conflict, so only the replace-set gate holds it.
+    // No args: only the replace-set gate holds it.
     let top: HashSet<(String, String)> = HashSet::new();
     let replace: BTreeSet<(String, String)> =
         BTreeSet::from([("dev-libs".to_string(), "slotconflicttarget".to_string())]);
@@ -585,8 +540,7 @@ fn direct_solve_replace_set_holds_the_conflict() {
     assert_eq!(out.surviving.len(), 1);
 }
 
-/// Backlog #161 S5: a lone bare parent over two instances solves
-/// through the tuple path, dropping the later-walked instance.
+/// A lone bare parent solves through the tuple path.
 #[test]
 fn direct_solve_lone_bare_parent_solves_through_the_tuple() {
     let root = fixtures_root();
@@ -625,9 +579,7 @@ fn direct_solve_lone_bare_parent_solves_through_the_tuple() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: installed instances rank after every merge
-/// instance -- over three `mgfc` versions with only 2.0 walked,
-/// the two unforced merges drop in rank order behind it.
+/// Installed ranks last over three versions with only one walked.
 #[test]
 fn direct_solve_ambiguous_conflict_prefers_the_walked_instance() {
     let root = fixtures_root();
@@ -679,8 +631,7 @@ fn direct_solve_ambiguous_conflict_prefers_the_walked_instance() {
             ),
         ],
     }];
-    // Only 2 is walked: 2 ranks first, the installed 1
-    // second, the unwalked 3.0 last.
+    // Only 2 walked: 2 first, installed 1 second, unwalked 3.0 last.
     let entries = vec![GraphEntry {
         discovery: 0,
         category: "dev-libs".into(),
@@ -703,8 +654,7 @@ fn direct_solve_ambiguous_conflict_prefers_the_walked_instance() {
         repos: &repos,
         config: &config,
     }));
-    // 2 wins the tuple; 3.0 drops against the installed keeper.
-    // The 1-vs-2 residual survives for the mask trial.
+    // 3.0 drops against the installed keeper; the 1-vs-2 residual survives.
     assert_eq!(
         out.removed,
         vec![(
@@ -717,9 +667,7 @@ fn direct_solve_ambiguous_conflict_prefers_the_walked_instance() {
     assert_eq!(out.surviving.len(), 1);
 }
 
-/// Backlog #161 S5: a lone outside parent still solves through the
-/// tuple path -- misattributing it to an instance must change the
-/// verdict, not pass silently.
+/// A lone outside parent still solves through the tuple path.
 #[test]
 fn direct_solve_lone_outside_parent_solves_through_the_tuple() {
     let root = fixtures_root();
@@ -761,9 +709,7 @@ fn direct_solve_lone_outside_parent_solves_through_the_tuple() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: without top-level args the S0 forcing still
-/// drops 2.0 -- the verdict must not depend on which path (tuple
-/// or direct edge) each parent takes.
+/// Argless forcing still drops the unforced merge.
 #[test]
 fn direct_solve_argless_forcing_drops_the_unforced_merge() {
     let root = fixtures_root();
@@ -793,9 +739,7 @@ fn direct_solve_argless_forcing_drops_the_unforced_merge() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: a parent triple naming no pulled version --
-/// here a version that does not exist -- falls back to the shared
-/// sink instead of hijacking an instance edge.
+/// An unresolvable parent falls back to the shared sink.
 #[test]
 fn direct_solve_unresolvable_parent_falls_back_to_the_sink() {
     let root = fixtures_root();
@@ -837,9 +781,7 @@ fn direct_solve_unresolvable_parent_falls_back_to_the_sink() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: a parent triple whose installed flag matches no
-/// instance -- a merge instance pulled "as installed" -- falls back
-/// to the shared sink just the same.
+/// A mismatched installed flag falls back to the sink too.
 #[test]
 fn direct_solve_mismatched_parent_installedness_falls_back_to_the_sink() {
     let root = fixtures_root();
@@ -881,9 +823,7 @@ fn direct_solve_mismatched_parent_installedness_falls_back_to_the_sink() {
     assert!(out.surviving.is_empty());
 }
 
-/// Backlog #161 S5: a single-match edge from an instance node no
-/// traversal reaches deletes quietly -- the degenerate shape the
-/// take-over documents (no edge reached anything, no keeper owed).
+/// An unreached parent edge deletes quietly.
 #[test]
 fn direct_solve_unreached_parent_edge_deletes_quietly() {
     let root = fixtures_root();
@@ -913,8 +853,7 @@ fn direct_solve_unreached_parent_edge_deletes_quietly() {
         repos: &repos,
         config: &config,
     }));
-    // Both instances drop with no keeper: the only edge hangs off
-    // an instance node the walk never reaches.
+    // Both drop with no keeper: the edge hangs off an unreached node.
     assert_eq!(
         out.removed,
         vec![

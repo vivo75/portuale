@@ -1,10 +1,7 @@
 use super::*;
 
-/// Backlog #211 I1: the `--solver=` bridge fixpoint runs the
-/// new-slot update arm once `update`/`top_level_cps` are threaded
-/// through, so both solvers agree -- a slot-moving provider merged
-/// fresh schedules the walked consumer bound to the old slot, and
-/// stays off without `--update` (real's `want_update` gate).
+/// The bridge fixpoint runs the new-slot update arm, so both solvers agree (--update
+/// schedules the walked consumer; without it the arm stays off).
 #[test]
 fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     use md5::Digest as _;
@@ -65,8 +62,7 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
         ..graph_entry("dev-libs", "massc", "1.0")
     };
     let entries = [fresh, consumer];
-    // With `--update` the bridge synthesises the consumer rebuild,
-    // exactly like the default path's scan-then-seed.
+    // With `--update` the bridge synthesises the consumer rebuild.
     let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
         root: &dir,
         repos: &repos,
@@ -88,7 +84,7 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
             ..
         }
     ));
-    // Without `--update` (and no arg-chain) the arm stays off.
+    // Without `--update` the arm stays off.
     let (off, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
         root: &dir,
         repos: &repos,
@@ -105,10 +101,8 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S1: the eliminate path's replace-cp lookup matches
-/// the cp being decided -- a decoy installed package of the *same*
-/// category that sorts first never satisfies it -- and a pin filed
-/// for another cp never filters into this cp's parent match.
+/// The replace-cp lookup matches the cp being decided: a decoy and a foreign pin
+/// never satisfy it.
 #[test]
 fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
     let dir = slotundo_temp_dir("161-elim");
@@ -128,10 +122,7 @@ fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
         rdepend: "",
         installed_use: "",
     });
-    // Same category, sorts first, different package and version: a
-    // loosened lookup (`||`, `!=`) lands here and rule 1 (version)
-    // keeps the rebuild, while the exact lookup walks past it to
-    // `sounneed` and rule 8 demotes.
+    // Same-category decoy sorting first: the exact lookup walks past it.
     let decoy = dir.join("var/db/pkg/dev-libs/aadecoy-9.9");
     fs::create_dir_all(&decoy).unwrap();
     fs::write(decoy.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -170,10 +161,8 @@ fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S1: the S3 synthesiser entry lands at the *tree*
-/// ebuild's slot for the installed version (`souprov-1.0` is 0/1;
-/// 2.0's 0/2 must not leak in), carries no `[oldver]` bracket when
-/// the slots agree, and records the vdb repository.
+/// The synthesiser entry lands at the tree ebuild's slot, with no `[oldver]`
+/// bracket on agreement, and records the vdb repository.
 #[test]
 fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
     let dir = slotundo_temp_dir("161-entries");
@@ -218,12 +207,8 @@ fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #274: the old post-pass slot-op synthesiser's own
-/// `oldbest` assembly carries #247's third disjunct (real
-/// `resolver/output.py:721-731`) -- a same-slot / same-sub-slot
-/// rebuild whose installed repo drifted from the tree repo still
-/// gets the `[oldver]` bracket, and the entry itself keeps the tree
-/// repo (real `pkg.repo`).
+/// A repo-drifted rebuild still gets the `[oldver]` bracket while the entry keeps
+/// the tree repo.
 #[test]
 fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
     let dir = slotundo_temp_dir("274-entries");
@@ -279,9 +264,7 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
 
 #[test]
 fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
-    // `sounneed-1.0` records `soflag? ( souprov:0/1= )` (flag off, so
-    // both rule-8 sides use-reduce it away); `souprov` is upgrading
-    // 1.0(0/1) -> 2.0(0/2) in the graph.
+    // Flag off, so both rule-8 sides use-reduce the conditional away.
     let dir = slotundo_temp_dir("undo");
     slotundo_vdb(SlotundoVdbArgs {
         dir: &dir,
@@ -330,13 +313,11 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
     let entry = slotundo_rebuild_entry("sounneed", "1.0", "0", "1", &[("soflag", false)]);
     let entries = [provider.clone(), entry.clone()];
     assert_eq!(undo(&entries, false, false, &no_top, false), replace);
-    // ... and the same shape with the flag ON keeps the rebuild: the
-    // tree `:=` binds to the graph's 0/2, the vdb says 0/1.
+    // Flag on: the tree `:=` binds to the graph's 0/2, so the rebuild is kept.
     let entry_on = slotundo_rebuild_entry("sounneed", "1.0", "0", "1", &[("soflag", true)]);
     assert!(undo(&[provider.clone(), entry_on], false, false, &no_top, false).is_empty());
 
-    // Rule 6: an own-slot move (installed 0/1, tree 0/2) keeps the
-    // rebuild even though rule 8 would compare equal.
+    // Rule 6: an own-slot move keeps the rebuild.
     let entry_slot = slotundo_rebuild_entry("sounneed", "1.0", "0", "2", &[("soflag", false)]);
     assert!(
         undo(
@@ -349,19 +330,14 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         .is_empty()
     );
 
-    // Rule 3 (S5): `--changed-slot` keeps a rebuild whose tree ebuild
-    // at the same cpv moved vs the installed instance. `sounneed`'s
-    // tree slot is its vdb slot, so the rule does not fire: the rule-8
-    // demotion stands with the flag on.
+    // Rule 3: `--changed-slot` only fires when the tree ebuild moved; here it
+    // did not, so the rule-8 demotion stands.
     assert_eq!(
         undo(&entries, false, true, &no_top, false),
         replace,
         "rule 3 must not keep a rebuild whose tree ebuild did not move"
     );
-    // The `souneedslot` fixture (vdb 0/1, tree 0/2) is the positive
-    // shape: kept with the flag on. Rule 6 keeps it without the flag
-    // too -- rule 3 is behaviour-neutral for ebuilds (documented), so
-    // both must agree.
+    // Positive shape (vdb 0/1, tree 0/2): kept with and without the flag.
     slotundo_vdb(SlotundoVdbArgs {
         dir: &dir,
         name: "souneedslot",
@@ -395,7 +371,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         "a slot-moved ebuild consumer is kept with and without --changed-slot"
     );
 
-    // Rule 1: a different installed version is a real upgrade.
+    // Rule 1: a different installed version is an upgrade.
     let entry_v2 = slotundo_rebuild_entry("sounneed", "2.0", "0", "1", &[("soflag", false)]);
     assert!(undo(&[provider.clone(), entry_v2], false, false, &no_top, false).is_empty());
 
@@ -421,7 +397,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         .is_empty()
     );
 
-    // Rule 4: a parent atom that doesn't match the installed instance.
+    // Rule 4: a parent atom missing the installed instance.
     let bad_want = HashMap::from([(sounneed.clone(), vec!["=dev-libs/sounneed-2.0".to_string()])]);
     let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
         root: &dir,
@@ -449,13 +425,13 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         )
         .is_empty()
     );
-    // ... selective ignores the argument (real's `selective` arm).
+    // Selective ignores the argument (Portage's `selective` arm).
     assert_eq!(
         undo(&[provider.clone(), entry.clone()], true, false, &top, false),
         replace
     );
 
-    // Rule 7: a binary entry keeps its rebuild (binary halves are v2).
+    // Rule 7: a binary entry keeps its rebuild.
     let mut entry_binary = entry.clone();
     entry_binary.source = CandidateSource::Binary;
     assert!(
@@ -481,8 +457,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         .is_empty()
     );
 
-    // A non-slot-operator entry (e.g. an ordinary USE reinstall for
-    // the same cp) is never touched.
+    // Non-slot-operator entries are never touched.
     let mut entry_plain = entry.clone();
     entry_plain.outcome = PretendOutcome::Reinstall {
         version: "1.0".into(),
@@ -504,8 +479,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         .is_empty()
     );
 
-    // The latch: once demoted, the S3 scan cannot re-add the cp even
-    // though its vdb binding is still stale.
+    // The latch: demoted cps are never re-added by the scan.
     let reach: HashSet<(String, String)> = HashSet::from([sounneed.clone()]);
     let latched = undo(
         &[provider.clone(), entry.clone()],
@@ -538,9 +512,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
 
 #[test]
 fn required_set_reachable_cps_follows_the_forward_installed_dep_graph() {
-    // Throwaway vdb: a 3-link chain tail -> mid -> target, plus an
-    // `island` reachable from nothing and a `sysdep` pulled only by a
-    // `@system` member. Mirrors the container's CASE 2 / CASE 3.
+    // Throwaway vdb: tail -> mid -> target chain, an island, and a @system half.
     let dir = TempDir::new("portage-repo-reach").keep();
     let mk = |name: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -559,8 +531,7 @@ fn required_set_reachable_cps_follows_the_forward_installed_dep_graph() {
 
     let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
 
-    // Only `tail` in @world -> the whole chain is reachable, `island`
-    // and the @system half are not.
+    // Only `tail` in @world: the chain is reachable, the rest is not.
     let r = required_set_reachable_cps(&dir, &["dev-libs/tail".to_string()], &[]);
     assert!(r.contains(&cp("tail")) && r.contains(&cp("mid")) && r.contains(&cp("target")));
     assert!(!r.contains(&cp("island")));

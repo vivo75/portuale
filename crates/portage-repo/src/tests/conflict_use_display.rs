@@ -1,17 +1,7 @@
 use super::*;
 
-/// Backlog #205 R3: the enforced pin's rejection is recorded as a
-/// slot-conflict-style mask on the chosen version (real "Record
-/// missed updates", `lib/_emerge/depgraph.py:2085-2106`), so the
-/// existing `backtrack_missed_updates` derivation renders the
-/// `WARNING` row. The run settles `[abk0c-1, abk0a-2, abk0d-1]`
-/// (`backtrack: 2/2`, rc 1 in the contract pin) and the rejected
-/// `abk0a-3` rides out as exactly one skipped-update row naming
-/// the enforcing consumer: installed `abk0b-1`, rendered vdb-based
-/// (`installed`, vdb USE, `__unknown__` repo fallback -- the
-/// fixture vdb entry carries no `repository` file, like real's
-/// `portage.versions._unknown_repo`) instead of the
-/// merge-scheduled tree form a graph puller keeps.
+/// The enforced pin's rejection renders as one skipped-update row naming the
+/// installed enforcing consumer (vdb USE, `__unknown__` repo fallback).
 #[test]
 fn enforced_pin_miss_renders_the_installed_enforcing_consumer() {
     let result = graph_result_abk0_worldb(2);
@@ -52,16 +42,8 @@ fn enforced_pin_miss_renders_the_installed_enforcing_consumer() {
         row.consumer_installed,
         "the enforcing consumer renders installed (vdb-based), not merge-scheduled"
     );
-    // The fixture vdb entry carries no USE/IUSE files, so the
-    // vdb-based display is the empty-valued USE group (renders bare
-    // `USE=""`, as pinned -- and as real's probe consumer line
-    // shows). That the row carries the vdb-sourced set rather than
-    // the tree ebuild's IUSE is the mechanism; the non-empty shape
-    // is pinned by
-    // `enforced_pin_miss_carries_the_vdb_use_and_repo` below.
-    // Post-#230 the display is real's full `pkg_use_display`
-    // (`skipped_update_installed_use_display_for`), which always
-    // emits the USE group instead of the old empty vec.
+    // Empty-valued USE group: the row carries the vdb set, not the tree IUSE (the
+    // non-empty shape is pinned by the next test).
     let fixture_root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &fixture_root,
@@ -82,13 +64,7 @@ fn enforced_pin_miss_renders_the_installed_enforcing_consumer() {
     );
 }
 
-/// Backlog #205 R3, vdb legs: with `IUSE`/`USE`/`repository` files
-/// staged on a scratch copy of the `abk0*` vdb entries, the same
-/// skipped-update row carries the recorded vdb USE and the recorded
-/// repo instead of the `__unknown__` fallback. Repos and config
-/// stay on the fixtures (like the contract pin's test-local ROOT,
-/// whose `PORTAGE_CONFIGROOT` stays shared); only the vdb comes
-/// from the scratch root.
+/// Same row with staged vdb files: recorded vdb USE and repo, no fallback.
 #[test]
 fn enforced_pin_miss_carries_the_vdb_use_and_repo() {
     let fixture_root = fixtures_root();
@@ -123,11 +99,7 @@ fn enforced_pin_miss_carries_the_vdb_use_and_repo() {
     assert_eq!(row.atom, "<dev-libs/abk0a-3");
     assert_eq!(row.consumer_cpv, "dev-libs/abk0b-1:0/0::testrepo");
     assert!(row.consumer_installed);
-    // The row's USE is the vdb-sourced display for the scratched
-    // entry -- the same `installed_use_display_for` value, read off
-    // the staged root -- not the tree ebuild's IUSE (abk0b-1's
-    // ebuild declares none, so a tree-sourced display would be
-    // empty).
+    // The row carries the staged vdb display, not the tree IUSE (empty there).
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &fixture_root,
         main_repo_location: &fixture_root.join("repo"),
@@ -144,11 +116,8 @@ fn enforced_pin_miss_carries_the_vdb_use_and_repo() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #230: the skipped-update block renders real's full
-/// `pkg_use_display`, not the IUSE-only approximation -- the
-/// effective USE masked to the valid-IUSE domain, one group per
-/// non-hidden `USE_EXPAND` var, `( )`-wrapped force/mask flags.
-/// Pure-function level: masking plus assembly, no repos needed.
+/// The skipped-update block renders Portage's full `pkg_use_display`: effective
+/// USE masked to valid IUSE, one group per visible USE_EXPAND var.
 #[test]
 fn skipped_use_display_masks_to_the_valid_domain_and_groups_expands() {
     let config = portage_profile::Config {
@@ -158,10 +127,7 @@ fn skipped_use_display_masks_to_the_valid_domain_and_groups_expands() {
         archlist: HashSet::from(["amd64".to_string(), "x86".to_string()]),
         ..Default::default()
     };
-    // EAPI 8 (iuse_effective rule): only declared IUSE and
-    // IUSE_EFFECTIVE survive; the profile-global `foo` and the
-    // forced-but-undeclared `globalforceflag` are masked out, while
-    // the implicit `elibc_glibc` is kept and grouped.
+    // EAPI 8: only declared IUSE and IUSE_EFFECTIVE survive.
     let explicit: HashSet<String> = HashSet::from(["alpha".to_string(), "beta".to_string()]);
     let use_flags: HashSet<String> = HashSet::from([
         "alpha".to_string(),
@@ -195,10 +161,8 @@ fn skipped_use_display_masks_to_the_valid_domain_and_groups_expands() {
         ],
         "real `emerge --info dev-libs/pkginfopkg` shape: USE=\"alpha -beta\" ELIBC=\"glibc\"",
     );
-    // Pre-EAPI-5 rule: ARCH is kept-then-discarded, hidden-expand
-    // flags are kept but their group is hidden, and per-package
-    // force/mask membership keeps a flag no IUSE declares (and wraps
-    // it). `other_vars["ARCH"]` is the profile ARCH scalar.
+    // Pre-EAPI-5: ARCH kept-then-discarded, hidden groups hidden, per-package
+    // force/mask keeps an undeclared flag (wrapped).
     let mut pre_config = portage_profile::Config {
         use_expand: HashSet::from(["CPU_FLAGS_X86".to_string()]),
         use_expand_hidden: HashSet::from(["CPU_FLAGS_X86".to_string()]),
@@ -232,9 +196,8 @@ fn skipped_use_display_masks_to_the_valid_domain_and_groups_expands() {
     );
 }
 
-/// Backlog #230: within-group order is enabled-first then byte-sorted
-/// (real's default `sort_separated`, plain string order), groups are
-/// `USE`-first then byte-sorted var names.
+/// Within-group order is enabled-first then byte-sorted; groups are USE-first
+/// then byte-sorted.
 #[test]
 fn skipped_use_display_orders_enabled_first_then_byte_sorted() {
     let config = portage_profile::Config {
@@ -266,15 +229,8 @@ fn skipped_use_display_orders_enabled_first_then_byte_sorted() {
     );
 }
 
-/// Backlog #230, fix round 1 (post-#220): end to end over the
-/// fixture tree -- the blk0 ebuilds are EAPI 8 now, so the
-/// `eapi_has_iuse_effective` gate selects the `IUSE_EFFECTIVE`
-/// domain and the profile globals mask out: a flagless blk0
-/// package renders `USE="" ELIBC="glibc"`, byte-identical to
-/// real's own parent lines in the fix-round-1 probe
-/// (`<dev-libs/blk0x-2 required by (dev-libs/blk0b-1:0/0::testrepo,
-/// ebuild scheduled for merge to '<root>') USE="" ELIBC="glibc"`).
-/// A missing version yields no display rather than a panic.
+/// End to end over the fixture tree: a flagless blk0 package renders `USE=""`
+/// with the implicit group; a missing version yields no display.
 #[test]
 fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
     let root = fixtures_root();
@@ -303,7 +259,7 @@ fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
             ("ELIBC".to_string(), "glibc".to_string()),
         ],
     );
-    // EAPI 8, no IUSE: only the implicit ELIBC group survives.
+    // EAPI 8, no IUSE: only the implicit group survives.
     assert_eq!(
         skipped_update_use_display_for(&repos, &config, "dev-libs", "mgxc", "2"),
         vec![
@@ -314,18 +270,8 @@ fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
     assert!(skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "9").is_empty());
 }
 
-/// Backlog #264: the slot-conflict `USE="…"` display carries real's
-/// USE_EXPAND groups -- real's `slot_collision.py` header / parent
-/// lines go through the same `pkg_use_display`
-/// (`_emerge/UseFlagDisplay.py:55`) as the skipped-update block, so
-/// the slot-conflict producers must render the same groups.
-/// Grounded in real `/usr/sbin/emerge` 3.0.82.2 `--pretend
-/// --ignore-default-opts --autounmask-backtrack=y dev-libs/aub0a
-/// dev-libs/aub0b dev-libs/aub0c` on the staged fixture, whose
-/// header lines read `USE="foo" ELIBC="glibc"` (aub0d-0) /
-/// `USE="-bar" ELIBC="glibc"` (aub0d-1, `bar` incrementally
-/// removed by `profiles/default/make.defaults`) and whose parent
-/// lines read `USE="" ELIBC="glibc"`.
+/// The slot-conflict display carries the same USE_EXPAND groups (Portage's
+/// `slot_collision.py` shares `pkg_use_display` with this block).
 #[test]
 fn slot_conflict_use_display_renders_use_expand_groups() {
     let root = fixtures_root();
@@ -354,7 +300,7 @@ fn slot_conflict_use_display_renders_use_expand_groups() {
             ("ELIBC".to_string(), "glibc".to_string()),
         ],
     );
-    // EAPI 8, no IUSE: the bare `USE=""` gains the implicit group.
+    // EAPI 8, no IUSE: the bare display gains the implicit group.
     assert_eq!(
         pkg_use_display_for(&repos, &config, "dev-libs", "aub0b", "0"),
         vec![

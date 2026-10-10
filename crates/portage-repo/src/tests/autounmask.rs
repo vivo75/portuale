@@ -2,16 +2,8 @@ use super::*;
 
 #[test]
 fn autounmask_suggests_a_keyword_only_when_enabled() {
-    // dev-libs/autounmaskkeywordpkg's own KEYWORDS is "~amd64", not
-    // accepted by the fixture profile's own ACCEPT_KEYWORDS, and it
-    // has no package.accept_keywords entry of its own -- masked by
-    // KEYWORDS alone (package.mask/license/properties/restrict all
-    // pass), the exact "keyword_masked_only" shape --autounmask's
-    // own v1 suggestion targets. With autounmask_suggest_keywords
-    // off (the real, correct default -- see resolve_pretend_graph's
-    // own doc comment for the full on/off default-resolution logic
-    // this mirrors), no suggestion is appended, matching this
-    // portuale's own pre-existing behavior exactly.
+    // `~amd64`-only, masked by KEYWORDS alone: the keyword suggestion shape. With
+    // suggestion off (Portage's default) nothing is appended.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -33,9 +25,7 @@ fn autounmask_suggests_a_keyword_only_when_enabled() {
     )
     .resolve()
     .expect_err("no visible candidate at all");
-    // Keyword-masked-only -> real `_show_unsatisfied_dep`'s "All
-    // ebuilds … have been masked" block (`~amd64 keyword`), not the
-    // bare "there are no ebuilds to satisfy" line.
+    // Keyword-masked-only renders the "have been masked" block, not the bare miss.
     assert_eq!(
         err_without_suggestion.to_string(),
         "\n!!! All ebuilds that could satisfy \"dev-libs/autounmaskkeywordpkg\" \
@@ -46,12 +36,8 @@ fn autounmask_suggests_a_keyword_only_when_enabled() {
          man page or refer to the Gentoo Handbook.\n"
     );
 
-    // With `--autounmask` explicit, the same keyword-masked-only
-    // target now RESOLVES (real portage applies the implicit
-    // `=cpv ~arch` change and the graph succeeds) rather than being
-    // fatal -- it prints as a normal `New` entry and the change is
-    // recorded for the `The following keyword changes are necessary
-    // to proceed:` block.
+    // With `--autounmask` the target resolves as `New` and the change is recorded
+    // for the keyword-changes block (Portage applies the implicit `=cpv ~arch`).
     let resolved = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");
     let entry = &resolved.entries[0];
     assert!(matches!(entry.outcome, PretendOutcome::New { .. }));
@@ -66,15 +52,8 @@ fn autounmask_suggests_a_keyword_only_when_enabled() {
 
 #[test]
 fn autounmask_use_suggests_a_flag_flip_only_when_enabled() {
-    // dev-libs/useflagpkg's own "foo" flag is enabled globally by
-    // the fixture profile's own make.conf (see use_dep_enforcement's
-    // own tests above -- "-foo" is genuinely unsatisfiable against
-    // it). "dev-libs/useflagpkg[-foo]" is masked by this one USE-dep
-    // alone (package.mask/license/KEYWORDS all pass), the exact
-    // "use_masked_only" shape --autounmask-use's own v1 suggestion
-    // targets. With autounmask_suggest_use off (the real default),
-    // no suggestion is appended; the abort is real's own USE block
-    // (backlog #265(b)), not the bare miss.
+    // Masked by one USE-dep alone: the use suggestion shape. With suggestion off
+    // (Portage's default) the abort is Portage's USE block, not the bare miss.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -104,9 +83,7 @@ fn autounmask_use_suggests_a_flag_flip_only_when_enabled() {
          - dev-libs/useflagpkg-1.0::testrepo (Change USE: -foo)"
     );
 
-    // With `--autounmask-use` (on by default), the same
-    // `use_masked_only` atom now RESOLVES via the implicit
-    // `package.use` flip rather than being fatal.
+    // With `--autounmask-use` (on by default) the atom resolves via the flip.
     let resolved = graph_result_autounmask("dev-libs/useflagpkg[-foo]");
     let entry = resolved
         .entries
@@ -124,10 +101,8 @@ fn autounmask_use_suggests_a_flag_flip_only_when_enabled() {
 
 #[test]
 fn fixture_dependency_use_dep_mismatch_resolves_via_the_flip_once_autounmask_use_is_on() {
-    // `dev-libs/usedeprejectedpkg` RDEPENDs `dev-libs/useflagpkg[-foo]`.
-    // With `--autounmask-use` on the dependency RESOLVES (was
-    // `NoVisibleCandidate` + a `use_suggestion` before autounmask-use
-    // *resolution* shipped).
+    // With `--autounmask-use` on the dependency resolves (was `NoVisibleCandidate`
+    // with only a `use_suggestion` before flip resolution shipped).
     let result = graph_result_autounmask("dev-libs/usedeprejectedpkg");
     let dep = result
         .entries
@@ -147,10 +122,7 @@ fn fixture_dependency_use_dep_mismatch_resolves_via_the_flip_once_autounmask_use
 
 #[test]
 fn autounmask_license_resolves_a_eula_masked_dependency() {
-    // `dev-libs/licensemaskedconsumer` RDEPENDs the EULA-masked
-    // `dev-libs/licensemaskedpkg` (LICENSE="SomeEula", no
-    // package.license unmask). With `--autounmask-license` on the
-    // dependency resolves and the missing license is recorded.
+    // EULA-masked dep: resolves with `--autounmask-license`, license recorded.
     let result = graph_result_autounmask("dev-libs/licensemaskedconsumer");
     let dep = result
         .entries
@@ -170,8 +142,7 @@ fn autounmask_license_resolves_a_eula_masked_dependency() {
         ]
     );
 
-    // Off by default: `graph_result_real` (no autounmask) leaves the
-    // dependency `NoVisibleCandidate` and records nothing.
+    // Off by default: the dep stays `NoVisibleCandidate`, nothing recorded.
     let plain = graph_result_real("dev-libs/licensemaskedconsumer");
     assert!(plain.autounmask_license_changes.is_empty());
     assert!(plain.entries.iter().any(|e| e.package == "licensemaskedpkg"
@@ -180,10 +151,7 @@ fn autounmask_license_resolves_a_eula_masked_dependency() {
 
 #[test]
 fn autounmask_keep_masks_n_unmasks_a_package_mask() {
-    // `dev-libs/maskmaskedconsumer` RDEPENDs the package.mask'd
-    // `dev-libs/hardmaskedpkg`. `graph_result_autounmask` has
-    // `autounmask_suggest_masks` on, so the dependency resolves and
-    // the `=<cpv>` mask change is recorded (empty token).
+    // package.mask'd dep: resolves with masks on, `=<cpv>` change recorded.
     let result = graph_result_autounmask("dev-libs/maskmaskedconsumer");
     let dep = result
         .entries
@@ -196,7 +164,7 @@ fn autounmask_keep_masks_n_unmasks_a_package_mask() {
     assert_eq!(change.atom, "=dev-libs/hardmaskedpkg-1.0");
     assert_eq!(change.token, "");
 
-    // Off by default: no autounmask -> dep stays NoVisibleCandidate.
+    // Off by default: the dep stays `NoVisibleCandidate`.
     let plain = graph_result_real("dev-libs/maskmaskedconsumer");
     assert!(plain.autounmask_mask_changes.is_empty());
     assert!(
@@ -207,14 +175,12 @@ fn autounmask_keep_masks_n_unmasks_a_package_mask() {
 
 #[test]
 fn abort_outcome_membership_and_order() {
-    // Slice 3 pins (docs/history/abort-path-spec.md §6, live captures in
-    // fixtures/abort-captures/): the outcome is produced on the
-    // settled graph while `entries` stays the full graph (the
-    // renderer switches to `partial` in Slice 4).
+    // Slice 3 pins, expected value from Portage (spec §6, live captures in
+    // fixtures/abort-captures/): the outcome is produced on the settled graph
+    // while `entries` stays the full graph.
     //
-    // Masked-only dep (§4a): empty partial, the report's display
-    // atom, the top as the first merge-bound requirer -- and the
-    // `-last` sibling identical (declared position is unobservable).
+    // Masked-only dep (§4a): empty partial, the report's display atom, the top
+    // as the first merge-bound requirer.
     for top in ["dev-libs/abort-masked-mid", "dev-libs/abort-masked-last"] {
         let result = graph_result_real(top);
         assert_eq!(result.entries.len(), 4, "{top}: full graph kept");
@@ -245,13 +211,9 @@ fn abort_outcome_membership_and_order() {
             other => panic!("{top}: expected UnsatisfiedAtom, got {other:?}"),
         }
     }
-    // Unserializable cycle (§4c): the `_serialize_tasks` stuck
-    // remainder -- top + both arms, both leaves drained out -- in
-    // leaf-drain order, `partial` one entry per member in that order.
-    // The autounmask+cycle fixtures (§4d) are the same shape: the
-    // autounmask changes only stop real's backtracking at try 0.
-    // (The `abort-au-*` tops resolve with `--autounmask-use` on, the
-    // CLI default; `graph_result_real` runs with autounmask off.)
+    // Unserializable cycle (§4c): the stuck remainder in leaf-drain order, one
+    // partial entry per member. The autounmask+cycle fixtures (§4d) match, with
+    // the changes only stopping backtracking at try 0.
     for (top, result) in [
         (
             "dev-libs/abort-cycle-mid",
@@ -308,9 +270,8 @@ fn abort_outcome_membership_and_order() {
             "{top}: the autounmask change is still reported alongside the cycle"
         );
     }
-    // With `--autounmask-use=n` the `[auflag]` dep is unsatisfiable
-    // and wins over the cycle (spec §4e third bullet: real prints
-    // the "no ebuilds built with USE flags" block, no list).
+    // With `--autounmask-use=n` the unsatisfiable dep wins over the cycle (spec
+    // §4e: Portage prints the USE-flags block, no list).
     assert!(matches!(
         graph_result_autounmask_use_n("dev-libs/abort-au-cycle").outcome,
         ResolveOutcome::Aborted {
@@ -318,9 +279,7 @@ fn abort_outcome_membership_and_order() {
             ..
         }
     ));
-    // Precedence: a walk-time failure beats the serialize-time one
-    // in the same graph (oracle `abort-masked-cycle`: no list, no
-    // circular block) -- even though the cycle is still detected.
+    // Walk-time failure beats the serialize-time one in the same graph.
     let result = graph_result_real("dev-libs/abort-masked-cycle");
     assert!(!result.circular_deps.is_empty());
     assert!(matches!(
@@ -330,8 +289,7 @@ fn abort_outcome_membership_and_order() {
             ..
         }
     ));
-    // Autounmask changes alone never abort (real `_success_without_
-    // autounmask` shows the full list); neither do ordinary resolves.
+    // Changes alone never abort (Portage shows the full list).
     for top in ["dev-libs/abort-au-plain", "dev-libs/aucasctop"] {
         assert_eq!(
             graph_result_autounmask(top).outcome,
@@ -350,15 +308,8 @@ fn abort_outcome_membership_and_order() {
 
 #[test]
 fn autounmask_backtrack_disabled_gate() {
-    // Backlog #217, both branches of the "terminated early" gate
-    // (`GraphResult::autounmask_backtrack_disabled`, real
-    // `_autounmask_backtrack_disabled`, `depgraph.py:11752`).
-    // Fixture ground truth is live real, captured in
-    // `fixtures/abort-captures/`: `abort-au-plain`'s USE block has
-    // NO notice (lone change -- `_success_without_autounmask`),
-    // `abort-au-cycle`'s and `aucasctop`'s blocks DO (a cycle /
-    // a restart-worthy flip on the already-graphed `aucascmid`
-    // coincide).
+    // Both branches of the "terminated early" gate, expected value from Portage
+    // (live captures in fixtures/abort-captures/).
     let plain = graph_result_autounmask("dev-libs/abort-au-plain");
     assert!(
         !plain.autounmask_use_changes.is_empty(),
@@ -372,8 +323,8 @@ fn autounmask_backtrack_disabled_gate() {
         !plain.autounmask_backtrack_disabled(false),
         "plain: lone change prints no notice"
     );
-    // The cycle shape keeps the notice via the outcome arm, and the
-    // restart-wanted shape via the accumulator arm.
+    // Cycle keeps the notice via the outcome arm, restart-wanted via the
+    // accumulator arm.
     let cycle = graph_result_autounmask("dev-libs/abort-au-cycle");
     assert!(
         !cycle.autounmask_use_changes.is_empty(),
@@ -392,10 +343,8 @@ fn autounmask_backtrack_disabled_gate() {
         casc.autounmask_backtrack_disabled(false),
         "aucasctop: restart-wanted, notice stays"
     );
-    // Post-failure parent collects keep the notice too (real
-    // `_apply_parent_use_changes`, `depgraph.py:5820`): the aup0b
-    // cell records `-foo` on the failed dep and fails with the
-    // notice.
+    // Post-failure parent collects keep the notice too (Portage applies parent
+    // changes before re-probing).
     let aup = graph_result_autounmask("=dev-libs/aup0b-1");
     assert_eq!(
         aup.autounmask_use_changes.len(),
@@ -410,11 +359,8 @@ fn autounmask_backtrack_disabled_gate() {
         aup.autounmask_backtrack_disabled(false),
         "aup0b: notice stays"
     );
-    // `dev-libs/parentflipeqpkg`: the masked child means no flip is
-    // recorded at all (real's untouchable-child `continue`,
-    // `depgraph.py:6732-6736`), so there is no change block and no
-    // notice -- the bare miss (round-2 correction of the old
-    // resolve+rows expectation, which was never live-probed).
+    // Masked child: no flip recorded at all (Portage skips the parent probe), so
+    // no change block and no notice -- the bare miss.
     let flip = graph_result_autounmask("dev-libs/parentflipeqpkg");
     assert!(
         flip.autounmask_use_changes.is_empty(),
@@ -428,17 +374,8 @@ fn autounmask_backtrack_disabled_gate() {
         !flip.autounmask_backtrack_disabled(false),
         "parentflipeqpkg: bare miss prints no notice"
     );
-    // `dev-libs/pfgraphparent`: same masked-child shape as
-    // parentflipeqpkg (`use.mask pf`), so the same untouchable-child
-    // `continue` (`depgraph.py:6732-6736`) applies -- live real
-    // (`localhost/test-portuale:latest`, staged fixtures, g195c
-    // probe `LLM/evidence/2026-09-28-g195/g195c-real-probe.txt`)
-    // reports the bare miss under default AND `--autounmask-backtrack=y`:
-    // `emerge: there are no ebuilds to satisfy
-    // "dev-libs/pfgraphchild[pf=]"`, no rows, no block, rc 1.
-    // (Corrected under coordinator ruling B20, option (a); the old
-    // flip+notice assertions below were a source-reading inference,
-    // never a live measurement.)
+    // Same masked-child shape (`use.mask pf`): Portage reports the bare miss under
+    // default and `--autounmask-backtrack=y` alike (live probe, rc 1, no rows).
     let result = graph_result_autounmask("dev-libs/pfgraphparent");
     assert!(
         result.autounmask_use_changes.is_empty(),
@@ -452,10 +389,8 @@ fn autounmask_backtrack_disabled_gate() {
         !result.autounmask_backtrack_disabled(false),
         "pfgraphparent: bare miss prints no notice"
     );
-    // The config conjuncts suppress unconditionally, even where the
-    // notice would otherwise print: `--autounmask-backtrack=y`
-    // opts back in, and `--backtrack=0` leaves real's
-    // `_allow_backtracking` False so the flag is never set.
+    // Config conjuncts suppress unconditionally: `--autounmask-backtrack=y` opts
+    // back in, and `--backtrack=0` never sets the flag.
     assert!(
         !graph_result_autounmask_backtrack("dev-libs/abort-au-cycle")
             .autounmask_backtrack_disabled(true),
@@ -476,18 +411,9 @@ fn autounmask_backtrack_disabled_gate() {
 
 #[test]
 fn autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf() {
-    // Backlog #218: real's DFS applies `aucasclate`'s `[cascade]`
-    // flip to the still-unwalked `aucascmid` before walking its deps
-    // (`_add_dep` only pushes onto `_dep_stack`,
-    // `lib/_emerge/depgraph.py:3254-3271`; the flip itself is
-    // `_pkg_use_enabled(pkg, target_use)`, `:7669`), so
-    // `aucascleaf` joins the graph in the same attempt
-    // (live-captured in `fixtures/abort-captures/
-    // dev-libs_aucasctop.pretend-debug.stdout`, one continuous walk).
-    // Portuale's already-resolved-slot re-check re-expands the
-    // flipped package's newly-gated deps in-walk
-    // (`expand_resolved_slot_with_flipped_use`), so the default
-    // (no-backtrack) graph carries the full 4-package list.
+    // Portage's DFS applies the late flip before walking the mid package's deps,
+    // so the leaf joins the graph in the same attempt; portuale re-expands the
+    // flipped package's newly-gated deps in-walk instead.
     let result = graph_result_autounmask("dev-libs/aucasctop");
     let mut pkgs: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
     pkgs.sort_unstable();
@@ -496,9 +422,7 @@ fn autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf() {
         vec!["aucasclate", "aucascleaf", "aucascmid", "aucasctop"],
         "the in-graph flip lands before the flipped node's walk"
     );
-    // The flipped package carries a real merge-order edge to the
-    // leaf (not a stitched-on entry): its deps were re-flattened
-    // under the flipped USE.
+    // Genuine merge-order edge to the leaf: deps re-flattened under the flipped USE.
     let mid = result
         .entries
         .iter()
@@ -508,20 +432,13 @@ fn autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf() {
         mid.deps.iter().any(|d| d.package == "aucascleaf"),
         "aucascmid's re-expanded deps name aucascleaf"
     );
-    // The change block still records the flip (the #217 notice gate
-    // reads the same accumulator).
+    // The change block still records the flip.
     assert!(
         !result.autounmask_use_changes.is_empty(),
         "the [cascade] flip is still reported"
     );
-    // L0 20260928T063310Z: the delta never records a phantom owner.
-    // `aucascleaf` queues only through the flipped package's
-    // re-expansion (a genuinely new slot), and no text-new delta atom
-    // re-names a settled slot here -- so every `required_by` set is
-    // exactly the forward-walk owners, with no flipped-package
-    // residue for `build_digraph`'s fallback to stitch a phantom
-    // edge from (real carries no such edge: the flip lands via the
-    // later atom, never via a re-walk of the flipped package).
+    // No phantom owners: every `required_by` set is exactly the forward-walk
+    // owners (Portage carries no flip-landing edge here either).
     for (pkg, want) in [
         ("aucasctop", vec![]),
         (
@@ -549,9 +466,7 @@ fn autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf() {
         got.sort_unstable();
         assert_eq!(got, want, "{pkg} has exactly its forward-walk owners");
     }
-    // The fresh-flip shape is untouched: `aucasclate` alone resolves
-    // `aucascmid[cascade]` on first encounter, leaf included, with no
-    // delta pass involved.
+    // First-encounter flip still pulls the leaf with no delta pass involved.
     let late_result = graph_result_autounmask("dev-libs/aucasclate");
     let mut late_pkgs: Vec<&str> = late_result
         .entries
@@ -564,8 +479,7 @@ fn autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf() {
         vec!["aucasclate", "aucascleaf", "aucascmid"],
         "first-encounter flip still pulls the leaf"
     );
-    // `--autounmask-backtrack=y` (whole-walk re-drive) agrees on the
-    // graph -- the delta only anticipates what the re-drive finds.
+    // Whole-walk re-drive agrees with the in-walk delta.
     let bt_result = graph_result_autounmask_backtrack("dev-libs/aucasctop");
     let mut bt_pkgs: Vec<&str> = bt_result
         .entries
@@ -579,8 +493,7 @@ fn autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf() {
 #[test]
 fn autounmask_keywords_records_the_dep_chain_for_a_keyword_masked_dependency() {
     let result = graph_result_autounmask("dev-libs/autounmaskdepconsumer");
-    // Both the consumer and the (now un-keyword-masked) dependency
-    // resolve as New.
+    // Consumer and unmasked dependency both resolve as New.
     let dep = result
         .entries
         .iter()
@@ -604,15 +517,9 @@ fn autounmask_keywords_records_the_dep_chain_for_a_keyword_masked_dependency() {
 
 #[test]
 fn autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_version() {
-    // `dev-libs/kwbacktop` RDEPENDs `dev-libs/kwbackmid` (bare -> stable
-    // `1.0` wins the slot first) AND `>=dev-libs/kwbackmid-2.0` (only
-    // `2.0` exists there, and it is `~amd64`). Slice 6: the slot
-    // conflict folds both atoms into `slot_constraints`, and on the
-    // retry `resolve_pretend`'s `*_masked_only` fallback fires because
-    // no *is_visible* candidate satisfies the folded `>=2.0` -- so
-    // `kwbackmid-2.0`'s keyword is autounmasked and the slot settles on
-    // `2.0`. Real `_select_pkg` weighing every atom pulling the slot +
-    // `_autounmask_levels`.
+    // The folded `>=2.0` pulls a masked-only candidate, so its keyword is
+    // autounmasked and the slot settles on `2.0` (Portage weighs every atom
+    // pulling the slot).
     let result = graph_result_autounmask("dev-libs/kwbacktop");
     let mid: Vec<&GraphEntry> = result
         .entries
@@ -636,14 +543,8 @@ fn autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_version() 
 
 #[test]
 fn autounmask_levels_unmask_two_categories_at_once_on_the_same_version() {
-    // `dev-libs/multimaskdep-2.0` is `~amd64` keyword-masked AND
-    // `@EULA` license-masked; `multimaskdep-1.0` is only keyword-masked.
-    // Real `_autounmask_levels`: level 1 (+license) yields nothing (both
-    // still keyword-blocked); level 2 (+~arch +license) unmasks BOTH
-    // categories, and re-scanning every version picks the higher `2.0`.
-    // Before the per-level re-scan, portuale's flat `keyword_masked_only`
-    // fallback excluded `2.0` (it has a license problem too) and settled
-    // on `1.0` with only a keyword change.
+    // Level 1 (+license) yields nothing; level 2 (+arch +license) unmasks both
+    // and the re-scan picks the higher `2.0` (Portage `_autounmask_levels`).
     let result = graph_result_autounmask("dev-libs/multimaskconsumer");
     let dep = result
         .entries
@@ -672,10 +573,8 @@ fn autounmask_levels_unmask_two_categories_at_once_on_the_same_version() {
 
 #[test]
 fn autounmask_keywords_top_level_dep_chain_is_the_argument_line() {
-    // Backlog #248: the change sits on the argument package itself,
-    // and real `_get_dep_chain` never prints the start node -- just
-    // the `(argument)` line (fresh host 3.0.82.2 staged-fixture
-    // probe 2026-09-29).
+    // The change sits on the argument package: just the `(argument)` line
+    // (Portage never prints the start node; live probe 2026-09-29).
     let result = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");
     assert_eq!(result.autounmask_keyword_changes.len(), 1);
     assert_eq!(
@@ -686,15 +585,9 @@ fn autounmask_keywords_top_level_dep_chain_is_the_argument_line() {
 
 #[test]
 fn autounmask_use_resolves_a_use_dep_mismatch_and_applies_the_flip_to_the_display() {
-    // `dev-libs/useflagpkg[-foo]` -- `foo` is default-on, the atom
-    // wants it off. `--autounmask-use` (on in `graph_result_
-    // autounmask`) applies the flip so the entry resolves as `New`,
-    // the `-pv` USE display shows `foo` disabled, and the change is
-    // recorded with the `>=<cpv>` atom form (real `check_if_latest`
-    // for USE, bug #536392). Backlog #248: the dep chain is just the
-    // `(argument)` line -- real `_get_dep_chain` never prints the
-    // start node (fresh host 3.0.82.2 staged-fixture probe
-    // 2026-09-29).
+    // The flip resolves the entry as `New` with `foo` disabled, recorded in the
+    // `>=<cpv>` atom form; the dep chain is just the `(argument)` line (live
+    // probe 2026-09-29).
     let result = graph_result_autounmask("dev-libs/useflagpkg[-foo]");
     let entry = result
         .entries
@@ -724,13 +617,8 @@ fn autounmask_use_resolves_a_use_dep_mismatch_and_applies_the_flip_to_the_displa
 
 #[test]
 fn autounmask_use_flip_is_not_blocked_by_a_default_satisfied_missing_flag() {
-    // `dev-libs/useflagpkg[missingflag,nonexistentflag(+)]` -- the atom
-    // needs `missingflag` on (it's in IUSE, default-off: a real flip)
-    // AND `nonexistentflag(+)` (not in IUSE, its `(+)` default already
-    // stands in for "enabled" -- nothing to flip). `suggested_use_flip`
-    // must skip the default-satisfied missing flag rather than bail on
-    // the whole atom, so the `missingflag` flip is still suggested,
-    // applied, and recorded.
+    // The `(+)` default already stands in for "enabled", so only the
+    // genuinely-missing flag is suggested, applied, and recorded.
     let result = graph_result_autounmask("dev-libs/useflagpkg[missingflag,nonexistentflag(+)]");
     let entry = result
         .entries
@@ -766,18 +654,8 @@ fn autounmask_use_dependency_records_the_two_line_dep_chain() {
 
 #[test]
 fn autounmask_use_parent_flip_fails_like_portage_when_the_child_flag_is_masked() {
-    // `dev-libs/parentflipeqpkg` (IUSE +feat) RDEPENDs
-    // `dev-libs/parentflipchildpkg[feat=]`; the child's own `feat` is
-    // `use.mask`'d. Live real (`localhost/test-portuale:latest`,
-    // staged fixtures, `emerge --pretend dev-libs/parentflipeqpkg`,
-    // rc 1) reports the BARE miss -- no rows, no USE block:
-    // `emerge: there are no ebuilds to satisfy
-    // "dev-libs/parentflipchildpkg[feat=]"`. Real's untouchable-child
-    // `continue` (`lib/_emerge/depgraph.py:6732-6736`) skips the
-    // parent probe when the child's needed flag is masked/forced, so
-    // no parent flip is ever recorded. (The old resolve+rows+block
-    // expectation was verified against the since-removed second
-    // Python copy, never live real.)
+    // Masked child flag: Portage reports the bare miss with no rows (live probe,
+    // rc 1); the parent keeps its own default.
     let result = graph_result_autounmask("dev-libs/parentflipeqpkg");
     assert!(
         matches!(result.outcome, ResolveOutcome::Aborted { .. }),
@@ -821,19 +699,9 @@ fn autounmask_use_parent_flip_fails_like_portage_when_the_child_flag_is_masked()
 
 #[test]
 fn autounmask_use_parent_flip_records_minus_foo_and_fails_for_aup0b() {
-    // Upstream `test_autounmask_parent.py` (`aup0b`): `dev-libs/aup0b`
-    // (IUSE `+bar +foo`) DEPENDs `dev-libs/aup0d[foo(-)?,bar(-)?]`;
-    // the fixture profile leaves the parent at `{foo}`, so only the
-    // `foo(-)?` conditional is parent-active. Live real
-    // (`localhost/test-portuale:latest`, staged fixtures,
-    // `emerge --pretend --autounmask =dev-libs/aup0b-1`, rc 1)
-    // records `-foo` on the parent and FAILS: stdout is the merge
-    // header with no rows, stderr is the `-foo` USE block plus the
-    // "backtracking has terminated early" notice. Real
-    // `_apply_parent_use_changes` (`lib/_emerge/depgraph.py:5820`)
-    // re-probes with `violated_conditionals` (`:6779-6798`), which
-    // sees only the parent-active `foo`, and the
-    // `_success_without_autounmask` tail (`:5793`) returns False.
+    // Upstream parent-probe shape: only the parent-active conditional counts, so
+    // `-foo` is recorded and the resolve still fails with the notice (live
+    // probe, rc 1).
     let result = graph_result_autounmask("=dev-libs/aup0b-1");
     assert!(
         matches!(result.outcome, ResolveOutcome::Aborted { .. }),
@@ -872,41 +740,9 @@ fn autounmask_use_parent_flip_records_minus_foo_and_fails_for_aup0b() {
 
 #[test]
 fn autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_portage() {
-    // `dev-libs/pfgraphparent` (IUSE +pf) RDEPENDs
-    // `dev-libs/pfgraphchild[pf=]` AND `pf? ( dev-libs/pfgraphextra )`.
-    // The child's `pf` is `use.mask`'d. Live real
-    // (`localhost/test-portuale:latest`, staged fixtures,
-    // `emerge --pretend dev-libs/pfgraphparent`, rc 1) reports the
-    // BARE miss -- no rows, no USE block:
-    //
-    //     These are the packages that would be merged, in order:
-    //
-    //     Calculating dependencies  ... done!
-    //     Dependency resolution took 0.35 s (backtrack: 0/20).
-    //
-    //
-    //     emerge: there are no ebuilds to satisfy "dev-libs/pfgraphchild[pf=]" for /tmp/fxstage/fixtures/.
-    //     (dependency required by "dev-libs/pfgraphparent-1.0::testrepo" [ebuild])
-    //     (dependency required by "dev-libs/pfgraphparent" [argument])
-    //     rc=1
-    //
-    // (identical text with `--autounmask-backtrack=y` and with
-    // `--autounmask-use=n`; Global-Updates/news/FEATURES noise cut;
-    // portuale omits real's staging `for <root>.` suffix, the
-    // long-standing `fixture-miss-message-unsuffixed` class.)
-    // Real's untouchable-child `continue`
-    // (`lib/_emerge/depgraph.py:6732-6736`) skips the parent probe
-    // when the child's needed flag is masked/forced, so no parent
-    // flip is ever recorded and there is nothing to re-resolve --
-    // neither the default single-dep re-resolve (which kept
-    // `pf? ( pfgraphextra )` in the list) nor the
-    // `--autounmask-backtrack=y` whole-graph re-resolve (which
-    // dropped it) ever happens. (The old resolve+rows+block
-    // expectation was a source-reading inference, never a live
-    // measurement. Renamed from
-    // `autounmask_use_parent_flip_re_resolves_the_whole_graph`,
-    // which stated the opposite of what real does -- coordinator
-    // ruling B20, option (a).)
+    // Masked child flag with a second conditional dep: Portage still reports the
+    // bare miss under every flag combination (live probe, rc 1); nothing ever
+    // re-resolves, and the parent keeps its own default.
     for result in [
         graph_result_autounmask("dev-libs/pfgraphparent"),
         graph_result_autounmask_backtrack("dev-libs/pfgraphparent"),
@@ -950,20 +786,14 @@ fn autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_portage() {
         );
         assert!(result.use_unsat_deps.is_empty());
         assert_eq!(result.plain_miss_deps.len(), 1);
-        // `pfgraphextra` is still walked (`pf? (...)` stays active
-        // with the parent's +pf unflipped) but the `Aborted` outcome
-        // prints no rows -- real's merge list is likewise empty.
+        // Still walked but the aborted outcome prints no rows.
     }
 }
 
 #[test]
 fn existing_slot_use_change_chain_starts_at_the_requester() {
-    // Backlog #244: `aubreaktop` pulls `aubreaksub` plain first, then
-    // `aubreakwant` needs `aubreaksub[brk]` on the already-resolved
-    // package. Real's change chain starts at the requester whose atom
-    // needed the change (`aubreakwant`), not at `aubreaktop`, which
-    // pulled the package in first (real 3.0.82.2,
-    // LLM/evidence/2026-09-28-244/fixture-oracle-2/real/dev-libs_aubreaktop.txt).
+    // The change chain starts at the requester whose atom needed the change, not
+    // at the package that pulled it in first (live probe 2026-09-28).
     let result = graph_result_autounmask("dev-libs/aubreaktop");
     let change = result
         .autounmask_use_changes
@@ -982,21 +812,9 @@ fn existing_slot_use_change_chain_starts_at_the_requester() {
 
 #[test]
 fn autounmask_use_breakage_abandons_autounmask_and_re_resolves_clean() {
-    // `dev-libs/aubreaktop` RDEPENDs `aubreaksub` (plain, resolves
-    // `brk` off first), then `aubreakwant` (needs `aubreaksub[brk]`)
-    // and `aubreakunwant` (needs `aubreaksub[-brk]`). Autounmask folds
-    // `brk` on for `aubreakwant`; the next pass's `aubreakunwant[-brk]`
-    // asks for it back off -- a flag wanted both ways. Real
-    // `_autounmask_breakage` (depgraph.py:12262): drop every autounmask
-    // change and re-resolve one final pass with suggestion off. So
-    // nothing is recorded, `aubreaksub` settles at its default `brk`
-    // off, and `aubreakwant`'s now-unsatisfiable `[brk]` shows up as an
-    // ordinary (non-fatal) dependency `NoVisibleCandidate` -- exactly
-    // what `--autounmask-use=n` would have produced from the start.
-    // Needs `--autounmask-backtrack=y`: the contradiction is only
-    // detected across the loop's re-drives (the default collect-only
-    // path never gets a second pass to notice the flag wanted both
-    // ways).
+    // A flag wanted both ways: Portage drops every change and re-resolves clean,
+    // so the contradiction surfaces as an ordinary `NoVisibleCandidate`. Only
+    // detectable across backtrack re-drives.
     let result = graph_result_autounmask_backtrack("dev-libs/aubreaktop");
     assert!(
         result.autounmask_use_changes.is_empty(),
@@ -1023,9 +841,8 @@ fn autounmask_use_breakage_abandons_autounmask_and_re_resolves_clean() {
     );
 }
 
-/// Backlog #205 R4, negative legs: keyword/license/mask changes keep
-/// `trigger: None` (real renders those without the unsatisfied
-/// filter), on the same fixture shapes their own tests pin.
+/// Keyword/license/mask changes keep `trigger: None` (Portage renders those
+/// without the unsatisfied filter).
 #[test]
 fn non_use_changes_keep_no_trigger() {
     let keyword = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");

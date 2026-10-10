@@ -1,16 +1,7 @@
 use super::*;
 
-/// Backlog #253 (half 1): the prune trigger chains the conflict
-/// half of real's missed updates (`_get_missed_updates`,
-/// `depgraph.py:1529-1565`, the `:1533-1536` chain). At this layer
-/// the conflict half rides `pass.skipped_updates` (the direct
-/// solve's removal rows, filed before the trigger runs), while the
-/// mask half comes out of [`backtrack_missed_updates`] -- so a
-/// conflict-source-only pass (non-empty replace set, no live
-/// conflicts, mask half empty, direct rows present) must take the
-/// prune restart exactly like a mask-half one. RED before the
-/// predicate chains both sources (the pass settles after the
-/// replace-growth restart instead).
+/// The prune trigger also fires on the conflict half alone: direct-solve removal
+/// rows with a non-empty replace set restart like a mask-half pass.
 #[test]
 fn slot_operator_prune_rebuilds_fires_on_conflict_source_only() {
     let dir = slotundo_temp_dir("253-prune-conflict");
@@ -52,8 +43,7 @@ fn slot_operator_prune_rebuilds_fires_on_conflict_source_only() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #253 (half 1, no-over-fire guard): with neither half
-/// present the trigger stays quiet -- a replace set alone settles.
+/// With neither half present the trigger stays quiet.
 #[test]
 fn slot_operator_prune_rebuilds_stays_quiet_without_missed_updates() {
     let dir = slotundo_temp_dir("253-prune-quiet");
@@ -76,8 +66,7 @@ fn slot_operator_prune_rebuilds_stays_quiet_without_missed_updates() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S4: the use-overlay fold appends new flips and
-/// records while an exact `(atom, token)` duplicate stays single.
+/// The use-overlay fold appends new flips without duplicating pairs.
 #[test]
 fn collect_feedback_folds_the_use_overlay_without_duplicating() {
     let dir = slotundo_temp_dir("161-cf-over");
@@ -103,8 +92,6 @@ fn collect_feedback_folds_the_use_overlay_without_duplicating() {
         },
     ];
     let params = BacktrackParams::default();
-    // One record already logged: the same `(atom, token)` must not
-    // append twice, while a new token for the same atom must.
     let mut grown = params.clone();
     grown.autounmask_use_change_records.push(AutounmaskChange {
         atom: "=dev-libs/overpkg-1.0".to_string(),
@@ -135,9 +122,7 @@ fn collect_feedback_folds_the_use_overlay_without_duplicating() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S4: two want-atoms a single version satisfies become
-/// that package's retry constraints (real's solvable-conflict
-/// re-resolve).
+/// Two want-atoms one version satisfies become retry constraints.
 #[test]
 fn collect_feedback_solves_a_two_want_conflict_into_constraints() {
     let dir = slotundo_temp_dir("161-cf-solv");
@@ -172,9 +157,7 @@ fn collect_feedback_solves_a_two_want_conflict_into_constraints() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S4: a lone want-atom is not a solvable conflict --
-/// the guard needs two -- so the pass falls through to the mask
-/// trial instead of constraining a retry.
+/// A lone want-atom falls through to the mask trial.
 #[test]
 fn collect_feedback_keeps_a_single_want_out_of_constraints() {
     let dir = slotundo_temp_dir("161-cf-single");
@@ -201,8 +184,7 @@ fn collect_feedback_keeps_a_single_want_out_of_constraints() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S4: retry constraints append only the missing wants
-/// -- an already-logged atom is not pushed twice.
+/// Retry constraints append only missing wants.
 #[test]
 fn collect_feedback_does_not_duplicate_logged_constraints() {
     let dir = slotundo_temp_dir("161-cf-dup");
@@ -233,9 +215,7 @@ fn collect_feedback_does_not_duplicate_logged_constraints() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S4: with the search present but unsatisfiable, the
-/// slot-operator trigger stays off and the pass records an empty
-/// rebuild list instead of scanning.
+/// A stuck pass records an empty rebuild list instead of scanning.
 #[test]
 fn collect_feedback_reports_no_rebuilds_when_the_pass_is_stuck() {
     let dir = slotundo_temp_dir("161-cf-nvc");
@@ -245,9 +225,7 @@ fn collect_feedback_reports_no_rebuilds_when_the_pass_is_stuck() {
     fs::write(d.join("SLOT"), "0\n").unwrap();
     fs::write(d.join("RDEPEND"), "dev-libs/bar:2/2=\n").unwrap();
     let config = test_config();
-    // Reachable so a retried scan would find the stale consumer, but
-    // excluded so the reverse-dependency scan itself stays quiet --
-    // the legs isolate the slot-operator gate below.
+    // Excluded so the scan stays quiet; isolates the gate below.
     let reachable: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "stale".to_string())]);
     let excluded = vec!["dev-libs/stale".to_string()];
@@ -282,10 +260,7 @@ fn collect_feedback_reports_no_rebuilds_when_the_pass_is_stuck() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S4: an enforced reverse pin is retained once --
-/// a reachable consumer's runtime pin on a version the tree still
-/// carries is enforced (holdable), not dropped. Append leg (fresh
-/// params) and dedup leg (pre-retained pin) share the setup.
+/// An enforced reverse pin is retained once (append then dedup legs).
 #[test]
 fn collect_feedback_keeps_an_enforced_pin_single() {
     let dir = slotundo_temp_dir("161-cf-enf");
@@ -299,8 +274,6 @@ fn collect_feedback_keeps_an_enforced_pin_single() {
             fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
         }
     };
-    // `souprov-1.0` stays a satisfying candidate, so the pin holds
-    // and is enforced rather than dropped for the residual report.
     mk("pinner-1.0", "=dev-libs/souprov-1.0");
     let config = test_config();
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
@@ -337,17 +310,11 @@ fn collect_feedback_keeps_an_enforced_pin_single() {
     };
     let mut pass = pass_161();
     pass.entries = vec![souprov_upgrade.clone()];
-    // Append leg: fresh params collect the pin via config feedback.
-    // Backlog #209: the enforced-pin feedback travels as `RevDep`
-    // (same working copy as `Config`; the driver feeds it back
-    // in-pass under `--backtrack=0`).
     let decision = collect_feedback(&ctx, &BacktrackParams::default(), &mut pass, &config);
     let PassDecision::Feedback(BacktrackFeedback::RevDep { params: out }) = decision else {
         panic!("a newly enforced pin retries with config");
     };
     assert_eq!(out.reverse_dep_pins, vec![pin.clone()]);
-    // Dedup leg: a pre-retained pin is not pushed twice, and the
-    // latched constraint keeps the pass quiet.
     let mut pass2 = pass_161();
     pass2.entries = vec![souprov_upgrade];
     let mut grown = BacktrackParams::default();
@@ -364,12 +331,7 @@ fn collect_feedback_keeps_an_enforced_pin_single() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S4: a dropped reverse pin is collected once -- the
-/// `pinner`/`souprov` shape with a hard upgrade requirement drops
-/// the pin for the residual report. Three legs isolate the three
-/// sites: the conflict-gated first scan (append), its dedup, and
-/// the unconditional second scan (dedup after mask-trial fall-
-/// through).
+/// A dropped reverse pin is collected once across the three scan sites.
 #[test]
 fn collect_feedback_collects_a_dropped_pin_once() {
     let dir = slotundo_temp_dir("161-cf-drop");
@@ -430,16 +392,12 @@ fn collect_feedback_collects_a_dropped_pin_once() {
             .insert(("dev-libs".to_string(), "souprov".to_string()), wants);
         pass
     };
-    // Leg A: two solvable wants retry with constraints -- the
-    // early return isolates the first scan, which collects the pin.
     let mut pass_a = pass_for(hard_double);
     let decision_a = collect_feedback(&ctx, &BacktrackParams::default(), &mut pass_a, &config);
     let PassDecision::Feedback(BacktrackFeedback::Config { params: base_a }) = decision_a else {
         panic!("a solvable conflict retries with constraints");
     };
     assert_eq!(base_a.dropped_pins, vec![pin.clone()]);
-    // Leg B: a lone want falls through to the mask trial -- the
-    // first scan's dedup skips a retained pin.
     let mut pass_b = pass_for(hard_single.clone());
     let mut grown_b = BacktrackParams::default();
     grown_b.dropped_pins.push(pin.clone());
@@ -449,8 +407,6 @@ fn collect_feedback_collects_a_dropped_pin_once() {
         panic!("an unsolvable conflict masks");
     };
     assert_eq!(base_b.dropped_pins, vec![pin.clone()]);
-    // Leg C: with the mask trial's entries pre-covered, the pass
-    // settles -- the second scan's dedup skips the retained pin.
     let sc = souprov_conflict_161();
     let probe = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
         repos: &ctx.repos,
@@ -490,12 +446,7 @@ fn collect_feedback_collects_a_dropped_pin_once() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #205 R4, stale-trigger leg: when the recorded trigger is
-/// no longer a requirer (masking retry, parent-flip rescue), the
-/// fill falls back to the legacy first-requirer start. Direct
-/// `fill_use_change_chains` shape: `abk0c` is required by `abk0a`
-/// (which ascends to the `abk0d` argument), while the recorded
-/// trigger names a `abk0d` that requires nothing here -- stale.
+/// A stale recorded trigger falls back to the first-requirer start.
 #[test]
 fn stale_trigger_falls_back_to_the_first_requirer() {
     let mut abk0c = graph_entry("dev-libs", "abk0c", "1");
@@ -527,14 +478,8 @@ fn stale_trigger_falls_back_to_the_first_requirer() {
     );
 }
 
-/// Backlog #248: a USE change on an argument package (no requirers)
-/// yields exactly the `(argument)` row -- real `_get_dep_chain`
-/// never prints the start node (fresh host 3.0.82.2 staged-fixture
-/// probe 2026-09-29: `emerge --pretend dev-libs/useflagpkg[-foo]`
-/// prints only `# required by dev-libs/useflagpkg[-foo]
-/// (argument)`). Direct `fill_use_change_chains` shape: the
-/// `useflagpkg` entry requires nothing, so there is no forcing
-/// parent to start from.
+/// A USE change on an argument package yields exactly the `(argument)` row:
+/// Portage's `_get_dep_chain` never prints the start node.
 #[test]
 fn use_change_on_an_argument_package_yields_only_the_argument_row() {
     let own = graph_entry("dev-libs", "useflagpkg", "1.0");
@@ -560,12 +505,7 @@ fn use_change_on_an_argument_package_yields_only_the_argument_row() {
     );
 }
 
-/// Backlog #248, keyword twin: a keyword change on an argument
-/// package yields exactly the `(argument)` row (same fresh host
-/// probe family as the contract pin:
-/// `emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg`
-/// prints only `# required by dev-libs/autounmaskkeywordpkg
-/// (argument)`).
+/// Keyword twin of the above: exactly the `(argument)` row.
 #[test]
 fn keyword_change_on_an_argument_package_yields_only_the_argument_row() {
     let own = graph_entry("dev-libs", "autounmaskkeywordpkg", "1.0");

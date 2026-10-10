@@ -2,12 +2,8 @@ use super::*;
 
 #[test]
 fn slot_conflict_mask_choices_groups_missed_update_siblings() {
-    // `mgfc` conflict as the `mgfa` walk records it: 2.0 pulled by
-    // `mgfb-2`'s `=mgfc-2`, 1.0 by `mgfa`'s and `mgfb-1`'s `=mgfc-1`;
-    // `mgfc-3.0` visible in the repo but pulled by nothing. The 2.0
-    // choice groups 3.0 (both `=1.0` parents miss it); the 1.0 choice
-    // groups 3.0 too (`=2.0` misses it). Longest-conflict first, so
-    // the 2.0 choice sorts last and DFS explores it first.
+    // `mgfc` conflict as the `mgfa` walk records it; unpulled `mgfc-3.0` groups
+    // with each choice. Longest-conflict first, so 2.0 sorts last and runs first.
     let repos = find_repos(&fixtures_root()).expect("fixture repos resolve");
     let config = test_config();
     let puller = |pkg: &str, ver: &str, atom: &str| {
@@ -52,7 +48,6 @@ fn slot_conflict_mask_choices_groups_missed_update_siblings() {
         config: &config,
     });
     assert_eq!(choices.len(), 2);
-    // Ascending length: the 1.0 choice (one parent) first.
     assert_eq!(
         choices[0].target,
         ("dev-libs".to_string(), "mgfc".to_string(), "1".to_string())
@@ -83,9 +78,6 @@ fn slot_conflict_mask_choices_groups_missed_update_siblings() {
         )
     );
     assert_eq!(choices[1].similar[0].parents.len(), 2);
-    // Content, not just counts: the 2.0 choice is opposed by both
-    // `=1.0` pulls (neither matches 2.0), and so is its 3.0 sibling;
-    // the 1.0 choice and its sibling answer only `=2.0`.
     fn atoms(ps: &[((String, String, String), String)]) -> Vec<String> {
         let mut v: Vec<String> = ps.iter().map(|(_, a)| a.clone()).collect();
         v.sort();
@@ -103,9 +95,7 @@ fn slot_conflict_mask_choices_groups_missed_update_siblings() {
     assert_eq!(atoms(&choices[0].similar[0].parents), ["=dev-libs/mgfc-2"]);
 }
 
-/// Backlog #161 S5: an already-masked sibling never joins the mask
-/// group -- over `dev-libs/mgfc` (three same-slot versions) the
-/// masked non-party 1 stays out of 3.0's group.
+/// An already-masked sibling never joins the mask group.
 #[test]
 fn slot_conflict_mask_choices_skips_an_already_masked_sibling() {
     let root = fixtures_root();
@@ -145,9 +135,7 @@ fn slot_conflict_mask_choices_skips_an_already_masked_sibling() {
                 "1.0".to_string(),
                 "<dev-libs/mgfc-3.0".to_string(),
             ),
-            // Matches 2 only: without it the masked sibling shares
-            // every conflict atom and the subset gate, not the mask
-            // check, would exclude it.
+            // Matches 2 only: the mask check, not the subset gate, excludes it.
             (
                 "dev-libs".to_string(),
                 "sounneed".to_string(),

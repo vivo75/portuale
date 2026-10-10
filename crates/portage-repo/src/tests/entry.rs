@@ -2,14 +2,8 @@ use super::*;
 
 #[test]
 fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
-    // Two packages in a cycle: a's DEPEND (an unsatisfied build-time
-    // edge, the one kind real's `ignore_priority` ladder can never
-    // relax) names b, b's RDEPEND (a run-time edge) names a. Real
-    // itself gives up on this shape and raises its internal
-    // circular-dependency error; portuale still has to emit a list,
-    // and `select_nodes`' own fallback prefers the node whose every
-    // remaining dependency the widest filter would drop -- b, which
-    // a must build against.
+    // a's unsatisfied DEPEND names b, b's RDEPEND names a: the cycle breaks at
+    // the run-time edge, so b merges first (a must build against it).
     let dep = |pkg: &str, priority: DepPriority| DepEdge {
         atom: format!("dev-libs/{pkg}"),
         evaluated: format!("dev-libs/{pkg}").clone(),
@@ -47,10 +41,7 @@ fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
     let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["cyc-b", "cyc-a"]);
 
-    // A cycle made entirely of unsatisfied build-time edges can't be
-    // broken at all -- the walk falls back to bias order (and
-    // `find_hard_cycles` renders the `* Error: circular
-    // dependencies:` block for it).
+    // All-buildtime cycle: unbreakable, falls back to bias order.
     let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
     let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
     a.deps = vec![dep("cyc-b", buildtime)];
@@ -73,11 +64,7 @@ fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
 
 #[test]
 fn topological_merge_order_stamps_discovery_before_sorting() {
-    // Backlog #155 S1: `GraphEntry::discovery` is the pre-sort BFS
-    // position, so the `--tree` walk can enumerate display parents in
-    // resolution-insertion order like real's digraph does. Input
-    // [a(dep b), b] sorts to [b, a]; the ranks must track the input
-    // slots, not the sorted ones.
+    // `discovery` is the pre-sort BFS position: ranks track input slots.
     let dep = |pkg: &str, priority: DepPriority| DepEdge {
         atom: format!("dev-libs/{pkg}"),
         evaluated: format!("dev-libs/{pkg}").clone(),
@@ -114,10 +101,8 @@ fn topological_merge_order_stamps_discovery_before_sorting() {
 
 #[test]
 fn implicit_system_deps_n_skips_the_merge_order_bias() {
-    // Three independent leaves in discovery order a, b, c, with c in
-    // @system: the bias promotes the deep system dep first, while
-    // `--implicit-system-deps=n` (real `depgraph._merge_order_bias`'s
-    // own early return) keeps discovery order.
+    // Leaves a, b, c with c in @system: the bias promotes c first, while
+    // `--implicit-system-deps=n` keeps discovery order.
     let mut config = test_config();
     config.system_packages = vec!["dev-libs/c".to_string()];
     let atoms = vec![
@@ -159,13 +144,8 @@ fn implicit_system_deps_n_skips_the_merge_order_bias() {
     assert_eq!(names, vec!["a", "b", "c"]);
 }
 
-/// Backlog #242 Slice D: `skipped_update_roots` attributes the missed
-/// instance to the root the rejecting parent's edge points at, and a
-/// merge parent to its entry's root. The blk0 shape: target `blk0b-1`
-/// rejects `blk0x-3` through its `DEPEND` edge while a running-rooted
-/// twin of the graph exists (cross-active) — the miss lands running,
-/// the parent stays target. Single-rooted (no running entry anywhere)
-/// the same edges attribute target — the `fixture_env` shape.
+/// `skipped_update_roots` attributes the miss to the root the rejecting edge
+/// points at, and a merge parent to its entry's root.
 #[test]
 fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
     fn entry(package: &str, version: &str, running: bool, deps: Vec<DepEdge>) -> GraphEntry {
@@ -214,8 +194,7 @@ fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
             key,
         }
     }
-    // Cross-active: a target parent with a DEPEND edge at the miss
-    // plus a running entry elsewhere in the graph.
+    // Cross-active: target parent plus a running entry elsewhere.
     let running_twin = entry("blk0x", "1", true, Vec::new());
     let parent = entry(
         "blk0b",
@@ -252,7 +231,7 @@ fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
         (false, false),
         "single-root runs keep the target attribution",
     );
-    // A runtime edge keeps the miss with a running parent.
+    // A runtime edge keeps the miss in the parent's (running) root.
     let parent = entry("blk0b", "1", true, vec![edge("blk0x", "dev-libs/blk0x", 0)]);
     let entries = vec![parent];
     assert_eq!(
@@ -265,7 +244,7 @@ fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
         (true, true),
         "RDEPEND keeps the miss in the parent's (running) root",
     );
-    // Unknown parent: both target (today's rendering, documented).
+    // Unknown parent: both target.
     assert_eq!(
         skipped_update_roots(
             &entries,

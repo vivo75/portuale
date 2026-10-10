@@ -2,12 +2,8 @@ use super::*;
 
 #[test]
 fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
-    // Bug 456208 shape, from the fixtures: `kde-base/ark`'s tree
-    // `RDEPEND=app-arch/libarchive:=` (an *unbuilt* slot operator)
-    // against the installed `libarchive-3.1.1`, whose vdb `SLOT` is
-    // `0` while the tree ebuild at the same cpv says `0/13` -- a
-    // slot move without a revbump. Real `_slot_change_probe`
-    // (depgraph.py:2317-2359) schedules the installed child.
+    // Bug 456208 shape: tree `RDEPEND=app-arch/libarchive:=` (unbuilt) against
+    // installed `libarchive-3.1.1` (vdb `0`, tree `0/13`): Portage schedules it.
     let dir = slotundo_temp_dir("probe");
     let mk = |name: &str, slot: &str| {
         let d = dir.join("var/db/pkg/app-arch").join(name);
@@ -67,8 +63,7 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
         "no binary entry is merged, so the #212 arm reports nothing"
     );
 
-    // Real's `dep.child.built`: when the graph resolved the dep to a
-    // merge-bound entry (a real upgrade), the probe does not fire.
+    // Resolved to a merge-bound entry (Portage's built dep): no probe.
     let mut merged_child = child.clone();
     merged_child.outcome = PretendOutcome::Reinstall {
         version: "3.1.1".into(),
@@ -106,9 +101,7 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     });
     assert!(scheduled.is_empty());
 
-    // A child whose tree ebuild did *not* move is not scheduled: the
-    // `souneedslot` fixture depends on `dev-libs/souprov:=`, and the
-    // installed `souprov-1.0` (vdb 0/1) has tree `SLOT="0/1"`.
+    // A child whose tree ebuild did not move is not scheduled.
     slotundo_vdb(SlotundoVdbArgs {
         dir: &dir,
         name: "souprov",
@@ -157,10 +150,8 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #161 S1: the slot-change probe fires for an `Upgrade`
-/// parent (bug 456208 is not `Reinstall`-only), while a slot-only
-/// `:0` dep (no `=` operator) never probes -- it is not a
-/// slot-operator atom at all.
+/// The probe fires for an `Upgrade` parent too; a slot-only `:0` dep never
+/// probes (not a slot-operator atom).
 #[test]
 fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps() {
     use md5::Digest as _;
@@ -204,7 +195,7 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
         volatile: false,
         module_specific_options: vec![],
     }];
-    // Installed child moved: vdb SLOT 0/9 vs tree 0/1.
+    // Installed child moved: vdb 0/9 vs tree 0/1.
     let vd = base.join("var/db/pkg/dev-libs/probechild-2.0");
     std::fs::create_dir_all(&vd).unwrap();
     std::fs::write(vd.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -271,10 +262,8 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
     let _ = fs::remove_dir_all(&base);
 }
 
-/// #243: the binary arm masks only when the same-version ebuild is
-/// visible (real `_slot_change_probe`, `depgraph.py:2347`): a binary at
-/// SLOT 0/1 whose tree ebuild moved to 0/2 *and* is keyword-masked
-/// (`~amd64` against an `amd64`-only config) is left alone.
+/// The binary arm masks only when the same-version ebuild is visible (Portage's
+/// `_slot_change_probe`).
 #[test]
 fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
     use md5::Digest as _;
@@ -371,14 +360,8 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
     );
 }
 
-/// Backlog #212 (v2 `#24c`): real `_slot_change_backtrack`
-/// (`depgraph.py:2381-2398`) masks a merge-bound *binary* whose
-/// built slot-operator dep cannot be satisfied the way it was
-/// built, so the backtrack-config restart resolves the dep to the
-/// tree ebuild instead. Shape: an ebuild parent with unbuilt
-/// `:=` deps; the graph resolved `dev-libs/maskchild` to a binary
-/// built at SLOT 0/1 while the tree ebuild at the same cpv moved
-/// to 0/2 without a revbump (the S0 `somaskchild` shape).
+/// The backtrack arm masks a merge-bound stale binary so the restart resolves the
+/// dep to the tree ebuild instead.
 #[test]
 fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     use md5::Digest as _;
@@ -455,8 +438,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     ];
     let empty = BTreeSet::new();
 
-    // Only the slot-moved binary is reported; nothing is scheduled
-    // (no installed instance exists in this scratch root).
+    // Only the slot-moved binary reports; nothing schedules here.
     let mut scheduled = BTreeSet::new();
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
@@ -481,7 +463,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
          one and the scheduled set are untouched"
     );
 
-    // `--exclude` on the tree ebuild vetoes the mask (real `:2343`).
+    // `--exclude` on the tree ebuild vetoes the mask (Portage).
     let mut masked_excl: BTreeSet<(String, String, String)> = BTreeSet::new();
     let mut scheduled_excl = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
@@ -499,8 +481,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
         "an excluded tree ebuild is no replacement"
     );
 
-    // A built (binary) parent is not a probing parent (real's
-    // `not dep.parent.built` gate, `:2324`).
+    // A binary parent never probes (Portage's `not dep.parent.built` gate).
     let binary_parent = GraphEntry {
         source: CandidateSource::Binary,
         ..parent.clone()
@@ -521,21 +502,9 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// #236 A: real `_slot_operator_update_probe` +
-/// `_slot_operator_update_backtrack` (`_emerge/depgraph.py:2576-2800`,
-/// `:2400-2452`) on the shape the `_minimize_children` collapse leaves
-/// behind -- the walk bound the installed consumer's built
-/// `>=forceprov-1.0:0/1=` and live `forceprov:=` to the *installed*
-/// child, and no update of the child is in the graph. The probe finds
-/// the tree's `2.0` (`0/2`), which the replacement ebuild's `:=`
-/// accepts, and forces both halves: the consumer into the replace set,
-/// the child's candidate into `slot_operator_forced_upgrade`. A second
-/// in-scope parent pinning `<forceprov-2.0` refuses it
-/// (`_slot_operator_check_reverse_dependencies`), and without
-/// `--update` the probe does not run (`want_update`). Real's own
-/// answer on this shape: the ResolverPlayground probe in
-/// `LLM/evidence/2026-09-29-236/` (`slotop`: `backtracking due to
-/// missed slot abi update`, then `U provpkg-2.0 + rR consrdep`).
+/// The update force scan forces the installed child's update when the tree has a
+/// newer slot the replacement's `:=` accepts; a second parent's pin or a missing
+/// `--update` refuses it.
 #[test]
 fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
     use md5::Digest as _;
@@ -629,7 +598,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
             "2.0".to_string()
         )])
     );
-    // No `--update`, child not requested: real's `want_update` is off.
+    // Without `--update` the probe does not run.
     assert_eq!(
         scan(&entries, &HashSet::new(), false),
         (empty.clone(), BTreeSet::new())
@@ -641,8 +610,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
         scan(&with_veto, &HashSet::from([veto.clone()]), true),
         (empty.clone(), BTreeSet::new())
     );
-    // Already merge-bound child: the walk's own selection upgraded it,
-    // the entry-keyed scan owns that case.
+    // Already-upgraded child: the walk's own selection owns that case.
     let upgraded = vec![
         installed("forcecons"),
         GraphEntry {

@@ -1,11 +1,7 @@
 use super::*;
 
-/// Backlog #221: `find_restart_cycles` (real `_serialize_tasks`'
-/// no-leaf restart trigger, `_emerge/depgraph.py:10264-10296`) finds
-/// the hard-containing cycle a stranded walk leaves behind, one
-/// index cycle per closing hard edge, in `find_hard_cycles` order
-/// convention (each element depends on the next, last wraps to
-/// first). The empty result and the rotation flips fail here.
+/// `find_restart_cycles` finds the hard-containing cycle a stranded walk leaves
+/// behind, one index cycle per closing hard edge.
 #[test]
 fn find_restart_cycles_reports_a_hard_two_cycle() {
     let dep = |pkg: &str, priority: DepPriority| DepEdge {
@@ -52,7 +48,7 @@ fn find_restart_cycles_reports_a_hard_two_cycle() {
     for cycle in &cycles {
         assert_eq!(cycle.len(), 2, "{cycles:?}");
     }
-    // Canonical rotations of the same a -> b -> a loop.
+    // Canonical rotations of the same loop.
     let mut canon: Vec<Vec<usize>> = cycles
         .iter()
         .map(|c| {
@@ -65,10 +61,8 @@ fn find_restart_cycles_reports_a_hard_two_cycle() {
     assert_eq!(canon, vec![vec![0, 1]], "{cycles:?}");
 }
 
-/// The bug-705986/icedtea shape: the closing edge is runtime-only
-/// (an RDEPEND `||` branch), invisible to `find_hard_cycles`, but
-/// the cycle still holds an unsatisfied buildtime edge -- so it is
-/// a restart trigger. The runtime-edge inclusion flip fails here.
+/// Runtime-closing cycle (bug-705986 shape): invisible to `find_hard_cycles` but
+/// still a restart trigger while it holds an unsatisfied buildtime edge.
 #[test]
 fn find_restart_cycles_reports_a_runtime_closing_cycle() {
     let dep = |pkg: &str, priority: DepPriority, key: u8| DepEdge {
@@ -94,8 +88,7 @@ fn find_restart_cycles_reports_a_runtime_closing_cycle() {
     a.deps = vec![dep("cyc-v", buildtime, 3)];
     v.deps = vec![dep("cyc-a", runtime, 0)];
     let entries = vec![a, v];
-    // Only the buildtime half reaches the walk's hard arm; the
-    // runtime half is a soft map entry at most.
+    // Only the buildtime half reaches the hard arm.
     let mut map: EdgeKindMap = HashMap::new();
     map.insert(
         (
@@ -114,9 +107,8 @@ fn find_restart_cycles_reports_a_runtime_closing_cycle() {
     assert_eq!(cycles[0].len(), 2, "{cycles:?}");
 }
 
-/// A pure-runtime two-cycle is group-merged, never restarted (real's
-/// `find_smallest_cycle` absorbs it): no hard edge, no trigger. An
-/// acyclic pair is quiet too. Both emptiness flips fail here.
+/// A pure-runtime two-cycle is group-merged, never restarted; an acyclic pair is
+/// quiet too.
 #[test]
 fn find_restart_cycles_ignores_runtime_only_and_acyclic_graphs() {
     let dep = |pkg: &str, priority: DepPriority| DepEdge {
@@ -184,14 +176,8 @@ fn find_restart_cycles_ignores_runtime_only_and_acyclic_graphs() {
     );
 }
 
-/// Backlog #221 (I3): a build-time edge softened by a parallel
-/// run-time route -- `sbrA` BDEPENDs+RDEPENDs on `sbrB` while `sbrB`
-/// BDEPENDs back -- is breakable for the hard reporter (`(true,
-/// true)` in the walk's `EdgeKindMap`, so `find_hard_cycles` stays
-/// empty) but still strands the walk, so `find_restart_cycles`
-/// reports it. `assemble_result`'s persisting-ring leg (not the hard
-/// leg) renders the failure. The emptiness/non-emptiness flips fail
-/// here.
+/// A build-time edge softened by a parallel run-time route hides from hard cycles
+/// but still strands the walk, so restart cycles report it.
 #[test]
 fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles() {
     let dep = |pkg: &str, priority: DepPriority, key: u8| DepEdge {
@@ -219,11 +205,9 @@ fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles() {
     let entries = vec![a, b];
     let cp = |pkg: &str| (false, "dev-libs".to_string(), pkg.to_string());
     let mut map: EdgeKindMap = HashMap::new();
-    // Owner `sbr-a` reaches `sbr-b` both hard (BDEPEND) and soft
-    // (RDEPEND): breakable, invisible to the hard reporter.
+    // Hard + soft route: breakable, invisible to the hard reporter.
     map.insert((cp("sbr-b"), cp("sbr-a")), (true, true));
-    // Owner `sbr-b` reaches `sbr-a` hard only -- but one directed
-    // edge is no cycle.
+    // Hard only, but one directed edge is no cycle.
     map.insert((cp("sbr-a"), cp("sbr-b")), (true, false));
     assert!(
         find_hard_cycles(
@@ -241,8 +225,7 @@ fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles() {
         Path::new("/nonexistent-root"),
         &HashMap::new(),
     );
-    // One index cycle per closing hard edge (both edges are hard
-    // here): the two rotations of the same a -> b -> a loop.
+    // One index cycle per closing hard edge.
     assert_eq!(cycles.len(), 2, "{cycles:?}");
     let mut canon: Vec<Vec<usize>> = cycles
         .iter()
@@ -261,17 +244,12 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
     let hardcpv = |p: &str| format!("dev-libs/{p}-1.0");
     let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
 
-    // Pure hard cycle hca <-> hcb: reported starting where real's
-    // `shortest_cycle[0]` starts -- hca is the earliest-inserted
-    // node, so the cycle closes through its child hcb
-    // (`[hcb, hca]`, backlog #278). The entries carry no `deps`, so
-    // the #228 slot-op arm never fires and no vdb is consulted
-    // (fake root).
+    // Pure hard cycle: reported from the earliest-inserted node; no `deps`, so no
+    // slot-op arm and no vdb consulted.
     let mut hard: EdgeKindMap = HashMap::new();
     hard.insert((cp("hcb"), cp("hca")), (true, false));
     hard.insert((cp("hca"), cp("hcb")), (true, false));
-    // Explicit `discovery` (unit entries default to 0, which would
-    // tie and fall back to array order): hca discovered first.
+    // Explicit `discovery`: hca discovered first (unit entries default to 0).
     let mut first = graph_entry("dev-libs", "hca", "1.0");
     first.discovery = 0;
     let mut second = graph_entry("dev-libs", "hcb", "1.0");
@@ -288,8 +266,7 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
         vec![vec![hardcpv("hcb"), hardcpv("hca")]]
     );
 
-    // Same shape but one edge has a run-time alternative -> breakable,
-    // nothing reported.
+    // One edge with a run-time alternative: breakable, nothing reported.
     let mut mixed: EdgeKindMap = HashMap::new();
     mixed.insert((cp("hcb"), cp("hca")), (true, false));
     mixed.insert((cp("hca"), cp("hcb")), (true, true));
@@ -327,24 +304,13 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
     );
 }
 
-/// Backlog #278: the printed cycle starts where real's does. Real
-/// `circular_dependency_handler` prints `shortest_cycle[0]` (real
-/// `resolver/circular_dependency.py:76-99`), and `_find_cycles`
-/// (`:48-56`) keeps the first strictly-shortest cycle of real
-/// `digraph.get_cycles` order (earliest-inserted node first) -- not
-/// a lowest-index rotation. The #249 variant shape (entries in
-/// discovery order, the requested build tool first): hard edges both
-/// ways (`u249make -BDEPEND(dev-libs/u249json:0=)-> u249json`,
-/// `u249json -BDEPEND(dev-util/u249make)-> u249make`), so real
-/// 3.0.82.2 prints from `u249json`
-/// (`u249json -> u249make -> u249json`; O1 S0 probe). The old
-/// lowest-index rotation started at `u249make` instead.
+/// The printed cycle starts where Portage's does: earliest-inserted node first,
+/// not a lowest-index rotation.
 #[test]
 fn find_hard_cycles_starts_where_portages_get_cycles_starts() {
     let cpv = |c: &str, p: &str| format!("{c}/{p}-1");
     let cp = |c: &str, p: &str| (false, c.to_string(), p.to_string());
-    // Explicit `discovery` mirroring the resolve (the requested
-    // build tool is discovered before the library it pulls).
+    // Explicit `discovery` mirroring the resolve.
     let mut make = graph_entry("dev-util", "u249make", "1");
     make.discovery = 0;
     let mut json = graph_entry("dev-libs", "u249json", "1");
@@ -365,8 +331,7 @@ fn find_hard_cycles_starts_where_portages_get_cycles_starts() {
             &hard,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            // The insertion-rank path (what the resolver threads):
-            // the requested tool is inserted before the library.
+            // The insertion-rank path (what the resolver threads).
             Some(&[0, 1])
         ),
         vec![vec![
@@ -376,13 +341,8 @@ fn find_hard_cycles_starts_where_portages_get_cycles_starts() {
     );
 }
 
-/// Backlog #216: a true self-loop -- the kept `||` branch's atom
-/// matching the owner's own merge-bound cpv -- reports the
-/// one-member ring (real deadlocks on `go → go` in
-/// `_serialize_tasks`), while a same-cp cross-slot edge
-/// (`=hcs-2.0` against merged `hcs-1.0`, ordinary in real's
-/// package-keyed digraph) does not. The `oi == di` gate and the
-/// atom-match `&&` widening fail here.
+/// A true self-loop reports the one-member ring; a same-cp cross-slot edge does
+/// not.
 #[test]
 fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
     let hardcpv = |p: &str, v: &str| format!("dev-libs/{p}-{v}");
@@ -416,8 +376,7 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
         vec![vec![hardcpv("hcs", "1.0")]]
     );
 
-    // Same-cp cross-slot edge: the atom names another version, so
-    // the owner's own instance is not its target -- no cycle.
+    // Cross-slot edge: the atom names another version, so no cycle.
     let mut cross = vec![graph_entry("dev-libs", "hcs", "1.0")];
     cross[0].deps = vec![self_edge("hcs", "=dev-libs/hcs-2.0", Some(0))];
     assert!(
@@ -445,10 +404,8 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
         vec![vec![hardcpv("hcs", "1.0")]]
     );
 
-    // A self-loop touching an installed instance stays invisible
-    // (backlog #216 scope: reporting it would flip an
-    // outcome-correct resolve into a spurious circular abort; the
-    // retry that would re-resolve past it is #221's scope).
+    // An installed instance keeps a self-loop invisible (out of scope: reporting it
+    // would flip an outcome-correct resolve into a spurious abort).
     let root = TempDir::new("portuale-selfloop").keep();
     let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
     std::fs::create_dir_all(&inst_dir).unwrap();
@@ -457,13 +414,8 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Backlog #216: the serialize-dead-end retry fires only for a fresh
-/// single-node self-loop closed by a kept `||` self-branch. A
-/// two-node ring, an inline self-dep, and a self-loop with an
-/// installed instance of the owner keep today's report-no-retry
-/// path (multi-node rings are #221's scope; the installed cases
-/// entangle merge-vs-installed bookkeeping this slice does not
-/// re-model). Each gate `&&` fails here.
+/// The dead-end retry fires only for a fresh single-node self-loop closed by a
+/// kept `||` self-branch.
 #[test]
 fn cycle_restartable_gates_the_retry_to_fresh_branch_self_loops() {
     let buildtime = DepPriority {
@@ -535,19 +487,9 @@ fn cycle_restartable_gates_the_retry_to_fresh_branch_self_loops() {
 
 #[test]
 fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
-    // Backlog #228 fix round 1 (review Important-1): real's digraph
-    // holds the `||` branch the walk selected (real
-    // `dep_check.py::dep_zapdeps`' `choice_bins`: the first branch,
-    // in written order, all of whose atoms resolve in the graph
-    // wins), not a suppressed one. Owner `dev-libs/own` carries
-    // RDEPEND `|| ( dev-libs/keb dev-libs/kea:= )`; the walk kept the
-    // first (plain run-time) branch, while `dev-libs/kea` is
-    // merge-bound through its own hard DEPEND back-edge to the
-    // owner. The discarded `:=` branch's unsatisfied
-    // `runtime_slot_op` edge must not harden `own -> kea`: there is
-    // no cycle to report. (Pre-fix the unrecorded-edge arm added
-    // that suppressed edge and reported a phantom `own -> kea ->
-    // own` cycle.)
+    // Portage's digraph holds the selected `||` branch (first resolvable branch in
+    // written order), not a suppressed one: the discarded `:=` branch must not
+    // harden `own -> kea`.
     let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
     let runtime = DepPriority {
         runtime: true,
@@ -590,8 +532,7 @@ fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
     }];
     let keb = graph_entry("dev-libs", "keb", "1.0");
     let entries = vec![own, kea, keb];
-    // The walk recorded the kept branch (soft run-time) and kea's
-    // hard back-edge; the suppressed `:=` branch has no map entry.
+    // Kept branch and hard back-edge recorded; the suppressed branch has no entry.
     let mut map: EdgeKindMap = HashMap::new();
     map.insert((cp("keb"), cp("own")), (false, true));
     map.insert((cp("own"), cp("kea")), (true, false));
@@ -609,15 +550,8 @@ fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
 
 #[test]
 fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
-    // Backlog #228 fix round 1 (review Important-2): real filters
-    // `inst_pkgs` to the child's slot and sub-slot for
-    // `slot_operator == "="` (real
-    // `depgraph.py::_add_pkg_dep_string`), so an installed same-cp
-    // different-slot instance does NOT satisfy a `:=` edge. Owner
-    // `dev-libs/sown -RDEPEND:=-> dev-libs/sdep` (child slot `1`)
-    // with `dev-libs/sdep-1.0:0` installed: the edge stays hard and
-    // the two-cycle reports. With `dev-libs/sdep-1.0:1/0`
-    // installed the edge is satisfied and breakable: no cycle.
+    // Portage filters `inst_pkgs` to the child's slot for `:=`: a different-slot
+    // installed instance does not satisfy the edge, a same-slot one does.
     let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
     let runtime_slot_op = DepPriority {
         runtime: true,
@@ -662,10 +596,8 @@ fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
         std::fs::write(vdb.join("SLOT"), format!("{slot}\n")).unwrap();
         root
     };
-    // Installed slot `0`, child slot `1`: unsatisfied (hard).
-    // Starts at `sdep` since backlog #278 (real's
-    // `shortest_cycle[0]`: `sown` is earliest-inserted, so the ring
-    // closes through its child).
+    // Installed slot `0`, child slot `1`: unsatisfied (hard). Starts at `sdep`
+    // (earliest-inserted `sown`, so the ring closes through its child).
     let root = make_vdb("n228-slot-gate-other-slot", "0");
     assert_eq!(
         find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new(), None),
@@ -683,11 +615,8 @@ fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
 
 #[test]
 fn find_virtual_cycles_reports_self_loop_ring_and_lollipop() {
-    // Backlog #193: real `_virt_deps_visible` (`depgraph.py:6208`)
-    // fails a virtual that (transitively) requires itself through
-    // selected virtual providers -- upstream `test_virtual_cycle.py`
-    // (bug 965570): `virtual/gzip-1` (self-`RDEPEND`) and the
-    // `virtual/A-1 → B-1 → C-1 → A-1` ring.
+    // Portage fails a virtual that (transitively) requires itself through
+    // selected providers (upstream virtual-cycle test).
     let redge = |pkg: &str| DepEdge {
         atom: format!("virtual/{pkg}"),
         evaluated: format!("virtual/{pkg}"),
@@ -707,14 +636,13 @@ fn find_virtual_cycles_reports_self_loop_ring_and_lollipop() {
         e
     };
     let fake = Path::new("/nonexistent-root");
-    // Self-loop: the single member reports with `::testrepo`.
+    // Self-loop: the single member reports.
     let gzip = virt("gzip", vec![redge("gzip")]);
     assert_eq!(
         find_virtual_cycles(&[gzip], fake),
         vec!["virtual/gzip-1::testrepo".to_string()]
     );
-    // Three-ring: every member reports, sorted (real sorts the
-    // probe-stack packages, `Package.py:830`).
+    // Three-ring: every member reports, sorted.
     let ring = vec![
         virt("A", vec![redge("B")]),
         virt("B", vec![redge("C")]),
@@ -728,9 +656,7 @@ fn find_virtual_cycles_reports_self_loop_ring_and_lollipop() {
             "virtual/C-1::testrepo".to_string(),
         ]
     );
-    // Lollipop: `X` pulls self-looping `Y` -- real reports the
-    // whole recursion set (`list(_virt_deps_visible_recursion)`),
-    // not just the loop.
+    // Lollipop: the whole recursion set reports, not just the loop.
     let lollipop = vec![virt("X", vec![redge("Y")]), virt("Y", vec![redge("Y")])];
     assert_eq!(
         find_virtual_cycles(&lollipop, fake),
@@ -743,11 +669,7 @@ fn find_virtual_cycles_reports_self_loop_ring_and_lollipop() {
 
 #[test]
 fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes() {
-    // Real's stack holds virtuals only and the imp expands `RDEPEND`
-    // alone (`depgraph.py:6224-6256`): a `virtual/ → non-virtual →
-    // virtual/` ring probes clean (an ordinary merge), a `DEPEND`
-    // (`key: 3`) loop is never expanded, and an `AlreadyInstalled`
-    // virtual is never a start node (not merge-bound).
+    // Portage's stack holds virtuals only and expands RDEPEND alone.
     let redge = |cat: &str, pkg: &str, key: u8| DepEdge {
         atom: format!("{cat}/{pkg}"),
         evaluated: format!("{cat}/{pkg}"),
@@ -768,14 +690,13 @@ fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes() {
     let mut p = graph_entry("dev-libs", "P", "1");
     p.deps = vec![redge("virtual", "V", 0)];
     assert!(find_virtual_cycles(&[v, p], fake).is_empty());
-    // DEPEND-only loop between two virtuals: no report.
+    // DEPEND-only loop: never expanded.
     let mut d1 = graph_entry("virtual", "D1", "1");
     d1.deps = vec![redge("virtual", "D2", 3)];
     let mut d2 = graph_entry("virtual", "D2", "1");
     d2.deps = vec![redge("virtual", "D1", 3)];
     assert!(find_virtual_cycles(&[d1, d2], fake).is_empty());
-    // AlreadyInstalled virtual with a self-edge: not merge-bound,
-    // never expanded.
+    // AlreadyInstalled virtual: not merge-bound, never expanded.
     let mut ai = GraphEntry {
         outcome: PretendOutcome::AlreadyInstalled {
             version: "1".to_string(),
@@ -784,8 +705,7 @@ fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes() {
     };
     ai.deps = vec![redge("virtual", "AI", 0)];
     assert!(find_virtual_cycles(&[ai], fake).is_empty());
-    // A ring with no virtual at all: the category gate skips it
-    // (ordinary circular handling owns that shape).
+    // No virtual in the ring: the category gate skips it.
     let mut n1 = graph_entry("dev-libs", "N1", "1");
     n1.deps = vec![redge("dev-libs", "N2", 0)];
     let mut n2 = graph_entry("dev-libs", "N2", "1");
@@ -795,18 +715,9 @@ fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes() {
 
 #[test]
 fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
-    // `O` (virtual, merge-bound): `RDEPEND`
-    // `|| ( virtual/plain virtual/D )`, both merge-bound; the walk
-    // keeps the first written branch (real `dep_zapdeps`
-    // choice_bins, the same `kept_alt_branches` set
-    // `build_digraph` collapses to), so `O → D` is suppressed. `D`
-    // is still merged (pulled by `P`), and `D → O` is selected --
-    // but the `D → O → D` loop never closes through the suppressed
-    // edge, so nothing reports. Without the kept check this walk
-    // would follow `O → D → O` and report both. (Real's `dep_check`
-    // may probe the suppressed branch during choice evaluation and
-    // fail here instead -- a documented cut in
-    // `find_virtual_cycles`.)
+    // The walk keeps the first written branch, so `O → D` is suppressed and the
+    // loop never closes through it (a documented cut: Portage may probe the
+    // suppressed branch during choice evaluation and fail instead).
     let alt_edge = |pkg: &str, branch: u32| DepEdge {
         atom: format!("virtual/{pkg}"),
         evaluated: format!("virtual/{pkg}"),
@@ -846,10 +757,7 @@ fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
 
 #[test]
 fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
-    // `dev-libs/usecyclea` (IUSE +x) build-depends on
-    // `dev-libs/usecycleb` only under `x`; `usecycleb` build-depends
-    // back unconditionally. `_find_suggestions` should offer exactly
-    // "disable x on usecyclea".
+    // USE-gated build cycle: exactly "disable x on usecyclea".
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -883,17 +791,8 @@ fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
 
 #[test]
 fn circular_dep_solutions_applies_the_autounmask_use_overlay() {
-    // Backlog #208(b): `=dev-libs/cyc0w-3` needs `dev-libs/cyc0z[bar]`,
-    // so the resolve autounmasks `bar` on `cyc0z-3` (IUSE `+foo bar`,
-    // `DEPEND="foo? ( !bar? ( dev-libs/cyc0y ) ) foo? (
-    // dev-libs/cyc0y ) !bar? ( dev-libs/cyc0y )"`). Real
-    // `_pkg_use_enabled` (`_emerge/depgraph.py:7669`) evaluates the
-    // suggestion on the autounmasked `USE="bar foo"` while `bar`
-    // stays untouchable (`resolver/circular_dependency.py:104-114`),
-    // so the only assignment dropping `dev-libs/cyc0y` is `foo` off:
-    // `cyc0z-3 (Change USE: -foo)`. Without the overlay `bar` reads
-    // off and no assignment drops the atom (the generic
-    // "temporarily disabling USE flags" advisory).
+    // Portage evaluates the suggestion on the autounmasked USE while `bar` stays
+    // untouchable, so the only fix is `foo` off.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -935,14 +834,7 @@ fn circular_dep_solutions_applies_the_autounmask_use_overlay() {
 
 #[test]
 fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
-    // Same USE-gated cycle shape as usecyclea/usecycleb (here
-    // gpcyclea/gpcycleb), but the top-level target dev-libs/gpcyclec
-    // is a "grandparent" of the cycle with its own hard
-    // dev-libs/gpcyclea[x] use-dep -- grandparent_use_conflict's
-    // `ignore` branch fires (the "disable x" fix would violate
-    // gpcyclec's own hard requirement), so the suggestion list comes
-    // back empty. `docs/history/find-suggestions-plan.md`'s "no
-    // fixture yet" note.
+    // Grandparent with a hard use-dep on the fix: the suggestion list is empty.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -969,18 +861,8 @@ fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
 
 #[test]
 fn mixed_priority_cycle_reports_per_edge_labels() {
-    // Backlog #228: `dev-libs/slopcyca -RDEPEND:=-> dev-libs/slopcycb
-    // -DEPEND-> dev-libs/slopcyca`. The `RDEPEND` `:=` edge is an
-    // unsatisfied `runtime_slot_op` priority -- unbreakable at every
-    // `ignore_priority` rung, so real aborts (n228 probe: real
-    // 3.0.81.3 rc 1 with `(buildtime)` on the back edge and
-    // `(runtime_slot_op)` on the slot-op edge) where the pre-#228
-    // detector saw only a soft run-time edge and merged silently.
-    // Since backlog #278 the rotation starts where real's
-    // `shortest_cycle[0]` starts (`slopcycb`: fresh 3.0.82.2 probe
-    // prints `slopcycb depends on / slopcyca (buildtime) / slopcycb
-    // (runtime_slot_op)`), so the labels read `buildtime` into the
-    // second line, `runtime_slot_op` closing.
+    // The `:=` edge is unbreakable at every rung, so Portage aborts; rotation
+    // starts at the earliest-inserted node.
     let result = graph_result_real("dev-libs/slopcyca");
     assert_eq!(
         result.circular_deps,
@@ -993,8 +875,7 @@ fn mixed_priority_cycle_reports_per_edge_labels() {
         cycle_edge_labels(&result.entries, &result.circular_deps[0]),
         vec!["buildtime".to_string(), "runtime_slot_op".to_string()]
     );
-    // The all-buildtime fixtures keep the old rendering: every
-    // edge labels `(buildtime)`.
+    // All-buildtime fixtures keep the old rendering.
     let hard = graph_result_real("dev-libs/hardcyclea");
     assert_eq!(
         cycle_edge_labels(&hard.entries, &hard.circular_deps[0]),
@@ -1004,9 +885,7 @@ fn mixed_priority_cycle_reports_per_edge_labels() {
 
 #[test]
 fn circular_dep_solutions_is_empty_for_a_cycle_with_no_conditional_edge() {
-    // `hardcyclea` <-> `hardcycleb`, both with an unconditional
-    // `DEPEND` and no IUSE -- `extract_affecting_use` finds nothing,
-    // so there is no suggestion (real hits the generic-advisory else).
+    // Unconditional DEPENDs, no IUSE: no suggestion (the generic advisory).
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,

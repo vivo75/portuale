@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
-    // A tiny installed graph: dcworld (required, world) -> dcdep ->
-    // dcsub, dcworld -[bar?, USE=bar]-> dccond; dcorphan -> dcorphandep
-    // (both orphan). systempkg is required too (passed as a root).
+    // dcworld (world) -> dcdep -> dcsub, dcworld -[bar?]-> dccond; dcorphan chain
+    // orphaned; systempkg required as a root.
     let root = masters_test_root("depclean");
     let install = |name: &str, rdepend: &str, use_str: &str, depend: &str, bdepend: &str| {
         let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
@@ -57,12 +56,10 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
             "dev-libs/dcorphandep-1.0".to_string(),
         ]
     );
-    // dcworld, dcdep, dcsub, dccond, dcbuilddep (DEPEND), dcbdep
-    // (BDEPEND), systempkg.
+    // Seven required packages (world closure plus DEPEND/BDEPEND/system).
     assert_eq!(result.required_count, 7);
 
-    // `args` mode: `-c dev-libs/dcorphan` -> just that one (its
-    // private dep dcorphandep is protected, being non-arg).
+    // `args` mode narrows to the named package; its private dep stays protected.
     let narrowed = depclean_cleanlist(DepcleanCleanlistArgs {
         root: &root,
         world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
@@ -80,7 +77,7 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
             .collect::<Vec<_>>(),
         vec!["dev-libs/dcorphan-1.0".to_string()]
     );
-    // `-c dev-libs/dcsub` -> nothing (dcdep still needs it).
+    // Still needed by dcdep: nothing listed.
     let needed = depclean_cleanlist(DepcleanCleanlistArgs {
         root: &root,
         world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
@@ -92,9 +89,7 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
     });
     assert!(needed.cleanlist.is_empty());
 
-    // `--depclean-lib-check` feedback: forcing dcorphan as a
-    // protected provider keeps it *and* its own RDEPEND dcorphandep,
-    // recomputing an empty cleanlist and a required_count of 9.
+    // Protected provider keeps its own RDEPEND too: empty cleanlist, nine required.
     let protected = InstalledPackage {
         category: "dev-libs".to_string(),
         package: "dcorphan".to_string(),
@@ -113,7 +108,7 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
     assert!(lib_kept.cleanlist.is_empty(), "{:?}", lib_kept.cleanlist);
     assert_eq!(lib_kept.required_count, 9);
 
-    // No kept package has an unsatisfiable hard runtime dep here.
+    // No unsatisfiable hard runtime dep here.
     assert!(result.unresolved.is_empty(), "{:?}", result.unresolved);
 
     std::fs::remove_dir_all(&root).ok();
@@ -134,8 +129,8 @@ fn depclean_flags_a_kept_packages_unsatisfiable_runtime_dep() {
             std::fs::write(d.join("DEPEND"), format!("{depend}\n")).unwrap();
         }
     };
-    // uw (world) -> uk; uk RDEPENDs a missing package + a satisfied
-    // `||` group, and DEPENDs a missing build dep (SOFT, ignored).
+    // uk RDEPENDs a missing package plus a satisfied `||` group; its missing
+    // DEPEND is build-time (soft), so ignored.
     install("uw", "dev-libs/uk", "");
     install(
         "uk",
@@ -175,8 +170,7 @@ fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
     let world = &[("dev-libs/dw".to_string(), "@selected".to_string())];
     let args = &["dev-libs/dw".to_string()];
 
-    // `-c dev-libs/dw` (deselect default true): the world seed is
-    // dropped in args mode -> dw is unreachable -> removed.
+    // Deselect drops the world seed in args mode: dw becomes unreachable.
     let removed = depclean_cleanlist(DepcleanCleanlistArgs {
         root: &root,
         world_seeds: world,
@@ -195,8 +189,7 @@ fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
         vec!["dev-libs/dw-1.0".to_string()]
     );
 
-    // `-c dev-libs/dw --deselect=n`: the world seed is kept ->
-    // @selected still reaches dw -> nothing to remove.
+    // `--deselect=n` keeps the seed: @selected still reaches dw.
     let kept = depclean_cleanlist(DepcleanCleanlistArgs {
         root: &root,
         world_seeds: world,
@@ -237,7 +230,7 @@ fn depclean_cleanlist_records_reverse_dep_parents_for_kept_packages() {
         lib_protected_providers: &[],
         package_provided: &[],
     });
-    // rorphan is the cleanlist; kept = rdep, rshared, rw (cpv order).
+    // rorphan is the cleanlist; kept parents render in cpv order.
     assert_eq!(
         result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
         vec!["dev-libs/rorphan-1.0".to_string()]
@@ -272,18 +265,8 @@ fn depclean_cleanlist_records_reverse_dep_parents_for_kept_packages() {
 
 #[test]
 fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_dependency_edge() {
-    // Real `-pc` advisory: "package.provided ... will be removed by
-    // depclean, even if they are part of the world set." `pwprov` is
-    // a @world member that is also listed in `package_provided` --
-    // real `_resolve`'s per-arg loop intercepts it before it ever
-    // becomes a graph root (`depgraph.py:5497-5503`, *before*
-    // `_add_pkg`/`_select_package` run), so world membership does not
-    // protect it. `pdprov` is only reachable via `pw`'s RDEPEND,
-    // which is also `package_provided`-listed -- real
-    // `dep_check.py:1052` intercepts that edge too (no graph node
-    // for the literal installed provider), so `pdprov` stays
-    // unreachable and joins the cleanlist as well. `pw` itself (a
-    // genuine, non-provided world member) stays required throughout.
+    // Portage intercepts `package.provided` before the root forms and on the
+    // edge, so world membership does not protect either package.
     let root = masters_test_root("depclean-pprovided");
     let install = |name: &str, rdepend: &str| {
         let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
@@ -325,9 +308,7 @@ fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_depend
         ]
     );
 
-    // Without `package_provided`, both stay protected (pwprov by its
-    // own world membership, pdprov by pw's RDEPEND) -- nothing to
-    // clean.
+    // Without `package_provided` both stay protected: nothing to clean.
     let baseline = depclean_cleanlist(DepcleanCleanlistArgs {
         root: &root,
         world_seeds: world,
@@ -344,13 +325,7 @@ fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_depend
 
 #[test]
 fn depclean_unresolved_halt_does_not_fire_for_a_dep_satisfied_only_by_package_provided() {
-    // `uk` (kept, reachable from world) RDEPENDs on
-    // `dev-libs/uprovided`, which has no literal vdb entry at all --
-    // only a `package_provided` listing. Real dependency resolution
-    // treats a `package.provided`-matched atom as already satisfied
-    // (`dep_check.py:1052`), so `unresolved_deps()` must not flag it;
-    // without the fix this spuriously halts with "not being
-    // installed" (real behaviour: it doesn't).
+    // Portage treats a `package.provided`-matched atom as satisfied, so no halt.
     let root = masters_test_root("depclean-unresolved-pprovided");
     let install = |name: &str, rdepend: &str| {
         let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
@@ -378,7 +353,7 @@ fn depclean_unresolved_halt_does_not_fire_for_a_dep_satisfied_only_by_package_pr
     });
     assert!(result.unresolved.is_empty(), "{:?}", result.unresolved);
 
-    // Without `package_provided`, the same setup halts.
+    // Without `package_provided` the same setup halts.
     let baseline = depclean_cleanlist(DepcleanCleanlistArgs {
         root: &root,
         world_seeds: world,
@@ -414,7 +389,7 @@ fn depclean_cleanlist_a_use_conditional_dep_that_is_off_does_not_keep_its_target
             std::fs::write(d.join("USE"), format!("{use_str}\n")).unwrap();
         }
     };
-    // dcw's `off? ( ... )` group is inactive -> dchidden is orphan.
+    // Inactive `off?` group: dchidden is orphan.
     install("dcw", "off? ( dev-libs/dchidden )", "");
     install("dchidden", "", "");
     let result = depclean_cleanlist(DepcleanCleanlistArgs {
@@ -433,13 +408,8 @@ fn depclean_cleanlist_a_use_conditional_dep_that_is_off_does_not_keep_its_target
 
 #[test]
 fn depclean_cleanlist_is_returned_in_topological_removal_order() {
-    // Two orphan chains where alphabetical order != dependency order:
-    // dev-libs/zztop RDEPENDs dev-libs/aabase, and dev-libs/mmid
-    // RDEPENDs dev-libs/zztop. Real _calc_depclean removes a package
-    // before the ones it depends on, so the order is mmid, zztop,
-    // aabase -- the reverse of the cat/pn sort. dev-libs/loner is a
-    // fourth orphan with no edges: it sorts by cpv among each level's
-    // ready set (emitted descending, real `nodes.sort(reverse=True)`).
+    // Alphabetical order differs from dependency order: Portage removes a package
+    // before the ones it depends on (dependents first, cpv-descending per level).
     let root = masters_test_root("depclean-order");
     let install = |name: &str, rdepend: &str| {
         let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
@@ -466,8 +436,7 @@ fn depclean_cleanlist_is_returned_in_topological_removal_order() {
     });
     assert!(result.ordered);
     let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
-    // Level 0 ready = {mmid, loner} (nothing depends on them),
-    // emitted cpv-descending (mmid > loner). Then zztop, then aabase.
+    // Level 0 ready first (cpv-descending), then dependents' deps.
     assert_eq!(
         clean,
         vec![
@@ -478,7 +447,7 @@ fn depclean_cleanlist_is_returned_in_topological_removal_order() {
         ]
     );
 
-    // No edges at all -> ordered = false, cat/pn sort kept.
+    // No edges: unordered, cat/pn sort kept.
     let root2 = masters_test_root("depclean-order-flat");
     for n in ["ccc", "aaa", "bbb"] {
         let d = root2.join("var/db/pkg/dev-libs").join(format!("{n}-1.0"));
@@ -511,11 +480,8 @@ fn depclean_cleanlist_is_returned_in_topological_removal_order() {
 
 #[test]
 fn topological_removal_order_breaks_a_cycle_by_priority_and_pops_one() {
-    // A 2-node cycle: `hi` DEPENDs `lo` (buildtime, priority -4) and
-    // `lo` RDEPENDs `hi` (runtime, -2). No true root. Real portage's
-    // `ignore_priority_range` scan tries -4 first: only `lo` has all
-    // its remaining incoming edges <= -4 (the single edge hi->lo),
-    // so `lo` is popped; `hi` then falls out as a plain root.
+    // Two-node cycle with no true root: Portage's priority scan pops `lo` first,
+    // then `hi` falls out as a plain root.
     let root = masters_test_root("depclean-cycle");
     let mk = |name: &str, key: &str, dep: &str| {
         let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
@@ -550,8 +516,7 @@ fn topological_removal_order_breaks_a_cycle_by_priority_and_pops_one() {
         vec!["lo".to_string(), "hi".to_string()]
     );
 
-    // Mutual RDEPEND (both edges -2): -4/-3 yield nothing, -2 makes
-    // both eligible -> the cpv-max node (`zz`) is popped first.
+    // Mutual RDEPEND: the cpv-max node pops first.
     let root2 = masters_test_root("depclean-cycle-rr");
     mk_at(&root2, "zz", "RDEPEND", "dev-libs/yy");
     mk_at(&root2, "yy", "RDEPEND", "dev-libs/zz");
@@ -595,9 +560,7 @@ fn prune_cleanlist_removes_superseded_versions_only() {
             std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
         }
     };
-    // aa, zz, mm are all multi-version; single is not. keeper pins
-    // mm-2.0. zz-1.0 pins aa-1.0 (both themselves prunable, so the
-    // pin is only an ordering edge, not a keep).
+    // keeper pins mm-2.0; zz-1.0's pin on aa-1.0 is only an ordering edge.
     install("aa", "1.0", "");
     install("aa", "2.0", "");
     install("zz", "1.0", "=dev-libs/aa-1.0");
@@ -611,9 +574,7 @@ fn prune_cleanlist_removes_superseded_versions_only() {
     let result = prune_cleanlist(&root, &[], &[], &[]);
     assert!(result.ordered);
     let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
-    // mm-2.0 kept (keeper needs it), mm-3.0/aa-2.0/zz-2.0 highest,
-    // single single-version, keeper protected. Topological order:
-    // level 0 ready {zz-1.0, mm-1.0} cpv-desc, then aa-1.0.
+    // mm-2.0 kept, the rest pruned in topological order.
     assert_eq!(
         clean,
         vec![
@@ -623,10 +584,7 @@ fn prune_cleanlist_removes_superseded_versions_only() {
         ]
     );
 
-    // `--prune --verbose`'s reverse-dep display: only mm-2.0 (a kept
-    // non-highest version with a real Package parent) -- the highest
-    // versions are pulled in only by the internal protected-set seed,
-    // which `show_parents` filters out.
+    // Reverse-dep display names only the kept non-highest version with a parent.
     assert_eq!(
         result
             .kept_parents
@@ -639,9 +597,7 @@ fn prune_cleanlist_removes_superseded_versions_only() {
         )]
     );
 
-    // `--prune --nodeps`: NO dependency check -- every non-highest
-    // version of every multi-version cp is selected, mm-2.0 included
-    // (unlike `--prune`, which keeps it for `keeper`).
+    // `--nodeps`: no dependency check, so every non-highest version is selected.
     let nd = prune_nodeps_selection(&root, &[]);
     assert_eq!(
         nd.iter()
@@ -669,8 +625,7 @@ fn prune_cleanlist_removes_superseded_versions_only() {
             ),
         ]
     );
-    // `--prune --nodeps <atom>`: best/rest split over the atom's own
-    // match set -- `<dev-libs/mm-3.0` keeps mm-2.0, prunes mm-1.0.
+    // `--nodeps <atom>`: best/rest split over the atom's own match set.
     let nd_atom = prune_nodeps_selection(&root, &["<dev-libs/mm-3.0".to_string()]);
     assert_eq!(
         nd_atom
@@ -680,7 +635,7 @@ fn prune_cleanlist_removes_superseded_versions_only() {
         vec![("2.0".to_string(), vec!["1.0".to_string()])]
     );
 
-    // `--prune dev-libs/mm`: only mm's old versions are candidates.
+    // Named package: only its old versions are candidates.
     let narrowed = prune_cleanlist(&root, &["dev-libs/mm".to_string()], &[], &[]);
     assert_eq!(
         narrowed
@@ -691,7 +646,7 @@ fn prune_cleanlist_removes_superseded_versions_only() {
         vec!["dev-libs/mm-1.0".to_string()]
     );
 
-    // A root with only single-version cps -> nothing to prune.
+    // Single-version cps: nothing to prune.
     let root2 = masters_test_root("prune-none");
     for n in ["one", "two"] {
         let d = root2.join("var/db/pkg/dev-libs").join(format!("{n}-1.0"));

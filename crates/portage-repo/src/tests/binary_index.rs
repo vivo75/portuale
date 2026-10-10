@@ -1,10 +1,6 @@
 use super::*;
 
-/// Backlog #123: `build_local_binpkg_index` honours the CLI layer's
-/// `$PKGDIR` directory scan (`config.scanned_binpkgs`) when one
-/// exists. (The old per-inputs memo is gone: the index is built once
-/// per resolution and threaded as an `Arc`, never re-derived from
-/// `&Config` at a call site.)
+/// `build_local_binpkg_index` honours the CLI `$PKGDIR` scan when one exists.
 #[test]
 fn build_local_binpkg_index_uses_the_cli_scanned_binpkgs() {
     let config = portage_profile::Config {
@@ -26,8 +22,7 @@ fn build_local_binpkg_index_uses_the_cli_scanned_binpkgs() {
 
 #[test]
 fn list_remote_binary_candidates_reads_each_binrepos_own_packages_index() {
-    // dev-libs/remotebinpkg exists only in the binhost's Packages
-    // index -- no ebuild, no local $PKGDIR entry.
+    // Only in the binhost index: no ebuild, no local entry.
     let binrepos = vec![fixture_binhost()];
     let local = BinaryIndex::from_pkgdir(&fixtures_root().join("pkgdir"));
     let cands = list_remote_binary_candidates(
@@ -44,10 +39,7 @@ fn list_remote_binary_candidates_reads_each_binrepos_own_packages_index() {
     assert_eq!(c.repo_name, "gentoo", "from the index's own REPO field");
     assert_eq!(c.source, CandidateSource::Binary);
 
-    // A cpv+version the local $PKGDIR already carries is dropped as
-    // "already downloaded" (real bintree.isremote) -- passing the
-    // binhost index as its own `local` makes every entry look
-    // already-local, so nothing is returned.
+    // Already-local entries are dropped (Portage `bintree.isremote`).
     let none = list_remote_binary_candidates(
         &binrepos,
         Path::new("/"),
@@ -57,7 +49,7 @@ fn list_remote_binary_candidates_reads_each_binrepos_own_packages_index() {
     );
     assert!(none.is_empty());
 
-    // No binrepos configured -> no remote candidates at all.
+    // No binrepos: no remote candidates.
     assert!(
         list_remote_binary_candidates(&[], Path::new("/"), &local, "dev-libs", "remotebinpkg",)
             .is_empty()
@@ -87,8 +79,7 @@ fn dedup_binary_instances_keeps_newest_build_time_per_group() {
     };
     let cfg = test_config();
 
-    // Bare atom: newest BUILD_TIME of the group wins, regardless of
-    // input order or BUILD_ID.
+    // Bare atom: newest BUILD_TIME wins.
     let atom = portage_dep::parse_atom("dev-libs/x").unwrap();
     let out = dedup_binary_instances(
         vec![
@@ -102,8 +93,7 @@ fn dedup_binary_instances_keeps_newest_build_time_per_group() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].build_id.as_deref(), Some("3"));
 
-    // Atom `[feat]`: the instance that satisfies it wins even when a
-    // newer instance in the same group does not.
+    // Atom `[feat]`: the satisfying instance wins even when older.
     let atom_use = portage_dep::parse_atom("dev-libs/x[feat]").unwrap();
     let out = dedup_binary_instances(
         vec![bin("1.0", "1", 1000, &["feat"]), bin("1.0", "2", 2000, &[])],
@@ -113,7 +103,7 @@ fn dedup_binary_instances_keeps_newest_build_time_per_group() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].build_id.as_deref(), Some("1"));
 
-    // Ebuild candidates pass straight through, untouched.
+    // Ebuilds pass through untouched.
     let mut eb = bin("1.0", "9", 9000, &[]);
     eb.source = CandidateSource::Ebuild;
     eb.build_id = None;
@@ -122,12 +112,7 @@ fn dedup_binary_instances_keeps_newest_build_time_per_group() {
     assert_eq!(out[0].source, CandidateSource::Ebuild);
 }
 
-/// B1 bug 2: a version already present in the local `$PKGDIR` hides
-/// *every* remote build of that version, including a newer
-/// `BUILD_ID`. Real `bintree.isremote` is per instance
-/// (`cpv` + `build_id` under binpkg-multi-instance), so the newer
-/// remote build must stay a candidate and the stale local one must
-/// not shadow it.
+/// A local `$PKGDIR` version hides only its own build, never a newer remote one.
 #[test]
 fn multi_instance_local_build_does_not_shadow_a_newer_remote_build() {
     let binrepo = in_memory_binhost_1010(
@@ -152,13 +137,7 @@ fn multi_instance_local_build_does_not_shadow_a_newer_remote_build() {
     );
 }
 
-/// B1 bug 3: `find_remote_binpkg` (the download lookup) matches by
-/// `CPV` only and returns the first `Packages` entry -- the oldest
-/// build, listed first -- so `-7` is planned but `-6` is fetched into
-/// `$PKGDIR` (which then triggers bug 2). With no `BUILD_ID` to ask
-/// for, the lookup must at least return the newest build (highest
-/// `BUILD_TIME`, real `_cmp_cpv` order); the fix adds a `build_id`
-/// parameter and this stays the fallback.
+/// The download lookup falls back to the newest build when no `BUILD_ID` is asked.
 #[test]
 fn multi_instance_download_lookup_returns_the_newest_build() {
     let binrepo = in_memory_binhost_1010(
@@ -182,8 +161,7 @@ fn multi_instance_download_lookup_returns_the_newest_build() {
 
 #[test]
 fn quickpkg_direct_index_entries_reads_the_source_root_vdb() {
-    // `fixtures/quickpkgroot` has one installed package,
-    // dev-libs/quickpkgdirectpkg-1.0, with RDEPEND=dev-libs/newpkg.
+    // One installed package with an RDEPEND on newpkg.
     let src = fixtures_root().join("quickpkgroot");
     let entries = quickpkg_direct_index_entries(&src);
     assert_eq!(entries.len(), 1);
@@ -198,11 +176,10 @@ fn quickpkg_direct_index_entries_reads_the_source_root_vdb() {
         Some("dev-libs/newpkg")
     );
     assert_eq!(e.get("REPO").map(String::as_str), Some("testrepo"));
-    // An empty vdb file (DEPEND) contributes no key at all.
+    // An empty vdb file contributes no key.
     assert!(!e.contains_key("DEPEND"));
 
-    // The synthesized record is a valid binary candidate + its
-    // metadata is readable the same way a `Packages` entry's is.
+    // The synthesized record reads like a `Packages` entry.
     let index = BinaryIndex::from_entries(entries);
     let cands = list_binary_candidates(&index, "dev-libs", "quickpkgdirectpkg");
     assert_eq!(cands.len(), 1);
@@ -215,15 +192,13 @@ fn quickpkg_direct_index_entries_reads_the_source_root_vdb() {
         Some("dev-libs/newpkg"),
     );
 
-    // A root with no vdb at all is an empty list, not an error.
+    // No vdb: empty list, not an error.
     assert!(quickpkg_direct_index_entries(&fixtures_root().join("distfiles")).is_empty());
 }
 
 #[test]
 fn exclude_prevents_a_not_yet_installed_package_from_being_offered() {
-    // dev-libs/newpkg has no installed version at all -- excluding
-    // it means there's no eligible candidate left, same
-    // NoVisibleCandidate outcome as any other unsatisfiable atom.
+    // No installed version: excluding leaves no candidate.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     assert_eq!(
@@ -248,9 +223,7 @@ fn exclude_prevents_a_not_yet_installed_package_from_being_offered() {
 
 #[test]
 fn changed_slot_does_not_fire_for_a_package_with_no_recorded_difference() {
-    // dev-libs/samepkg's own vdb SLOT ("0") matches its current
-    // ebuild's own SLOT exactly -- no reinstall even with
-    // --changed-slot enabled.
+    // Matching SLOT: no reinstall even with --changed-slot.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
@@ -287,12 +260,8 @@ fn changed_slot_does_not_fire_for_a_package_with_no_recorded_difference() {
 
 #[test]
 fn changed_deps_and_changed_slot_combine_in_one_reinstall_outcome() {
-    // dev-libs/changedslotpkg's own vdb has BOTH a stale RDEPEND
-    // (samepkg, vs. the current ebuild's newpkg) and a stale SLOT
-    // ("0" vs. the current ebuild's "0/2") -- real portage treats
-    // --changed-deps and --changed-slot as independent, freely
-    // combinable triggers, so giving both must set both fields on
-    // the same Reinstall outcome, not just whichever fires first.
+    // Portage treats --changed-deps and --changed-slot as independent triggers, so
+    // both fields land on the same Reinstall outcome.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
@@ -336,12 +305,7 @@ fn changed_deps_and_changed_slot_combine_in_one_reinstall_outcome() {
 
 #[test]
 fn fixture_repo_constrained_atom_finds_the_named_repo_only() {
-    // dev-libs/overlayonlypkg exists only in the fixture's overlay
-    // repo (named "overlay" in repos.conf) -- "::overlay" must
-    // resolve it, "::testrepo" (the main repo's own name) must not,
-    // proving portage-repo's own candidate strings really do carry
-    // "::reponame" end to end, not just that portage-dep can parse
-    // and match it in isolation.
+    // Overlay-only package: `::overlay` resolves it, `::testrepo` does not.
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {

@@ -2,9 +2,7 @@ use super::*;
 
 #[test]
 fn binary_index_from_entries_feeds_list_binary_candidates_and_read_binary_metadata() {
-    // The `$PKGDIR` directory-scan path: `BinaryIndex::from_entries`
-    // (what `config.scanned_binpkgs` becomes) is consumed exactly
-    // like a parsed `<pkgdir>/Packages`.
+    // Scanned entries are consumed like a parsed `Packages` file.
     let index = BinaryIndex::from_entries(vec![HashMap::from([
         ("CPV".to_string(), "dev-libs/scanned-1.0".to_string()),
         ("SLOT".to_string(), "0".to_string()),
@@ -22,15 +20,14 @@ fn binary_index_from_entries_feeds_list_binary_candidates_and_read_binary_metada
     assert_eq!(m.get("RDEPEND").map(String::as_str), Some("dev-libs/dep"));
     assert!(read_binary_metadata(&index, "dev-libs", "scanned", "9.9").is_none());
 
-    // A missing pkgdir is an empty index (unchanged tolerance).
+    // A missing pkgdir is an empty index.
     assert!(BinaryIndex::from_pkgdir(Path::new("/nonexistent")).is_empty());
 }
 
 #[test]
 fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
-    // #69 S1: real compares a binary's baked IUSE/USE against the
-    // *same-version ebuild's* profile view, not against the binary's
-    // own selection. Binary: IUSE=foo, baked USE=foo.
+    // Portage compares baked IUSE/USE against the same-version ebuild's profile
+    // view. Binary: IUSE=foo, baked USE=foo.
     let dir = slotundo_temp_dir("binpkg-respect-use");
     let binary = || {
         let mut c = candidate("1.0", &["amd64"]);
@@ -39,8 +36,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
         c.binary_use = Some(HashSet::from(["foo".to_string()]));
         c
     };
-    // Each call gets a fresh repo dir: `repo_aux_metadata` memoises
-    // by path, and the cells rewrite the same cpv's IUSE.
+    // Fresh repo dir per cell: metadata memoises by path.
     let ebuild_at = |tag: &str, iuse: &str| {
         let repo = dir.join(format!("repo-{tag}"));
         fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
@@ -56,7 +52,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
     };
 
     let mut config = test_config();
-    // The profile selects foo, matching the binary's baked USE.
+    // The profile selects foo.
     config.conf_use_tokens = vec!["foo".to_string()];
 
     // Matching sets: kept.
@@ -72,8 +68,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
         respect_use: true
     }));
 
-    // The ebuild gained newflag: rejected by plain respect-use alone
-    // (the IUSE-set difference), the regression pin.
+    // Ebuild gained newflag: the IUSE difference rejects (regression pin).
     let ebuild = ebuild_at("newflag", "foo newflag");
     assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary(),
@@ -85,7 +80,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
         changed_use: false,
         respect_use: true
     }));
-    // ...and by --newuse even with respect-use off.
+    // Same under --newuse with respect-use off.
     assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary(),
         ebuild_at_version: Some(&ebuild),
@@ -96,8 +91,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
         changed_use: false,
         respect_use: false
     }));
-    // --reinstall=changed-use (respect-use off) only counts enabled
-    // differences: both sides enable foo -> kept.
+    // changed-use counts only enabled differences: kept.
     assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary(),
         ebuild_at_version: Some(&ebuild),
@@ -108,7 +102,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
         changed_use: true,
         respect_use: false
     }));
-    // No gate (respect-use off, no reinstall form): nothing compared.
+    // No gate: nothing compared.
     assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary(),
         ebuild_at_version: Some(&ebuild),
@@ -119,10 +113,8 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
         changed_use: false,
         respect_use: false
     }));
-    // No same-version ebuild: real `depgraph.py:8265-8271`
-    // (`pkgsettings.setcpv(pkg)`) compares against the *profile's*
-    // selection for the binary cpv over the binary's own IUSE. The
-    // profile still selects foo here, so the binary is kept.
+    // No ebuild: Portage compares the profile selection over the binary's own
+    // IUSE; foo is still selected, so the binary is kept.
     assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary(),
         ebuild_at_version: None,
@@ -133,9 +125,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
         changed_use: false,
         respect_use: true
     }));
-    // The profile no longer selects foo while the binary's baked USE
-    // has it (the #69 R0 n1 shape) -> rejected, even though there is
-    // no ebuild to compare against.
+    // Profile dropped foo while baked USE has it: rejected with no ebuild either.
     config.conf_use_tokens.clear();
     assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary(),
@@ -148,8 +138,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
         respect_use: true
     }));
 
-    // Enabled-state flip: the profile no longer selects foo while
-    // the binary was built with it -> rejected under respect-use.
+    // Enabled-state flip with an ebuild: rejected.
     let ebuild = ebuild_at("flip", "foo");
     config.conf_use_tokens.clear();
     assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
@@ -165,10 +154,7 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// #117: the `binpkg_respect_use_ok` memo is transparent (a repeated
-/// call runs the body once) and must distinguish every key axis: the
-/// ebuild's own metadata, the binary's IUSE and baked USE, the three
-/// flags, and the config.
+/// The memo is transparent and separates every key axis.
 #[test]
 fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
     let dir = slotundo_temp_dir("binpkg-respect-use-memo");
@@ -206,8 +192,7 @@ fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
         })
     };
 
-    // Unique inputs -> certainly a miss; the ebuild gained newflag, so
-    // the binary is rejected.
+    // Unique inputs: a miss; newflag rejects.
     let before = binpkg_respect_use_ok_uncached_calls();
     assert!(!call(&config, "foo", &["foo"]));
     let after_first = binpkg_respect_use_ok_uncached_calls();
@@ -218,21 +203,14 @@ fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
         after_first,
         "a repeat with identical arguments must hit the memo"
     );
-    // A differing binary IUSE misses. Here the baked USE enables
-    // newflag while the ebuild's effective USE does not, so the
-    // enabled-state term rejects: false, like the first call (only
-    // the counter can prove the miss, which is exactly why it exists).
+    // Differing binary IUSE misses (only the counter proves it).
     assert!(!call(&config, "foo newflag", &["foo newflag"]));
     assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 1);
     // A differing baked USE misses.
     assert!(!call(&config, "foo", &[]));
     assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 2);
-    // Backlog #122 (audit O4): two `repo_location`s with different
-    // md5-cache `IUSE` behind identical candidate `iuse` must not
-    // share -- the uncached body reads the ebuild's md5-cache entry
-    // through `candidate_iuse_and_use`. The old key hashed only the
-    // candidate's own `iuse` and would have served the first call's
-    // `true` for the second.
+    // Two repo_locations with different md5 IUSE behind the same candidate iuse
+    // must not share.
     let ebuild_at_same_iuse = |tag: &str, md5_iuse: &str| {
         let repo = dir.join(format!("repo-same-iuse-{tag}"));
         fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
@@ -270,8 +248,7 @@ fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
         respect_use: true
     }));
     assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 4);
-    // Backlog #124 E3: the build identity separates instances -- the
-    // same CPV at a different BUILD_ID is a miss, and a repeat hits.
+    // The build identity separates instances: a miss, then a hit.
     let mut other_build = binary("foo", &["foo"]);
     other_build.build_id = Some("2".to_string());
     assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
@@ -307,14 +284,8 @@ fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// #69 R2 / real `depgraph.py:3148-3150` (`flags -= forced_flags`):
-/// a flag the profile force/masks never rejects a binary through the
-/// IUSE *presence* difference alone. The ebuild gained a **masked**
-/// flag (`mflag`, disabled on the ebuild side) and, in the second
-/// cell, a **forced** one (`fflag`, enabled): the masked cell keeps
-/// the binary (this is the R0 n3a shape and the regression pin for
-/// the subtraction), the forced cell rejects through the
-/// enabled-within-IUSE term instead (R0 n3b).
+/// A profile forced/masked flag never rejects through the IUSE presence
+/// difference alone: masked keeps, forced rejects on enabled state.
 #[test]
 fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
     let dir = slotundo_temp_dir("binpkg-respect-use-forced");
@@ -346,8 +317,7 @@ fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
         ..Default::default()
     }];
 
-    // Masked flag added to the ebuild's IUSE: presence difference is
-    // subtracted, enabled states agree (disabled on both sides).
+    // Masked flag: presence subtracted, states agree (disabled both sides).
     let ebuild = ebuild_at("masked", "foo mflag");
     assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary(),
@@ -370,9 +340,8 @@ fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
         respect_use: true
     }));
 
-    // Forced flag added to the ebuild's IUSE: presence difference is
-    // subtracted too, but the ebuild side now *enables* it, so the
-    // enabled-within-IUSE term rejects -- exactly real's n3b cell.
+    // Forced flag: subtracted too, but the ebuild enables it, so the enabled
+    // term rejects.
     let ebuild = ebuild_at("forced", "foo fflag");
     assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary(),
@@ -385,10 +354,7 @@ fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
         respect_use: false
     }));
 
-    // The no-ebuild arm passes the binary cpv's own force/mask set
-    // (real's `pkgsettings.useforce ∪ usemask`), though its presence
-    // term is empty by construction there (`cur_iuse = old_iuse`),
-    // so the outcome is the same keep either way.
+    // No-ebuild arm: the binary's own force/mask set (Portage `useforce ∪ usemask`).
     let mut masked_binary = binary();
     masked_binary.iuse = "foo mflag".to_string();
     masked_binary.binary_use = Some(HashSet::from(["foo".to_string()]));
@@ -405,24 +371,15 @@ fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Audit D1 (`LLM/02.68-74-review-through-B5.md`): the subtraction
-/// input is not intersected with the ebuild's IUSE. A flag the
-/// profile masks that the new ebuild's IUSE has **dropped** is
-/// forgiven on the presence term -- real keeps the binary (probed
-/// live against 3.0.82.2: `_reinstall_for_flags` returns `None`;
-/// `depgraph.py:8264` chains `myeb.use.force/mask` unfiltered, and
-/// `config.setcpv`'s `getUseMask(cpv_slot)` never filters by IUSE).
-/// The old filtered set (R2's `forced_or_masked_flags`) lost the
-/// flag, so the presence difference rejected the binary.
+/// The subtraction input is not intersected with the ebuild's IUSE: a masked flag
+/// the ebuild dropped is forgiven on the presence term.
 #[test]
 fn binpkg_respect_use_forgives_a_profile_masked_flag_the_ebuild_iuse_dropped() {
     let dir = slotundo_temp_dir("binpkg-respect-use-dropped-masked");
     let binary = {
         let mut c = candidate("1.0", &["amd64"]);
         c.source = CandidateSource::Binary;
-        // Baked IUSE carries the flag the ebuild dropped; the baked
-        // USE does *not* enable it (a masked flag cannot be baked
-        // enabled -- the live probe's `orig_use` is `{"foo"}`).
+        // Baked IUSE carries the dropped flag; baked USE does not enable it.
         c.iuse = "foo removed".to_string();
         c.binary_use = Some(HashSet::from(["foo".to_string()]));
         c
@@ -444,9 +401,7 @@ fn binpkg_respect_use_forgives_a_profile_masked_flag_the_ebuild_iuse_dropped() {
         ..Default::default()
     }];
 
-    // Real's subtraction forgives `removed` despite the IUSE
-    // difference (binary had it, ebuild does not): the binary is
-    // kept under --newuse and under respect-use alike.
+    // Portage forgives `removed` despite the IUSE difference: kept under both gates.
     assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
         candidate: &binary,
         ebuild_at_version: Some(&ebuild),
@@ -468,9 +423,7 @@ fn binpkg_respect_use_forgives_a_profile_masked_flag_the_ebuild_iuse_dropped() {
         respect_use: true
     }));
 
-    // Control, the pre-D1 shape: without the profile masking the
-    // flag the presence difference does reject -- the profile
-    // masking, not the filter, is what carries the keep.
+    // Control: unmasked, the presence difference rejects.
     let mut config_unmasked = config.clone();
     config_unmasked.use_mask_force_levels.clear();
     assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
@@ -514,8 +467,7 @@ fn read_binary_metadata_any_falls_back_to_a_binrepo_index() {
         binrepos: vec![fixture_binhost()],
         ..test_config()
     };
-    // Not in the (empty) local index; found in the binrepo's cached
-    // `Packages`, SIZE and REPO carried through.
+    // Falls back to the binrepo index.
     let m = read_binary_metadata_any(ReadBinaryMetadataAnyArgs {
         config: &config,
         root: Path::new("/"),

@@ -1,8 +1,7 @@
 use super::*;
 
-/// Backlog #214 (v2 `#24e`): the conflict-fired probe schedules the
-/// installed `:=` parent for rebuild instead of reporting, with one
-/// guard arm per coded gate.
+/// The conflict-fired probe rebuilds the installed `:=` parent instead of
+/// reporting, with one guard arm per gate.
 #[test]
 fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
     let (base, repos) = abi_probe_harness(true);
@@ -65,7 +64,6 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
     };
     let abicons = ("app-misc".to_string(), "abicons".to_string());
     let entries = abi_probe_entries(installed_consumer.clone());
-    // Positive: the installed `:=` parent rebuilds.
     assert_eq!(
         probe(
             &entries,
@@ -75,7 +73,6 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         ),
         BTreeSet::from([abicons.clone()])
     );
-    // Merge-bound parent rebinds through its own walk: no probe.
     let merging = abi_probe_entries(PretendOutcome::New {
         version: "1".to_string(),
     });
@@ -100,7 +97,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         .is_empty(),
         "an in-flight rebuild is not scheduled twice"
     );
-    // Excluded parent: real's `excluded_pkgs` skip.
+    // Excluded parent is never force-rebuilt (Portage's `excluded_pkgs` skip).
     assert!(
         probe(
             &entries,
@@ -111,8 +108,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         .is_empty(),
         "an excluded parent is never force-rebuilt"
     );
-    // Non-built atom: a plain version pin is a real conflict, not an
-    // ABI rebuild (real's `slot_operator_built` gate).
+    // Plain version pin is a conflict, not a rebuild (Portage's `slot_operator_built` gate).
     let plain = abi_conflict_record(
         vec![(force_cpv, ">=app-misc/abiprov-2")],
         vec![(cons_cpv, "=app-misc/abiprov-1")],
@@ -121,13 +117,13 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         probe(&entries, &[plain], &BTreeSet::new(), &[]).is_empty(),
         "a non-slot-operator pin reports instead of rebuilding"
     );
-    // `(Argument)` parent: not a package, real skips it.
+    // `(Argument)` parent is not a package; Portage skips it.
     let arg_only = abi_conflict_record(vec![], vec![("", "app-misc/abiprov:0/1=")]);
     assert!(
         probe(&entries, &[arg_only], &BTreeSet::new(), &[]).is_empty(),
         "a top-level atom schedules no rebuild"
     );
-    // Same sub-slot on both instances: no ABI shift to chase.
+    // Same sub-slot on both instances: no ABI shift.
     let mut same_sub = record.clone();
     same_sub.instances[1].sub_slot = "2".to_string();
     same_sub.instances[1].parents = vec![SlotConflictParent {
@@ -140,15 +136,14 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         probe(&entries, &[same_sub], &BTreeSet::new(), &[]).is_empty(),
         "identical sub-slots are not an ABI update"
     );
-    // Downgrade direction: the other instance is older.
+    // Downgrade direction: never the update target.
     let mut older_other = record.clone();
     older_other.instances[0].version = "0".to_string();
     assert!(
         probe(&entries, &[older_other], &BTreeSet::new(), &[]).is_empty(),
         "an older other-instance is never the update target"
     );
-    // No same-version ebuild for the parent: the forced reinstall
-    // would dead-end.
+    // No same-version ebuild: a forced reinstall would dead-end.
     let (bare_base, bare_repos) = abi_probe_harness(false);
     let walked: HashSet<(String, String)> = entries
         .iter()
@@ -187,8 +182,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         .is_empty(),
         "without a visible replacement the probe does nothing"
     );
-    // Veto: another installed parent rejects the fresh candidate
-    // (the R2 refusal, same gate as the scan).
+    // Veto: another installed parent rejects the candidate.
     let veto_dir = base.join("var/db/pkg/app-misc").join("abiveto-1");
     fs::create_dir_all(&veto_dir).unwrap();
     fs::write(veto_dir.join("CATEGORY"), "app-misc\n").unwrap();
@@ -214,11 +208,8 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         .is_empty(),
         "a vetoed candidate refuses the whole replacement"
     );
-    // #254: the replacement's `:=` under a USE conditional that is off
-    // in the tree ebuild. Real's `_select_atoms_probe`
-    // (`_emerge/depgraph.py:2667-2713`) evaluates it against the
-    // replacement's USE, so the atom is not selected and the probe
-    // refuses; a flat token match would accept it.
+    // Portage evaluates the `:=` against the replacement's USE, so an off-flag
+    // conditional refuses where a flat token match would accept.
     {
         use md5::Digest as _;
         let (cond_base, cond_repos) = abi_probe_harness(true);
@@ -271,10 +262,8 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
     let _ = fs::remove_dir_all(&bare_base);
 }
 
-/// Backlog #214 (v2 `#24e`): the settle-time display continuity --
-/// a `slot_operator_rebuild` reinstall re-derives its
-/// `(provider-cpv, consumer-cpv)` pair from the recorded built atom
-/// and the merged provider, so the `causing rebuilds` block renders
+/// Settle-time display continuity: a `slot_operator_rebuild` reinstall re-derives
+/// its pair from the built atom and the merged provider, so the block renders
 /// even though the firing pass restarted.
 #[test]
 fn slot_conflict_abi_display_pairs_follow_the_rebuild() {
@@ -299,14 +288,13 @@ fn slot_conflict_abi_display_pairs_follow_the_rebuild() {
         },
         slot: Some("0".into()),
         sub_slot: Some("2".into()),
-        // #254: the rebuilt consumer's own walk pulls the provider
-        // (real pairs only a child of the replacement).
+        // Only a child of the replacement pairs (Portage).
         required_by: vec![("app-misc".to_string(), "abicons".to_string())],
         ..graph_entry("app-misc", "abiprov", "2")
     };
     let set: BTreeSet<(String, String)> =
         BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]);
-    // Positive: the rebuilt consumer re-derives its provider pair.
+    // Rebuilt consumer re-derives its pair.
     assert_eq!(
         slot_conflict_abi_display_pairs(&base, &[reinstall(true), provider.clone()], &set, true),
         vec![(
@@ -314,9 +302,7 @@ fn slot_conflict_abi_display_pairs_follow_the_rebuild() {
             "app-misc/abicons-1".to_string()
         )]
     );
-    // #254: the rebuilt consumer does not pull the provider (its new
-    // build dropped the `:=`, e.g. a USE conditional now off): real's
-    // `_compute_abi_rebuild_info` finds no child, so no pair.
+    // Provider no longer pulled (USE conditional now off): no pair.
     let unpulled = GraphEntry {
         required_by: Vec::new(),
         ..provider.clone()
@@ -354,9 +340,8 @@ fn slot_conflict_abi_display_pairs_follow_the_rebuild() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// Backlog #288: an argument atom is a probe parent of its own cp and
-/// vetoes a provider candidate it does not match (real
-/// `_slot_operator_check_reverse_dependencies` over `_parent_atoms`).
+/// An argument atom is a probe parent of its own cp and vetoes candidates its
+/// atom does not match.
 #[test]
 fn argument_probe_parents_veto_a_candidate_the_argument_does_not_match() {
     let mut parents: HashMap<(String, String), Vec<ProbeParent>> = HashMap::new();
