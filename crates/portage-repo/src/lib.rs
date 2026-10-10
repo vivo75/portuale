@@ -13773,39 +13773,45 @@ fn dependency_avoid_update_candidate<'a>(
 /// `changed_slot`/`rebuilt_binaries`/`newrepo` each independently able
 /// to trigger a reinstall even though no real version change is
 /// happening at all.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-#[allow(clippy::fn_params_excessive_bools, reason = "#336 Phase 5 worklist")]
 fn already_installed_or_reinstall(
-    root: &Path,
-    repos: &[RepoConfig],
-    config: &portage_profile::Config,
+    source: &SelectSource,
+    opts: &SelectOptions,
     atom: &portage_dep::Atom,
     installed_best: &Candidate,
-    newuse: bool,
-    changed_use: bool,
-    changed_deps: bool,
-    with_bdeps: bool,
-    changed_slot: bool,
-    usepkg: bool,
-    usepkgonly: bool,
-    rebuilt_binaries: bool,
-    rebuilt_binaries_timestamp: Option<u64>,
     // `BUILD_TIME` of the binary candidate (local or remote) at
     // `installed_best.version`, for the `--rebuilt-binaries` check --
     // `None` when the pool has no binary for this version.
     binary_build_time: Option<i64>,
-    newrepo: bool,
-    // `--emptytree`/`-e` (real `create_depgraph_params.py:176` --
-    // `myparams["empty"] = True`, `depgraph.py:7889` -- installed
-    // packages are not selected as candidates, so every atom in the
-    // deep tree resolves to a merge). Portuale's candidate pool is
-    // already tree-only, so `empty` just forces the "would be
-    // `AlreadyInstalled`" fallback to a bare `Reinstall` instead
-    // (real `output.py`: `attr_display.replace` still set from
-    // `vardb.cpv_exists`, no `[oldver]`, no reason -- exactly the
-    // portuale's own reasonless `[ebuild R]`).
-    empty: bool,
 ) -> Result<PretendOutcome, Error> {
+    let SelectSource {
+        repos,
+        root,
+        config,
+        ..
+    } = *source;
+    let SelectOptions {
+        newuse,
+        changed_use,
+        changed_deps,
+        with_bdeps,
+        changed_slot,
+        usepkg,
+        usepkgonly,
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        newrepo,
+        // `--emptytree`/`-e` (real `create_depgraph_params.py:176` --
+        // `myparams["empty"] = True`, `depgraph.py:7889` -- installed
+        // packages are not selected as candidates, so every atom in the
+        // deep tree resolves to a merge). Portuale's candidate pool is
+        // already tree-only, so `empty` just forces the "would be
+        // `AlreadyInstalled`" fallback to a bare `Reinstall` instead
+        // (real `output.py`: `attr_display.replace` still set from
+        // `vardb.cpv_exists`, no `[oldver]`, no reason -- exactly the
+        // portuale's own reasonless `[ebuild R]`).
+        empty,
+        ..
+    } = *opts;
     let changed_flags = if newuse || changed_use {
         reinstall_flags_for_use_change(
             root,
@@ -14355,23 +14361,11 @@ pub fn resolve_pretend(
         .filter(|c| satisfies_extra_constraints(c))
         {
             return already_installed_or_reinstall(
-                root,
-                repos,
-                config,
+                source,
+                opts,
                 &atom,
                 installed_best,
-                newuse,
-                changed_use,
-                changed_deps,
-                with_bdeps,
-                changed_slot,
-                usepkg,
-                usepkgonly,
-                rebuilt_binaries,
-                rebuilt_binaries_timestamp,
                 best_binary_build_time(&candidates, &installed_best.version),
-                newrepo,
-                empty,
             );
         }
     }
@@ -14766,23 +14760,11 @@ pub fn resolve_pretend(
         };
         if let Some(installed_best) = installed_best {
             return already_installed_or_reinstall(
-                root,
-                repos,
-                config,
+                source,
+                opts,
                 &atom,
                 installed_best,
-                newuse,
-                changed_use,
-                changed_deps,
-                with_bdeps,
-                changed_slot,
-                usepkg,
-                usepkgonly,
-                rebuilt_binaries,
-                rebuilt_binaries_timestamp,
                 best_binary_build_time(&candidates, &installed_best.version),
-                newrepo,
-                empty,
             );
         }
     }
