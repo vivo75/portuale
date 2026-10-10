@@ -29,7 +29,7 @@ Skipped-update records (withheld upgrades, backtrack-mask rows) and their groupi
 
 ## fn group_skipped_updates
 - Backlog #129 (review round 2): Portage `_get_missed_updates` keeps one entry per `(root, slot_atom)` (`lib/_emerge/depgraph.py:1553-1562`) -- the highest missed pkg with its whole `(parent, atom)` set (`:2090-2106` accumulates into a set per pkg) -- and `_show_missed_update_slot_conflicts` (`:1650+`) renders one block per entry with every parent line inside. Portuale's rows stay one per rejecting parent (the established #90 S2 shape, which `collapse_skipped_updates` also assumes). Portage itself iterates an unordered set -- `Package` keeps identity hash (`_emerge/Package.py:27`) -- so its within-block order is hash order; the `blk0b blk0c blk0a` oracle's b-then-c order is what the sorted direct rows give here.
-- Mask rows arrive in first-seen mask order, direct rows in first-seen block order.
+- `GraphResult::skipped_updates` order is preserved: groups keep first-seen order, parents keep row order -- mask rows arrive in first-seen mask order, direct rows in first-seen block order.
 
 ## fn backtrack_masked_match
 - Backlog #129 (S1): Portage `_show_unsatisfied_dep(..., check_backtrack=True)` (`depgraph.py:6471-6484`) -- no output, just the verdict: `true` when the atom matches a version the settled backtrack state still masks (Portage raises `_backtrack_mask`, and the missed update renders in the abbreviated tail). USE-deps are stripped for the match, exactly like the missed-update recording's plain-match form (`direct_solve_atom_matches`' `for_skipped` arm, `:2083-2094`).

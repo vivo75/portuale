@@ -230,7 +230,7 @@ pub(crate) fn resolve_root_deps_build_entries(
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
             Some(to.clone())
         }
-    // A removal is never walked (it has no deps).
+        // A removal is never walked (it has no deps).
         PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
         PretendOutcome::AlreadyInstalled { .. } => return Vec::new(),
     };
