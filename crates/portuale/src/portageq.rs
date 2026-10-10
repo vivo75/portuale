@@ -1,47 +1,18 @@
-// `portuale portageq`: native `has_version` / `best_version` (feat#157,
-// backlog #305 S6.2).
-//
-// Real `bin/portageq` is a Python program that reads `var/db/pkg`
-// directly, so on a database-backed ROOT it cannot see the installed
-// packages. This applet answers the same two questions from the
-// installed-package database behind `portage_vdb`, and nothing else:
-// every other portageq command is refused by name.
-//
-// Behaviour contract: `LLM/evidence/305-s6-portageq.md` ("Rules the
-// native implementation must follow", rules 1-10), taken from real
-// `bin/portageq:80-203` and `:1408-1425`. Where the captures table and
-// the rules disagree, the rules win. Design: `docs/vdb_to_db.md` §10.
-//
-// Matching reuses the resolver's own installed-package matcher
-// (`portage_repo::best_installed_match`, the `best_installed_matching`
-// core): slot, sub-slot, version operators, `::repo`, USE deps against the
-// installed `USE`. There is no second matcher here.
-//
-// Backend: `PORTUALE_VDB_BACKEND` + `PORTUALE_VDB_PATH` (exported by `mrg`
-// to its children) select a database; `PORTUALE_VDB_ROOT` (also exported
-// by `mrg`) names the ROOT that database belongs to. The database is
-// registered only for that root: `has_version -b` asks about BROOT `/`
-// while ROOT is a chroot, and that other root keeps the files layout.
-// Without `PORTUALE_VDB_ROOT` the database is used for whatever <eroot>
-// is given (a hand-set environment names the backend explicitly).
-//
-// redb (S6.3, owner question Q5): redb allows one process per file, and a
-// merging `mrg` holds it read-write, so this helper cannot open it. `mrg`
-// then serves the lookups over a Unix socket and exports its path in
-// `PORTUALE_VDB_IPC` (`vdb_ipc.rs`, real Portage's `ebuild-ipc` pattern).
-// When the backend is redb, the <eroot> is the database's root and
-// `PORTUALE_VDB_IPC` is set, every installed-package lookup goes to the
-// parent: the match (`best_installed_match`) and `dep_expand`'s category
-// lookup. Everything else -- rules 1-10, the strict parse, the EAPI QA
-// notice, USE-conditional evaluation, the implicit IUSE from the config,
-// the output and exit codes -- stays here, in one place for every
-// backend. A pipe that cannot be reached, or an `err` reply, is exit 4
-// (never 1: that would read as "not installed"). The parent answers from
-// its last committed state: during `pkg_preinst` the old instance, until
-// the new one is published. Files and sqlite never use the pipe (they
-// open the database directly, read-only); redb without the variable
-// keeps S5.4's behaviour: read directly when nobody holds the file, exit
-// 4 naming the missing variable when somebody does.
+//! `portuale portageq`: native `has_version` / `best_version` over the
+//! installed-package database. Every other portageq command is refused by
+//! name.
+//!
+//! Matching reuses the resolver's own installed-package matcher
+//! (`portage_repo::best_installed_match`); there is no second matcher here.
+//! Backend: `PORTUALE_VDB_BACKEND` + `PORTUALE_VDB_PATH` (exported by `mrg`
+//! to its children) select a database, `PORTUALE_VDB_ROOT` names the ROOT it
+//! belongs to. On redb, held read-write by a running `mrg`, lookups go to the
+//! parent over the socket in `PORTUALE_VDB_IPC`.
+//!
+//! Behaviour contract: `LLM/evidence/305-s6-portageq.md` ("Rules the native
+//! implementation must follow", rules 1-10). Where the captures table and
+//! the rules disagree, the rules win.
+// Portage: bin/portageq; dbapi/dep_expand.py, dep_expand; eapi.py, _get_eapi_attrs
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -53,10 +24,9 @@ const USAGE: &str = "usage: portuale portageq {has_version|best_version} <eroot>
 
 /// Exit code for "the helper itself failed" (cannot open the database,
 /// ambiguous bare name). `phase-helpers.sh` treats anything but 0/1 from
-/// `has_version` as fatal (`unexpected portageq exit code`), which is
-/// right: 1 would read as "not installed".
+/// `has_version` as fatal, which is right: 1 would read as "not installed".
 const EX_INTERNAL: u8 = 4;
-/// `os.EX_USAGE`, what real portageq exits with for a bad <eroot>.
+/// `os.EX_USAGE`, for a bad <eroot>.
 const EX_USAGE: u8 = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,8 +65,6 @@ pub fn run(args: &[String]) -> ExitCode {
 }
 
 fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
-    // Real: `uses_eroot` only when an <eroot> argument is present; it must
-    // be a directory (`portageq:1469-1475`).
     if let Some(eroot) = rest.first()
         && !Path::new(eroot).is_dir()
     {
@@ -111,11 +79,10 @@ fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
     }
     let root = PathBuf::from(&rest[0]);
     let raw = rest[1].as_str();
-    // Where the installed packages are read; decided at the first lookup,
-    // so the argument and atom errors (rules 1, 4) never depend on it.
+    // Decided at the first lookup, so argument/atom errors never depend on it.
     let mut lookup: Option<Lookup> = None;
 
-    // Rule 3: strict iff EBUILD_PHASE is set; EAPI then decides.
+    // Strict iff EBUILD_PHASE is set; EAPI then decides.
     let strict = std::env::var_os("EBUILD_PHASE").is_some();
     let eapi: Option<String> = if strict {
         std::env::var("EAPI").ok()
@@ -126,7 +93,6 @@ fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
 
     let parsed = portage_dep::parse_atom(raw).filter(|a| a.repo.is_none() || allow_repo);
 
-    // The atom string handed to the matcher, and its unevaluated original.
     let (atom, unevaluated): (String, Option<String>) = match parsed {
         Some(a) => {
             if strict && let Some(msg) = eapi_violation(&a, raw, eapi.as_deref()) {
@@ -164,17 +130,16 @@ fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
                 Ok(a) => (a, None),
                 Err(ExpandError::Invalid) => {
                     eprintln!("ERROR: Invalid atom: '{raw}'");
-                    // Real: has_version catches InvalidAtom (exit 2);
-                    // best_version dies with a traceback (exit 1). We keep
-                    // the exit code and print the line instead of the
-                    // traceback.
+                    // `has_version` exits 2, `best_version` 1 (which dies
+                    // with a traceback under Portage; the line without the
+                    // traceback is a documented divergence).
                     return match cmd {
                         Cmd::HasVersion => 2,
                         Cmd::BestVersion => 1,
                     };
                 }
                 Err(ExpandError::Ambiguous(list)) => {
-                    // Real: AmbiguousPackageName, uncaught, exit 1.
+                    // Uncaught under Portage too: exit 1.
                     eprintln!("ERROR: ambiguous package name '{raw}': {}", list.join(" "));
                     return 1;
                 }
@@ -197,7 +162,7 @@ fn run_query(cmd: Cmd, rest: &[String]) -> u8 {
     };
 
     // Rule 7: the resolver's own installed-package matcher, here or in the
-    // parent `mrg` (S6.3).
+    // parent `mrg`.
     let implicit = || -> HashSet<String> {
         crate::pretend::load_repos_and_config(&portage_repo::config_root_from_env(), &root)
             .map(|(_, config)| config.iuse_effective)
@@ -247,8 +212,7 @@ enum Lookup {
     /// `portage_vdb::for_root(eroot)`: the files tree, or the database
     /// registered by [`setup_backend`].
     Local,
-    /// The parent `mrg`, over the socket named in `PORTUALE_VDB_IPC`
-    /// (redb only, Q5; see `vdb_ipc.rs`).
+    /// The parent `mrg`, over the socket named in `PORTUALE_VDB_IPC`.
     Parent(PathBuf),
 }
 
@@ -256,11 +220,9 @@ enum Lookup {
 /// the database `mrg` exported for this root, if any. The default (files)
 /// needs nothing: `portage_vdb::for_root` falls back to it.
 fn setup_backend(eroot: &Path) -> Result<Lookup, String> {
-    // #318: a standalone `portageq` (no `emerge`/`ebuild`/`mrg` above it
-    // exported a choice) follows make.conf's `PORTUALE_VDB_BACKEND` /
-    // `PORTUALE_VDB_PATH`, as those applets do, so every tool reads the
-    // database `emerge` writes. Any exported value, `files` included,
-    // wins without resolving the config: phases never pay for it.
+    // A standalone `portageq` (no applet above it exported a choice)
+    // follows make.conf, as those applets do; any exported value, `files`
+    // included, wins without resolving the config.
     if std::env::var_os("PORTUALE_VDB_BACKEND").is_none() {
         let sel = crate::mrg::resolve_vdb_selection(
             None,
@@ -288,13 +250,12 @@ fn setup_backend(eroot: &Path) -> Result<Lookup, String> {
     if kind == BackendKind::Files {
         return Ok(Lookup::Local);
     }
-    // Which root does the database belong to?
     if let Some(db_root) = std::env::var_os("PORTUALE_VDB_ROOT").filter(|v| !v.is_empty())
         && !same_root(Path::new(&db_root), eroot)
     {
         return Ok(Lookup::Local);
     }
-    // S6.3, Q5: on redb the parent holds the file; ask it.
+    // On redb the parent holds the file; ask it over the socket.
     if kind == BackendKind::Redb
         && let Some(socket) = std::env::var_os(crate::vdb_ipc::IPC_VAR).filter(|v| !v.is_empty())
     {
@@ -337,9 +298,9 @@ fn open_sqlite_readonly(_path: &Path) -> Result<SharedDb, String> {
 
 /// redb allows one process per file. A read-only open succeeds only when
 /// nobody holds the file read-write (a helper run by hand, outside `mrg`).
-/// Under a running `mrg` on redb the file is held and the helper asks the
-/// parent over `PORTUALE_VDB_IPC` instead (S6.3, [`setup_backend`]); this
-/// open is reached only when that variable is missing, so a `Busy` says so.
+/// Under a running `mrg` the file is held and the helper asks the parent
+/// over `PORTUALE_VDB_IPC` instead; reached only when that variable is
+/// missing, so a `Busy` says so.
 #[cfg(feature = "vdb-redb")]
 fn open_redb_readonly(path: &Path) -> Result<SharedDb, String> {
     match portage_vdb::RedbDb::open_readonly(path) {
@@ -382,12 +343,11 @@ pub(crate) fn same_root(a: &Path, b: &Path) -> bool {
 }
 
 // ---------------------------------------------------------------------
-// EAPI-aware atom validation (real `Atom(..., eapi=)`)
+// EAPI-aware atom validation
 // ---------------------------------------------------------------------
 
 /// Numeric EAPI for the attribute comparisons, `None` for a missing or
-/// unsupported EAPI: real `_get_eapi_attrs` then returns the permissive
-/// attribute set (`eapi.py:48`).
+/// unsupported EAPI (which then yields the permissive attribute set).
 fn eapi_number(eapi: Option<&str>) -> Option<u32> {
     let eapi = eapi?;
     if !portage_repo::md5_dict::eapi_is_supported(eapi) {
@@ -401,20 +361,18 @@ fn eapi_number(eapi: Option<&str>) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// Real `eapi_has_repo_deps`: false for every numbered EAPI, true for the
-/// permissive (missing or unsupported) attribute set. So under
-/// `EBUILD_PHASE` with a real `EAPI`, `::repo` atoms are invalid.
+/// Whether `::repo` atoms are allowed: false for every numbered EAPI, true
+/// for the permissive set (so `::repo` is invalid under `EBUILD_PHASE`).
 fn eapi_has_repo_deps(eapi: Option<&str>) -> bool {
     eapi_number(eapi).is_none()
 }
 
-/// The error real `Atom(raw, allow_repo=..., eapi=eapi)` raises for an
-/// atom the EAPI-less parse accepted, if any (`dep/__init__.py:2090-2150`).
+/// The error for an atom the EAPI-less parse accepted but the `EAPI` forbids,
+/// if any.
 fn eapi_violation(atom: &portage_dep::Atom, raw: &str, eapi: Option<&str>) -> Option<String> {
     let n = eapi_number(eapi)?;
     let eapi = eapi?;
-    // Pre-EAPI-5 slot grammar has no sub-slot and no operator: the slot
-    // regex rejects the atom outright (`InvalidAtom(self._string)`).
+    // Pre-EAPI-5 slot grammar has no sub-slot and no operator.
     if n < 5 && (atom.slot_operator.is_some() || atom.sub_slot.is_some()) {
         return Some(raw.to_string());
     }
@@ -440,19 +398,16 @@ fn eapi_violation(atom: &portage_dep::Atom, raw: &str, eapi: Option<&str>) -> Op
 }
 
 // ---------------------------------------------------------------------
-// QA notices (real `elog("eqawarn", lines)`, portageq:1408-1425)
+// QA notices
 // ---------------------------------------------------------------------
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Real portageq runs `bash -c "source '$PORTAGE_BIN_PATH/isolated-functions.sh' ;
-/// eqawarn '<line>' ; ..."`, so the notice goes through the ebuild's own
-/// elog machinery (log file, `PORTAGE_ELOG_*`). Do the same when
-/// `PORTAGE_BIN_PATH` names a directory holding `isolated-functions.sh`.
-/// Otherwise (no phase environment) print ` * <line>` on stderr, the
-/// plain-text form of `eqawarn`'s output.
+/// The notice goes through the ebuild's own elog machinery when
+/// `PORTAGE_BIN_PATH` holds `isolated-functions.sh` (via `bash -c "source
+/// ... ; eqawarn '<line>'"`). Otherwise prints ` * <line>` on stderr.
 fn eqawarn(lines: &[String]) {
     if let Some(bin) = std::env::var_os("PORTAGE_BIN_PATH").filter(|v| !v.is_empty()) {
         let bin = PathBuf::from(bin);
@@ -478,19 +433,18 @@ fn eqawarn(lines: &[String]) {
 }
 
 // ---------------------------------------------------------------------
-// dep_expand (real `portage/dbapi/dep_expand.py`, the fall-through path)
+// dep_expand (the fall-through path for strings the strict parse rejects)
 // ---------------------------------------------------------------------
 
 enum ExpandError {
     Invalid,
     Ambiguous(Vec<String>),
-    /// The parent pipe failed (S6.3).
+    /// The parent pipe failed.
     Internal(String),
 }
 
-/// The categories that have `pn` installed under `root` (the
-/// `cpv_expand` lookup of [`dep_expand`]). Also what the parent pipe
-/// answers to a `categories` request (`vdb_ipc.rs`).
+/// The categories that have `pn` installed under `root`. Also what the
+/// parent pipe answers to a `categories` request.
 pub(crate) fn installed_categories_of(root: &Path, pn: &str) -> Vec<String> {
     portage_vdb::for_root(root)
         .categories()
@@ -500,11 +454,9 @@ pub(crate) fn installed_categories_of(root: &Path, pn: &str) -> Vec<String> {
         .collect()
 }
 
-/// What `vardb.match()` does to a string the strict `Atom()` parse
-/// rejected: a missing `=` prefix is allowed (`cat/pkg-1.0`), and a name
-/// without a category is expanded to the one category that has it
-/// installed (`cpv_expand`); none installed leaves `null/<pn>`, which
-/// matches nothing.
+/// What `vardb.match()` does to a string the strict `Atom()` parse rejected:
+/// a missing `=` prefix is allowed, and a bare name expands to its installed
+/// category; none installed leaves `null/<pn>`, which matches nothing.
 fn dep_expand(source: &Lookup, root: &Path, raw: &str) -> Result<String, ExpandError> {
     let orig = raw.strip_prefix('*').unwrap_or(raw);
     if orig.is_empty() {
@@ -622,9 +574,8 @@ mod tests {
         )
     }
 
-    /// Run `<cmd> <fixtures> <atom>` on the files tree and, with the
-    /// sqlite feature, on the sqlite conversion of the same root; the two
-    /// must be identical (S6.2 acceptance). Returns the common result.
+    /// Run `<cmd> <fixtures> <atom>` on the files tree and, with the sqlite
+    /// feature, on the sqlite conversion; the two must be identical.
     fn q(cmd: &str, atom: &str, env: &[(&str, &str)]) -> Res {
         let fx = fixtures();
         let fx = fx.to_str().unwrap();
@@ -652,8 +603,7 @@ mod tests {
         out
     }
 
-    /// Evidence captures 1, 2; rule 8: exit 0 when installed, 1 when not,
-    /// nothing printed.
+    /// Rule 8: exit 0 when installed, 1 when not, nothing printed.
     #[test]
     fn found_and_not_found() {
         assert_eq!(has("dev-libs/keeper", &[]), 0);
@@ -689,8 +639,7 @@ mod tests {
         );
     }
 
-    /// Evidence capture 14; rules 7 and 8 (`::repo`, allowed outside a
-    /// phase).
+    /// Rule 7 (`::repo`, allowed outside a phase).
     #[test]
     fn repo_atoms() {
         assert_eq!(has("dev-libs/newrepopkg::oldrepo", &[]), 0);
@@ -698,9 +647,8 @@ mod tests {
         assert_eq!(has("dev-libs/keeper::testrepo", &[]), 0);
     }
 
-    /// Evidence captures 5, 6; rule 7: `[flag]` / `[-flag]` against the
-    /// installed package's own `USE`, and a flag outside its `IUSE` never
-    /// matches (real `_match_use`).
+    /// Rule 7: `[flag]` / `[-flag]` against the installed package's own `USE`;
+    /// a flag outside its `IUSE` never matches.
     #[test]
     fn use_deps_against_installed_use() {
         // infoinstpkg: USE=alpha, IUSE=alpha beta.
@@ -714,10 +662,8 @@ mod tests {
         assert_eq!(has("dev-libs/infoinstpkg[nosuchflag(-)]", &[]), 1);
     }
 
-    /// Evidence captures 7, 8; rule 2: `[flag?]` is evaluated against
-    /// `$USE` only when `USE` is set; the dropped conditional's flag must
-    /// still be in the installed `IUSE` (real checks the unevaluated
-    /// atom's `.required`).
+    /// Rule 2: `[flag?]` is evaluated against `$USE` only when `USE` is set;
+    /// the dropped conditional's flag must still be in the installed `IUSE`.
     #[test]
     fn use_conditionals_follow_the_environment_use() {
         // beta is in IUSE but not enabled.
@@ -745,8 +691,7 @@ mod tests {
         );
     }
 
-    /// Evidence capture 10; rule 4: strict (`EBUILD_PHASE` set) and
-    /// unparsable: stderr line, exit 2, nothing on stdout, no QA notice.
+    /// Rule 4: strict and unparsable: stderr line, exit 2, no QA notice.
     #[test]
     fn strict_invalid_atom_exits_2() {
         let env = [("EBUILD_PHASE", "setup"), ("EAPI", "8")];
@@ -756,7 +701,7 @@ mod tests {
             assert_eq!(out, "");
             assert_eq!(err, "ERROR: Invalid atom: 'garbage-atom'\n");
         }
-        // Rule 3: with a real EAPI, `::repo` is not allowed under strict.
+        // Rule 3: with a numbered EAPI, `::repo` is not allowed under strict.
         let (rc, _, err) = q("has_version", "dev-libs/keeper::testrepo", &env);
         assert_eq!(rc, 2);
         assert_eq!(err, "ERROR: Invalid atom: 'dev-libs/keeper::testrepo'\n");
@@ -767,9 +712,8 @@ mod tests {
         );
     }
 
-    /// Rules 3 and 5: strict, the atom parses without an EAPI but is
-    /// invalid for `EAPI`: a QA notice, and the atom still matches. With
-    /// no `PORTAGE_BIN_PATH` the notice is ` * QA Notice: ...` on stderr.
+    /// Rules 3 and 5: strict, the atom parses without an EAPI but is invalid
+    /// for it: a QA notice, and the atom still matches.
     #[test]
     fn strict_eapi_only_invalid_warns_and_still_matches() {
         let env = [("EBUILD_PHASE", "setup"), ("EAPI", "1")];
@@ -815,9 +759,7 @@ mod tests {
         assert!(v("dev-libs/x[a]", "no-such-eapi").is_none());
     }
 
-    /// The QA notice goes through `eqawarn` from
-    /// `$PORTAGE_BIN_PATH/isolated-functions.sh` when that file exists
-    /// (real `elog("eqawarn", ...)`).
+    /// The QA notice goes through `$PORTAGE_BIN_PATH/isolated-functions.sh`.
     #[test]
     fn qa_notice_goes_through_isolated_functions_eqawarn() {
         let tmp = portage_util::TempDir::new("portageq_eqawarn").keep();
@@ -845,10 +787,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Evidence capture 9; rule 6: not strict, a bare unknown name is
-    /// expanded as a package name and does not match (exit 1, silent). A
-    /// bare name that is installed expands to its category (real
-    /// `dep_expand` / `cpv_expand`), and a missing `=` is tolerated.
+    /// Rule 6: not strict, a bare name expands to its installed category and
+    /// a missing `=` is tolerated; unknown names do not match (exit 1).
     #[test]
     fn non_strict_bare_names_expand() {
         let (rc, out, err) = q("has_version", "garbage-atom", &[]);
@@ -862,9 +802,8 @@ mod tests {
     }
 
     /// Rule 6: not strict, a malformed atom: `has_version` prints
-    /// `ERROR: Invalid atom` and exits 2; `best_version` exits 1 (real
-    /// dies with a traceback; documented divergence: the same ERROR line,
-    /// no traceback).
+    /// `ERROR: Invalid atom` and exits 2; `best_version` exits 1 (Portage
+    /// dies with a traceback; same ERROR line here, no traceback).
     #[test]
     fn non_strict_malformed_atom() {
         for atom in ["dev-libs/keeper[", "=dev-libs/keeper", "dev-libs/keeper:"] {
@@ -879,8 +818,7 @@ mod tests {
         }
     }
 
-    /// Evidence captures 11, 13; rule 9: `best_version` prints the highest
-    /// matching `cat/pf`.
+    /// Rule 9: `best_version` prints the highest matching `cat/pf`.
     #[test]
     fn best_version_prints_the_highest_match() {
         assert_eq!(
@@ -905,8 +843,7 @@ mod tests {
         assert_eq!((rc, out.as_str(), err.as_str()), (0, "\n", ""));
     }
 
-    /// Evidence capture 15; rules 1 and 10: fewer than two arguments:
-    /// `ERROR: insufficient parameters!` on stdout, exit 3.
+    /// Rules 1 and 10: fewer than two arguments is exit 3 with the usage line.
     #[test]
     fn insufficient_parameters() {
         let fx = fixtures();
@@ -920,8 +857,8 @@ mod tests {
         }
     }
 
-    /// Other portageq commands are refused by name, not emulated; a bad
-    /// <eroot> is real's `Not a directory` usage error (exit 64).
+    /// Other portageq commands are refused by name; a bad <eroot> is the
+    /// `Not a directory` usage error (exit 64).
     #[test]
     fn unknown_command_and_bad_eroot() {
         let (rc, out, err) = res(&portageq(Backend::Files, &["envvar", "/", "ROOT"], &[]));
@@ -941,8 +878,7 @@ mod tests {
         );
     }
 
-    /// `argv[0] == "portageq"` runs the applet (a symlink beside the
-    /// binary, like `emerge` / `ebuild`).
+    /// `argv[0] == "portageq"` runs the applet (symlink beside the binary).
     #[cfg(unix)]
     #[test]
     fn argv0_dispatch() {
@@ -962,10 +898,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// The database belongs to one root (`PORTUALE_VDB_ROOT`): for any
-    /// other <eroot> (`has_version -b`: BROOT `/` while ROOT is a chroot)
-    /// the files layout is used. An empty database for the matching root
-    /// answers "nothing installed", which proves it is the one opened.
+    /// The database belongs to one root (`PORTUALE_VDB_ROOT`): any other
+    /// <eroot> uses the files layout. An empty database for the matching root
+    /// answers "nothing installed", proving it is the one opened.
     #[cfg(feature = "vdb-sqlite")]
     #[test]
     fn database_is_used_only_for_its_own_root() {
@@ -1024,10 +959,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// S5.4: a redb database nobody holds is read directly (a helper run
-    /// outside `mrg`); one held by another process (the parent `mrg`)
-    /// without `PORTUALE_VDB_IPC` is a clean exit 4 that names the missing
-    /// variable (S6.3).
+    /// A redb database nobody holds is read directly; one held without
+    /// `PORTUALE_VDB_IPC` is a clean exit 4 naming the missing variable.
     #[cfg(feature = "vdb-redb")]
     #[test]
     fn redb_is_read_when_free_and_exit_4_when_held() {
@@ -1075,9 +1008,8 @@ mod tests {
         assert!(same_root(Path::new("/"), Path::new("//")));
     }
 
-    /// Optional: the same queries against the real `bin/portageq`
-    /// (`PORTUALE_COMPARE_PORTAGEQ=1`; needs python3 and the
-    /// `3rdparty/portage` checkout). Compares exit code and stdout.
+    /// Optional: the same queries against Portage's own `bin/portageq`
+    /// (`PORTUALE_COMPARE_PORTAGEQ=1`; needs the `3rdparty/portage` checkout).
     #[test]
     fn matches_portageq_on_the_fixture_root() {
         if std::env::var_os("PORTUALE_COMPARE_PORTAGEQ").as_deref() != Some("1".as_ref()) {

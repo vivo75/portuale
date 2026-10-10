@@ -1,14 +1,6 @@
-// Real `post_emerge()`'s own preserved-libs advisory (`lib/_emerge/
-// post_emerge.py:126-152`) + `display_preserved_libs()`
-// (`lib/portage/util/_dyn_libs/display_preserved_libs.py`): after any
-// `emerge` run that changed the vdb, if the `preserved_libs_registry`
-// still has entries, print the list of preserved libraries and their
-// consumers and tell the user to run `emerge @preserved-rebuild`.
-//
-// Real `post_emerge` reloads + prunes the registry first ("in order to
-// ensure that we do not display stale data"); portuale already prunes
-// during the merge/unmerge itself (`ebuild_merge::prune_unused_preserved_
-// libs`), so the registry read here is already current.
+//! Advisory "run `emerge @preserved-rebuild`" notice printed after a
+//! vdb-changing run, when the preserved-libs registry still has entries.
+// Portage: post_emerge.py, post_emerge; display_preserved_libs.py, display_preserved_libs
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -18,11 +10,9 @@ use crate::needed_elf;
 
 const MAX_DISPLAY: usize = 3;
 
-/// Real `post_emerge()`'s own gate + banner + `display_preserved_libs()`
-/// call + trailer. Called at the end of every `emerge` action that can
-/// change the vdb (merge, `--resume`, `--unmerge`, `--depclean`,
-/// `--prune`). A no-op when the registry is empty. `--quiet` collapses
-/// the whole thing to a one-line `!!! existing preserved libs found`.
+/// Decide, print the banner, the per-package blocks and the trailer. Called
+/// `emerge` action that can change the vdb. A no-op when the registry is
+/// empty; `--quiet` collapses the whole thing to one line.
 pub fn show_preserved_libs_notice(root: &Path, color: &Colorizer, quiet: bool, verbose: bool) {
     let plib_dict = crate::ebuild_merge::preserved_lib_paths(root);
     if plib_dict.is_empty() {
@@ -42,8 +32,7 @@ pub fn show_preserved_libs_notice(root: &Path, color: &Colorizer, quiet: bool, v
     );
 }
 
-/// Real `display_preserved_libs(vardb, verbose)`
-/// (`display_preserved_libs.py`): the per-`cpv` `>>> package:` blocks.
+/// The per-`cpv` `>>> package:` blocks with each library's consumers.
 fn display_preserved_libs(
     root: &Path,
     plib_dict: &BTreeMap<String, Vec<String>>,
@@ -56,13 +45,10 @@ fn display_preserved_libs(
 
     let all_preserved: BTreeSet<String> = plib_dict.values().flatten().cloned().collect();
 
-    // Real `consumer_map`: preserved path -> its sorted consumers, with
-    // any consumer that is itself one of the *same* provider package's
-    // own preserved libs filtered out (real `internal_plib_keys`).
+    // Preserved path -> sorted consumers, skipping consumers that are
+    // the same provider package's own preserved libs.
     let mut consumer_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for paths in plib_dict.values() {
-        // Real `internal_plib_keys`: a consumer that is itself one of the
-        // *same* provider package's own preserved libs is filtered out.
         let internal: BTreeSet<needed_elf::ObjKey> =
             paths.iter().map(|p| needed_elf::obj_key(root, p)).collect();
         for f in paths {
@@ -95,8 +81,8 @@ fn display_preserved_libs(
     for (cpv, paths) in plib_dict {
         println!("{} package: {cpv}", color.c("WARN", ">>>"));
 
-        // Real `samefile_map`: group this cpv's paths by obj key so a
-        // hardlink alias is listed once, under all its names.
+        // Group this cpv's paths by obj key so a hardlink alias is
+        // listed once, under all its names.
         let mut samefile: BTreeMap<needed_elf::ObjKey, BTreeSet<String>> = BTreeMap::new();
         for f in paths {
             samefile
@@ -112,8 +98,8 @@ fn display_preserved_libs(
             }
             let f = alt[0];
             let mut consumers = consumer_map.get(f).cloned().unwrap_or_default();
-            // Real: prefer the non-preserved consumers if there are any
-            // (a preserved-lib consumer is rebuilt via its own block).
+            // Prefer the non-preserved consumers when there are any (a
+            // preserved-lib consumer is rebuilt via its own block).
             let non_preserved: Vec<String> = consumers
                 .iter()
                 .filter(|c| !all_preserved.contains(*c))

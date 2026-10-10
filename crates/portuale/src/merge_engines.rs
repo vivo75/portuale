@@ -1,46 +1,24 @@
-//! Real `MergeEngine` adapters: the director seam executing the actual
-//! source/binary merges.
-//!
-//! Grounding: real `_emerge/MergeListItem.py::_start` dispatches on
-//! `pkg.type_name` -- a source package through the `EbuildBuild` chain,
-//! a `"binary"` one through `_emerge/Binpkg.py`. The `mrg-director` crate
-//! pins that kind routing (`SourceMergeEngine`/`BinaryMergeEngine`: own
-//! kind `Skipped`, other kind `Failed`); these adapters are the
-//! binary-crate halves that actually build and merge. Each carries the
-//! same context its underlying merge function already threads (repos,
-//! root, tmpdir, options, binhost config, `$PKGDIR`), and each
-//! [`MergeUnit`] is derived from its resolved [`GraphEntry`] by
-//! [`merge_unit_for_entry`] -- the unit carries every merge-relevant
-//! field (version, kind, repo, slot/sub-slot and resolved USE for the
-//! build-phase env, `remote_binary`/`build_id` for binpkg location), so
-//! rebuilding the entry inside `execute` loses nothing the merge
-//! functions read.
-//!
-//! Live paths: `emerge_getbinpkg::run_merge_plan` executes every entry's
-//! unit through one of these engines (mixed source+binary merge), and
-//! `emerge_build::run_source_merge`'s serial loop merges through
-//! [`SourceEngine::merge_entry`]. The `-jN` scheduler keeps calling its
-//! own build-then-merge split directly (build-half concurrency plus a
-//! serialized vdb merge, like real portage) -- the engine seam owns
+//! [`MergeEngine`] adapters executing the actual source/binary merges: a
+//! source package through the `EbuildBuild` chain, a `"binary"` one through
+//! binpkg unpacking. Each [`MergeUnit`] derives from its resolved
+//! [`GraphEntry`] via [`merge_unit_for_entry`]; the engine seam owns
 //! per-unit execution, not DAG scheduling.
+// Portage: MergeListItem.py, _start
 
 use mrg_director::{MergeContext, MergeEngine, MergeKind, MergeOutcome, MergeUnit};
 use portage_repo::{CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
-/// One resolved [`GraphEntry`] as a director [`MergeUnit`]: the merge
-/// version out of the outcome, the kind out of `entry.source`, the repo,
-/// slot/sub-slot, resolved USE, and binary location out of the entry.
-/// `None` for `AlreadyInstalled` (a silent no-op, like the merge
-/// functions' own early return) and `NoVisibleCandidate` (nothing to
-/// merge -- the caller reports it, same as before).
+/// One resolved [`GraphEntry`] as a director [`MergeUnit`]. `None` for
+/// `AlreadyInstalled` (a silent no-op) and `NoVisibleCandidate` (nothing to
+/// merge; the caller reports it).
 pub fn merge_unit_for_entry(
     entry: &GraphEntry,
     root: &Path,
     progress: mrg_director::MergeProgress,
 ) -> Option<MergeUnit> {
     let version = match &entry.outcome {
-        // #72 B3: a blocker-removal task is not a merge unit.
+        // A blocker-removal task is not a merge unit.
         PretendOutcome::AlreadyInstalled { .. }
         | PretendOutcome::NoVisibleCandidate
         | PretendOutcome::Uninstall { .. } => {
@@ -71,15 +49,13 @@ pub fn merge_unit_for_entry(
 }
 
 /// Rebuild the [`GraphEntry`] a merge function needs from a [`MergeUnit`].
-/// The outcome is always `New { version }`: the merge functions only ever
-/// read the version out of it (`New`/`Reinstall` share the `version`
-/// arm, `Upgrade`/`Downgrade` the `to` arm), and display-only fields
-/// (blockers, oldbest, `required_by`, counters) are never consulted
+/// The outcome is always `New { version }`: the merge functions only read
+/// the version out of it, and display-only fields are never consulted
 /// mid-merge. `None` when the unit's `cpv` does not parse.
 fn rebuild_entry(unit: &MergeUnit, source: CandidateSource) -> Option<GraphEntry> {
     let candidate = portage_dep::parse_candidate(&unit.cpv)?;
-    // `parse_candidate` splits the `-rN` revision off `version` (real
-    // `catpkgsplit`); the merge reads the full `package-version[-rN]`.
+    // The `-rN` revision is split off `version`; the merge reads the full
+    // `package-version[-rN]`.
     let version = match &candidate.revision {
         Some(r) => format!("{}-r{r}", candidate.version),
         None => candidate.version.clone(),
@@ -116,8 +92,7 @@ fn rebuild_entry(unit: &MergeUnit, source: CandidateSource) -> Option<GraphEntry
     })
 }
 
-/// The source-build `MergeEngine`: real `MergeListItem`'s `"ebuild"` arm
-/// (`emerge_build::merge_one_source_entry` -- phase chain + vdb write).
+/// The source-build `MergeEngine` (`emerge_build::merge_one_source_entry`).
 pub struct SourceEngine<'a> {
     /// Every repo the merge may read the ebuild from (for
     /// `locate_candidate`).
@@ -132,16 +107,13 @@ pub struct SourceEngine<'a> {
     pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
     /// `--buildpkg-exclude` atoms.
     pub buildpkg_exclude: &'a [String],
-    /// Backlog #197: the run's status display (blank/`>>>` rule for the
-    /// `Emerging`/`Installing`/`Completed` lines).
+    /// The run's status display for the `Emerging`/`Installing`/`Completed` lines.
     pub display: &'a crate::emerge_build::StatusDisplay,
 }
 
 impl SourceEngine<'_> {
-    /// Merge one resolved entry from source (the `Source`-entry arm of
-    /// the mixed dispatcher, and `run_source_merge`'s serial loop).
-    /// `progress` is the entry's own real `(curval, maxval)` snapshot
-    /// (backlog #177) for the `Emerging`/`Installing`/`Completed` lines.
+    /// Merge one resolved entry from source. `progress` is the entry's own
+    /// snapshot for the status lines.
     pub fn merge_entry(
         &self,
         entry: &GraphEntry,
@@ -186,9 +158,7 @@ impl MergeEngine for SourceEngine<'_> {
     }
 }
 
-/// The binary-unpack `MergeEngine`: real `MergeListItem`'s `"binary"` arm
-/// (`emerge_getbinpkg::merge_one_binary_entry` -- locate/fetch + unpack +
-/// vdb write).
+/// The binary-unpack `MergeEngine` (`emerge_getbinpkg::merge_one_binary_entry`).
 pub struct BinaryEngine<'a> {
     /// The resolved binhost configuration (remote fetch + `Packages`).
     pub config: &'a portage_profile::Config,
@@ -200,15 +170,13 @@ pub struct BinaryEngine<'a> {
     pub portage_tmpdir: &'a Path,
     /// Merge options.
     pub options: &'a crate::ebuild_merge::MergeOptions,
-    /// Backlog #197: the run's status display (blank/`>>>` rule for the
-    /// `Emerging binary`/`Installing`/`Completed` lines).
+    /// The run's status display for the `Emerging binary`/`Installing`/`Completed` lines.
     pub display: &'a crate::emerge_build::StatusDisplay,
 }
 
 impl BinaryEngine<'_> {
-    /// Merge one resolved binary entry (the `Binary`-entry arm of the
-    /// mixed dispatcher). `progress` is the entry's own real
-    /// `(curval, maxval)` snapshot (backlog #177).
+    /// Merge one resolved binary entry. `progress` is the entry's own
+    /// snapshot for the status lines.
     pub fn merge_entry(
         &self,
         entry: &GraphEntry,
@@ -288,10 +256,8 @@ mod tests {
         }
     }
 
-    /// `merge_unit_for_entry` derives the unit the director executes:
-    /// version out of the outcome (`to` for an upgrade), kind out of the
-    /// source, slot/USE/repo carried for the build-phase env; installed
-    /// and unresolvable entries map to "nothing to merge".
+    /// The unit carries everything the merge reads; installed and
+    /// unresolvable entries map to "nothing to merge".
     #[test]
     fn merge_unit_for_entry_carries_everything_the_merge_reads() {
         let root = Path::new("/root");
@@ -318,8 +284,8 @@ mod tests {
                 .is_none()
         );
 
-        // A binary entry keeps its location bits (remote fetch, build
-        // id) on the unit, so the binary engine can locate it.
+        // A binary entry keeps its location bits on the unit, so the
+        // binary engine can locate it.
         let mut binary = test_entry();
         binary.source = CandidateSource::Binary;
         binary.remote_binary = true;
@@ -330,8 +296,7 @@ mod tests {
         assert!(unit.remote_binary);
         assert_eq!(unit.build_id.as_deref(), Some("3"));
 
-        // A `-rN` revision survives the unit round-trip (real
-        // `catpkgsplit` splits it off; the merge reads it back whole).
+        // A `-rN` revision survives the unit round-trip.
         let mut revised = test_entry();
         revised.outcome = PretendOutcome::New {
             version: "1.2-r1".to_string(),
@@ -348,10 +313,8 @@ mod tests {
         );
     }
 
-    /// The adapters refuse the other kind (the same `type_name` routing
-    /// real `MergeListItem._start` performs), and report an unparseable
-    /// unit as failed rather than panicking. Real merging itself is
-    /// covered by the existing `run_merge_plan` end-to-end tests.
+    /// The adapters refuse the other kind, and report an unparseable unit
+    /// as failed rather than panicking.
     #[test]
     fn engines_refuse_the_other_kind_and_a_bad_cpv() {
         let ctx = MergeContext {

@@ -1,48 +1,21 @@
-// Real `NeededEntry` (`lib/portage/util/_dyn_libs/NeededEntry.py`): the
-// data model for one parsed line of a real `NEEDED.ELF.2` file -- the
-// aux vdb metadata real, unmodified `bin/misc-functions.sh
-// install_qa_check`'s own real `scanelf`-driven step generates, and
-// which `ebuild_merge::populate_vdb_tmp` now copies into every real vdb
-// entry that has one (see that function's own doc comment).
-//
-// Each step confirmed with the user before implementing: real parsing
-// (`NeededEntry`), real `LinkageMap.rebuild()`'s own initial data-
-// gathering loop (`read_all_needed_entries`), `rebuild()`'s own
-// remaining indexing logic (`rebuild`), and now `findConsumers()` +
-// `_find_libs_to_preserve()`'s own graph-reachability decision
-// (`find_consumers`/`find_libs_to_preserve`, plus the small primitives
-// they both need: `getlibpaths`, a minimal `LibGraph`). Deliberately
-// still missing: the live-`scanelf`-for-orphaned-preserved-libs branch
-// inside real `rebuild()` itself (`LinkageMapELF.py:233-324` -- the one
-// place real portage falls back to a raw ELF header read rather than
-// `NEEDED.ELF.2`, out of scope until preserve-libs actually needs it).
-//
-// What this slice does NOT do, even though the pure-computation port is
-// now complete: wire `find_libs_to_preserve`'s own output into a real
-// merge/unmerge's actual control flow (calling it at the right point in
-// `ebuild_merge::merge_after_install`, writing results into the real
-// `preserved_libs_registry.json` via the already-existing
-// `write_plib_registry`, and making `ebuild_unmerge::remove_contents`
-// skip deleting a preserved path). That's a real, separate control-flow
-// integration task across two already-tested files, not a "port this
-// Python function" task -- left for a following slice so it can be
-// scoped and reviewed on its own, without risk to the already-shipped
-// preserve-libs *consult/unregister* side. `#[allow(dead_code)]` below
-// is deliberate: this module has no real caller yet, the same "narrow,
-// additive, no wiring until the next slice needs it" shape portuale
-// has used before (e.g. `masters =` parsing landing before eclass
-// masters-chain search consumed it).
+//! `NEEDED.ELF.2` parsing and linkage-map computation: one parsed aux-file
+//! line (`NeededEntry`), the per-package gathering loop
+//! (`read_all_needed_entries`), the soname providers/consumers index
+//! (`rebuild`), and the graph-reachability decisions (`find_consumers`,
+//! `find_libs_to_preserve` plus `getlibpaths` and the minimal `LibGraph`).
+//! Still missing: the live-`scanelf`-for-orphaned-preserved-libs branch
+//! inside `rebuild()` itself, and wiring `find_libs_to_preserve` into a
+//! merge/unmerge's control flow (a separate task, so `dead_code` stays
+//! allowed until the next slice needs it).
+// Portage: NeededEntry.py, NeededEntry; LinkageMapELF.py, rebuild/findConsumers; vartree.py, _find_libs_to_preserve
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-/// Real `NeededEntry.__slots__`: one parsed `NEEDED.ELF.2` line.
-/// `soname` is a plain (possibly empty) string, not `Option`, matching
-/// real Python exactly -- real `scanelf` genuinely reports an empty
-/// soname for some real libraries (e.g. musl's own `libc.so`, which has
-/// no `DT_SONAME` at all; this is precisely why real `misc-functions.sh`
-/// deliberately never uses `scanelf -q`, see that script's own comment).
+/// One parsed `NEEDED.ELF.2` line. `soname` is a plain (possibly empty)
+/// string, not `Option`: `scanelf` genuinely reports an empty soname for
+/// some libraries (e.g. musl's `libc.so`, which has no `DT_SONAME`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NeededEntry {
     pub arch: String,
@@ -50,28 +23,18 @@ pub struct NeededEntry {
     pub soname: String,
     pub runpaths: Vec<String>,
     pub needed: Vec<String>,
-    /// Real `NeededEntry._MULTILIB_CAT_INDEX`: the optional 6th field,
-    /// `None` when the field is either absent (real, pre-multilib-
-    /// category `NEEDED.ELF.2` data) or present-but-empty.
+    /// The optional 6th field: `None` when absent or present-but-empty.
     pub multilib_category: Option<String>,
 }
 
 impl NeededEntry {
-    /// Real `NeededEntry.parse()`: `arch;filename;soname;rpaths;needed`,
-    /// semicolon-delimited, an optional 6th `multilib_category` field,
-    /// any further fields silently ignored (real "extra fields may exist
-    /// for future extensions"). `None` for a malformed line (real
-    /// `InvalidData`, fewer than 5 fields) -- callers skip it and keep
-    /// going, the same tolerance real `LinkageMap.rebuild()` itself
-    /// already has for a bad line (`writemsg_level` + `continue`, never
-    /// aborting the whole read over one bad entry).
+    /// `arch;filename;soname;rpaths;needed`, semicolon-delimited, with an
+    /// optional 6th `multilib_category` field; further fields ignored.
+    /// `None` for a malformed line (fewer than 5 fields); callers skip it
+    /// and keep going.
     ///
-    /// `rpaths`'s own real `"  -  "` sentinel (two spaces, a dash, two
-    /// spaces) means "no rpath at all" -- real `scanelf`'s own `%r`
-    /// output for an object with none, since `bin/misc-functions.sh`
-    /// deliberately never passes `scanelf -q` (which would otherwise
-    /// omit rpath-less-and-soname-less libraries like musl's `libc.so`
-    /// entirely) and so must handle this literal placeholder itself.
+    /// The `rpaths` `"  -  "` sentinel (two spaces, a dash, two spaces)
+    /// means "no rpath at all".
     pub fn parse(line: &str) -> Option<Self> {
         let fields: Vec<&str> = line.split(';').collect();
         if fields.len() < 5 {
@@ -104,25 +67,16 @@ impl NeededEntry {
         })
     }
 
-    /// Parses every line of a real `NEEDED.ELF.2` file's own text,
-    /// silently skipping any malformed line (see `parse`'s own doc
-    /// comment for why that matches real tolerance).
+    /// Parses every line of a `NEEDED.ELF.2` file's text, silently skipping
+    /// malformed lines.
     pub fn parse_file(text: &str) -> Vec<Self> {
         text.lines().filter_map(Self::parse).collect()
     }
 
-    /// Real `NeededEntry.__str__` (`NeededEntry.py:67-87`): "format this
-    /// entry for writing to a NEEDED.ELF.2 file" -- used when real
-    /// portage itself *rewrites* the file (`vardbapi.removeFromContents`/
-    /// `writeContentsToContentsFile`, see `ebuild_merge::remove_from_
-    /// contents`'s own doc comment), as opposed to the original real
-    /// `scanelf`-generated file this module's own `parse`/`parse_file`
-    /// read. Two real asymmetries from the read side, both intentional,
-    /// not bugs: an empty `runpaths` serializes as a plain empty string
-    /// here (`":".join([])`), never the `"  -  "` sentinel `scanelf`
-    /// itself emits; and the 6th (`multilib_category`) field is *always*
-    /// present, even when `None` (as `""`), unlike the original file
-    /// which may omit it entirely for pre-multilib-category data.
+    /// Format this entry for writing back to a `NEEDED.ELF.2` file. Two
+    /// intentional asymmetries from the read side: an empty `runpaths`
+    /// serializes as `""`, never the `"  -  "` sentinel; the 6th field is
+    /// always present, even when `None` (as `""`).
     pub fn to_needed_line(&self) -> String {
         format!(
             "{};{};{};{};{};{}\n",
@@ -136,17 +90,10 @@ impl NeededEntry {
     }
 }
 
-/// Real `ELFHeader.read` + `compute_multilib_category`
-/// (`portage/util/_dyn_libs/NeededEntry.py`, `portage/dep/soname/
-/// multilib_category.py`): read one ELF header's own `EI_CLASS`,
-/// `e_machine` and `e_flags` and classify it into the real multilib
-/// category (`x86_64`, `x86_32`, `x86_x32`, `arm_64`, ...), or `None`
-/// for a non-ELF/unreadable file or an unrecognized machine/class
-/// combination (real's own `None` return, which makes the entry an
-/// "unrecognized ELF file" and keeps its 6th `NEEDED.ELF.2` field
-/// empty). Used by `ebuild_phases::write_post_install_soname_deps` to
-/// add the trailing field real's `_post_src_install_soname_symlinks`
-/// writes back.
+/// Read one ELF header's `EI_CLASS`, `e_machine` and `e_flags` and classify
+/// it into the multilib category (`x86_64`, `x86_32`, `arm_64`, ...), or
+/// `None` for a non-ELF/unreadable file or an unrecognized combination
+/// (which leaves the entry's 6th `NEEDED.ELF.2` field empty).
 pub fn compute_multilib_category(path: &Path) -> Option<String> {
     const ELFCLASS32: u8 = 1;
     const ELFCLASS64: u8 = 2;
@@ -181,7 +128,7 @@ pub fn compute_multilib_category(path: &Path) -> Option<String> {
     let flags_off = if ei_class == ELFCLASS64 { 48 } else { 36 };
     let e_flags = u32_at(&data, flags_off, le)?;
 
-    // Real constants (portage/util/elf/constants.py).
+    // ELF machine/flag constants (Portage's portage/util/elf/constants.py).
     const EM_SPARC: u16 = 2;
     const EM_386: u16 = 3;
     const EM_68K: u16 = 4;
@@ -291,11 +238,8 @@ pub fn compute_multilib_category(path: &Path) -> Option<String> {
     Some(format!("{prefix}_{suffix}"))
 }
 
-/// One `fnmatch`-style exclusion pattern list (real
-/// `SonameDepsProcessor._exclude_pattern`: `shlex.split` the
-/// `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` value, `lstrip("/")` each
-/// pattern, match any of them). The `shlex` part is a minimal
-/// whitespace/quote split -- real's own excludes are bare path globs.
+/// One `fnmatch`-style exclusion pattern list: `shlex`-split the
+/// `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` value and `lstrip("/")` each pattern.
 fn exclude_patterns(value: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
@@ -321,15 +265,12 @@ fn exclude_patterns(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// Real `SonameDepsProcessor` (`portage/util/_dyn_libs/soname_deps.py`):
-/// turn one package's `NEEDED.ELF.2` entries into the `PROVIDES` and
-/// `REQUIRES` strings real writes into `build-info` (and therefore into
-/// the archive's `metadata/PROVIDES`/`metadata/REQUIRES`, #39).
-/// `(provides, requires)`, each `None` when the corresponding map is
-/// empty -- real writes no file at all in that case. Entries without a
-/// recognized `multilib_category` are the caller's own "unrecognized
-/// ELF" case and must be filtered before calling this (real
-/// `SonameDepsProcessor.add` asserts on a missing category).
+/// Turn one package's `NEEDED.ELF.2` entries into the `PROVIDES` and
+/// `REQUIRES` strings written into `build-info` (and the archive's
+/// `metadata/PROVIDES`/`metadata/REQUIRES`). Each side is `None` when its
+/// map is empty (no file is written then). Entries without a recognized
+/// `multilib_category` must be filtered before calling.
+/// Portage: soname_deps.py, SonameDepsProcessor
 pub fn generate_soname_deps(
     entries: &[NeededEntry],
     provides_exclude: &str,
@@ -399,9 +340,8 @@ pub fn generate_soname_deps(
         }
     }
 
-    // Real `_intersect`: a provided soname is never a requirement;
-    // an internal library without an soname is resolved through a
-    // matching DT_RUNPATH entry.
+    // A provided soname is never a requirement; an internal library
+    // without a soname is resolved through a matching DT_RUNPATH entry.
     let cats: BTreeSet<String> = requires_map
         .keys()
         .chain(provides_map.keys())
@@ -466,32 +406,14 @@ pub fn generate_soname_deps(
     (provides, requires)
 }
 
-/// Real `LinkageMap.rebuild()`'s own initial data-gathering loop
-/// (`LinkageMapELF.py:218-231`): for every real installed package (real
-/// `dbapi.cpv_all()`, walked here the same way `ebuild_merge::
-/// find_owners` already walks every installed package's own vdb
-/// directory), its own real vdb-stored `NEEDED.ELF.2` (real `aux_get(cpv,
-/// [self._needed_aux_key])`), parsed via `NeededEntry::parse_file`.
-/// Degrades gracefully to an empty entry list for a package with no such
-/// file at all (real `aux_get` itself already tolerates a missing aux
-/// file the same way, returning `""`) -- a `cpv` is still included, with
-/// an empty `Vec`, matching real `rebuild()`'s own unconditional per-cpv
-/// walk (it never skips a `cpv` just because it happens to own no ELF
-/// content). Returns `(cpv, entries)` pairs in sorted vdb directory-
-/// listing order, for portuale's own determinism -- real `cpv_all()`
-/// has no particular real ordering guarantee, so this doesn't lose
-/// anything real by sorting.
-///
-/// Still just the raw per-package data: no soname map, no multilib/
-/// runpath resolution (real `rebuild()`'s own `libs`/`obj_properties`
-/// indexing, `providers`/`consumers` bucketing, `$ORIGIN` expansion --
-/// all real, separately-scoped future work), so nothing here yet answers
-/// "what does path X provide" or "what needs path X" -- only "what did
-/// each installed package's own real `NEEDED.ELF.2` say".
+/// For every installed package, its vdb-stored `NEEDED.ELF.2` parsed via
+/// `NeededEntry::parse_file`. A package with no such file still yields a
+/// `cpv`, with an empty `Vec`. Returns `(cpv, entries)` pairs in sorted vdb
+/// directory-listing order, for determinism.
+// Portage: LinkageMapELF.py, rebuild (initial data-gathering loop)
 pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
-    // `read_file_all` is the old walk, moved into `FilesDb` unchanged
-    // (the `-MERGING-` skip included); a missing, unreadable or non-UTF-8
-    // file is still an empty row.
+    // The old walk, moved into `FilesDb` unchanged (the `-MERGING-` skip
+    // included); a missing, unreadable or non-UTF-8 file is an empty row.
     portage_vdb::for_root(root)
         .read_file_all("NEEDED.ELF.2")
         .unwrap_or_default()
@@ -506,15 +428,11 @@ pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
         .collect()
 }
 
-/// Real `_approx_multilib_categories` (`LinkageMapELF.py:29-46`): maps a
-/// real ELF `e_machine` value (real `NEEDED.ELF.2`'s own `arch` field,
-/// already stripped of its real `EM_` prefix by real, unmodified
-/// `bin/misc-functions.sh` before it's ever written) to an approximate
-/// multilib category -- only ever consulted when a `NeededEntry` has no
-/// `multilib_category` field of its own (real, pre-multilib-category
-/// `NEEDED.ELF.2` data, or portuale's own fixtures, which never emit
-/// that optional 6th field). Falls back to the raw `arch` string
-/// unchanged for anything not in the table, exactly like real portage.
+/// Map an ELF `e_machine` value (the `NEEDED.ELF.2` `arch` field without its
+/// `EM_` prefix) to an approximate multilib category, for entries with no
+/// `multilib_category` field of their own. Unknown values pass through
+/// unchanged.
+// Portage: LinkageMapELF.py, _approx_multilib_categories
 fn approx_multilib_category(arch: &str) -> String {
     match arch {
         "386" => "x86_32",
@@ -538,11 +456,10 @@ fn approx_multilib_category(arch: &str) -> String {
     .to_string()
 }
 
-/// Real `portage.util.normalize_path` (`lib/portage/util/__init__.py:
-/// 139-153`): a lexical, non-symlink-resolving path normalizer (real
-/// `os.path.normpath`, with real portage's own leading-`//`-vs-`/` fix)
-/// -- collapses `.`/empty segments, resolves `..` segments against
-/// already-collapsed real segments, never touches the filesystem.
+/// Lexical, non-symlink-resolving path normalizer: collapses `.`/empty
+/// segments, resolves `..` against already-collapsed segments, never touches
+/// the filesystem.
+// Portage: util/__init__.py, normalize_path
 fn normalize_path(path: &str) -> String {
     let absolute = path.starts_with('/');
     let mut out: Vec<&str> = Vec::new();
@@ -569,61 +486,33 @@ fn normalize_path(path: &str) -> String {
     }
 }
 
-/// Real dynamic-linker `$ORIGIN`/`${ORIGIN}` runpath expansion (real
-/// `rebuild()`'s own `varexpand(x, {"ORIGIN": os.path.dirname(entry.
-/// filename)}, ...)`) -- narrowed to just this one real substitution
-/// (portage's own general `varexpand` handles arbitrary `${VAR}`/`$VAR`
-/// references; `ORIGIN` is the only one `rebuild()` itself ever
-/// supplies a value for).
+/// Dynamic-linker `$ORIGIN`/`${ORIGIN}` runpath expansion: the only
+/// substitution `rebuild()` supplies a value for.
 fn expand_origin(rpath: &str, origin: &str) -> String {
     rpath
         .replace("${ORIGIN}", origin)
         .replace("$ORIGIN", origin)
 }
 
-/// Real `LinkageMap.rebuild`'s own preserved-libs branch: preserved
-/// libraries are registered in no `NEEDED.ELF.2` file, so real runs
-/// the real, unmodified `scanelf` binary over them (`scanelf -BF
-/// '%a;%F;%S;%r;%n'`, deliberately without `-q` so soname-less
-/// libraries like musl's `libc.so` are not omitted) and indexes every
-/// reported line exactly like `NEEDED.ELF.2` data, owned by the
-/// preserving cpv.
+/// Preserved libraries are in no `NEEDED.ELF.2` file, so run `scanelf -BF
+/// '%a;%F;%S;%r;%n'` over them (without `-q`, so soname-less libraries are
+/// not omitted) and index every reported line like `NEEDED.ELF.2` data,
+/// owned by the preserving cpv.
 ///
-/// `preserved` is real `getPreservedLibs()` (preserving cpv -> paths).
-/// Only still-existing regular files and symlinks are scanned --
-/// directories are never passed (real `scanelf` would recurse into
-/// them and index files nothing preserves), anything else `scanelf`
-/// reports nothing for is skipped with real `InvalidData` tolerance.
-/// Each line's real `EM_`-prefixed arch (`EM_X86_64`) is stripped to the
-/// bare `e_machine` name (`l[3:]`) before parsing, and the multilib
-/// category comes from a live ELF header read
-/// (`compute_multilib_category`, real `ELFHeader.read` +
-/// `compute_multilib_category`) -- `None` falls back to the approximate
-/// table in `rebuild`, exactly like real `_approx_multilib_categories`.
+/// `preserved` maps preserving cpv -> paths. Only still-existing regular
+/// files and symlinks are scanned. Each line's `EM_`-prefixed arch is
+/// stripped before parsing, and the multilib category comes from a live ELF
+/// header read, falling back to the approximate table in `rebuild`.
 ///
-/// Deliberate cuts vs. real (documented, no fixture instance):
-/// - Real generates a dummy `("", x, "", "", "")` line for a preserved
-///   path `scanelf` reports nothing for (a non-ELF file), so
-///   `findConsumers` never raises `KeyError`. Portuale's own
-///   `find_consumers` instead returns `Err` there and every caller
-///   already treats that as "no consumers" -- the dummy line's own
-///   empty provider/consumer sets -- so no dummy is emitted.
-/// - Real infers an implicit soname from the basename for an
-///   empty-soname shared object (bug 715162, via the `file` binary).
-///   Skipped: a `NEEDED.ELF.2`-indexed library with an empty soname
-///   provides nothing either, so both paths agree.
-/// - A missing `scanelf` binary degrades to no entries (real raises
-///   `CommandNotFound`), but loudly: a stderr warning names the
-///   missing tool, since silent degradation would turn bump-2-style
-///   preserves into `{}` with zero log output. A `scanelf` that runs
-///   but fails still degrades silently (real tolerates unscannable
-///   lines the same way).
+/// Deliberate cuts (no fixture instance): no dummy line for a preserved
+/// path `scanelf` reports nothing for (`find_consumers` returns `Err` there
+/// and callers treat that as "no consumers"); no implicit-soname inference
+/// for an empty-soname object; a missing `scanelf` degrades to no entries
+/// with a loud stderr warning, while a `scanelf` that runs but fails
+/// degrades silently.
 ///
 /// Returns `(owner, entries)` groups ready to append to
-/// `read_all_needed_entries`'s own output before `rebuild` (an owner
-/// already present there gains the scanned entries, matching real
-/// grouping everything by owner for the bundled-library runpath
-/// inference -- see `owner_entries_with_preserved_orphans`).
+/// `read_all_needed_entries`'s output before `rebuild`.
 pub fn scan_preserved_lib_entries(
     root: &Path,
     preserved: &BTreeMap<String, Vec<String>>,
@@ -632,7 +521,7 @@ pub fn scan_preserved_lib_entries(
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (cpv, paths) in preserved {
         for p in paths {
-            // First-wins on a duplicate path across cpvs; real `plibs.update(...)` is last-wins (only observable if two cpvs register the same path).
+            // First-wins on a duplicate path across cpvs.
             if !seen.insert(p.clone()) {
                 continue;
             }
@@ -651,11 +540,8 @@ pub fn scan_preserved_lib_entries(
 
     let mut args = vec!["-BF".to_string(), "%a;%F;%S;%r;%n".to_string()];
     args.extend(targets.iter().map(|(_, full)| full.clone()));
-    // Real `os.path.join(EPREFIX or "/", "usr/bin/scanelf")`
-    // (`LinkageMap.rebuild`): the EPREFIXed absolute path first, then
-    // `PATH`. Portuale assumes an empty `EPREFIX` like every other
-    // real-execution path, so that is `/usr/bin/scanelf`, falling back
-    // to a `PATH` lookup.
+    // `/usr/bin/scanelf` first (empty `EPREFIX` assumed, like every other
+    // live-execution path), then a `PATH` lookup.
     let scanelf_bin = if std::path::Path::new("/usr/bin/scanelf").is_file() {
         "/usr/bin/scanelf".to_string()
     } else {
@@ -677,8 +563,7 @@ pub fn scan_preserved_lib_entries(
     let root_str = root.to_string_lossy();
     let root_prefix = format!("{}/", root_str.trim_end_matches('/'));
     // Which preserving cpv each scanned absolute path belongs to, so a
-    // reported line is grouped under its real owner (real
-    // `plibs.pop(entry.filename)`).
+    // reported line is grouped under its owner.
     let mut path_owner: BTreeMap<String, String> = BTreeMap::new();
     for (cpv, full) in &targets {
         path_owner
@@ -687,9 +572,7 @@ pub fn scan_preserved_lib_entries(
     }
     let mut by_owner: BTreeMap<String, Vec<NeededEntry>> = BTreeMap::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        // Real `l[3:]`: strip scanelf's own `EM_`-prefixed arch
-        // (`EM_X86_64` -> `X86_64`, the `e_machine` name real
-        // `_approx_multilib_categories` maps).
+        // Strip scanelf's `EM_`-prefixed arch (`EM_X86_64` -> `X86_64`).
         let Some(line) = line.get(3..) else {
             continue;
         };
@@ -709,19 +592,10 @@ pub fn scan_preserved_lib_entries(
     by_owner.into_iter().collect()
 }
 
-/// Real `LinkageMap._ObjectKey`'s own generated key (`LinkageMapELF.py:
-/// 98-148`): a real `(dev, ino)` pair when the object still exists on
-/// disk (real `os.stat`, follows symlinks, matching real `_obj_key`
-/// exactly) -- the same file reachable via multiple filesystem paths
-/// (symlinks, hardlinks) collapses to one entry, every path kept as an
-/// `alt_paths` entry (see `ObjProperties`). Falls back to the object's
-/// own literal path string when it doesn't exist: real `_obj_key`
-/// instead falls back to `os.path.realpath(...)` (symlink-resolved, but
-/// tolerant of a nonexistent target) -- a deliberate, narrower
-/// simplification for a case that should be rare in practice (a real
-/// `NEEDED.ELF.2` entry, read moments after real `scanelf` itself
-/// confirmed the object's existence, no longer existing by the time this
-/// runs).
+/// Object identity for the index: a `(dev, ino)` pair when the object still
+/// exists on disk (follows symlinks), so one file reachable via several
+/// paths collapses to one entry with every path kept as `alt_paths`.
+/// Falls back to the literal path string when it doesn't exist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ObjKey {
     Inode(u64, u64),
@@ -739,69 +613,55 @@ pub fn obj_key(root: &Path, obj: &str) -> ObjKey {
     }
 }
 
-/// Real `LinkageMap._obj_properties_class` (a real `slot_dict_class`):
-/// everything real `rebuild()` records about one indexed object, keyed
-/// by its own `ObjKey`.
+/// Everything `rebuild()` records about one indexed object, keyed by its
+/// `ObjKey`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjProperties {
-    /// Real `arch` (the multilib category, real or approximated).
+    /// The multilib category (indexed, or approximated).
     pub category: String,
     pub needed: BTreeSet<String>,
     pub runpaths: Vec<String>,
     pub soname: String,
-    /// Every real filename this exact object was indexed under -- always
-    /// has at least one entry (the first-seen one, real `myprops` is
-    /// only ever created once per `ObjKey`).
+    /// Every filename this exact object was indexed under -- always
+    /// non-empty (the first-seen one; created once per `ObjKey`).
     pub alt_paths: Vec<String>,
-    /// The real owning `cpv` (`category/pf`).
+    /// The owning `cpv` (`category/pf`).
     pub owner: String,
 }
 
-/// Real `LinkageMap._soname_map_class` (a real `slot_dict_class`): every
-/// real object that provides this soname (`DT_SONAME` matches it), and
-/// every real object that needs it (this soname appears in its own
-/// `DT_NEEDED` list) -- within one multilib category's own map.
+/// Every object providing a soname (`DT_SONAME` matches it), and every
+/// object needing it -- within one multilib category's map.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SonameMap {
     pub providers: BTreeSet<ObjKey>,
     pub consumers: BTreeSet<ObjKey>,
 }
 
-/// Real `LinkageMap._libs`/`_obj_properties`, populated by `rebuild`.
+/// The `libs`/`obj_properties` index, populated by `rebuild`.
 #[derive(Debug, Clone, Default)]
 pub struct LinkageMap {
-    /// Real `self._libs`: multilib category -> soname -> providers/
-    /// consumers.
+    /// Multilib category -> soname -> providers/consumers.
     pub libs: BTreeMap<String, BTreeMap<String, SonameMap>>,
     pub obj_properties: BTreeMap<ObjKey, ObjProperties>,
 }
 
-/// Real `LinkageMap.rebuild()`'s own remaining indexing logic
-/// (`LinkageMapELF.py:325-469`, everything after the initial data-
-/// gathering loop `read_all_needed_entries` already covers): consumes
-/// `owner_entries` (real shape: every installed package's own real
-/// `NEEDED.ELF.2` entries, exactly what `read_all_needed_entries`
-/// returns) and builds the real soname providers/consumers map.
+/// Consume `owner_entries` (every installed package's `NEEDED.ELF.2`
+/// entries, as `read_all_needed_entries` returns) and build the soname
+/// providers/consumers map.
 ///
-/// Per entry: the real multilib category (its own `multilib_category`
-/// field, or `approx_multilib_category`'s own fallback), real
-/// `normalize_path`'d filename, and real `$ORIGIN`-expanded (then also
-/// `normalize_path`'d) runpaths. Then, real "implicit runpath" inference
-/// for bundled libraries (`LinkageMapELF.py:380-410`): within the *same*
-/// owner package's own entries, if a needed soname is provided by
-/// another entry from that same owner, and that provider's own directory
-/// isn't already in the runpaths, it's added -- accounting for internal
-/// library resolution a package may implement itself (e.g. bundled
-/// libraries), without requiring an explicit rpath for it.
+/// Per entry: the multilib category (its own field, or the approximate
+/// fallback), the normalized filename, and `$ORIGIN`-expanded normalized
+/// runpaths. Then implicit-runpath inference for bundled libraries: within
+/// the *same* owner's entries, if a needed soname is provided by another
+/// entry from that owner and that provider's directory isn't in the
+/// runpaths, it is added.
 ///
-/// Finally, real per-object indexing: an object already indexed under
-/// the same `ObjKey` (a hardlink/symlink alias, or simply listed twice)
-/// only ever contributes its own filename as an extra `alt_paths` entry
-/// -- real "only one set of data can be correct... mixing data may
-/// corrupt the index" -- never re-indexed into `libs`. A newly-seen
-/// object's own soname (if non-empty) is added as a provider, and every
-/// one of its own needed sonames as a consumer, both keyed by its real
-/// multilib category.
+/// Finally, per-object indexing: an object already indexed under the same
+/// `ObjKey` (a hardlink/symlink alias, or listed twice) only gains an extra
+/// `alt_paths` entry and is never re-indexed. A newly-seen object's soname
+/// (if non-empty) is added as a provider, and each needed soname as a
+/// consumer, keyed by multilib category.
+// Portage: LinkageMapELF.py, rebuild (indexing logic)
 pub fn rebuild(root: &Path, owner_entries: &[(String, Vec<NeededEntry>)]) -> LinkageMap {
     struct Resolved {
         owner: String,
@@ -907,10 +767,8 @@ pub fn rebuild(root: &Path, owner_entries: &[(String, Vec<NeededEntry>)]) -> Lin
     map
 }
 
-/// Real `os.path.dirname`: everything before the last `/`, or `""` if
-/// there is none -- unlike `Path::parent()`, `dirname("/foo")` is `"/"`
-/// (not `None`), matching real Python's own behavior exactly (needed
-/// here since `$ORIGIN`/soname-symlink logic both rely on that).
+/// Like `os.path.dirname`: everything before the last `/`, or `""`; unlike
+/// `Path::parent()`, `dirname("/foo")` is `"/"` (both rely on that here).
 fn dirname(path: &str) -> String {
     match path.rfind('/') {
         Some(0) => "/".to_string(),
@@ -919,7 +777,7 @@ fn dirname(path: &str) -> String {
     }
 }
 
-/// Real `os.path.basename`: everything after the last `/`.
+/// Like `os.path.basename`: everything after the last `/`.
 fn basename(path: &str) -> &str {
     match path.rfind('/') {
         Some(i) => &path[i + 1..],
@@ -927,12 +785,9 @@ fn basename(path: &str) -> &str {
     }
 }
 
-/// Real `grabfile()` (`lib/portage/util/__init__.py:156-185`), narrowed
-/// to what `getlibpaths`'s own `read_ld_so_conf` actually needs:
-/// whitespace-normalizes each line, strips a `#`-prefixed token onward
-/// (an inline, not just a leading, comment), skips anything left empty.
-/// A missing file degrades to an empty result, matching real
-/// `grabfile`'s own tolerance for a nonexistent file.
+/// Read a config file the way `getlibpaths` needs: whitespace-normalize each
+/// line, strip a `#`-prefixed token onward, skip empties. A missing file
+/// degrades to an empty result.
 fn grab_lines(path: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
@@ -952,21 +807,12 @@ fn grab_lines(path: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Real `getlibpaths()` (`lib/portage/util/__init__.py:1945-1963`): the
-/// real default dynamic-linker library search path -- `LD_LIBRARY_PATH`
-/// (explicit parameter here, not an ambient env read, the same
-/// "explicit parameter over ambient env read inside library code"
-/// reasoning `portage_fetch::FetchOptions::gentoo_mirrors` already
-/// established), every line of the real, root-scoped `/etc/ld.so.conf`
-/// (real `grabfile` semantics, see `grab_lines`), then the real
-/// `/usr/lib`/`/lib` defaults -- each `normalize_path`'d. Real
-/// `/etc/ld.so.conf.d/*.conf`'s own `include` directive expansion is
-/// deliberately not reproduced here, the same v1 cut portuale's own
-/// `env_update.rs` module doc comment already documents and confirmed
-/// with the user for the *other* real `/etc/ld.so.conf` reader in this
-/// portuale (`run_env_update`'s own candidate-lib-dir scan) -- a rare,
-/// admin-configured mechanism, not populated by anything portuale's
-/// own fixtures do.
+/// The default dynamic-linker library search path: `LD_LIBRARY_PATH` (an
+/// explicit parameter, not an ambient env read), every line of the
+/// root-scoped `/etc/ld.so.conf`, then the `/usr/lib`/`/lib` defaults --
+/// each normalized. The `include` directive for `/etc/ld.so.conf.d/*.conf`
+/// is deliberately not expanded.
+// Portage: util/__init__.py, getlibpaths
 pub fn getlibpaths(root: &Path, ld_library_path: Option<&str>) -> Vec<String> {
     let mut rval: Vec<String> = ld_library_path
         .unwrap_or("")
@@ -982,16 +828,10 @@ pub fn getlibpaths(root: &Path, ld_library_path: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// Real `portage.util.digraph`, narrowed to exactly what real
-/// `_find_libs_to_preserve()` uses: `add(node, parent)` (real "adds the
-/// specified node with the specified parent" -- an edge where `parent`
-/// depends on `node`), `root_nodes()` (real: nodes with no parent --
-/// nothing in the graph depends on them), and `child_nodes()` (real:
-/// what a node itself depends on). Nodes are `ObjKey`s here (real
-/// `_LibGraphNode` wraps an `_ObjectKey`, the exact same real dedup-by-
-/// inode identity `ObjKey` already gives this port); `alt_paths` are
-/// tracked alongside, the same real "multiple recorded paths can be the
-/// same real object" bookkeeping `path_to_node` itself does.
+/// `portage.util.digraph`, narrowed to what `_find_libs_to_preserve` uses:
+/// `add(node, parent)` (an edge where `parent` depends on `node`),
+/// `root_nodes()` (nodes nothing depends on) and `child_nodes()` (what a
+/// node depends on). Nodes are `ObjKey`s; `alt_paths` are tracked alongside.
 #[derive(Debug, Clone, Default)]
 struct LibGraph {
     children: BTreeMap<ObjKey, BTreeSet<ObjKey>>,
@@ -1014,11 +854,8 @@ impl LibGraph {
         }
     }
 
-    /// Real `path_to_node`: registers (or reuses) the graph node for
-    /// `path`'s own real object identity, recording `path` itself as one
-    /// of that node's own `alt_paths` -- deliberately *not* itself an
-    /// `add()` call (real `path_to_node` doesn't add an edge either; the
-    /// caller decides separately whether and how this node connects).
+    /// Registers (or reuses) the graph node for `path`'s object identity,
+    /// recording `path` as one of that node's `alt_paths`. Adds no edge.
     fn path_to_node(&mut self, root: &Path, path: &str) -> ObjKey {
         let key = obj_key(root, path);
         self.alt_paths
@@ -1056,30 +893,16 @@ pub struct FindConsumersArgs<'a> {
     pub greedy: bool,
 }
 
-/// Real `LinkageMap.findConsumers()` (`LinkageMapELF.py:817-960`),
-/// narrowed to the one real calling convention `_find_libs_to_preserve`
-/// itself actually uses: `obj` is always a path string (never an
-/// already-resolved `_ObjectKey`), and `exclude_providers` is always
-/// exactly one real callable (`(installed_instance.isowner,)`, a real
-/// 1-tuple at the one real call site) rather than a general collection
-/// -- `exclude_provider: Option<&dyn Fn(&str) -> bool>` here.
+/// `findConsumers`, narrowed to the one calling convention
+/// `_find_libs_to_preserve` uses: `obj` is always a path string, and
+/// `exclude_provider` is a single callable.
 ///
-/// Real "shadowed by another version" check first: if a same-directory
-/// soname symlink exists and doesn't actually point at `obj` itself
-/// (dev/inode comparison), `obj` has no consumers of its own (real bug
-/// context: binutils-style per-`CHOST` symlink indirection). Then real
-/// `exclude_providers`/`greedy` consumer-satisfaction filtering: a
-/// consumer is dropped from the result if some *other*, non-excluded
-/// provider of the same soname already satisfies it (found in its own
-/// runpath or the real default lib path, `defpath`) -- so only
-/// consumers that would actually break stay in the result. Finally, only
-/// consumers that can actually *reach* `obj` itself (`obj`'s own
-/// directory is in the consumer's own runpath or `defpath`) are
-/// returned at all.
-///
-/// `Err` for a real `KeyError` (matching portuale's own established
-/// error-string convention) -- `obj` itself not a real indexed object at
-/// all.
+/// A consumer is dropped when some *other*, non-excluded provider of the
+/// same soname already satisfies it (found in its runpath or `defpath`), so
+/// only consumers that would actually break stay. Only consumers that can
+/// reach `obj` (its directory is in their runpath or `defpath`) are returned.
+/// `Err` when `obj` is not an indexed object at all.
+// Portage: LinkageMapELF.py, findConsumers
 pub fn find_consumers(args: FindConsumersArgs<'_>) -> Result<BTreeSet<String>, String> {
     let FindConsumersArgs {
         root,
@@ -1094,7 +917,7 @@ pub fn find_consumers(args: FindConsumersArgs<'_>) -> Result<BTreeSet<String>, S
         return Err(format!("{obj_key_val:?} ({obj}) not in object list"));
     };
 
-    // Real shadowed-by-symlink check.
+    // A same-directory soname link pointing elsewhere: no consumers.
     if !obj_props.soname.is_empty() {
         let soname_link = root
             .join(dirname(obj).trim_start_matches('/'))
@@ -1184,38 +1007,18 @@ pub struct FindLibsToPreserveArgs<'a> {
     pub new_owner_is_owner: &'a dyn Fn(&str) -> bool,
 }
 
-/// Real `dblink._find_libs_to_preserve()` (`vartree.py:3491-3595`),
-/// narrowed to its own pure computation: the real gating conditions
-/// (`_linkmap_broken`, `_plib_registry is None`, `FEATURES=preserve-libs`
-/// off, no `_installed_instance`) are the *caller's* own responsibility
-/// to check before calling this at all -- see this module's own doc
-/// comment for why wiring this into a real merge/unmerge is deliberately
-/// not part of this slice.
+/// `_find_libs_to_preserve`'s pure computation: the gating conditions are
+/// the *caller's* responsibility. `old_contents` is the previous same-slot
+/// instance's `CONTENTS` paths; the two closures say whether the old / new
+/// instance owns a path (an unmerge-only caller passes `false` always).
 ///
-/// `old_contents`: the *previous* same-slot instance's own real
-/// `CONTENTS` paths (real `installed_instance.getcontents()`) -- already
-/// `ROOT`-relative absolute paths in portuale's own convention, unlike
-/// real Python's own `f_abs[root_len:]` stripping (which starts from a
-/// `ROOT`-joined absolute path; portuale's `CONTENTS` entries never
-/// carry `ROOT` in the first place, so there's nothing to strip).
-/// `old_owner_is_owner`: real `installed_instance.isowner` (does the
-/// *old*, being-replaced/removed instance own this path). `new_owner_is_
-/// owner`: real `self.isowner`, gated by real `not unmerge` at the one
-/// real call site that matters (`vartree.py:3585`/`3589`) -- folded into
-/// this closure by the caller instead of a separate `unmerge: bool`
-/// parameter: a real unmerge-only caller passes a closure that always
-/// returns `false`, exactly matching what `not unmerge and self.isowner
-/// (f)` collapses to when `unmerge` is `true`.
-///
-/// Real algorithm: build a dependency graph from real `findConsumers`
-/// results (an edge from each provider to each of its own real
-/// consumers, skipping a consumer that's itself being removed and isn't
-/// also a provider); walk from every real "root" consumer (nothing
-/// depends on it, and it isn't itself a provider) to find every provider
-/// transitively reachable -- those are the real preserve candidates.
-/// For each, real hardlink/soname-symlink classification decides what to
-/// actually preserve (skipping a candidate the *new* package already
-/// replaces both the real file *and* the soname symlink for).
+/// Build a dependency graph from `find_consumers` results (provider ->
+/// consumers, skipping a consumer being removed that isn't also a
+/// provider); walk from every "root" consumer to find every transitively
+/// reachable provider -- the preserve candidates. Hardlink/soname-symlink
+/// classification then decides what to actually preserve (skipping a
+/// candidate the *new* package already replaces).
+// Portage: vartree.py, _find_libs_to_preserve
 pub fn find_libs_to_preserve(args: FindLibsToPreserveArgs<'_>) -> BTreeSet<String> {
     let FindLibsToPreserveArgs {
         root,
@@ -1323,15 +1126,10 @@ pub fn find_libs_to_preserve(args: FindLibsToPreserveArgs<'_>) -> BTreeSet<Strin
     preserve_paths
 }
 
-/// Every recorded path of every object that lists `soname` in its own
-/// `DT_NEEDED` -- a soname-keyed reverse lookup across all multilib
-/// categories. Used by `ebuild_merge::find_unused_preserved_libs` as the
-/// fallback consumer scan for a preserved library whose owning package
-/// has already left the vdb (so the library itself is no longer an
-/// indexed object -- real portage's own `scanelf`-for-orphaned-
-/// preserved-libs `rebuild()` branch, `LinkageMapELF.py:233-324`, keeps
-/// such a library in the map; portuale deliberately never ported that
-/// branch, so this basename==soname reverse lookup stands in for it).
+/// Soname-keyed reverse lookup across all multilib categories: every recorded
+/// path of every object listing `soname` in `DT_NEEDED`. Used as the fallback
+/// consumer scan for a preserved library whose owning package already left
+/// the vdb (so the library itself is no longer indexed).
 pub fn soname_consumers(map: &LinkageMap, soname: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for arch_map in map.libs.values() {
@@ -1347,20 +1145,15 @@ pub fn soname_consumers(map: &LinkageMap, soname: &str) -> BTreeSet<String> {
     out
 }
 
-/// Real `_find_unneeded_preserved_nodes()` (`vartree.py:1899-1943`):
-/// given `consumers_by_preserved` (a registered preserved-library path
-/// -> the paths that link against it, both sides already filtered to
-/// files that exist on disk -- a preserved consumer is kept in the map
-/// so cycle propagation works), return the subset of `preserved_paths`
-/// that nothing needs.
+/// Given `consumers_by_preserved` (preserved path -> linking paths, both
+/// sides already filtered to files on disk), return the subset of
+/// `preserved_paths` that nothing needs.
 ///
-/// A preserved library is *needed* iff it has a consumer that is not
-/// itself a preserved library, or a consumer that is a preserved library
-/// which is itself needed (transitively). Everything else is unneeded --
-/// including a group of preserved libraries that only consume each other
-/// in a cycle with no outside consumer (real bug 652382). Paths are
-/// deduplicated by real `_obj_key` (dev/inode) so a hardlink alias
-/// counts once.
+/// A preserved library is *needed* iff it has a consumer that is not itself
+/// preserved, or transitively through one that is. Everything else is
+/// unneeded -- including a cycle of preserved libraries with no outside
+/// consumer. Paths deduplicate by `ObjKey`, so a hardlink alias counts once.
+// Portage: vartree.py, _find_unneeded_preserved_nodes
 pub fn find_unneeded_preserved(
     root: &Path,
     consumers_by_preserved: &BTreeMap<String, BTreeSet<String>>,
@@ -1438,11 +1231,9 @@ mod tests {
 
     #[test]
     fn parse_reads_a_real_minimal_five_field_line() {
-        // Real, live-verified output for a real dynamically-linked ELF
-        // binary with no DT_SONAME of its own (`/usr/bin/true`, see
-        // `ebuild_merge.rs`'s own `real_merge_copies_a_real_needed_elf2_
-        // into_the_vdb` test): the empty soname field is exactly why
-        // real scanelf is never invoked with `-q`.
+        // Live-verified output for a dynamically-linked ELF binary with no
+        // DT_SONAME of its own (`/usr/bin/true`): the empty soname field is
+        // exactly why scanelf is never invoked with `-q`.
         let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6").unwrap();
         assert_eq!(entry.arch, "X86_64");
         assert_eq!(entry.filename, "/usr/bin/true");
@@ -1519,11 +1310,9 @@ mod tests {
         assert_eq!(entry, reparsed);
     }
 
-    /// Real `__str__`'s own two asymmetries from the read side: an empty
-    /// `runpaths` serializes as a plain empty string, never the `"  -  "`
-    /// sentinel `scanelf` itself emits; the 6th field is always present
-    /// (as `""` when `None`), even though the original 5-field line
-    /// omitted it entirely.
+    /// The write/read asymmetries: an empty `runpaths` serializes as a plain
+    /// empty string, never the `"  -  "` sentinel; the 6th field is always
+    /// present (as `""` when `None`).
     #[test]
     fn to_needed_line_writes_the_portage_rewrite_format_not_the_scanelf_read_format() {
         let entry = NeededEntry::parse("X86_64;/usr/bin/true;;  -  ;libc.so.6").unwrap();
@@ -1644,8 +1433,8 @@ mod tests {
         let root = tempdir();
         make_object(&root, "/opt/bundled/libbundled.so.1");
         make_object(&root, "/opt/bundled/consumer");
-        // Same owner, no explicit rpath on the consumer -- real bundled-
-        // library internal resolution (LinkageMapELF.py:380-410).
+        // Same owner, no explicit rpath on the consumer: bundled-library
+        // internal resolution.
         let owner_entries = vec![(
             "dev-libs/pkg-1.0".to_string(),
             vec![
@@ -1863,9 +1652,9 @@ mod tests {
         let defpath = vec!["/usr/lib".to_string()];
         let exclude = |p: &str| p == "/usr/lib/excluded/libfoo.so.1";
 
-        // Querying the excluded provider: app is satisfied elsewhere
-        // (the real, non-excluded /usr/lib/libfoo.so.1), so it's not
-        // reported as a real consumer of the excluded one.
+        // Querying the excluded provider: app is satisfied elsewhere (the
+        // non-excluded /usr/lib/libfoo.so.1), so it's not reported as a
+        // consumer of the excluded one.
         let consumers = find_consumers(FindConsumersArgs {
             root: &root,
             map: &map,
@@ -1882,8 +1671,8 @@ mod tests {
     fn find_consumers_returns_empty_for_an_object_shadowed_by_a_different_soname_symlink() {
         let root = tempdir();
         make_object(&root, "/usr/lib/libfoo.so.1.2.3");
-        // A same-directory soname symlink pointing at a DIFFERENT real
-        // file -- the real object queried below is shadowed.
+        // A same-directory soname symlink pointing at a DIFFERENT file --
+        // the object queried below is shadowed.
         make_object(&root, "/usr/lib/other.so.1");
         std::os::unix::fs::symlink(
             root.join("usr/lib/other.so.1"),
@@ -1966,13 +1755,11 @@ mod tests {
     fn find_libs_to_preserve_does_not_preserve_when_the_new_package_fully_replaces_it() {
         let root = tempdir();
         make_object(&root, "/usr/lib/libfoo.so.1.2.3");
-        // A real soname *symlink* (not a hardlink -- `alt_paths` for a
-        // preserve node is only ever populated from paths portuale's
-        // own `old_contents`/consumer walk actually mentions, matching
-        // real portage's own `path_to_node` semantics, never from a
-        // filesystem-wide inode scan; both the real file and its own
-        // soname symlink must be real `old_contents` entries in their
-        // own right, exactly as real vdb `CONTENTS` would record both).
+        // A soname *symlink* (not a hardlink): `alt_paths` for a preserve
+        // node is only ever populated from paths the `old_contents`/consumer
+        // walk actually mentions, never from a filesystem-wide inode scan;
+        // both the file and its soname symlink must be `old_contents`
+        // entries in their own right, as vdb `CONTENTS` records both.
         std::os::unix::fs::symlink(
             root.join("usr/lib/libfoo.so.1.2.3"),
             root.join("usr/lib/libfoo.so.1"),
@@ -1997,8 +1784,8 @@ mod tests {
             "/usr/lib/libfoo.so.1".to_string(),
         ];
         let old_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
-        // The *new* package being merged replaces both the real file
-        // and the soname symlink itself -- nothing to preserve.
+        // The *new* package being merged replaces both the file and the
+        // soname symlink itself -- nothing to preserve.
         let new_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
 
         let preserved = find_libs_to_preserve(FindLibsToPreserveArgs {
@@ -2037,10 +1824,9 @@ mod tests {
         assert!(preserved.is_empty());
     }
 
-    /// #39: real `compute_multilib_category` (`multilib_category.py`) on
-    /// hand-built ELF headers -- one per branch of the machine/class
-    /// mapping (class suffix, x32's `EM_X86_64`+`ELFCLASS32`, the
-    /// specialized riscv/mips/loong flag logic).
+    /// `compute_multilib_category` on hand-built ELF headers -- one per branch
+    /// of the machine/class mapping (class suffix, x32, the specialized
+    /// riscv/mips/loong flag logic).
     #[test]
     fn compute_multilib_category_classifies_real_elf_headers() {
         fn header(class: u8, machine: u16, flags: u32) -> Vec<u8> {
@@ -2076,22 +1862,21 @@ mod tests {
         assert_eq!(cat(2, 8, 0).as_deref(), Some("mips_n64"));
         assert_eq!(cat(1, 8, 0x0000_2000).as_deref(), Some("mips_o64"));
         assert_eq!(cat(2, 258, 0b011).as_deref(), Some("loong_lp64d"));
-        // A non-ELF file and an unknown machine both yield real's `None`.
+        // A non-ELF file and an unknown machine both yield `None`.
         assert_eq!(compute_multilib_category(&write("not-elf", b"hello")), None);
         assert_eq!(cat(2, 0xffff, 0), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// #39: real `SonameDepsProcessor` output -- provides become
-    /// `PROVIDES`, needed sonames become `REQUIRES` unless the package
-    /// itself provides them, and the exclude patterns filter both.
+    /// `SonameDepsProcessor` output: provides become `PROVIDES`, needed
+    /// sonames become `REQUIRES` unless the package itself provides them, and
+    /// the exclude patterns filter both.
     #[test]
     fn generate_soname_deps_matches_the_portage_soname_deps_processor() {
         let entries = vec![
             NeededEntry::parse("X86_64;/usr/bin/x;;;libc.so.6;x86_64").unwrap(),
             NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64").unwrap(),
-            // Consumes the soname it also provides: must not land in
-            // REQUIRES (real `_intersect`).
+            // Consumes the soname it also provides: must not land in REQUIRES.
             NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;libfoo.so.1;x86_64")
                 .unwrap(),
         ];
@@ -2099,7 +1884,7 @@ mod tests {
         assert_eq!(provides.as_deref(), Some("x86_64: libfoo.so.1\n"));
         assert_eq!(requires.as_deref(), Some("x86_64: libc.so.6\n"));
 
-        // Real `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` globs.
+        // `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` globs.
         let (provides, requires) = generate_soname_deps(&entries, "libfoo.so*", "libc.so*");
         assert_eq!(provides, None);
         assert_eq!(requires, None);

@@ -1,18 +1,10 @@
-// Portuale: a multicall-style binary proving the emerge/ebuild dispatch
-// mechanism described in LLM/agent-context.md ("emerge/ebuild binary
-// shape"): a single static binary that behaves differently depending on
-// how it is invoked, busybox-style. Real dispatch installs this binary
-// once and creates `emerge` / `ebuild` symlinks (or hardlinks) pointing
-// at it; argv[0] tells it which applet to run.
-//
-// Both applets now do real work: `emerge` resolves dependencies and
-// builds / merges / unmerges packages (see pretend.rs and its
-// `emerge_*` siblings), `ebuild` runs real phase chains and the real
-// merge / unmerge / package steps (see ebuild.rs). Both still recognize
-// their whole real CLI surface by name (see emerge_options.rs /
-// ebuild_options.rs) even where a given flag or action isn't
-// implemented, reporting which one it is rather than a generic error.
-// `portuale --help` (or a bare `portuale`) lists the applets.
+// Portuale: a multicall-style binary, busybox-style: one static binary
+// behaves as `emerge`, `ebuild`, `mrg`, `vdb` or `portageq` depending on
+// argv[0] (a symlink beside it) or an explicit first argument. `emerge`
+// resolves and merges packages, `ebuild` runs phase chains and the
+// merge/unmerge/package steps; both recognize their whole Portage CLI
+// surface by name even where a flag is not implemented. `portuale --help`
+// lists the applets.
 
 mod binpkg;
 mod color;
@@ -83,10 +75,8 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-/// `portuale --help` / `portuale` with no applet: one line per applet,
-/// name plus a short (< 120 char) description. busybox lists its applets
-/// the same way. This dispatch shim has no upstream counterpart, so the
-/// text is not a port of anything.
+/// `portuale --help` / bare `portuale`: one line per applet. This dispatch
+/// shim has no upstream counterpart, so the text is not a port of anything.
 fn print_applets() {
     println!(
         "portuale: a multicall binary -- runs as `emerge`, `ebuild`, `mrg`, `vdb`, or `portageq` depending on how it is invoked"
@@ -134,10 +124,8 @@ fn emerge_is_pretend(args: &[String]) -> bool {
     })
 }
 
-/// #318: the backend `PORTUALE_VDB_BACKEND` selects (environment, then
-/// make.conf), opened and registered before the applet runs, the same
-/// rule `mrg` applies without its flags. `None` keeps the run going on
-/// the files tree; `Err` is the exit status to stop with.
+/// Select, open and register the VDB backend before the applet runs (the same
+/// rule `mrg` applies without its flags). `None` keeps the files tree.
 fn select_vdb_for(
     who: &str,
     args: &[String],
@@ -159,9 +147,6 @@ fn run_emerge(args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
     let code = pretend::run(args);
-    // `docs/history/second_python_copy_removal.md` §4: the L0 bed and the
-    // contract suite ask for the count of dependency tokens the resolver
-    // dropped as unparseable, and assert it is zero.
     if std::env::var_os("PORTUALE_REPORT_UNPARSED_DEP_TOKENS").is_some() {
         eprintln!(
             "portuale: unparsed dependency tokens: {}",
@@ -173,8 +158,7 @@ fn run_emerge(args: &[String]) -> ExitCode {
 
 fn run_ebuild(args: &[String]) -> ExitCode {
     // Read-write even for a build-only command: its phases' `has_version`
-    // reach a redb file only through the parent pipe a read-write open
-    // starts (redb allows one process per file).
+    // reach a redb file only through the parent pipe a read-write open starts.
     let _vdb_ipc = match select_vdb_for("ebuild", args, false) {
         Ok(server) => server,
         Err(code) => return code,
@@ -196,11 +180,10 @@ fn run(applet: Applet, args: &[String]) -> ExitCode {
     }
 }
 
-/// The Rust runtime ignores SIGPIPE, so `portuale ... | head` makes the next
-/// `println!` panic ("failed printing to stdout: Broken pipe"), and with
-/// `panic = "abort"` that is a core dump. Leave SIGPIPE ignored (the remote
-/// transport relies on `EPIPE` errors when ssh dies) and instead turn that one
-/// panic into the exit a SIGPIPE death would have shown a shell: 141, silently.
+/// The Rust runtime ignores SIGPIPE, so `portuale ... | head` would make the
+/// next `println!` panic; turn that one panic into the quiet exit 141 a
+/// SIGPIPE death shows a shell. The ignored disposition stays (the remote
+/// transport relies on `EPIPE` errors when ssh dies).
 fn exit_quietly_on_broken_pipe() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -214,31 +197,26 @@ fn exit_quietly_on_broken_pipe() {
 
 fn main() -> ExitCode {
     exit_quietly_on_broken_pipe();
-    // #326 D7: the helper entry runs first, from `args_os()` (helpers
-    // receive raw filenames that may not be UTF-8), before anything else:
-    // no config, no `bin_dir()`, no extraction, no atexit.
+    // The helper entry runs first, from `args_os()` (raw filenames may not
+    // be UTF-8), before anything else: no config, no extraction, no atexit.
     let argv_os: Vec<std::ffi::OsString> = std::env::args_os().collect();
     if argv_os.get(1).is_some_and(|s| s == "__helper") {
         return ExitCode::from(helpers::run(&argv_os[2..]) as u8);
     }
-    // #331: pin the binary's path before any phase can run, so a file
-    // replaced mid-run never surfaces as `<path> (deleted)`.
+    // Pin the binary's path before any phase can run, so a file replaced
+    // mid-run never surfaces as `<path> (deleted)`.
     self_exe::self_exe();
     let argv: Vec<String> = std::env::args().collect();
     let invoked_as = basename(&argv[0]);
 
-    // C2: the binary that owns real ebuild-phase execution registers the
-    // cache-miss metadata provider `portage-repo` asks from
-    // `repo_aux_metadata` (the ebuild fallback real `porttree.py` runs
-    // when `metadata/md5-cache` lacks the entry). `portage-repo` itself
-    // carries no phase runner; unregistered (unit tests), a miss keeps
-    // the old read error.
+    // The binary that owns ebuild-phase execution registers the
+    // cache-miss metadata provider (the ebuild fallback when
+    // `metadata/md5-cache` lacks the entry).
     portage_repo::register_aux_metadata_provider(ebuild_phases::depend_phase_metadata);
 
-    // Primary dispatch: argv[0] (how a real emerge/ebuild symlink invokes
-    // us). Fallback: an explicit first argument, e.g. `portuale emerge
-    // --pretend ...`, matching busybox's own dual invocation style so the
-    // binary is still exercisable without symlinks set up.
+    // Primary dispatch: argv[0] (symlink invocation). Fallback: an explicit
+    // first argument, e.g. `portuale emerge --pretend ...`, so the binary
+    // is exercisable without symlinks set up.
     if let Some(applet) = Applet::from_name(invoked_as) {
         return run(applet, &argv[1..]);
     }
@@ -265,8 +243,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod broken_pipe_tests {
-    /// Backlog #323: output into a closed pipe is a quiet 141, not a panic
-    /// message and an abort (SIGABRT, 134).
+    /// A closed stdout pipe exits 141 quietly, not a panic message and an abort.
     #[test]
     fn a_closed_stdout_pipe_exits_141_without_a_panic() {
         use std::os::unix::process::ExitStatusExt;
