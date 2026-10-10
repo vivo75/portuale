@@ -212,7 +212,6 @@ mod tests {
         let expected = vec!["00-first", "aa/inner", "nn-mid", "zz/inner", "zz-last"];
         assert_eq!(rels(&root), expected);
 
-
         assert_eq!(
             recursive_config_files(&root.join("00-first")).unwrap(),
             vec![root.join("00-first")]

@@ -49,6 +49,9 @@
 ## fn seal_entry
 - Moved from `ebuild_merge::write_consolidated_metadata_file` (Portage `_write_metadata_file` + `_stamp_metadata_file`, `vartree.py:188-229`, `not delete_individual`).
 - Non-UTF-8 fields open with `errors="replace"` (`vartree.py:268`), sealed as lossy text like an unsealed read (#309).
+- Moved from `ebuild_merge::write_consolidated_metadata_file` (Portage `_write_metadata_file` + `_stamp_metadata_file`, `vartree.py: 188-229`, `not delete_individual`): every [`METADATA_FILE_FIELDS`] file in the pending dir that reads as UTF-8, whitespace-normalised, sorted, under `#format=1`, written with `std::fs::write`; then a `stat` of the dir and `#dir_mtime=<st_mtime_ns>` appended in a second open. No-op when no field file exists.
+- Portage `_consolidate_to_metadata_file` opens with `errors="replace"` (`vartree.py:268`), so a non-UTF-8 field is sealed as its lossy text, like an unsealed read (#309).
+- Portage appends `#dir_mtime=` in a separate `open(..., "a")` step, *after* the body is on disk, so `st_mtime_ns` reflects the body write (the last dir change) and the append itself -- no new dir entry -- leaves it untouched.
 
 ## fn finish_entry
 - Moved from `ebuild_merge::publish_vdb_tmp` (Portage `self.dbdir = self.dbpkgdir; self.delete(); _movefile(dbtmpdir, dbpkgdir)`).
@@ -79,6 +82,7 @@
 
 ## fn format_preserved_libs
 - Moved from `ebuild_merge::write_plib_registry`. Byte-for-byte Python's output: `"` and `\` escaped, C0 controls as short forms or `\u00xx`, everything else (including non-ASCII and DEL) raw UTF-8.
+- Portage `store()`'s `json.dumps(..., ensure_ascii=False, indent="\t", sort_keys=True)` layout (the `BTreeMap` keeps keys sorted). An empty dict is exactly `{}`, and there is no trailing newline, byte for byte Python's output. Moved from `ebuild_merge::write_plib_registry`.
 
 ## tests: merge_sequence_publishes_a_stamped_entry
 - Pending entry hidden from readers; the counter ticks from a missing store to 0; a stale pending entry is wiped by the next `begin_entry`.
@@ -91,3 +95,21 @@
 
 ## tests: concurrent_ticks_are_unique
 - Threads here stand in for Portage's processes.
+
+## fn read_pending
+- [`InstalledDb::read_pending_file`](crate::InstalledDb::read_pending_file): one `open` of `-MERGING-<pf>/<name>`, no existence `stat`. A missing pending entry and a missing file are both `Ok(None)`.
+
+## fn read_world
+- Moved from `pretend::read_world_atoms`: one `read_to_string` of `<root>/var/lib/portage/world`; a missing file (`NotFound` only) is an empty world, any other failure is [`Error::Io`]. Lines are trimmed; blank, `#` and `@` lines are dropped.
+
+## fn read_world_sets
+- Moved from `pretend::read_world_sets`: as [`FilesDb::read_world`], keeping only `@` lines and stripping every leading `@`.
+
+## fn json_quote
+- Portage `json.dumps(..., ensure_ascii=False)`: `"` and `\` escaped, C0 controls as the short forms (`\b \t \n \f \r`) or `\u00xx`, everything else (including non-ASCII and DEL) raw UTF-8.
+
+## fn next_counter_is_above_every_installed_entry_counter
+- Portage `get_counter_tick_core` (`vartree.py:1304-1370`): the next counter is above every installed entry's `COUNTER` even when the `counter` file is behind (or missing), and entries whose `COUNTER` is absent or not an integer are skipped (`except (KeyError, OverflowError, ValueError): continue`). Value derived from the Portage source (`max_counter + 1`), checked by hand against it.
+
+## fn next_counter_waits_for_the_vdb_lock
+- The tick takes Portage's VDB lock (`<vdb parent>/.<basename>.portage_lockfile`): while another holder has it, `next_counter` blocks.

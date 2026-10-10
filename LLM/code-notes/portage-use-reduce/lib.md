@@ -9,6 +9,9 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 - `use_reduce_structured` is the `--changed-deps` structured-comparison follow-up: ports `flat=False`/`opconvert=False` (`_use_reduce_cached`), every redundant-bracket optimization (`is_single`/`special_append`/`ends_in_any_of_dep`/`last_any_of_operator_level`).
 - `use_reduce_flat_disjunctive` is the `"||"`-group resolution follow-up: portuale's cut of Portage `dep_zapdeps`'s `choice_bins`, enough to make `|| ( wine-vanilla wine-staging ... )` pick the installed `wine-staging` rather than the first-listed one. The finer bins (`in_graph`/`any_slot`/`unsat_use_*`/`other_*`) and full backtracking still aren't ported.
 - Tokens stay opaque strings throughout by architecture; portage-repo supplies the installed/visibility-checking closure.
+- Unlike atom.rs, this is NOT a narrowed grammar: flat mode's tokenizer and bracket/use-conditional handling (the part of use_reduce this ports) is fully self-contained in the Portage implementation and is ported as-is, error behavior included. What's out of scope is a set of *optional parameters* the harness simply never exercises: `masklist`, `excludeall` (rare flag-override sets), `is_src_uri`/the "->" SRC_URI arrow token (fetch-restriction syntax), `opconvert` (the operator-into-argument-list shape, which nothing in portuale needs), and `token_class`/`is_valid_flag` (tokens stay opaque strings here, matching how config.py itself calls use_reduce for RESTRICT/PROPERTIES/IUSE-like values -- see the grep in LLM/what-this-proves.md).
+- Portage `other_installed_any_slot` (bin 7): no atom's full match exists at all (not even ignoring `[use]`), but some atom's bare `cat/pkg` is installed in some slot (bug 522652's fuzzy match). Second-pass-only.
+- Portage `preferred_in_graph` / `preferred_installed` / `preferred_any_slot` (bin 0): every non-blocker atom's `cat/pkg` is already installed (Portage `all_installed` over `Atom(atom.cp)`) or already in the graph, and USE-deps are satisfiable -- what makes `virtual/wine`'s `|| ( wine-vanilla wine-staging … )` pick the installed `wine-staging` instead of failing REQUIRED_USE on the first-listed `wine-vanilla`. The top bin; once found, `resolve_disjunctions` breaks early. Selectable.
 
 ## enum MatchMode
 - `Normal`: conditionals active iff the flag is in `uselist` (negated for `!flag?`). `All` = Portage's `matchall=True`; `None` = Portage's `matchnone=True`.
@@ -34,16 +37,19 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 
 ## const EMPTY_ANY_OF
 - Kept verbatim so structured comparison against Portage agrees. Also the `eapi=None` default Portage's `dep_check` uses for installed packages.
+- The placeholder atom Portage `use_reduce` (EAPI 7+, `empty_groups_always_true` false, which is also the `eapi=None` default) substitutes for a `|| ( )` group that reduced to nothing -- kept verbatim so a structured comparison against the Portage function agrees.
 
 ## fn ends_in_any_of_dep / last_any_of_operator_level / special_append
 - Ported as-is from Portage. `last_any_of_operator_level`: a non-operator token breaks the chain first (returns -1). `special_append`: `l == ["||", Group]` splices the group's contents.
 
 ## fn use_reduce_structured
 - Stays atom-agnostic: no `token_class=Atom` conversion, no `evaluate_conditionals` on atoms' USE-deps; the caller does both as a per-atom post-pass. Output shape matches `serialize_dep_tree` (also used by the subset/disjunctive paths).
+- Portage `portage.dep.use_reduce`'s own `flat=False`, `opconvert=False` mode (`_use_reduce_cached`, `lib/portage/dep/__init__.py`): the nested stack reducer with every redundant-bracket optimization (`is_single`/`special_append`/`ends_in_any_of_dep`/ `last_any_of_operator_level`) ported as-is, so two dependency strings that Portage `use_reduce` would collapse to the same structure collapse to the same structure here too. Conditionals are evaluated against `uselist`/`mode` exactly like the flat path; an inactive `flag? ( )` group is dropped, an emptied `|| ( )` becomes the Portage `__const__/empty-any-of` placeholder atom. Stays token/atom-agnostic (no `token_class=Atom` conversion, no `evaluate_conditionals` on the atom's own USE-deps -- the caller does both as a per-atom post-pass, keeping this crate's established "tokens are opaque strings" architecture). Returns the reduced tree re-serialized to a flat token stream (`(`/`)` around every `Group`), the same shape `serialize_dep_tree` already produces for the subset/disjunctive paths.
 
 ## fn use_reduce_flat_subset
 - Grounded against Portage's `--with-test-deps` call site in `depgraph.py`: `use_reduce(dep_string, uselist=use_enabled | {"test"}, ..., subset={"test"})`.
 - Pipeline: `build_dep_tree` (= `paren_reduce`) -> `select_subset` -> `serialize_dep_tree` (= `paren_enclose`) -> unmodified `use_reduce_flat`.
+- Portage `use_reduce`'s own `subset` parameter (`lib/portage/dep/__init__.py`): Portage handles this as a genuine two-pass operation even when `flat=True` is also given -- `subset` filtering (`select_subset`, over the full nested `paren_reduce` structure) runs *first*, producing an already-filtered dependency string, which is *then* reduced normally (`flat=True`'s own bracket/conditional handling). This mirrors that exactly: `build_dep_tree` (this crate's own `paren_reduce` equivalent) -> `select_subset` -> `serialize_dep_tree` (this crate's own `paren_enclose` equivalent) -> the ordinary `use_reduce_flat`, completely unmodified. Grounded against Portage's own `--with-test-deps` call site in `depgraph.py`: `use_reduce(dep_string, uselist=use_enabled | {"test"}, ..., subset={"test"})` extracts exactly the *additional* deps a `test?` conditional (anywhere in the string, at any nesting depth) contributes once `"test"` is forced on, discarding every unconditional dep and every dep gated only by some *other* conditional -- see `select_subset`'s own doc comment for the exact walk.
 
 ## fn next_alternative
 - Portage's dependency-specification grammar allows a bare conditional directly as a `"||"` alternative, not just atoms/groups; hence the `flag?` marker plus its `Group` are consumed as one unit.
@@ -54,6 +60,8 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 - `Unsatisfiable` has no Portage equivalent: Portage's classification always lands an atom in some bin; only portuale's circular-self-dep guard produces it. See `portage-repo::disjunction_preference`.
 - `OtherInstalledAnySlot`: bug 522652's fuzzy match. `OtherInstalled`: typically masked or keyword-rejected (`atom.without_use` tree match fails). `Available` is what makes `|| ( foo[a] foo[b] )` prefer the USE-satisfiable `foo[b]`. `Installed` is what makes `virtual/wine` pick installed `wine-staging` instead of failing REQUIRED_USE on first-listed `wine-vanilla`; once found, `resolve_disjunctions` breaks early (pre-slice-2 it broke early on the first best-rank hit, making tie-breaks unreachable).
 - `tie_break` design rule 2 (`docs/history/022-agent-task-22-zapdeps.fable.md`): portage-use-reduce stays atom-agnostic and hands the caller the tied alternatives' flattened atom lists; the caller owns candidate lookup, `cp`/version parsing and `vercmp`. In-bin ordering: prefer an upgrade via `vercmp` over the intersecting `cp_map`, or `all_installed_slots`, or `all_in_graph`, unless sacrificing an upgrade (`dep_check.py` soft 738-802). A trivial `&mut |_| 0` reproduces pre-slice-2 behaviour (portage-repo's pre-slice-2 shim at its two `--root-deps` call sites).
+- Portage fills nine lists and picks the first atom of the first *selectable* choice across them, in bin order (`dep_check.py:812-816`):
+- Every bin's choices have `all_available = True` except bins 5-8 (`other_*`, reached when some atom is only available via a masked / force path), which Portage still *returns* on its `allow_masked` second pass -- ported as of slice 2/4 of backlog #22 (`docs/history/022-agent-task-22-zapdeps.fable.md`): `resolve_disjunctions` runs a first pass considering only [`is_selectable`](AltPreference::is_selectable) ranks (Portage's `allow_masked=False`), and only when THAT finds nothing at all does a second pass consider the `other_*` bins too (Portage's `allow_masked=True`) -- see `resolve_disjunctions`'s own doc comment. One exception: portuale's own bolt-on circular-self-dep guard (no Portage equivalent) stays hard-`Unsatisfiable` in both passes -- see `portage-repo::disjunction_preference`'s own doc comment.
 
 ## fn use_reduce_flat_disjunctive / type TieBreak
 - Portage `_add_pkg_dep_string`'s `"||"` resolution. The never-silently-wrong invariant: a dependency portuale can't currently resolve is never silently dropped (established by `resolve_pretend_graph`, portage-repo, for the unconditional-flatten v1 this replaces).
@@ -62,6 +70,7 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 ## fn resolve_disjunctions
 - Ordering mirrors Portage `_create_graph` draining the plain `dep_stack` before `_dep_disjunctive_stack` (`depgraph.py:3257-3268`): single flatten can't interleave two stacks, but emits plain results first, then `||`-chosen ones.
 - Backlog #238: Portage `use_reduce` drops an alternative an inactive conditional emptied before `dep_zapdeps` ranks the group. Before the fix the emptied alternative was probed with an empty slice and came back vacuously satisfiable, silently dropping the whole group.
+- Portage's `allow_masked = True` pass: still never picks portuale's own circular-self-dep guard (no Portage equivalent -- see `AltPreference::Unsatisfiable`'s own doc comment), only a genuine `other_*` bin.
 
 ## tests: subset_still_honors_a_nested_non_subset_conditional_normally
 - `test? ( bar? ( dev-libs/a ) )`: "bar" not in subset, still evaluated normally (only actually-active branches contribute, exactly like without subset filtering).
@@ -89,3 +98,21 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 
 ## tests: structured_matches_portage_use_reduce_normalization
 - Every expectation captured from Portage `portage.dep.use_reduce(s, uselist=u, token_class=Atom)` (`flat=False`/`opconvert=False` default), serialized like `serialize_dep_tree` (`(`/`)` around every sublist).
+
+## type TieBreak
+- Falls back to keeping the *whole* `"||"` group exactly as `use_reduce_flat` would have flattened it (literal `"||"` marker, every alternative's own atoms, no selection at all) whenever *no* alternative is currently satisfiable -- so a dependency portuale can't currently resolve is never silently dropped, preserving the exact "never silently wrong about whether a dependency exists" invariant `resolve_pretend_graph`'s own doc comment (portage-repo) already established for the unconditional-flatten v1 this replaces. Portage's `other_*` bins and the `allow_masked` second pass still aren't ported (`AltPreference::is_selectable`'s own doc comment); everything else -- the fine `unsat_use_*` bins and, as of slice 2, in-bin upgrade-preference ordering via `tie_break` below -- is.
+
+## fn disjunctive_picks_the_first_satisfiable_alternative
+- "b" is the only satisfiable alternative -- "a" and "c" must both be dropped entirely, not just deprioritized.
+
+## fn disjunctive_falls_back_to_every_alternative_when_none_satisfiable
+- Nothing is satisfiable -- matches plain use_reduce_flat's own "flatten everything" output exactly, so nothing regresses when portuale can't currently resolve any alternative.
+
+## fn disjunctive_prefers_an_installed_alternative_over_an_earlier_available_one
+- Portage `dep_zapdeps`'s `preferred_installed` (choice bin 0) beats `preferred_non_installed` (bin 1): of `|| ( a b )` where `a` would need a merge and `b` is already installed, `b` wins even though `a` is listed first. (This is the `virtual/wine` -> `wine-staging` case.)
+
+## fn disjunctive_defers_a_tie_to_tie_break_and_keeps_first_when_it_says_zero
+- Both `a` and `b` rank `Available` (a Portage tie) -- `tie_break` decides, not "first satisfiable". A trivial `&mut |_| 0` (portage-repo's own pre-slice-2 shim at its two `--root-deps` call sites) reproduces the old first-listed-wins behaviour.
+
+## fn disjunctive_never_calls_tie_break_for_a_single_alternative_at_the_best_rank
+- "b" alone ranks Installed (beats "a"'s Available) -- there is no tie, so tie_break must not be consulted at all.
