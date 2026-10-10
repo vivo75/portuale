@@ -1,6 +1,6 @@
 // Rust port of a deliberately narrowed subset of `portage.dep.Atom` and
 // `portage.dep.match_from_list` (lib/portage/dep/__init__.py) -- the
-// "atom matching" slice from docs/agent-context.md's depgraph/config
+// "atom matching" slice from LLM/agent-context.md's depgraph/config
 // resolution follow-up work.
 //
 // KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (PMS chapter 8):

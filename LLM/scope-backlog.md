@@ -1,5 +1,7 @@
 # Scope backlog
 
+> Paths and identifiers written before 2026-10-10 may predate the #336 refactor: see [`renames.tsv`](renames.tsv).
+
 What real portage does that portuale doesn't, the standing non-goals, and
 the honest distance to a drop-in replacement. Expected behaviour comes
 from real Portage (the differential beds, now in the sibling `pmtest`

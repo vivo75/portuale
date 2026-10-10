@@ -1,6 +1,6 @@
 // Repo/metadata/vdb access for the single-atom `emerge --pretend` portuale
-// slice (see docs/agent-context.md's depgraph/config-resolution follow-up
-// work, and docs/what-this-proves.md for the full scope writeup).
+// slice (see LLM/agent-context.md's depgraph/config-resolution follow-up
+// work, and LLM/what-this-proves.md for the full scope writeup).
 //
 // Overlays: every `[reponame]` section in `repos.conf` with a `location`
 // (not just `[DEFAULT] main-repo`) is now a candidate source -- see
@@ -26,7 +26,7 @@
 //     `KEY=value` text -- confirmed against a real vendored tree), never
 //     from executing the ebuild in bash. This is deliberate: it lets
 //     `--pretend` work without the bash dependency that real phase
-//     execution will eventually require (see docs/agent-context.md's "Deferred:
+//     execution will eventually require (see LLM/agent-context.md's "Deferred:
 //     ebuild phase execution").
 //   - No virtuals, no backtracking.
 //
@@ -2919,7 +2919,7 @@ pub fn find_remote_binpkg_instance<'a>(
 /// `orig_iuse ∩ orig_use ^ cur_iuse ∩ cur_use` is non-empty).
 ///
 /// The subtraction input is **not** intersected with the ebuild's IUSE
-/// (audit D1, `docs/02.68-74-review-through-B5.md`): real's
+/// (audit D1, `LLM/02.68-74-review-through-B5.md`): real's
 /// `forced_flags` is `chain(myeb.use.force, myeb.use.mask)` /
 /// `chain(pkgsettings.useforce, pkgsettings.usemask)` verbatim, and
 /// `myeb.use.force` comes from `config.setcpv`'s per-cpv
@@ -4044,7 +4044,7 @@ pub fn forced_or_masked_flags(
 /// `portage/package/ebuild/config.py:1973-1980`, never filters by the
 /// package's IUSE), and `:3151`'s `flags -= forced_flags` must forgive a
 /// profile-masked flag the new ebuild's IUSE has dropped (audit D1,
-/// `docs/02.68-74-review-through-B5.md`; probed live against
+/// `LLM/02.68-74-review-through-B5.md`; probed live against
 /// 3.0.82.2). The [`forced_or_masked_flags`] IUSE filter stays for the
 /// display paths that render `( … )` over a package's own IUSE.
 fn forced_or_masked_flags_unfiltered(
@@ -5803,7 +5803,7 @@ fn installed_parent_use_state(
 ///
 /// Per operator, for parent-has `P` and child-has `C`, child-IUSE-valid
 /// `V`, `(+)`-defaulted `E` and `(-)`-defaulted `D` (oracle:
-/// `docs/evidence/2026-09-28-g195/g195d-oracle-output.txt`, from
+/// `LLM/evidence/2026-09-28-g195/g195d-oracle-output.txt`, from
 /// `g195d-oracle-probe.py` over real 3.0.82.2; pinned cell-by-cell by
 /// `tests_195d`):
 /// * `flag?` (`IfParentEnabled`, `:1525-1531`): violated iff the parent
@@ -7290,7 +7290,7 @@ pub enum PretendOutcome {
     /// before it (`serialize_merge_order`). Never a merge target or an
     /// execution unit: #72 B4 renders the `[uninstall     ]` row, every
     /// scheduling/merge site skips it (execution is a documented
-    /// non-goal, `docs/02.072-uninstall_merge_rows.md` §7).
+    /// non-goal, `LLM/02.072-uninstall_merge_rows.md` §7).
     Uninstall {
         version: String,
     },
@@ -15312,7 +15312,7 @@ pub(crate) fn dep_child_root(owner_targets_running_root: bool, key: u8) -> bool 
 /// merge parent to their resolving roots, so the renderer paints real's
 /// per-node `to '<root>'` suffix and per-root USE (`Package.__str__` +
 /// `pkg_use_display`, S0 map
-/// `docs/evidence/2026-10-02-242-display-sites.md` §1e).
+/// `LLM/evidence/2026-10-02-242-display-sites.md` §1e).
 ///
 /// A merge parent sits in its entry's root (looked up by cpv; first
 /// merge-match wins — a dual-root same-cp-same-version parent is
@@ -26673,7 +26673,7 @@ pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
 ///     the build host before compiling; PDEPEND only after this package
 ///     itself merges; IDEPEND only at install time) -- meaningless
 ///     distinctions for a `--pretend`-only portuale with no real merge
-///     ordering or phase execution to begin with (see docs/agent-context.md's
+///     ordering or phase execution to begin with (see LLM/agent-context.md's
 ///     "Deferred: ebuild phase execution"), so v1 treats all five as "a
 ///     dependency this package needs, resolve and report it" uniformly,
 ///     the same "report, don't enforce" simplification already applied to
@@ -31972,7 +31972,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // atom came from (portuale's own single-unified-graph
         // architecture merges them into one combined string before
         // flattening at all -- the same documented limitation
-        // `docs/agent-context.md`'s own `--root-deps` backlog entry
+        // `LLM/agent-context.md`'s own `--root-deps` backlog entry
         // names for the bigger, still-unattempted "recursive second-root
         // graph" gap), so an `RDEPEND`/`PDEPEND`/`IDEPEND` `||` group
         // gets this same permissive check too -- harmless in practice
@@ -36395,7 +36395,7 @@ mod tests {
 
     /// The fixture tree is not in this repository: `fixtures/` is a
     /// symlink to `../pmtest/fixtures`, the single copy, which the
-    /// contract suite reads too (`docs/agent-context.md`, "Where the
+    /// contract suite reads too (`LLM/agent-context.md`, "Where the
     /// tests live"). Every `#[cfg(test)]` reader in the workspace
     /// resolves it through a compile-time `CARGO_MANIFEST_DIR/../..`
     /// path, so a missing or half-checked-out sibling would otherwise
@@ -36692,7 +36692,7 @@ mod tests {
         assert_eq!(out[0].source, CandidateSource::Ebuild);
     }
 
-    /// Backlog 2026-10 B1 (`docs/backlog-tasks-2026-10.md`): binpkg-multi-
+    /// Backlog 2026-10 B1 (`LLM/backlog-tasks-2026-10.md`): binpkg-multi-
     /// instance builds of one `cpv` are told apart only by `BUILD_ID`.
     /// Shared fixture for the three tests below, modelled on the real
     /// `seed-desk` binhost's `app-text/libspectre-0.2.12` -6 (built
@@ -37278,7 +37278,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Audit D1 (`docs/02.68-74-review-through-B5.md`): the subtraction
+    /// Audit D1 (`LLM/02.68-74-review-through-B5.md`): the subtraction
     /// input is not intersected with the ebuild's IUSE. A flag the
     /// profile masks that the new ebuild's IUSE has **dropped** is
     /// forgiven on the presence term -- real keeps the binary (probed
@@ -46082,7 +46082,7 @@ mod tests {
     /// the target-root argument is not reused across the root boundary --
     /// forming the running-root `cyc0z-3 <-> cyc0y-1` cycle live real
     /// reports under default staging (backtrack `1/20`, blame `cyc0z-3`;
-    /// `docs/evidence/2026-09-29-242-inventory/probes/default-cyc0z-1.txt`).
+    /// `LLM/evidence/2026-09-29-242-inventory/probes/default-cyc0z-1.txt`).
     #[test]
     fn cross_root_depend_forms_the_running_root_cycle() {
         let root = fixtures_root();
@@ -46185,7 +46185,7 @@ mod tests {
     /// running-root build dep merges before its target-root consumer, and
     /// `g216comp` lands TWICE (one row per root, real `output.py`
     /// `get_display_list`).
-    /// (`docs/evidence/2026-09-29-242-inventory/probes/default-g216top.txt`).
+    /// (`LLM/evidence/2026-09-29-242-inventory/probes/default-g216top.txt`).
     #[test]
     fn cross_root_bdepend_self_branch_merges_in_both_roots() {
         let root = fixtures_root();
@@ -49091,7 +49091,7 @@ mod tests {
         // a visible candidate's own IUSE lacks is `Missing IUSE:`, never
         // a `Change USE:` row and never a plain miss. Live real 3.0.82.2
         // staged-fixture probes
-        // (`docs/evidence/2026-09-30-265/real/mia0a-{1,2}.txt`):
+        // (`LLM/evidence/2026-09-30-265/real/mia0a-{1,2}.txt`):
         // `=dev-libs/mia0a-1` (`mia0b[foo?]`) prints the block with
         // `- dev-libs/mia0b-1::testrepo (Missing IUSE: foo)`, and
         // `=dev-libs/mia0a-2` (`mia0b[foo?,bar]`) prints the same row
@@ -49137,7 +49137,7 @@ mod tests {
         // record one `Missing IUSE: foo` disclosure on `mia0b` whose chain
         // walks the merge parent up to the top-level argument, like
         // real's `(dependency required by …)` lines in
-        // `docs/evidence/2026-09-30-265/real/mia0a-{1,2}.txt`.
+        // `LLM/evidence/2026-09-30-265/real/mia0a-{1,2}.txt`.
         for (arg, atom) in [
             ("=dev-libs/mia0a-1", "dev-libs/mia0b[foo?]"),
             ("=dev-libs/mia0a-2", "dev-libs/mia0b[foo?,bar]"),
@@ -50581,7 +50581,7 @@ mod tests {
         // `(dependency required by …)` lines (real skips the chain for
         // an `AtomArg` parent, `depgraph.py:7080-7090`). Live real
         // 3.0.82.2 staged-fixture probe
-        // (`docs/evidence/2026-09-30-265/real/useflagpkg-autounmask-use-n.txt`):
+        // (`LLM/evidence/2026-09-30-265/real/useflagpkg-autounmask-use-n.txt`):
         // `emerge --pretend --autounmask-use=n
         // 'dev-libs/useflagpkg[-foo]'` prints the block where portuale
         // printed the plain `no ebuilds to satisfy` miss. Real's staging
@@ -50879,7 +50879,7 @@ mod tests {
     /// The pmtest fixture `dev-util/u249make` (bug 703440's cycle with the
     /// `||` inside `virtual/u249make`): real's ResolverPlayground merges the
     /// bootstrap after one circular restart and aborts under
-    /// `--backtrack=0` (portuale `docs/evidence/2026-09-30-249/u249.txt`).
+    /// `--backtrack=0` (portuale `LLM/evidence/2026-09-30-249/u249.txt`).
     #[test]
     fn virtual_or_choice_is_demoted_through_its_pullers_circular_record() {
         let ok = graph_result_real("dev-util/u249make");
@@ -51389,7 +51389,7 @@ mod tests {
         // parentflipeqpkg (`use.mask pf`), so the same untouchable-child
         // `continue` (`depgraph.py:6732-6736`) applies -- live real
         // (`localhost/test-portuale:latest`, staged fixtures, g195c
-        // probe `docs/evidence/2026-09-28-g195/g195c-real-probe.txt`)
+        // probe `LLM/evidence/2026-09-28-g195/g195c-real-probe.txt`)
         // reports the bare miss under default AND `--autounmask-backtrack=y`:
         // `emerge: there are no ebuilds to satisfy
         // "dev-libs/pfgraphchild[pf=]"`, no rows, no block, rc 1.
@@ -52249,7 +52249,7 @@ mod tests {
     /// `test_autounmask_use_breakage`; `aub0a` needs `aub0d[-foo]`,
     /// `aub0b` `aub0d[foo]`, `aub0c` `>=aub0d-1`; the fixture profile
     /// enables `foo`). Expected values from real 3.0.82.2
-    /// (`docs/evidence/2026-09-28-244/fixture-oracle/real/`).
+    /// (`LLM/evidence/2026-09-28-244/fixture-oracle/real/`).
     fn aub0_result(order: &str, backtrack_y: bool) -> GraphResult {
         let root = fixtures_root();
         let mut config = portage_profile::resolve_config(
@@ -52397,7 +52397,7 @@ mod tests {
         // package. Real's change chain starts at the requester whose atom
         // needed the change (`aubreakwant`), not at `aubreaktop`, which
         // pulled the package in first (real 3.0.82.2,
-        // docs/evidence/2026-09-28-244/fixture-oracle-2/real/dev-libs_aubreaktop.txt).
+        // LLM/evidence/2026-09-28-244/fixture-oracle-2/real/dev-libs_aubreaktop.txt).
         let result = graph_result_autounmask("dev-libs/aubreaktop");
         let change = result
             .autounmask_use_changes
@@ -52482,7 +52482,7 @@ mod tests {
     /// provider's new slot and flags the stale consumer. Expected value:
     /// host real Portage on `-uDN sys-apps/systemd` (libfido2 `rRg`,
     /// libcbor kept at the installed 0.14), see
-    /// `docs/backlog-tasks-2026-10.md` #303.
+    /// `LLM/backlog-tasks-2026-10.md` #303.
     #[test]
     fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update() {
         let dir = TempDir::new("portage-repo-slotop-303").keep();
@@ -53233,7 +53233,7 @@ mod tests {
     /// #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`)
     /// on its two observed shapes. (1) An installed parent's dynamic deps
     /// (the r25 shape, real's own probe in
-    /// `docs/evidence/2026-09-29-236/playground/r25-debug.log`): the live
+    /// `LLM/evidence/2026-09-29-236/playground/r25-debug.log`): the live
     /// `minlib:=` picks the tree's `2.0` (`0/2`), the appended built
     /// `>=minlib-1.0:0/1=` the installed `1.0`; installed-first elimination
     /// drops `2.0` and both atoms bind the installed instance. (2) An
@@ -53377,7 +53377,7 @@ mod tests {
     /// `>=minlib2-1[bar]` alongside `<minlib2-3` collapses onto the lower
     /// pick when that pick builds `bar`, and stays split when it does
     /// not. Grounded on real 3.0.82.2's ResolverPlayground
-    /// (`docs/evidence/2026-10-01-266/r266_pg.py`).
+    /// (`LLM/evidence/2026-10-01-266/r266_pg.py`).
     #[test]
     fn minimize_children_matches_use_deps_against_candidate_use() {
         use md5::Digest as _;
@@ -53463,7 +53463,7 @@ mod tests {
     /// (`_slot_operator_check_reverse_dependencies`), and without
     /// `--update` the probe does not run (`want_update`). Real's own
     /// answer on this shape: the ResolverPlayground probe in
-    /// `docs/evidence/2026-09-29-236/` (`slotop`: `backtracking due to
+    /// `LLM/evidence/2026-09-29-236/` (`slotop`: `backtracking due to
     /// missed slot abi update`, then `U provpkg-2.0 + rR consrdep`).
     #[test]
     fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
@@ -58492,7 +58492,7 @@ mod tests {
     /// which honours use-deps: an installed `dev-util/u250make` built
     /// `-foo` does not satisfy `dev-util/u250make[foo]`, so the
     /// `u250json -> u250make` build edge stays unbreakable (the pmtest
-    /// fixture; real's playground in `docs/evidence/2026-09-30-250/`).
+    /// fixture; real's playground in `LLM/evidence/2026-09-30-250/`).
     #[test]
     fn run_pass_use_mismatched_installed_instance_leaves_the_build_edge_hard() {
         let dir = slotundo_temp_dir("250-edge");
@@ -77050,7 +77050,7 @@ mod tests_184 {
 /// [`violated_parent_flags`] against real `Atom.violated_conditionals`
 /// (`lib/portage/dep/__init__.py:1465`, branches `:1525-1576`).
 ///
-/// Oracle: `docs/evidence/2026-09-28-g195/g195d-oracle-output.txt` (a
+/// Oracle: `LLM/evidence/2026-09-28-g195/g195d-oracle-output.txt` (a
 /// host run of real Portage 3.0.82.2 on these same inputs via
 /// `g195d-oracle-probe.py`). Each row's expectation is the oracle's
 /// `arm` column — the parent arm's composed end-to-end outcome, not

@@ -1,9 +1,9 @@
 // The read-write layer of `portuale vdb mount --rw` (backlog #317): what
 // real Portage writes into `var/db/pkg` while it merges and unmerges,
 // mapped onto database transactions. Design:
-// `docs/superpowers/specs/2026-10-05-rw-fuse-vdb-design.md`; plan:
-// `docs/02.317-rw-fuse.opus.md`; the real operation sequences:
-// `docs/evidence/317-s0-capture.md`.
+// `LLM/superpowers/specs/2026-10-05-rw-fuse-vdb-design.md`; plan:
+// `LLM/02.317-rw-fuse.opus.md`; the real operation sequences:
+// `LLM/evidence/317-s0-capture.md`.
 //
 // `RwView` wraps the read-only `vdb_view::View` and answers first from
 // its own objects, then from the view:

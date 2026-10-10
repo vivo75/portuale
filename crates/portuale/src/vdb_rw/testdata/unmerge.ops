@@ -1,4 +1,4 @@
-# Real `ebuild unmerge` (docs/evidence/317-s0-strace/4-unmerge.ops.txt):
+# Real `ebuild unmerge` (LLM/evidence/317-s0-strace/4-unmerge.ops.txt):
 # shutil.rmtree of the entry (unlinkat of every file, then rmdir), then
 # rmdir of the category, which succeeds once it is empty.
 unlink dev-libs/seed-1/COUNTER

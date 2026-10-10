@@ -13,7 +13,7 @@
 // # Split of the logic
 //
 // The child (`portageq.rs`) keeps every rule of
-// `docs/evidence/305-s6-portageq.md` (arguments, strict parse, EAPI QA
+// `LLM/evidence/305-s6-portageq.md` (arguments, strict parse, EAPI QA
 // notice, USE-conditional evaluation, `dep_expand`, output and exit codes)
 // and the config load for the profile's implicit IUSE. The parent only
 // runs the two installed-package lookups those rules need, through the

@@ -1,4 +1,4 @@
-# Real same-pf replace (docs/evidence/317-s0-strace/2-merge-same-pf.ops.txt):
+# Real same-pf replace (LLM/evidence/317-s0-strace/2-merge-same-pf.ops.txt):
 # the new entry is staged, the live one is rmtree'd, rmdir of the category
 # fails (the staged dir is still there), then the publish rename.
 mkdir dev-libs/-MERGING-seed-1 755

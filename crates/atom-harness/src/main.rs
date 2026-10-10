@@ -1,5 +1,5 @@
 // Neutral CLI test-harness binary for portuale's atom matching (see
-// docs/agent-context.md and crates/portage-dep/src/lib.rs for the v1
+// LLM/agent-context.md and crates/portage-dep/src/lib.rs for the v1
 // grammar this implements). Same argv/output contract as
 // python/atom_harness.py.
 //

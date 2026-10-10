@@ -1,5 +1,7 @@
 # GLEP compliance review (2026-09-15)
 
+> Paths and identifiers written before 2026-10-10 may predate the #336 refactor: see [`renames.tsv`](renames.tsv).
+
 Audit of portuale's current implementation against the 12 GLEPs flagged as
 technical/tooling-relevant, cross-referenced against both portuale's Rust
 source and the vendored real Portage (`3rdparty/portage/`) it is validated

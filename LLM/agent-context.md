@@ -506,7 +506,7 @@ Rust bash (`reubeno/brush`). Outcome:
   merged from upstream periodically; drop the fork once the PRs land.
 - `rusty_bash` was ruled out (not an embeddable library).
 
-**[`brush-pin.md`](brush-pin.md) is the source of truth for the current
+**[`brush-pin.md`](../docs/brush-pin.md) is the source of truth for the current
 pin, the staged fixes, and the re-pin checklist.**
 
 ## How portuale actually runs, session to session

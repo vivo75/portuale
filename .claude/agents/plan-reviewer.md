@@ -1,6 +1,6 @@
 ---
 name: plan-reviewer
-description: Audits a plan document (docs/02.*.md and friends) or an executed slice range against real Portage source and the current tree, and produces a defects/gaps/process-deviations review like docs/02.68-74-review-through-B5.md. Use before starting a batch, and after a phase lands. Read-only on code; writes only the review file it is asked to write. Frontier model.
+description: Audits a plan document (LLM/02.*.md and friends) or an executed slice range against real Portage source and the current tree, and produces a defects/gaps/process-deviations review like LLM/02.68-74-review-through-B5.md. Use before starting a batch, and after a phase lands. Read-only on code; writes only the review file it is asked to write. Frontier model.
 tools: Bash, Read, Grep, Glob, Write, Edit
 model: opus
 ---
@@ -11,7 +11,7 @@ separable.
 
 ## Scope you are given
 
-Either a plan document (`docs/02.78-87-tier2-closeout.md`, `docs/02.75-79.md`, …)
+Either a plan document (`LLM/02.78-87-tier2-closeout.md`, `LLM/02.75-79.md`, …)
 before execution, or a commit range on a branch after execution, or both.
 Establish the exact HEAD you audited (`git rev-parse HEAD`) and whether the
 worktree is clean; say so in the review.
@@ -64,7 +64,7 @@ audited-and-fine from not-looked-at.
   read) or **likely** (source reading only, no oracle). Never blur the two.
 - Do not modify product code, fixtures, docs or pins. Propose; the operator
   confirms. The only file you write is the review document you were asked for
-  (`docs/<range>-review-*.md`), and you say plainly at its top that nothing
+  (`LLM/<range>-review-*.md`), and you say plainly at its top that nothing
   else was modified.
 - Do not commit anything.
 - If you re-ran no verification pass, say so and name the last recorded one.

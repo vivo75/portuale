@@ -203,7 +203,7 @@
 // portuale doesn't implement -- reproducing it here would be actively
 // misleading) -- it's a short, honest, portuale-specific summary of what
 // portuale actually supports, ending with a pointer to
-// README.md and docs/agent-context.md for the rest.
+// README.md and LLM/agent-context.md for the rest.
 
 use crate::color::{self, Colorizer};
 use crate::difflib;
@@ -631,7 +631,7 @@ fn resolve_root_deps_running_root(
 /// is annotated with where it actually installs — exactly as real portage
 /// annotates any row whose own `pkg.root_config.settings["ROOT"] != "/"`
 /// (backlog #242 Slice D S0 map
-/// `docs/evidence/2026-10-02-242-display-sites.md` §1a; the #206 cut
+/// `LLM/evidence/2026-10-02-242-display-sites.md` §1a; the #206 cut
 /// reopened per display site). Under a staged target `ROOT` every
 /// target-rooted row carries `to <target>` and every running-rooted row
 /// `to <running>`; a `/`-rooted row stays bare on both sides (real's
@@ -2849,10 +2849,10 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
 /// ebuild merge, `PKG_BINARY_MERGE` for a binary one — a no-op unless the
 /// caller's `Colorizer` is enabled). Deliberate cuts, both grounded on
 /// live real: the ` to '<ROOT>'` arm never fires (eight unanimous
-/// `docs/evidence/2026-09-27-181-circular-text/real/` captures plus the
+/// `LLM/evidence/2026-09-27-181-circular-text/real/` captures plus the
 /// six-case n206 container probe, all `ROOT=$FX`, show no suffix — and
 /// backlog #242 Slice D's S0
-/// (`docs/evidence/2026-10-02-242-display-sites.md` §1d) settles why:
+/// (`LLM/evidence/2026-10-02-242-display-sites.md` §1d) settles why:
 /// every pinned cycle forms in the running root `/`, so real's own
 /// per-node gate stays shut on every pinned shape; portuale's root is
 /// non-`/` in every test, so the literal gate would inject tmp paths;
@@ -9950,7 +9950,7 @@ fn resolve_config_for_root(
 
 /// Backlog #242 Slice D: the running root's own profile (`Config`) for
 /// per-node USE paint (S0 map
-/// `docs/evidence/2026-10-02-242-display-sites.md` §2). `None` on a
+/// `LLM/evidence/2026-10-02-242-display-sites.md` §2). `None` on a
 /// single-root run (the running root coincides with the target — target
 /// paint everywhere) and when the running config fails to load (a
 /// hermetic test tree carries no `/etc/portage` — the target paint is
@@ -9987,7 +9987,7 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
 /// prints ahead of the change blocks whenever there are changes to
 /// report, even under `--autounmask-only`. Ported for `--pretend` runs
 /// (grounded on the fresh host 3.0.82.2 staged-fixture probe,
-/// `docs/evidence/2026-09-30-271/`); a non-`--pretend` run keeps the old
+/// `LLM/evidence/2026-09-30-271/`); a non-`--pretend` run keeps the old
 /// suppression -- real has no pretend gate here, so that half is a cut,
 /// unprobed this slice. Pure predicate so the matrix stays unit-pinned;
 /// the empty-changes arm (a plain package prints nothing, rc 0) falls
@@ -13629,7 +13629,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // has changes to report -- so under `--pretend --autounmask
     // --autounmask-only` the list IS printed (backlog #271; grounded on
     // the fresh host 3.0.82.2 staged-fixture probe,
-    // `docs/evidence/2026-09-30-271/`). Also forces the dry-run path:
+    // `LLM/evidence/2026-09-30-271/`). Also forces the dry-run path:
     // nothing is ever built.
     //
     // Backlog #185: real `_emerge/actions.py:464-469` (`mergelist_shown`
@@ -19792,7 +19792,7 @@ mod tests {
     fn root_suffix_annotates_each_entry_with_its_own_root() {
         // Backlog #242 Slice D: real `output.py:841-862` appends unquoted
         // `to <EROOT>` on every merge row whose OWN root is not `/` (S0 map
-        // `docs/evidence/2026-10-02-242-display-sites.md` §1a) — the #206
+        // `LLM/evidence/2026-10-02-242-display-sites.md` §1a) — the #206
         // cut reopened per display site.
         use std::path::Path;
         let target_entry = || {

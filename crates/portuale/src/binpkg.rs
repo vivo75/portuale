@@ -1,5 +1,5 @@
 // The `$PKGDIR` directory-scan fallback -- real `bintree._populate_local`
-// (see `docs/agent-context.md`). Every other binary-package path in this
+// (see `LLM/agent-context.md`). Every other binary-package path in this
 // portuale is `<pkgdir>/Packages`-index driven and format-agnostic, so a
 // `gpkg`/`xpak` *listed in an index* already resolves for `--pretend`.
 // What the index reader can't do is the "no trusted index" branch: when
@@ -53,7 +53,7 @@ use std::process::{Command, Stdio};
 ///   inner `tarfile.ReadError`, an `OSError`). The scan aborts.
 ///
 /// The classification mirrors real's exception families site by site;
-/// the per-site table is `docs/07.60-gpkg-populate-read-errors.opus.md`
+/// the per-site table is `LLM/07.60-gpkg-populate-read-errors.opus.md`
 /// section 4. Every `.xpak` read error is `Fatal`: real's
 /// `tbz2.get_data()` returns `None` on any scan failure and the caller
 /// then raises `AttributeError` on `None.get`.
@@ -2882,7 +2882,7 @@ mod tests {
 
     /// The two-class split real's `_populate_local` caller has
     /// (`bintree.py:1185`, per-site table in
-    /// `docs/07.60-gpkg-populate-read-errors.opus.md` section 4). The
+    /// `LLM/07.60-gpkg-populate-read-errors.opus.md` section 4). The
     /// inner-member cells' classes are asserted in their own tests
     /// above; this pins the outer-container and xpak rows.
     #[test]

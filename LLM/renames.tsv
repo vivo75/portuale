@@ -20,3 +20,20 @@ path	rust/required-use-harness/	crates/required-use-harness/	1
 path	rust/use-reduce-harness/	crates/use-reduce-harness/	1
 path	rust/versions-harness/	crates/versions-harness/	1
 note	cd rust && cargo …	cargo … (from the repo root)	1
+path	docs/01.322-relocatable-binary.opus.md	LLM/01.322-relocatable-binary.opus.md	2
+path	docs/02.305-vdb-backends.opus.md	LLM/02.305-vdb-backends.opus.md	2
+path	docs/02.317-rw-fuse.opus.md	LLM/02.317-rw-fuse.opus.md	2
+path	docs/02.326-no-portage-runtime.opus.md	LLM/02.326-no-portage-runtime.opus.md	2
+path	docs/02.326-review-plan.md	LLM/02.326-review-plan.md	2
+path	docs/Paragone_solver_portage.md	LLM/Paragone_solver_portage.md	2
+path	docs/agent-context.md	LLM/agent-context.md	2
+path	docs/backlog-tasks-2026-10.md	LLM/backlog-tasks-2026-10.md	2
+path	docs/backlog-tasks.md	LLM/backlog-tasks.md	2
+path	docs/evidence	LLM/evidence	2
+path	docs/feat-157-authoritative-vdb-database.md	LLM/feat-157-authoritative-vdb-database.md	2
+path	docs/glep-compliance-review.md	LLM/glep-compliance-review.md	2
+path	docs/lessons-of-backlog-ops-2026-10-03.md	LLM/lessons-of-backlog-ops-2026-10-03.md	2
+path	docs/recap-of-backlog-ops-2026-10-03.md	LLM/recap-of-backlog-ops-2026-10-03.md	2
+path	docs/scope-backlog.md	LLM/scope-backlog.md	2
+path	docs/superpowers	LLM/superpowers	2
+path	docs/what-this-proves.md	LLM/what-this-proves.md	2

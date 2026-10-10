@@ -90,3 +90,9 @@ Every entry can be overridden by a follow-up commit. Newest last.
       ambiguous;
     - `graph_real*` / `resolve_real*` fixture helpers kept, because they mean
       "the fixture's actual config" (contrasted with `*_empty`).
+17. **Gate basetemp.** A reused `--basetemp` breaks the next contract run.
+    A privileged merge test leaves a root-owned directory in the basetemp,
+    and pytest's cleanup at the start of the next run fails with
+    `PermissionError`, which turned all 2285 tests into setup errors. The
+    product is not involved. `gate.sh` now uses a fresh `$OUT/pytest` per
+    run. Old gate dirs need `sudo rm -rf`.

@@ -1,5 +1,7 @@
 # What this proves
 
+> Paths and identifiers written before 2026-10-10 may predate the #336 refactor: see [`renames.tsv`](renames.tsv).
+
 > The append-only per-slice record of everything shipped, each entry
 > grounded in the real portage source it ports. New slices append here
 > (workflow step 7); prior entries are fixed in place — a claim that
@@ -5838,7 +5840,7 @@ in `emerge_pretend_reference.py` for CLI-surface parity, inert under
 this landed the removal-hook (`prerm`/`postrm`) and `pkg_config` paths
 still stayed on the default (that gap closed in "`emerge --shell` reaches
 the removal-hook and `--config` paths" below). The brush `declare -f` bug
-is tracked in [`brush-pin.md`](brush-pin.md) for an upstream report.
+is tracked in [`brush-pin.md`](../docs/brush-pin.md) for an upstream report.
 
 ### `PORTAGE_PYM_PATH` is now set, so eclass `has_version` works
 

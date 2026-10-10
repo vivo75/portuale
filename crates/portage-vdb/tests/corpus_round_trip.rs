@@ -1,4 +1,4 @@
-//! Round trip of the #305 corpus (docs/evidence/305-s0-corpus.md, plan
+//! Round trip of the #305 corpus (LLM/evidence/305-s0-corpus.md, plan
 //! S2.8, S5.3): every corpus member is copied files -> sqlite -> files
 //! (feature `vdb-sqlite`), files -> redb -> files (`vdb-redb`) and, with
 //! both, files -> sqlite -> redb -> files, and `verify` must find nothing

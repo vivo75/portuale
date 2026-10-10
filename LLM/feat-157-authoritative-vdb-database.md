@@ -1,11 +1,13 @@
 # #157 — swappable installed-package database (files / sqlite / redb)
 
+> Paths and identifiers written before 2026-10-10 may predate the #336 refactor: see [`renames.tsv`](renames.tsv).
+
 Status: **implemented 2026-10-05** on branch `backlog/305-vdb-backends`
 (slices S0–S8; S9, `emerge` selection, not done: backlog #318; read-write FUSE, D2: #317).
 Proposed 2026-09-25 (revised the same day: three backends, `mrg` first).
 What shipped and how it was checked: [`what-this-proves.md`](what-this-proves.md)
 (#305 paragraph), evidence in `docs/evidence/305-*.md`.
-Design: [`vdb_to_db.md`](vdb_to_db.md). Read it first; this file holds
+Design: [`vdb_to_db.md`](../docs/vdb_to_db.md). Read it first; this file holds
 only the slices, the gates and the open decisions.
 Backlog: [`backlog-tasks-2026-10.md`](backlog-tasks-2026-10.md) Tier 2
 **#305** (filed 2026-10-04; #157 was taken by then, so "feat#157" stays

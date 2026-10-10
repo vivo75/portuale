@@ -1,4 +1,4 @@
-// Real merge/filesystem mutation (task #55, `docs/agent-context.md`'s own
+// Real merge/filesystem mutation (task #55, `LLM/agent-context.md`'s own
 // "Real merge/install/filesystem mutation" section): after running the
 // real `install` phase chain (task #54's own `ebuild_phases` module),
 // really run `pkg_preinst`, copy `${D}`'s own regular files, directories,
@@ -161,7 +161,7 @@
 //     `find_consumers`, `find_libs_to_preserve`) and the real control-
 //     flow wiring into both merge (`unregister_preserved_libs`, this
 //     module) and unmerge (`preserve_libs_on_unmerge`, this module) are
-//     real now -- see `docs/what-this-proves.md`'s own "`preserve-libs`" sections for
+//     real now -- see `LLM/what-this-proves.md`'s own "`preserve-libs`" sections for
 //     the full grounding of each slice.
 //   - `merge_tree`'s regular-file and symlink writes mirror real
 //     `movefile()`'s **atomic replacement**: the new file/link is
@@ -191,7 +191,7 @@
 //     There's still no privilege-*dropping* concept anywhere in
 //     portuale (real userpriv/fakeroot's own reason for existing) --
 //     see the "sandbox / build isolation" section of
-//     `docs/scope-backlog.md` for that separate, still-correct
+//     `LLM/scope-backlog.md` for that separate, still-correct
 //     non-goal.
 //   - Directory-entry merge order is sorted by filename for determinism
 //     (portuale's own test-reproducibility need) rather than real

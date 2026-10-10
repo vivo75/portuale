@@ -1,5 +1,5 @@
 # Real Portage merging a new package into a new category, from
-# docs/evidence/317-s0-strace/1-merge-new.ops.txt (dblink.treewalk,
+# LLM/evidence/317-s0-strace/1-merge-new.ops.txt (dblink.treewalk,
 # vartree.py:5027-5241): info files copied into -MERGING-, COUNTER,
 # CONTENTS and metadata through write_atomic (mkstemp temp, a _umask_test
 # file, chmod, rename), the stamp appended last, then the publish rename.

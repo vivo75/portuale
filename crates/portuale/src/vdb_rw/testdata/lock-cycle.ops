@@ -1,5 +1,5 @@
 # Real Portage's slot lock with FEATURES=parallel-install, from
-# docs/evidence/317-s0-strace/5-pi-merge-new.ops.txt (locks.py lockfile +
+# LLM/evidence/317-s0-strace/5-pi-merge-new.ops.txt (locks.py lockfile +
 # _lockfile_was_removed), on a category that does not exist yet.
 mkdir app-misc 755
 create app-misc/.binpkgrmpkg:0.portage_lockfile 660

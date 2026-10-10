@@ -63,7 +63,7 @@ fn find_test_spans(lines: &[&str]) -> Vec<(usize, usize)> {
 }
 
 /// Strip comments and string/char literals from a line of Rust code, the
-/// same rough way `docs/evidence/305-s0-inventory.py` does: cut at the
+/// same rough way `LLM/evidence/305-s0-inventory.py` does: cut at the
 /// first `//`, then blank `"..."` strings and real char literals (`'x'`,
 /// `'\\n'`). A lone `'` is a lifetime (`'a`, `'_`, `'static`) and is kept.
 fn strip_comments_and_strings(line: &str) -> String {

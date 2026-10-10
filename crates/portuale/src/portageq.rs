@@ -7,7 +7,7 @@
 // installed-package database behind `portage_vdb`, and nothing else:
 // every other portageq command is refused by name.
 //
-// Behaviour contract: `docs/evidence/305-s6-portageq.md` ("Rules the
+// Behaviour contract: `LLM/evidence/305-s6-portageq.md` ("Rules the
 // native implementation must follow", rules 1-10), taken from real
 // `bin/portageq:80-203` and `:1408-1425`. Where the captures table and
 // the rules disagree, the rules win. Design: `docs/vdb_to_db.md` §10.

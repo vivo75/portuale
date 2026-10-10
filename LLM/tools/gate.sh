@@ -21,7 +21,7 @@ grep -E '^test .* \.\.\. FAILED$' "$OUT/test.txt" | sed 's/^/  /'
 
 git -C ../pmtest clean -fdq fixtures/
 (cd ../pmtest && python3 -m pytest pytests-contract-suite -q -rfE -p no:cacheprovider \
-    --basetemp=/var/tmp/pytest-readability) >"$OUT/contract.txt" 2>&1
+    --basetemp="$OUT/pytest") >"$OUT/contract.txt" 2>&1
 echo "contract rc=$?"
 tail -1 "$OUT/contract.txt" | sed 's/^/  /'
 grep -E '^(FAILED|ERROR) ' "$OUT/contract.txt" | sed 's/^/  /'

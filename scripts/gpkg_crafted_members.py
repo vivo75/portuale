@@ -2,11 +2,11 @@
 """Backlog #56/#58 S0 -- crafted gpkg containers, one per member-type cell.
 
 #56 cells (`a`-`h`, outer container members) and their probe modes are
-unchanged -- see `docs/07.56-gpkg_outer_container.opus.md` section 5 and
+unchanged -- see `LLM/07.56-gpkg_outer_container.opus.md` section 5 and
 `TEST/findings/l2.md` "## #56 S0".
 
 #58 adds the **inner** cell family (`i0`...`i19`) from
-`docs/07.058-check_metadata_member_types.md` section S0: each cell starts
+`LLM/07.058-check_metadata_member_types.md` section S0: each cell starts
 from the committed valid `.gpkg.tar`, decompresses its inner
 `metadata.tar.zst` / `image.tar.zst`, rebuilds that inner tar with Python
 `tarfile` (one crafted member), recompresses it with `zstd`, and rebuilds

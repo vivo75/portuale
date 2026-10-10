@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Entrypoint for LLM/agent work on this repo. **Read
-[`docs/agent-context.md`](docs/agent-context.md) first** — it holds the
+[`LLM/agent-context.md`](LLM/agent-context.md) first** — it holds the
 settled goals, hard constraints, architecture decisions, the bash-backend
 investigation, the current state, and the open backlog. This file is just
 the operating rhythm and the rules.
@@ -40,7 +40,7 @@ the next slice") and expects the same rhythm every time:
    A fixture that "passes" without isolating the new behaviour is worse
    than none.
 6. **Add tests**. The black-box suite lives in the sibling `pmtest`
-   repo (see `docs/agent-context.md`, "Where the tests live"): a `CASES`
+   repo (see `LLM/agent-context.md`, "Where the tests live"): a `CASES`
    entry there (Rust exit code; the output invariants in
    `pytests-contract-suite/test_output_invariants.py` run over it
    automatically) *and* a pinned-output test function in
@@ -52,10 +52,10 @@ the next slice") and expects the same rhythm every time:
    review it, then accept it with `PORTUALE_CORPUS_BLESS=1` — in pmtest's
    own commit, which stays separate from this repo's.
 7. **Update the docs**: append a paragraph to
-   [`docs/what-this-proves.md`](docs/what-this-proves.md) (never rewrite
+   [`LLM/what-this-proves.md`](LLM/what-this-proves.md) (never rewrite
    prior slices' paragraphs — they are history; fix one only to correct a
    now-stale claim) with a runnable, live-verified example, and update
-   [`docs/scope-backlog.md`](docs/scope-backlog.md) if the slice closes or
+   [`LLM/scope-backlog.md`](LLM/scope-backlog.md) if the slice closes or
    changes an open entry. Update other docs only if the slice makes them
    stale.
 8. **Run the full verification pass** before a slice is done. Here:
@@ -87,7 +87,7 @@ the next slice") and expects the same rhythm every time:
 10. **Track slices as tasks** — one per shipped slice, `completed` only
     once step 8 is green and the docs are updated.
 11. **Close out a multi-slice plan in one commit.** When the last slice
-    of a `docs/<tier>.<nnn>-*.opus.md` plan lands, the same commit that
+    of a `LLM/<tier>.<nnn>-*.opus.md` plan lands, the same commit that
     flips its `backlog-tasks.md` entry to `DONE <date>` must also flip
     the **plan file's own `Status:` header** from `proposed` to
     `done <date>` (with the slice range, branch and commits). A plan's
@@ -101,7 +101,8 @@ the next slice") and expects the same rhythm every time:
 
 ## Two repos, one project
 
-`portuale` (this repo: product code, unit tests, `docs/`) and `pmtest`
+`portuale` (this repo: product code, unit tests, human docs in `docs/`,
+agent material in `LLM/`) and `pmtest`
 (the sibling checkout at `../pmtest`: the contract suite, fixtures, the
 test bed, the harvested corpus) are **one project in two repositories**.
 Every rule above that says "this repo" applies to the pair, split by
@@ -135,7 +136,7 @@ content, never duplicated:
 
 Backlog item numbers are global across tiers and **never reused**. Before
 filing, take the next free number by scanning *all* tiers
-(`grep -nE '^[0-9]+\. \*\*' docs/backlog-tasks.md`), not just the tier
+(`grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks.md`), not just the tier
 you are writing in — two items filed 13 minutes apart into different
 tiers both claimed #58 on 2026-09-15. Plan filenames are
 `<tier>.<item>-<slug>.opus.md`, so the numeric prefix must match the tier

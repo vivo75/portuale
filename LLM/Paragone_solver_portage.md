@@ -351,12 +351,12 @@ Lo Scheduler chiede invece in che ordine eseguire il lavoro. Il depgraph seriali
 
 La differenza pratica è che lo Scheduler non ragiona più su DEPEND, RDEPEND o BDEPEND. Per questo, nell'esempio, xen-tools aspetta anche la merge di bridge-utils, che è solo una RDEPEND: il tipo ha già svolto il suo ruolo durante la serializzazione.
 
-![xen_tools_4193_dipendenze_per_tipo](./images/xen_tools_4193_dipendenze_per_tipo.svg)
+![xen_tools_4193_dipendenze_per_tipo](../docs/images/xen_tools_4193_dipendenze_per_tipo.svg)
 
 
-![xen_tools_valutazione_use_e_slot_operator](./images/xen_tools_valutazione_use_e_slot_operator.svg)
+![xen_tools_valutazione_use_e_slot_operator](../docs/images/xen_tools_valutazione_use_e_slot_operator.svg)
 
-![xen_tools_grafo_vs_modello_scheduler](./images/xen_tools_grafo_vs_modello_scheduler.svg)
+![xen_tools_grafo_vs_modello_scheduler](../docs/images/xen_tools_grafo_vs_modello_scheduler.svg)
 
 # Portuale
 
@@ -380,4 +380,4 @@ Alcuni problemi fermano il loop invece di alimentarlo. Con `USE=system-qemu` l'e
 
 Proprio xen-tools offre un esempio concreto di ciclo che il mio schema lineare non mostrava. Con `system-qemu` xen-tools ha in DEPEND `qemu[xen]`, e qemu con `USE=xen` dipende da `xen-tools:=`. Se uno dei due è già installato, l'arco risulta soddisfatto e la serializzazione può ignorarlo. In un'installazione da zero entrambi sono da compilare, quindi il ciclo non si spezza: Portage si ferma con un errore di dipendenza circolare e suggerisce una modifica di USE. Nel caso tipico propone di disattivare `xen` su qemu per il primo giro.
 
-![portage_solver_reale_con_backtracking](./images/portage_solver_reale_con_backtracking.svg)
+![portage_solver_reale_con_backtracking](../docs/images/portage_solver_reale_con_backtracking.svg)

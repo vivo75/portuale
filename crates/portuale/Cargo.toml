@@ -25,7 +25,7 @@ mrg-director = { path = "../mrg-director" }
 # `_emerge/unmerge.py::_unmerge_display`) -- a pure version-parsing
 # crate, already a transitive dependency via portage-dep/portage-repo.
 portage-versions = { path = "../portage-versions" }
-# Real ebuild phase execution (task #54, docs/agent-context.md's own
+# Real ebuild phase execution (task #54, LLM/agent-context.md's own
 # "Real ebuild phase execution" section): a deliberate, accepted dynamic
 # dependency (this pilot's own "near-zero dependencies" discipline is
 # explicitly waived here, see that doc's own "bash-execution-backend

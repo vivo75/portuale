@@ -4,7 +4,7 @@ Implemented GLEPs (Final or Active)
 
 | GLEP number | Type             | Status          | Title                                                           |
 |        ---: | :---             | :----:          | :---                                                            |
-|          [ 1](./glep-0001.rst) | Informational   | Active | GLEP purpose and guidelines                            |
+|          [ 1](glep-0001.rst) | Informational   | Active | GLEP purpose and guidelines                            |
 |          [ 2](./glep-0002,rst) | Informational   | Active | Sample ReStructuredText GLEP template                  |
 |          [ 6](./glep-0006,rst) | Standards Track | Final  | Gentoo Linux monthly bug day                           |
 |          [11](./glep-0011,rst) | Standards Track | Final  | Web Application Installation                           |

@@ -231,7 +231,7 @@ mod tests {
     /// embedded runtime, never the live `bin/`. Proves the extracted tree
     /// works as a phase runtime (modes, symlinks, helper lookups). The
     /// relocated-binary half (no build tree at all) is the container run in
-    /// `docs/evidence/322-s2.md`.
+    /// `LLM/evidence/322-s2.md`.
     #[test]
     fn a_phase_running_merge_works_from_an_extracted_runtime() {
         let tmp = TempDir::new("embedded-runtime-merge");

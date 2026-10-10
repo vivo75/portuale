@@ -167,7 +167,7 @@ These all go to `LLM/` with the same relative names. `docs/` keeps:
   - rewrite live entry points;
   - leave history docs alone;
   - give each history doc a header line after its title:
-    `> Paths and identifiers before 2026-10-10: see [LLM/renames.tsv](…).`
+    `> Paths and identifiers before 2026-10-10: see `LLM/renames.tsv`.`
 - [ ] `LLM/README.md`: the agent index, moved out of `docs/README.md`.
   `docs/README.md` becomes a human index.
 - [ ] Link check with

@@ -1,6 +1,6 @@
 // Shared CLI scaffolding for portuale's neutral test-harness binaries
 // (versions-harness, atom-harness, use-reduce-harness, required-use-harness;
-// see docs/agent-context.md, "Test/benchmark harness architecture"). Every
+// see LLM/agent-context.md, "Test/benchmark harness architecture"). Every
 // harness is a thin per-crate `dispatch(op, args)` over the library surface
 // plus the same two-mode driver: one operation per process invocation in
 // correctness mode, or a stdin "batch" loop in benchmark mode. The argv/output

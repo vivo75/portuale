@@ -1,5 +1,5 @@
 // Neutral CLI test-harness binary for portuale's REQUIRED_USE checking (see
-// docs/agent-context.md and portage-required-use/src/lib.rs's doc comment).
+// LLM/agent-context.md and portage-required-use/src/lib.rs's doc comment).
 // Same argv/output contract as python/required_use_harness.py,
 // which wraps real portage.dep.check_required_use directly.
 //

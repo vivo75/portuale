@@ -10,7 +10,7 @@ Goal: let portuale use N CPUs where it is safe, without breaking the
 determinism contract or the musl-static story.
 
 Source grounding: cites below name **symbols, not line numbers** — the
-repo convention (`docs/08.102-108-perf-memoisation.md` header: "find
+repo convention (`LLM/08.102-108-perf-memoisation.md` header: "find
 things by symbol name, not line number"); the first draft's `path:line`
 cites had already drifted in 16 of 19 cases within hours of being
 written. Files: `rust/portuale/src/*.rs`,

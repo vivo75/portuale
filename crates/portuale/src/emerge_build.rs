@@ -791,7 +791,7 @@ pub(crate) fn merge_one_source_entry(
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
         // #72 B3: a blocker-removal task is not a merge. Executing it is
-        // a documented non-goal (`docs/02.072-uninstall_merge_rows.md`
+        // a documented non-goal (`LLM/02.072-uninstall_merge_rows.md`
         // §7); the entry is skipped exactly like an installed no-op.
         PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::Uninstall { .. } => {
             return Ok(());

@@ -1,7 +1,7 @@
 # Subagents for the backlog-plan workflow
 
-These map onto the slice shapes that recur in `docs/02.*.md` and the older
-`docs/<tier>.<nnn>-*.opus.md` plans. The split is deliberate: the slices that
+These map onto the slice shapes that recur in `LLM/02.*.md` and the older
+`LLM/<tier>.<nnn>-*.opus.md` plans. The split is deliberate: the slices that
 *decide* something run on a frontier model, the slices that *execute* something
 already decided run on a cheap one, and the executing ones are safe to fan out.
 

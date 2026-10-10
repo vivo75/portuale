@@ -2,7 +2,7 @@
 
 Design document for feature **#157**. The slice plan and verification
 gates are in
-[`feat-157-authoritative-vdb-database.md`](feat-157-authoritative-vdb-database.md);
+[`feat-157-authoritative-vdb-database.md`](../LLM/feat-157-authoritative-vdb-database.md);
 this document explains *what* is built and *why*. Status: **proposed
 2026-09-25, revised the same day for three backends**. Diagrams are
 Mermaid.

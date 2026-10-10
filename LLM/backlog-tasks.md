@@ -1,5 +1,7 @@
 # Backlog tasks
 
+> Paths and identifiers written before 2026-10-10 may predate the #336 refactor: see [`renames.tsv`](renames.tsv).
+
 One line per open task. Each has a code/doc pointer so a fresh model can
 start without a full context load. Source of truth for detail:
 [`scope-backlog.md`](scope-backlog.md) (section letters in brackets),

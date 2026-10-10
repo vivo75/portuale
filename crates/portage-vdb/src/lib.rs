@@ -1,11 +1,11 @@
 //! The installed-package database ("VDB") behind one interface
 //! (feat#157, backlog #305).
 //!
-//! Design: `docs/feat-157-authoritative-vdb-database.md` (authoritative)
-//! and `docs/vdb_to_db.md` §6–§11. Plan: `docs/02.305-vdb-backends.opus.md`.
+//! Design: `LLM/feat-157-authoritative-vdb-database.md` (authoritative)
+//! and `docs/vdb_to_db.md` §6–§11. Plan: `LLM/02.305-vdb-backends.opus.md`.
 //! The method list comes from the S0 inventory
-//! (`docs/evidence/305-s0-path-inventory.md` §4, needs N1–N16 in §5) and
-//! the write order from `docs/evidence/305-s0-vartree-write-order.md`.
+//! (`LLM/evidence/305-s0-path-inventory.md` §4, needs N1–N16 in §5) and
+//! the write order from `LLM/evidence/305-s0-vartree-write-order.md`.
 //!
 //! - [`InstalledDb`] is the read side plus [`InstalledDb::begin_write`];
 //!   [`WriteTxn`] is the write side.
