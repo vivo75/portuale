@@ -2,7 +2,7 @@
 Build-log path, `PORTAGE_LOGDIR` symlink, and capture tests.
 
 ## fn ensure_portage_logdir_symlink_gains_the_gz_suffix_when_compressed
-- Ports Portage's `prepare_build_dirs.py` `compress_log_ext`: with `FEATURES=compress-build-logs` the log file is `<...>.log.gz` in both layouts.
+- Ports Portage's `prepare_build_dirs.py:397-399` (`compress_log_ext`): with `FEATURES=compress-build-logs` the log file is `<...>.log.gz` in both layouts.
 
 ## fn tail_of_gunzips_a_compressed_build_log
 - Ports Portage's `Scheduler.py` / `doebuild.py`, which wrap a `.gz`-suffixed log in `gzip.GzipFile(mode="rb")` before reading.

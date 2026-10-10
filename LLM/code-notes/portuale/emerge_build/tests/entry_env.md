@@ -11,7 +11,10 @@ Per-entry environment unit tests.
 - #37 S2: the S0 oracle's exact row set (`TEST/findings/l2.md` "S0 recon (#37)"). The profile layers replayed set implicit arch/elibc/kernel flags no package declares in IUSE; `archusepkg` declares `IUSE="amd64 riscv"`. Portage's `environ_filter`/`AA`-pop rows stay out (S0 findings).
 
 ## fn entry_resolved_features_folds_the_matched_env_file_value
-- Backlog #98: fold order cases are S0 cells B/C. A pkg `-tok` does not prune a calling-env token.
+- Backlog #98: the per-entry folded `FEATURES` list. A matched env file value folds onto the run-wide list in `[run-wide, pkg, calling-env]` order (S0 cells B/C); no match returns `None`, so the run-wide value, and every gate reading it, stays untouched. A pkg `-tok` does not prune a calling-env token.
 
 ## fn entry_build_env_rereads_profile_env_changed_after_resolve
-- Backlog #332: Portage's `Scheduler._allocate_config` calls `config.reload()` for every package task, which re-reads `env.d`. `entry_build_env` is portuale's `_allocate_config` point; untouched `profile.env` takes the fast path (pre-#332 env exactly). Expected value from Portage source; the bed finding was `PT_HELPER_DOINS` missing from later packages.
+- Backlog #332: Portage's `Scheduler._allocate_config` calls `config.reload()` for every package task (`Scheduler.py:1899-1913`), which re-reads `env.d` (`config.py:2691-2699`). `entry_build_env` is portuale's `_allocate_config` point; untouched `profile.env` takes the fast path (pre-#332 env exactly). Expected value from Portage source (`config.py:2691-2699`); the bed finding was `PT_HELPER_DOINS` missing from later packages.
+
+## fn get (test helper)
+- Later pairs win in both backends (`Command::envs` / successive `export`s), so it reads the *last* pair: the run-wide base carries empty `USE_EXPAND` placeholders that the per-entry rows override.
