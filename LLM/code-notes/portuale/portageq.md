@@ -28,7 +28,7 @@ Native `has_version` / `best_version` over the installed-package database.
 - EAPI-aware atom validation (Portage `Atom(..., eapi=)`): ports the error Portage's `Atom(raw, allow_repo=..., eapi=eapi)` raises (dep/__init__.py:2090-2150). Pre-EAPI-5 slot grammar rejects the atom outright in Portage (`InvalidAtom(self._string)`).
 
 ## fn eqawarn
-- QA notices: Portage `elog("eqawarn", ...)` (`elog("eqawarn", lines)`, portageq:1408-1425). Portage portageq runs `bash -c "source '$PORTAGE_BIN_PATH/isolated-functions.sh' ; eqawarn '<line>' ; ..."`, so the notice goes through the ebuild's own elog machinery (log file, `PORTAGE_ELOG_*`). Do the same when `PORTAGE_BIN_PATH` names a directory holding `isolated-functions.sh`. Otherwise (no phase environment) print ` * <line>` on stderr. The plain-text ` * <line>` on stderr is the plain-text form of `eqawarn`'s output.
+- QA notices: Portage `elog("eqawarn", ...)` (`elog("eqawarn", lines)`, portageq:1408-1425). Portage's portageq runs `bash -c "source '$PORTAGE_BIN_PATH/isolated-functions.sh' ; eqawarn '<line>' ; ..."`, so the notice goes through the ebuild's own elog machinery (log file, `PORTAGE_ELOG_*`). Do the same when `PORTAGE_BIN_PATH` names a directory holding `isolated-functions.sh`. Otherwise (no phase environment) print ` * <line>` on stderr. The plain-text ` * <line>` on stderr is the plain-text form of `eqawarn`'s output.
 
 ## fn dep_expand
 - Ports `portage/dbapi/dep_expand.py` (the fall-through path) and `cpv_expand`: what `vardb.match()` does to a string the strict `Atom()` parse rejected: a missing `=` prefix is allowed (`cat/pkg-1.0`), a bare name expands to the one installed category, none installed leaves `null/<pn>` which matches nothing.

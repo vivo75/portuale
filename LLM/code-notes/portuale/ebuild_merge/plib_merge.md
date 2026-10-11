@@ -7,7 +7,6 @@ Merge-side preserved-library handling: collision takeover, CONTENTS/NEEDED strip
 ## fn unregister_preserved_libs
 - Ports `dblink.merge()`'s post-copy step (lib/portage/dbapi/vartree.py:5095-5159): any path this merge's `find_collisions` matched against a currently-registered preserved lib is now owned by the just-merged package, so the taken-over paths drop from the registry (removing the owning `cp:slot` entry once its path list empties) and from the previous owner's vdb `CONTENTS` (Portage's `removeFromContents`).
 - Skipped when the previous owner *is* the just-merged package (Portage's `if cpv != self.mycpv`): re-merging the exact same cpv already replaces its own vdb entry wholesale, so there is nothing stale to strip.
-- Ports `dblink.merge()`'s own post-copy step (`lib/portage/dbapi/vartree.py:5095-5159`): any path this merge's own `find_collisions` matched against a currently-registered preserved lib is now legitimately owned by the just-merged package instead of its previous, registered owner.
 
 ## fn remove_from_contents
 - Ports `vardbapi.removeFromContents` (vartree.py:1244-1310). A missing vdb entry for `cpv` (already unmerged some other way) is silently a no-op, matching Portage's tolerance of a stale registry entry.

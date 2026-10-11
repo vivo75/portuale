@@ -2,7 +2,7 @@
 Minimal `difflib.SequenceMatcher` port for `emerge --search` fuzzy matching.
 
 ## module
-- A faithful, minimal port of CPython's `difflib.SequenceMatcher.ratio()` (`Lib/difflib.py`), just enough for `emerge --search`'s fuzzy matching (`_emerge/search.py`: `difflib.SequenceMatcher().ratio() >= cutoff`). Real Portage gates on all three of `real_quick_ratio()`, `quick_ratio()` and `ratio()`, but the first two are upper bounds on the third (`ratio <= quick_ratio <= real_quick_ratio` always), so `ratio() >= cutoff` alone is the exact combined condition.
+- A faithful, minimal port of CPython's `difflib.SequenceMatcher.ratio()` (`Lib/difflib.py`), just enough for `emerge --search`'s fuzzy matching (`_emerge/search.py`: `difflib.SequenceMatcher().ratio() >= cutoff`). Portage gates on all three of `real_quick_ratio()`, `quick_ratio()` and `ratio()`, but the first two are upper bounds on the third (`ratio <= quick_ratio <= real_quick_ratio` always), so `ratio() >= cutoff` alone is the exact combined condition.
 - Scope match with CPython: `isjunk` is always `None` (search.py never passes one), so there is no junk set at all; `autojunk` only fires for a `b` of length >= 200, which a search key / package-name part never reaches, so both the junk sets and the autojunk pruning are omitted. Everything else (`find_longest_match`'s `j2len` DP, the earliest-match tie-break, the recursive `get_matching_blocks` split, `2.0 * matches / total`) is ported literally so a Rust search produces byte-identical results to Portage's `emerge --search` `difflib`-backed one.
 - Portage's `_emerge/search.py` compares `difflib.SequenceMatcher().ratio() >= cutoff`, i.e. `difflib.SequenceMatcher(None, a, b).ratio()` against the cutoff.
 

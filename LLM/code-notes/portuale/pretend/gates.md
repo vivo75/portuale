@@ -15,7 +15,6 @@ Pure predicates for what a run shows: merge-list gating, the empty-plan arms, an
 - The empty-changes arm (a plain package prints nothing, rc 0) falls out of `has_changes=false`, exactly like Portage's empty change loops.
 
 ## fn nothing_to_merge
-- Backlog #225: ports `action_build` (`_emerge/actions.py:496-521`). `mergecount == 0` counts `operation == "merge"` packages; `emerge_build::resume_cpv` is `Some` for exactly that set.
 - Aborts and `--autounmask-only` never reach the merge driver; the `--pretend` branch returns after the display with no message.
 - The plain-run exclusion: `mergecount` stays `None` without display flags, so `Scheduler` still writes -- possibly empty -- per backlog #179.
 - The resume-list-untouched half is pinned end to end in pmtest (`test_portuale.py`, backlog #225).

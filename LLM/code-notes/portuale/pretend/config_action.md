@@ -13,7 +13,6 @@
 
 ## fn misspell_suggestion_block
 - Ports Portage's `depgraph.py:7034-7066` + `dbapi/_similar_name_search.py` for `--misspell-suggestions` (default on).
-- Applies only when the atom's `cat/pkg` genuinely doesn't exist in any repo (Portage's `not cp_exists` -- a `cat/pkg` that exists but is only masked gets the autounmask notes instead, never this).
 - Returns the block with no trailing newline -- the caller adds one.
 - Portage `depgraph.py:7034-7066` + `dbapi/_similar_name_search.py` (`--misspell-suggestions`, default on): when `resolve_pretend_graph` aborts a top-level atom with `there are no ebuilds to satisfy "<atom>".` **and** that atom's `cat/pkg` genuinely doesn't exist in any repo (Portage `not cp_exists` -- a `cat/pkg` that exists but is only masked gets the autounmask notes instead, never this), print `difflib.get_close_matches` suggestions over every `cat/pkg` in the tree. Returns the block to append to the already-printed `emerge: <message>` (no trailing newline -- the caller adds one), or `None` when it doesn't apply.
 - The message's first line is exactly `there are no ebuilds to satisfy "<atom-debug>".` -- pull the quoted atom out.

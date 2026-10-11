@@ -19,7 +19,6 @@ Package rows for `emerge --info`.
 - Deliberately narrow vs Portage `action_info`: **ebuild candidates only** (no installed-package `was built with` + `CHOST`/`CFLAGS` vdb `_aux_env_search` diff, no `(non-installed binary)` line), and no `pkg_info()` phase execution.
 - USE-dep post-filter (`dev-libs/foo[bar]`), same as `resolve_pretend`: matched candidates are filtered to those whose USE satisfies the atom.
 - `all_flags = true` (Portage `pkg_use_display` for a non-installed package renders every flag), no installed diff, no reinstall flags.
-- What `emerge --info <atom>` shows in Portage's `action_info` per-package "`<cpv>::<repo> would be built with the following:`" block (`actions.py:2321` + `pkg_use_display`). Portage skips an atom with no visible ebuild candidate with a `- <atom>` "no matches" note (rendered by the caller).
 - The USE display is built exactly the way a `New` `GraphEntry`'s `use_expand_display` is (all flags, Portage's `pkg_use_display` for a non-installed package).
 - Dedup: Portage renders `sorted(pkg.iuse.all)`, a frozenset (see `refresh_entry_use_display`).
 - The `mypkgs` gate (`actions.py:1896-1900`); the ebuild path is Portage's `portdb.findname(pkg.cpv, myrepo=pkg.repo)` for the `pkg_info()` run (`actions.py:2360`).
@@ -31,12 +30,10 @@ Package rows for `emerge --info`.
 - `use_expand_display` is Portage's `pkg_use_display` for a `built=True` package. The archive lookup is Portage's `bindb.bintree.getname(cpv)` + `xpak.tbz2(...).getfile` / `gpkg (...).get_metadata` (`actions.py:2362-2384`); the scratch layout lets the phase driver derive `CATEGORY`/`PN` from the path the way Portage's `doebuild(tree="bintree")` derives them from the binpkg metadata.
 - Portage's `_display_use` `USE="…"` + one `VAR="…"` per non-hidden `USE_EXPAND` group, each value already enabled-first/disabled-last ordered, exactly the pairs `pretend.rs::use_suffix` renders for a `New` entry under `-pv`.
 - The `defines_pkg_info` field: whether this candidate's ebuild defines `pkg_info()` (EAPI 4+ + `info` in `DEFINED_PHASES`) -- Portage `action_info` only prints the `<cpv> would be built with the following:` block for such packages (`actions.py:1896`).
-- `use_expand_display` is Portage's `pkg_use_display` for a `built=True` package. The archive lookup is Portage's `bindb.bintree.getname(cpv)` + `xpak.tbz2(...).getfile` / `gpkg (...).get_metadata` (`actions.py:2362-2384`); the scratch layout lets the phase driver derive `CATEGORY`/`PN` from the path the way Portage's `doebuild(tree="bintree")` derives them from the binpkg metadata.
 
 ## fn has_local_binary_candidate
 - Portage's `action_info` `bindb.match(x.cp)` `cp_exists` probe (`actions.py:1883`). Takes the run's already-built index (backlog #123) instead of re-deriving it from `&Config`.
 - The caller lays the extracted ebuild out as `<scratch>/<category>/<package>/<pf>.ebuild` so the phase driver can derive `CATEGORY`/`PN` from the path the way Portage `doebuild(tree="bintree")` derives them from the binpkg metadata.
-- Portage's `action_info` `bindb.match(x.cp)` `cp_exists` probe (`actions.py:1883`). Takes the run's already-built index (backlog #123) instead of re-deriving it from `&Config`.
 
 ## fn resolve_info_binary_candidate
 - Portage's `(portdb, "ebuild"), (bindb, "binary")` search loop (`actions.py:1876-1900`). Portage never lists a binary candidate it couldn't run `pkg_info()` for, so unlike the ebuild path there is no separate "list but don't run" state. Takes the run's already-built index (backlog #123).
@@ -61,7 +58,6 @@ Package rows for `emerge --info`.
 - The `mydesiredvars` values come from the package's vdb `environment.bz2` via `read_vdb_env_vars` -- Portage `_aux_env_search`, and *only* from there (Portage never consults the individual `build-info` files for these five).
 - Portage `mydesiredvars` sourcing (`actions.py:2335-2342` over `_aux_env_search`): the saved env, or nothing -- a var the env lacks is `Unset:`, and a present value that matches the current config (including empty-equals-empty) prints nowhere. The printed value is Portage's raw `myval`, untrimmed.
 - Portage `action_info`'s `if metadata["DEFINED_PHASES"]: if "info" not in ...: continue` -- names `info`, OR is entirely empty (falsy-check quirk).
-- Portage's `None` vs `split()`-equal branches (`actions.py:2336-2342`); the `USE` line's `( )` force/mask wrap is Portage's `pkg_use_display`, via the same `forced_or_masked_flags` the ebuild-candidate side uses.
 
 ## struct InstalledInfo::defines_pkg_info
 - Whether `action_info` attempts `>>> Attempting to run pkg_info()` for this installed match (`actions.py:2350-2356`).

@@ -66,7 +66,6 @@
 
 ## fn render_entry
 - Render one `depend`-phase result as the bytes Portage `flat_hash._setitem` writes (`portage.cache.flat_hash.database`): `for k in self._write_keys: v = values.get(k); if not v: continue; write f"{k}={v}\n"` -- sorted keys, empty values skipped, with the two synthetic keys `_eclasses_`/`_md5_` added exactly like Portage's `EbuildMetadataPhase` + `_write_cache` do. Shared by `--regen` (the repo's `metadata/md5-cache`) and C3's depcachedir write-back (`ebuild_phases::depend_phase_metadata`): same key set, different destination directory *and* `_eclasses_` shape -- the repo cache is `flat_hash.md5_database` (pairs), the depcachedir `mtime_md5_database` (triples with the eclass dir, `store_eclass_paths = True`; S0 cell (a)).
-- Portage `flat_hash._setitem`: `for k in self._write_keys: v = values.get(k); if not v: continue; write f"{k}={v}\n"`. Sorted keys, empty values skipped.
 
 ## fn write_entry
 - Write one rendered cache entry into `dir` (`<...>/<category>`), Portage `flat_hash._setitem`'s tempfile-then-`os.rename` dance: a unique temporary sibling first so concurrent writers (C3's provider can run in several `portuale` processes at once -- the C2 concurrency pin spawns sixteen) never collide, then an atomic rename over the final name. The caller decides whether a failure is fatal (`--regen`) or best-effort (the depcachedir write-back, whose fallback is the in-process memo).

@@ -2,22 +2,19 @@
 CONFIG_PROTECT decisions, `._cfgNNNN_` allocation, atomic replaces and xattr comparison.
 
 ## fn is_protected
-- Portage `ConfigProtect.isprotected` (lib/portage/util/__init__.py): longest-prefix match against `config_protect` (a whitespace-separated path list, `root`-joined) minus `config_protect_mask`.
+- Portage `ConfigProtect.isprotected()` (`lib/portage/util/__init__.py`): longest-prefix match against `config_protect` (a whitespace-separated path list, `root`-joined) minus `config_protect_mask`.
 - A protect/mask entry naming a real on-disk directory matches any path under it (`/etc` matches `/etc/foo` but not `/etcfoo`); one that doesn't (a literal file, or a nonexistent path) only ever matches exactly.
 - `pub(crate)`: `ebuild_unmerge`'s `FEATURES=unmerge-orphans` handling reuses this exact check (Portage `self.isprotected(obj)`).
-- Portage `ConfigProtect.isprotected()` (`lib/portage/util/__init__.py`).
 
 ## fn new_protect_filename
-- Portage `new_protect_filename` (lib/portage/util/__init__.py:1803): the next unused `._cfgNNNN_<basename>` sibling of `dest`, unless the highest-numbered existing sibling already holds the same content/target as `newmd5`, which is then reused instead of allocating a new one.
+- Portage `new_protect_filename()` (`lib/portage/util/__init__.py:1803`): the next unused `._cfgNNNN_<basename>` sibling of `dest`, unless the highest-numbered existing sibling already holds the same content/target as `newmd5`, which is then reused instead of allocating a new one.
 - `newmd5` mirrors Portage `_protect()`'s own `(dest_link or src_md5)` call argument: the pending update's content MD5 for a regular file, or (for a symlink) the comparison target-string the call site chose. Portage's own naming folds both "an MD5 hex string" and "a raw symlink target string" into the same parameter, compared against whichever kind the last `._cfgNNNN_` file itself turns out to be.
 - Narrower than Portage in one way: Portage `new_protect_filename(mydest, newmd5, force)` returns `mydest` unchanged outright when `mydest` doesn't exist yet and `force` is false -- moot here since every call site only calls this after confirming `dest` exists (see `merge_tree`'s obj/sym branches), so `force`'s only effect (forcing that early return to still allocate a number) never applies and isn't threaded through.
 - `dest` itself is never touched here; the caller writes to the returned path instead.
-- Portage `new_protect_filename()` (`lib/portage/util/__init__.py:1803`).
 
 ## fn new_backup_path
-- Portage `dblink._new_backup_path` (vartree.py): the first `dest.backup.NNNN` (zero-padded 4 digits from `0000`) whose `lstat` fails -- no file, symlink, or directory there yet.
+- Portage `dblink._new_backup_path` (`vartree.py:_new_backup_path`): the first `dest.backup.NNNN` (zero-padded 4 digits from `0000`) whose `lstat` fails -- no file, symlink, or directory there yet.
 - Used by `merge_tree`'s symlink-over-directory branch: Portage `mergeme()` never overwrites a real directory with a symlink; it merges the symlink under the backup name and keeps the directory.
-- Portage `dblink._new_backup_path` (`vartree.py:_new_backup_path`).
 
 ## fn unique_sibling_path
 - Named like Portage `movefile()`'s own merge temporary: `.{basename}._portage_merge_.{pid}` (lib/portage/util/movefile.py:322's `NamedTemporaryFile` prefix), with a counter suffix only on the (pid-reuse / parallel-merge) collision case.
@@ -42,7 +39,6 @@ CONFIG_PROTECT decisions, `._cfgNNNN_` allocation, atomic replaces and xattr com
 - Replaces the remove-then-symlink pair, which could leave the path briefly absent and, more importantly, was the second in-place mutation `merge_tree` had. One rule now covers both branches: never write through an existing inode. `rename(2)` replaces an existing file or symlink atomically.
 
 ## fn protect_decision
-- Portage `dblink._protect`'s decision, shared by `merge_tree`'s `obj`/`sym` branches (vartree.py:5434-5480 / 5831-5901).
 - `dest_md5`/`dest_link` are computed from the live destination's own lstat'd on-disk type, independent of the incoming source's type: a type-changing update (a symlink replacing a previously-installed regular file at the same path, or vice versa) is protected too, closing the "like-for-like only" v1 cut the module doc used to document.
 - `src_md5`/`src_link` mirror Portage `mymd5`/`myto`: always an MD5-shaped string either way (a symlink source's is the target string's MD5 -- Portage bug #485598); `src_link` only `Some` for a symlink source.
 - Portage `force` (from `dest_link != src_link` on a type mismatch) is deliberately not threaded through: it only ever changes behavior when `dest` doesn't exist, and this function only reaches `new_protect_filename` after confirming `dest` exists -- except the missing-destination case below that deliberately doesn't (see `new_protect_filename`).
@@ -56,5 +52,4 @@ CONFIG_PROTECT decisions, `._cfgNNNN_` allocation, atomic replaces and xattr com
 - Portage `vardbapi._conf_mem_file`: `<root>/var/lib/portage/config`, a persisted "which src MD5 has already been offered for this path" memory in `grabdict`/`writedict`'s `"path value\n"` format. Without it, re-merging an already-protected update would spawn a fresh `._cfgNNNN_` file every time, even though the admin was already shown this exact change once.
 - Portuale's `ebuild` CLI has no `--noconfmem` flag, so behavior always matches Portage's default (`--noconfmem` off).
 - Stored by the root's `portage_vdb::InstalledDb` (feat#157 S1.4: `config_memory` / `set_config_memory`; on `files` the same `<root>/var/lib/portage/config` file, read and written exactly as before).
-- Also read by `ebuild_unmerge::run_unmerge` (Portage `_unmerge_pkgfiles()`'s stale-confmem cleanup, vartree.py:2747/2931-2932/3106-3109 -- a removed file's `_conf_mem_file` entry is dropped once nothing still owns that path). A missing or unreadable store is empty.
-- Portage `vardbapi._conf_mem_file`: a real, persisted "which src MD5 has already been offered for this path" memory (Portage `grabdict`/`writedict`'s own `"path value\n"` format). `_unmerge_pkgfiles()`'s own `stale_confmem` cleanup (`vartree.py:2747`/`2931-2932`/`3106-3109`).
+- Also read by `ebuild_unmerge::run_unmerge` (Portage `_unmerge_pkgfiles()`'s own `stale_confmem` cleanup (`vartree.py:2747`/`2931-2932`/`3106-3109`) -- a removed file's `_conf_mem_file` entry is dropped once nothing still owns that path). A missing or unreadable store is empty.

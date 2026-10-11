@@ -21,7 +21,7 @@ repos.conf discovery and per-repository configuration.
 
 ## struct RepoConfig::sync_type / sync_uri / volatile / module_specific_options
 - Merged across the global `/usr/share/portage/config/repos.conf` and the user `<config_root>/etc/portage/repos.conf` (user wins). A repo the user is likely to hand-edit is "volatile". `module_specific_options` populated from `portage.sync.module_specific_options(repo)` filtered to keys the section actually carries.
-- `repos.conf`'s `sync-type` (real `RepoConfig.sync_type`) and `sync-uri` (real `RepoConfig.sync_uri`), merged the same way; `volatile` (real `RepoConfig.volatile`): the explicit `true`/`yes` value, else Portage's heuristic -- `True` unless the location is under `/var/db/repos` and owned by `root`/`portage`.
+- `repos.conf`'s `sync-type` (Portage's `RepoConfig.sync_type`) and `sync-uri` (Portage's `RepoConfig.sync_uri`), merged the same way; `volatile` (Portage's `RepoConfig.volatile`): the explicit `true`/`yes` value, else Portage's heuristic -- `True` unless the location is under `/var/db/repos` and owned by `root`/`portage`.
 
 ## fn path_owned_by_root_or_portage
 - Portage `config.py:445`; matches Portage's own "fail safe -> volatile" default.
@@ -31,7 +31,7 @@ repos.conf discovery and per-repository configuration.
 
 ## fn parse_layout_conf
 - Out of the ~20 real keys (`sign-manifests`, `manifest-hashes`, `eapis-banned`, `use-manifests`, ...); the rest are real but out of portuale's scope. Every key portuale reads has a real "absent" default.
-- Parses a repo's own `metadata/layout.conf` (real `parse_layout_conf`, `lib/portage/repository/config.py:1516`) -- a section-less `key = value` file. Returns an empty map when the file is absent.
+- Parses a repo's own `metadata/layout.conf` (Portage's `parse_layout_conf`, `lib/portage/repository/config.py:1516`) -- a section-less `key = value` file. Returns an empty map when the file is absent.
 
 ## fn read_repo_name_file
 - Portage `_read_repo_name` (`config.py:670-688`); Portage falls back to `"x-" + basename` + `missing = True`, but portuale's fallback (the `repos.conf` `[section]` name) is applied by the caller.

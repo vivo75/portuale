@@ -9,8 +9,7 @@ Fetching and linking the distfiles a build needs (`A`/`AA`).
 - Reads `FETCHCOMMAND`/`RESUMECOMMAND` (and the `_<PROTO>` variants) plus `PORTAGE_SSH_OPTS` out of `mysettings`.
 
 ## fn resolved_ro_distdirs
-- `shlex.split(PORTAGE_RO_DISTDIRS)`; each candidate is re-checked at fetch time, but Portage filters the list up front.
-- Portage `fetch.py:1055-1059`: `shlex.split(PORTAGE_RO_DISTDIRS)` filtered to directories that exist (each candidate is re-checked at fetch time, but real filters the list up front).
+- Portage `fetch.py:1055-1059`: `shlex.split(PORTAGE_RO_DISTDIRS)` filtered to directories that exist (each candidate is re-checked at fetch time, but Portage filters the list up front).
 
 ## fn package_a
 - Portage's `A` is the `use_reduce(SRC_URI, uselist=USE)` distfile list, the same set `fetch_src_uri` returns.

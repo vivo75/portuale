@@ -36,7 +36,6 @@ Merging the image tree onto ROOT. Context moved out of the code comments (#336 P
 ## fn lchown_or_chown
 - Portage `movefile()`'s ownership preservation: `lchown(dest, sstat.st_uid, sstat.st_gid)` for a symlink (Portage `movefile.py:255`, via `portage.data.lchown`, a thin `os.lchown` wrapper, `data.py:18`), `os.chown(dest, sstat.st_uid, sstat.st_gid)` for anything else (Portage `_apply_stat`, `movefile.py:28-30`): both set `dest` to the source's `st_uid`/`st_gid`, whatever the build phases or the ebuild's own `fowners` left in `${D}`.
 - Not gated on "am I root", matching Portage's own unconditional call with no privilege check at this call site. Run unprivileged with the source already owned by the calling process (the common single-user case), `chown(path, self_uid, self_gid)` is permitted regardless and still succeeds; only a genuinely privileged change without root hits the same `EPERM` Portage would.
-- "Real's" in the old doc meant Portage throughout.
 
 ## fn needs_move
 - Ports `dblink._needs_move` (`vartree.py:6363`) and its `:5916` call gate (Portage `if self._needs_move(...)` gate, bug #722270). The L3 ncurses case keeps `1:1` because the stage3 image's `curses.h`/terminfo are byte-identical to the rebuilt ones, so Portage leaves them alone while a fresh copy would come out `0:0`.

@@ -2,9 +2,8 @@
 Build and merge the plan from source, after saving it as the resume list.
 
 ## fn run_source_merge_plan
-- The up-front resume save is Portage `Scheduler.merge()`'s `_save_resume_list` (backlog #168); the failure-path re-save is `_save_resume_list` on failure. `write_resume_list` itself is unconditional now (Portage always assigns, backlog #179).
+- The up-front resume save is Portage `Scheduler.merge() -> _save_resume_list()` (backlog #168), same as the `--getbinpkg` arm above; the failure-path re-save is `_save_resume_list` on failure. `write_resume_list` itself is unconditional now (Portage always assigns -- an all-noop plan records the empty list, backlog #179).
 - Backlog #196 fix round 1: the failure-path GLEP 42 notice is Portage `post_emerge.py:155` regardless of retval, gated on the vdb having changed (`:112-117`).
-- The up-front resume save is Portage `Scheduler.merge() -> _save_resume_list()` (#168), same as the `--getbinpkg` arm above -- unconditional (an all-noop plan records the empty list, #179).
 - Portage `Scheduler._save_resume_list`: on a merge failure, record every still-unmerged package so `emerge --resume` can pick up where this left off.
 
 ## fn run_binary_merge_plan

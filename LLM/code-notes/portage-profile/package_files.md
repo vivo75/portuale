@@ -2,7 +2,7 @@
 Line readers for `package.mask`/`.unmask`, `package.accept_keywords`, `package.license`/`.properties`/`.accept_restrict`, `package.use`, and `license_groups`.
 
 ## fn read_config_lines
-- Real `_recursive_file_list` semantics: arbitrary depth, one ascending sort per directory over files and subdirectories together with each subdirectory expanded in place, skipping `VCS_DIRS` directories, dot-prefixed names and `~`-suffixed backups at every level including the root path itself, following symlinks (via `portage_util::recursive_config_files`).
+- Portage's `_recursive_file_list` semantics: arbitrary depth, one ascending sort per directory over files and subdirectories together with each subdirectory expanded in place, skipping `VCS_DIRS` directories, dot-prefixed names and `~`-suffixed backups at every level including the root path itself, following symlinks (via `portage_util::recursive_config_files`).
 - Unreadable paths report; missing paths stay empty.
 
 ## fn scope_repo_mask_lines

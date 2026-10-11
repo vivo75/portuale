@@ -5,7 +5,7 @@ A resolve request: the atoms and the emerge options.
 - Field names and types match the historical `resolve_pretend_graph` parameter list one-for-one. Owns its inputs so a `Box<dyn Resolver>` can be selected at runtime and the job stays decoupled from the CLI layer.
 
 ## field onlydeps
-- Portage's `main.py` boolean; the resolver walks every dep class for the root (Portage selects the root node with `onlydeps=True` and still traverses deps). Real's `pkg.onlydeps` gate in `_add_pkg_deps`.
+- Portage's `main.py` boolean; the resolver walks every dep class for the root (Portage selects the root node with `onlydeps=True` and still traverses deps). Portage's `pkg.onlydeps` gate in `_add_pkg_deps`.
 
 ## field onlydeps_with_rdeps
 - Portage `main.py` `true_y_or_n`, default enabled (`man emerge.1` "enabled by default"). Portage's `depgraph.py::_add_pkg_deps` blanks an onlydeps root's `RDEPEND` **and** `PDEPEND` on `"n"`; any other value (`"y"`, `"True"`, absent) keeps them.

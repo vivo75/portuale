@@ -61,7 +61,7 @@
 
 ## struct ObjProperties / struct SonameMap / struct LinkageMap
 - Port `LinkageMap._obj_properties_class` / `LinkageMap._soname_map_class` (a real `slot_dict_class`) and `LinkageMap._libs`/`_obj_properties`, populated by `rebuild`.
-- `ObjProperties::alt_paths`: every filename this exact object was indexed under -- always has at least one entry (the first-seen one, real `myprops` is only ever created once per `ObjKey`).
+- `ObjProperties::alt_paths`: every filename this exact object was indexed under -- always has at least one entry (the first-seen one, Portage's `myprops` is only ever created once per `ObjKey`).
 - `SonameMap`: every object that provides this soname (`DT_SONAME` matches it), and every object that needs it (this soname appears in its own `DT_NEEDED` list) -- within one multilib category's own map.
 - `LinkageMap::libs` is Portage `self._libs`: multilib category -> soname -> providers/consumers.
 
@@ -76,7 +76,7 @@
 - `LD_LIBRARY_PATH` is an explicit parameter here, not an ambient env read: "explicit parameter over ambient env read inside library code". The explicit-parameter-over-ambient-env-read follows the reasoning `portage_fetch::FetchOptions::gentoo_mirrors` established. The `include` cut matches the v1 cut portuale's `env_update.rs` documents and confirmed with the user for the *other* `/etc/ld.so.conf` reader (`run_env_update`'s candidate-lib-dir scan) -- a rare, admin-configured mechanism, not populated by anything portuale's fixtures do.
 
 ## struct LibGraph
-- Portage `path_to_node` registers (or reuses) the graph node for `path`'s own object identity, recording `path` itself as one of that node's own `alt_paths` -- deliberately *not* itself an `add()` call (real `path_to_node` doesn't add an edge either; the caller decides separately whether and how this node connects). `_LibGraphNode` wraps an `_ObjectKey`, the same dedup-by-inode identity `ObjKey` gives this port; the `alt_paths` bookkeeping matches `path_to_node`'s "multiple recorded paths can be the same object".
+- Portage `path_to_node` registers (or reuses) the graph node for `path`'s own object identity, recording `path` itself as one of that node's own `alt_paths` -- deliberately *not* itself an `add()` call (Portage's `path_to_node` doesn't add an edge either; the caller decides separately whether and how this node connects). `_LibGraphNode` wraps an `_ObjectKey`, the same dedup-by-inode identity `ObjKey` gives this port; the `alt_paths` bookkeeping matches `path_to_node`'s "multiple recorded paths can be the same object".
 
 ## fn find_consumers
 - Ports `LinkageMap.findConsumers()` (`LinkageMapELF.py:817-960`), narrowed to the one calling convention `_find_libs_to_preserve` uses: `obj` is always a path string (never an already-resolved `_ObjectKey`), and `exclude_providers` is always exactly one callable -- `exclude_provider: Option<&dyn Fn(&str) -> bool>` here.
