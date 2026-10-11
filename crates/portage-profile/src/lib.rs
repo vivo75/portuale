@@ -51,6 +51,7 @@ mod fingerprints;
 mod incrementals;
 mod make_conf;
 mod package_files;
+mod pkgindex_header;
 mod profile_chain;
 mod resolve;
 
@@ -65,6 +66,7 @@ pub use fingerprints::*;
 pub use incrementals::*;
 pub(crate) use make_conf::*;
 pub(crate) use package_files::*;
+pub use pkgindex_header::*;
 pub(crate) use profile_chain::*;
 pub use resolve::*;
 

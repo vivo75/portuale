@@ -31,6 +31,7 @@ pub(crate) fn merge_setup(
         verbose,
         shell,
         debug,
+        buildpkg_opt,
         ..
     } = opts;
     // The status-line blank rule lives in the merge functions' `StatusDisplay`;
@@ -43,12 +44,19 @@ pub(crate) fn merge_setup(
         verbose,
     );
     // Compressor/package-dir resolution; see `package_options_from_env`.
-    let package_options = package_options_from_env(
+    let mut package_options = package_options_from_env(
         shell,
         debug,
         Some(&config_features_string(config)),
         Some(config),
     );
+    // The transient `--buildpkg`/`--buildpkg=n` flag joins/leaves the run's
+    // `FEATURES` (and so the `Packages` header), like Portage's post-resolve
+    // `settings.features` mutation.
+    // Portage: _emerge/actions.py, action_build
+    if let Some(header) = package_options.pkgindex_header.as_mut() {
+        portage_profile::pkgindex_header_apply_buildpkg_opt(header, buildpkg_opt);
+    }
     let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(config));

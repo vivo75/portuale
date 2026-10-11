@@ -101,6 +101,20 @@ pub fn config_env_all() -> Vec<(String, String)> {
 /// (incrementals) on top of the profile chain + `make.conf`. Called once,
 /// right after `make.conf`.
 pub(crate) fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
+    // Raw calling-env values for the `Packages`-index header's child
+    // re-fold (see `Config::pkgindex_env_raw`).
+    for name in [
+        "FEATURES",
+        "CONFIG_PROTECT",
+        "CONFIG_PROTECT_MASK",
+        "ACCEPT_LICENSE",
+        "ACCEPT_PROPERTIES",
+        "ACCEPT_RESTRICT",
+    ] {
+        if let Some(value) = config_env_var(name) {
+            config.pkgindex_env_raw.insert(name.to_string(), value);
+        }
+    }
     for &name in ENV_INCREMENTAL_VARS {
         let Some(value) = config_env_var(name) else {
             continue;

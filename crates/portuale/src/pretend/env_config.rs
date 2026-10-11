@@ -88,6 +88,7 @@ pub(crate) fn package_options_from_env(
         binpkg_gpg_signing_gpg_home: std::env::var("BINPKG_GPG_SIGNING_GPG_HOME")
             .unwrap_or_default(),
         binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
+        pkgindex_header: config.map(portage_profile::pkgindex_header),
     }
 }
 

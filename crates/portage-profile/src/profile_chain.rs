@@ -5,10 +5,14 @@ use crate::*;
 /// Processes one file's lines against the shared scalar/USE/ACCEPT_KEYWORDS
 /// state, without any `source` support (used for make.defaults; make.conf
 /// wraps this with `source` handling -- see `process_make_conf_file`).
+/// `accept_layer` tags the caller's file layer for the `Packages`-index
+/// header's `ACCEPT_*` stacking (order-preserving, unlike the resolver's
+/// last-wins scalars).
 pub(crate) fn process_lines(
     text: &str,
     scalars: &mut HashMap<String, String>,
     config: &mut Config,
+    accept_layer: AcceptRawLayer,
 ) {
     for line in logical_lines(text) {
         let Some((key, raw_value)) = parse_kv_line(&line) else {
@@ -17,6 +21,16 @@ pub(crate) fn process_lines(
         let value = substitute(&raw_value, scalars);
         note_incremental(config, key, &value);
         note_higher(config, key);
+        if matches!(
+            key,
+            "ACCEPT_LICENSE" | "ACCEPT_PROPERTIES" | "ACCEPT_RESTRICT"
+        ) {
+            config.accept_raw_layers.push((
+                accept_layer,
+                key.to_string(),
+                value.split_whitespace().map(String::from).collect(),
+            ));
+        }
         match key {
             "USE" => {
                 apply_use_incremental(&value, &mut config.use_flags);

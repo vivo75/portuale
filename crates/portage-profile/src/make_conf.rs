@@ -204,6 +204,16 @@ pub(crate) fn process_make_conf_file(
         let value = substitute(&raw_value, scalars);
         note_incremental(config, key, &value);
         note_higher(config, key);
+        if matches!(
+            key,
+            "ACCEPT_LICENSE" | "ACCEPT_PROPERTIES" | "ACCEPT_RESTRICT"
+        ) {
+            config.accept_raw_layers.push((
+                AcceptRawLayer::Conf,
+                key.to_string(),
+                value.split_whitespace().map(String::from).collect(),
+            ));
+        }
         match key {
             "USE" => {
                 apply_use_incremental(&value, &mut config.use_flags);

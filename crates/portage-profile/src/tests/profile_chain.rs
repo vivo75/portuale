@@ -25,7 +25,7 @@ PORTAGE_GPG_SIGNING_COMMAND="gpg --sign --digest-algo SHA256 --clearsign --yes -
 "#;
     let mut scalars = HashMap::new();
     let mut config = Config::default();
-    process_lines(text, &mut scalars, &mut config);
+    process_lines(text, &mut scalars, &mut config, AcceptRawLayer::Globals);
     for (key, want) in [
         (
             "FETCHCOMMAND",
