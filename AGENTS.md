@@ -146,6 +146,17 @@ tiers both claimed #58 on 2026-09-15. Plan filenames are
 `<tier>.<item>-<slug>.opus.md`, so the numeric prefix must match the tier
 the item actually sits in.
 
+## Code comments and code notes
+
+Comments stay short: `///` summaries plus `# Errors`/`# Panics`, `//` only
+for a non-obvious why, one `// Portage: <file>, <function>` reference where
+needed. Context, Portage file:line citations, backlog numbers and history go
+to `LLM/code-notes/<crate>/<path without src/ and .rs>.md` under
+`## <kind> <symbol>`; run `python3 LLM/tools/code_notes_index.py` after adding
+a notes file. `LLM/tools/fact_coverage.py BASE FILE...` proves a comment edit
+lost no fact.
+
+<!-- graft:start -->
 ## Graft — repo context graph
 
 This repo is indexed in `graft/`: small linked markdown nodes that explain each
