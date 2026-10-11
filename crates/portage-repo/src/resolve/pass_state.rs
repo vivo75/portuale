@@ -172,6 +172,17 @@ pub(crate) struct PassState {
     /// package)` that pushed it if any (`None` for a top-level atom; only consulted
     /// for `GraphEntry::required_by`).
     pub(crate) queue: VecDeque<QueueItem>,
+    /// Seeds not yet popped: while positive, each pop closes the previous
+    /// seed's whole-subtree block, so Portage's LIFO `_dep_stack` order holds
+    /// (the last argument's subtree walks first). Set from the seeded queue
+    /// length once per pass.
+    // Portage: depgraph.py, _create_graph
+    pub(crate) seeds_left: usize,
+    /// Queue length right after the previous seed popped: the next pop splits
+    /// off everything past it into `held_blocks`.
+    pub(crate) seed_split_at: Option<usize>,
+    /// Whole-subtree blocks held back while an earlier seed's block drains.
+    pub(crate) held_blocks: VecDeque<VecDeque<QueueItem>>,
     pub(crate) pending_blockers: Vec<PendingBlocker>,
     /// Top-level atoms matched by `package.provided`. See `GraphResult::pprovided_atoms`.
     pub(crate) pprovided_atoms: Vec<String>,
