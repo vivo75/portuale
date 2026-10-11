@@ -2230,6 +2230,135 @@ mod tests {
     }
 
     #[test]
+    fn quickpkg_into_an_empty_pkgdir_writes_the_child_header_without_build_id() {
+        // A `FEATURES=unmerge-backup` quickpkg into an empty `PKGDIR` must
+        // write Portage's full settings-derived header (not just
+        // `TIMESTAMP`/`VERSION`) and an entry without `BUILD_ID`, even in
+        // the multi-instance layout whose filename carries `-1`.
+        // Portage: bintree.py, _update_pkgindex_header (`:2375`), inject
+        // (`:1910`) via bin/quickpkg (`:243`); the entry is
+        // `_pkgindex_entry` (`:2289`) from an archive with no `BUILD_ID`,
+        // while the `-1` filename comes from `_allocate_filename_multi`
+        // (`:2607`); the header arrives through the quickpkg child's
+        // re-resolved settings (vartree.py, `_quickpkg_dblink`, `:6297`).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let scratch = tmp.join("scratch");
+        let mut config = portage_profile::Config::default();
+        for (k, v) in [("ARCH", "amd64"), ("CHOST", "x86_64-pc-linux-gnu")] {
+            config.other_vars.insert(k.to_string(), v.to_string());
+        }
+        config.accept_keywords = ["amd64".to_string()].into_iter().collect();
+        config.use_expand_implicit = ["ARCH".to_string()].into_iter().collect();
+        config.use_expand_unprefixed = ["ARCH".to_string()].into_iter().collect();
+        config.incremental_sources.insert(
+            "FEATURES".to_string(),
+            vec![
+                vec!["sandbox".to_string()],
+                vec!["unmerge-backup".to_string(), "-sandbox".to_string()],
+            ],
+        );
+        config.pkgindex_env_raw.insert(
+            "FEATURES".to_string(),
+            "unmerge-backup -sandbox".to_string(),
+        );
+        config.accept_raw_layers.push((
+            portage_profile::AcceptRawLayer::Defaults,
+            "ACCEPT_LICENSE".to_string(),
+            vec!["-*".to_string(), "@FREE".to_string()],
+        ));
+        config.pkgindex_profile = "default/linux/amd64/23.0/systemd".to_string();
+        let snapshot = portage_profile::pkgindex_header(&config);
+
+        let mut options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_format: "xpak".to_string(),
+            binpkg_multi_instance: true,
+            ..PackageOptions::default()
+        };
+        options.pkgindex_header = Some(snapshot.clone());
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        std::fs::write(root.join("etc/probe.conf"), "probe\n").unwrap();
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/probe-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        std::fs::copy(
+            repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild"),
+            vdb_dir.join("probe-1.0.ebuild"),
+        )
+        .unwrap();
+        for (name, content) in [
+            ("EAPI", "8\n"),
+            ("SLOT", "0\n"),
+            ("CATEGORY", "dev-libs\n"),
+            ("PF", "probe-1.0\n"),
+            ("KEYWORDS", "amd64\n"),
+            ("USE", "amd64\n"),
+            ("BUILD_TIME", "1790541998\n"),
+            ("CONTENTS", "obj /etc/probe.conf\n"),
+        ] {
+            std::fs::write(vdb_dir.join(name), content).unwrap();
+        }
+
+        let built = quickpkg_from_vdb(QuickpkgFromVdbArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "probe",
+            pf: "probe-1.0",
+            scratch_ebuild_dir: &scratch,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            config_protect: "",
+            config_protect_mask: "",
+        })
+        .expect("quickpkg_from_vdb succeeds")
+        .expect("archive built");
+        assert_eq!(
+            built,
+            options.pkgdir.join("dev-libs/probe/probe-1.0-1.xpak")
+        );
+
+        let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+        let mut blocks = packages.trim().split("\n\n");
+        let header_block = blocks.next().expect("header block present");
+        let entry_block = blocks.next().expect("entry block present");
+        assert!(blocks.next().is_none(), "one entry only: {packages:?}");
+
+        let header_keys: Vec<&str> = header_block
+            .lines()
+            .map(|l| l.split_once(": ").map(|(k, _)| k).unwrap_or(""))
+            .collect();
+        let mut expected: Vec<&str> = snapshot
+            .child
+            .iter()
+            .filter(|(_, v)| v.is_some())
+            .map(|(k, _)| k.as_str())
+            .chain(["TIMESTAMP", "PACKAGES"])
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(header_keys, expected, "child header keys: {header_block:?}");
+        assert!(
+            header_block.contains("PACKAGES: 1"),
+            "entry count is rewritten on every inject: {header_block:?}"
+        );
+        assert!(
+            !entry_block.lines().any(|l| l.starts_with("BUILD_ID:")),
+            "a quickpkg entry carries no BUILD_ID like Portage's: {entry_block:?}"
+        );
+        assert!(
+            entry_block.contains("PATH: dev-libs/probe/probe-1.0-1.xpak"),
+            "the multi-instance filename still lands in PATH: {entry_block:?}"
+        );
+    }
+
+    #[test]
     fn real_package_builds_a_real_xpak_tbz2_and_a_real_packages_entry() {
         let tmp = tempdir();
         let root = tmp.join("root");

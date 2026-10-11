@@ -259,6 +259,76 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    /// Miniature of the 335 bed container's resolved config: `FEATURES`
+    /// negated in the env layer, `ACCEPT_LICENSE` only from the base
+    /// profile. Portage citations per assertion are inline.
+    fn bed_shaped_config() -> Config {
+        let mut config = Config::default();
+        for (k, v) in [
+            ("ARCH", "amd64"),
+            ("CBUILD", "x86_64-pc-linux-gnu"),
+            ("CHOST", "x86_64-pc-linux-gnu"),
+            ("ELIBC", "glibc"),
+            ("KERNEL", "linux"),
+            ("GENTOO_MIRRORS", "http://distfiles.gentoo.org"),
+            ("USE_EXPAND_VALUES_ARCH", "alpha amd64"),
+            ("USE_EXPAND_VALUES_ELIBC", "glibc musl"),
+            ("USE_EXPAND_VALUES_KERNEL", "linux"),
+        ] {
+            config.other_vars.insert(k.to_string(), v.to_string());
+        }
+        config.accept_keywords = HashSet::from(["amd64".to_string()]);
+        config.iuse_implicit = HashSet::from(["prefix".to_string(), "abi_x86_64".to_string()]);
+        config.use_flags = HashSet::from(["amd64".to_string(), "acl".to_string(), "X".to_string()]);
+        // Profile force/mask fold into the header USE like Portage's
+        // settings (and `emerge --info`), not just the raw flags.
+        config.use_force = HashSet::from(["forced_flag".to_string()]);
+        config.use_mask = HashSet::from(["acl".to_string()]);
+        config.use_expand = HashSet::from(["ARCH".to_string()]);
+        config.use_expand_implicit = HashSet::from([
+            "ARCH".to_string(),
+            "ELIBC".to_string(),
+            "KERNEL".to_string(),
+        ]);
+        config.use_expand_unprefixed = HashSet::from(["ARCH".to_string()]);
+        config.incremental_sources.insert(
+            "FEATURES".to_string(),
+            vec![
+                vec!["sandbox".to_string(), "buildpkg-live".to_string()],
+                vec!["unmerge-backup".to_string(), "-sandbox".to_string()],
+            ],
+        );
+        config.pkgindex_env_raw.insert(
+            "FEATURES".to_string(),
+            "unmerge-backup -sandbox".to_string(),
+        );
+        config
+            .incremental_sources
+            .insert("CONFIG_PROTECT".to_string(), vec![vec!["/etc".to_string()]]);
+        config.accept_raw_layers.push((
+            AcceptRawLayer::Defaults,
+            "ACCEPT_LICENSE".to_string(),
+            vec!["-*".to_string(), "@FREE".to_string()],
+        ));
+        for key in ["ACCEPT_PROPERTIES", "ACCEPT_RESTRICT"] {
+            config.accept_raw_layers.push((
+                AcceptRawLayer::Globals,
+                key.to_string(),
+                vec!["*".to_string()],
+            ));
+        }
+        config.pkgindex_profile = "default/linux/amd64/23.0/systemd".to_string();
+        config
+    }
+
+    fn valued_keys(snapshot: &HeaderSnapshot) -> Vec<&str> {
+        snapshot
+            .iter()
+            .filter(|(_, v)| v.is_some())
+            .map(|(k, _)| k.as_str())
+            .collect()
+    }
+
     fn snapshot_value<'a>(snapshot: &'a HeaderSnapshot, key: &str) -> &'a str {
         snapshot
             .iter()
@@ -266,5 +336,113 @@ mod tests {
             .and_then(|(_, v)| v.as_ref())
             .map(String::as_str)
             .unwrap_or("<absent>")
+    }
+
+    #[test]
+    fn pkgindex_header_parent_carries_portages_settings_key_set() {
+        // Portage: bintree.py, _update_pkgindex_header (the header-keys
+        // loop) + getbinpkg.py, PackageIndex.write (sorted, falsy skipped).
+        let header = pkgindex_header(&bed_shaped_config());
+        assert_eq!(
+            valued_keys(&header.parent),
+            vec![
+                "ACCEPT_KEYWORDS",
+                "ACCEPT_LICENSE",
+                "ACCEPT_PROPERTIES",
+                "ACCEPT_RESTRICT",
+                "ARCH",
+                "CBUILD",
+                "CHOST",
+                "CONFIG_PROTECT",
+                "ELIBC",
+                "FEATURES",
+                "GENTOO_MIRRORS",
+                "IUSE_IMPLICIT",
+                "KERNEL",
+                "PROFILE",
+                "USE",
+                "USE_EXPAND",
+                "USE_EXPAND_IMPLICIT",
+                "USE_EXPAND_UNPREFIXED",
+                "USE_EXPAND_VALUES_ARCH",
+                "USE_EXPAND_VALUES_ELIBC",
+                "USE_EXPAND_VALUES_KERNEL",
+                "VERSION",
+            ]
+        );
+        // The env negation holds in the parent: Portage stacks the calling
+        // env over the files (config.py, regenerate).
+        assert_eq!(
+            snapshot_value(&header.parent, "FEATURES"),
+            "buildpkg-live unmerge-backup"
+        );
+        // Pruned, not doubled (helper.py, prune_incremental).
+        assert_eq!(snapshot_value(&header.parent, "ACCEPT_LICENSE"), "@FREE");
+        assert_eq!(snapshot_value(&header.parent, "ACCEPT_PROPERTIES"), "*");
+        assert_eq!(snapshot_value(&header.parent, "USE"), "X amd64 forced_flag");
+        assert_eq!(
+            snapshot_value(&header.parent, "PROFILE"),
+            "default/linux/amd64/23.0/systemd"
+        );
+        // Unset settings values stay managed-but-absent, so a later write
+        // removes a stale stored key instead of keeping it.
+        assert!(
+            header
+                .parent
+                .iter()
+                .any(|(k, v)| k == "INSTALL_MASK" && v.is_none())
+        );
+    }
+
+    #[test]
+    fn pkgindex_header_child_refolds_like_portages_quickpkg_subprocess() {
+        // Portage: vartree.py, _quickpkg_dblink (the child inherits the
+        // resolved settings as env) + bin/quickpkg (inject from the child).
+        let header = pkgindex_header(&bed_shaped_config());
+        assert_eq!(valued_keys(&header.child), valued_keys(&header.parent));
+        // The env negation is lost in the re-fold: the files' `sandbox`
+        // comes back (config.py stacking has no negation left to apply).
+        assert_eq!(
+            snapshot_value(&header.child, "FEATURES"),
+            "buildpkg-live sandbox unmerge-backup"
+        );
+        // The inherited resolved value stacks after the files again.
+        assert_eq!(
+            snapshot_value(&header.child, "ACCEPT_LICENSE"),
+            "@FREE @FREE"
+        );
+        assert_eq!(snapshot_value(&header.child, "ACCEPT_PROPERTIES"), "*");
+    }
+
+    #[test]
+    fn pkgindex_header_buildpkg_opt_adds_or_discards_the_transient_flag() {
+        // Portage: _emerge/actions.py, action_build (`--buildpkg` adds,
+        // `--buildpkg=n` discards; the flag is not a config variable).
+        let mut header = pkgindex_header(&bed_shaped_config());
+        pkgindex_header_apply_buildpkg_opt(&mut header, None);
+        assert_eq!(
+            snapshot_value(&header.parent, "FEATURES"),
+            "buildpkg-live unmerge-backup"
+        );
+        pkgindex_header_apply_buildpkg_opt(&mut header, Some(true));
+        assert_eq!(
+            snapshot_value(&header.parent, "FEATURES"),
+            "buildpkg buildpkg-live unmerge-backup"
+        );
+        // Adding twice keeps one copy; the child snapshot is untouched.
+        pkgindex_header_apply_buildpkg_opt(&mut header, Some(true));
+        assert_eq!(
+            snapshot_value(&header.parent, "FEATURES"),
+            "buildpkg buildpkg-live unmerge-backup"
+        );
+        assert_eq!(
+            snapshot_value(&header.child, "FEATURES"),
+            "buildpkg-live sandbox unmerge-backup"
+        );
+        pkgindex_header_apply_buildpkg_opt(&mut header, Some(false));
+        assert_eq!(
+            snapshot_value(&header.parent, "FEATURES"),
+            "buildpkg-live unmerge-backup"
+        );
     }
 }
