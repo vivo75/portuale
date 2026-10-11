@@ -3,6 +3,7 @@
 use crate::resolve::pass::*;
 use portage_dep::Atom;
 use portage_profile::Config;
+use std::ops::ControlFlow;
 
 /// The values [`record_unresolved_dep`] reads from its caller.
 pub(crate) struct RecordUnresolvedDepArgs<'a> {
@@ -22,23 +23,32 @@ pub(crate) struct RecordUnresolvedDepArgs<'a> {
     pub(crate) atom: &'a Atom,
 }
 
-/// A dependency with no version to merge: feedback for backtracking, and its unsatisfied entry.
-pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
-    let RecordUnresolvedDepArgs {
+/// The values [`maybe_missing_dep_backtrack`] reads from its caller.
+pub(crate) struct MaybeMissingDepBacktrackArgs<'a> {
+    pub(crate) current_atom: &'a str,
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) key: &'a (String, String),
+    pub(crate) state: &'a mut PassState,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: &'a Option<(String, String)>,
+}
+
+/// Remember a missing-dep backtrack trigger for a dependency that matches
+/// nothing: with backtracking live and a merge-bound parent not yet tried,
+/// mask `!=parent-cpv` and retry. The entry still builds so an unfixable dep
+/// reports unchanged.
+pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>) {
+    let MaybeMissingDepBacktrackArgs {
         current_atom,
-        bp,
-        key,
         outcome,
         ctx,
+        bp,
+        key,
         state,
         config,
         owner,
-        atom_root,
-        item_targets_running_root,
-        unevaluated_atom,
-        depth,
-        union_constraints,
-        atom,
     } = args;
     // The dep matches nothing. With backtracking live and a merge-bound parent
     // not yet tried, mask `!=parent-cpv` and retry (one trigger per pass); the
@@ -47,7 +57,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
     let bare_atom = current_atom
         .split_once('[')
         .map_or(current_atom, |(b, _)| b);
-    let masked_probe = bp.masked_negatives_for(&key);
+    let masked_probe = bp.masked_negatives_for(key);
     if matches!(outcome, PretendOutcome::NoVisibleCandidate)
         && ctx.backtrack_max > 0
         && state.missing_dep_trigger.is_none()
@@ -89,6 +99,38 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             }
         }
     }
+}
+
+/// The values [`record_installed_slot_collision`] reads from its caller.
+pub(crate) struct RecordInstalledSlotCollisionArgs<'a> {
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) atom_root: &'a Path,
+    pub(crate) key: &'a (String, String),
+    pub(crate) item_targets_running_root: bool,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) current_atom: &'a str,
+}
+
+/// Record the installed-vs-merge slot collision for an `AlreadyInstalled`
+/// atom beside a merge-bound one in the same slot.
+///
+/// Returns the installed node's slot for the repeat-dedup key below; the vdb
+/// `SLOT` read is reused there.
+pub(crate) fn record_installed_slot_collision(
+    args: RecordInstalledSlotCollisionArgs<'_>,
+) -> Option<String> {
+    let RecordInstalledSlotCollisionArgs {
+        outcome,
+        atom_root,
+        key,
+        item_targets_running_root,
+        state,
+        ctx,
+        config,
+        current_atom,
+    } = args;
     // An installed instance beside a merge-bound one in the same slot that this
     // atom rejects is a slot collision (Portage's `_package_tracker` holds both
     // nodes). Recorded before the `other_outcomes` dedup, since a repeat visit
@@ -97,14 +139,14 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
     // (`collect_feedback` reconciles a jointly-satisfiable slot on retry).
     // The vdb `SLOT` file only (one read per installed node); the fuller lookup
     // is deferred to the rare branches that build a record.
-    let installed_node_slot = match &outcome {
+    let installed_node_slot = match outcome {
         PretendOutcome::AlreadyInstalled { version } => {
             // The instance lives in this atom's own resolving root.
             Some(read_vdb_slot(atom_root, &key.0, &key.1, version).0)
         }
         _ => None,
     };
-    if let PretendOutcome::AlreadyInstalled { version } = &outcome {
+    if let PretendOutcome::AlreadyInstalled { version } = outcome {
         let inst_slot = installed_node_slot.clone().unwrap_or_default();
         let slot_key = (
             key.0.clone(),
@@ -158,6 +200,41 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             .entry(slot_key)
             .or_insert_with(|| version.clone());
     }
+    installed_node_slot
+}
+
+/// The values [`dedup_repeat_visit`] reads from its caller.
+pub(crate) struct DedupRepeatVisitArgs<'a> {
+    pub(crate) key: &'a (String, String),
+    pub(crate) installed_node_slot: Option<String>,
+    pub(crate) item_targets_running_root: bool,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) unevaluated_atom: &'a Option<String>,
+    pub(crate) current_atom: &'a str,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: Option<&'a (String, String)>,
+}
+
+/// Drop repeat visits: repeats key by the installed instance's own slot, so a
+/// second installed instance in another slot is a distinct node whose deps
+/// still walk. `Break` when this visit was already recorded.
+pub(crate) fn dedup_repeat_visit(args: DedupRepeatVisitArgs<'_>) -> ControlFlow<()> {
+    let DedupRepeatVisitArgs {
+        key,
+        installed_node_slot,
+        item_targets_running_root,
+        state,
+        outcome,
+        bp,
+        unevaluated_atom,
+        current_atom,
+        ctx,
+        config,
+        owner,
+    } = args;
     // Repeats key by the installed instance's own slot (Portage's
     // `pkg.slot_atom` identity): a second installed instance in another slot is
     // a distinct node whose deps still walk. Misses keep cp-scoped dedup.
@@ -181,7 +258,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             let display_atom = unevaluated_atom.as_deref().unwrap_or(current_atom);
             if state
                 .nvc_dep_atoms
-                .get(&key)
+                .get(key)
                 .is_some_and(|old| live_miss_atom_supersedes(old, display_atom))
             {
                 let masked_rows = masked_candidates_for_atom(&ctx.repos, display_atom, config);
@@ -191,10 +268,10 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
                     entries: &state.entries,
                     display_atom,
                     evaluated_atom: current_atom,
-                    owner: owner.as_ref(),
+                    owner,
                     config,
                 });
-                state.nvc_dep_atoms.entry(key.clone()).and_modify(|old| {
+                state.nvc_dep_atoms.entry((*key).clone()).and_modify(|old| {
                     if live_miss_atom_supersedes(old, display_atom) {
                         *old = display_atom.to_string();
                     }
@@ -234,14 +311,44 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
                 }
             }
         }
-        return;
+        return ControlFlow::Break(());
     }
+    ControlFlow::Continue(())
+}
+
+/// The values [`enqueue_installed_deps`] reads from its caller.
+pub(crate) struct EnqueueInstalledDepsArgs<'a> {
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) depth: u32,
+    pub(crate) atom_root: &'a Path,
+    pub(crate) key: &'a (String, String),
+    pub(crate) state: &'a mut PassState,
+    pub(crate) config: &'a Config,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+}
+
+/// Queue an installed package's own deps too once `deep` allows recursion at
+/// this depth (never for a miss, never under `nodeps`).
+///
+/// Returns the `deps` display list, computed under the same condition.
+pub(crate) fn enqueue_installed_deps(args: EnqueueInstalledDepsArgs<'_>) -> Vec<DepEdge> {
+    let EnqueueInstalledDepsArgs {
+        outcome,
+        ctx,
+        depth,
+        atom_root,
+        key,
+        state,
+        config,
+        union_constraints,
+    } = args;
     // An installed package's own deps walk too once `deep` allows recursion at
     // this depth (never for a miss, never under `nodeps`); `deps` below is
     // computed under the same condition. Portage: _add_pkg
     // (_ignored_deps vs order).
     let mut already_installed_deps: Vec<DepEdge> = Vec::new();
-    if let PretendOutcome::AlreadyInstalled { version } = &outcome
+    if let PretendOutcome::AlreadyInstalled { version } = outcome
         && !ctx.nodeps
         && ctx.deep.recurses_at(depth)
     {
@@ -315,6 +422,43 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             union_constraints,
         );
     }
+    already_installed_deps
+}
+
+/// What [`compute_nvc_suggestions`] hands back to its caller.
+pub(crate) struct NvcSuggestionsOut {
+    pub(crate) keyword_suggestion: Option<(String, String)>,
+    pub(crate) use_suggestion: Option<(String, Vec<(String, bool)>)>,
+    pub(crate) parent_use_suggestion: Option<ParentUseSuggestion>,
+}
+
+/// The values [`compute_nvc_suggestions`] reads from its caller.
+pub(crate) struct ComputeNvcSuggestionsArgs<'a> {
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) atom: &'a Atom,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: Option<&'a (String, String)>,
+    pub(crate) unevaluated_atom: &'a Option<String>,
+    pub(crate) entries: &'a [GraphEntry],
+}
+
+/// The `--autounmask` keyword, USE and parent-USE suggestions for a
+/// dependency's own miss.
+pub(crate) fn compute_nvc_suggestions(args: ComputeNvcSuggestionsArgs<'_>) -> NvcSuggestionsOut {
+    let ComputeNvcSuggestionsArgs {
+        outcome,
+        bp,
+        ctx,
+        key,
+        atom,
+        config,
+        owner,
+        unevaluated_atom,
+        entries,
+    } = args;
     // Keyword suggestion for a dependency's own miss (see
     // `GraphEntry::keyword_suggestion`).
     let keyword_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
@@ -338,20 +482,46 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
     let parent_use_suggestion =
         if matches!(outcome, PretendOutcome::NoVisibleCandidate) && bp.autounmask_suggest_use {
             owner
-                .as_ref()
                 .zip(unevaluated_atom.as_deref())
                 .and_then(|(owner, unevaluated)| {
-                    suggested_parent_use_candidate(
-                        &ctx.repos,
-                        &state.entries,
-                        unevaluated,
-                        owner,
-                        config,
-                    )
+                    suggested_parent_use_candidate(&ctx.repos, entries, unevaluated, owner, config)
                 })
         } else {
             None
         };
+    NvcSuggestionsOut {
+        keyword_suggestion,
+        use_suggestion,
+        parent_use_suggestion,
+    }
+}
+
+/// The values [`record_miss_disclosure`] reads from its caller.
+pub(crate) struct RecordMissDisclosureArgs<'a> {
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) unevaluated_atom: &'a Option<String>,
+    pub(crate) current_atom: &'a str,
+    pub(crate) key: &'a (String, String),
+    pub(crate) state: &'a mut PassState,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: Option<&'a (String, String)>,
+}
+
+/// Record the masked / USE-unsatisfied / plain-miss disclosure for a
+/// dependency `NoVisibleCandidate` (one per `cat/pkg`). A parent-flip rescue
+/// records no disclosure at all.
+pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
+    let RecordMissDisclosureArgs {
+        outcome,
+        unevaluated_atom,
+        current_atom,
+        key,
+        state,
+        ctx,
+        config,
+        owner,
+    } = args;
     // Masked-dependency disclosure: a miss matching only masked ebuilds records
     // the "all masked" block (one per `cat/pkg`) instead of the bare line. The
     // display atom is the unevaluated form, so conditional deps show as written.
@@ -361,7 +531,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
         let display_atom = unevaluated_atom.as_deref().unwrap_or(current_atom);
         state
             .nvc_dep_atoms
-            .entry(key.clone())
+            .entry((*key).clone())
             .and_modify(|old| {
                 // A live slot-operator miss supersedes a built one.
                 if live_miss_atom_supersedes(old, display_atom) {
@@ -372,7 +542,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
         // A parent-flip rescue records no disclosure at all (Portage drops the
         // item from display); the change block is its whole output.
         // `nvc_dep_atoms` is still kept for the abort reason.
-        if !state.parent_flip_recorded.contains(&key) {
+        if !state.parent_flip_recorded.contains(key) {
             if let Some(masked) = masked_candidates_for_atom(&ctx.repos, display_atom, config) {
                 // A supersede refreshes the just-computed rows too.
                 match state
@@ -404,7 +574,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
                 entries: &state.entries,
                 display_atom,
                 evaluated_atom: current_atom,
-                owner: owner.as_ref(),
+                owner,
                 config,
             }) {
                 // A supersede refreshes the just-computed rows too.
@@ -461,6 +631,32 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
             }
         }
     }
+}
+
+/// The values [`push_unresolved_entry`] reads from its caller.
+pub(crate) struct PushUnresolvedEntryArgs<'a> {
+    pub(crate) key: (String, String),
+    pub(crate) outcome: PretendOutcome,
+    pub(crate) already_installed_deps: Vec<DepEdge>,
+    pub(crate) keyword_suggestion: Option<(String, String)>,
+    pub(crate) use_suggestion: Option<(String, Vec<(String, bool)>)>,
+    pub(crate) parent_use_suggestion: Option<ParentUseSuggestion>,
+    pub(crate) item_targets_running_root: bool,
+    pub(crate) state: &'a mut PassState,
+}
+
+/// Push the unsatisfied entry carrying its resolving root and suggestions.
+pub(crate) fn push_unresolved_entry(args: PushUnresolvedEntryArgs<'_>) {
+    let PushUnresolvedEntryArgs {
+        key,
+        outcome,
+        already_installed_deps,
+        keyword_suggestion,
+        use_suggestion,
+        parent_use_suggestion,
+        item_targets_running_root,
+        state,
+    } = args;
     state.entries.push(GraphEntry {
         discovery: 0,
         category: key.0,
@@ -491,5 +687,107 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
         remote_binary: false,
         build_id: None,
         deps: already_installed_deps,
+    });
+}
+
+/// A dependency with no version to merge: feedback for backtracking, and its unsatisfied entry.
+pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
+    let RecordUnresolvedDepArgs {
+        current_atom,
+        bp,
+        key,
+        outcome,
+        ctx,
+        state,
+        config,
+        owner,
+        atom_root,
+        item_targets_running_root,
+        unevaluated_atom,
+        depth,
+        union_constraints,
+        atom,
+    } = args;
+    maybe_missing_dep_backtrack(MaybeMissingDepBacktrackArgs {
+        current_atom,
+        outcome: &outcome,
+        ctx,
+        bp,
+        key: &key,
+        state: &mut *state,
+        config,
+        owner,
+    });
+    let installed_node_slot = record_installed_slot_collision(RecordInstalledSlotCollisionArgs {
+        outcome: &outcome,
+        atom_root,
+        key: &key,
+        item_targets_running_root,
+        state: &mut *state,
+        ctx,
+        config,
+        current_atom,
+    });
+    if dedup_repeat_visit(DedupRepeatVisitArgs {
+        key: &key,
+        installed_node_slot,
+        item_targets_running_root,
+        state: &mut *state,
+        outcome: &outcome,
+        bp,
+        unevaluated_atom,
+        current_atom,
+        ctx,
+        config,
+        owner: owner.as_ref(),
+    })
+    .is_break()
+    {
+        return;
+    }
+    let already_installed_deps = enqueue_installed_deps(EnqueueInstalledDepsArgs {
+        outcome: &outcome,
+        ctx,
+        depth,
+        atom_root,
+        key: &key,
+        state: &mut *state,
+        config,
+        union_constraints,
+    });
+    let NvcSuggestionsOut {
+        keyword_suggestion,
+        use_suggestion,
+        parent_use_suggestion,
+    } = compute_nvc_suggestions(ComputeNvcSuggestionsArgs {
+        outcome: &outcome,
+        bp,
+        ctx,
+        key: &key,
+        atom,
+        config,
+        owner: owner.as_ref(),
+        unevaluated_atom,
+        entries: &state.entries,
+    });
+    record_miss_disclosure(RecordMissDisclosureArgs {
+        outcome: &outcome,
+        unevaluated_atom,
+        current_atom,
+        key: &key,
+        state: &mut *state,
+        ctx,
+        config,
+        owner: owner.as_ref(),
+    });
+    push_unresolved_entry(PushUnresolvedEntryArgs {
+        key,
+        outcome,
+        already_installed_deps,
+        keyword_suggestion,
+        use_suggestion,
+        parent_use_suggestion,
+        item_targets_running_root,
+        state: &mut *state,
     });
 }
