@@ -211,8 +211,9 @@ fn synthetic_unit_bytes(
 /// Serialises the tests that pin `PORTAGE_CONFIGROOT`: it is
 /// process-global, and `place_config_root` reads it (the server
 /// `make.globals` lookup) while `PlacedConfig` overwrites it, so
-/// two such tests racing would seed from each other's server root.
-static PLACED_CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// two such tests racing would seed from each other's server root. The
+/// `FEATURES`-mutating tests elsewhere (`pretend::tests::unmerge`) share it.
+pub(crate) static PLACED_CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
     // Direct stage runs (no preflight) still need a resolved absolute

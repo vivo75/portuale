@@ -30,7 +30,7 @@ mod ssh;
 mod stages;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use binpkg_flow::*;
 pub(crate) use client_binary::*;

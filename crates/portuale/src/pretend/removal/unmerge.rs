@@ -407,6 +407,15 @@ pub(crate) fn feature_enabled(token: &str) -> bool {
         .map(|f| f.split_whitespace().any(|t| t == token))
         .unwrap_or(false)
 }
+/// The resolved `FEATURES` driving `emerge -C`, plus its `unmerge-backup`
+/// gate: the folded config value already stacks the calling env, so a
+/// `make.conf`-only token still backs up.
+/// Portage: dbapi/vartree.py, dblink._pre_unmerge_backup
+pub(crate) fn unmerge_backup_features(config: &portage_profile::Config) -> (bool, String) {
+    let resolved = config_features_string(config);
+    let backup = resolved.split_whitespace().any(|t| t == "unmerge-backup");
+    (backup, resolved)
+}
 /// Arguments of [`execute_unmerge`].
 pub(crate) struct ExecuteUnmergeArgs<'a> {
     pub(crate) removal_list: &'a [(String, String, String)],
@@ -442,14 +451,24 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
     // `FEATURES=unmerge-orphans` keeps what the resolved `CONFIG_PROTECT`
     // protects, not the process env's value.
     options.apply_config_protect(config);
+    // Resolved `FEATURES` for the backup gate and both option sets, as the
+    // merge paths do.
+    // Portage: dbapi/vartree.py, dblink._pre_unmerge_backup
+    let (backup_wanted, resolved_features) = unmerge_backup_features(config);
+    options.set_resolved_features(&resolved_features);
     // `FEATURES=unmerge-backup` -> a `quickpkg` of each package before it's
     // removed. `BINPKG_FORMAT` follows the resolved chain; a failed
-    // resolution keeps the old env-only fallback. `resolved_features` stays
-    // `None` on purpose: only the format joins the chain.
+    // resolution keeps the old env-only fallback.
     let unmerge_config =
         ebuild_phases::resolve_unmerge_config(&portage_repo::config_root_from_env(), root);
-    let backup = feature_enabled("unmerge-backup")
-        .then(|| package_options_from_env(shell, debug, None, unmerge_config.as_ref()));
+    let backup = backup_wanted.then(|| {
+        package_options_from_env(
+            shell,
+            debug,
+            Some(&resolved_features),
+            unmerge_config.as_ref(),
+        )
+    });
     let scratch = portage_tmpdir.join("portage").join("_unmerge_src");
     let total = removal_list.len();
     for (idx, (category, package, version)) in removal_list.iter().enumerate() {
@@ -515,7 +534,9 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
         items: &items,
         phases: Some(&["prerm", "postrm"]),
         color,
-        split_elog: feature_enabled("split-elog"),
+        split_elog: resolved_features
+            .split_whitespace()
+            .any(|t| t == "split-elog"),
     });
 
     // After the removal, regenerate any stale GNU info directory index,
