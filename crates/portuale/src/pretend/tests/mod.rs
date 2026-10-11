@@ -411,13 +411,7 @@ fn true_spelling_matches_bare(flag_eq_true: &str, flag_bare: &str, atom: &str, e
 
 /// The `portuale` binary next to the current test executable.
 fn built_portuale_bin() -> std::path::PathBuf {
-    let mut portuale_bin = std::env::current_exe().expect("current test exe");
-    portuale_bin.pop();
-    if portuale_bin.ends_with("deps") {
-        portuale_bin.pop();
-    }
-    portuale_bin.push("portuale");
-    portuale_bin
+    crate::self_exe::built_portuale_bin()
 }
 
 /// A scratch `ROOT` with a stale multi-item resume list. Returns the root plus
@@ -522,8 +516,19 @@ fn pty_watchdog_bound() -> std::time::Duration {
 /// Bounded wait collecting the child's piped stdout/stderr; on timeout the child
 /// is killed and the panic carries whatever it had printed.
 #[cfg(unix)]
-fn wait_pty_output(mut child: std::process::Child) -> std::process::Output {
-    let bound = pty_watchdog_bound();
+fn wait_pty_output(child: std::process::Child) -> std::process::Output {
+    wait_pty_output_bound(child, pty_watchdog_bound())
+}
+
+/// [`wait_pty_output`] with an explicit bound, so tests never mutate the
+/// process-global `PORTUALE_TEST_PTY_WATCHDOG_SECS` override: that variable is
+/// read by every pty wait in this process, and a test that sets it widens the
+/// kill window of every parallel pty test to its own short bound.
+#[cfg(unix)]
+fn wait_pty_output_bound(
+    mut child: std::process::Child,
+    bound: std::time::Duration,
+) -> std::process::Output {
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {

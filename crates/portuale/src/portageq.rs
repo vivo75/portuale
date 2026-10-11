@@ -509,13 +509,7 @@ mod tests {
     }
 
     fn binary() -> PathBuf {
-        let mut bin = std::env::current_exe().unwrap();
-        bin.pop();
-        if bin.ends_with("deps") {
-            bin.pop();
-        }
-        bin.push("portuale");
-        bin
+        crate::self_exe::built_portuale_bin()
     }
 
     /// A sqlite conversion of the fixture VDB (`copy_all`), made once.

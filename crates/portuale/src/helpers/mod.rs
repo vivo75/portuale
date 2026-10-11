@@ -67,13 +67,7 @@ mod dispatcher_tests {
     /// The `portuale` binary built next to this test binary (child
     /// processes: the helpers run across a real process boundary).
     fn portuale_exe() -> std::path::PathBuf {
-        let mut exe = std::env::current_exe().expect("current test exe");
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
-        exe
+        crate::self_exe::built_portuale_bin()
     }
 
     fn helper(args: &[&str]) -> std::process::Output {

@@ -372,12 +372,7 @@ mod fixture_tests {
             .collect();
         names.sort();
         assert!(!names.is_empty(), "no fixture cases in {}", cases.display());
-        let mut exe = std::env::current_exe().expect("current test exe");
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
+        let exe = crate::self_exe::built_portuale_bin();
         for name in names {
             let dir = cases.join(&name);
             let input = parse(&std::fs::read_to_string(dir.join("in.manifest")).unwrap());
@@ -442,12 +437,7 @@ mod fixture_tests {
         let file = root.join("file-0600");
         std::fs::write(&file, b"x").unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let mut exe = std::env::current_exe().expect("current test exe");
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
+        let exe = crate::self_exe::built_portuale_bin();
         let out = std::process::Command::new(&exe)
             .args(["__helper", "chmod-lite", "file-0600"])
             .current_dir(&root)

@@ -96,12 +96,7 @@ mod table_tests {
     fn the_native_locale_answer_matches_every_oracle_row() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/locale");
         let table = std::fs::read_to_string(dir.join("table.tsv")).unwrap();
-        let mut exe = std::env::current_exe().expect("current test exe");
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
+        let exe = crate::self_exe::built_portuale_bin();
         let mut rows = 0;
         let mut skipped = 0;
         for line in table.lines().skip(1) {
