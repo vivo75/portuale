@@ -38,7 +38,10 @@ fn use_db(kind: portage_vdb::BackendKind, root: &Path, db_path: &Path) -> Arc<dy
 
 /// Every file of a live entry with its permission bits and bytes;
 /// the volatile `#dir_mtime=` line of `metadata` is dropped (the
-/// same thing `verify` ignores: directory mtimes).
+/// same thing `verify` ignores: directory mtimes). The group/other
+/// write bits are masked: another test's in-process `brush` phase can
+/// flip the process umask (`022`/`002`) between the two runs being
+/// compared (#343).
 fn entry_files(db: &dyn InstalledDb, key: &EntryKey) -> Tree {
     let image = db.entry_image(key).unwrap().expect("entry is installed");
     image
@@ -56,7 +59,7 @@ fn entry_files(db: &dyn InstalledDb, key: &EntryKey) -> Tree {
             } else {
                 f.data
             };
-            (f.meta.name, (f.meta.mode & 0o7777, data))
+            (f.meta.name, (f.meta.mode & 0o7755, data))
         })
         .collect()
 }
@@ -114,10 +117,14 @@ fn payload_tree(root: &Path) -> Tree {
 /// creates, which is not what the unmerge tests compare.
 #[cfg(feature = "vdb-sqlite")]
 fn payload_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    payload_tree(root)
-        .into_iter()
-        .map(|(k, (_, data))| (k, data))
-        .collect()
+    tree_bytes(payload_tree(root))
+}
+
+/// A [`payload_tree`] without the permission bits, for the merge tests
+/// (ungated: [`payload_bytes`] is sqlite-gated but the binpkg/source
+/// comparisons run on every backend).
+fn tree_bytes(tree: Tree) -> BTreeMap<String, Vec<u8>> {
+    tree.into_iter().map(|(k, (_, data))| (k, data)).collect()
 }
 
 fn install_hook(f: impl Fn(&Path) + 'static) {
@@ -188,7 +195,13 @@ fn binpkg_merge_matches_files(kind: portage_vdb::BackendKind) {
         "a {kind} merge writes no var/db/pkg"
     );
     assert_eq!(on_sqlite.0, on_files.0, "entry files differ");
-    assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+    // Bytes only: the payload modes follow the process umask, which
+    // another test's in-process `brush` phase can flip mid-run (#343).
+    assert_eq!(
+        tree_bytes(on_sqlite.1),
+        tree_bytes(on_files.1),
+        "payload differs"
+    );
     assert_eq!(on_sqlite.2, on_files.2, "config memory differs");
     let pending_env = pending_env.borrow().clone().expect("pending env");
     assert_ne!(
@@ -511,7 +524,8 @@ fn a_source_merge_on_sqlite_matches_the_files_merge() {
         if name == "BUILD_TIME" || name == "metadata" {
             continue;
         }
-        assert_eq!(&on_sqlite.0[name].0, mode, "{name} mode");
+        // Masked: the process umask can differ between the two runs (#343).
+        assert_eq!(on_sqlite.0[name].0 & 0o7755, mode & 0o7755, "{name} mode");
         // `CONTENTS` records each file's mtime, which a fresh
         // build moves: compare the lines without their mtime.
         let strip = |b: &[u8]| -> Vec<String> {
@@ -530,7 +544,12 @@ fn a_source_merge_on_sqlite_matches_the_files_merge() {
         }
         assert_eq!(&on_sqlite.0[name].1, data, "{name} bytes");
     }
-    assert_eq!(on_sqlite.1, on_files.1, "payload differs");
+    // Bytes only, as above: payload modes follow the process umask (#343).
+    assert_eq!(
+        tree_bytes(on_sqlite.1),
+        tree_bytes(on_files.1),
+        "payload differs"
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 }
 fn unmerge_standalone(root: &Path, ptmp: &Path, pf: &str, pn: &str) {
@@ -797,6 +816,14 @@ fn snapshot(db: &dyn InstalledDb) -> Snap {
 /// database ROOT ends in the same installed state, modulo run-dependent
 /// values (mtimes, `BUILD_TIME`, umask bits).
 fn sequence_equivalence(kind: portage_vdb::BackendKind) {
+    // `FEATURES`/`PORTAGE_CONFIGROOT`/`INSTALL_MASK` are process-global:
+    // the merges below record the merge-time `FEATURES` into the vdb
+    // `environment`, so no other test may mutate them mid-sequence. Shares
+    // the lock the mutating tests hold (`PLACED_CONFIG_ENV_LOCK`); immune
+    // to a poisoned mutex so one failed holder cannot cascade (#343).
+    let _env = crate::remote::tests::PLACED_CONFIG_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let tmp = tempdir();
     let root = tmp.join("root");
     let ptmp = tmp.join("ptmp");
