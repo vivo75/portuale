@@ -2,9 +2,9 @@
 """Run `cargo dupes` over crates/ only and print a readable summary.
 
 Usage: dupes.py [--exclude-tests] [--json OUT]
-The JSON stream cargo-dupes emits holds five values: the summary, then the
+The JSON stream cargo-dupes emits holds the summary, then the
 exact-function, near-function, sub-function-exact and sub-function-near
-group arrays. Sub-function members report the *enclosing* function's span,
+group arrays, each left out when empty. Sub-function members report the *enclosing* function's span,
 not the duplicated block's, so their line numbers locate, not measure.
 """
 import json
@@ -23,7 +23,10 @@ while raw[i:].strip():
     v, j = dec.raw_decode(rest)
     vals.append(v)
     i = len(raw) - len(rest) + j
-summary, exact, near, sub_exact, sub_near = vals
+# cargo-dupes omits an empty array, so map the arrays by the summary counts.
+summary, arrays = vals[0], iter(vals[1:])
+kinds = ["exact_duplicate_groups", "near_duplicate_groups", "sub_exact_groups", "sub_near_groups"]
+exact, near, sub_exact, sub_near = (next(arrays) if summary.get(k) else [] for k in kinds)
 print(json.dumps(summary, indent=1))
 for label, groups in (("EXACT", exact), ("NEAR", near)):
     for g in groups:
