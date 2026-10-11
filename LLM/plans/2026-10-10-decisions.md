@@ -284,3 +284,28 @@ The owner approved items 1-27 and commented on two of them: item 2
     (`#![deny(missing_docs)]` wants field docs). Grouping bools into
     enums is not done here: the struct field names already say what
     each value means at the call site. The worklist allow count is 0.
+
+## 2026-10-10, Phase 7 execution notes
+
+37. **Comment pass: proofs, then a fact check, then repair.** Phase 7 ran
+    in 33 file batches (opencode workers, one brief each). Each batch was
+    committed only after `LLM/tools/strip_comments_eq.py HEAD <files>`
+    proved that no code token changed. Owner review asked whether the
+    workers' content was checked too. That showed paraphrase losses
+    (identifiers and Portage citations dropped instead of moved), so
+    `LLM/tools/fact_coverage.py BASE FILE...` now lists every concrete
+    fact on a removed comment line that is absent from both the kept
+    code and the notes file: backticked spans, file:line, `#NNN`,
+    quoted strings, dates and versions. A repair pass restored the
+    facts it found, verbatim, into the notes. The first two repairs
+    were a side-by-side trial: a Sonnet subagent restored 261 facts in
+    77 s, opencode 130 in about 12 min, with equal quality. Sonnet did
+    the rest of the repairs. The final check over all 400 files leaves
+    only fragments between two backtick spans (regex artifacts). Then a
+    cleanup pass over the 401 notes files rewrote "real" meaning
+    Portage and merged duplicate bullets.
+    `LLM/tools/code_notes_index.py` regenerates `LLM/code-notes/INDEX.md`.
+    From here on, execution goes back to opencode, because Claude
+    credit is the limit; only review and commits stay with Claude.
+    Functions over 200 code lines after the pass (40, syn-parsed) are
+    listed in `2026-10-10-long-functions.md` for #339.
