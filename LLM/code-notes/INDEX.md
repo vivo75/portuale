@@ -116,16 +116,30 @@
 - [crates/portage-repo/src/resolve/merge_bound.rs](portage-repo/resolve/merge_bound.md) — Lookups over the entries a run will merge.
 - [crates/portage-repo/src/resolve/or_preference.rs](portage-repo/resolve/or_preference.md) — Which alternative of an `||` group to prefer: Portage `dep_zapdeps`'s choice bins and in-bin ordering.
 - [crates/portage-repo/src/resolve/outcome.rs](portage-repo/resolve/outcome.md) — The outcome of resolving one atom.
+- [crates/portage-repo/src/resolve/pass/assemble_pass.rs](portage-repo/resolve/pass/assemble_pass.md) — The pass result from the finished walk state.
 - [crates/portage-repo/src/resolve/pass/candidate_pool.rs](portage-repo/resolve/pass/candidate_pool.md) — Re-derives the source (ebuild, PKGDIR or binhost binary) of the resolved version.
+- [crates/portage-repo/src/resolve/pass/changed_deps_report.rs](portage-repo/resolve/pass/changed_deps_report.md) — Record one installed version for the changed-deps report.
+- [crates/portage-repo/src/resolve/pass/collect_pass_blockers.rs](portage-repo/resolve/pass/collect_pass_blockers.md) — Collect the pass blockers and flag tree-solved replacements.
 - [crates/portage-repo/src/resolve/pass/enqueue_deps.rs](portage-repo/resolve/pass/enqueue_deps.md) — Folds the entry's dependency keys and queues the atoms they name.
 - [crates/portage-repo/src/resolve/pass/entry_fetch.rs](portage-repo/resolve/pass/entry_fetch.md) — Records the entry's fetch restriction and the bytes left to download.
 - [crates/portage-repo/src/resolve/pass/entry_use_display.rs](portage-repo/resolve/pass/entry_use_display.md) — Records the entry's USE display: changed flags, IUSE and USE_EXPAND groups.
 - [crates/portage-repo/src/resolve/pass/entry_use_flags.rs](portage-repo/resolve/pass/entry_use_flags.md) — Computes the entry's USE flags: baked for a binary, profiled otherwise, plus any autounmask-use flip.
 - [crates/portage-repo/src/resolve/pass/existing_slot.rs](portage-repo/resolve/pass/existing_slot.md) — Keeps, replaces or conflicts the already-resolved slot.
+- [crates/portage-repo/src/resolve/pass/finish_required_by.rs](portage-repo/resolve/pass/finish_required_by.md) — Fill entry required_by and drop shadowed installed entries.
+- [crates/portage-repo/src/resolve/pass/finish_slot_conflicts.rs](portage-repo/resolve/pass/finish_slot_conflicts.md) — Merge, solve and synthesize the pass slot conflicts.
 - [crates/portage-repo/src/resolve/pass/graph_entry.rs](portage-repo/resolve/pass/graph_entry.md) — Adds the chosen candidate to the graph, with its autounmask suggestions.
+- [crates/portage-repo/src/resolve/pass/graph_resolved.rs](portage-repo/resolve/pass/graph_resolved.md) — Pick the resolved candidate and graph it, reporting slot collisions.
+- [crates/portage-repo/src/resolve/pass/initial_outcome.rs](portage-repo/resolve/pass/initial_outcome.md) — The initial outcome for one queued atom: complete-mode pin, sibling collapse, resolve.
 - [crates/portage-repo/src/resolve/pass/mod.rs](portage-repo/resolve/pass/mod.md) — One resolver pass (BFS walk) over the dependency graph.
+- [crates/portage-repo/src/resolve/pass/outcome_fallbacks.rs](portage-repo/resolve/pass/outcome_fallbacks.md) — The installed fallbacks and reinstall flips applied to a resolved outcome.
+- [crates/portage-repo/src/resolve/pass/parent_record.rs](portage-repo/resolve/pass/parent_record.md) — Record this atom's per-instance parent-atom row.
 - [crates/portage-repo/src/resolve/pass/parent_use_flip.rs](portage-repo/resolve/pass/parent_use_flip.md) — Records a parent USE flip that alone can satisfy a failed dependency, then re-walks.
+- [crates/portage-repo/src/resolve/pass/pop_queue_item.rs](portage-repo/resolve/pass/pop_queue_item.md) — Pop one item off the walk queue, holding back later seeds' blocks.
+- [crates/portage-repo/src/resolve/pass/prepare_atom.rs](portage-repo/resolve/pass/prepare_atom.md) — Parse and dedup one queued atom, recording its edges.
+- [crates/portage-repo/src/resolve/pass/resolve_outcome.rs](portage-repo/resolve/pass/resolve_outcome.md) — One `resolve_pretend` call against the pass-constant constraints.
+- [crates/portage-repo/src/resolve/pass/seed_queue.rs](portage-repo/resolve/pass/seed_queue.md) — Seed the walk queue with the top-level and auto-replace atoms.
 - [crates/portage-repo/src/resolve/pass/slot_conflicts.rs](portage-repo/resolve/pass/slot_conflicts.md) — Solves the pass's slot conflicts directly where one instance can go, and drops the loser.
+- [crates/portage-repo/src/resolve/pass/step_queue_item.rs](portage-repo/resolve/pass/step_queue_item.md) — Process one queued atom through resolve, graph and enqueue.
 - [crates/portage-repo/src/resolve/pass/top_level_unsatisfied.rs](portage-repo/resolve/pass/top_level_unsatisfied.md) — Drops or aborts a top-level atom with no visible candidate, Portage's argument handling.
 - [crates/portage-repo/src/resolve/pass/unresolved_dep.rs](portage-repo/resolve/pass/unresolved_dep.md) — Handles a dependency with no version to merge: backtracking feedback and its unsatisfied entry.
 - [crates/portage-repo/src/resolve/pass_helpers.rs](portage-repo/resolve/pass_helpers.md) — Small helpers of the resolver pass.
