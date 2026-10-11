@@ -1,0 +1,18 @@
+# #336 Phase 6 T1: test helper -> topic, for tests that call no production
+# fn directly (split_tests.py --helper-topics). Tests matching no row go to
+# tests/graph.rs (full fixture-graph resolution tests).
+graph_result_autounmask	autounmask
+graph_result_autounmask_backtrack	autounmask
+euf_flat	use_flags
+euf_layers	use_flags
+pu	use_flags
+resolve_real_changed_deps	reinstall
+resolve_real_newuse	reinstall
+resolve_real_newrepo	reinstall
+graph_changed_deps_report	reinstall
+graph_root_deps	root_deps
+graph_result_real_backtrack	backtracker
+run_161	pass
+slotundo_temp_dir	slot_undo
+graph_deep	queue
+resolve_update_excluded	queue

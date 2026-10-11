@@ -1,0 +1,82 @@
+# #336 Phase 6: crates/portage-repo/src/lib.rs split spec (split_module.py).
+# anchor<TAB>module<TAB>doc. Items from an anchor (matched as a prefix of the
+# item header) up to the next anchor go to <module>; "lib" keeps them in
+# lib.rs. "=override" rows move one item regardless of ranges. The doc column
+# becomes the module's `//!` line (first occurrence only).
+pub enum Error	error	The crate's error type.
+pub fn config_root_from_env	env_roots	ROOT, PORTAGE_CONFIGROOT and PORTAGE_TMPDIR from the environment.
+pub enum UpdateCmd	updates	`profiles/updates` package and slot moves, applied when metadata is read.
+static PACKAGE_MOVES_ENABLED	globals	Process-wide switches the CLI sets once per run.
+pub fn global_package_updates	=updates
+fn apply_move_to_token	updates
+pub fn root_from_env	env_roots
+pub struct RepoConfig	repo_config	repos.conf discovery and per-repository configuration.
+fn read_md5_cache(	metadata_cache	md5-cache reading, the aux-metadata provider and pregen/regen switches.
+pub enum CandidateSource	candidates	Ebuild candidates for a package.
+pub fn read_packages_index	binary_index	The binary package index (`Packages`) and binary candidates.
+fn binpkg_respect_use_ok(	binpkg_use	`--binpkg-respect-use` checks and binary metadata readers.
+fn matches_config_entry	config_match	Per-package index over `package.*` config atoms.
+pub fn effective_use_flags(	use_flags	Effective USE and USE mask/force resolution.
+enum LicenseNode	license	LICENSE parsing and ACCEPT_LICENSE acceptance.
+fn use_flags_if_conditional(	fetch_restrict	SRC_URI and RESTRICT=fetch helpers.
+fn resolve_accept_tokens(	license
+fn metadata_key_accepted(	visibility	Keyword, mask and license visibility of a candidate.
+fn flag_is_settable(	visibility_use_flip	USE-flip suggestions for autounmask.
+pub struct VisibilityProvenance	provenance	Where a candidate's mask or keyword decision comes from.
+fn keywords_accepted(	visibility
+pub fn installed_candidates(	installed	Installed packages read from the VDB.
+pub struct InfoPkgRow	info_pkgs	Package rows for `emerge --info`.
+pub fn installed_versions(	installed
+pub enum PretendOutcome	resolve/outcome	The outcome of resolving one atom.
+pub use portage_vdb	=lib
+fn vdb_aux_get(	installed
+pub struct DepcleanResult	depclean	depclean, prune and clean selection.
+struct InstalledUseState	use_display	USE flag display columns.
+fn canonical_dep_key(	reinstall	When an installed package needs a reinstall (changed deps, slot, repo, USE).
+fn atom_currently_satisfiable(	masked_deps	Masked-dependency reports.
+fn use_unsat_parent_row(	use_unsat	Reports for dependencies whose USE requirements no candidate meets.
+fn all_masked_report(	masked_deps
+fn chain_node_usedep_suffix(	dep_chain	The "required by" chain printed under a masked dependency.
+fn atom_cp_installed(	resolve/graph_lookup	Whether an atom is installed or already in the graph.
+fn alternative_downgrade_demoted(	resolve/or_preference	Which alternative of an `||` group to prefer.
+pub fn resolve_info_candidate(	info_pkgs
+fn root_deps_satisfied_atoms(	resolve/root_deps	`--root-deps` build entries for the running root.
+fn dependency_avoid_update_candidate	resolve/pretend	Selecting one atom's candidate (`resolve_pretend`).
+pub enum BlockerSatisfiedBy	resolve/entry	Graph entries and their edges.
+fn is_built_slot_op(	resolve/rev_dep	Constraints that installed reverse dependencies put on an upgrade.
+type SlotOpRebuildScan	=slot_operator/rebuild_scan
+struct ProbeParent	slot_operator/abi_probe	The slot-conflict ABI probe.
+fn slot_operator_rebuild_scan(	slot_operator/rebuild_scan	Rebuilds triggered by slot-operator dependencies.
+type SlotOpForceScan	slot_operator/force_scan	Slot-operator update-force and slot-change probes.
+fn slot_operator_unsatisfied_probe(	slot_operator/unsat_probe	The unsatisfied slot-operator dependency probe.
+fn bind_slot_operator_deps	slot_operator/bind	Binding `:=` dependencies to the selected slot.
+fn slot_operator_eliminate_rebuilds(	slot_operator/eliminate	Eliminating unnecessary slot-operator rebuilds.
+fn merge_bound_version	resolve/merge_bound	Lookups over the entries a run will merge.
+fn cycle_restartable(	resolve/cycles	Circular dependencies.
+struct PendingBlocker	resolve/blockers	Blockers.
+pub struct SlotConflict	resolve/slot_conflict	Slot conflicts: records, merging and rendering.
+fn pkg_use_display_for(	resolve/conflict_use_display	USE displays shared by slot-conflict and skipped-update reports.
+enum InstalledSide	resolve/slot_conflict
+pub struct SkippedUpdate	resolve/skipped	Skipped-update records and their grouping.
+pub(crate) struct DirectSolveInput	resolve/direct_solve	Solving slot conflicts directly, without backtracking.
+pub(crate) fn constraint_withheld_updates	resolve/withhold	Updates withheld by constraints, and missed updates to backtrack on.
+fn missing_dep_full_row(	resolve/skipped
+pub struct ChangedDepsReportEntry	resolve/result	The resolver's result and how a run aborts.
+fn autounmask_dep_chain(	resolve/autounmask	Autounmask dependency chains and suggestions.
+pub enum Deep	resolve/queue	The walk queue.
+fn delta_atom_cleanly_reuses_resolved_slot	resolve/slot_expand	Re-expanding a resolved slot when USE changes.
+pub fn complete_graph_auto_enable	resolve/complete_graph	When `--complete-graph` turns itself on.
+pub struct ResolveRequest	resolve/request	A resolve request: the atoms and the emerge options.
+pub enum SolverKind	resolve/resolver	The resolver trait and solver selection.
+struct ResolveCtx<'a>	resolve/ctx	The per-run resolver context.
+struct BacktrackNode	resolve/backtracker	The backtracking search tree.
+struct MaskChoice	resolve/backtrack_params	Parameters a backtracking pass runs with.
+struct PassResult	resolve/pass_state	The state and result of one resolver pass.
+fn overlay_use_want(	resolve/pass_helpers	Small helpers of the resolver pass.
+fn run_pass(	resolve/pass	One resolver pass over the graph.
+enum MaskReason	resolve/feedback	Turning a pass's problems into feedback for the next pass.
+fn assemble_result(	resolve/assemble	Assembling the final result.
+fn replay_use_of(	resolve/replay	Fail-fast replay of the best pass.
+fn backtracking_resolve(	resolve/driver	The backtracking loop.
+pub(crate) enum InstalledMetaLayer	resolve/installed_meta	Installed packages' metadata as the resolver sees it.
+struct DepOwner	resolve/enqueue	Queueing one package's dependencies.

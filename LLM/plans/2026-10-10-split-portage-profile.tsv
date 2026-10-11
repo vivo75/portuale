@@ -1,0 +1,16 @@
+# #336 Phase 6: crates/portage-profile/src/lib.rs split spec (split_module.py).
+pub struct ProfileUseLayer	config	The resolved configuration (`Config`) and its USE layers.
+const TRACKED_INCREMENTALS	incrementals	Incremental variables (USE, FEATURES, …) and how their tokens stack.
+fn logical_lines(	=make_conf
+pub struct BinRepo	binrepo	binrepos.conf entries.
+fn parse_binrepos(	=binrepo
+fn shlex_token(	make_conf	make.conf-style parsing: logical lines, shell tokens, variable substitution.
+pub fn apply_incremental(	incrementals
+const ENV_INCREMENTAL_VARS	env_layer	The process-environment layer over make.conf and the profile.
+fn process_lines(	profile_chain	The profile chain: parent files and per-profile make.defaults.
+fn process_make_conf_file(	make_conf
+fn read_repo_make_defaults_use(	profile_chain
+struct EnvdParse	envd	env.d files.
+fn read_config_lines(	package_files	package.mask, package.accept_keywords, package.license and package.use parsers.
+pub fn use_context_base_fingerprint(	fingerprints	Fingerprints of the config parts that resolver caches depend on.
+pub fn resolve_config(	resolve	`resolve_config`: building the full `Config` from disk and the environment.

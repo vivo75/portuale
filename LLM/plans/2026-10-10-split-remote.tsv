@@ -1,0 +1,13 @@
+# #336 Phase 6: crates/portuale/src/remote/mod.rs split spec (split_module.py).
+pub fn sh_quote	ssh	The ssh transport: argv, control sockets, running scripts, copying files.
+pub(crate) struct ConfigRootOverride	config_place	Placing the client's config root on the server.
+fn run_raw_command(	ssh
+fn preflight_script(	preflight	Preflight gates checked before a remote merge.
+pub(crate) fn default_bin_dirs	client_binary	Finding, checking and installing portuale on the client.
+fn known_host_lines(	host_keys	known_hosts lookups and host-key fingerprints.
+pub fn run_remote_cli(	plan	The remote entry points: resolve, plan, and run each unit.
+fn run_preflight_inner(	preflight
+pub(crate) struct LedgerEntry	ledger	The server/client merge ledger.
+pub(crate) struct VdbShadow	binpkg_flow	Checking the binary plan and running the binpkg flow.
+fn eapi_exports_merge_type(	merge_script	The phase and merge shell scripts sent to the client.
+fn client_vdb_placement(	stages	The merge, regen, old-hook and phase stages.
