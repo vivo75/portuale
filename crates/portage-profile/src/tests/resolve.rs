@@ -2263,11 +2263,18 @@ fn package_use_expand_shorthand_is_user_level_only() {
     );
 }
 
-#[test]
-fn package_use_mask_and_force_stack_repo_then_profile_only_no_user_source() {
-    // A deliberately-written user-level file must be completely ignored:
-    // Portage has no such source (see UseManager's file/variable table).
-    let root = TempDir::new("portage-profile-test-package-use-mask-force").keep();
+/// Shared body of the mask/force stacking tests: repo-level plus
+/// profile-chain entries stack, and a deliberately-written user-level
+/// file is completely ignored (Portage has no such source; see
+/// UseManager's file/variable table). Only the file names and the
+/// asserted config fields differ between the plain and stable variants.
+fn check_mask_and_force_stack_repo_then_profile_only_no_user_source(
+    dir_name: &str,
+    mask_file: &str,
+    force_file: &str,
+    check: impl Fn(&Config),
+) {
+    let root = TempDir::new(dir_name).keep();
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
     let portage_dir = root.join("etc/portage");
@@ -2276,16 +2283,12 @@ fn package_use_mask_and_force_stack_repo_then_profile_only_no_user_source() {
     fs::create_dir_all(&portage_dir).unwrap();
     fs::create_dir_all(&leaf).unwrap();
 
-    fs::write(repo_profiles.join("package.use.mask"), "dev-libs/a maska\n").unwrap();
-    fs::write(leaf.join("package.use.mask"), "dev-libs/b maskb\n").unwrap();
-    fs::write(portage_dir.join("package.use.mask"), "dev-libs/c maskc\n").unwrap();
-    fs::write(
-        repo_profiles.join("package.use.force"),
-        "dev-libs/a forcea\n",
-    )
-    .unwrap();
-    fs::write(leaf.join("package.use.force"), "dev-libs/b forceb\n").unwrap();
-    fs::write(portage_dir.join("package.use.force"), "dev-libs/c forcec\n").unwrap();
+    fs::write(repo_profiles.join(mask_file), "dev-libs/a maska\n").unwrap();
+    fs::write(leaf.join(mask_file), "dev-libs/b maskb\n").unwrap();
+    fs::write(portage_dir.join(mask_file), "dev-libs/c maskc\n").unwrap();
+    fs::write(repo_profiles.join(force_file), "dev-libs/a forcea\n").unwrap();
+    fs::write(leaf.join(force_file), "dev-libs/b forceb\n").unwrap();
+    fs::write(portage_dir.join(force_file), "dev-libs/c forcec\n").unwrap();
 
     let make_profile = portage_dir.join("make.profile");
     let _ = fs::remove_file(&make_profile);
@@ -2302,19 +2305,33 @@ fn package_use_mask_and_force_stack_repo_then_profile_only_no_user_source() {
         eroot: &root,
     })
     .expect("config must resolve");
-    assert_eq!(
-        config.package_use_mask,
-        vec![
-            ("dev-libs/a".to_string(), vec!["maska".to_string()]),
-            ("dev-libs/b".to_string(), vec!["maskb".to_string()]),
-        ]
-    );
-    assert_eq!(
-        config.package_use_force,
-        vec![
-            ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
-            ("dev-libs/b".to_string(), vec!["forceb".to_string()]),
-        ]
+    check(&config);
+}
+
+#[test]
+fn package_use_mask_and_force_stack_repo_then_profile_only_no_user_source() {
+    // A deliberately-written user-level file must be completely ignored:
+    // Portage has no such source (see UseManager's file/variable table).
+    check_mask_and_force_stack_repo_then_profile_only_no_user_source(
+        "portage-profile-test-package-use-mask-force",
+        "package.use.mask",
+        "package.use.force",
+        |config| {
+            assert_eq!(
+                config.package_use_mask,
+                vec![
+                    ("dev-libs/a".to_string(), vec!["maska".to_string()]),
+                    ("dev-libs/b".to_string(), vec!["maskb".to_string()]),
+                ]
+            );
+            assert_eq!(
+                config.package_use_force,
+                vec![
+                    ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
+                    ("dev-libs/b".to_string(), vec!["forceb".to_string()]),
+                ]
+            );
+        },
     );
 }
 
@@ -2364,66 +2381,26 @@ fn use_stable_mask_and_force_stack_profile_chain_only_and_stay_out_of_use_flags(
 fn package_use_stable_mask_and_force_stack_repo_then_profile_only_no_user_source() {
     // Mirrors the non-stable test above for the stable variant; the user-level
     // file is ignored (no such source in Portage).
-    let root = TempDir::new("portage-profile-test-package-use-stable-mask-force").keep();
-    let repo = root.join("repo");
-    let repo_profiles = repo.join("profiles");
-    let portage_dir = root.join("etc/portage");
-    let leaf = root.join("leaf-profile");
-    fs::create_dir_all(&repo_profiles).unwrap();
-    fs::create_dir_all(&portage_dir).unwrap();
-    fs::create_dir_all(&leaf).unwrap();
-
-    fs::write(
-        repo_profiles.join("package.use.stable.mask"),
-        "dev-libs/a maska\n",
-    )
-    .unwrap();
-    fs::write(leaf.join("package.use.stable.mask"), "dev-libs/b maskb\n").unwrap();
-    fs::write(
-        portage_dir.join("package.use.stable.mask"),
-        "dev-libs/c maskc\n",
-    )
-    .unwrap();
-    fs::write(
-        repo_profiles.join("package.use.stable.force"),
-        "dev-libs/a forcea\n",
-    )
-    .unwrap();
-    fs::write(leaf.join("package.use.stable.force"), "dev-libs/b forceb\n").unwrap();
-    fs::write(
-        portage_dir.join("package.use.stable.force"),
-        "dev-libs/c forcec\n",
-    )
-    .unwrap();
-
-    let make_profile = portage_dir.join("make.profile");
-    let _ = fs::remove_file(&make_profile);
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
-
-    let config = resolve_config(ResolveConfigArgs {
-        config_root: &root,
-        main_repo_location: &repo,
-        overlay_repos: &[],
-        repo_aliases: &[],
-        main_repo_name: "testrepo",
-        repo_masters: &HashMap::new(),
-        eroot: &root,
-    })
-    .expect("config must resolve");
-    assert_eq!(
-        config.package_use_stable_mask,
-        vec![
-            ("dev-libs/a".to_string(), vec!["maska".to_string()]),
-            ("dev-libs/b".to_string(), vec!["maskb".to_string()]),
-        ]
-    );
-    assert_eq!(
-        config.package_use_stable_force,
-        vec![
-            ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
-            ("dev-libs/b".to_string(), vec!["forceb".to_string()]),
-        ]
+    check_mask_and_force_stack_repo_then_profile_only_no_user_source(
+        "portage-profile-test-package-use-stable-mask-force",
+        "package.use.stable.mask",
+        "package.use.stable.force",
+        |config| {
+            assert_eq!(
+                config.package_use_stable_mask,
+                vec![
+                    ("dev-libs/a".to_string(), vec!["maska".to_string()]),
+                    ("dev-libs/b".to_string(), vec!["maskb".to_string()]),
+                ]
+            );
+            assert_eq!(
+                config.package_use_stable_force,
+                vec![
+                    ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
+                    ("dev-libs/b".to_string(), vec!["forceb".to_string()]),
+                ]
+            );
+        },
     );
 }
 

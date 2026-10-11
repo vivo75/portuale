@@ -199,29 +199,14 @@ pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Res
         fs_sandbox,
         ..Isolation::default()
     };
-    // The pump guard must outlive `cmd` (see `open_log_file`): declared first so
-    // drop order destroys it after `cmd`; `drop(cmd)` closes write ends deterministically.
-    let mut pump_guard: Option<LogPump> = None;
-    let mut cmd = sandbox_wrapped_command(&bin_dir.join("misc-functions.sh"), dyn_command, iso);
-    // Curated env only (like the phase spawns): an unfiltered inherited env would
-    // leak into the regenerated vdb env via `${T}/environment`. No IPC daemon.
-    cmd.env_clear();
-    cmd.envs(
-        std::env::vars()
-            .filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL" && k != "PORTAGE_IPC_DAEMON"),
-    );
-    cmd.envs(vars);
-    if let Some(path) = log_file {
-        let sink = open_log_file(path)?;
-        cmd.stdout(sink.out).stderr(sink.err);
-        pump_guard = sink.pump;
-    }
-    let status = spawn_trackable(&mut cmd)
-        .map_err(|e| format!("spawning real bash for {dyn_command} failed: {e}"))?;
-    drop(cmd);
-    // Explicit: joins the gzip thread now that every write end is closed.
-    drop(pump_guard);
-    Ok(status.code().unwrap_or(1))
+    spawn_bash_script(SpawnBashScriptArgs {
+        script: &bin_dir.join("misc-functions.sh"),
+        argv_word: dyn_command,
+        vars,
+        iso,
+        log_file,
+        context: dyn_command,
+    })
 }
 
 /// One process-wide multi-threaded tokio runtime (Portage runs a whole invocation
