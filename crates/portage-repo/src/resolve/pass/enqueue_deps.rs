@@ -2,6 +2,7 @@
 
 use crate::resolve::pass::*;
 use portage_profile::Config;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 /// The values [`enqueue_entry_deps`] reads from its caller.
@@ -21,23 +22,25 @@ pub(crate) struct EnqueueEntryDepsArgs<'a> {
     pub(crate) candidate_str: &'a str,
 }
 
-/// Fold the entry's dependency keys and queue the atoms they name.
-pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
-    let EnqueueEntryDepsArgs {
-        ctx,
-        depth,
-        metadata,
-        candidate_source,
-        state,
-        entry_idx,
-        use_flags,
-        bp,
-        config,
-        union_constraints,
-        key,
-        version,
-        candidate_str,
-    } = args;
+/// What [`select_dep_tokens`] hands back to its caller.
+pub(crate) struct SelectDepTokensOut {
+    pub(crate) onlydeps_blanks_runtime: bool,
+    pub(crate) onlydeps_blanks_idepend: bool,
+    pub(crate) eapi_has_idepend: bool,
+    pub(crate) tokens: Vec<String>,
+}
+
+/// Pick the dep keys this entry walks and flatten them to tokens.
+///
+/// A built package under `--usepkg`/`--getbinpkg` walks without
+/// `DEPEND`/`BDEPEND`; `--buildpkgonly` without `--deep` blanks the
+/// runtime keys of a non-built package instead.
+pub(crate) fn select_dep_tokens(
+    ctx: &ResolveCtx<'_>,
+    depth: u32,
+    metadata: &Arc<HashMap<String, String>>,
+    candidate_source: CandidateSource,
+) -> SelectDepTokensOut {
     // A built package (binary) under `--usepkg`/`--getbinpkg` walks without
     // `DEPEND`/`BDEPEND`; `--buildpkgonly` without `--deep` blanks the
     // runtime keys of a non-built package instead. Binaries keep theirs.
@@ -87,7 +90,51 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         }
     }
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    SelectDepTokensOut {
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+        tokens,
+    }
+}
 
+/// The values [`record_merge_order_deps`] reads from its caller.
+pub(crate) struct RecordMergeOrderDepsArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) candidate_source: CandidateSource,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) entry_idx: usize,
+    pub(crate) onlydeps_blanks_runtime: bool,
+    pub(crate) onlydeps_blanks_idepend: bool,
+    pub(crate) eapi_has_idepend: bool,
+}
+
+/// Record the entry's merge-order dep edges, cut to the running-root scope.
+///
+/// Discovery order is per-key, flattened separately so cross-key order can't
+/// leak in. Blanked keys stay out of the digraph too.
+pub(crate) fn record_merge_order_deps(args: RecordMergeOrderDepsArgs<'_>) {
+    let RecordMergeOrderDepsArgs {
+        ctx,
+        candidate_source,
+        metadata,
+        use_flags,
+        state,
+        entry_idx,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    } = args;
+    let keep_key = |key: &&str| {
+        onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+            key,
+            eapi_has_idepend,
+            onlydeps_blanks_runtime,
+            onlydeps_blanks_idepend,
+        })
+    };
     // Discovery order is per-key (`RDEPEND`, `IDEPEND`, `PDEPEND`, `DEPEND`,
     // `BDEPEND`), flattened separately so cross-key order can't leak in.
     // Portage: depgraph.py, _add_pkg_dep_string (deps tuple)
@@ -145,10 +192,39 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
                 && visited_cps.contains(&(d.category.clone(), d.package.clone())))
         });
     }
+}
 
-    // Per-edge build-time/run-time classification for the merge-order sort
-    // and cycle detection: an atom in the build-time keys but not the run-time
-    // ones tags `buildtime_hard`. Portage: DepPriority
+/// What [`classify_dep_atoms`] hands back to its caller.
+pub(crate) struct ClassifyDepAtomsOut {
+    pub(crate) buildtime_atoms: HashSet<String>,
+    pub(crate) runtime_atoms: HashSet<String>,
+    pub(crate) bdepend_atoms: HashSet<String>,
+}
+
+/// The values [`classify_dep_atoms`] reads from its caller.
+pub(crate) struct ClassifyDepAtomsArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) candidate_source: CandidateSource,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) onlydeps_blanks_runtime: bool,
+    pub(crate) onlydeps_blanks_idepend: bool,
+    pub(crate) eapi_has_idepend: bool,
+}
+
+/// Per-edge build-time/run-time classification for the merge-order sort
+/// and cycle detection: an atom in the build-time keys but not the run-time
+/// ones tags `buildtime_hard`. Portage: DepPriority
+pub(crate) fn classify_dep_atoms(args: ClassifyDepAtomsArgs<'_>) -> ClassifyDepAtomsOut {
+    let ClassifyDepAtomsArgs {
+        ctx,
+        candidate_source,
+        metadata,
+        use_flags,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    } = args;
     let flatten_keys = |keys: &[&str]| -> HashSet<String> {
         let joined: String = keys
             .iter()
@@ -182,6 +258,46 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     } else {
         flatten_keys(&["BDEPEND"])
     };
+    ClassifyDepAtomsOut {
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+    }
+}
+
+/// What [`prepare_disjunction_scope`] hands back to its caller.
+pub(crate) struct DisjunctionScopeOut<'a> {
+    pub(crate) cross_running_root: Option<&'a Path>,
+    pub(crate) running_tags: HashSet<String>,
+    pub(crate) self_node: RootCp,
+    pub(crate) queued: Vec<QueueItem>,
+    pub(crate) circ_with_pullers: Option<HashMap<RootCp, Vec<CircularDepChild>>>,
+}
+
+/// The values [`prepare_disjunction_scope`] reads from its caller.
+pub(crate) struct PrepareDisjunctionScopeArgs<'a, 's> {
+    pub(crate) ctx: &'s ResolveCtx<'a>,
+    pub(crate) metadata: &'s Arc<HashMap<String, String>>,
+    pub(crate) use_flags: &'s HashSet<String>,
+    pub(crate) state: &'s mut PassState,
+    pub(crate) entry_idx: usize,
+    pub(crate) bp: &'s BacktrackParams,
+}
+
+/// The `||`-resolution scope for this expansion: per-group roots, the queued
+/// snapshot (queued-but-unresolved deps count as will-be-in-graph) and the
+/// cycle view with the pullers' children joined in.
+pub(crate) fn prepare_disjunction_scope<'a>(
+    args: PrepareDisjunctionScopeArgs<'a, '_>,
+) -> DisjunctionScopeOut<'a> {
+    let PrepareDisjunctionScopeArgs {
+        ctx,
+        metadata,
+        use_flags,
+        state,
+        entry_idx,
+        bp,
+    } = args;
     // This expansion's per-group roots (Portage `_add_pkg_deps`' `depend_root`
     // plus the running-root groups). `None` on same-root runs: a no-op.
     let cross_running_root: Option<&Path> = ctx.cross_root();
@@ -194,17 +310,6 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
             )
         })
         .unwrap_or_default();
-    // Whether one `||` alternative resolves running-rooted: every member
-    // tagged running (mixed-key same text falls target). Same-root runs
-    // keep the pass-through below.
-    let group_running = |atoms: &[String]| -> bool {
-        cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a))
-    };
-    // A `||` group with no tree-visible branch still needs one selected here,
-    // or the unsatisfiable branch queues as an ordinary dep. Applies to all
-    // keys (the merged string hides which key an atom came from); harmless,
-    // since those atoms resolve via tree visibility anyway.
-    // Portage: --root-deps branch selection; see `root_deps_satisfied_atoms`
     // No self-exclusion on the first pass: an in-graph self atom ranks
     // `preferred_in_graph` and the cycle map re-resolves it; only a self atom
     // matching nothing refuses. Portage: dep_zapdeps.
@@ -257,12 +362,54 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         } else {
             None
         };
-    let circular_view = circ_with_pullers
-        .as_ref()
-        .unwrap_or(&bp.circular_dependency);
+    DisjunctionScopeOut {
+        cross_running_root,
+        running_tags,
+        self_node,
+        queued,
+        circ_with_pullers,
+    }
+}
+
+/// The values [`flatten_dep_string`] reads from its caller.
+pub(crate) struct FlattenDepStringArgs<'a> {
+    pub(crate) tokens: &'a [String],
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) cross_running_root: Option<&'a Path>,
+    pub(crate) running_tags: &'a HashSet<String>,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) self_node: &'a RootCp,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) circular_view: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+    pub(crate) queued: &'a [QueueItem],
+}
+
+/// Flatten the dep string with `||` branch selection.
+///
+/// Branch selection sees the group's own root; a `||` group with no
+/// tree-visible branch still selects one here. `Break` when the string does
+/// not flatten.
+pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<(), Vec<String>> {
+    let FlattenDepStringArgs {
+        tokens,
+        use_flags,
+        metadata,
+        cross_running_root,
+        running_tags,
+        ctx,
+        config,
+        entries,
+        self_node,
+        union_constraints,
+        circular_view,
+        queued,
+    } = args;
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         portage_use_reduce::UseReduceFlatDisjunctiveArgs {
-            tokens: &tokens,
+            tokens,
             uselist: use_flags,
             mode: portage_use_reduce::MatchMode::Normal,
             empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
@@ -282,15 +429,13 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
                     ctx.root
                 };
                 let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
-                    state
-                        .entries
+                    entries
                         .iter()
                         .filter(|e| e.targets_running_root == grp_running)
                         .cloned()
                         .collect()
                 });
-                let entries_view: &[GraphEntry] =
-                    scoped_entries.as_deref().unwrap_or(&state.entries);
+                let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
                 let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
                     queued
                         .iter()
@@ -298,7 +443,7 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
                         .cloned()
                         .collect()
                 });
-                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
+                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
                 promote_tied_alternative(PromoteTiedAlternativeArgs {
                     repos: &ctx.repos,
                     config,
@@ -313,21 +458,29 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         &mut |atoms: &[String]| {
             // Branch selection sees the group's own root (installed db and
             // same-root graph only). Pass-through unless cross-root + running.
-            let grp_running = group_running(atoms);
+            // Whether one `||` alternative resolves running-rooted: every member
+            // tagged running (mixed-key same text falls target). Same-root runs
+            // keep the pass-through below.
+            let grp_running =
+                cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a));
+            // A `||` group with no tree-visible branch still needs one selected here,
+            // or the unsatisfiable branch queues as an ordinary dep. Applies to all
+            // keys (the merged string hides which key an atom came from); harmless,
+            // since those atoms resolve via tree visibility anyway.
+            // Portage: --root-deps branch selection; see `root_deps_satisfied_atoms`
             let grp_root: &Path = if grp_running {
                 cross_running_root.expect("running-root group without a cross root")
             } else {
                 ctx.root
             };
             let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
-                state
-                    .entries
+                entries
                     .iter()
                     .filter(|e| e.targets_running_root == grp_running)
                     .cloned()
                     .collect()
             });
-            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(&state.entries);
+            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
             let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
                 queued
                     .iter()
@@ -335,26 +488,55 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
                     .cloned()
                     .collect()
             });
-            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
+            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
             disjunction_preference(DisjunctionPreferenceArgs {
                 repos: &ctx.repos,
                 config,
                 root: grp_root,
                 entries: entries_view,
-                self_cp: &self_node,
+                self_cp: self_node,
                 constraints: union_constraints,
                 circular_dependency: circular_view,
                 root_deps_running_root: ctx.root_deps_running_root,
                 atoms,
                 queued: queued_view,
                 update: ctx.update,
-                gate_entries: &state.entries,
-                gate_queued: &queued,
+                gate_entries: entries,
+                gate_queued: queued,
             })
         },
     ) else {
-        return;
+        return ControlFlow::Break(());
     };
+    ControlFlow::Continue(flat_deps)
+}
+
+/// The values [`filter_root_deps`] reads from its caller.
+pub(crate) struct FilterRootDepsArgs<'a> {
+    pub(crate) flat_deps: Vec<String>,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) state: &'a mut PassState,
+    pub(crate) cross_running_root: Option<&'a Path>,
+}
+
+/// Apply the `--root-deps` existence split: atoms one root satisfies never
+/// reach the ordinary queue, atoms neither satisfies become their own
+/// running-root entries. No-op unless cross-root with a split root.
+pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> Vec<String> {
+    let FilterRootDepsArgs {
+        flat_deps,
+        ctx,
+        config,
+        metadata,
+        use_flags,
+        key,
+        state,
+        cross_running_root,
+    } = args;
     // The existence-check split only runs for flag-on coinciding-roots builds;
     // on a cross-root run the per-group walk above already resolved every build
     // atom against its own root, so filtering here would double-resolve them.
@@ -421,13 +603,49 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
                     running_root,
                     atom_str,
                     config,
-                    owner: key.clone(),
+                    owner: (*key).clone(),
                     seen: &mut state.root_deps_build_seen,
                     local_binpkg: &ctx.local_binpkg,
                 },
             ));
         }
     }
+    flat_deps
+}
+
+/// The values [`record_slot_pullers_and_enqueue`] reads from its caller.
+pub(crate) struct RecordSlotPullersAndEnqueueArgs<'a> {
+    pub(crate) flat_deps: Vec<String>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) version: &'a str,
+    pub(crate) depth: u32,
+    pub(crate) parent_use: &'a HashSet<String>,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) entry_idx: usize,
+    pub(crate) buildtime_atoms: &'a HashSet<String>,
+    pub(crate) runtime_atoms: &'a HashSet<String>,
+    pub(crate) bdepend_atoms: &'a HashSet<String>,
+    pub(crate) tokens: &'a Vec<String>,
+    pub(crate) running_tags: &'a HashSet<String>,
+}
+
+/// Record this package as a puller of every non-blocker `cat/pkg` its dep
+/// string names, then queue the flattened deps.
+pub(crate) fn record_slot_pullers_and_enqueue(args: RecordSlotPullersAndEnqueueArgs<'_>) {
+    let RecordSlotPullersAndEnqueueArgs {
+        flat_deps,
+        key,
+        version,
+        depth,
+        parent_use,
+        state,
+        entry_idx,
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+        tokens,
+        running_tags,
+    } = args;
     // Record this package as a puller of every non-blocker `cat/pkg` its
     // dep string names (atom text kept for the `pulled in by` lines).
     for tok in &flat_deps {
@@ -451,17 +669,51 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         key,
         version,
         depth,
-        parent_use: use_flags,
+        parent_use,
         queue: &mut state.queue,
         pending_blockers: &mut state.pending_blockers,
-        buildtime_atoms: &buildtime_atoms,
-        runtime_atoms: &runtime_atoms,
-        bdepend_atoms: &bdepend_atoms,
-        or_universe: &or_group_universe(&tokens),
-        running_atoms: &running_tags,
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+        or_universe: &or_group_universe(tokens),
+        running_atoms: running_tags,
         owner_targets_running_root: state.entries[entry_idx].targets_running_root,
     });
+}
 
+/// The values [`enqueue_test_deps`] reads from its caller.
+pub(crate) struct EnqueueTestDepsArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) depth: u32,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) config: &'a Config,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) key: &'a (String, String),
+    pub(crate) version: &'a str,
+    pub(crate) tokens: &'a Vec<String>,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) entry_idx: usize,
+}
+
+/// Queue the `test?`-gated deps too under `--with-test-deps`.
+///
+/// Additive, never a replacement. A `test?` dep is never hard (optional),
+/// never from `BDEPEND`, never a `||` choice, never running.
+pub(crate) fn enqueue_test_deps(args: EnqueueTestDepsArgs<'_>) {
+    let EnqueueTestDepsArgs {
+        ctx,
+        depth,
+        use_flags,
+        metadata,
+        config,
+        candidate_str,
+        key,
+        version,
+        tokens,
+        state,
+        entry_idx,
+    } = args;
     // `--with-test-deps` is additive, never a replacement; see
     // `resolve_pretend_graph` for the gating. A `test?` dep is never hard
     // (optional), never from `BDEPEND`, never a `||` choice, never running.
@@ -487,7 +739,7 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
             test_uselist.insert("test".to_string());
             let subset: HashSet<String> = ["test".to_string()].into_iter().collect();
             if let Ok(test_deps) = portage_use_reduce::use_reduce_flat_subset(
-                &tokens,
+                tokens,
                 &test_uselist,
                 portage_use_reduce::MatchMode::Normal,
                 &subset,
@@ -510,4 +762,118 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
             }
         }
     }
+}
+
+/// Fold the entry's dependency keys and queue the atoms they name.
+pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
+    let EnqueueEntryDepsArgs {
+        ctx,
+        depth,
+        metadata,
+        candidate_source,
+        state,
+        entry_idx,
+        use_flags,
+        bp,
+        config,
+        union_constraints,
+        key,
+        version,
+        candidate_str,
+    } = args;
+    let SelectDepTokensOut {
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+        tokens,
+    } = select_dep_tokens(ctx, depth, metadata, candidate_source);
+    record_merge_order_deps(RecordMergeOrderDepsArgs {
+        ctx,
+        candidate_source,
+        metadata,
+        use_flags,
+        state: &mut *state,
+        entry_idx,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    });
+    let ClassifyDepAtomsOut {
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+    } = classify_dep_atoms(ClassifyDepAtomsArgs {
+        ctx,
+        candidate_source,
+        metadata,
+        use_flags,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    });
+    let scope = prepare_disjunction_scope(PrepareDisjunctionScopeArgs {
+        ctx,
+        metadata,
+        use_flags,
+        state: &mut *state,
+        entry_idx,
+        bp,
+    });
+    let circular_view = scope
+        .circ_with_pullers
+        .as_ref()
+        .unwrap_or(&bp.circular_dependency);
+    let ControlFlow::Continue(flat_deps) = flatten_dep_string(FlattenDepStringArgs {
+        tokens: &tokens,
+        use_flags,
+        metadata,
+        cross_running_root: scope.cross_running_root,
+        running_tags: &scope.running_tags,
+        ctx,
+        config,
+        entries: &state.entries,
+        self_node: &scope.self_node,
+        union_constraints,
+        circular_view,
+        queued: &scope.queued,
+    }) else {
+        return;
+    };
+    let flat_deps = filter_root_deps(FilterRootDepsArgs {
+        flat_deps,
+        ctx,
+        config,
+        metadata,
+        use_flags,
+        key,
+        state: &mut *state,
+        cross_running_root: scope.cross_running_root,
+    });
+    record_slot_pullers_and_enqueue(RecordSlotPullersAndEnqueueArgs {
+        flat_deps,
+        key,
+        version,
+        depth,
+        parent_use: use_flags,
+        state: &mut *state,
+        entry_idx,
+        buildtime_atoms: &buildtime_atoms,
+        runtime_atoms: &runtime_atoms,
+        bdepend_atoms: &bdepend_atoms,
+        tokens: &tokens,
+        running_tags: &scope.running_tags,
+    });
+    enqueue_test_deps(EnqueueTestDepsArgs {
+        ctx,
+        depth,
+        use_flags,
+        metadata,
+        config,
+        candidate_str,
+        key,
+        version,
+        tokens: &tokens,
+        state: &mut *state,
+        entry_idx,
+    });
 }
