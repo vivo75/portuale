@@ -69,6 +69,45 @@ impl IncrementalSnapshot {
     }
 }
 
+/// Fold stacked token layers with Portage's incremental semantics
+/// (`-*` clears, `-tok` discards, bare/`+`-prefixed adds), then sort.
+/// Shared by [`Config::resolved_incremental`] and the `Packages`-index
+/// header's child re-fold.
+// Portage: config.py, regenerate
+pub fn fold_token_layers(layers: &[&[String]]) -> Vec<String> {
+    let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for tokens in layers {
+        for tok in *tokens {
+            if tok == "-*" {
+                set.clear();
+            } else if let Some(rest) = tok.strip_prefix('-') {
+                set.remove(rest);
+            } else {
+                set.insert(tok.strip_prefix('+').unwrap_or(tok).to_string());
+            }
+        }
+    }
+    set.into_iter().collect()
+}
+
+/// Portage's `prune_incremental`: drop everything up to and including the
+/// last `*`/`-*` boundary handling for header stacking (duplicates kept,
+/// order kept). Only cuts noise, never reorders.
+// Portage: package/ebuild/_config/helper.py, prune_incremental
+pub fn prune_token_layers(tokens: &[String]) -> Vec<String> {
+    for (i, tok) in tokens.iter().rev().enumerate() {
+        if tok == "*" {
+            return tokens[tokens.len() - i - 1..].to_vec();
+        } else if tok == "-*" {
+            if i == 0 {
+                return vec!["-*".to_string()];
+            }
+            return tokens[tokens.len() - i..].to_vec();
+        }
+    }
+    tokens.to_vec()
+}
+
 /// Incremental-variable token semantics: `-*` clears, `-flag` removes,
 /// `flag`/`+flag` adds. Shared by config files and per-package
 /// `package.use` application.

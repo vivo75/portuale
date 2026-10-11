@@ -87,7 +87,7 @@ pub(crate) fn load_scalar_layers(
         scalars.remove("USE");
         note_higher(&mut *config, "USE");
         let snapshot = IncrementalSnapshot::take(config);
-        process_lines(&text, &mut *scalars, &mut *config);
+        process_lines(&text, &mut *scalars, &mut *config, AcceptRawLayer::Globals);
         snapshot.restore(&mut *config);
     }
 
@@ -115,7 +115,7 @@ pub(crate) fn load_scalar_layers(
                 source: e,
             })?;
             let snapshot = IncrementalSnapshot::take(config);
-            process_lines(&text, &mut *scalars, &mut *config);
+            process_lines(&text, &mut *scalars, &mut *config, AcceptRawLayer::Defaults);
             snapshot.restore(&mut *config);
         }
         let level_make_defaults_use = config.use_tokens[before..].to_vec();

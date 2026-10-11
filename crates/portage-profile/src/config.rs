@@ -237,6 +237,34 @@ pub struct Config {
     /// Per-source token lists for the displayed `INCREMENTALS`
     /// variables, in db-stack order; see `resolved_incremental`.
     pub incremental_sources: HashMap<String, Vec<Vec<String>>>,
+    /// The selected profile's path relative to the main repo's
+    /// `profiles/` dir (`""` when no `make.profile` resolves): Portage's
+    /// `PROFILE` `Packages`-index header value.
+    // Portage: dbapi/bintree.py, _update_pkgindex_header
+    pub pkgindex_profile: String,
+    /// Raw `ACCEPT_LICENSE`/`ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT`
+    /// assignments per file layer, in Portage's stacking order: the
+    /// `Packages`-index header stacks them (order-preserving, duplicates
+    /// kept), unlike the last-wins scalars the resolver keeps.
+    // Portage: package/ebuild/config.py, regenerate
+    pub accept_raw_layers: Vec<(AcceptRawLayer, String, Vec<String>)>,
+    /// Calling-environment raw values for the header-relevant variables
+    /// (`FEATURES`, `CONFIG_PROTECT`, `CONFIG_PROTECT_MASK`,
+    /// `ACCEPT_LICENSE`, `ACCEPT_PROPERTIES`, `ACCEPT_RESTRICT`), recorded
+    /// by `apply_env_layer`: the `Packages`-index header of a `quickpkg`
+    /// child stacks the inherited (already-resolved) values over the
+    /// files again.
+    // Portage: dbapi/vartree.py, _quickpkg_dblink; bin/quickpkg
+    pub pkgindex_env_raw: HashMap<String, String>,
+}
+
+/// Which file layer a raw `ACCEPT_*` assignment came from, in Portage's
+/// header-stacking order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AcceptRawLayer {
+    Globals,
+    Defaults,
+    Conf,
 }
 
 impl Config {
@@ -245,20 +273,15 @@ impl Config {
     /// bare or `+`-prefixed adds), then sort. `None` when never assigned.
     // Portage: config.py, regenerate
     pub fn resolved_incremental(&self, key: &str) -> Option<Vec<String>> {
-        let sources = self.incremental_sources.get(key)?;
-        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for tokens in sources {
-            for tok in tokens {
-                if tok == "-*" {
-                    set.clear();
-                } else if let Some(rest) = tok.strip_prefix('-') {
-                    set.remove(rest);
-                } else {
-                    set.insert(tok.strip_prefix('+').unwrap_or(tok).to_string());
-                }
-            }
-        }
-        Some(set.into_iter().collect())
+        self.incremental_sources.get(key).map(|sources| {
+            fold_token_layers(
+                sources
+                    .iter()
+                    .map(Vec::as_slice)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+        })
     }
 
     /// Whether `<eroot>/etc/profile.env` changed since this config was

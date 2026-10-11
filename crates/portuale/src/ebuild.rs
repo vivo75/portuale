@@ -312,6 +312,8 @@ pub fn run(args: &[String]) -> ExitCode {
             binpkg_gpg_signing_gpg_home: std::env::var("BINPKG_GPG_SIGNING_GPG_HOME")
                 .unwrap_or_default(),
             binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
+            // Config-less standalone path: no resolved header snapshot.
+            pkgindex_header: None,
         };
         // Per-package `BINPKG_COMPRESS*`: the match plays only when the
         // calling env is silent and only for `xpak` runs.

@@ -159,6 +159,21 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
 
     config.other_vars = scalars;
 
+    // The `Packages`-index `PROFILE`: the selected profile relative to the
+    // main repo's `profiles/`, falling back to the absolute path when the
+    // profile lives outside it.
+    // Portage: dbapi/bintree.py, _update_pkgindex_header
+    if let Some(selected) = chain.last() {
+        let profiles_base = main_repo_location.join("profiles");
+        let canon_base = profiles_base
+            .canonicalize()
+            .unwrap_or_else(|_| profiles_base.clone());
+        config.pkgindex_profile = selected
+            .strip_prefix(&canon_base)
+            .map(|rel| rel.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| selected.to_string_lossy().into_owned());
+    }
+
     // Freeze the immutable USE-context and visibility digests now that the
     // config is complete (the backtrack loop mutates only `autounmask_use`).
     config.use_context_base = Some(use_context_base_fingerprint(&config));
