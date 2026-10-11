@@ -41,13 +41,7 @@ pub(crate) fn eclass_locations_value(pkg_dir: &Path, config_root: &Path) -> Stri
 pub(crate) fn portuale_bin_value() -> String {
     #[cfg(test)]
     {
-        let mut exe = std::env::current_exe().expect("current test exe");
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
-        exe.display().to_string()
+        crate::self_exe::built_portuale_bin().display().to_string()
     }
     #[cfg(not(test))]
     {

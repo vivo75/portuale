@@ -12,13 +12,7 @@ fn fake_runtime(root: &Path) -> PathBuf {
 
 /// The `portuale` binary built next to this test binary.
 fn portuale_exe() -> PathBuf {
-    let mut exe = std::env::current_exe().expect("current test exe");
-    exe.pop();
-    if exe.ends_with("deps") {
-        exe.pop();
-    }
-    exe.push("portuale");
-    exe
+    crate::self_exe::built_portuale_bin()
 }
 
 mod commands;

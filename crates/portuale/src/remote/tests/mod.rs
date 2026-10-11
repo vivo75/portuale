@@ -217,15 +217,7 @@ static PLACED_CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
     // Direct stage runs (no preflight) still need a resolved absolute
     // path in the fixture context: the built `portuale` binary.
-    let abs = {
-        let mut exe = std::env::current_exe().expect("current test exe");
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
-        exe.display().to_string()
-    };
+    let abs = crate::self_exe::built_portuale_bin().display().to_string();
     RemoteContext {
         hostname: "localtest".to_string(),
         user: None,
@@ -604,12 +596,7 @@ fn run_old_hook_snippet(
     // The old hooks resolve `PORTAGE_PYTHON` through
     // `$UNITBIN/portuale-python`, whose shim execs `$PORTUALE_BIN` --
     // export the built binary directly (never the libtest harness).
-    let mut exe = std::env::current_exe().expect("current test exe");
-    exe.pop();
-    if exe.ends_with("deps") {
-        exe.pop();
-    }
-    exe.push("portuale");
+    let exe = crate::self_exe::built_portuale_bin();
     let script = format!(
         concat!(
             "export PATH={farm}\n",
@@ -664,13 +651,7 @@ fn run_old_hook_snippet(
 
 /// The `portuale` binary next to the current test executable.
 fn s8_portuale_bin() -> std::path::PathBuf {
-    let mut exe = std::env::current_exe().expect("current test exe");
-    exe.pop();
-    if exe.ends_with("deps") {
-        exe.pop();
-    }
-    exe.push("portuale");
-    exe
+    crate::self_exe::built_portuale_bin()
 }
 
 fn s8_fixtures() -> std::path::PathBuf {

@@ -360,13 +360,7 @@ mod tests {
     /// The `portuale` binary next to this test binary (child processes:
     /// the helper reads stdin, so only a real process boundary matches).
     fn portuale_exe() -> std::path::PathBuf {
-        let mut exe = std::env::current_exe().expect("current test exe");
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
-        exe
+        crate::self_exe::built_portuale_bin()
     }
 
     /// Run the native filter as the shim would, stdin bytes verbatim

@@ -2586,12 +2586,7 @@ mod tests {
         let script = "EAPI=8\nSLOT=\"0\"\npkg_pretend() {\n\thas_version -r dev-libs/samepkg && echo yes > OUT || echo no > OUT\n}\n";
         std::fs::write(&ebuild, script.replace("OUT", &out.display().to_string())).unwrap();
 
-        let mut bin = std::env::current_exe().unwrap();
-        bin.pop();
-        if bin.ends_with("deps") {
-            bin.pop();
-        }
-        bin.push("portuale");
+        let bin = crate::self_exe::built_portuale_bin();
         let run = |config_root: &Path, args: &[&str]| {
             std::process::Command::new(&bin)
                 .args(args)
@@ -2694,12 +2689,7 @@ mod tests {
                 format!("--vdb-path={}", p.display()),
             ]);
         }
-        let mut bin = std::env::current_exe().unwrap();
-        bin.pop();
-        if bin.ends_with("deps") {
-            bin.pop();
-        }
-        bin.push("portuale");
+        let bin = crate::self_exe::built_portuale_bin();
         let run = |extra: &[&str], atoms: &[&str]| {
             let out = std::process::Command::new(&bin)
                 .arg("mrg")
@@ -2884,12 +2874,7 @@ pkg_postinst() {
         let db = root.join("var/lib/portage/vdb.redb");
         drop(portage_vdb::RedbDb::open(&db).unwrap());
 
-        let mut bin = std::env::current_exe().unwrap();
-        bin.pop();
-        if bin.ends_with("deps") {
-            bin.pop();
-        }
-        bin.push("portuale");
+        let bin = crate::self_exe::built_portuale_bin();
         let merge = |v: &str| -> String {
             let out = std::process::Command::new(&bin)
                 .arg("mrg")

@@ -281,13 +281,7 @@ mod tests {
 
     /// The `portuale` binary next to the test binary (child processes).
     fn portuale_exe() -> PathBuf {
-        let mut exe = std::env::current_exe().expect("current test exe");
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
-        exe
+        crate::self_exe::built_portuale_bin()
     }
 
     fn fixtures() -> PathBuf {

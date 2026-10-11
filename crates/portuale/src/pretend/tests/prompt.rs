@@ -489,19 +489,19 @@ fn prompt_line_buffer_drains_the_kernel_so_a_child_cannot_steal_the_next_answer(
 #[cfg(unix)]
 fn pty_watchdog_kills_a_hung_child_and_fails_the_test() {
     // `sleep` stands in for a child stuck in a blocking read; a 1 s bound keeps it fast.
-    // SAFETY: this is the only test setting the watchdog variable,
-    // and the value is read once per `wait_pty_*` call in this
-    // thread's own child.
-    unsafe {
-        std::env::set_var("PORTUALE_TEST_PTY_WATCHDOG_SECS", "1");
-    }
+    // The bound travels as an argument, never through the process environment:
+    // every pty wait in this process reads `PORTUALE_TEST_PTY_WATCHDOG_SECS`,
+    // so exporting a 1 s value here would let a parallel pty test kill its own
+    // child on a slow machine.
     let child = std::process::Command::new("sleep")
         .arg("3600")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn the hung child");
-    let result = std::panic::catch_unwind(|| wait_pty_output(child));
+    let result = std::panic::catch_unwind(|| {
+        wait_pty_output_bound(child, std::time::Duration::from_secs(1))
+    });
     assert!(result.is_err(), "the watchdog must panic, not return");
     let msg = result
         .err()
@@ -511,10 +511,6 @@ fn pty_watchdog_kills_a_hung_child_and_fails_the_test() {
         msg.contains("watchdog:"),
         "the panic must carry the `watchdog:` prefix the chase greps for: {msg}"
     );
-    // SAFETY: paired with the `set_var` above in the same test.
-    unsafe {
-        std::env::remove_var("PORTUALE_TEST_PTY_WATCHDOG_SECS");
-    }
 }
 
 #[test]
@@ -631,12 +627,7 @@ fn ask_true_spelling_hits_the_tty_gate_like_portage() {
 #[test]
 fn ask_without_a_tty_exits_immediately_instead_of_prompting() {
     // Portage: actions.py. `--ask` without a terminal exits up front, before resolving.
-    let mut portuale_bin = std::env::current_exe().expect("current test exe");
-    portuale_bin.pop();
-    if portuale_bin.ends_with("deps") {
-        portuale_bin.pop();
-    }
-    portuale_bin.push("portuale");
+    let portuale_bin = crate::self_exe::built_portuale_bin();
 
     let output = std::process::Command::new(&portuale_bin)
         .args(["emerge", "--ask", "dev-libs/does-not-matter"])

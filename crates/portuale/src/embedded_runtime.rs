@@ -217,12 +217,7 @@ mod tests {
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
         let fixtures = repo().join("fixtures");
-        let mut exe = std::env::current_exe().unwrap();
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
+        let exe = crate::self_exe::built_portuale_bin();
         let out = std::process::Command::new(exe)
             .env(crate::ebuild_phases::BIN_DIR_VAR, &bin)
             .env("PORTAGE_CONFIGROOT", &fixtures)

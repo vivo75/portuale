@@ -247,12 +247,7 @@ mod broken_pipe_tests {
     #[test]
     fn a_closed_stdout_pipe_exits_141_without_a_panic() {
         use std::os::unix::process::ExitStatusExt;
-        let mut exe = std::env::current_exe().unwrap();
-        exe.pop();
-        if exe.ends_with("deps") {
-            exe.pop();
-        }
-        exe.push("portuale");
+        let exe = crate::self_exe::built_portuale_bin();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
         let mut child = std::process::Command::new(exe)
             .args(["emerge", "--list-sets"])

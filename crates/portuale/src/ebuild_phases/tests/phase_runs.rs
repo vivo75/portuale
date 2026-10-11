@@ -85,14 +85,9 @@ fn features_test_passthrough_actually_runs_src_test() {
     std::fs::create_dir_all(&portage_tmpdir).unwrap();
     let marker = portage_tmpdir.join("portage/dev-libs/srctestpkg-1.0/temp/test-ran");
 
-    // `CARGO_BIN_EXE_<name>` is unset for unit tests: derive the sibling
-    // binary's path from this test binary's own path instead.
-    let mut portuale_bin = std::env::current_exe().expect("current test exe");
-    portuale_bin.pop();
-    if portuale_bin.ends_with("deps") {
-        portuale_bin.pop();
-    }
-    portuale_bin.push("portuale");
+    // `CARGO_BIN_EXE_<name>` is unset for unit tests: the shared helper
+    // derives the sibling binary and fails fast when it is missing or stale.
+    let portuale_bin = crate::self_exe::built_portuale_bin();
 
     let run = |features: &str| {
         let _ = std::fs::remove_file(&marker);
@@ -145,12 +140,7 @@ fn phase_has_version_uses_native_portageq() {
     let root = fx.clone();
     let portage_tmpdir = tmp.join("tmp");
 
-    let mut portuale_bin = std::env::current_exe().expect("current test exe");
-    portuale_bin.pop();
-    if portuale_bin.ends_with("deps") {
-        portuale_bin.pop();
-    }
-    portuale_bin.push("portuale");
+    let portuale_bin = crate::self_exe::built_portuale_bin();
 
     // Only the sqlite block below adds variants.
     #[cfg_attr(not(feature = "vdb-sqlite"), allow(unused_mut))]
@@ -246,12 +236,7 @@ fn replacing_the_running_binary_mid_run_keeps_later_phases_working() {
     )
     .unwrap();
 
-    let mut release = std::env::current_exe().expect("current test exe");
-    release.pop();
-    if release.ends_with("deps") {
-        release.pop();
-    }
-    release.push("portuale");
+    let release = crate::self_exe::built_portuale_bin();
     let bin = tmp.join("bin/portuale");
     std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
     // An external `cp`, not `std::fs::copy`: a forked sibling holding the
@@ -310,12 +295,7 @@ fn portage_ipc_daemon_in_the_calling_env_never_reaches_a_phase() {
          }\n",
     )
     .unwrap();
-    let mut portuale_bin = std::env::current_exe().expect("current test exe");
-    portuale_bin.pop();
-    if portuale_bin.ends_with("deps") {
-        portuale_bin.pop();
-    }
-    portuale_bin.push("portuale");
+    let portuale_bin = crate::self_exe::built_portuale_bin();
     // `has_version` without `-r` reads the vdb at ROOT: an existing
     // but empty tree answers 1 (a missing one exits 64).
     std::fs::create_dir_all(tmp.join("root/var/db/pkg")).unwrap();
@@ -356,12 +336,7 @@ fn portuale_bin_runs_helper_ping_inside_a_phase() {
          }\n",
     )
     .unwrap();
-    let mut portuale_bin = std::env::current_exe().expect("current test exe");
-    portuale_bin.pop();
-    if portuale_bin.ends_with("deps") {
-        portuale_bin.pop();
-    }
-    portuale_bin.push("portuale");
+    let portuale_bin = crate::self_exe::built_portuale_bin();
     let out = std::process::Command::new(&portuale_bin)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -397,12 +372,7 @@ fn portage_python_is_the_shim_unless_real_mode() {
          }\n",
     )
     .unwrap();
-    let mut portuale_bin = std::env::current_exe().expect("current test exe");
-    portuale_bin.pop();
-    if portuale_bin.ends_with("deps") {
-        portuale_bin.pop();
-    }
-    portuale_bin.push("portuale");
+    let portuale_bin = crate::self_exe::built_portuale_bin();
     let run = |helpers: Option<&str>, tag: &str| {
         // Fresh builddir per run: a finished phase leaves its marker
         // behind and is then skipped (so the second run would print
@@ -492,12 +462,7 @@ fn relocated_unpack_and_docompress_use_only_native_or_vendored_helpers() {
          }\n",
     )
     .unwrap();
-    let mut portuale_bin = std::env::current_exe().expect("current test exe");
-    portuale_bin.pop();
-    if portuale_bin.ends_with("deps") {
-        portuale_bin.pop();
-    }
-    portuale_bin.push("portuale");
+    let portuale_bin = crate::self_exe::built_portuale_bin();
     let portage_tmpdir = tmp.join("tmp");
     let run = |phase: &str| {
         std::process::Command::new(&portuale_bin)
