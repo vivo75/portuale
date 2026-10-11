@@ -111,3 +111,33 @@ pub(crate) fn spawn_trackable(
     }
     status
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A spawn that lands after termination is killed at once instead of
+    /// running to completion: without the sticky flag this sleeps out the
+    /// full minute and only then fails the bound.
+    #[test]
+    fn a_spawn_after_termination_is_killed_at_once() {
+        let registry = new_scheduler_registry();
+        // The failure lands while this worker has no child yet (between
+        // phases): the one-shot kill finds nothing to signal.
+        kill_registered_children(&registry);
+        let _guard = scope_scheduler_registry(registry);
+        let started = std::time::Instant::now();
+        let status =
+            spawn_trackable(std::process::Command::new("sleep").arg("60")).expect("spawn sleep");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "a post-termination spawn must be killed, not waited out (took {:?})",
+            started.elapsed()
+        );
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&status),
+            Some(libc::SIGTERM),
+            "the late spawn must die by the termination signal, not exit: {status:?}"
+        );
+    }
+}

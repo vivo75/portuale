@@ -116,6 +116,21 @@ struct RestoreFeatures {
     saved: Option<std::ffi::OsString>,
 }
 
+impl RestoreFeatures {
+    fn set(value: Option<&str>) -> Self {
+        let saved = std::env::var_os("FEATURES");
+        // SAFETY: the caller holds `FEATURES_ENV_LOCK`; no other
+        // test in this binary touches `FEATURES` while it is held.
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var("FEATURES", v),
+                None => std::env::remove_var("FEATURES"),
+            }
+        }
+        Self { saved }
+    }
+}
+
 impl Drop for RestoreFeatures {
     fn drop(&mut self) {
         // SAFETY: same locked env mutation as `set` (restoring the value).
@@ -159,4 +174,84 @@ fn unmerge_features_probe_root(tag: &str, make_conf: &str) -> std::path::PathBuf
     #[cfg(unix)]
     std::os::unix::fs::symlink(&prof, portage_dir.join("make.profile")).unwrap();
     root
+}
+
+/// Resolves the probe root's config the way the unmerge path does.
+fn unmerge_features_probe_config(root: &std::path::Path) -> portage_profile::Config {
+    crate::ebuild_phases::resolve_unmerge_config(root, root).expect("scratch chain resolves")
+}
+
+#[test]
+fn unmerge_backup_gate_reads_a_make_conf_only_token() {
+    // Portage: lib/portage/dbapi/vartree.py:6288 (`_pre_unmerge_backup`
+    // gates on `settings.features`, the folded chain, not the calling
+    // env); `make.globals`' own `FEATURES` line carries
+    // `binpkg-multi-instance` (host `/usr/share/portage/config/make.globals`).
+    let _env = FEATURES_ENV_LOCK.lock().unwrap();
+    let _restore = RestoreFeatures::set(None);
+    let root = unmerge_features_probe_root("make_conf_only", "FEATURES=\"unmerge-backup\"\n");
+    let config = unmerge_features_probe_config(&root);
+    let (backup, resolved) = unmerge_backup_features(&config);
+    assert!(
+        backup,
+        "a make.conf-only unmerge-backup must back up, got {resolved:?}"
+    );
+    assert!(
+        resolved
+            .split_whitespace()
+            .any(|t| t == "binpkg-multi-instance"),
+        "the make.globals token must ride along, got {resolved:?}"
+    );
+    // The handed-on package options lay the backup out multi-instance.
+    let package_options = package_options_from_env(
+        crate::ebuild_phases::ShellBackend::default(),
+        false,
+        Some(&resolved),
+        Some(&config),
+    );
+    assert!(
+        package_options.binpkg_multi_instance,
+        "the resolved features must switch the backup to the multi-instance layout"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn unmerge_backup_gate_honours_an_env_negation_over_make_conf() {
+    // Portage: lib/portage/config.py, regenerate (incremental stacking: a
+    // calling-env `-token` removes a lower layer's token);
+    // lib/portage/dbapi/vartree.py:6288 (the gate itself).
+    let _env = FEATURES_ENV_LOCK.lock().unwrap();
+    let _restore = RestoreFeatures::set(Some("-unmerge-backup"));
+    let root = unmerge_features_probe_root("env_negation", "FEATURES=\"unmerge-backup\"\n");
+    let config = unmerge_features_probe_config(&root);
+    let (backup, resolved) = unmerge_backup_features(&config);
+    assert!(
+        !backup,
+        "an env -unmerge-backup must win over make.conf, got {resolved:?}"
+    );
+    assert!(
+        resolved
+            .split_whitespace()
+            .any(|t| t == "binpkg-multi-instance"),
+        "the negation must only drop its own token, got {resolved:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn unmerge_backup_gate_stays_on_for_an_env_only_token() {
+    // Portage: lib/portage/dbapi/vartree.py:6288 (the gate reads the folded
+    // `settings.features`, whose top layer is the calling env). This is the
+    // pre-fix behaviour, kept: previously the only source.
+    let _env = FEATURES_ENV_LOCK.lock().unwrap();
+    let _restore = RestoreFeatures::set(Some("unmerge-backup"));
+    let root = unmerge_features_probe_root("env_only", "# no FEATURES here\n");
+    let config = unmerge_features_probe_config(&root);
+    let (backup, resolved) = unmerge_backup_features(&config);
+    assert!(
+        backup,
+        "an env-only unmerge-backup must still back up, got {resolved:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }
