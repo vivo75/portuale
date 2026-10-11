@@ -1,0 +1,38 @@
+# crates/portuale/src/ebuild_merge/installed_instance.rs
+INSTALL_MASK and what is already installed.
+
+## fn apply_install_mask
+- Ports Portage's `dblink.treewalk()` `preinst_mask` + `install_mask_dir` step (`vartree.py:4581-4610`, before `_collision_protect` and before a single file is copied to `${ROOT}`): applies `options.install_mask` to the staged image, deleting every matched path, then -- when a `no{man,info,doc}` `FEATURE` folded a `/usr/share/*` entry in -- `rmdir`s a now-empty `<d>/usr/share`. The resolved mask is also written to `<build_info>/INSTALL_MASK` (Portage's `preinst_mask` writes it there; `populate_vdb_tmp` then copies it into the vdb wholesale like every other build-info file). A no-op with an empty mask -- and then no `INSTALL_MASK` file, matching Portage's own `[[ -n ${x} ]] && echo … > INSTALL_MASK`. Shared with the remote-merge server (`remote_bundle::build_bundle`, backlog #170): the bundle is staged from the same extraction, so the mask must prune the same image before `collect_filemeta` runs.
+
+## fn read_installed_slot
+- Reads through the shared `portage_repo::vdb_entry_slot` seam every other installed-metadata consumer uses: a valid consolidated `metadata` snapshot serves the field with no per-entry `open()`, and a multi-line value collapses to one space-separated line the way Portage's `_aux_get` normalises (`" ".join(myd.split())`, `vartree.py:975-1053`). A missing or empty `SLOT` reads as `Some("0")`, matching Portage's `aux_get` invalid-`SLOT` to `"0"` translation (`:967-972`; O5 ruling 2026-09-23, which folds #115's empty-`SLOT` half into this slice -- #115 S1 extends the same translation to present-but-invalid values upstream in `portage_repo::vdb_aux_get`, so they arrive here already `"0"`; the `EAPI` and `_mtime_` thirds stay #115's documented cuts). The return stays `Option<String>` so the five callers' `None` arms keep compiling untouched, but it is now always `Some`: every caller only queries listed installed versions, so "no such entry" cannot reach here in practice (and Portage's `aux_get` raises `KeyError` there -- portuale has no such signal, per `vdb_aux_get`'s doc).
+- Reads the installed `SLOT` (main slot only) of `<root>/var/db/pkg/<category>/<package>-<version>`.
+
+## fn installed_instance_pf
+- Ports Portage's `self._installed_instance` selection (`vartree.py:4409-4418`): among every other installed version of this exact `category/package/slot`, the one with the highest `COUNTER` (Portage's `cpv_counter`; portuale's own per-package `COUNTER` file -- see `WriteTxn::next_counter`, called by `populate_vdb_tmp`). `None` when none exist (a first-ever install, or every other same-slot instance's `COUNTER` is unreadable). Portage's `_installed_instance` is only ever set when `slot_matches` (this exact slot has at least one other installed version already) -- naturally true here too, since an empty `own_versions` list has no max at all.
+
+## fn replacing_versions
+- Ports Portage's `dblink.treewalk` `REPLACING_VERSIONS` set (`vartree.py:4768-4771`) just before `pkg_preinst`: the versions of the installed same-slot instances this merge replaces. Portuale's per-merge analogue is the single `installed_instance_pf` it already selects (the highest-`COUNTER` same-slot instance -- Portage's `others_in_slot`'s own selection); its version is what an ebuild's `ver_replacing` gate (Portage for EAPI >= 9, the `eapi9-ver` eclass for EAPI < 9) sees. Portage's general `doebuild_environment` setter (`doebuild.py:1317-1322`) builds the same value for `preinst`/`postinst`/`pretend`/`setup` from `vardb.match(cpv_slot) + vardb.match("=" + cpv)`. `None` for a first-ever install (no other same-slot instance), matching Portage's empty string.
+
+## fn owns_path
+- The path field of the recognized `obj`/`sym`/`dir`/`dev`/`fif`/`bin` lines, the same set `format_contents_line` writes. Read through the `mrg_director::PackagesDb` seam (`mrg_director::VdbReader` over `root`) rather than the file directly; the seam's `contents_files` returns paths with the vdb record's one leading `/` stripped (its documented shape), so the leading `/` is removed here to meet it -- the exact inverse of that strip on every entry `format_contents_line` writes.
+- `abs_path` is a logical absolute path (what `find_collisions` builds); the seam's `contents_files` returns the same paths with the vdb record's one leading `/` stripped.
+
+## fn read_contents_pf
+- The fallback is Portage's `dblink.getcontents()` resolving through `dbdir`, which is `dbtmpdir` for the package being merged while the replace loop unmerges the instances it replaces (Portage's `treewalk()`: the new entry is renamed into place only after). Enumeration skips are unaffected (those never name a `pf` explicitly; see `portage_util::is_merging_vdb_entry`).
+- The fallback goes through `dbdir`, which is `dbtmpdir` for the package being merged while the replace loop unmerges the instances it replaces -- so an `others_in_slot`/`also_keep` ownership check against the replacing version sees the just-written file list.
+
+## fn owns_path_pf
+- Keyed by a bare `category`/`pf` pair (`"package-version"`, Portage's own vdb directory-name convention) rather than a split `package`/`version`: what `blocked_installed_packages` already has on hand, since it discovers installed packages by scanning vdb directory names directly rather than through `installed_versions`'s own `package`-scoped lookup. Both callers (the blocker set above, `ebuild_unmerge`'s same-slot orphan check) hold only the bare vdb directory name; going through the seam would split the `pf` apart only for `VdbReader` to join it back together.
+
+## fn owned_node_type_pf
+- Ports Portage's `dblnk._match_contents(relative_path)` + `getcontents()[key][0]`. The one caller is `ebuild_unmerge`'s bug #326685 "symlink orphan" detection: it needs to know not just whether another same-slot instance owns a path (`owns_path_pf`) but specifically what type it recorded it as, to tell "still a symlink there too" apart from "reclassified as a directory".
+
+## fn owned_node_value_pf
+- Ports Portage's `dblnk._match_contents(relative_path)` + `getcontents()[key]`, the value half `owned_node_type_pf` leaves out: an `obj` entry's content MD5, or a `sym` entry's target string -- exactly the values Portage's `_protect()`'s `data[2]` compares against `dest_md5`/`dest_link` for `protect_if_modified` (see `protect_decision`). `None` for any other node type (`dir`, etc. -- never Portage `_protect()`-relevant) or a path this instance doesn't own at all.
+
+## fn entry_file_is_regular
+- `entry/<name>.is_file()` of old: one `stat` (following symlinks) through the root's [`portage_vdb::InstalledDb::file_meta`]; a missing entry or file, or any error, is `false`.
+
+## fn read_entry_text
+- One file of the live entry `category/pf` as UTF-8 text, through the root's [`portage_vdb::InstalledDb::read_file`] (`files`: one `open` of `var/db/pkg/<category>/<pf>/<name>`). `None` when the entry or the file is missing, unreadable or not UTF-8 -- every case today's `read_to_string(..).ok()` callers treated alike.
