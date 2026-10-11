@@ -254,30 +254,12 @@ pub(crate) fn run_one_phase_bash(args: RunOnePhaseBashArgs<'_>) -> Result<i32, S
         config_root,
         extra_env,
     });
-    // The pump guard must outlive `cmd` (see `open_log_file`): declared first so
-    // drop order destroys it after `cmd`, on every path.
-    let mut pump_guard: Option<LogPump> = None;
-    let mut cmd = sandbox_wrapped_command(&bin_dir.join("ebuild.sh"), phase, iso);
-    // Curated env only, like Portage: only whitelisted calling-env vars pass through;
-    // `phase_env_vars` sets the rest on top.
-    cmd.env_clear();
-    // `LC_ALL` never reaches a phase (see `phase_env_vars`); no IPC daemon either.
-    cmd.envs(
-        std::env::vars()
-            .filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL" && k != "PORTAGE_IPC_DAEMON"),
-    );
-    cmd.envs(vars);
-    if let Some(path) = log_file {
-        // Only the write ends move into `cmd`; the guard escapes outward so it drops
-        // after `cmd`. `drop(cmd)` below closes the copies deterministically.
-        let sink = open_log_file(path)?;
-        cmd.stdout(sink.out).stderr(sink.err);
-        pump_guard = sink.pump;
-    }
-    let status = spawn_trackable(&mut cmd)
-        .map_err(|e| format!("spawning real bash for phase {phase} failed: {e}"))?;
-    drop(cmd);
-    // Explicit: joins the gzip thread now that every write end is closed.
-    drop(pump_guard);
-    Ok(status.code().unwrap_or(1))
+    spawn_bash_script(SpawnBashScriptArgs {
+        script: &bin_dir.join("ebuild.sh"),
+        argv_word: phase,
+        vars,
+        iso,
+        log_file,
+        context: &format!("phase {phase}"),
+    })
 }
