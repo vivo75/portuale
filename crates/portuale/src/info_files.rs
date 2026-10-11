@@ -1,56 +1,8 @@
-// Real `chk_updated_info_files` (`lib/portage/util/_info_files.py:14-141`),
-// called from real `_emerge/post_emerge.py::post_emerge` (`post_emerge.
-// py:126-130`): after an emerge that changed the vdb, regenerate every
-// GNU info directory index (`<infodir>/dir`) whose directory mtime no
-// longer matches the `mtimedb["info"]` memo, by running the host
-// `/usr/bin/install-info` over each info file in it.
-//
-// The port is line-by-line in spirit:
-//   - gated on the *host* `/usr/bin/install-info` existing (not
-//     `ROOT`-relative): without it the whole function is a silent no-op
-//     (real line 15 -- not even the blank line is printed).
-//   - `inforoot = normalize_path(root + z)` per non-empty infodir (real
-//     line 21); skipped when it is not a directory or contains an entry
-//     starting with `.keepinfodir` (real lines 22-24); regenerated only
-//     when its `st_mtime` (whole seconds) differs from
-//     `prev_mtimes[inforoot]` or is absent there (real lines 25-27).
-//   - output via real `EOutput` (`output.py:663-676,649-661`): a bare
-//     `\n` on stdout, then ` * <msg>` einfo lines on stdout / eerror on
-//     stderr -- each rendered here through the same
-//     `color.c("INFO"|"ERR", " * ")` helper `elog::echo_summary` uses.
-//     `--quiet` (real `noiselimit < 0`, `actions.py:3907-3908`) suppresses
-//     the einfo lines AND the bare `\n` (real `writemsg_stdout` defaults
-//     to `noiselevel=0`, which `--quiet`'s `noiselimit=-1` filters);
-//     the eerror line and the collected error text (real
-//     `writemsg_level(errmsg, level=ERROR, noiselevel=-1)`, always to
-//     stderr since `ERROR >= WARNING`) print regardless.
-//   - the regeneration loop (real lines 38-134): sorted `listdir`, skip
-//     dot-files, subdirectories, and `dir{,ext}{,.old}` names (the
-//     `dir_extensions` tuple); on the first processed file rename every
-//     `dir<ext>` to `dir<ext>.old`; run `/usr/bin/install-info
-//     --dir-file=<inforoot>/dir <inforoot>/<x>` with `LANG=C LANGUAGE=C`
-//     (no shell), stdout+stderr merged; classify the output (contains
-//     `already exists, for file \`` or starts with the 44-char
-//     `install-info: warning: no info dir entry in ` prefix -- both
-//     verified live against install-info (GNU texinfo) 7.3 -- as
-//     harmless, anything else as an error); restore the `.old` files
-//     when no new `dir` was produced; unlink every `dir<ext>.old`; store
-//     the new `st_mtime` in `prev_mtimes` (real line 134, re-statted
-//     after the regen).
-//
-// Two deliberate narrowings:
-//   - real merges the child's stderr into its stdout pipe
-//     (`stderr=STDOUT`, interleaved); portuale captures both and
-//     concatenates stdout-then-stderr. Only a substring test and a
-//     prefix test ever read the text, and both behave the same on the
-//     concatenated form for every output install-info 7.3 was observed
-//     to produce (silent success; the warning prefix first;
-//     `already exists` anywhere).
-//   - real checks writability with `os.access(inforoot, os.W_OK)`; the
-//     port is `libc::access(W_OK)` on the same path (same syscall, same
-//     real-UID semantics -- real uses the default `effective_ids=False`,
-//     and `access(2)` likewise checks the real UID; `libc` is already a
-//     direct dependency).
+//! Regenerate stale GNU info directory indexes (`<infodir>/dir`) after a
+//! vdb-changing merge, by running the host `/usr/bin/install-info` over
+//! each info file in them. Without the host binary the whole run is a
+//! silent no-op.
+// Portage: _info_files.py, chk_updated_info_files (called from post_emerge.py, post_emerge)
 
 use std::collections::BTreeMap;
 use std::ffi::CString;
@@ -61,19 +13,17 @@ use std::path::{Path, PathBuf};
 
 use crate::color::Colorizer;
 
-/// The host binary real shells out to (real `_info_files.py:76-81`):
-/// a host path, never `ROOT`-relative.
+/// The host binary shelled out to: a host path, never `ROOT`-relative.
 const INSTALL_INFO: &str = "/usr/bin/install-info";
 
-/// Real `_info_files.py:38`'s own `dir_extensions` tuple, in order.
+/// The `dir_extensions` tuple, in order.
 const DIR_EXTENSIONS: &[&str] = &["", ".gz", ".bz2", ".xz", ".lz", ".lz4", ".zst", ".lzma"];
 
-/// Real `_info_files.py:95`: an `already installed` file is not an error.
+/// An `already installed` file is not an error.
 const ALREADY_EXISTS: &str = "already exists, for file `";
 
-/// Real `_info_files.py:101`: the (harmless) no-DIR-header warning
-/// prefix -- all 44 chars (`install-info: warning: no info dir entry in
-/// `, verified live against install-info (GNU texinfo) 7.3).
+/// The (harmless) no-DIR-header warning prefix: `install-info: warning:
+/// no info dir entry in ` (all 44 chars).
 const NO_DIR_ENTRY_PREFIX: &str = "install-info: warning: no info dir entry in ";
 
 /// What one `chk_updated_info_files` run did (for tests and the
@@ -81,21 +31,20 @@ const NO_DIR_ENTRY_PREFIX: &str = "install-info: warning: no info dir entry in "
 /// is non-empty).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct InfoReport {
-    /// `false` when the host has no `/usr/bin/install-info` -- real's
-    /// own whole-function no-op (nothing printed, nothing recorded).
+    /// `false` when the host has no `/usr/bin/install-info`: the whole
+    /// function is a no-op (nothing printed, nothing recorded).
     pub ran: bool,
     /// The inforoot dirs that were regenerated, in infodirs order.
     pub regenerated: Vec<String>,
-    /// Real `icount`: every processed info file, errors included.
+    /// Every processed info file, errors included.
     pub icount: usize,
-    /// Real `badcount`: processed files whose install-info output was
-    /// neither silent nor one of the two harmless shapes.
+    /// Processed files whose install-info output was neither silent nor one
+    /// of the two harmless shapes.
     pub badcount: usize,
 }
 
-/// Real `portage.util.normalize_path` (`util/__init__.py:139-153`):
-/// `normpath`, except a leading `//` collapses to `/` (real joins
-/// `root + z`, so `"/" + "/usr/share/info"` reaches here as
+/// `portage.util.normalize_path`: `normpath`, except a leading `//`
+/// collapses to `/` (the `root + z` join reaches here as
 /// `"//usr/share/info"`).
 fn normalize_path(mypath: &str) -> String {
     let absolute = mypath.starts_with('/');
@@ -119,10 +68,8 @@ fn normalize_path(mypath: &str) -> String {
     out
 }
 
-/// Real `_info_files.py:46`'s own `os.access(inforoot, os.W_OK)` gate,
-/// same syscall via the already-declared `libc` dependency (real-UID
-/// semantics on both sides: real passes the default
-/// `effective_ids=False`, and `access(2)` checks the real UID).
+/// Writability gate via `libc::access(W_OK)` (same syscall and UID semantics
+/// as Portage's `os.access(inforoot, os.W_OK)` default).
 fn is_writable(path: &Path) -> bool {
     let Ok(bytes) = CString::new(path.as_os_str().as_bytes()) else {
         return false;
@@ -132,8 +79,8 @@ fn is_writable(path: &Path) -> bool {
     unsafe { libc::access(bytes.as_ptr(), libc::W_OK) == 0 }
 }
 
-/// Real `_info_files.py:57-64`: dot-files, subdirectories, and the
-/// `dir{,ext}{,.old}` names are never info files.
+/// Dot-files, subdirectories, and the `dir{,ext}{,.old}` names are never
+/// info files.
 fn skippable_name(name: &std::ffi::OsStr, inforoot: &Path) -> bool {
     let lossy = name.to_string_lossy();
     if lossy.starts_with('.') || inforoot.join(name).is_dir() {
@@ -149,10 +96,9 @@ fn skippable_name(name: &std::ffi::OsStr, inforoot: &Path) -> bool {
     false
 }
 
-/// How one install-info run's merged output classifies (real
-/// `_info_files.py:95-110`): silent, `already exists`, or the no-entry
-/// warning are all harmless (`None`); anything else is collected error
-/// text (`Some`). Verified live against install-info (GNU texinfo) 7.3.
+/// How one install-info run's merged output classifies: silent, `already
+/// exists`, or the no-entry warning are all harmless (`None`); anything
+/// else is collected error text (`Some`).
 fn classify_output(myso: &str) -> Option<&str> {
     if myso.is_empty() {
         return None;
@@ -167,8 +113,7 @@ fn classify_output(myso: &str) -> Option<&str> {
 }
 
 /// Reusable `install-info` spawn for tests: `None` when the binary is
-/// missing at `binary` (real `_info_files.py:86-87`'s own `OSError ->
-/// myso = None`) or fails to start.
+/// missing at `binary` or fails to start.
 fn run_install_info(binary: &str, inforoot: &str, name: &std::ffi::OsStr) -> Option<String> {
     let out = std::process::Command::new(binary)
         .arg(format!("--dir-file={inforoot}/dir"))
@@ -177,11 +122,11 @@ fn run_install_info(binary: &str, inforoot: &str, name: &std::ffi::OsStr) -> Opt
         .env("LANGUAGE", "C")
         .output()
         .ok()?;
-    // Real `stderr=STDOUT`: merged. Captured separately here and
-    // concatenated stdout-then-stderr (see this module's doc comment).
+    // Captured separately and concatenated stdout-then-stderr; only a
+    // substring test and a prefix test ever read the text.
     let mut merged = out.stdout;
     merged.extend_from_slice(&out.stderr);
-    // Real `.decode("utf-8", "replace").rstrip("\n")`.
+    // Portage decodes lossy and strips trailing newlines the same way.
     Some(
         String::from_utf8_lossy(&merged)
             .trim_end_matches('\n')
@@ -189,34 +134,41 @@ fn run_install_info(binary: &str, inforoot: &str, name: &std::ffi::OsStr) -> Opt
     )
 }
 
-/// Human error context for the filesystem operations real lets raise
-/// (`listdir`/`stat` outside the tolerated `ENOENT` renames/unlinks).
+/// Human error context for filesystem operations the caller does not
+/// tolerate.
 fn fs_err(path: &Path, e: std::io::Error) -> String {
     format!("{}: {e}", path.display())
 }
 
-/// Real `chk_updated_info_files(root, infodirs, prev_mtimes)`
-/// (`lib/portage/util/_info_files.py:14-141`): `prev_mtimes` is real
-/// `mtimedb["info"]` (mutated in place -- the caller commits it);
-/// `quiet` is real `--quiet` (`noiselimit < 0`). Output goes to the two
-/// sinks (production passes locked stdout/stderr; tests pass `Vec<u8>`
-/// buffers so the `--quiet` suppression itself is pinned, not just the
-/// memo side-effect). Eight params (real's three + quiet/color/binary +
-/// the two sinks) -- arity-lint noise, not a design smell.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn chk_updated_info_files(
-    root: &Path,
-    infodirs: &[String],
-    prev_mtimes: &mut BTreeMap<String, i64>,
-    quiet: bool,
-    color: &Colorizer,
-    install_info: &str,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> Result<InfoReport, String> {
+/// Arguments of [`chk_updated_info_files`].
+pub struct ChkUpdatedInfoFilesArgs<'a> {
+    pub root: &'a Path,
+    pub infodirs: &'a [String],
+    pub prev_mtimes: &'a mut BTreeMap<String, i64>,
+    pub quiet: bool,
+    pub color: &'a Colorizer,
+    pub install_info: &'a str,
+    pub out: &'a mut dyn Write,
+    pub err: &'a mut dyn Write,
+}
+
+/// `chk_updated_info_files(root, infodirs, prev_mtimes)`: `prev_mtimes` is
+/// `mtimedb["info"]` (mutated in place; the caller commits it), `quiet` is
+/// `--quiet`. Output goes to the two sinks (production passes locked
+/// stdout/stderr; tests pass buffers so the suppression itself is pinned).
+pub fn chk_updated_info_files(args: ChkUpdatedInfoFilesArgs<'_>) -> Result<InfoReport, String> {
+    let ChkUpdatedInfoFilesArgs {
+        root,
+        infodirs,
+        prev_mtimes,
+        quiet,
+        color,
+        install_info,
+        out,
+        err,
+    } = args;
     let mut report = InfoReport::default();
-    // Real line 15: without the host binary the whole function is a
-    // silent no-op.
+    // Without the host binary the whole function is a silent no-op.
     if !Path::new(install_info).exists() {
         return Ok(report);
     }
@@ -258,10 +210,8 @@ pub fn chk_updated_info_files(
     }
 
     if regen_infodirs.is_empty() {
-        // Real lines 29-32: `writemsg_stdout("\n")` (noiselevel 0 --
-        // `--quiet` filters it) + the einfo. (`let _ =` matches
-        // `println!`'s own error-ignoring semantics: `print_to`
-        // discards write errors.)
+        // Up-to-date branch: a bare `\n` plus the einfo, both suppressed
+        // under `--quiet`.
         if !quiet {
             let _ = writeln!(out);
             let _ = writeln!(
@@ -273,7 +223,6 @@ pub fn chk_updated_info_files(
         return Ok(report);
     }
 
-    // Real lines 33-36.
     if !quiet {
         let _ = writeln!(out);
         let _ = writeln!(
@@ -287,8 +236,8 @@ pub fn chk_updated_info_files(
     let mut badcount: usize = 0;
     let mut errmsg = String::new();
     for inforoot in &regen_infodirs {
-        // Real lines 43-47 (the `""` guard is dead -- `normalize_path`
-        // never returns it -- but mirrors real line 43).
+        // The `""` guard is dead (`normalize_path` never returns it) but
+        // kept for fidelity.
         if inforoot.is_empty() {
             continue;
         }
@@ -310,8 +259,7 @@ pub fn chk_updated_info_files(
                 continue;
             }
             if processed_count == 0 {
-                // Real lines 65-73: rename every `dir<ext>` aside,
-                // tolerating only `ENOENT`.
+                // Rename every `dir<ext>` aside, tolerating only `ENOENT`.
                 for ext in DIR_EXTENSIONS {
                     let from = PathBuf::from(format!("{}{}", dir_file.display(), ext));
                     let to = PathBuf::from(format!("{}{}.old", dir_file.display(), ext));
@@ -323,9 +271,7 @@ pub fn chk_updated_info_files(
                 }
             }
             processed_count += 1;
-            // Real lines 75-94: spawn, merged output, `OSError -> None`.
             let myso = run_install_info(install_info, inforoot, x).unwrap_or_default();
-            // Real lines 95-110.
             if let Some(bad) = classify_output(&myso) {
                 badcount += 1;
                 errmsg.push_str(bad);
@@ -334,8 +280,7 @@ pub fn chk_updated_info_files(
             icount += 1;
         }
 
-        // Real lines 112-121: no new `dir` produced -- put the old files
-        // back. (`Path::exists` follows symlinks, like `os.path.exists`.)
+        // No new `dir` produced: put the old files back.
         if moved_old_dir && !dir_file.exists() {
             for ext in DIR_EXTENSIONS {
                 let from = PathBuf::from(format!("{}{}.old", dir_file.display(), ext));
@@ -348,8 +293,8 @@ pub fn chk_updated_info_files(
             }
         }
 
-        // Real lines 123-131: clean `.old` cruft so it can't block an
-        // unmerge of an otherwise empty directory.
+        // Clean `.old` cruft so it can't block an unmerge of an otherwise
+        // empty directory.
         for ext in DIR_EXTENSIONS {
             let old = PathBuf::from(format!("{}{}.old", dir_file.display(), ext));
             match std::fs::remove_file(&old) {
@@ -359,8 +304,7 @@ pub fn chk_updated_info_files(
             }
         }
 
-        // Real line 134: re-stat after the regen (install-info rewrote
-        // `dir`, so the mtime moved).
+        // Re-stat after the regen (install-info rewrote `dir`).
         prev_mtimes.insert(
             inforoot.clone(),
             std::fs::metadata(inforoot_path)
@@ -372,19 +316,15 @@ pub fn chk_updated_info_files(
 
     report.icount = icount;
     report.badcount = badcount;
-    // Real lines 136-141.
     if badcount > 0 {
-        // Real `out.eerror(...)`: `ERR`-coloured ` * ` on stderr (real's
-        // `EOutput` here is never quiet -- the `--quiet` suppression is
-        // purely the `noiselimit` checks around the einfo calls).
+        // `ERR`-coloured ` * ` on stderr, always (even `--quiet`).
         let _ = writeln!(
             err,
             "{}{}",
             color.c("ERR", " * "),
             format_args!("Processed {icount} info files; {badcount} errors.")
         );
-        // Real `writemsg_level(errmsg, level=ERROR, noiselevel=-1)`:
-        // stderr, always (even `--quiet`).
+        // Collected error text: stderr, always (even `--quiet`).
         let _ = write!(err, "{errmsg}");
     } else if icount > 0 && !quiet {
         let _ = writeln!(
@@ -397,19 +337,12 @@ pub fn chk_updated_info_files(
     Ok(report)
 }
 
-/// Real `_emerge/post_emerge.py::post_emerge`'s own info block
-/// (`post_emerge.py:89-130`): `infodirs` re-read after `env-update`
-/// (here: `env_update::info_dir_values`, the same env.d collation real
-/// `settings.reload(); settings.regenerate()` derives
-/// `${ROOT}/etc/profile.env` from), skipped when `"noinfo" in FEATURES`,
-/// then the equivalent of real `mtimedb.commit()` -- the memo is
-/// written back only when the regen changed it (real `commit()` itself
-/// only writes on change). The vdb-changed / `--pretend` / vdb-lock
-/// gates live with the callers: every call site is a post-merge
-/// sequence reached only after a successful non-pretend merge/unmerge
-/// (see `pretend.rs`); portuale is a single process with no `vardbapi`
-/// lock to take, and a merge that succeeded already proved the vdb
-/// writable.
+/// `post_emerge`'s info block: `infodirs` re-read after `env-update` (here
+/// `env_update::info_dir_values`), skipped when `"noinfo"` is in `FEATURES`,
+/// then the memo written back only when the regen changed it. The
+/// vdb-changed / `--pretend` / vdb-lock gates live with the callers: every
+/// call site is a post-merge sequence after a successful non-pretend
+/// merge/unmerge, and a merge that succeeded already proved the vdb writable.
 pub fn post_merge_info_update(
     root: &Path,
     color: &Colorizer,
@@ -422,20 +355,19 @@ pub fn post_merge_info_update(
     let infodirs = crate::env_update::info_dir_values(root);
     let mut prev_mtimes = crate::mtimedb::read_info_mtimes(root);
     let before = prev_mtimes.clone();
-    // Production sinks: locked stdout/stderr (same bytes `println!` /
-    // `eprintln!` emitted before the sink refactor).
+    // Production sinks: locked stdout/stderr.
     let mut out = std::io::stdout().lock();
     let mut err = std::io::stderr().lock();
-    let report = chk_updated_info_files(
+    let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
         root,
-        &infodirs,
-        &mut prev_mtimes,
+        infodirs: &infodirs,
+        prev_mtimes: &mut prev_mtimes,
         quiet,
         color,
-        INSTALL_INFO,
-        &mut out,
-        &mut err,
-    )?;
+        install_info: INSTALL_INFO,
+        out: &mut out,
+        err: &mut err,
+    })?;
     if prev_mtimes != before {
         crate::mtimedb::write_info_mtimes(root, &prev_mtimes)?;
     }
@@ -448,8 +380,7 @@ mod tests {
     use portage_util::TempDir;
 
     fn test_color() -> Colorizer {
-        // No colour in tests: `color.c` passes text through when the
-        // style is disabled, so assertions read the plain real strings.
+        // No colour in tests, so assertions read the plain strings.
         Colorizer::new(false)
     }
 
@@ -461,10 +392,9 @@ mod tests {
         Path::new(INSTALL_INFO).exists()
     }
 
-    /// A small valid `.info` file (a `START-INFO-DIR-ENTRY` block naming
-    /// `* infopkg:`) plus a stale but well-formed `dir` index -- the
-    /// same shape the pmtest real-merge contract test installs through
-    /// the `dev-libs/dirregenpkg` fixture ebuild.
+    /// A small valid `.info` file plus a stale but well-formed `dir` index
+    /// (the shape the pmtest contract test installs through the
+    /// `dev-libs/dirregenpkg` fixture ebuild).
     fn write_info_pair(info_dir: &Path) {
         let mut info = std::fs::File::create(info_dir.join("infopkg.info")).unwrap();
         write!(
@@ -517,9 +447,8 @@ mod tests {
 
     #[test]
     fn regen_records_the_dir_mtime_and_cleans_the_old_files() {
-        // Real `_info_files.py`'s own contract: after the post-merge
-        // step `dir` is regenerated containing the entry, `dir.old` is
-        // gone, and `mtimedb["info"][<abs inforoot>]` is the dir's mtime.
+        // After the post-merge step `dir` holds the entry, `dir.old` is
+        // gone, and the memo records the dir's mtime.
         if !install_info_present() {
             eprintln!("skip: no {INSTALL_INFO} on this host");
             return;
@@ -530,22 +459,22 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        let report = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
 
         assert!(report.ran);
         assert_eq!(report.regenerated, vec![inforoot.clone()]);
         assert_eq!((report.icount, report.badcount), (1, 0));
-        // The user-visible lines real prints for a regen.
+        // The user-visible lines printed for a regen.
         let printed = String::from_utf8(out).unwrap();
         assert!(
             printed.contains("Regenerating GNU info directory index..."),
@@ -563,7 +492,7 @@ mod tests {
             .unwrap()
             .mtime();
         assert_eq!(prev.get(&inforoot), Some(&mtime));
-        // And the memo round-trips through the real mtimedb file.
+        // And the memo round-trips through the mtimedb file.
         crate::mtimedb::write_info_mtimes(&root, &prev).unwrap();
         assert_eq!(crate::mtimedb::read_info_mtimes(&root), prev);
         let _ = std::fs::remove_dir_all(&root);
@@ -580,35 +509,34 @@ mod tests {
         let mut prev = BTreeMap::new();
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let first = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let first = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
         assert_eq!(first.regenerated.len(), 1);
 
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let second = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let second = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
-        // Real's own `GNU info directory index is up-to-date.` branch:
-        // nothing regenerated, nothing counted -- and the line itself
-        // reaches stdout.
+        // Up-to-date branch: nothing regenerated, nothing counted, and the
+        // line itself reaches stdout.
         assert!(second.regenerated.is_empty());
         assert_eq!((second.icount, second.badcount), (0, 0));
         let printed = String::from_utf8(out).unwrap();
@@ -622,11 +550,8 @@ mod tests {
 
     #[test]
     fn quiet_regen_prints_nothing_but_records_the_memo() {
-        // Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): the
-        // einfo lines and the bare `\n` are suppressed, while the regen
-        // itself -- and its memo record -- still happens. The sinks pin
-        // the suppression directly (the pmtest contract test pins the
-        // non-quiet lines end to end through the real binary).
+        // `--quiet`: the einfo lines and the bare `\n` are suppressed, while
+        // the regen itself -- and its memo record -- still happens.
         if !install_info_present() {
             eprintln!("skip: no {INSTALL_INFO} on this host");
             return;
@@ -636,16 +561,16 @@ mod tests {
         let mut prev = BTreeMap::new();
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let report = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            true,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: true,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
         assert!(report.ran);
         assert_eq!((report.icount, report.badcount), (1, 0));
@@ -657,8 +582,7 @@ mod tests {
 
     #[test]
     fn noinfo_leaves_the_dir_and_the_memo_alone() {
-        // Real `post_emerge.py:127`: `"noinfo" not in settings.features`
-        // gates the whole block.
+        // `"noinfo"` in `FEATURES` gates the whole block.
         let (root, _) = scratch_root_with_infopath();
         let color = test_color();
         let before = std::fs::read(root.join("usr/share/info/dir")).unwrap();
@@ -676,8 +600,7 @@ mod tests {
 
     #[test]
     fn keepinfodir_skips_the_directory() {
-        // Real `_info_files.py:22-24`: a dir containing an entry
-        // starting with `.keepinfodir` is never regenerated.
+        // A dir containing a `.keepinfodir*` entry is never regenerated.
         if !install_info_present() {
             eprintln!("skip: no {INSTALL_INFO} on this host");
             return;
@@ -689,16 +612,16 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        let report = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            INSTALL_INFO,
-            &mut out,
-            &mut err,
-        )
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
 
         assert!(report.regenerated.is_empty());
@@ -708,25 +631,24 @@ mod tests {
 
     #[test]
     fn missing_install_info_is_a_silent_no_op() {
-        // Real `_info_files.py:15`: without the host binary nothing at
-        // all happens -- exercised here against a bogus path so the
-        // test holds whether or not the host ships install-info.
+        // Without the host binary nothing at all happens -- exercised here
+        // against a bogus path so the test holds with or without install-info.
         let (root, _) = scratch_root_with_infopath();
         let color = test_color();
         let mut prev = BTreeMap::new();
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        let report = chk_updated_info_files(
-            &root,
-            &["/usr/share/info".to_string()],
-            &mut prev,
-            false,
-            &color,
-            "/nonexistent/install-info-for-test",
-            &mut out,
-            &mut err,
-        )
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: "/nonexistent/install-info-for-test",
+            out: &mut out,
+            err: &mut err,
+        })
         .unwrap();
 
         assert_eq!(report, InfoReport::default());
@@ -787,7 +709,7 @@ mod tests {
 
     #[test]
     fn normalize_path_collapses_the_root_join_double_slash() {
-        // Real `normalize_path(root + z)`: `"/" + "/usr/share/info"`.
+        // `normalize_path(root + z)`: `"/" + "/usr/share/info"`.
         assert_eq!(normalize_path("//usr/share/info"), "/usr/share/info");
         assert_eq!(normalize_path("/usr/share/info/"), "/usr/share/info");
         assert_eq!(normalize_path("/"), "/");

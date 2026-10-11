@@ -1,0 +1,17 @@
+# #336 Phase 6: crates/portuale/src/ebuild_phases/mod.rs split spec (split_module.py).
+pub(crate) struct Environment	environment	The build environment of one package: paths, directories, fake DISTDIR.
+pub(crate) fn repo_root(	runtime_paths	Where the phase runtime (bin/, pym/) and the repository live; the embedded runtime.
+pub(crate) fn restrict_mirror_from_restrict	standalone_config	Configuration for standalone `ebuild` phases and unmerge.
+const PACKAGE_ENV_INCREMENTALS	package_env	`package.env` matching and its incremental variables.
+pub(crate) fn resolve_entry_portage_tmpdir	standalone_config
+fn standalone_package_env_lookup(	=package_env
+fn depend_use_set(	fetch_sources	Fetching and linking the distfiles a build needs.
+fn bind_slot_operator(	post_install_meta	VDB metadata written after src_install.
+pub enum ShellBackend	sandbox	The phase shell backend, the calling-environment filter, and sandbox/isolation.
+fn eclass_locations_value(	phase_env	The environment variables and PATH a phase runs with.
+async fn run_one_phase(	run_phase	Running one phase on brush or bash.
+thread_local!	scheduler_registry	Child processes registered for the build scheduler to kill.
+pub(crate) struct DependError	depend_phase	The depend phase and its metadata cache.
+async fn run_misc_functions(	misc_functions	`misc-functions.sh` steps.
+async fn run_commands_async(	commands	Running a phase command list, with logging.
+fn brush_phase_params(	single_phase	Single phases, clean, instprep, and phases run from a saved environment.

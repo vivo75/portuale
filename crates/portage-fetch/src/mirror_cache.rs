@@ -1,9 +1,9 @@
-// Real `${DISTDIR}/.mirror-cache.json` (`fetch.py::async_mirror_url`)
+// Portage's `${DISTDIR}/.mirror-cache.json` (`fetch.py::async_mirror_url`)
 // and the URL helpers `async_mirror_url` uses to turn a mirror root plus
 // a layout path into the URL (or local path) actually tried.
 //
-// The cache file is SHARED with real portage whenever both run against
-// the same `DISTDIR`, so it must round-trip in both directions: real
+// The cache file is shared with Portage whenever both run against
+// the same `DISTDIR`, so it must round-trip in both directions: Portage
 // writes `json.dump({mirror_url: (time.time(), structure), ...})`, i.e.
 // `{"http://distfiles.gentoo.org": [1788293350.3617969, [["filename-hash",
 // "BLAKE2B", "8"]]]}`, and portuale writes exactly that shape back
@@ -15,7 +15,7 @@
 // file and passes `now` in.
 
 /// One cache entry: when the mirror's `layout.conf` was last read
-/// (seconds since the epoch, real `time.time()`), and its `[structure]`.
+/// (seconds since the epoch, Portage's `time.time()`), and its `[structure]`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CacheEntry {
     pub mirror_url: String,
@@ -23,13 +23,13 @@ pub struct CacheEntry {
     pub structure: Vec<Vec<String>>,
 }
 
-/// Real `ts >= time.time() - 86400`: an entry refreshed at least daily.
+/// Portage `ts >= time.time() - 86400`: an entry refreshed at least daily.
 pub const MIRROR_CACHE_TTL_SECS: f64 = 86400.0;
 
-/// Parses the cache file. Anything that isn't the real shape -- invalid
+/// Parses the cache file. Anything that isn't Portage's shape -- invalid
 /// JSON, a non-object, an entry that isn't `[number, [[str...]...]]` --
-/// yields an empty cache, as real's `except (OSError, ValueError): pass`
-/// does for unreadable JSON (real would crash on a well-formed but
+/// yields an empty cache, as Portage's `except (OSError, ValueError): pass`
+/// does for unreadable JSON (Portage would crash on a well-formed but
 /// wrongly-shaped entry; starting over is the non-crashing equivalent).
 pub fn parse_mirror_cache(text: &str) -> Vec<CacheEntry> {
     let mut parser = Json {
@@ -68,7 +68,7 @@ pub fn parse_mirror_cache(text: &str) -> Vec<CacheEntry> {
             }
             vals.push(strings);
         }
-        // Real `json.load` keeps the LAST duplicate key.
+        // Portage `json.load` keeps the LAST duplicate key.
         entries.retain(|e: &CacheEntry| e.mirror_url != mirror_url);
         entries.push(CacheEntry {
             mirror_url,
@@ -79,7 +79,7 @@ pub fn parse_mirror_cache(text: &str) -> Vec<CacheEntry> {
     entries
 }
 
-/// Real `json.dump(cache, f)` output for the cache.
+/// Portage `json.dump(cache, f)` output for the cache.
 pub fn serialize_mirror_cache(entries: &[CacheEntry]) -> String {
     let body: Vec<String> = entries
         .iter()
@@ -103,7 +103,7 @@ pub fn serialize_mirror_cache(entries: &[CacheEntry]) -> String {
     format!("{{{}}}", body.join(", "))
 }
 
-/// Real `cache[mirror_url] = (time.time(), structure)`: replace in
+/// Portage `cache[mirror_url] = (time.time(), structure)`: replace in
 /// place (dict order unchanged) or append.
 pub fn upsert_mirror_cache(entries: &mut Vec<CacheEntry>, entry: CacheEntry) {
     match entries
@@ -151,7 +151,7 @@ fn json_string(s: &str) -> String {
     out
 }
 
-/// Real `urlparse(url).scheme`, lower-cased; empty when there is none.
+/// Portage `urlparse(url).scheme`, lower-cased; empty when there is none.
 pub fn url_scheme(url: &str) -> String {
     match url.split_once(':') {
         Some((scheme, _))
@@ -166,8 +166,8 @@ pub fn url_scheme(url: &str) -> String {
     }
 }
 
-/// Real `urlparse(url).hostname` (lower-cased, no userinfo, no port),
-/// rendered the way real's `f".layout.conf.{hostname}"` does -- `None`
+/// Portage `urlparse(url).hostname` (lower-cased, no userinfo, no port),
+/// rendered the way Portage's `f".layout.conf.{hostname}"` does -- `None`
 /// when there is no network location.
 pub fn url_hostname(url: &str) -> String {
     let after_scheme = if url_scheme(url).is_empty() {
@@ -192,7 +192,7 @@ pub fn url_hostname(url: &str) -> String {
     }
 }
 
-/// Real `urllib.parse.quote(path)` (default `safe="/"`): percent-encode
+/// Portage `urllib.parse.quote(path)` (default `safe="/"`): percent-encode
 /// every UTF-8 byte except ASCII letters, digits, `_.-~` and `/`.
 pub fn url_quote(path: &str) -> String {
     let mut out = String::new();
@@ -206,7 +206,7 @@ pub fn url_quote(path: &str) -> String {
     out
 }
 
-/// Real `async_mirror_url`'s final step: `path` is the layout path
+/// Portage `async_mirror_url`'s final step: `path` is the layout path
 /// (`MirrorLayout::get_path`), URL-quoted for `ftp`/`http`/`https`
 /// mirrors only; a `/`-rooted mirror is a local directory
 /// (`os.path.join(mirror_url, path)`), anything else gets
@@ -383,8 +383,7 @@ impl Json {
 mod tests {
     use super::*;
 
-    /// A cache file as real portage wrote it on this project's dev host
-    /// (`/var/cache/distfiles/.mirror-cache.json`, 2026-09-14).
+    /// A cache file as Portage wrote it (see notes for provenance).
     const REAL_CACHE: &str = r#"{"http://gentoo.mirror.root.lu": [1770760517.2913396, [["filename-hash", "BLAKE2B", "8"]]], "https://ftp.fau.de/gentoo": [1767201153.5657716, [["filename-hash", "BLAKE2B", "8"]]], "http://distfiles.gentoo.org": [1788293350.3617969, [["filename-hash", "BLAKE2B", "8"]]]}"#;
 
     #[test]
@@ -457,7 +456,7 @@ mod tests {
         assert_eq!(parse_mirror_cache(&text), entries);
     }
 
-    /// Expected values: real `urlparse(...).scheme/.hostname` and
+    /// Expected values: Portage `urlparse(...).scheme/.hostname` and
     /// `urllib.parse.quote`.
     #[test]
     fn url_helpers_match_python_urllib() {

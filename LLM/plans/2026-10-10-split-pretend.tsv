@@ -1,0 +1,34 @@
+# #336 Phase 6: crates/portuale/src/pretend/mod.rs split spec (all but `run`).
+fn columnwidth_from_env	display/attrs	Merge-list row attributes: columns, version decoration, USE suffix, sizes.
+fn resolve_root_deps_running_root	=env_config
+fn package_counters_summary	display/counters	The `Total:` summary line.
+fn merge_bound_version	display/attrs
+enum BlockerRowDisposition	display/blockers	Blocker rows in the merge list.
+fn print_entry_line	display/entry_line	One merge-list row.
+fn print_tree	display/tree	The `--tree` display.
+fn json_escape	json	`--json` output.
+fn circular_node_text	display/circular	The circular-dependency block.
+fn print_json	json
+fn report_option	lib
+fn wants_help	help	`emerge --help`.
+fn read_world_atoms	world	The world and world_sets files.
+fn run_deselect	deselect	`--deselect`.
+enum BareName	atoms	Expanding command-line tokens to atoms (dep_expand).
+fn still_listed_parents	removal/unmerge	`--unmerge`: listing and removing installed packages.
+fn package_options_from_env	env_config	Config and repo loading, EMERGE_DEFAULT_OPTS, scheduling policy.
+fn stdin_is_tty	prompt	`--ask` prompts and their terminal handling.
+fn entries_not_merged	resume	`--resume`.
+fn feature_enabled	removal/unmerge
+fn run_prune_pretend	removal/prune_clean	`--prune` and `--clean`.
+struct LibConsumerProtection	removal/depclean	`--depclean`.
+fn run_list_sets	search	`--list-sets` and `--search`.
+pub struct FilesystemNews	news	GLEP 42 news.
+fn buildpkg_from_config	env_config
+fn use_expand_display_value	info	`emerge --info`.
+fn run_config_action	config_action	`emerge --config`.
+enum SlotConflictReason	conflicts	Slot-conflict text helpers.
+pub(crate) fn load_repos_and_config	env_config
+fn merge_list_shown	gates	Small predicates deciding what a run shows.
+pub fn run(	lib
+@	display	The merge-list display.
+@	removal	Package removal actions: unmerge, prune, clean, depclean.

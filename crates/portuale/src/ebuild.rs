@@ -1,72 +1,22 @@
 // `ebuild <file> <command> [command...]`: CLI-surface recognition
-// (mirroring emerge's own pretend.rs/emerge_options.rs treatment -- real
-// options, see ebuild_options.rs, transcribed from bin/ebuild's own
-// argparse setup, and real commands, from doebuild()'s own
-// `validcommands` list, are recognized and accepted; genuinely invalid
-// input -- an unrecognized option, a filename not ending in ".ebuild",
-// an unrecognized command, or a missing file/command -- is rejected with
-// a specific, accurate message), PLUS, as of task #54, real execution
-// for the `actionmap_deps`-chained phase commands (`pretend`/`setup`/
-// `unpack`/`prepare`/`configure`/`compile`/`test`/`install` -- see
-// `ebuild_phases`'s own module doc comment for the full architecture and
-// v1 scope cuts), PLUS, as of task #55, real execution for `merge` (see
-// `ebuild_merge`'s own module doc comment: runs the real `install` chain,
-// then really runs pkg_preinst, copies `${D}` into `${ROOT}`, writes a
-// real vdb entry, then really runs pkg_postinst), `unmerge` (see
-// `ebuild_unmerge`'s own module doc comment: runs pkg_prerm, really
-// deletes every file/dir/symlink the vdb entry's own CONTENTS lists from
-// `${ROOT}`, runs pkg_postrm, then removes the vdb entry itself), and
-// `package` (see `ebuild_package`'s own module doc comment: runs the
-// real `install` chain, then really invokes `bin/misc-functions.sh`'s
-// own `__dyn_package` -- real, unmodified bash shelling out to the
-// native `portuale` helpers (`xpak recompose` / `gpkg compress`, #326
-// S4-S5, through `bin/portuale-python`) -- producing a genuine
-// XPAK-tagged `.tbz2` at `PKGDIR`, plus a real `Packages` index entry
-// for it), PLUS,
-// as of two slices ago, real execution for `qmerge` too (see
-// `ebuild_merge::run_qmerge`'s own doc comment: `merge`'s own body,
-// minus the `install` phase re-run, gated on the same real
-// `${PORTAGE_BUILDDIR}/.installed` marker real `doebuild()` itself
-// checks), PLUS, as of the previous slice, real execution for standalone
-// `config`/`info` too, PLUS, as of this slice, `prerm`/`postrm` joining
-// them as standalone commands (see `ebuild_phases::
-// is_standalone_phase_command`'s own doc comment: real, single-
-// phase runs via `run_single_phase`, the exact same machinery
-// `preinst`/`postinst` already use internally as part of `merge` -- no
-// new phase-execution machinery needed at all; `preinst`/`postinst`
-// themselves stay internal-only, a real ordering constraint tying them
-// to `merge`'s own file-copy step that `prerm`/`postrm` don't share with
-// `unmerge`). Every other real command (`preinst`/`postinst`/`nofetch`/
-// `depend`/`fetch`/`fetchall`/`digest`/`manifest`/`rpm`/`instprep`/
-// `clean`/`cleanrm`) still falls through to the pre-existing dry-run
-// stub message below unchanged. (`instprep` does run for real inside
-// every `merge`/`qmerge` -- `ebuild_phases::run_instprep`, real
-// `treewalk()`'s first step -- only the standalone command is stubbed.)
+// plus real execution for the phase chain (`pretend`/`setup`/`unpack`/
+// `prepare`/`configure`/`compile`/`test`/`install`), `merge`/`qmerge`/
+// `unmerge`/`package`/`config`/`info`/`prerm`/`postrm`. Every other
+// Portage command is recognized but still a dry-run stub (`instprep`
+// runs inside every `merge`/`qmerge`; only the standalone command is
+// stubbed).
 //
-// Exit codes mirror real `ebuild`'s own conventions: 2 for "missing
-// required args" (real bin/ebuild's argparse `parser.error()`), 1 for
-// everything else invalid (real bin/ebuild's own `err()` helper, and
-// `doebuild()`'s own return value for an unrecognized command).
+// Exit codes mirror Portage's `ebuild`: 2 for missing args, 1 for
+// everything else invalid.
 //
-// KNOWN, DOCUMENTED DEVIATION: real bin/ebuild uses argparse's
-// `parse_known_args`, which silently swallows an unrecognized flag into
-// the leftover-positional-args list rather than rejecting it outright
-// -- in practice this usually surfaces later as a confusing "does not
-// end with '.ebuild'" error instead of a clear "unrecognized option"
-// one. Portuale deliberately reports an unrecognized option
-// immediately and specifically instead, matching the clearer error
-// philosophy `emerge`'s own CLI already uses.
+// Known deviation: `bin/ebuild` uses `parse_known_args`, which swallows
+// an unrecognized flag into the positional leftovers (surfacing later
+// as a confusing error); portuale rejects it immediately instead.
 //
-// `-h`/`--help` IS real and implemented, checked unconditionally before
-// anything else in `args` -- matching real bin/ebuild's own behavior
-// (argparse's auto-added `-h`/`--help` is checked during parsing itself,
-// before any of the app's own logic runs, so it wins regardless of what
-// else -- valid or not -- accompanies it). See `ebuild_options.rs`'s
-// own doc comment for why `--version` is deliberately NOT implemented
-// alongside it. The help text itself is NOT a port of real bin/ebuild's
-// own argparse-generated usage block -- it's a short, honest,
-// portuale-specific summary, the same "portuale-specific summary, not a port
-// of real formatting" precedent `emerge --help` already set.
+// `-h`/`--help` wins unconditionally, like argparse's own check during
+// parsing. The help text is a portuale-specific summary, not a port of
+// the argparse usage block; `--version` is deliberately not implemented.
+// Portage: bin/ebuild, doebuild.py
 
 use crate::ebuild_merge;
 use crate::ebuild_options::{self, Kind};
@@ -75,17 +25,15 @@ use crate::ebuild_phases;
 use crate::ebuild_unmerge;
 use std::process::ExitCode;
 
-/// Whether `--help`/`-h` appears anywhere in `args` -- unlike `emerge`'s
-/// own `wants_help`, no short-flag-bundle scanning is needed here: real
-/// bin/ebuild declares no short aliases for any of its own six options,
-/// so `-h` is never part of a bundle to begin with.
+/// Whether `--help`/`-h` appears anywhere in `args`. No short-flag
+/// bundle scanning: `bin/ebuild` declares no short aliases for its own
+/// options, so `-h` is never part of a bundle.
 fn wants_help(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--help" || arg == "-h")
 }
 
-/// A short, honest, portuale-specific summary -- not a port of real
-/// bin/ebuild's own argparse-generated usage block (see the module doc
-/// comment for why).
+/// A short, portuale-specific summary (not a port of the argparse
+/// usage block; see the module doc).
 fn print_help() {
     println!("ebuild: command-line interface to the Portuale package manager");
     println!();
@@ -129,24 +77,12 @@ pub fn run(args: &[String]) -> ExitCode {
 
     let mut ebuild_file: Option<&str> = None;
     let mut commands: Vec<&str> = Vec::new();
-    // Real, not simulated (task #56): `--debug` sets real `PORTAGE_DEBUG`,
-    // triggering real `bin/ebuild.sh`'s own `set -x` guard during phase
-    // execution below -- see `ebuild_phases::run_one_phase`'s own setup
-    // block. Every other real ebuild `Kind::Boolean` option is still a
-    // pure no-op (the `Some(Kind::Boolean) => {}` arm below), matching
-    // this module's own long-documented v1 scope; `--debug` is the first
-    // one wired to something real.
+    // `--debug` sets `PORTAGE_DEBUG`, so `bin/ebuild.sh` runs `set -x`.
+    // Every other boolean option is still a pure no-op.
     let mut debug = false;
-    // `--shell bash|brush` (default `bash`): selects which real shell
-    // backend executes every phase/hook/misc-function below -- see
-    // `ebuild_phases::ShellBackend`'s own doc comment (including why the
-    // default is `bash`, not the embedded `brush`). A portuale-only flag,
-    // not a real `bin/ebuild` option at all, so it's checked here
-    // directly rather than through `ebuild_options::lookup_option`
-    // (deliberately NOT added to `ebuild_options::OPTIONS`, which is
-    // specifically a transcription of real bin/ebuild's own argparse
-    // setup) -- the same "special-cased outside the real-options table"
-    // treatment `wants_help` above already gets.
+    // `--shell bash|brush` (default `bash`): the shell backend for
+    // phase/hook execution. A portuale-only flag, checked here rather
+    // than through the options table (which transcribes `bin/ebuild`).
     let mut shell = ebuild_phases::ShellBackend::default();
 
     let mut i = 0;
@@ -173,9 +109,8 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg.starts_with('-') {
             match ebuild_options::lookup_option(arg) {
                 Some(Kind::Value) => {
-                    // "--opt=value" carries its value inline; "--opt value"
-                    // needs the next token skipped so it isn't mistaken for
-                    // the ebuild file or a command.
+                    // `--opt=value` is inline; `--opt value` needs the
+                    // next token skipped.
                     if !arg.contains('=') && i + 1 < args.len() {
                         i += 1;
                     }
@@ -218,16 +153,9 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
-    // Real execution (task #54/#55, ebuild_phases's/ebuild_merge's/
-    // ebuild_unmerge's/ebuild_package's own module doc comments) only
-    // when EVERY requested command is one portuale actually implements
-    // for real (the actionmap_deps-chained phase subset, plus
-    // `merge`/`qmerge`/`unmerge`/`package`/`config`/`info`/`prerm`/
-    // `postrm`) -- a
-    // deliberate, simple v1 boundary: no partial-real-execution ambiguity
-    // when a request mixes a real command with one portuale still only
-    // dry-runs (e.g. `ebuild foo.ebuild compile clean`). A purely dry-run
-    // request keeps the exact pre-existing stub message unchanged.
+    // Real execution only when EVERY requested command is implemented
+    // for real: no partial-real-execution ambiguity for mixed lists
+    // (e.g. `compile clean`). A purely dry-run request keeps the stub.
     if commands.iter().all(|cmd| {
         ebuild_phases::is_phase_command(cmd)
             || ebuild_phases::is_standalone_phase_command(cmd)
@@ -237,18 +165,14 @@ pub fn run(args: &[String]) -> ExitCode {
             || ebuild_package::is_package_command(cmd)
     }) {
         let root = portage_repo::root_from_env();
-        // Real portage's own make.globals default is `/var/tmp` (the
-        // builddir adds `portage/<cat>/<pf>` itself); see
-        // `portage_repo::portage_tmpdir_from_env`'s own doc comment.
+        // `make.globals` default is `/var/tmp` (the builddir adds the
+        // rest itself).
         let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
-        // Real per-package `PORTAGE_TMPDIR` (backlog #99): re-derive the
-        // tmpdir from the matched `package.env` value when the calling
-        // environment does not carry the key itself (`env`-over-`pkg`,
-        // #101). Skipped for `depend` (metadata extraction stays
-        // config-free) and `clean` (which operates on the process
-        // builddir by definition) — real's own `_check_temp_dir`
-        // exempts the same commands (`doebuild.py:756-764`). A missing
-        // matched directory fails here with real's exact message.
+        // Per-package `PORTAGE_TMPDIR`: re-derive from the matched
+        // `package.env` value when the calling environment is silent.
+        // Skipped for `depend`/`clean`, which Portage exempts too.
+        // A missing matched directory fails with Portage's message.
+        // Portage: doebuild.py, _check_temp_dir
         let portage_tmpdir = if commands
             .iter()
             .any(|cmd| *cmd == "depend" || *cmd == "clean")
@@ -271,35 +195,17 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         };
-        // Same env-var-not-full-config-resolution shortcut as
-        // PORTAGE_TMPDIR above -- real make.globals's own defaults (see
-        // ebuild_merge::MergeOptions's own Default impl) apply when
-        // unset.
-        // Real make.globals's own DISTDIR default -- same env-var-not-
-        // full-config-resolution shortcut as PORTAGE_TMPDIR/PKGDIR/
-        // CONFIG_PROTECT, shared by both real-execution paths below
-        // that run the real `install` chain (and therefore a real
-        // `unpack`, see `ebuild_phases::fetch_sources`).
+        // Same env-var-not-full-config-resolution shortcut: the
+        // `make.globals` defaults apply when unset.
+        // Real `make.globals` `DISTDIR` default, same shortcut.
         let distdir = std::env::var_os("DISTDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
-        // Real `settings`-derived merge config via the same env-var
-        // shortcut every real-execution CLI boundary here takes -- now
-        // factored into `MergeOptions::from_env` (shared with `emerge
-        // <atom>`'s own `emerge_build::run_source_merge`): `CONFIG_
-        // PROTECT[_MASK]`, `DISTDIR`, the `collision-protect`/
-        // `protect-owned`/`config-protect-if-modified` `FEATURES`
-        // tokens, `NOCONFMEM`, `PORTAGE_CONFIGROOT`.
+        // Merge config via the same env-var shortcut, factored into
+        // `MergeOptions::from_env` (shared with `emerge <atom>`).
         let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
-        // Real per-package `FEATURES` (backlog #130): standalone `ebuild
-        // <file> merge`/`qmerge` never resolved a matched `package.env`
-        // `FEATURES` value before -- `from_env` only ever read the raw
-        // process `$FEATURES`. Fold a match onto that same raw value
-        // (real's `[run-wide, pkg, calling-env]` order collapses to
-        // `[raw-process, pkg, raw-process]` here, since standalone
-        // `ebuild` has no separately resolved run-wide config) and
-        // re-derive the merge-time gates from it, matching the resolved-
-        // graph paths' `set_resolved_features` call.
+        // Per-package `FEATURES`: fold a matched `package.env` value
+        // onto the raw process value and re-derive the merge gates.
         if let Some(features) = ebuild_phases::resolve_standalone_resolved_features(
             std::path::Path::new(ebuild_file),
             &portage_repo::config_root_from_env(),
@@ -309,9 +215,7 @@ pub fn run(args: &[String]) -> ExitCode {
         ) {
             merge_options.set_resolved_features(&features);
         }
-        // Real `"unmerge-orphans" in self.settings.features` -- same
-        // env-var-not-full-config-resolution shortcut `collision_protect`/
-        // `protect_owned` above already use.
+        // `unmerge-orphans` from `FEATURES`, same shortcut.
         let default_unmerge_options = ebuild_unmerge::UnmergeOptions::default();
         let unmerge_orphans = std::env::var("FEATURES")
             .map(|features| {
@@ -331,19 +235,10 @@ pub fn run(args: &[String]) -> ExitCode {
             config_root: portage_repo::config_root_from_env(),
             already_unmerged: Vec::new(),
         };
-        // Real binpkg scalars from the resolved chain (backlogs #173,
-        // #180): calling env over `make.conf`/profile/`make.globals`
-        // (the standalone `resolve_config` chain below the env, real
-        // `config` precedence), else real `make.globals`'s own defaults
-        // (`PackageOptions::default()`). The env half reads through
-        // `config_env_var` (not raw `std::env::var`), the same test
-        // hook `env_over_config_scalar` uses. The gpkg compression
-        // pair (`BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`)
-        // reads files-only below the env (the Q6 rule: real's
-        // `environ_filter` keeps a calling-environment value out of
-        // the helper's rebuilt settings); `PORTAGE_BZIP2_COMMAND`
-        // keeps the full chain for both formats (whitelisted, never
-        // filtered), as does `PKGDIR`.
+        // Binpkg scalars from the resolved chain (calling env over
+        // files), else the `make.globals` defaults. The gpkg pair reads
+        // files-only below the env; `PORTAGE_BZIP2_COMMAND` and `PKGDIR`
+        // keep the full chain.
         let ebuild_path_for_chain = std::path::Path::new(ebuild_file);
         let config_root_for_chain = portage_repo::config_root_from_env();
         let chain = |key: &str| {
@@ -364,10 +259,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 key,
             )
         };
-        // Real `BINPKG_FORMAT` from the resolved chain (backlog #173),
-        // resolved first: the compression lookup below depends on it.
-        // Keeps the dedicated wrapper (not the key-parameterized
-        // closure below it) so the #173 block stays verbatim.
+        // `BINPKG_FORMAT` first: the compression lookup depends on it.
         let binpkg_format = portage_profile::config_env_var("BINPKG_FORMAT")
             .or_else(|| {
                 ebuild_phases::resolve_standalone_binpkg_format(
@@ -400,13 +292,13 @@ pub fn run(args: &[String]) -> ExitCode {
             portage_bzip2_command: ebuild_package::resolve_portage_bzip2_command(chain),
             binpkg_format,
             config_root: portage_repo::config_root_from_env(),
-            // Real default-on FEATURES token -- see `PackageOptions::
-            // buildpkg_live`'s own doc comment.
+            // Real default-on `FEATURES` token; see
+            // `PackageOptions::buildpkg_live`.
             buildpkg_live: !std::env::var("FEATURES")
                 .map(|f| f.split_whitespace().any(|t| t == "-buildpkg-live"))
                 .unwrap_or(false),
-            // Real default is on, but this defaults off -- see
-            // `PackageOptions::binpkg_multi_instance`'s own doc comment.
+            // Real default is on, but this defaults off; see
+            // `PackageOptions::binpkg_multi_instance`.
             binpkg_multi_instance: std::env::var("FEATURES")
                 .map(|f| f.split_whitespace().any(|t| t == "binpkg-multi-instance"))
                 .unwrap_or(false),
@@ -421,22 +313,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 .unwrap_or_default(),
             binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
         };
-        // Real per-package `BINPKG_COMPRESS*` (backlog #147 S3): a
-        // standalone `ebuild <file> package` runs `doebuild` on the
-        // setcpv'd config (`bin/ebuild:365`), so the package's own
-        // settings reach the xpak pipe (S0 C2: gzip magic with
-        // run-wide zstd). The match plays only when the calling env
-        // is silent on `BINPKG_COMPRESS` (real's calling-env-wins
-        // scalar precedence, #101 -- the run-wide resolution above
-        // already folded it in) and only for `xpak` runs: real's
-        // gpkg helper reads the global settings
-        // (`bin/gpkg-helper.py:49`), never the package's (S0
-        // B-gpkg). No per-entry `FEATURES` fold here on purpose: no
-        // per-package `FEATURES` token has a real-honored
-        // standalone-`package` artefact effect (the layout is
-        // run-wide -- the STOPPED S1 arm owns that question -- and
-        // signing needs its own oracle), so per O9 it is not
-        // implemented.
+        // Per-package `BINPKG_COMPRESS*`: the match plays only when the
+        // calling env is silent and only for `xpak` runs.
         if package_options.binpkg_format == "xpak"
             && std::env::var("BINPKG_COMPRESS").is_err()
             && let Some((compress, flags, bzip2)) =
@@ -465,12 +343,10 @@ pub fn run(args: &[String]) -> ExitCode {
         }
         let ebuild_path = std::path::Path::new(ebuild_file);
 
-        // `merge` / `qmerge` / `unmerge` write into a root-owned
-        // filesystem and the vdb -- refuse them up front for an
-        // unprivileged caller (real `bin/ebuild` has no such guard and
-        // just fails mid-phase; portuale gives the same clear error
-        // `emerge` does -- see `privileges::is_privileged`). Non-root
-        // ownership of `$ROOT` (a prefix / staging tree) is still allowed.
+        // `merge`/`qmerge`/`unmerge` write into a root-owned filesystem:
+        // refuse unprivileged callers up front (Portage has no such
+        // guard and just fails mid-phase). Non-root ownership of
+        // `$ROOT` (a prefix/staging tree) is still allowed.
         if commands.iter().any(|&c| {
             ebuild_merge::is_merge_command(c)
                 || ebuild_merge::is_qmerge_command(c)
@@ -481,15 +357,9 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
 
-        // One command at a time here, not the whole slice at once --
-        // neither `merge`/`unmerge` nor `package` is itself an
-        // ebuild_phases-recognized phase (real `doebuild()` handles them
-        // as their own, separate steps, not `bin/ebuild.sh` phase
-        // arguments at all), so a mixed list like `["install", "merge"]`
-        // needs its own per-command routing. This also mirrors real
-        // `bin/ebuild`'s own `for arg in pargs: doebuild(ebuild, arg,
-        // ...)` loop, which likewise re-derives the environment fresh
-        // for every top-level command argument.
+        // One command at a time: neither `merge`/`unmerge` nor `package`
+        // is a phase, so a mixed list needs per-command routing (like
+        // `bin/ebuild`'s own per-argument `doebuild` loop).
         for &cmd in &commands {
             let result = if ebuild_merge::is_merge_command(cmd) {
                 ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options, None)
@@ -498,38 +368,38 @@ pub fn run(args: &[String]) -> ExitCode {
             } else if ebuild_unmerge::is_unmerge_command(cmd) {
                 ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
             } else if ebuild_package::is_package_command(cmd) {
-                ebuild_package::run_package(
+                ebuild_package::run_package(ebuild_package::RunPackageArgs {
                     ebuild_path,
-                    &root,
-                    &portage_tmpdir,
-                    &package_options,
-                    &[],
-                    "",
-                )
+                    root: &root,
+                    portage_tmpdir: &portage_tmpdir,
+                    options: &package_options,
+                    build_env: &[],
+                    use_flags: "",
+                })
             } else if ebuild_phases::is_standalone_phase_command(cmd) {
-                ebuild_phases::run_single_phase(
+                ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
                     ebuild_path,
-                    cmd,
-                    &root,
-                    &portage_tmpdir,
+                    phase: cmd,
+                    root: &root,
+                    portage_tmpdir: &portage_tmpdir,
                     debug,
-                    &merge_options.config_root,
+                    config_root: &merge_options.config_root,
                     shell,
-                    &[],
-                    None,
-                )
+                    build_env: &[],
+                    log_file: None,
+                })
             } else {
-                ebuild_phases::run_commands(
+                ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
                     ebuild_path,
-                    &[cmd],
-                    &root,
-                    &portage_tmpdir,
-                    &distdir,
+                    commands: &[cmd],
+                    root: &root,
+                    portage_tmpdir: &portage_tmpdir,
+                    distdir: &distdir,
                     debug,
-                    &merge_options.config_root,
+                    config_root: &merge_options.config_root,
                     shell,
-                    &[],
-                )
+                    build_env: &[],
+                })
             };
             match result {
                 Ok(0) => {}
@@ -562,11 +432,7 @@ mod tests {
 
     #[test]
     fn accepts_a_real_command_and_still_prints_the_stub_marker() {
-        // "clean" is a real ebuild command (doebuild()'s own
-        // validcommands list) that portuale still doesn't implement
-        // for real (unlike "merge"/"qmerge"/"package"/"config"/"info"/
-        // the actionmap_deps-chained phases) -- exactly the case the
-        // dry-run stub still needs to cover.
+        // "clean" is a Portage command portuale still only dry-runs.
         let code = run(&args(&["foo-1.0.ebuild", "clean"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -597,9 +463,8 @@ mod tests {
 
     #[test]
     fn accepts_shell_bash_and_shell_brush() {
-        // "clean" is dry-run-only (see `accepts_a_real_command_and_
-        // still_prints_the_stub_marker` above), so this only exercises
-        // `--shell`'s own CLI parsing, not real phase execution.
+        // "clean" is dry-run-only, so this only exercises `--shell`'s
+        // own CLI parsing.
         let code = run(&args(&["--shell", "brush", "foo-1.0.ebuild", "clean"]));
         assert_eq!(code, ExitCode::SUCCESS);
         let code = run(&args(&["--shell", "bash", "foo-1.0.ebuild", "clean"]));
@@ -668,9 +533,7 @@ mod tests {
 
     #[test]
     fn help_wins_unconditionally_regardless_of_position_or_other_args() {
-        // Even with an otherwise-complete, valid invocation alongside it,
-        // and even with a genuinely unrecognized option present too --
-        // help is checked before anything else is parsed at all.
+        // Help is checked before anything else is parsed at all.
         let code = run(&args(&["foo-1.0.ebuild", "merge", "--help"]));
         assert_eq!(code, ExitCode::SUCCESS);
         let code = run(&args(&["--not-a-real-option", "--help"]));

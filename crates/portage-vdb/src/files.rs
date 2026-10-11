@@ -1,15 +1,9 @@
 //! `FilesDb`: the historic `var/db/pkg` directory tree.
 //!
-//! The read side of per-entry and `aux` reads (S1.2) is today's
-//! `portage-repo` code, moved here unchanged: the same `openat`/`statx`
-//! sequence and the same in-process memo (thread-local, validated by the
-//! entry directory's `st_mtime_ns`). The merge's write side (S1.4: the
-//! pending entry, the counter, the preserved-libs registry and the config
-//! memory) is in `files_write.rs`. Every method that is not moved yet
-//! returns [`Error::Unsupported`] naming the plan step that moves it
-//! (`reverse_dependents` stays above this crate on `files`, see the module
-//! doc item 19; S1.5 moved `owners`, `read_file_all`, `delete_entry`
-//! `replace_file`; S1.6 moved `world` / `world_sets`).
+//! Per-entry and `aux` reads keep the same `openat`/`statx` sequence and
+//! the same in-process memo as before. The merge's writes are in
+//! `files_write.rs`. Every method not moved yet returns
+//! [`Error::Unsupported`] naming the plan step that moves it.
 
 use crate::types::DIR_MODE_MASK;
 use std::cell::RefCell;
@@ -28,15 +22,13 @@ use crate::{
     MetadataStamp, PreservedLibs, Result, Snapshot, World, WorldSets, WriteTxn, in_metadata_file,
 };
 
-/// The VDB directory under a root, joined without canonicalising (today's
-/// `root.join("var/db/pkg")`).
+/// The VDB directory under a root, joined without canonicalising.
 pub(crate) const VDB_PATH: &str = "var/db/pkg";
 
 /// The `files` backend for one root, or for one bare VDB directory.
 #[derive(Debug, Clone)]
 pub struct FilesDb {
-    /// `Some` for [`FilesDb::new`]: the root the D4 stores (`world`,
-    /// `counter`, ...) live under. `None` for [`FilesDb::open_vdb_dir`].
+    /// The root the D4 stores live under; `None` for a bare VDB directory.
     root: Option<PathBuf>,
     /// `<root>/var/db/pkg`, or the directory given to `open_vdb_dir`.
     vdb: PathBuf,
@@ -44,9 +36,7 @@ pub struct FilesDb {
 
 impl FilesDb {
     /// The `files` backend of `root`: entries under `<root>/var/db/pkg`,
-    /// D4 stores under `<root>/var/lib/portage` and
-    /// `<root>/var/cache/edb`. `root` is used as given (no
-    /// canonicalisation, no I/O).
+    /// D4 stores under `<root>/var/lib/portage` and `<root>/var/cache/edb`.
     pub fn new(root: &Path) -> Self {
         FilesDb {
             root: Some(root.to_path_buf()),
@@ -54,10 +44,9 @@ impl FilesDb {
         }
     }
 
-    /// A read-only view of a bare VDB directory with no root around it
-    /// (N12: the remote `server:<path>` shadow and its `pull_dir` copy).
+    /// A read-only view of a bare VDB directory with no root around it.
     /// Not registered anywhere. The D4 stores are absent: their reads
-    /// return empty values and every write fails (from S1.2/S1.7 on).
+    /// return empty values and every write fails.
     pub fn open_vdb_dir(vdb_dir: &Path) -> Self {
         FilesDb {
             root: None,
@@ -66,13 +55,10 @@ impl FilesDb {
     }
 
     /// The `files` backend a command-line `files:PATH` names: `PATH` is a
-    /// root, or the VDB directory itself (a path ending in the VDB
-    /// location means the root three levels up, so the D4 stores come
-    /// along). Any other existing directory is a bare VDB directory
-    /// ([`FilesDb::open_vdb_dir`]: `root()` is `None`, no D4 stores).
-    /// `None` when `PATH` is no directory.
+    /// root or the VDB directory itself. `None` when `PATH` is no directory.
     pub fn from_cli_path(path: &Path) -> Option<Self> {
         if path.ends_with(VDB_PATH) {
+            // `<root>/var/db/pkg` is three levels below the root.
             let root = path.ancestors().nth(3)?;
             let root = if root.as_os_str().is_empty() {
                 Path::new(".")
@@ -88,8 +74,7 @@ impl FilesDb {
         }
     }
 
-    /// The root given to [`FilesDb::new`]; `None` for
-    /// [`FilesDb::open_vdb_dir`].
+    /// The root given to [`FilesDb::new`]; `None` for a bare VDB directory.
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
@@ -100,14 +85,9 @@ impl FilesDb {
     }
 }
 
-/// `st_mtime` of `p` in nanos, 0 when the path is missing or unreadable.
-/// The invalidation signal for category-scoped caches (moved from
-/// `portage-repo::dir_mtime_nanos`): every portuale vdb mutation replaces
-/// or removes a package dir (`publish_vdb_tmp` `remove_dir_all` +
-/// `rename`; unmerge removes the dir), so the *category* dir mtime
-/// catches all of them. An external in-place rewrite of a file inside a
-/// running process is not caught -- the same in-process-cache property
-/// real's `vardb` dbapi has; no portuale writer does it.
+/// `st_mtime` of `p` in nanos, 0 when missing or unreadable: the
+/// invalidation signal for category-scoped caches (every vdb mutation
+/// replaces or removes a package dir).
 fn dir_mtime_nanos(p: &Path) -> u64 {
     fs::metadata(p)
         .and_then(|m| m.modified())
@@ -133,16 +113,10 @@ fn file_meta_of(name: String, st: &fs::Metadata) -> FileMeta {
     }
 }
 
-/// Real `_read_metadata_file(path, dir_st)` (`vartree.py:115-187`): parse
-/// and validate a consolidated `metadata` snapshot. `None` unless
-/// `#format=` parses to [`METADATA_FILE_FORMAT_VERSION`] **and**
-/// `#dir_mtime=` parses and equals the package directory's `st_mtime_ns`.
-/// A `#format=` this version does not know is rejected immediately (real
-/// abandons the file on the version line, before parsing the rest); other
-/// `#` lines are ignored; a line without `=` is skipped;
-/// `k, v = line.split("=", 1)` with the last duplicate winning. Real
-/// writes `#dir_mtime=` last, so a file left truncated by an interrupted
-/// write lacks it and is rejected rather than read as a short snapshot.
+/// Parse and validate a consolidated `metadata` snapshot: `#format=`
+/// must match and `#dir_mtime=` must equal the dir mtime, else `None`.
+/// A truncated write lacks the stamp (written last) and is rejected.
+// Portage: lib/portage/vartree.py, _read_metadata_file
 fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String, String>> {
     let raw = fs::read_to_string(path).ok()?;
     let (result, dir_mtime) = parse_metadata_text(&raw)?;
@@ -153,11 +127,7 @@ fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String,
 }
 
 /// The text half of [`read_metadata_file`], shared with the SQLite
-/// backend (which stores the stamp state per entry and so does not compare
-/// the directory mtime): the parsed fields and the `#dir_mtime=` value
-/// when present. `None` unless `#format=` is present and equals
-/// [`METADATA_FILE_FORMAT_VERSION`] (or a `#format=`/`#dir_mtime=` value
-/// does not parse).
+/// backend: the parsed fields and the `#dir_mtime=` value when present.
 pub(crate) fn parse_metadata_text(raw: &str) -> Option<(HashMap<String, String>, Option<i128>)> {
     let mut result: HashMap<String, String> = HashMap::new();
     let mut version: Option<u32> = None;
@@ -182,13 +152,10 @@ pub(crate) fn parse_metadata_text(raw: &str) -> Option<(HashMap<String, String>,
     Some((result, dir_mtime))
 }
 
-/// The per-key fallback read: the raw file normalised exactly like real
-/// `_aux_get` (`" ".join(myd.split())`, `vartree.py:1044-1046`), with an
-/// absent file as `""`. Real applies the same normalisation on this path,
-/// so the bytes are the same whether the snapshot validated or not.
-/// Invalid UTF-8 decodes lossy (`U+FFFD`), matching real's
-/// `encoding="utf-8", errors="replace"` (`vartree.py:1035-1039`) instead
-/// of collapsing to `""` (backlog #125, audit O15).
+/// The per-key fallback read: the raw file whitespace-normalised, with an
+/// absent file as `""`. Invalid UTF-8 decodes lossy, matching Portage's
+/// `errors="replace"`.
+// Portage: lib/portage/vartree.py, _aux_get
 fn read_vdb_file(path: &Path) -> String {
     fs::read(path)
         .map(|bytes| normalise_aux_bytes(&bytes))
@@ -204,18 +171,10 @@ pub(crate) fn normalise_aux_bytes(bytes: &[u8]) -> String {
         .join(" ")
 }
 
-/// Whether `value` is a `SLOT` real `aux_get` keeps instead of
-/// translating to `"0"`: `slot(/slot)?` with `slot = [\w][\w+.-]*`
-/// (ASCII — `versions.py:38`, `re.ASCII`), the `/sub` half iff the
-/// EAPI has `slot_operator` (`versions.py:76-90`). Portuale does no
-/// EAPI parametrization inside the EAPI 5+ floor (`agent-context.md`:
-/// every live EAPI has `slot_operator`, `eapi.py:319`), so this is
-/// always the operator shape; an entry whose own `EAPI` is empty (for
-/// which real would use the single-slot shape after its `EAPI ""→"0"`
-/// step) is out of scope — that translation is #115's documented cut,
-/// and no such entry has a portuale-visible consumer anyway (Phase 12
-/// S0.3). Empty is *not* invalid here: a missing/empty `SLOT` stays
-/// `""` at this layer and keeps #126's O5 caller contracts.
+/// Whether `value` is a `SLOT` Portage's `aux_get` keeps instead of
+/// translating to `"0"`: `slot(/slot)?` with `slot = [\w][\w+.-]*`. Empty
+/// is *not* invalid: a missing/empty `SLOT` stays `""`.
+// Portage: lib/portage/versions.py, _valid_slot
 fn is_valid_aux_slot(value: &str) -> bool {
     fn is_slot(s: &str) -> bool {
         let mut chars = s.bytes();
@@ -231,13 +190,9 @@ fn is_valid_aux_slot(value: &str) -> bool {
     }
 }
 
-/// Real `aux_get`'s invalid-`SLOT` → `"0"` translation, applied at the
-/// one seam every vdb `SLOT` read flows through. Real translates in
-/// the outer `aux_get` (`vartree.py:967-972`); here
-/// [`FilesDb::aux_get_field`] serves both roles, so it lives here, for the
-/// `SLOT` key only, over present (non-empty) values. The memoised value
-/// is the translated one (observably identical: the translation is
-/// idempotent, `"0"` is valid).
+/// Portage's invalid-`SLOT` → `"0"` translation, for present (non-empty)
+/// values only. The memoised value is the translated one (`"0"` is valid).
+// Portage: lib/portage/vartree.py, aux_get
 pub(crate) fn translate_aux_slot(key: &str, value: String) -> String {
     if key == "SLOT" && !value.is_empty() && !is_valid_aux_slot(&value) {
         return "0".to_string();
@@ -251,13 +206,9 @@ impl FilesDb {
         self.vdb.join(&key.category).join(&key.pf)
     }
 
-    /// A cheap fingerprint of the VDB directory's structure (moved from
-    /// `portage-repo::vdb_fingerprint`): the vdb dir's own mtime plus
-    /// every category dir's mtime, xor-folded with a count. Any package
-    /// merge/unmerge changes the mtime of `var/db/pkg` (new category) or
-    /// of a category dir (new/removed package dir), so a matching
-    /// fingerprint means the installed set is unchanged. ~30 `stat`s vs
-    /// the ~2000 `SLOT` file reads a full scan does.
+    /// A cheap fingerprint of the VDB structure: the vdb dir's mtime plus
+    /// every category dir's mtime, xor-folded with a count. ~30 `stat`s vs
+    /// the ~2000 `SLOT` reads a full scan does.
     fn fingerprint(&self) -> u64 {
         let vdb = self.vdb.as_path();
         let Ok(cats) = portage_util::read_dir_entries(vdb) else {
@@ -272,49 +223,25 @@ impl FilesDb {
         acc ^ count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
     }
 
-    /// Real `_aux_get(cpv, wants, st)` (`vartree.py:975-1053`) for one
-    /// in-set key (moved from `portage-repo::vdb_aux_get`): `stat` the
-    /// package dir once, try the consolidated `metadata` snapshot, and
-    /// serve an in-set key from it with **no** `open()`; otherwise read
-    /// the individual file (the pre-#109 path). `None` when the entry
-    /// directory does not exist (one `statx`, no more).
-    ///
-    /// The snapshot rule is real's own (`vartree.py:1010-1017`): a
-    /// validated snapshot is *complete*, so a field missing from it had no
-    /// individual file either and is served as `""` instead of paying an
-    /// `open()` that would just fail. Safe by construction for added
-    /// fields -- adding a per-field file bumps the package dir's mtime,
-    /// which invalidates the snapshot -- and the residual in-place-rewrite
-    /// hole is real's own documented one (why it calls `_bump_mtime` on
-    /// both sides of `aux_update`).
-    ///
-    /// Real's `aux_get` `EAPI == "" -> "0"` translation is not here:
-    /// callers default individually and that parity question is a filed
-    /// residue. The invalid-`SLOT` -> `"0"` half *is* here
-    /// ([`translate_aux_slot`], #115 S1).
+    /// Portage's `_aux_get` for one in-set key: `stat` the package dir
+    /// once, try the consolidated `metadata` snapshot (a validated one is
+    /// *complete*, so a missing field is `""` with no `open()`), otherwise
+    /// read the individual file. `None` when the entry does not exist.
+    /// The invalid-`SLOT` -> `"0"` translation applies, via
+    /// [`translate_aux_slot`]; the `EAPI == "" -> "0"` one does not.
+    // Portage: lib/portage/vartree.py, _aux_get
     pub(crate) fn aux_get_field(&self, key: &EntryKey, field: &str) -> Option<String> {
-        // #112: one `statx` for both the existence test and the
-        // `st_mtime_ns` validity check below.
+        // One `statx` for both the existence test and the `st_mtime_ns`
+        // validity check below.
         let dir = self.entry_dir(key);
         let st = fs::metadata(&dir).ok().filter(|st| st.is_dir())?;
         let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
 
-        // Real `aux_get`'s `_aux_cache["packages"]` (`vartree.py:909-973`):
-        // per-instance metadata keyed on the package dir's `st_mtime_ns`,
-        // so a second key on the same instance costs one `stat` instead of
-        // a snapshot read (and a per-key `open()` on the fallback path).
-        // `cache_these = _aux_cache_keys ∪ wants` is why a validated
-        // snapshot fills **all** 23 fields at once; the fallback path
-        // resolves lazily per key and records each resolved value,
-        // including `""`.
-        //
-        // The in-process staleness property is real's own: an in-place
-        // rewrite of a field file leaves the dir mtime alone, so a value
-        // read once is served until the dir changes. Real calls
-        // `_bump_mtime` on both sides of `aux_update` for exactly that
-        // reason; the same property is why portuale's merge path (which
-        // replaces the whole entry dir) is safe. Thread-local so the
-        // lookup stays lock-free, like `EUF_CACHE`.
+        // Per-instance metadata keyed on the dir's `st_mtime_ns`: a snapshot
+        // fills all 23 fields at once, the fallback resolves lazily per
+        // key. An in-place field rewrite leaves the dir mtime alone, so a
+        // value read once is served until the dir changes. Thread-local,
+        // so the lookup stays lock-free.
         type CacheKey = (PathBuf, String, String);
         type AuxCache = HashMap<CacheKey, (i128, Rc<HashMap<String, String>>)>;
         thread_local! {
@@ -322,9 +249,8 @@ impl FilesDb {
         }
         let cache_key = (self.vdb.clone(), key.category.clone(), key.pf.clone());
 
-        // The `stat` above is the validity signal, paid on every call
-        // (real stats before consulting `_aux_cache` too); the memo
-        // removes the snapshot read and the per-key `open`.
+        // The `stat` above is the validity signal, paid on every call; the
+        // memo removes the snapshot read and the per-key `open`.
         let cached = AUX_CACHE.with(|c| {
             c.borrow()
                 .get(&cache_key)
@@ -335,8 +261,8 @@ impl FilesDb {
             if let Some(v) = map.get(field) {
                 return Some(translate_aux_slot(field, v.clone()));
             }
-            // Fallback path: this key has not been resolved yet. Drop the
-            // shared handle before mutating so `Rc::make_mut` can reuse it.
+            // This key is not resolved yet; drop the shared handle before
+            // mutating so `Rc::make_mut` can reuse it.
             drop(map);
             let value = translate_aux_slot(field, read_vdb_file(&dir.join(field)));
             AUX_CACHE.with(|c| {
@@ -351,9 +277,8 @@ impl FilesDb {
         let mut map: HashMap<String, String> =
             match read_metadata_file(&dir.join("metadata"), dir_mtime_ns) {
                 Some(snapshot) => {
-                    // A validated snapshot is complete for the 23-set:
-                    // pre-fill every member so an absent one is `""` with
-                    // no `open()`.
+                    // A validated snapshot is complete: pre-fill every
+                    // member so an absent one is `""` with no `open()`.
                     let mut m = snapshot;
                     for &f in METADATA_FILE_FIELDS {
                         m.entry(f.to_string()).or_default();
@@ -376,13 +301,10 @@ impl FilesDb {
     }
 }
 
-/// The claims of one entry's `CONTENTS` text (the per-line rule of
-/// [`FilesDb::owners`], shared with the SQLite backend): a line whose
-/// first two words are a kind (`obj`, `sym`, `dir`, `dev`, `fif`, `bin`)
-/// and a path claims that path; one leading `/` is ignored on both sides.
-/// Each claim pairs the first of `paths` it matches with `key`.
-/// `wanted` is [`owner_wanted`] of `paths`, built once per `owners` call:
-/// a lookup per line instead of a scan of every queried path (#314).
+/// The claims of one entry's `CONTENTS` text: a line whose first two
+/// words are a kind (`obj`, `sym`, `dir`, `dev`, `fif`, `bin`) and a path
+/// claims that path; one leading `/` is ignored on both sides. Each claim
+/// pairs the first of `paths` it matches with `key`.
 pub(crate) fn claim_paths(
     text: &str,
     key: &EntryKey,
@@ -403,10 +325,8 @@ pub(crate) fn claim_paths(
     }
 }
 
-/// For `owners` on every backend (S8.2; the `files` scan since #314): each distinct
-/// normal form (one leading `/` stripped, as [`claim_paths`] compares) of
-/// `paths`, with the first input path that has it, which is the one
-/// `claim_paths` reports.
+/// For `owners` on every backend: each distinct normal form (one leading
+/// `/` stripped) of `paths`, with the first input path that has it.
 pub(crate) fn owner_wanted<'a>(paths: &[&'a [u8]]) -> HashMap<&'a [u8], &'a [u8]> {
     let mut m: HashMap<&[u8], &[u8]> = HashMap::new();
     for p in paths {
@@ -415,9 +335,8 @@ pub(crate) fn owner_wanted<'a>(paths: &[&'a [u8]]) -> HashMap<&'a [u8], &'a [u8]
     m
 }
 
-/// The spellings a `CONTENTS` line can have for the normal form `n`, as
-/// stored in the `owner` index (the path as written): `/n`, and `n` itself
-/// when it does not start with `/` (a line whose path has none).
+/// The spellings a `CONTENTS` line can have for the normal form `n`:
+/// `/n`, and `n` itself when it does not start with `/`.
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 pub(crate) fn owner_spellings(n: &[u8]) -> Vec<Vec<u8>> {
     let mut v = vec![[b"/".as_slice(), n].concat()];
@@ -462,8 +381,7 @@ impl InstalledDb for FilesDb {
             };
             for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
                 let dirname = pkg.file_name().to_string_lossy().to_string();
-                // Real `vardbapi._excluded_dirs`: an in-progress
-                // `-MERGING-<pf>` entry is never an installed package.
+                // An in-progress `-MERGING-<pf>` entry is never installed.
                 if portage_util::is_merging_vdb_entry(&dirname) {
                     continue;
                 }
@@ -473,8 +391,8 @@ impl InstalledDb for FilesDb {
         Ok(out)
     }
 
-    /// The category directories of the VDB (each one tested with
-    /// `is_dir`), in listing order; empty when the VDB cannot be listed.
+    /// The category directories of the VDB, in listing order; empty when
+    /// the VDB cannot be listed.
     fn categories(&self) -> Result<Vec<String>> {
         let Ok(cats) = portage_util::read_dir_entries(&self.vdb) else {
             return Ok(Vec::new());
@@ -513,14 +431,12 @@ impl InstalledDb for FilesDb {
         };
         let mut out = Vec::new();
         for e in entries.into_iter().filter(|e| {
-            // `d_type` fast path: a real directory needs no `statx`. The
-            // `path().is_dir()` fallback keeps exact semantics for
+            // `d_type` fast path; the `path().is_dir()` fallback covers
             // symlinked entries and `DT_UNKNOWN` filesystems.
             e.file_type().is_ok_and(|t| t.is_dir()) || e.path().is_dir()
         }) {
             let name = e.file_name().to_string_lossy().to_string();
-            // Real `vardbapi._excluded_dirs`: an in-progress
-            // `-MERGING-<pf>` entry is never an installed version.
+            // An in-progress `-MERGING-<pf>` entry is never installed.
             if portage_util::is_merging_vdb_entry(&name) {
                 continue;
             }
@@ -530,7 +446,7 @@ impl InstalledDb for FilesDb {
     }
 
     fn has_entry(&self, key: &EntryKey) -> Result<bool> {
-        // One `statx`, following symlinks like the `is_dir()` it replaces.
+        // One `statx`.
         Ok(fs::metadata(self.entry_dir(key)).is_ok_and(|st| st.is_dir()))
     }
 
@@ -581,8 +497,7 @@ impl InstalledDb for FilesDb {
     }
 
     fn read_file(&self, key: &EntryKey, name: &str) -> Result<Option<Vec<u8>>> {
-        // One `open`, no separate existence `stat` (today's raw read).
-        // A missing entry directory and a missing file are both `None`.
+        // One `open`, no separate existence `stat`.
         let path = self.entry_dir(key).join(name);
         match fs::read(&path) {
             Ok(bytes) => Ok(Some(bytes)),
@@ -629,13 +544,9 @@ impl InstalledDb for FilesDb {
         self.read_pending(key, name)
     }
 
-    /// Moved from `needed_elf::read_all_needed_entries`: the same walk and
-    /// the same order of `open`s. Every category directory is listed and
-    /// tested first; then, category by category, the entry directories
-    /// are listed and tested, and the file of each non-`-MERGING-` entry
-    /// is read. A file that cannot be read is `None`, whatever the reason
-    /// (today's `read_to_string(..).unwrap_or_default()`); an unreadable
-    /// VDB or category directory ends or skips the listing.
+    /// One named file of every live entry, in listing order. A file that
+    /// cannot be read is `None`, whatever the reason; an unreadable VDB
+    /// or category directory ends or skips the listing.
     fn read_file_all(&self, name: &str) -> Result<Vec<(EntryKey, Option<Vec<u8>>)>> {
         let mut out = Vec::new();
         let Ok(categories) = portage_util::read_dir_entries(&self.vdb) else {
@@ -667,13 +578,9 @@ impl InstalledDb for FilesDb {
         Ok(out)
     }
 
-    /// Every regular file of the live entry (sorted by name, like
-    /// `list_files`; a sub-directory is not part of an entry and is
-    /// skipped), exact bytes, `st_mode` and `st_mtime_ns`; the directory's
-    /// `st_mode` and `st_mtime_ns`; and the `metadata` stamp state by the
-    /// real reader rule ([`parse_metadata_text`] + equality with the
-    /// directory's `st_mtime_ns`). The directory is `stat`ed first; reads
-    /// do not change its mtime.
+    /// A whole live entry for a converter: every file with its bytes, mode
+    /// and mtime, the directory's mode and mtime, and the `metadata` stamp
+    /// state. `None` when the entry does not exist.
     fn entry_image(&self, key: &EntryKey) -> Result<Option<EntryImage>> {
         let dir = self.entry_dir(key);
         let dst = match fs::metadata(&dir) {
@@ -772,20 +679,11 @@ impl InstalledDb for FilesDb {
         )
     }
 
-    /// Moved from `ebuild_merge::find_owners` (its directory walk plus the
-    /// per-entry `installed_contents_files`): list the VDB, each category
-    /// directory (tested with `is_dir`) and each entry directory (tested
-    /// with `is_dir`), skip `-MERGING-` entries, `stat` the entry and read
-    /// its `CONTENTS` (a missing, unreadable or non-UTF-8 file owns
-    /// nothing). A `CONTENTS` line whose first two words are a kind
-    /// (`obj`, `sym`, `dir`, `dev`, `fif`, `bin`) and a path claims that
-    /// path; one leading `/` is ignored on both sides of the comparison.
-    /// Each claim pairs the first of `paths` it matches with the entry.
-    ///
-    /// Not done here, because both live above this crate: the
-    /// package-move fallback and the `<package>-<version>` split that
-    /// `find_owners` applies to the entry name (it skips a name that does
-    /// not split). `find_owners` applies the split to the result.
+    /// File owners: each entry's `CONTENTS` is read (a missing,
+    /// unreadable or non-UTF-8 file owns nothing) and every claim is
+    /// paired with the first of `paths` it matches (see [`claim_paths`]).
+    /// The package-move fallback and the `<package>-<version>` split stay
+    /// above this crate.
     fn owners(&self, paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
         let mut out = Vec::new();
         let wanted = owner_wanted(paths);
@@ -810,8 +708,6 @@ impl InstalledDb for FilesDb {
                     continue;
                 }
                 let key = EntryKey::new(category.clone(), pf);
-                // Today's `resolve_vdb_entry` tests the entry once before
-                // the read; keep the `statx`.
                 let _ = self.has_entry(&key);
                 let Some(text) = self
                     .read_file(&key, "CONTENTS")
@@ -867,12 +763,8 @@ mod tests {
         root
     }
 
-    // ---- `generation` (moved with `vdb_fingerprint` from portage-repo:
-    // the `all_installed_packages` cache key: the vdb dir's own mtime
-    // plus every category dir's mtime, xor-folded with the category
-    // count; a missing vdb is exactly 0). Only deterministic oracles pin
-    // the hash: absence (0), presence (non-zero, non-one), and
-    // sensitivity to structural change. ----
+    // Only deterministic oracles pin the hash: absence (0), presence
+    // (non-zero, non-one), and sensitivity to structural change.
 
     /// A missing vdb fingerprints to exactly 0.
     #[test]

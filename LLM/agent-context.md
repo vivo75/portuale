@@ -241,6 +241,15 @@ per-slice ledger) and `git log`. The per-slice "current state" narrative
 that used to live here is snapshotted in `history/agent-context-current-state-2026-09-10.md` (deleted
 2026-10-03; git history).
 
+**2026-10-11 #336 note (readability refactor, done):** the files were
+split by topic (`crates/<crate>/src/<area>/…`, plan
+`plans/2026-10-10-split-map.md`), functions with more than five
+parameters take one `<Fname>Args` struct, and code comments are short:
+long context, Portage citations and history now live in
+[`code-notes/`](code-notes/INDEX.md), one notes file per source file.
+Paths written before 2026-10-10 may predate this: see
+[`renames.tsv`](renames.tsv). Humans start at `docs/architecture.md`.
+
 **2026-10-03 close-out note:** the per-batch plans (`batch-2026-09-21` …
 `batch-2026-10-02`), the per-phase plans and `docs/history/` were deleted
 and condensed into [`lessons-of-backlog-ops-2026-10-03.md`](lessons-of-backlog-ops-2026-10-03.md)

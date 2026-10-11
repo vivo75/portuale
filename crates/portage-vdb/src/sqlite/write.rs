@@ -1,4 +1,4 @@
-//! `SqliteDb`'s write side (S2.5): [`SqliteTxn`] and the derived tables.
+//! `SqliteDb`'s write side: [`SqliteTxn`] and the derived tables.
 //!
 //! See the crate module doc, "Write transactions", for the model.
 
@@ -266,7 +266,7 @@ impl WriteTxn for SqliteTxn<'_> {
             let Some(raw) = blob(&self.conn, id, field).be(&p)? else {
                 continue;
             };
-            // Lossy, like real's consolidation (`errors="replace"`, #309).
+            // Lossy, like Portage's consolidation.
             let text = String::from_utf8_lossy(&raw);
             data.push((
                 field.to_string(),
@@ -498,11 +498,9 @@ impl WriteTxn for SqliteTxn<'_> {
     fn set_import_mark(&mut self, generation: u64, source: &str) -> Result<()> {
         let p = self.db.path.clone();
         let gen_str = generation.to_string();
-        // Delete existing entries first to avoid conflicts
         self.conn
             .execute("DELETE FROM meta WHERE key IN ('imported_files_generation', 'imported_files_source')", [])
             .be(&p)?;
-        // Insert the new values
         self.conn
             .execute(
                 "INSERT INTO meta (key, value) VALUES ('imported_files_generation', ?1)",
@@ -682,9 +680,8 @@ fn derive_owner(c: &Connection, id: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// `needed` from `NEEDED.ELF.2` (`arch;obj;soname;rpath;needed[;...]`,
-/// real `NeededEntry.parse`): a line with fewer than five `;` fields is
-/// skipped, `obj` is bytes, the other columns are the field text (lossy
+/// `needed` from `NEEDED.ELF.2` (`arch;obj;soname;rpath;needed[;...]`):
+/// a line with fewer than five `;` fields is skipped, `obj` is bytes, the other columns are the field text (lossy
 /// UTF-8), with the `"  -  "` no-rpath sentinel stored as `""`. `rpath`
 /// stays colon-joined and `needed` comma-joined, as in the file.
 fn derive_needed(c: &Connection, id: i64) -> rusqlite::Result<()> {

@@ -1,0 +1,6 @@
+# crates/portage-repo/src/resolve/feedback/solvable_slot_conflicts.rs
+Config-feedback retry when one version satisfies every atom behind a slot conflict.
+
+## fn step_solvable_slot_conflicts
+- Portage `backtracking.py` retry loop driven by `_process_slot_conflicts`: if this attempt left any slot conflicts, check each one for solvability -- is there a single version of the conflicted `cat/pkg` that satisfies *every* atom text that targeted it this pass? If so, the whole atom set becomes a config-feedback node for the conflicted package. Unsolvable conflicts fall through to the mask node below; anything still conflicting when the search is exhausted is reported from the best run, exactly as before.
+- Solvability pre-check against the raw candidate list (Portage `_select_pkg_highest_available` over the full atom set). This deliberately ignores keyword/mask visibility -- the rare case where the one satisfying version is itself masked resolves to a plain `NoVisibleCandidate` on the retry, which is acceptable and documented for this slice. It does NOT ignore USE-deps (Portage enforces them in selection): a version only counts when every want-atom matches it on version, slot, *and* USE, so a USE-mismatching slot reuse falls through to the mask trial and the notice instead of constraining a retry that can only end in swallowed "no visible ebuild" lines.

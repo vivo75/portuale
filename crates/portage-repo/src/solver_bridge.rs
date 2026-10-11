@@ -1,77 +1,39 @@
 //! Alternate `--solver=` backends: PubGrub and resolvo over the same repo facts.
 //!
-//! Portuale-only (real `emerge` has no `--solver`): [`super::SolverKind`]'s
+//! Portuale-only (Portage's `emerge` has no `--solver`): [`super::SolverKind`]'s
 //! `PubGrub`/`Resolvo` variants land here. Both backends drive lu-zero's
-//! `portage-atom-pubgrub` / `portage-atom-resolvo` bridges (see
-//! `docs/history/solver-backends-analysis.md` and the `3rdparty/portage-cli`
-//! checkout) instead of the backtracking walk -- the same md5-cache facts
-//! in, a [`super::GraphResult`] out, so `pretend.rs` never knows which
-//! algorithm resolved the graph.
+//! `portage-atom-pubgrub` / `portage-atom-resolvo` bridges instead of the
+//! backtracking walk -- the same md5-cache facts in, a [`super::GraphResult`]
+//! out, so `pretend.rs` never knows which algorithm resolved the graph.
 //!
-//! The feeding direction is exactly the bridges' documented boundary ("a
-//! solver over facts"): portuale computes all policy (per-version resolved
-//! USE via [`super::effective_use_flags`], target atoms, installed set)
-//! and hands it in; the engines only pick versions.
-//!
-//! Performance shape (measured: the engines themselves take ~20ms; the
-//! adapter must not dominate): [`LazyRepo`] loads md5-cache facts **on
-//! demand per `cat/pkg`**, memoized, over a **reachability closure**
-//! BFS-seeded from the target + installed CPNs. md5 reads, dep-string
-//! parses and (the dominant cost, ~1ms each) `effective_use_flags` runs
-//! therefore scale with the request's closure, not the tree -- the same
-//! complexity shape as the backtracking walk's own BFS. The closure
-//! over-approximates (both sides of every `flag?()` conditional are
-//! followed, USE unevaluated), so reachability never drops a package the
-//! solver could select; `all_packages` exposes exactly the closure, which
-//! keeps dropped-dependency filtering sound. The PubGrub provider is built
-//! with `new_for_targets` (reachable conversion, not whole-tree); the
-//! resolvo pool is populated from closure records only (its construction
-//! is inherently whole-input).
+//! Portuale computes all policy (resolved USE, target atoms, installed set) and
+//! hands it in; the engines only pick versions. Facts load on demand per
+//! `cat/pkg` over a reachability-closure BFS, so cost scales with the request,
+//! not the tree.
 //!
 //! Deliberate v1 cuts (each would be its own slice):
-//! - No autounmask relaxation levels: the pool *is* visibility-filtered
-//!   with the walk's own `is_visible` (keyword/license/mask/PROPERTIES/
-//!   RESTRICT acceptance), so an invisible version is never offered --
-//!   but unlike the walk, a candidate that would need a `--autounmask*`
-//!   flip (a `~arch` keyword, a license, a `package.mask`) simply fails
-//!   to resolve rather than producing the flip suggestion.
-//! - Notices, wired where the bridge result admits them: blockers are
-//!   resolved through the walk's own `resolve_blockers` (H.15c), ABI
-//!   rebuilds through its `slot_operator_rebuild_entries` fixpoint
-//!   (H.15), circular deps through its `find_hard_cycles` over the
-//!   entry `deps` edges (J), and USE display carries the real
-//!   forced/masked `( )` markers (J). `slot_conflicts` and the
-//!   `autounmask_*` change lists stay empty: an engine solution picks a
-//!   single version per CPN, so a successful plan admits no same-slot
-//!   divergence, and no relaxation loop ran whose flips could be
-//!   listed -- a bridge failure is one `Error::Detail` line (engine-
-//!   native text), not a real `depgraph.py` notice.
-//! - Merge order is the walk's own `topological_merge_order` over real
-//!   `deps` edges rebuilt from each version's raw dep strings plus
-//!   resolved USE (H.15b) -- engine install order only seeds positions.
-//! - A dep-string class that `DepEntry::parse` rejects feeds empty deps
-//!   for that class; a version `Cpv`/`Version`-unparsable by
-//!   `portage_atom` is skipped; top-level blocker atoms are skipped.
-//! - USE-dep / `::repo` / slot-operator target forms resolve the way the
-//!   bridges resolve them, which may differ from the walk.
-//! - `oldbest` carries the resolved candidate's own sub-slot/repo (an
-//!   approximation of the installed one's) and new-slot `New` entries
-//!   list installed versions with empty sub-slot/repo.
+//! - No autounmask relaxation levels: invisible versions are never offered, but
+//!   a candidate needing a flip fails instead of suggesting one.
+//! - `slot_conflicts` and the `autounmask_*` lists stay empty; a bridge failure
+//!   is one `Error::Detail` line of engine-native text, not a Portage notice.
+//! - Merge order is the walk's own `topological_merge_order`; engine install
+//!   order only seeds positions.
+//! - Unparsable dep-string classes feed empty deps; unparsable versions and
+//!   top-level blocker atoms are skipped.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig, ResolveRequest,
-    Resolver as PortualeResolver, all_installed_packages, effective_use_flags, find_repos,
-    installed_pkg_iuse_and_use, is_visible, list_candidates, repo_aux_metadata,
+    EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig,
+    ResolveRequest, Resolver as PortualeResolver, all_installed_packages, effective_use_flags,
+    find_repos, installed_pkg_iuse_and_use, is_visible, list_candidates, repo_aux_metadata,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
 
 /// One repo version with everything a bridge needs except resolved USE
-/// (computed on demand by [`LazyRepo::use_of`]): parsed dep trees per
-/// class plus identity back into `GraphEntry` fields.
+/// (computed on demand by [`LazyRepo::use_of`]).
 #[derive(Clone)]
 struct LoadedVersion {
     category: String,
@@ -84,10 +46,8 @@ struct LoadedVersion {
     keywords: Vec<String>,
     /// DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND in that order.
     deps: [Vec<portage_solver::DepEntry>; 5],
-    /// The raw md5-cache strings those trees parsed from, same key
-    /// order -- kept so merge-order edge building can reuse the exact
-    /// walk-path helper (`merge_order::dep_edges_from_metadata`, which
-    /// needs the unreduced strings plus resolved USE).
+    /// The raw md5-cache strings the trees parsed from, for merge-order edge
+    /// building over the exact walk-path helper.
     raw_deps: [String; 5],
 }
 
@@ -98,8 +58,8 @@ impl LoadedVersion {
     }
 }
 
-/// Collect every CPN referenced by parsed dep trees (both conditional
-/// branches, blockers included): the over-approximating closure edge.
+/// Every CPN referenced by parsed dep trees (both conditional branches): the
+/// over-approximating closure edge.
 fn referenced_cpns(entries: &[portage_solver::DepEntry], out: &mut Vec<String>) {
     for entry in entries {
         match entry {
@@ -117,9 +77,8 @@ fn referenced_cpns(entries: &[portage_solver::DepEntry], out: &mut Vec<String>) 
     }
 }
 
-/// Whether `cat/pkg` names a real repo directory (any repo): the closure
-/// admits only resolvable names, so a dropped dependency stays genuinely
-/// absent downstream.
+/// Whether `cat/pkg` names a repo directory: the closure admits only resolvable
+/// names, so a dropped dependency stays genuinely absent downstream.
 fn cp_exists(repos: &[RepoConfig], cp: &str) -> bool {
     let Some((category, package)) = cp.split_once('/') else {
         return false;
@@ -129,20 +88,12 @@ fn cp_exists(repos: &[RepoConfig], cp: &str) -> bool {
         .any(|repo| repo.location.join(category).join(package).is_dir())
 }
 
-/// Repo facts loaded on demand per `cat/pkg` and memoized, over a
-/// reachability closure BFS-seeded from the target + installed CPNs.
+/// Repo facts loaded on demand per `cat/pkg` and memoized, over a reachability
+/// closure BFS-seeded from the target + installed CPNs.
 ///
-/// The closure is computed from parsed dep trees *without* USE evaluation
-/// (both conditional branches followed), so it is a superset of whatever
-/// the solver can reach; `effective_use_flags` then runs only for versions
-/// the solver actually queries via `use_of`. Everything scales with the
-/// request's closure, never the tree.
-///
-/// `Clone` shares nothing but copies the memoized maps (cheap: the
-/// closure is fully loaded at `build` time): the provider takes one copy
-/// while the `Plan -> GraphResult` mapping keeps the other, so USE
-/// computed during the solve stays cached provider-side and only the
-/// selected versions re-resolve mapping-side.
+/// The closure follows both conditional branches USE-unevaluated, so it is a
+/// superset of whatever the solver can reach; `effective_use_flags` runs only
+/// for versions the solver actually queries.
 #[derive(Clone)]
 struct LazyRepo {
     repos: Vec<RepoConfig>,
@@ -154,13 +105,8 @@ struct LazyRepo {
 }
 
 impl LazyRepo {
-    /// Build the closure from `seeds` (target CPNs, fully expanded) and
-    /// `shallow` (installed CPNs: versions loaded for favored-version
-    /// registration and upgrade comparison, but their own dep cones NOT
-    /// expanded -- nothing explores them unless the target cone reaches
-    /// them, in which case the target expansion loads them anyway):
-    /// BFS over parsed dep trees, loading (md5 read + parse, no USE) per
-    /// visited `cat/pkg`.
+    /// Build the closure from `seeds` (target CPNs, fully expanded) and `shallow`
+    /// (installed CPNs: loaded but not expanded): BFS over parsed dep trees.
     fn build(
         req: &ResolveRequest,
         repos: Vec<RepoConfig>,
@@ -185,8 +131,6 @@ impl LazyRepo {
                 continue;
             }
             if !expand {
-                // Shallow: versions must be present for the solver, but
-                // the cone stops here.
                 repo.load_versions(&cp)?;
                 continue;
             }
@@ -215,10 +159,8 @@ impl LazyRepo {
         if let Some((category, package)) = cp.split_once('/') {
             let candidates = list_candidates(&self.repos, category, package)?;
             for candidate in candidates.iter() {
-                // The walk resolves from a visibility-filtered pool; the
-                // bridges get the same pool (keyword/license/mask/PROPERTIES/
-                // RESTRICT acceptance via the walk's own `is_visible`), so an
-                // invisible version is never offered to either engine.
+                // Same visibility-filtered pool as the walk: invisible versions are
+                // never offered to either engine.
                 if !is_visible(candidate, category, package, &self.config) {
                     continue;
                 }
@@ -227,7 +169,7 @@ impl LazyRepo {
                 else {
                     continue;
                 };
-                // Skip versions outside `portage_atom`'s own version grammar.
+                // Skip versions outside `portage_atom`'s version grammar.
                 if portage_solver::Cpv::parse(&format!("{cp}-{}", candidate.version)).is_err() {
                     continue;
                 }
@@ -277,16 +219,15 @@ impl LazyRepo {
             return cached.clone();
         }
         let candidate_str = format!("{cpv}::{}", version.repo_name);
-        let use_set = effective_use_flags(
-            &self.config,
-            &version.iuse,
-            &version.keywords,
-            &candidate_str,
-            &version.category,
-            &version.package,
-        );
-        // Owned: the parked-bridge memo keeps its own copy (cold path;
-        // one clone per miss, as before #103).
+        let use_set = effective_use_flags(EffectiveUseFlagsArgs {
+            config: &self.config,
+            iuse: &version.iuse,
+            keywords: &version.keywords,
+            candidate_str: &candidate_str,
+            category: &version.category,
+            package: &version.package,
+        });
+        // One clone per miss; the memo keeps its own copy.
         self.uses.borrow_mut().insert(cpv, use_set.as_ref().clone());
         use_set.as_ref().clone()
     }
@@ -303,15 +244,9 @@ impl LazyRepo {
     }
 }
 
-/// Target + installed CPN seeds for the closure: every target atom's CPN
-/// (blockers excluded -- an unmerge action, not a merge target) plus every
-/// installed `cat/pkg` (favored-version registration and upgrade
-/// comparison need their repo versions present).
-/// Target + installed CPN seeds for the closure: every target atom's CPN
-/// (blockers excluded -- an unmerge action, not a merge target) expands
-/// fully; every installed `cat/pkg` loads shallowly (favored-version
-/// registration and upgrade comparison need its repo versions present,
-/// not its dep cone).
+/// Target + installed CPN seeds: target atoms' CPNs expand fully (blockers
+/// excluded: an unmerge action, not a merge target); installed CPNs load
+/// shallowly for favored-version registration and upgrade comparison.
 fn closure_seeds(req: &ResolveRequest) -> Result<(Vec<String>, Vec<String>), String> {
     let mut seeds = Vec::new();
     for atom in &req.atoms {
@@ -339,8 +274,7 @@ fn interned(
     portage_solver::interner::Interned::intern(value)
 }
 
-/// Split an `IUSE` string into flag names, stripping the `+`/`-` default
-/// markers the same way the walk's USE display does.
+/// Split an `IUSE` string into flag names, stripping `+`/`-` default markers.
 fn parse_iuse(iuse: &str) -> Vec<String> {
     let mut out: Vec<String> = iuse
         .split_whitespace()
@@ -384,7 +318,7 @@ impl InstalledView {
     }
 }
 
-/// Newest installed version in a slot by real `vercmp` ordering.
+/// Newest installed version in a slot by `vercmp` ordering.
 fn newest_installed(versions: &[String]) -> &str {
     let mut best = &versions[0];
     for candidate in &versions[1..] {
@@ -397,12 +331,9 @@ fn newest_installed(versions: &[String]) -> &str {
     best
 }
 
-/// Shared `Plan -> GraphResult` mapping: ordered `(cp, version)` selections
-/// plus `(to_cpv -> [(from_cat, from_pkg)])` parent edges become entries;
-/// each entry's `deps` come from its raw dep strings plus resolved USE
-/// (H.15b) and the whole list is re-sorted through the walk's own
-/// `topological_merge_order` below. USE display resolves on demand
-/// through `repo` (memoized).
+/// Shared `Plan -> GraphResult` mapping: ordered selections plus parent edges
+/// become entries with walk-derived `deps`, re-sorted through the walk's own
+/// merge order.
 fn graph_result_from_order(
     req: &ResolveRequest,
     repos: &[RepoConfig],
@@ -412,14 +343,10 @@ fn graph_result_from_order(
 ) -> GraphResult {
     let installed = InstalledView::of(req);
     let mut entries = Vec::new();
-    // Blocker atoms met in plan entries' dep strings, resolved after the
-    // loop by the shared walk-path helper (see below).
     let mut pending_blockers: Vec<super::PendingBlocker> = Vec::new();
     let mut seen_blockers: HashSet<(String, String, String)> = HashSet::new();
     for (cp, version) in order {
         let Some(record) = repo.record(cp, version) else {
-            // Not one of the offered facts (should not happen: the order
-            // came from the plan over these same facts).
             continue;
         };
         let use_set = repo.use_of(&record);
@@ -494,57 +421,47 @@ fn graph_result_from_order(
             })
             .collect();
         let empty: HashSet<String> = HashSet::new();
-        // Forced/masked-flag `( )` markers (J): the walk wraps every
-        // profile-forced or masked IUSE flag via `forced_or_masked_flags`
-        // (`refresh_entry_use_display`); the bridge passed an empty set,
-        // so real `pkg_use_display`'s `( )` wraps never rendered. Same
-        // call, same `cat/pkg-ver:slot/sub::repo` candidate spelling.
+        // Forced/masked-flag `( )` markers via the walk's own helper, with the same
+        // candidate spelling the walk resolves under.
         let candidate_str = format!(
             "{cp}-{version}:{}/{sub}::{repo}",
             record.slot,
             sub = record.sub_slot,
             repo = record.repo_name,
         );
-        let forced = super::forced_or_masked_flags(
-            &record.iuse,
-            &record.keywords,
-            &candidate_str,
-            &record.category,
-            &record.package,
-            &req.config,
-        );
-        // Same `all_flags` split `pretend.rs` uses: enabled-first full
-        // form for `-pv`, changed-only form for plain `-p`.
-        let use_expand_display = super::build_use_expand_display(
-            &use_flags_display,
-            &req.config,
-            None,
-            &forced,
-            true,
-            &empty,
-        );
-        let use_expand_display_p = super::build_use_expand_display(
-            &use_flags_display,
-            &req.config,
-            None,
-            &forced,
-            false,
-            &empty,
-        );
+        let forced = super::forced_or_masked_flags(super::ForcedOrMaskedFlagsArgs {
+            iuse: &record.iuse,
+            keywords: &record.keywords,
+            candidate_str: &candidate_str,
+            category: &record.category,
+            package: &record.package,
+            config: &req.config,
+        });
+        // Same `all_flags` split `pretend.rs` uses for `-pv` vs `-p`.
+        let use_expand_display =
+            super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
+                use_flags_display: &use_flags_display,
+                config: &req.config,
+                installed: None,
+                forced: &forced,
+                all_flags: true,
+                reinst_flags: &empty,
+            });
+        let use_expand_display_p =
+            super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
+                use_flags_display: &use_flags_display,
+                config: &req.config,
+                installed: None,
+                forced: &forced,
+                all_flags: false,
+                reinst_flags: &empty,
+            });
         let cpv = format!("{cp}-{version}");
         let mut required_by: Vec<(String, String)> = parents.get(&cpv).cloned().unwrap_or_default();
         required_by.sort();
         required_by.dedup();
-        // Merge-order fidelity (H.15b): the walk path builds every
-        // entry's `deps` (real `_add_pkg_dep_string` order/priorities)
-        // and sorts the whole list through `topological_merge_order`
-        // (real `_serialize_tasks`); bridge entries used to carry no
-        // edges at all, so engine install order leaked straight into
-        // the display. Reuse the exact walk-path helper over the raw
-        // dep strings (`raw_deps`: DEPEND, RDEPEND, BDEPEND, PDEPEND,
-        // IDEPEND) plus this version's resolved USE -- bridge plans are
-        // ebuild (source) candidates, hence the ebuild key list and
-        // `built = false`, exactly the walk's own call for one.
+        // Entry `deps` from the raw dep strings plus resolved USE, exactly the
+        // walk's own call for a source candidate.
         let dep_metadata: HashMap<String, String> = [
             ("DEPEND", record.raw_deps[0].as_str()),
             ("RDEPEND", record.raw_deps[1].as_str()),
@@ -562,15 +479,9 @@ fn graph_result_from_order(
             &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
             false,
         );
-        // Blocker collection (H.15c): the walk queues every USE-evaluated
-        // dep token and diverts blocker atoms into `pending_blockers`
-        // instead of the graph. Mirror it over the same raw strings and
-        // resolved USE: flatten each key with USE applied, and record
-        // every blocker atom against this owner (deduped per owner+atom;
-        // one owner can name the same block in several keys).
-        // #143 S1: `raw_deps` is key-ordered
-        // (DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND), so the index
-        // recovers real's `blocker.priority.buildtime` provenance.
+        // Blocker atoms in the same raw strings, flattened with USE applied and
+        // recorded per owner (deduped); the key index recovers buildtime
+        // provenance. Portage: `_add_pkg_dep_string` diverts blockers the same way.
         for (key_idx, raw) in record.raw_deps.iter().enumerate() {
             let toks: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
             let Ok(flat) = portage_use_reduce::use_reduce_flat(
@@ -597,7 +508,7 @@ fn graph_result_from_order(
                     pending_blockers.push(super::PendingBlocker {
                         atom_str: evaluated,
                         strong: dep_atom.blocker == portage_dep::Blocker::Strong,
-                        // #143 S1: key-ordered `raw_deps` (see above).
+                        // Key-ordered `raw_deps`, so the index is the buildtime provenance.
                         buildtime: key_idx == 0 || key_idx == 2,
                         target_category: dep_atom.category,
                         target_package: dep_atom.package,
@@ -640,22 +551,14 @@ fn graph_result_from_order(
             deps,
         });
     }
-    // Blocker reporting (H.15c): match every collected blocker atom
-    // against the installed db plus this plan's own resolved entries via
-    // the shared walk-path `resolve_blockers` (same USE-aware `[use]`
-    // gating, same `match_from_list` semantics), and file each conflict
-    // on its owner entry -- mirroring the walk, which resolves blockers
-    // after the graph settles and before the merge-order sort.
+    // Blocker reporting via the shared walk-path helper, filed on owner entries.
     let conflicts = super::resolve_blockers(
         &req.root,
         &pending_blockers,
         &entries,
-        // The bridge engines have no required-set closure of their own.
+        // The bridge has no required-set closure of its own.
         &std::collections::HashSet::new(),
-        // #143 S1: the bridge path never runs under `--buildpkgonly`
-        // (`ResolveRequest` carries no such flag — the parked
-        // pubgrub/resolvo engines are not the `--buildpkgonly` CLI
-        // path), so the gate is inert here.
+        // Never runs under `--buildpkgonly`, so the gate is inert here.
         false,
     );
     let mut orphan_blockers = Vec::new();
@@ -663,22 +566,11 @@ fn graph_result_from_order(
         &mut entries,
         &req.root,
         conflicts,
-        // The bridge has no scan-collected owners of its own; orphans
-        // can still arise from walk-pending owners without entries, so
-        // they ride the same field rather than being dropped.
+        // Orphans ride the same field rather than being dropped.
         &mut orphan_blockers,
     );
-    // ABI rebuilds (H.15, last slice): an installed consumer whose
-    // built `cat/pkg:S/SS=` dep no longer matches how this plan leaves
-    // that slot is scheduled for a reinstall -- the walk's own
-    // `slot_operator_rebuild_entries` fixpoint, called with the walk's
-    // own gate (`rebuild_if_new_slot`, not
-    // `ignore_built_slot_operator_deps`) and the walk's own
-    // complete-mode reachability (empty outside complete mode
-    // suppresses the scan entirely, exactly like a plain non-complete
-    // walk). Entries are extended before the merge-order sort so
-    // rebuilds land dependency-first like every other entry; the
-    // `(provider, consumer)` pairs feed `_show_abi_rebuild_info`.
+    // ABI rebuilds via the walk's own fixpoint, extended before the merge-order
+    // sort so rebuilds land dependency-first.
     let slot_op_reachable: HashSet<(String, String)> = if req.config.complete_seed_atoms.is_empty()
     {
         HashSet::new()
@@ -690,74 +582,46 @@ fn graph_result_from_order(
             (Vec::new(), Vec::new())
         } else {
             {
-                // #211 I1: the request carries the same `update` flag
-                // and top-level atoms the default path resolves under
-                // (same construction as `ResolveCtx::top_level_cps`), so
-                // the bridge fixpoint runs the new-slot arm too and both
-                // solvers agree.
+                // Same `update` flag and top-level atoms the default path resolves
+                // under, so the bridge fixpoint runs the new-slot arm too.
                 let top_level_cps: HashSet<(String, String)> = req
                     .atoms
                     .iter()
                     .filter_map(|a| portage_dep::parse_atom(a))
                     .map(|atom| (atom.category, atom.package))
                     .collect();
-                // #268: the raw request atoms behind `top_level_cps`,
-                // for the greedy-eligibility half of the `#252` gate.
+                // The raw request atoms, for the greedy-eligibility half of the gate.
                 let top_level_atoms: HashSet<String> = req.atoms.iter().cloned().collect();
-                super::slot_operator_rebuild_entries(
-                    &req.root,
+                super::slot_operator_rebuild_entries(super::SlotOperatorRebuildEntriesArgs {
+                    root: &req.root,
                     repos,
-                    &entries,
-                    &slot_op_reachable,
-                    req.with_bdeps,
-                    &req.excluded,
-                    req.update,
-                    &top_level_cps,
-                    &top_level_atoms,
-                    &req.config,
-                )
+                    entries: &entries,
+                    reachable: &slot_op_reachable,
+                    with_bdeps: req.with_bdeps,
+                    excluded: &req.excluded,
+                    update: req.update,
+                    top_level_cps: &top_level_cps,
+                    top_level_atoms: &top_level_atoms,
+                    config: &req.config,
+                })
             }
         };
     entries.extend(slot_op_rebuilds);
-    // Same merge-order sort the walk path applies (real portage's
-    // `mylist` is dependency-first): engine install order only seeds
-    // array positions now; `serialize_merge_order` re-sorts over the
-    // `deps` edges above plus the `required_by` fallback, with the same
-    // top-level atoms, profile config, root, and `--implicit-system-deps`
-    // bias the walk resolves under.
-    let (entries, insertion_rank) = super::topological_merge_order(
-        entries,
-        &req.atoms,
-        &req.config,
-        &req.root,
-        req.implicit_system_deps,
-        repos,
-        req.dynamic_deps,
-        // The bridge engines pick `||` branches natively (PubGrub /
-        // resolvo unit propagation, not `dep_zapdeps` bins) and run no
-        // backtrack restart, so there is no recorded cycle map to
-        // demote by -- an empty map keeps the suppression's
-        // re-derivation exactly as before (backlog #221).
-        &HashMap::new(),
-    );
-    // Circular-dep notice (J): the walk records every dependency edge's
-    // hard/soft kind while draining its queue and reports the shortest
-    // unbreakable build-time cycle via `find_hard_cycles`, which
-    // `pretend.rs` renders as the fatal `* Error: circular
-    // dependencies:` block (exit 1). Bridge entries carry the same
-    // `deps` edges (`dep_edges_from_metadata`, H.15b), so rebuild the
-    // same kind map here: a build-time edge no installed package
-    // satisfies is hard (`best_installed_for_atom`, the walk's own
-    // gate), anything else soft -- blockers never reach the map on
-    // either side (both skip them before recording). `find_hard_cycles`
-    // additionally reads the entries' own `deps` for the #228
-    // slot-operator arm, so the bridge inherits it with no extra map
-    // state here. `slot_conflicts`
-    // and the `autounmask_*` lists stay empty on purpose: an engine
-    // solution picks a single version per CPN, so a successful plan
-    // admits no same-slot divergence to report, and no relaxation loop
-    // ran whose flips could be listed (a candidate needing a flip
-    // fails instead -- the remaining cut, same as the module doc).
+    // Same merge-order sort the walk applies: engine order only seeds positions.
+    let (entries, insertion_rank) =
+        super::topological_merge_order(super::TopologicalMergeOrderArgs {
+            entries,
+            top_level_atoms: &req.atoms,
+            config: &req.config,
+            root: &req.root,
+            implicit_system_deps: req.implicit_system_deps,
+            repos,
+            dynamic_deps: req.dynamic_deps,
+            // No backtrack restart runs here, so no cycle map to demote by.
+            circular: &HashMap::new(),
+        });
+    // Circular-dep notice: rebuild the walk's hard/soft edge-kind map over the
+    // entry `deps` edges and report via `find_hard_cycles`, like the walk.
     let mut edge_kinds: super::EdgeKindMap = HashMap::new();
     for e in &entries {
         let owner = (
@@ -793,9 +657,7 @@ fn graph_result_from_order(
         &HashMap::new(),
         Some(&insertion_rank),
     );
-    // Elementary-cycle enumeration for the `large_cycle_count` trailer
-    // and cycle-only re-display, same as the walk path: only a reported
-    // hard cycle pays for the report build.
+    // Cycle report only when a hard cycle was reported.
     let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
         (false, Vec::new())
     } else {
@@ -809,24 +671,16 @@ fn graph_result_from_order(
     };
     GraphResult {
         entries,
-        // The bridge engines have no `Backtracker` loop: no restarts,
-        // and `--backtrack` is not consumed by them.
+        // No `Backtracker` loop: no restarts, and `--backtrack` is not consumed.
         backtrack_restarts: 0,
         backtrack_max: req.backtrack_max,
-        // No restart runs, so no cycle map is ever recorded either
-        // (backlog #221 is a walk-path rule).
+        // No restart runs, so no cycle map is ever recorded.
         circular_dependency: HashMap::new(),
-        // A solved engine plan admits no same-slot divergence and no
-        // relaxation loop ran, so it cannot abort either (no
-        // `_create_graph` 0-return, no `_serialize_tasks` give-up, no
-        // backtrack loop to exhaust) — always `Complete`. See
-        // `ResolveOutcome`'s doc comment; the abort path is a property
-        // of the BFS walk + backtrack loop in `lib.rs`, not the bridge.
+        // Always `Complete`: an engine plan cannot abort the way the walk can.
         outcome: super::ResolveOutcome::Complete,
         slot_conflicts: Vec::new(),
         skipped_updates: Vec::new(),
-        // Bridge engines run no backtrack loop, so no trial masks ever
-        // accumulate: nothing for either missed-update notice.
+        // No backtrack loop: no trial masks, nothing for either notice.
         skipped_missing_deps: Vec::new(),
         skipped_missing_dep_full: Vec::new(),
         orphan_blockers,
@@ -834,45 +688,32 @@ fn graph_result_from_order(
         buildpkgonly_deps_unsatisfied: false,
         prune_unresolved: false,
         pprovided_atoms: Vec::new(),
-        // Same standing empty: the bridge paths never drop a set
-        // member (their tests resolve explicit atoms, so `set_args`
-        // is empty and the fatal top-level miss stands).
+        // Never drops a set member (tests resolve explicit atoms).
         missing_args: Vec::new(),
         autounmask_keyword_changes: Vec::new(),
         autounmask_use_changes: Vec::new(),
         autounmask_license_changes: Vec::new(),
         autounmask_mask_changes: Vec::new(),
-        // Same standing empty: no relaxation loop ran whose flips a
-        // "terminated early" gate could hinge on (backlog #217: no
-        // changes, so `autounmask_backtrack_disabled()` is False
-        // regardless).
+        // No relaxation loop ran, so no early-termination gate can hinge on flips.
         autounmask_no_clean_tail: false,
         settled_with_backtracking: false,
         abi_rebuilds,
         circular_deps,
         large_cycle_count,
         cycle_display,
-        // The engine backends never leave an installed-consumer pin
-        // behind (a solved plan admits no same-slot divergence and no
-        // relaxation loop ran), so there is nothing to disclose here --
-        // same standing empty as slot_conflicts above.
+        // A solved plan admits no divergence and ran no relaxation loop.
         masked_deps: Vec::new(),
-        // Same standing empty: the engine backends have no BFS walk to
-        // record a `[use]`-unsatisfied dependency disclosure.
+        // No BFS walk: no `[use]`-unsatisfied disclosure.
         use_unsat_deps: Vec::new(),
-        // Same standing empty: no BFS walk, no plain-miss disclosure.
+        // No BFS walk: no plain-miss disclosure.
         plain_miss_deps: Vec::new(),
-        // Same standing empty (backlog #193): the engine backends have
-        // no `_virt_deps_visible` probe walk, and the bridge outcome is
-        // always `Complete` by design -- a virtual cycle is one more
-        // abort shape the bridges do not do, like slot conflicts above.
+        // No probe walk runs here, and the outcome is always `Complete`.
         virtual_cycle: Vec::new(),
     }
 }
 
 /// Named slot from a target atom's `:slot` part, if it names one
-/// (`SlotDep`'s fields are private, so this reads its `Display`: `0`,
-/// `0/1.2`, `0=`, `:=`, `:*`).
+/// (`SlotDep`'s fields are private, so this reads its `Display`).
 fn target_slot(dep: &portage_solver::Dep) -> Option<String> {
     let text = dep.slot_dep.as_ref().map(|slot| format!("{slot}"))?;
     if text.starts_with('=') || text.starts_with('*') {
@@ -899,9 +740,8 @@ impl PortualeResolver for PubGrubResolver {
     }
 }
 
-/// Facts over a [`LazyRepo`]: the bridge's own `PackageRepository`
-/// answers from memoized per-CPN loads, so the provider only ever pays
-/// for the closure (see `new_for_targets` below).
+/// Facts over a [`LazyRepo`]: answers from memoized per-CPN loads, so the
+/// provider only ever pays for the closure.
 struct BridgeRepo {
     lazy: LazyRepo,
 }
@@ -996,12 +836,8 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
         .collect();
     let lazy = LazyRepo::build(req, repos, &seeds, &shallow)
         .map_err(|e| format!("reading repo facts: {e}"))?;
-    // Reachable conversion, not whole-tree (`new` converts every CPN;
-    // `new_for_targets` converts the seeds' closure -- the same
-    // `with_bdeps = false` the default path uses, so behaviour is
-    // unchanged, only the converted set shrinks). The provider takes a
-    // clone; the mapping below keeps the original (memoized maps make
-    // the copy O(closure), no recompute).
+    // Reachable conversion, not whole-tree; the provider takes a clone while the
+    // mapping keeps the original (memoized maps make the copy cheap).
     let mut provider =
         PortageDependencyProvider::new_for_targets(BridgeRepo { lazy: lazy.clone() }, seed_cpns);
     for inst in all_installed_packages(&req.root) {
@@ -1042,10 +878,7 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
             }
             _ => PortageVersionSet::any(),
         };
-        // Same expansion the bridge's own `Solver` impl uses
-        // (`to_portage_targets`): a named `:slot` pins one slotted node,
-        // otherwise every slotted node for the CPN (an unslotted target
-        // node carries no versions when every version is slotted).
+        // A named `:slot` pins one slotted node, otherwise every slotted node.
         match target_slot(&dep) {
             Some(slot) => {
                 targets.push((PortagePackage::slotted(dep.cpn, interned(&slot)), versions))
@@ -1117,9 +950,7 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
     let (seeds, shallow) = closure_seeds(req)?;
     let lazy = LazyRepo::build(req, repos, &seeds, &shallow)
         .map_err(|e| format!("reading repo facts: {e}"))?;
-    // The pool construction is inherently whole-input, so the input is
-    // the closure (not the tree): populate only closure CPNs, USE
-    // resolved per version (memoized, so each runs once).
+    // The pool is inherently whole-input, so the input is the closure.
     let mut repo = InMemoryRepository::new();
     for cp in lazy.closure_cpns() {
         let cp_text = format!("{cp}");
@@ -1189,8 +1020,7 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
             InstalledPolicy::Favored,
         );
     }
-    // Per-version USE rides in each `PackageMetadata::use_flags`; the
-    // provider-level config stays default (no globally-forced flags).
+    // Per-version USE rides in each metadata; the provider config stays default.
     let use_config = RvUseConfig::default();
     let mut provider = PortageDependencyProvider::with_installed(&repo, &use_config, &installed);
     let mut reqs = Vec::new();
@@ -1204,16 +1034,7 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
     }
     let problem = resolvo::Problem::new().requirements(reqs);
     let mut solver = resolvo::Solver::new(provider);
-    // Engine-native failure text (the H.15a half of the solver V1 depth
-    // cuts): an unsolvable request renders resolvo's own conflict
-    // explanation (`Conflict::display_user_friendly`: "The following
-    // packages are incompatible" plus the conflict chains, named through
-    // the portage provider's solvable display) instead of the raw
-    // `UnsolvableOrCancelled` debug dump (`Unsolvable(Conflict {
-    // clauses: ... })`), which names no package at all. This mirrors the
-    // pubgrub backend, whose `format_solve_error` already renders its
-    // `NoSolution` derivation tree. A cancelled solve (not reachable
-    // through this synchronous call path) stays a plain message.
+    // Engine-native failure text naming the packages, never the internals dump.
     let solution = match solver.solve(problem) {
         Ok(solution) => solution,
         Err(resolvo::UnsolvableOrCancelled::Unsolvable(conflict)) => {
@@ -1223,8 +1044,7 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
             return Err("dependency resolution was cancelled".to_string());
         }
     };
-    // `iter()` is `slice::Iter` (items are `&SolvableId`), so `to_vec`
-    // would collect references -- the explicit copy stands.
+    // Items are references, so copy explicitly.
     #[allow(clippy::iter_cloned_collect)]
     let ids: Vec<resolvo::SolvableId> = solution.iter().copied().collect();
     let provider = solver.provider();
@@ -1284,9 +1104,7 @@ mod tests {
 
     #[test]
     fn active_resolver_for_selects_all_three_backends() {
-        // Selection itself is infallible and total: every kind yields a
-        // resolver. Behaviour is pinned by fixture-driven tests elsewhere;
-        // here only the wiring (no panic per kind).
+        // Every kind yields a resolver; behaviour is pinned elsewhere.
         let _portage = active_resolver_for(SolverKind::Portage);
         let _pubgrub = active_resolver_for(SolverKind::PubGrub);
         let _resolvo = active_resolver_for(SolverKind::Resolvo);
@@ -1299,9 +1117,7 @@ mod tests {
             .join("../../fixtures")
             .canonicalize()
             .expect("fixtures/ does not resolve: it is a symlink to ../pmtest/fixtures, so the sibling pmtest repo has to be checked out next to this one");
-        // The fixture profile's own ACCEPT_KEYWORDS (arch/amd64/make.defaults
-        // `ACCEPT_KEYWORDS="${ARCH}"` -> amd64), so `is_visible` in the pool
-        // sees the same keyword set a real resolve does.
+        // Same keyword set a Portage resolve sees.
         let mut config = portage_profile::Config::default();
         config.accept_keywords.insert("amd64".to_string());
         ResolveRequest {
@@ -1312,9 +1128,7 @@ mod tests {
             newuse: false,
             changed_use: false,
             nodeps: false,
-            // Bridge test helper resolves without `--onlydeps`; the
-            // parked pubgrub/resolvo engines do not implement the
-            // `--onlydeps-with-*` root filtering (nor `--nodeps`).
+            // The parked engines do not implement `--onlydeps` root filtering.
             onlydeps: false,
             onlydeps_with_rdeps: true,
             onlydeps_with_ideps: false,
@@ -1361,9 +1175,7 @@ mod tests {
         }
     }
 
-    /// The closure for a narrow target is a strict subset of the tree:
-    /// `dev-libs/newpkg` pulls nothing else, so only its own CPN (plus
-    /// installed CPNs, if any resolve) is loaded -- md5 reads, dep parses
+    /// The closure covers only the requested reachability: md5 reads, dep parses
     /// and USE runs scale with the request, never the tree.
     #[test]
     fn closure_covers_only_the_requested_reachability() {
@@ -1384,8 +1196,7 @@ mod tests {
             !closure.contains("dev-libs/diamond"),
             "closure leaked: {closure:?}"
         );
-        // ...but the diamond target pulls its whole (over-approximated)
-        // dependency cone.
+        // The diamond target pulls its whole over-approximated cone.
         let req = fixture_request(&["dev-libs/diamond"]);
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
@@ -1412,10 +1223,8 @@ mod tests {
         );
     }
 
-    /// The bridges resolve from a visibility-filtered pool: `dev-libs/
-    /// maskedpkg` is `~amd64`-only (invisible under `ACCEPT_KEYWORDS=amd64`)
-    /// so `load_versions` offers it nothing, while `dev-libs/newpkg`
-    /// (`amd64`) keeps its one visible version.
+    /// The pool is visibility-filtered: `~amd64`-only offers nothing while `amd64`
+    /// keeps its version.
     #[test]
     fn load_versions_filters_invisible_candidates() {
         use super::super::find_repos;
@@ -1434,11 +1243,8 @@ mod tests {
         assert_eq!(newpkg[0].version, "1.0");
     }
 
-    /// The resolvo backend reports engine-native failure text: an
-    /// unsatisfiable target renders resolvo's own conflict explanation
-    /// (`Conflict::display_user_friendly`) naming the involved packages
-    /// -- never the raw `UnsolvableOrCancelled` debug dump (which names
-    /// no package at all: `Unsolvable(Conflict { clauses: ... })`).
+    /// Unsatisfiable targets render the engine-native conflict naming the
+    /// packages, never the internals dump.
     #[test]
     fn resolvo_failure_text_is_engine_native_not_a_debug_dump() {
         use super::super::active_resolver_for;
@@ -1458,12 +1264,8 @@ mod tests {
         );
     }
 
-    /// Blocker reporting (H.15c): blocker atoms met in a solved bridge
-    /// plan's dep strings are matched by the shared walk-path
-    /// `resolve_blockers` and filed on their owner entries -- a weak
-    /// in-graph block (`weakblockerpkg` vs `blockerpartnerpkg`) and a
-    /// strong block against an installed package (`blockerpkg` vs
-    /// installed `samepkg-1.0`) alike, exactly the walk's own shapes.
+    /// Bridge entries report matched blockers through the shared walk-path helper,
+    /// in the walk's own shapes.
     #[test]
     fn bridge_entries_report_matched_blockers() {
         use super::super::active_resolver_for;
@@ -1485,7 +1287,7 @@ mod tests {
                 matched_category: "dev-libs".to_string(),
                 matched_package: "blockerpartnerpkg".to_string(),
                 matched_version: "1.0".to_string(),
-                // #68 S2: merge-bound match, merging parent -> unresolved.
+                // Merge-bound match with a merging parent: unresolved.
                 unsolvable: true,
                 satisfied_by: None,
                 tree_scheduled_uninstall: false,
@@ -1514,11 +1316,7 @@ mod tests {
                     matched_category: "dev-libs".to_string(),
                     matched_package: "samepkg".to_string(),
                     matched_version: "1.0".to_string(),
-                    // #68 S3: the installed fixtures that RDEPEND on
-                    // samepkg are not walked graph nodes here, so real
-                    // uninstalls it (`b`, rc 0); pre-S3 this was `true`
-                    // from the vdb reverse scan. #72 B3: resolved by
-                    // removing the installed match.
+                    // Not walked graph nodes, so Portage uninstalls the match.
                     unsolvable: false,
                     satisfied_by: Some(super::super::BlockerSatisfiedBy::Uninstall {
                         cpv: "dev-libs/samepkg-1.0".to_string(),
@@ -1530,14 +1328,8 @@ mod tests {
         }
     }
 
-    /// ABI rebuilds (H.15, last slice): a plan that moves a slot's
-    /// sub-slot schedules installed `:=`-bound consumers for reinstall
-    /// via the walk's own `slot_operator_rebuild_entries` fixpoint --
-    /// same gate, same complete-mode reachability. A throwaway vdb holds
-    /// `slotbindtarget-1.0` at `SLOT=2` plus a stale (`:2/2=`) and a
-    /// fresh (`:2/9=`) consumer, both in the seed set; resolving the
-    /// target (whose `-2.0` ebuild is `SLOT=2/9`) must reinstall only the
-    /// stale consumer and record the `(provider, consumer)` pair.
+    /// Plans moving a slot's sub-slot reinstall stale `:=` consumers via the
+    /// walk's fixpoint, recording the `(provider, consumer)` pair.
     #[test]
     fn bridge_plans_schedule_stale_equals_consumer_reinstalls() {
         use std::io::Write as _;
@@ -1604,8 +1396,7 @@ mod tests {
                     )
                 })
         };
-        // The target upgrades across the sub-slot; only the stale
-        // consumer reinstalls, flagged as a slot-operator rebuild.
+        // Only the stale consumer reinstalls as a slot-operator rebuild.
         assert!(matches!(
             by_pkg("slotbindtarget").outcome,
             super::super::PretendOutcome::Upgrade { .. }
@@ -1630,12 +1421,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Merge-order fidelity (H.15b): bridge entries carry real
-    /// `deps` edges (same helper, same key order/priorities as the
-    /// walk path) instead of an empty vec, so the shared
-    /// `serialize_merge_order` sort -- not raw engine install order --
-    /// decides the display order. `dev-libs/diamond`'s own entry must
-    /// name both `shared-a` and `shared-b` as dependencies.
+    /// Bridge entries carry walk-derived `deps` edges, so the shared sort -- not
+    /// engine install order -- decides the display order.
     #[test]
     fn bridge_entries_carry_merge_order_dep_edges() {
         for kind in [
@@ -1660,13 +1447,8 @@ mod tests {
         }
     }
 
-    /// Forced/masked-flag `( )` markers (J): with `forceflag` forced
-    /// and `maskflag` masked for the package, both bridge backends
-    /// render the walk's own `(forceflag)` / `(-maskflag)` wraps --
-    /// the bridge used to pass an empty forced set, so real
-    /// `pkg_use_display`'s markers never rendered. Fixture
-    /// `dev-libs/pkgusemaskforcepkg`, the same package the walk-path
-    /// contract pins (`USE="(forceflag) (-maskflag) -specflag"`).
+    /// Both backends render the walk's forced/masked `( )` wraps (same fixture
+    /// package the walk-path contract pins).
     #[test]
     fn bridge_use_display_wraps_forced_and_masked_flags() {
         for kind in [
@@ -1675,9 +1457,7 @@ mod tests {
         ] {
             let mut req = fixture_request(&["dev-libs/pkgusemaskforcepkg"]);
             req.solver = kind;
-            // `forced_or_masked_flags` reads the per-level stack, not
-            // the flat fields: one synthetic repo level forcing
-            // `forceflag` and masking `maskflag` for the package.
+            // One synthetic repo level forcing `forceflag` and masking `maskflag`.
             req.config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
                 package_use_force: vec![(
                     "dev-libs/pkgusemaskforcepkg".to_string(),
@@ -1710,15 +1490,8 @@ mod tests {
         }
     }
 
-    /// Circular-dep notice (J): the bridge rebuilds the walk's own
-    /// hard/soft edge-kind map over its entry `deps` edges and reports
-    /// the shortest unbreakable build-time cycle via `find_hard_cycles`
-    /// -- `pretend.rs` renders the fatal block from it, exactly like
-    /// the walk (`dev-libs/hardcyclea` <-> `dev-libs/hardcycleb`, both
-    /// unbuilt DEPEND edges). PubGrub linearises the cyclic closure,
-    /// so the notice lands; resolvo's `install_order` still cannot
-    /// linearise any cycle (Tier-4 `--solver=resolvo` item,
-    /// `scope-backlog.md` §J) and errors before the mapping runs.
+    /// The bridge reports the unbreakable build-time cycle through the walk's own
+    /// map; resolvo cannot order a cyclic closure and errors first.
     #[test]
     fn bridge_plan_reports_the_unbreakable_build_time_cycle() {
         let mut req = fixture_request(&["dev-libs/hardcyclea"]);

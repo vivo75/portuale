@@ -1,54 +1,14 @@
-// Real `env_update()` (`lib/portage/util/env_update.py`): real `dblink.
-// merge()` (`lib/portage/dbapi/vartree.py:5198-5209`) runs this
-// unconditionally after a successful merge that actually installed
-// something -- even when `pkg_postinst` itself failed ("It's stupid to
-// bail out here, so keep going regardless of phase return code"), gated
-// only on the merge's own `CONTENTS` being non-empty. It parses real
-// `/etc/env.d/*` files, regenerates `/etc/profile.env`/`/etc/csh.env`/a
-// systemd `/etc/environment.d/10-gentoo-env.conf`/`/etc/ld.so.conf`, and
-// -- when warranted -- runs the real, unmodified `ldconfig` binary.
-//
-// v1 scope, portuale's own "narrow, documented" pattern (confirmed
-// with the user before implementing):
-//   - No cross-process mtime cache (real `portage.mtimedb["ldpath"]`,
-//     which persists across a real, long-lived portage session): this
-//     portuale's own CLI is a fresh process per command, so every
-//     invocation is treated as a first run instead -- any candidate lib
-//     dir (`LDPATH` entries from env.d, an existing `usr/lib*`/`lib*`
-//     directory) found on disk post-merge is treated as "changed",
-//     triggering `ldconfig`. This exactly matches real portage's own
-//     genuine first-run behavior (empty `prev_mtimes`); the only real
-//     divergence is a *repeat* merge into the same `ROOT` that didn't
-//     touch any lib dir, where real portage would skip `ldconfig` and
-//     portuale re-runs it anyway -- never wrong, just occasionally
-//     extra (cheap, idempotent) invocations.
-//   - Real `getlibpaths()`'s own `/etc/ld.so.conf.d/*.conf` (`include`
-//     directive) parsing is not reproduced -- a rare, admin-configured
-//     mechanism, not populated by anything portuale's own fixtures do.
-//   - No `CHOST`/`CBUILD` cross-compile handling at all (portuale has
-//     no cross-compile concept anywhere else either) -- always takes
-//     real `env_update()`'s own `else` branch, `<ROOT>/sbin/ldconfig`
-//     (note: the *target* `ROOT`'s own binary, not a host `PATH` lookup
-//     -- real `_doebuild_spawn`-adjacent code relies on this being
-//     chroot-compatible with `-r target_root`).
-//   - No `EPREFIX` support anywhere in portuale -- the real bfd-linker
-//     alternate `/usr/etc/ld.so.conf` is never written.
-//   - env.d files that declare their own extra `SPACE_SEPARATED`/
-//     `COLON_SEPARATED` keys are not honored -- only the two real,
-//     hardcoded default sets (`CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`;
-//     `PATH`/`LDPATH`/`MANPATH`/etc.) are ever treated as cumulative.
-//   - Real `getconfig()`'s own shlex-based parser is not reproduced --
-//     env.d files are parsed with the same simple per-line
-//     `KEY="value"` shortcut `ebuild_merge::parse_slot` already takes
-//     for `SLOT`.
-//   - `/etc/ld.so.conf` is unconditionally rewritten every run (real
-//     `env_update()` only rewrites it -- and only then considers
-//     `ldconfig` worth running for *that specific reason* -- when its
-//     own content actually changed); moot here since portuale's own
-//     `ldconfig`-triggering decision doesn't depend on that comparison
-//     at all (see the mtime-cache cut above), and `/etc/ld.so.conf`
-//     itself isn't vdb-tracked (no `CONFIG_PROTECT`/unmerge interaction
-//     to preserve).
+//! Portage's `env_update()` (`lib/portage/util/env_update.py`), run after a
+//! merge that installed something: collate `/etc/env.d/*` into
+//! `profile.env`, `csh.env`, the systemd `environment.d` file and
+//! `ld.so.conf`, running the target root's own `ldconfig` when a
+//! candidate lib dir exists on disk.
+//!
+//! Scope cuts a caller must know: no cross-process mtime cache, so every
+//! run is treated as a first run (`ldconfig` may run redundantly but never
+//! wrongly); no `ld.so.conf.d` includes, `CHOST`/`CBUILD`, `EPREFIX`,
+//! extra cumulative keys, or shlex parsing; `/etc/ld.so.conf` is always
+//! rewritten.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -69,12 +29,8 @@ const COLON_SEPARATED: [&str; 12] = [
     "ROOTPATH",
 ];
 
-/// Real PMS-adjacent shell-assignment shortcut, the same one
-/// `ebuild_merge::parse_slot` already takes for `SLOT`: `KEY="value"`/
-/// `KEY='value'`/`KEY=value` (bare token), one assignment per line,
-/// trailing `# comment` allowed. Real `getconfig()`'s own shlex parser
-/// (multi-line values, embedded escapes) is not reproduced -- see this
-/// module's own doc comment.
+/// One `KEY="value"`/`KEY='value'`/`KEY=value` assignment per line,
+/// trailing `# comment` allowed. No shlex (multi-line values, escapes).
 fn parse_env_d_line(line: &str) -> Option<(String, String)> {
     let re = regex::Regex::new(
         r#"^[ \t]*([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|(\S*))[ \t]*(#.*)?$"#,
@@ -91,8 +47,8 @@ fn parse_env_d_line(line: &str) -> Option<(String, String)> {
     Some((key, value.to_string()))
 }
 
-/// Real `env_update()`'s own env.d filename filter: at least 3 chars,
-/// starting with two digits, not a dotfile/backup.
+/// At least 3 chars, starting with two digits, not a dotfile/backup.
+// Portage: lib/portage/util/env_update.py, env_update
 fn is_env_d_filename(name: &str) -> bool {
     let bytes = name.as_bytes();
     name.len() >= 3
@@ -103,17 +59,10 @@ fn is_env_d_filename(name: &str) -> bool {
         && !name.ends_with(".bak")
 }
 
-/// Real `INFOPATH`/`INFODIR`, colon-separated, collated from
-/// `/etc/env.d/*` the same way `run_env_update` collates every other
-/// real `COLON_SEPARATED` key -- `INFOPATH` entries first, then
-/// `INFODIR` entries (real `_emerge/post_emerge.py::post_emerge`'s own
-/// `infodirs = INFOPATH.split(":") + INFODIR.split(":")`, read from the
-/// settings reloaded after `env_update`). Empty entries are dropped
-/// (real `chk_updated_info_files` skips `""` itself); duplicates are
-/// kept (real passes them through -- the dir-mtime memo makes a second
-/// visit a no-op). Shared by `info_dirs_inodes` (the unmerge-time inode
-/// set) and `info_files` (the post-merge regeneration list) so there is
-/// exactly one env.d parser for both.
+/// `INFOPATH` entries first, then `INFODIR` entries; empty entries
+/// dropped, duplicates kept. Shared by `info_dirs_inodes` and `info_files`
+/// so there is exactly one env.d parser for both.
+// Portage: lib/_emerge/post_emerge.py, post_emerge
 pub fn info_dir_values(root: &Path) -> Vec<String> {
     let mut infopath: Vec<String> = Vec::new();
     let mut infodir: Vec<String> = Vec::new();
@@ -143,19 +92,11 @@ pub fn info_dir_values(root: &Path) -> Vec<String> {
     infopath.extend(infodir);
     infopath
 }
-/// Real `dblink._unmerge_pkgfiles()`'s own `infodirs_inodes`
-/// (`lib/portage/dbapi/vartree.py:2830-2846`): each real, `root`-joined
-/// candidate directory from `info_dir_values` that actually exists on
-/// disk right now contributes its own `(dev, ino)` -- real `os.stat`
-/// (follows symlinks, unlike the `lstat`-based inode keys portuale's
-/// own `dirs`/`protected_symlinks` otherwise use, since a real
-/// `INFOPATH` entry naming a symlink should still match the directory
-/// it resolves to). A missing env.d directory, or a named candidate
-/// that doesn't actually exist, degrades gracefully to an empty/smaller
-/// set -- the same tolerance `run_env_update` itself already has for a
-/// missing `/etc/env.d`. (`ebuild_unmerge::run_unmerge` is the one real
-/// caller, threading the result into `cleanup_info_dir`'s own real
-/// `inode_key in infodirs_inodes` check.)
+/// Each existing `root`-joined candidate directory from
+/// `info_dir_values` contributes its own `(dev, ino)`, via `stat`
+/// (follows symlinks, so an `INFOPATH` entry naming a symlink still
+/// matches). Missing entries degrade to an empty/smaller set.
+// Portage: lib/portage/dbapi/vartree.py, _unmerge_pkgfiles
 pub fn info_dirs_inodes(root: &Path) -> std::collections::BTreeSet<(u64, u64)> {
     use std::os::unix::fs::MetadataExt;
 
@@ -166,13 +107,10 @@ pub fn info_dirs_inodes(root: &Path) -> std::collections::BTreeSet<(u64, u64)> {
         .collect()
 }
 
-/// Real `potential_lib_dirs`/`getlibpaths`-adjacent candidate set (see
-/// this module's own doc comment for the v1 cuts): every `LDPATH`
-/// entry, plus `usr/lib`/`lib`, plus any top-level or `usr/`-relative
-/// directory whose own name starts with `lib` (excluding `libexec`,
-/// matching real `os.path.basename(y) != "libexec"`) -- filtered down
-/// to whichever of those actually exist as real directories on disk
-/// right now (post-merge).
+/// Every `LDPATH` entry, plus `usr/lib`/`lib`, plus any top-level or
+/// `usr/`-relative directory starting with `lib` (excluding `libexec`),
+/// filtered to directories actually on disk post-merge.
+// Portage: lib/portage/util/env_update.py, getlibpaths
 fn candidate_lib_dirs(root: &Path, ldpath_entries: &[String]) -> Vec<PathBuf> {
     let mut dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for entry in ldpath_entries {
@@ -204,16 +142,10 @@ fn candidate_lib_dirs(root: &Path, ldpath_entries: &[String]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Real `os.path.join(eroot, "sbin", "ldconfig")` invoked as `[ldconfig,
-/// "-X", "-r", target_root]` with `cwd="/"` -- a real, unmodified
-/// subprocess (portuale's own "real subprocess, accepted dependency"
-/// pattern already established for `wget` in the fetch slice). A
-/// missing or non-executable `<root>/sbin/ldconfig` is silently a no-op
-/// (real `env_update()`'s own tolerance -- most real `ROOT`s in this
-/// portuale's own synthetic fixtures never install one at all). Real
-/// `env_update()` only ever warns on a nonzero exit, never aborts the
-/// merge over it -- mirrored here by ignoring the exit status entirely
-/// once spawned.
+/// Run `<root>/sbin/ldconfig -X -r <root>` as an unmodified subprocess.
+/// A missing or non-executable binary is silently a no-op; the exit
+/// status is ignored once spawned (a failed `ldconfig` never aborts
+/// the merge).
 fn run_ldconfig(root: &Path) -> Result<(), String> {
     let ldconfig = root.join("sbin/ldconfig");
     let Ok(metadata) = std::fs::metadata(&ldconfig) else {
@@ -243,10 +175,9 @@ fn write_generated(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Real `env_update()`'s own top-level driver. Called unconditionally
-/// after a successful merge that actually installed something -- see
-/// this module's own doc comment for the full real grounding and v1
-/// scope cuts.
+/// Collate env.d and write the four generated files, then run
+/// `ldconfig` when a candidate lib dir exists. Called unconditionally
+/// after a successful merge that installed something.
 pub fn run_env_update(root: &Path) -> Result<(), String> {
     let envd_dir = root.join("etc/env.d");
     std::fs::create_dir_all(&envd_dir).map_err(|e| format!("{}: {e}", envd_dir.display()))?;
@@ -406,9 +337,7 @@ mod tests {
 
     #[test]
     fn info_dir_values_lists_infopath_before_infodir() {
-        // Real `post_emerge.py`'s own `INFOPATH.split(":") +
-        // `INFODIR.split(":")` order: every INFOPATH entry first, then
-        // every INFODIR entry.
+        // Expected order from Portage's post_emerge.py.
         let tmp = tempdir();
         std::fs::create_dir_all(tmp.join("etc/env.d")).unwrap();
         std::fs::write(

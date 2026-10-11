@@ -1,0 +1,41 @@
+# crates/portuale/src/pretend/display/blockers.rs
+Blocker rows in the merge list. Context moved out of the code comments (#336 Phase 7); the code keeps only the short why.
+
+## enum BlockerRowDisposition
+- Backlog #68/#72 B2: where one blocker row is displayed. `Trailing` is Portage's `Display.blockers` (`output.py:573-592`): unresolved rows, plus the satisfied rows #72 B4 has not moved inline yet. `Hidden` (a `Replacement` row whose replacement does not wait on its owner's merge): Portage's serializer never scheduled the blocker's uninstall, so the solved blocker never entered the merge list (`depgraph.py:10351-10358`) and no `Conflict:` entry exists for it (flat p2b, B0b). `Inline(usize)` (printed right after the replacement): Portage's `output.py:119-121` appends a satisfied blocker to `print_msg` at its `_serialize_tasks` position -- B0b's p2c/p2d/p2e shape.
+
+## fn kept_alt_for_display
+- Backlog #84: the kept-`|| ( … )`-branch set the disposition calls share, derived once per *walk* instead of once per row. `replacement_wait_index` used to derive it on every call, so each `Replacement` row paid the O(graph) derivation again in each of the three list walks (`collect_inline_blocker_lines`, `trailing_blocker_lines`, `count_blocker_rows`) and in the `--tree` node walk. The derivation itself is untouched -- still `portage_repo::kept_alt_branches`, the one `suppressed_alt_edges` ranking `build_digraph` shares, so the #53 self-branch exclusion still cannot drift -- only its placement moved.
+- `trailing_blocker_lines` passes only its own entry because it is called once per display entry (`print_entry_line`); hoisting the derivation to the list would have paid it once per entry -- measured 12.4 s -> 15.8 s on `emerge -p @world` here, a pessimization, not a saving.
+- `circular` (backlog #221): the settling pass's recorded cycle edges. Both the `--tree` walk and the flat-list blocker walks pass the resolve's own map, so a wait chain follows the cycle-breaking branch the walk took (backlogs #216/#221 reconciliation, I5: the flat walks used to pass an empty map, which could mis-disposition a wait chain through a demoted branch when Replacement rows coexist with a backtrack).
+
+## fn blocker_row_disposition
+- Backlog #68/#72 B2. `entries` is the display-ordered list, `owner_index` the entry carrying `b`, and `root` the vdb root the `satisfied` check reads.
+- Uninstall arm (backlog #72 B4): Portage appends the solved blocker when the uninstall node is selected (`depgraph.py:10351-10358`); B0 u6 has the `b` row between the uninstall row and the trailing unsatisfied group. A missing removal entry (an owner the bridge dropped) keeps the trailing group, the pre-B4 shape.
+
+## fn replacement_wait_index
+- Backlog #68/#72 B2's mechanism predicate. Portage's `_serialize_tasks` appends a satisfied blocker to the merge list only when it was stuck -- no merge node selectable in any priority range -- and scheduled the blocker's uninstall (`depgraph.py:9998`, `:10190`); the replacement's own selection then removes that uninstall and appends the solved blocker after itself (`:10315-10331`, `:10351-10358`). B0b pinned the shapes: the wait exists when the replacement depends on the owner's merge through a chain of merge-bound entries (`BDEPEND` p2c, `BDEPEND -> RDEPEND` p2d, plain `RDEPEND` p2e), and not when the dependency is satisfied by an installed package (flat p2b, no row), nor when the owner is not merging at all (cell g).
+- The traversal follows only edges Portage's leaf scan cannot ignore (`DepPriorityNormalRange`: optional and `runtime_post` edges are ignored at the first two relaxed rungs, build-time and runtime are not) that are not satisfied by an installed package (`dep_edge_satisfied_by_installed`, the same rule `build_digraph` uses for `DepPriority::satisfied`; `GraphEntry::deps` itself never carries that computed bit).
+- `|| ( … )` branches: `dep_zapdeps` collapses each group during graph construction, so the serializer operates on the one branch this run kept -- the predicate follows kept alternatives exactly like plain edges and skips only the suppressed ones (`portage_repo::kept_alt_branches`, the same `choice_bins` ranking `build_digraph` uses; #76 B0 captured Portage waiting through a disjunctive `BDEPEND` and an `RDEPEND` group, q1/q2/q3 in `TEST/findings/l0.md` "#76 B0").
+- Intermediate hops match by cp, not per instance (T10): `DepEdge` carries no resolved slot; Portage's `_create_graph` resolves each atom to one package and `build_digraph` narrows with its own `edge_matches`, so a cp with two merging slots could over-connect here -- the predicate can only *over-find* a wait (show a row Portage might hide), never miss one. B2's pinned shapes have no multi-slot intermediates; the `debug_assert!` still guards the ordering implication (the plan's guard, `docs/history/02.68-74.md` §4 D/B2).
+- The plan's guard (docs/history/02.68-74.md §4 D/B2): the predicate implies the owner merges before the replacement; if portuale's merge order disagrees, stop and report (a `merge_order.rs` item) rather than print a row Portage would put elsewhere.
+
+## fn replacement_entry_index
+- Shared by `replacement_wait_index` and the #81 tree-stuck row placement, which hangs the row under the same replacement Portage's solved-blocker append follows.
+
+## fn format_blocker_row
+- Ports Portage's `ResolverOutput._blockers` (`output.py:75-123`): one `[blocks <letter> ] <resolved> ("<atom>" is {hard,soft} blocking <owner cpv>)` line -- purely informational (see `resolve_pretend_graph`'s doc comment), v1 neither refuses nor changes the exit code for a blocker match. Since #68 S2/S3 a row can be *satisfied* (Portage's `blocker.satisfied`): the red `B` / `PKG_BLOCKER` branch is the unresolved one (`BlockerConflict::unsolvable`), the teal `b` / `PKG_BLOCKER_SATISFIED` branch the satisfied one.
+- `resolved` is Portage's `dep_expand(str(atom).lstrip("!"))` -- a category-qualification only, and every portuale blocker atom is already `cat/pkg[...]`, so it reduces to stripping the leading `!`/`!!`. Portage's `(is <desc> <parents>)` alternative (`self.resolved == blocker.atom`) is unreachable -- `resolved` drops the `!` while `blocker.atom` keeps it.
+- Portage's `_blockers` appends `empty_space_in_brackets()` after the five-space pad, adding the mask column's own space whenever `verbosity > 1` -- true at Portage's default `emerge -p` verbosity of 2, dropped only under `--quiet` (verbosity 1), which `include_mask` carries.
+- `indent` (backlog #75 C1): Portage's `_blockers` (`output.py:93-96`) places `self.indent` between the bracket and the resolved atom.
+- The row's `owner_cpv` (`cat/pkg-ver`) for the trailing `("…" is … blocking <owner>)` text -- an entry's own cpv at the four entry-owned call sites, the orphan's recorded cpv for a scan-collected owner with no entry (backlog #80).
+
+## fn trailing_blocker_lines
+- Satisfied rows are dropped under `--columns` (Portage `output.py:120`: `_blockers` appends a satisfied line to `print_msg` only when `not self.conf.columns`). Unresolved lines are never column-suppressed.
+
+## fn collect_inline_blocker_lines
+- Sorted by index (stable, so several owners waiting on the same replacement keep display order). Empty under `--columns` (satisfied lines are suppressed; the counters still count them -- Portage counts every `Blocker` node in the merge list, `get_display_list` `output.py:575-584`).
+
+## fn count_blocker_rows
+- Hidden rows never entered the list -- except in tree mode, where a flat-Hidden Replacement row the #81 simulation solves DOES enter it (C0 p2b: `Conflict: 1 block (all satisfied)` under `--tree -v` and nothing under flat `-v`). This mirrors `print_tree`'s Blocker-node set exactly (same flag, same arm): anything counted here has a node there.
+- The `blocks`/`blocks_satisfied` counters Portage `_PackageCounters` accumulates from the merge list: every `Blocker` node in it counts, satisfied or not (`get_display_list`, `output.py:575-584`), which is exactly the rows `Trailing` and `Inline` describe. Hidden rows never entered the list -- except in tree mode (`tree == true`), where a flat-Hidden Replacement row the #81 simulation solves DOES enter it (C0 p2b: `Conflict: 1 block (all satisfied)` under `--tree -v` and nothing under flat `-v`).

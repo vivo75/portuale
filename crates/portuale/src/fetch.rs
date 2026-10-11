@@ -1,87 +1,14 @@
-// Real network fetch -- the second half of "actually fetch a package's
-// real sources" (see `portage_fetch`'s own module doc comment for the
-// pure-logic half: SRC_URI flattening, Manifest parsing, digest
-// verification, all offline and 100% unit-testable). Shells out to real
-// `wget`, using real `make.globals`'s own default `FETCHCOMMAND`
-// template verbatim (`cnf/make.globals`), rather than an in-process HTTP
-// client -- matching portuale's own "run the same real external
-// process portage would" precedent (`bin/*.sh`, `xpak-helper.py`, ...).
-//
-// Real `FEATURES=distlocks` is real too (`lib/portage/locks.py:175-`'s
-// own `lockfile(mypath, wantnewlockfile=1)`, called at real
-// `fetch.py:1315-1330`/unlocked at `:2032-2033`, wrapping the *entire*
-// per-file fetch-and-verify sequence, not just the actual download):
-// a real, blocking `flock(2)` exclusive lock (real `fcntl.flock`) on a
-// real, separate sibling lockfile (real `'.' + basename +
-// '.portage_lockfile'`) -- guards against two concurrent portage
-// processes racing the same distfile. Confirmed via `cnf/make.globals`
-// (line 77-84) that `distlocks` is one of real portage's own *default*
-// `FEATURES` tokens (`PortageLockfile::acquire`'s own callers default to
-// locking accordingly). Released by simply closing the lock file's own
-// fd (`PortageLockfile`'s own `Drop`), the same real effect real
-// `unlockfile()`'s own explicit `flock(fd, LOCK_UN)` has -- POSIX
-// guarantees all of a process's own `flock` locks on an fd are released
-// when that fd is closed. Real `unlinkfile=0` (portuale's own default
-// too, matching real `fetch.py`'s own call): the lockfile itself
-// persists on disk after release, just unlocked, ready for reuse.
-//
-// KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
-// "narrow v1, document the cut" pattern):
-//   - Resume IS modelled now (the candidate loop passes real's
-//     fresh-vs-resume bit through the `mrg_director::FetchRequest` seam,
-//     `resume: true` running `make.globals`'s own default
-//     `RESUMECOMMAND`, `FETCHCOMMAND` + `-c`): once a non-empty partial
-//     file is on disk (a dropped connection, a mirror that closed
-//     mid-transfer), the candidate loop switches to `wget -c` to continue
-//     it rather than restarting, matching real `fetch.py`. A complete-
-//     but-corrupt file (digest mismatch after a full download) is still
-//     dropped -- it can't be resumed. Not modelled: real portage's
-//     `PORTAGE_FETCH_RESUME_MIN_SIZE` threshold (it only resumes a
-//     partial past 350000 bytes) -- portuale resumes any non-empty one.
-//   - `mirror://` resolution is real now (`portage_fetch::
-//     resolve_mirror_candidates` + `mirror_url`'s real `layout.conf`
-//     negotiation and `.mirror-cache.json`, see that
-//     crate's own module doc comment for the exact real mechanics
-//     covered -- including real `custommirrors`, an admin-configured
-//     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file, real
-//     `RESTRICT=mirror` (`FetchOptions::restrict_mirror` -- the public
-//     `GENTOO_MIRRORS` fallback is skipped), real
-//     `RESTRICT=primaryuri` (`FetchOptions::restrict_primaryuri` -- the
-//     file's own literal URIs move to the front of its candidate list),
-//     real `FEATURES=force-mirror` (`FetchOptions::force_mirror` --
-//     plain URIs never enter the list), and the real candidate order
-//     itself (`assemble_candidates`: local mirrors, then
-//     public `GENTOO_MIRRORS`, then `mirror://` expansions, then
-//     literals -- rather than portuale's old most-specific-first).
-//     On-filesystem mirrors (real `fsmirrors`) are copied from before
-//     any download (`copy_from_fsmirrors`). The one real behaviour
-//     deliberately not attempted: third-party shuffle (portuale stays
-//     deterministic). The
-//     `mirror+`/`fetch+`
-//     SRC_URI prefixes ARE parsed (`portage_fetch::SrcUriEntry::
-//     override_mirror`/`override_fetch`): `mirror+` re-permits the
-//     public `GENTOO_MIRRORS` fallback even under `RESTRICT=mirror`, and
-//     `override_fetch` (from either prefix) re-permits a plain URI under
-//     `RESTRICT=fetch` -- which IS modelled now
-//     (`FetchOptions::restrict_fetch`): a plain (non-`mirror://`) URI is
-//     barred from the candidate list, and the public mirrors too, so a
-//     `RESTRICT=fetch` package fetches OK only from an already-verified
-//     `DISTDIR` copy (or `custommirrors`/a `mirror://`-named mirror).
-//     Running the ebuild's own `pkg_nofetch` phase for a missing file IS
-//     modelled now -- `fetch_src_uri` fails, and its caller
-//     `ebuild_phases::fetch_sources` then runs `run_one_phase(env,
-//     "nofetch")` so the ebuild's custom "download it from … and place it
-//     in DISTDIR" instructions print, before the fetch error propagates.
-//   - No `FEATURES=verify-sig` GPG check -- this backlog item was
-//     mis-scoped when first written: real `verify-sig`/signature
-//     verification is a `gpkg` (the newer GPG-signed binary package
-//     format, `lib/portage/gpkg.py`) and repo-sync concept (real
-//     `lib/portage/sync/modules/webrsync`'s own gemato-based Manifest
-//     signing), not a `SRC_URI`/distfile-fetch one at all -- confirmed
-//     by grepping `fetch.py` directly and finding zero hits for either
-//     term. Neither `gpkg` nor repo syncing are in portuale's own
-//     scope at all yet, so there's nothing to port here.
-
+//! Network fetch: the second half of fetching a package's sources (the
+//! offline half -- SRC_URI flattening, Manifest parsing, digest
+//! verification -- lives in `portage_fetch`). Shells out to `wget` using
+//! `make.globals`' default `FETCHCOMMAND`, and honors `FEATURES=distlocks`
+//! with a blocking `flock` on a sibling lockfile per distfile.
+//!
+//! Scope cuts a caller must know: resume means any non-empty partial (no
+//! size threshold); `mirror://` resolution, `RESTRICT=mirror/fetch/
+//! primaryuri`, `force-mirror`, on-filesystem mirrors and `pkg_nofetch`
+//! are modelled; third-party mirrors are never shuffled (deterministic);
+//! no `FEATURES=verify-sig` (a `gpkg`/sync concept, not distfile-fetch).
 use mrg_director::{FetchRequest, Fetcher, WgetFetcher};
 use portage_fetch::{
     SrcUriEntry, flatten_src_uri, parse_manifest, parse_thirdpartymirrors,
@@ -91,17 +18,10 @@ use std::path::{Path, PathBuf};
 
 use crate::portage_lock::PortageLockfile;
 
-/// Real `make.globals`'s own `GENTOO_MIRRORS="http://distfiles.gentoo.
-/// org"` default. Used only by `ebuild_phases::fetch_sources`'s own
-/// `FetchOptions` construction, NOT read inside `fetch_src_uri` itself
-/// -- unlike `DISTDIR`/`ROOT`/`PORTAGE_TMPDIR`, `GENTOO_MIRRORS` has no
-/// dedicated CLI flag of its own yet, but the same "explicit parameter,
-/// not an ambient env read inside library code" reasoning still applies
-/// here: `FetchOptions.gentoo_mirrors` lets each test control it
-/// directly (most tests set it to `vec![]`, so a deliberately-failing
-/// fetch doesn't silently reach out to the real `distfiles.gentoo.org`
-/// as an unintended fallback) without needing `std::env::set_var`'s own
-/// unsoundness under parallel test execution.
+/// Default `GENTOO_MIRRORS` when the env var is unset/empty. A `FetchOptions`
+/// field rather than an ambient read, so tests control it directly (most set
+/// it to `vec![]`, so a deliberately-failing fetch never reaches the genuine
+/// mirror as an unintended fallback).
 pub fn gentoo_mirrors_from_env() -> Vec<String> {
     match std::env::var("GENTOO_MIRRORS") {
         Ok(value) if !value.trim().is_empty() => {
@@ -111,110 +31,51 @@ pub fn gentoo_mirrors_from_env() -> Vec<String> {
     }
 }
 
-/// `distdir` is env-var-sourced at the `ebuild.rs`/`pretend.rs` CLI
-/// boundary (`DISTDIR`, same "env var/hardcoded default" shortcut
-/// `PKGDIR`/`CONFIG_PROTECT` already use); `Default` matches real
-/// `make.globals`'s own `DISTDIR="/var/cache/distfiles"` exactly.
-/// `gentoo_mirrors` real make.globals default, see `gentoo_mirrors_
-/// from_env`'s own doc comment for why it's a field here rather than
-/// read directly inside `fetch_src_uri`. `config_root` (real
-/// `PORTAGE_CONFIGROOT`) is consulted only for real `custommirrors`
-/// (`${config_root}/etc/portage/mirrors`) -- deliberately a field, not
-/// an ambient env read inside this module, mirroring `ebuild_merge::
-/// MergeOptions::config_root`'s own doc comment exactly (portuale's
-/// own dev/test machine is a real Gentoo system with a real, populated
-/// `/etc/portage/mirrors`-shaped tree, so a silent real-`/`-style
-/// default here would make every test that doesn't override this field
-/// read real host config); `Default` below uses the same deliberately
-/// impossible path `MergeOptions::config_root` does, so `fetch_src_uri`
-/// always degrades to an empty `custommirrors` map unless a caller
-/// opts in explicitly. `distlocks` (real `"distlocks" in self.settings.
-/// features`) defaults to `true`: real `distlocks` *is* one of real
-/// `make.globals`'s own default `FEATURES` tokens (`cnf/make.globals:
-/// 77-84`, confirmed by reading it directly) -- unlike, say,
-/// `collision-protect`, which genuinely isn't.
+/// `distdir`/`config_root` are set at the CLI boundary, never read from the
+/// ambient env inside library code (a genuine Gentoo host's `/etc/portage`
+/// would otherwise leak into tests). `Default` matches `make.globals`
+/// (`DISTDIR`, the default mirrors) with an impossible `config_root`
+/// sentinel (empty `custommirrors` unless opted in) and `distlocks: true`
+/// (a default `FEATURES` token).
 pub struct FetchOptions {
     pub distdir: PathBuf,
     pub gentoo_mirrors: Vec<String>,
     pub config_root: PathBuf,
     pub distlocks: bool,
-    /// Real `RESTRICT=mirror` (real `fetch.py:880` --
-    /// `restrict_mirror = "mirror" in restrict or "nomirror" in
-    /// restrict`): when set, the public `GENTOO_MIRRORS`
-    /// fallback (`Candidate::Mirror` roots) is NOT tried for this package
-    /// -- real `file_restrict_mirror` gates `location_lists.append(
-    /// public_mirrors)` at `fetch.py:1126`. A `mirror://` URI's own
-    /// `thirdpartymirrors`/`custommirrors` expansion and any explicit
-    /// `SRC_URI` URI are still tried (real portage only drops the
-    /// *public* mirror list). Sourced from the ebuild's own
-    /// `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
-    ///
-    /// Real portage's own `mirror+` `SRC_URI` prefix
-    /// (`portage_fetch::SrcUriEntry::override_mirror`) re-permits the
-    /// public `GENTOO_MIRRORS` fallback for that one file even when this
-    /// is set -- `fetch_src_uri` checks `entry.override_mirror`
-    /// per-entry, matching real `file_restrict_mirror = ... and not
-    /// override_mirror` (`fetch.py:1117-1119`).
+    /// Portage's `RESTRICT=mirror`: skip the public `GENTOO_MIRRORS` fallback
+    /// for this package (`mirror://` expansions and explicit URIs are still
+    /// tried). A `mirror+` prefix re-permits it for that one file.
+    /// Sourced from the ebuild's `RESTRICT` field by `ebuild_phases::fetch_sources`.
     pub restrict_mirror: bool,
-    /// Real `RESTRICT=fetch` (real `fetch.py:1061` -- `restrict_fetch =
-    /// "fetch" in restrict`): a *plain* (non-`mirror://`) `SRC_URI` URI
-    /// is barred from the fetchable-candidate list (real
-    /// `fetch.py:1167`, `if (restrict_fetch and not override_fetch) …:
-    /// continue`), and the public `GENTOO_MIRRORS` fallback is barred
-    /// too (real `(restrict_fetch or restrict_mirror)`). A
-    /// `fetch+`/`mirror+` `SRC_URI` prefix
-    /// (`portage_fetch::SrcUriEntry::override_fetch`) re-permits the URI.
-    /// So a `RESTRICT=fetch` package only fetches OK when its distfile
-    /// is already verified in `DISTDIR` (or comes from `custommirrors` /
-    /// a `mirror://`-named mirror). Sourced from the ebuild's own
-    /// `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
-    /// Portuale does NOT run the ebuild's own `pkg_nofetch` phase for
-    /// a missing file (a documented cut) -- `fetch_src_uri` fails with a
-    /// generic "place it in DISTDIR by hand" pointer instead.
+    /// Portage's `RESTRICT=fetch`: bar plain `SRC_URI` URIs and the public
+    /// mirrors, so the file resolves only from `DISTDIR`/`custommirrors`/
+    /// `mirror://` mirrors. A `fetch+`/`mirror+` prefix re-permits the URI.
+    /// Sourced from the ebuild's `RESTRICT` field by `ebuild_phases::fetch_sources`.
     pub restrict_fetch: bool,
-    /// Real `RESTRICT=primaryuri` (real `fetch.py:1187-1189`): the
-    /// file's own literal `SRC_URI` URIs (plus the `mirror://`
-    /// third-party expansions, real `primaryuri_dict`) move to the
-    /// FRONT of that file's candidate list, ahead of the local/public
-    /// mirror layouts and the inline `mirror://` expansions -- instead
-    /// of the back, where they sit otherwise. Sourced from the ebuild's
-    /// own `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
+    /// Portage's `RESTRICT=primaryuri`: the file's literal URIs (plus the
+    /// `mirror://` expansions) move to the front of its candidate list.
+    /// Sourced from the ebuild's `RESTRICT` field by `ebuild_phases::fetch_sources`.
     pub restrict_primaryuri: bool,
-    /// Real `FEATURES=force-mirror` (real `fetch.py:1058` +
-    /// `fetch.py:1167`): a *plain* (non-`mirror://`) `SRC_URI` URI is
-    /// never a fetchable candidate -- the file fetches from mirrors
-    /// only. Unlike `restrict_fetch` this is a `FEATURES` token, read
-    /// from the process env by `ebuild_phases::fetch_sources` (the same
-    /// env-var shortcut `distlocks` above uses).
+    /// Portage's `FEATURES=force-mirror`: plain `SRC_URI` URIs are never
+    /// candidates; mirrors only. Read from the process env by the caller.
     pub force_mirror: bool,
-    /// The package's resolved `USE` (real `PORTAGE_USE`, the phase env's
-    /// `USE`) that `SRC_URI`'s `flag?` groups reduce against -- real
-    /// `use_reduce(SRC_URI, uselist=mysettings["PORTAGE_USE"].split())`.
-    /// Empty (every `flag?` off, every `!flag?` on) when no resolved
-    /// `USE` was threaded (standalone `ebuild <file>` with no graph).
+    /// The resolved `USE` (`PORTAGE_USE`) that `SRC_URI` `flag?` groups reduce
+    /// against; empty when none was threaded through.
     pub use_flags: std::collections::HashSet<String>,
-    /// Real `time.time()` for the `.mirror-cache.json` day-long freshness
-    /// check (`mirror_url`); `None` reads the system clock. Tests pin it.
+    /// Clock time for the `.mirror-cache.json` day-long freshness check;
+    /// `None` reads the system clock. Tests pin it.
     pub mirror_cache_now: Option<f64>,
-    /// Real `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` (default 5): after this
-    /// many downloads of a file fail digest verification, no further
-    /// location is tried (`checksum_failure_max_tries`).
+    /// Portage's `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` (default 5): stop trying
+    /// locations after this many digest failures.
     pub checksum_failure_max_tries: usize,
-    /// The resolved `FETCHCOMMAND`/`RESUMECOMMAND` family (real
-    /// `fetch.py:1652-1700`); `None` keeps the `make.globals` defaults.
-    /// Built by the caller from the resolved config scalars via
-    /// [`fetch_commands_from_config`].
+    /// The resolved `FETCHCOMMAND`/`RESUMECOMMAND` family; `None` keeps the
+    /// `make.globals` defaults. Built via [`fetch_commands_from_config`].
     pub fetch_commands: Option<portage_fetch::FetchCommands>,
-    /// Real `PORTAGE_RO_DISTDIRS` (`fetch.py:1055-1059`): read-only
-    /// distdir sources, existing directories only (`shlex.split` +
-    /// `isdir` at option-build time), each layout-resolved and
-    /// digest-checked, then **symlinked** into a writable DISTDIR.
+    /// Portage's `PORTAGE_RO_DISTDIRS` (existing dirs only): a verified file is
+    /// symlinked into a writable DISTDIR, never copied.
     pub ro_distdirs: Vec<std::path::PathBuf>,
-    /// Real `mysettings.get("PORTAGE_SSH_OPTS")` (`fetch.py:1806-1810`):
-    /// the `FETCHCOMMAND_SSH`/`_SFTP` templates' `"${PORTAGE_SSH_OPTS}"`
-    /// argument; `None` (the unset setting) expands to empty, same as
-    /// real. Built from the resolved config via
-    /// [`portage_ssh_opts_from_config`].
+    /// Portage's `PORTAGE_SSH_OPTS` for the `FETCHCOMMAND_SSH`/`_SFTP`
+    /// templates; `None` (unset) expands to empty. See [`portage_ssh_opts_from_config`].
     pub portage_ssh_opts: Option<String>,
 }
 
@@ -239,31 +100,17 @@ impl Default for FetchOptions {
     }
 }
 
-/// Real `make.globals`'s own default `FETCHCOMMAND`:
-/// `wget -t 3 -T 60 --passive-ftp -U "Portage (Gentoo,
-/// https://www.gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}"
-/// "${URI}"` -- invoked as a real subprocess with the exact same
-/// arguments, not reimplemented as an in-process HTTP client. A failed
-/// fetch removes whatever partial file `wget` may have left behind,
-/// same "don't leave broken state around" reasoning `emerge_build.rs`'s
-/// own build-failure handling already applies elsewhere.
-///
-/// The transport itself is `portage_fetch::download_via_wget` (shared
-/// with the `mrg-director` `Fetcher` seam); this wrapper names the
-/// non-resume `FETCHCOMMAND` for its own callers (the standalone mirror
-/// `layout.conf` read below and the remote-`Packages` fetches in
-/// `emerge_getbinpkg`), while `fetch_src_uri`'s candidate loop dispatches
-/// real's fresh-vs-resume split through the seam.
+/// The default-`FETCHCOMMAND` wget (the shared `portage_fetch` transport),
+/// invoked as a genuine subprocess, not an in-process HTTP client. This names
+/// the non-resume `FETCHCOMMAND` for index/`layout.conf` fetches, while
+/// `fetch_src_uri` dispatches fresh-vs-resume through the `Fetcher` seam.
+// Portage: cnf/make.globals, FETCHCOMMAND
 pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
     portage_fetch::download_via_wget(uri, dest, false)
 }
 
-/// Quiet sibling of [`wget_fetch`]: the same default-`FETCHCOMMAND`
-/// wget, but output-captured (`download_via_wget_quiet`) -- for the
-/// binhost index refresh (`emerge_getbinpkg::refresh_binhost_indexes`),
-/// whose failure message is shaped from the transcript (real
-/// `bintree._populate_remote`'s `!!! [repo] ...` pair), never inherited
-/// onto stdout/stderr.
+/// Output-captured sibling of [`wget_fetch`] for the binhost index refresh,
+/// whose failure message is shaped from the transcript, never inherited.
 pub(crate) fn wget_fetch_quiet(
     uri: &str,
     dest: &Path,
@@ -271,25 +118,15 @@ pub(crate) fn wget_fetch_quiet(
     portage_fetch::download_via_wget_quiet(uri, dest)
 }
 
-/// Real `mysettings.get("PORTAGE_SSH_OPTS")` (`fetch.py:1806-1810`):
-/// the resolved scalar when the config carries it, else `None` (absent
-/// expands to empty in the fetch command, exactly like real's missing
-/// settings key).
+/// The resolved `PORTAGE_SSH_OPTS` scalar, else `None` (absent expands to
+/// empty, like Portage's missing settings key).
 pub fn portage_ssh_opts_from_config(config: &portage_profile::Config) -> Option<String> {
     config.other_vars.get("PORTAGE_SSH_OPTS").cloned()
 }
 
-/// Real's `FETCHCOMMAND` family out of a resolved config: the plain
-/// scalars (`other_vars`, where `make.globals`/`make.conf` scalars land)
-/// plus every `FETCHCOMMAND_<PROTO>`/`RESUMECOMMAND_<PROTO>` override.
-///
-/// An absent `FETCHCOMMAND`/`RESUMECOMMAND` means the `make.globals`
-/// default (T2): real always reads `GLOBAL_CONFIG_PATH`'s `make.globals`
-/// (`config.py:446-480`), which a fixture config root does not carry, so
-/// the resolved value here is the shipped default template -- never
-/// `None`. A `None` field (the "unset" error real `fetch.py:1652-1660`
-/// prints when `make.globals` itself is missing) is only reachable from
-/// a hand-built [`portage_fetch::FetchCommands`].
+/// The `FETCHCOMMAND` family out of a resolved config: plain scalars plus
+/// every `FETCHCOMMAND_<PROTO>`/`RESUMECOMMAND_<PROTO>` override. An absent
+/// entry resolves to the shipped `make.globals` default template, never `None`.
 pub fn fetch_commands_from_config(
     config: &portage_profile::Config,
 ) -> portage_fetch::FetchCommands {
@@ -314,40 +151,14 @@ pub fn fetch_commands_from_config(
     commands
 }
 
-/// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check, run once
-/// before a real `unpack` phase (see `ebuild_phases.rs`'s own call
-/// Real `fetch.py` per-file candidate order (`fetch()`'s own
-/// `filedict[myfile]` build, `:1099-1192`) for one distfile's `group` of
-/// `SRC_URI` entries (`group_by_filename`, real `_parse_uri_map`).
-///
-/// Order (real positions in parentheses):
-/// 1. `custommirrors["local"]` non-`/` entries as mirror roots
-///    (real `local_mirrors`, always tried -- even under
-///    `RESTRICT=fetch`/`mirror`, real `location_lists =
-///    [local_mirrors] + ...`). `/`-rooted entries are on-filesystem
-///    mirrors (real `fsmirrors`), copied from before this list is
-///    tried (`copy_from_fsmirrors`), never download candidates.
-/// 2. public `GENTOO_MIRRORS` roots (real `public_mirrors`), once per
-///    file, unless mirror-restricted (real `file_restrict_mirror`, which
-///    only the first entry's `mirror+` prefix re-permits).
-/// 3. every entry's `mirror://` expansions inline, in `SRC_URI` order
-///    (`custommirrors` then `thirdpartymirrors`, unshuffled -- real
-///    shuffles the third-party half for load-balancing; portuale stays
-///    deterministic).
-/// 4. the primary-uri group: the file's literal URIs in REVERSE
-///    `SRC_URI` order (real `uris.reverse()`), then every third-party
-///    expansion again -- APPENDED last normally, PREPENDED first under
-///    `RESTRICT=primaryuri` (real `fetch.py:1186-1192`). The repeated
-///    third-party URLs are attempted once (real `tried_locations`).
-///    A plain literal barred by `RESTRICT=fetch` (without a
-///    `fetch+`/`mirror+` re-permit) or by `FEATURES=force-mirror` never
-///    enters the list (real `fetch.py:1167` `continue` -- `force-mirror`
-///    skips even a re-permitted literal).
-///
-/// Steps 1-2 are mirror *roots* (`Candidate::Mirror`), resolved to a URL
-/// only when the loop reaches them (`mirror_url`, real's
-/// `functools.partial(async_mirror_url, ...)`), so a file fetched from an
-/// earlier candidate never downloads a mirror's `layout.conf`.
+/// Per-file candidate order for one distfile's `group` of `SRC_URI` entries:
+/// `custommirrors["local"]` roots, public `GENTOO_MIRRORS` roots (unless
+/// mirror-restricted), inline `mirror://` expansions, then the primary-uri
+/// group (literals in reverse `SRC_URI` order plus third-party expansions
+/// again) -- appended last normally, prepended first under
+/// `RESTRICT=primaryuri`. Steps 1-2 are mirror roots resolved lazily, so a
+/// file fetched earlier never downloads a later mirror's `layout.conf`.
+// Portage: lib/portage/package/ebuild/fetch.py, fetch
 fn assemble_candidates(
     group: &[&SrcUriEntry],
     custommirrors: &std::collections::HashMap<String, Vec<String>>,
@@ -357,9 +168,8 @@ fn assemble_candidates(
     let Some(first) = group.first() else {
         return Vec::new();
     };
-    // Real `local_mirrors` keep their spelling (no `rstrip`), real
-    // `public_mirrors` are `x.rstrip("/")` -- both are also the
-    // `.mirror-cache.json` keys, so the spelling matters.
+    // `local_mirrors` keep their spelling, `public_mirrors` are stripped; both
+    // spellings are `.mirror-cache.json` keys, so it matters.
     let mut filedict: Vec<Candidate> = custommirrors
         .get("local")
         .into_iter()
@@ -367,8 +177,7 @@ fn assemble_candidates(
         .filter(|r| !r.starts_with('/'))
         .map(|r| Candidate::Mirror(r.clone()))
         .collect();
-    // Real `file_restrict_mirror` is decided once, when the filename is
-    // first seen -- by the FIRST URI's `mirror+` override.
+    // Mirror restriction is decided once, by the FIRST URI's `mirror+` prefix.
     let public_barred =
         (options.restrict_mirror || options.restrict_fetch) && !first.override_mirror;
     if !public_barred {
@@ -376,8 +185,7 @@ fn assemble_candidates(
             options
                 .gentoo_mirrors
                 .iter()
-                // `/`-rooted entries are real `fsmirrors`
-                // (`copy_from_fsmirrors`), never download candidates.
+                // `/`-rooted entries are on-filesystem mirrors, never download candidates.
                 .filter(|root| !root.starts_with('/'))
                 .map(|root| Candidate::Mirror(root.trim_end_matches('/').to_string())),
         );
@@ -396,17 +204,15 @@ fn assemble_candidates(
         .map(Candidate::Uri)
         .collect();
     if options.restrict_primaryuri {
-        // Real `filedict[myfile] = primaryuri_dict.get(myfile, []) + uris`.
         [primary, filedict].concat()
     } else {
         [filedict, primary].concat()
     }
 }
 
-/// Real `primaryuri_dict[myfile]` (`fetch.py:1165-1183`): the file's
-/// literal URIs that may be fetched, in REVERSE `SRC_URI` order (real
-/// `uris.reverse()` -- as real `fetch(..., listonly=1)` shows, tried
+/// The file's fetchable literals in reverse `SRC_URI` order (tried
 /// last-listed first), then every third-party `mirror://` expansion.
+// Portage: lib/portage/package/ebuild/fetch.py, fetch
 fn primary_uris(
     group: &[&SrcUriEntry],
     thirdpartymirrors: &std::collections::HashMap<String, Vec<String>>,
@@ -430,10 +236,8 @@ fn primary_uris(
     literals
 }
 
-/// Real `checksum_failure_max_tries` (`fetch.py:896-934`): real
-/// `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` as an integer, default 5; a
-/// non-integer or a value below 1 warns (the returned lines, real's
-/// `writemsg` text) and uses the default.
+/// Parse `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` (default 5); a non-integer or
+/// sub-1 value warns and uses the default.
 pub fn checksum_failure_max_tries(value: Option<&str>) -> (usize, Vec<String>) {
     const DEFAULT: i64 = 5;
     let Some(value) = value else {
@@ -463,8 +267,9 @@ pub fn checksum_failure_max_tries(value: Option<&str>) -> (usize, Vec<String>) {
     }
 }
 
-/// Real `_parse_uri_map` (`porttree.py:1828`): `SRC_URI` entries grouped
-/// by distfile name in first-seen order, identical URIs listed once.
+/// `SRC_URI` entries grouped by distfile in first-seen order, identical URIs
+/// listed once.
+// Portage: lib/portage/package/ebuild/porttree.py, _parse_uri_map
 fn group_by_filename(entries: &[SrcUriEntry]) -> Vec<(&str, Vec<&SrcUriEntry>)> {
     let mut groups: Vec<(&str, Vec<&SrcUriEntry>)> = Vec::new();
     for entry in entries {
@@ -488,32 +293,30 @@ enum Candidate {
     Mirror(String),
 }
 
-/// Real `async_mirror_url(mirror_url, filename, mysettings, cache_path)`
-/// (`fetch.py:731-785`): the URL (or, for a `/`-rooted mirror, the local
-/// path) of `filename` under `mirror`, laid out per the mirror's own
-/// `layout.conf`.
-///
-/// - `cache_path` (real: `${DISTDIR}/.mirror-cache.json` when `DISTDIR`
-///   is writable, else `None`) holds each mirror's `[structure]` with the
-///   time it was read; an entry younger than a day is used as is.
-/// - Otherwise the `layout.conf` is read: from `<mirror>/layout.conf` for
-///   a `/`-rooted mirror (a missing file reads as empty, real
-///   `read_configs` swallows `OSError`), else downloaded from
-///   `<mirror>/distfiles/layout.conf` into `${DISTDIR}/.layout.conf.<host>`
-///   (real `async_fetch(..., force=1, try_mirrors=0)`; left in place like
-///   real). Only a successful read is cached; a failed download or an
-///   unparseable file silently means "flat, nothing cached".
-/// - `now` is real `time.time()`, passed in so the day-long freshness
-///   window is testable.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn mirror_url(
-    mirror: &str,
-    filename: &str,
-    digests: &std::collections::HashMap<String, String>,
-    distdir: &Path,
-    cache_path: Option<&Path>,
+/// Arguments of [`mirror_url`].
+struct MirrorUrlArgs<'a> {
+    mirror: &'a str,
+    filename: &'a str,
+    digests: &'a std::collections::HashMap<String, String>,
+    distdir: &'a Path,
+    cache_path: Option<&'a Path>,
     now: f64,
-) -> String {
+}
+
+/// The URL (or local path, for a `/`-rooted mirror) of `filename` under
+/// `mirror`, laid out per the mirror's own `layout.conf`. Layouts cache in
+/// `.mirror-cache.json` for a day; only successful reads are cached, and a
+/// failed/unparseable read silently means flat. `now` is injectable for tests.
+// Portage: lib/portage/package/ebuild/fetch.py, async_mirror_url
+fn mirror_url(args: MirrorUrlArgs<'_>) -> String {
+    let MirrorUrlArgs {
+        mirror,
+        filename,
+        digests,
+        distdir,
+        cache_path,
+        now,
+    } = args;
     use portage_fetch::layout::MirrorLayoutConfig;
     use portage_fetch::mirror_cache::{
         CacheEntry, MIRROR_CACHE_TTL_SECS, mirror_file_url, parse_mirror_cache,
@@ -554,7 +357,7 @@ fn mirror_url(
                     structure: config.structure.clone(),
                 },
             );
-            // Real `atomic_ofstream`: write a sibling, then rename over.
+            // Write a sibling, then rename over (Portage's `atomic_ofstream`).
             let tmp = cache_path.with_extension(format!("json.{}", std::process::id()));
             if std::fs::write(&tmp, serialize_mirror_cache(&cache)).is_ok() {
                 let _ = std::fs::rename(&tmp, cache_path);
@@ -571,9 +374,8 @@ fn mirror_url(
     mirror_file_url(mirror, &path)
 }
 
-/// Real `fsmirrors` (`fetch.py:1019-1030`): the `/`-rooted
-/// `custommirrors["local"]` entries (as written), then the `/`-rooted
-/// `GENTOO_MIRRORS` entries (`rstrip("/")`).
+/// The `/`-rooted `custommirrors["local"]` entries (as written), then the
+/// `/`-rooted `GENTOO_MIRRORS` entries (stripped).
 fn fsmirrors(
     custommirrors: &std::collections::HashMap<String, Vec<String>>,
     gentoo_mirrors: &[String],
@@ -591,13 +393,10 @@ fn fsmirrors(
     local.chain(public).collect()
 }
 
-/// Real `fetch.py:1503-1513`: try each on-filesystem mirror in order,
-/// resolving the file's path through that directory's own `layout.conf`
-/// (real `async_mirror_url(mydir, myfile, mysettings)` -- no cache path,
-/// so it is re-read every time), copy the first one that exists to
-/// `dest`, and print real's `Local mirror has file: <file>`. A missing
-/// file (`ENOENT`/`ESTALE`) moves on to the next mirror; any other copy
-/// error is fatal, as real re-raises it. Returns whether a copy was made.
+/// Copy the first on-filesystem mirror that has the file to `dest`, printing
+/// `Local mirror has file: <file>`. A missing file moves on; any other copy
+/// error is fatal. Returns whether a copy was made.
+// Portage: lib/portage/package/ebuild/fetch.py, fetch
 fn copy_from_fsmirrors(
     fsmirrors: &[String],
     filename: &str,
@@ -606,7 +405,14 @@ fn copy_from_fsmirrors(
     dest: &Path,
 ) -> Result<bool, String> {
     for dir in fsmirrors {
-        let source = mirror_url(dir, filename, digests, &options.distdir, None, 0.0);
+        let source = mirror_url(MirrorUrlArgs {
+            mirror: dir,
+            filename,
+            digests,
+            distdir: &options.distdir,
+            cache_path: None,
+            now: 0.0,
+        });
         match std::fs::copy(&source, dest) {
             Ok(_) => {
                 eprintln!("Local mirror has file: {filename}");
@@ -621,8 +427,8 @@ fn copy_from_fsmirrors(
     Ok(false)
 }
 
-/// Real `os.access(DISTDIR, os.W_OK)` (`fetch.py:991`), which decides
-/// whether `.mirror-cache.json` is used at all.
+/// Whether `DISTDIR` is writable, which decides if `.mirror-cache.json` is
+/// used at all.
 fn distdir_writable(distdir: &Path) -> bool {
     let Ok(c) = std::ffi::CString::new(distdir.as_os_str().as_encoded_bytes()) else {
         return false;
@@ -632,9 +438,7 @@ fn distdir_writable(distdir: &Path) -> bool {
     unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
 }
 
-/// Real `fetch.py:1503`: check if there's enough free space on the
-/// filesystem holding `distdir` to accommodate a file of size `bytes`.
-/// Uses `os.statvfs` (real `_emerge/main.py:1063`) to get filesystem stats.
+/// Whether the filesystem holding `distdir` fits `bytes`, via `statvfs`.
 fn has_enough_space(distdir: &Path, bytes: u64) -> bool {
     let Ok(c) = std::ffi::CString::new(distdir.as_os_str().as_encoded_bytes()) else {
         return false;
@@ -644,28 +448,15 @@ fn has_enough_space(distdir: &Path, bytes: u64) -> bool {
     if unsafe { libc::statvfs(c.as_ptr(), &mut stat) } != 0 {
         return false;
     }
-    // Available space = block size * available blocks.
     let available_bytes = (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64);
     available_bytes >= bytes
 }
 
-/// site): for every file `src_uri` (this ebuild's own real, md5-cache-
-/// sourced `SRC_URI` string) names for the current USE set, fetches it
-/// into `options.distdir` unless a real, Manifest-verified copy is
-/// already there. `flag?` groups reduce against `options.use_flags`
-/// (real `use_reduce(..., uselist=PORTAGE_USE)`, #37 S4): before the
-/// resolved `USE` was threaded here every `flag?` group was treated as
-/// off, so an enabled `eselect? ( bashcomp.tar.gz )` was never fetched
-/// nor unpacked while `use eselect` was true in `src_prepare`.
-///
-/// Returns the real filename list real `A` should be set to (the
-/// caller is responsible for actually exporting it -- this module has
-/// no opinion on shell environment setup). A file with no `Manifest`
-/// entry at all is refused outright rather than fetched-but-unverified:
-/// unverifiable content is worse than a loud failure, the same
-/// reasoning `emerge_build.rs`'s own (now-superseded) blanket SRC_URI
-/// refusal established for the "no fetch machinery at all" case this
-/// slice replaces.
+/// Fetch every file `src_uri` names for the current USE set into
+/// `options.distdir`, unless a Manifest-verified copy is already there.
+/// `flag?` groups reduce against `options.use_flags`. Returns the filename
+/// list the caller exports as `A`. A file with no `Manifest` entry is refused
+/// outright: unverifiable content is worse than a loud failure.
 pub fn fetch_src_uri(
     pkg_dir: &Path,
     src_uri: &str,
@@ -684,31 +475,15 @@ pub fn fetch_src_uri(
     std::fs::create_dir_all(&options.distdir)
         .map_err(|e| format!("{}: {e}", options.distdir.display()))?;
 
-    // Real `mirror://` resolution (`profiles/thirdpartymirrors`, the
-    // ebuild's own repo's copy -- `repo_root_for` tolerates a
-    // standalone ebuild outside any repo checkout the same way it
-    // already does for eclass resolution, yielding an empty map, i.e.
-    // no thirdpartymirror candidates at all) plus real `custommirrors`
-    // (`${config_root}/etc/portage/mirrors`, real `grabdict()`'s own
-    // format -- reuses `parse_thirdpartymirrors` directly, since it's
-    // the exact same real format, just a different real source file)
-    // plus the real `GENTOO_MIRRORS` fallback -- see this
-    // module's own doc comment for the exact real mechanics
-    // covered/not covered.
+    // `mirror://` resolution: the ebuild repo's `thirdpartymirrors` (empty
+    // outside any repo checkout), `${config_root}/etc/portage/mirrors` as
+    // `custommirrors` (same file format), plus the `GENTOO_MIRRORS` fallback.
     let thirdpartymirrors = crate::ebuild_phases::repo_root_for(pkg_dir)
         .map(|repo_root| parse_thirdpartymirrors(&repo_root.join("profiles/thirdpartymirrors")))
         .transpose()?
         .unwrap_or_default();
-    // `.unwrap_or_default()`, not `?`: `options.config_root` is
-    // deliberately an impossible sentinel path by default (see
-    // `FetchOptions::config_root`'s own doc comment) -- joining
-    // `etc/portage/mirrors` onto it can fail with `ENOTDIR` (an
-    // *ancestor* component isn't a directory), not just the `NotFound`
-    // `parse_thirdpartymirrors` itself already tolerates, so this
-    // degrades to an empty `custommirrors` map on *any* resolution
-    // failure, the same graceful-degrade precedent `ebuild_merge::
-    // blocked_installed_packages`'s own `find_repos(config_root).ok()?`
-    // already established for this exact sentinel-path pattern.
+    // The default `config_root` is an impossible sentinel path, so ANY failure
+    // here (not just `NotFound`) degrades to an empty `custommirrors` map.
     let custommirrors = parse_thirdpartymirrors(&options.config_root.join("etc/portage/mirrors"))
         .unwrap_or_default();
 
@@ -717,19 +492,9 @@ pub fn fetch_src_uri(
         // The first entry names the file (and any error message).
         let entry = group[0];
         let dest = options.distdir.join(&entry.filename);
-        // Real `FEATURES=distlocks`: acquired before even checking
-        // whether the file is already fetched (real `fetch.py:1315`,
-        // ahead of its own `_check_distfile` call at `:1336`), held for
-        // the entire per-file sequence below, released when `_lock`
-        // drops at the end of this loop iteration -- see this module's
-        // own doc comment. Deliberately acquired *after* the "no
-        // Manifest entry" refusal just below rather than strictly
-        // mirroring real ordering: portuale's own single unified
-        // refusal for unverifiable content has no real single-point
-        // equivalent (real portage's own structure is different here),
-        // and there's nothing to actually fetch or protect with a lock
-        // when refusing outright -- no reason to require `DISTDIR`
-        // write access just to reach that refusal.
+        // `FEATURES=distlocks`: held for the whole per-file sequence, released
+        // when `_lock` drops. Acquired after the no-Manifest-entry refusal below,
+        // which needs no lock (nothing to fetch or protect when refusing outright).
         let digests = manifest.get(&entry.filename);
         let Some(digests) = digests else {
             return Err(format!(
@@ -746,11 +511,8 @@ pub fn fetch_src_uri(
 
         let mut already_verified = dest.is_file() && verify_digests(&dest, digests).is_ok();
 
-        // Real `fetch.py:1456-1475`: `PORTAGE_RO_DISTDIRS` -- a
-        // read-only distdir source is layout-resolved and
-        // digest-checked, and on a match **symlinked** into DISTDIR
-        // (never copied), only when DISTDIR itself is writable. Runs
-        // before the local fsmirrors copy and every download candidate.
+        // `PORTAGE_RO_DISTDIRS`: a verified read-only copy is symlinked into a
+        // writable DISTDIR -- before the fsmirrors copy and every download.
         if !already_verified
             && distdir_writable(&options.distdir)
             && !options.ro_distdirs.is_empty()
@@ -759,14 +521,14 @@ pub fn fetch_src_uri(
                 if !dir.is_dir() {
                     continue;
                 }
-                let source = mirror_url(
-                    &dir.to_string_lossy(),
-                    &entry.filename,
-                    &digests.hashes,
-                    &options.distdir,
-                    None,
-                    0.0,
-                );
+                let source = mirror_url(MirrorUrlArgs {
+                    mirror: &dir.to_string_lossy(),
+                    filename: &entry.filename,
+                    digests: &digests.hashes,
+                    distdir: &options.distdir,
+                    cache_path: None,
+                    now: 0.0,
+                });
                 let source = std::path::PathBuf::from(source);
                 if verify_digests(&source, digests).is_ok() {
                     let _ = std::fs::remove_file(&dest);
@@ -778,17 +540,15 @@ pub fn fetch_src_uri(
             }
         }
 
-        // Real `fetch.py:1503-1513`: before any download (and regardless
-        // of `RESTRICT=fetch`/`mirror`, which only shape the download
-        // list), a missing file is copied from the first on-filesystem
-        // mirror that has it -- only if there is enough free space.
+        // Before any download, a missing file is copied from the first
+        // on-filesystem mirror that has it, given enough free space.
         if !already_verified && !dest.exists() && has_enough_space(&options.distdir, digests.size) {
             let fsmirrors = fsmirrors(&custommirrors, &options.gentoo_mirrors);
             if copy_from_fsmirrors(&fsmirrors, &entry.filename, &digests.hashes, options, &dest)? {
                 match verify_digests(&dest, digests) {
                     Ok(()) => already_verified = true,
-                    // Real keeps a short copy to resume from; a full-size
-                    // but corrupt one is replaced by the download.
+                    // A short copy is kept to resume from; a full-size corrupt
+                    // one is replaced by the download.
                     Err(_) if std::fs::metadata(&dest).is_ok_and(|m| m.len() < digests.size) => {}
                     Err(_) => {
                         let _ = std::fs::remove_file(&dest);
@@ -800,35 +560,19 @@ pub fn fetch_src_uri(
         if !already_verified {
             let candidates =
                 assemble_candidates(&group, &custommirrors, &thirdpartymirrors, options);
-            // Real `fetch.py:1166-1174`: `if (restrict_fetch and not
-            // override_fetch) or force_mirror: continue` -- a *plain*
-            // (non-`mirror://`) `SRC_URI` URI is NOT a fetchable
-            // candidate under `RESTRICT=fetch` (only `mirror://`-named
-            // mirrors + `custommirrors` are). A `fetch+`/`mirror+` prefix
-            // (`entry.override_fetch`) re-permits it under
-            // `RESTRICT=fetch` (but not under `force-mirror`). A
-            // `mirror://` URI's own candidates already come only from
-            // the expansions, never the raw token, so nothing to strip
-            // there.
+            // A plain URI barred by `RESTRICT=fetch`/`force-mirror` never enters
+            // the list; a `fetch+`/`mirror+` prefix re-permits it (except under
+            // `force-mirror`). `mirror://` candidates come only from expansions.
             let plain_uri_barred_by_restrict_fetch =
                 (options.restrict_fetch && !entry.override_fetch || options.force_mirror)
                     && !entry.uri.starts_with("mirror://");
-            // Real `file_restrict_mirror = (restrict_fetch or
-            // restrict_mirror) and not override_mirror`
-            // (`fetch.py:1117-1119`): the public `GENTOO_MIRRORS`
-            // mirror list is appended unless mirroring is
-            // restricted -- but a `mirror+` SRC_URI prefix on this URI
-            // (`entry.override_mirror`) re-permits it for this file even
-            // then. `RESTRICT=fetch` implies mirror restriction too
-            // (real: `(restrict_fetch or restrict_mirror)`).
+            // The public mirror list is appended unless mirroring is restricted;
+            // `mirror+` re-permits it for this file. `RESTRICT=fetch` implies it too.
             let public_mirrors_barred =
                 (options.restrict_mirror || options.restrict_fetch) && !entry.override_mirror;
             if candidates.is_empty() {
-                // Real `fetch.py`: a `RESTRICT=fetch` file that isn't
-                // already in `DISTDIR` fails here; the caller
-                // (`ebuild_phases::fetch_sources`) then runs the ebuild's
-                // own `pkg_nofetch` phase, which prints custom "download
-                // it from … and place it in DISTDIR" instructions.
+                // A `RESTRICT=fetch` file missing from DISTDIR fails here; the
+                // caller then runs the ebuild's own `pkg_nofetch` phase.
                 let why = if plain_uri_barred_by_restrict_fetch {
                     format!(
                         "RESTRICT=fetch bars downloading it -- place a verified copy in {} \
@@ -849,10 +593,8 @@ pub fn fetch_src_uri(
 
             let mut errors = Vec::new();
             let mut fetched = false;
-            // Real `fetch.py`'s `tried_locations`: the assembled list
-            // legitimately repeats a location (a `mirror://` URI's
-            // third-party expansions sit both inline and in the
-            // primary-uri group), but each is attempted once per file.
+            // The assembled list may repeat a location, but each is attempted
+            // once per file.
             let mut tried = std::collections::HashSet::new();
             let cache_path = distdir_writable(&options.distdir)
                 .then(|| options.distdir.join(".mirror-cache.json"));
@@ -861,41 +603,32 @@ pub fn fetch_src_uri(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_secs_f64())
             });
-            // Real `uri_list`: a stack popped from the end, so the
-            // primary-uri switch below jumps ahead of what is left.
+            // A stack popped from the end, so the primary-uri switch below jumps
+            // ahead of what is left.
             let mut uri_list: Vec<Candidate> = candidates.iter().rev().cloned().collect();
             let mut checksum_failures = 0;
-            // The download half is the director's `Fetcher` seam: one
-            // resolved candidate URI -> `dest`, fresh or resumed, with no
-            // Manifest context -- digest verification stays right below
-            // at this call site, which holds the `Manifest` entry. The
-            // one Manifest-derived value the transport needs is real's
-            // `DIGESTS` substitution (`fetch.py:1797-1803`), formatted
-            // here (this is where the entry lives) and carried
-            // pre-formatted.
+            // One resolved candidate URI -> `dest`, fresh or resumed, with no
+            // Manifest context; digest verification stays here, which holds it.
             let digests_var = portage_fetch::digests_variable(digests);
             let fetcher: &dyn Fetcher = &WgetFetcher;
             while let Some(candidate) = uri_list.pop() {
                 let candidate = match &candidate {
                     Candidate::Uri(uri) => uri.clone(),
-                    Candidate::Mirror(root) => mirror_url(
-                        root,
-                        &entry.filename,
-                        &digests.hashes,
-                        &options.distdir,
-                        cache_path.as_deref(),
+                    Candidate::Mirror(root) => mirror_url(MirrorUrlArgs {
+                        mirror: root,
+                        filename: &entry.filename,
+                        digests: &digests.hashes,
+                        distdir: &options.distdir,
+                        cache_path: cache_path.as_deref(),
                         now,
-                    ),
+                    }),
                 };
                 if !tried.insert(candidate.clone()) {
                     continue;
                 }
                 let candidate = candidate.as_str();
-                // Real `fetch.py`: once a non-empty partial is on disk
-                // (from an earlier candidate that dropped mid-transfer, or
-                // a previous interrupted run), switch from `FETCHCOMMAND`
-                // to `RESUMECOMMAND` -- `wget -c` continues it rather than
-                // restarting.
+                // A non-empty partial on disk switches from `FETCHCOMMAND` to
+                // `RESUMECOMMAND` (`wget -c` continues it).
                 let has_partial = std::fs::metadata(&dest)
                     .map(|m| m.len() > 0)
                     .unwrap_or(false);
@@ -919,9 +652,8 @@ pub fn fetch_src_uri(
                         Err(e) => {
                             errors.push(format!("{candidate}: digest verification failed: {e}"));
                             checksum_failures += 1;
-                            // Real `_checksum_failure_temp_file`: rename the
-                            // corrupt file to preserve it as evidence, with a
-                            // deterministic suffix (counter) instead of random.
+                            // Rename the corrupt file aside with a deterministic
+                            // counter suffix, preserving it as evidence.
                             let bad_file = format!(
                                 "{}._checksum_failure_{}",
                                 dest.display(),
@@ -929,10 +661,8 @@ pub fn fetch_src_uri(
                             );
                             let _ = std::fs::rename(&dest, &bad_file);
                             eprintln!("Refetching... File renamed to '{bad_file}'");
-                            // Real `checksum_failure_count`: the second
-                            // failure switches to "primaryuri" mode (the
-                            // file's primary URIs are tried next); the
-                            // cap stops trying further locations at all.
+                            // The second failure jumps to the primary URIs; the cap
+                            // stops trying further locations at all.
                             if checksum_failures == 2 {
                                 uri_list.extend(
                                     primary_uris(&group, &thirdpartymirrors, options)
@@ -946,8 +676,8 @@ pub fn fetch_src_uri(
                             }
                         }
                     },
-                    // A transport failure may have left a resumable
-                    // partial -- keep it for the next candidate.
+                    // A transport failure may have left a resumable partial for
+                    // the next candidate.
                     Err(e) => errors.push(e),
                 }
             }
@@ -977,10 +707,8 @@ mod tests {
         dir
     }
 
-    // Real, independently-known BLAKE2b-512 and SHA-512 digests of the
-    // literal bytes "hello world" (confirmed via the real `b2sum`/
-    // `sha512sum` system tools, not invented) -- reused across these
-    // tests as a fixed, known-good distfile payload.
+    // Fixed, known-good distfile payload ("hello world"; digests confirmed via
+    // the system `b2sum`/`sha512sum` tools).
     const HELLO_BLAKE2B: &str = "021ced8799296ceca557832ab941a50b4a11f83478cf141f51f933f653ab9fbcc05a037cddbed06e309bf334942c4e58cdf1a46e237911ccd7fcf9787cbc7fd0";
     const HELLO_SHA512: &str = "309ecc489c12d6eb4cc40f50c902f2b4d0ed77ee511a7c7a9bcd3ca86d4cd86f989dd35bc5ff499670da34255b45b0cfd830e81f605dcf7dc5542e93ae9cd76f";
 
@@ -992,14 +720,8 @@ mod tests {
         .unwrap();
     }
 
-    /// Serves `body` over real, plain HTTP on `127.0.0.1` for exactly
-    /// one connection, on an OS-assigned ephemeral port -- lets a test
-    /// exercise the real, unmodified `wget` subprocess end-to-end
-    /// (spawn, `-O`, real HTTP response parsing) without needing
-    /// genuine internet access. `file://` URIs would be simpler, but
-    /// this system's own `wget` build has no `file://` support at all
-    /// (confirmed empirically: `wget file:///etc/hostname` ->
-    /// `"Unsupported scheme."`) -- real loopback HTTP has no such gap.
+    /// Serves `body` over loopback HTTP for exactly one connection, so tests
+    /// exercise the genuine `wget` subprocess end to end without internet.
     fn serve_once(body: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -1022,12 +744,9 @@ mod tests {
         (format!("http://127.0.0.1:{port}/file"), handle)
     }
 
-    /// A mirror-shaped HTTP server: answers `connections` requests,
-    /// serving `routes`' bodies by request path and 404 for anything
-    /// else, and records every requested path in order. Returns the
-    /// mirror root (`http://127.0.0.1:<port>`), the recorded paths, and
-    /// the thread handle. A caller expecting fewer requests than
-    /// `connections` stops the thread with `unblock_server` (an empty
+    /// A mirror-shaped HTTP server: serves `routes` by request path (404
+    /// otherwise), recording every requested path. A caller expecting fewer
+    /// requests than `connections` stops the thread with `unblock_server` (an empty
     /// connection ends it).
     #[allow(clippy::type_complexity)]
     fn serve_mirror(
@@ -1080,8 +799,7 @@ mod tests {
         (format!("http://127.0.0.1:{port}"), requested, handle)
     }
 
-    /// Connects (and sends nothing) so a `serve_mirror` thread still
-    /// waiting in `accept` can finish.
+    /// Connects (sending nothing) so a parked `serve_mirror` thread can exit.
     fn unblock_server(root: &str) {
         let addr = root.trim_start_matches("http://");
         let _ = std::net::TcpStream::connect(addr);
@@ -1108,17 +826,13 @@ mod tests {
         let lock1 = PortageLockfile::acquire(&dest).expect("first acquire succeeds");
         drop(lock1);
 
-        // Real `unlinkfile=0`: the lockfile persists on disk, just
-        // unlocked -- a second acquire (in the same process, a
-        // re-entrant flock on a fresh fd for the same file) must
-        // succeed immediately, not block on itself.
+        // The lockfile persists after release, just unlocked: a second acquire
+        // must succeed immediately, not block on itself.
         PortageLockfile::acquire(&dest).expect("second acquire succeeds once the first is dropped");
     }
 
-    /// Real, end-to-end proof of the actual blocking behavior
-    /// `flock(2)` provides: a second acquire on the same distfile, from
-    /// a different thread, genuinely blocks until the first lock is
-    /// dropped -- not merely that the API happens to return `Ok`.
+    /// A second acquire from another thread genuinely blocks until the first
+    /// lock is dropped.
     #[test]
     fn distfile_lock_blocks_a_second_acquire_until_released() {
         let dir = tempdir();
@@ -1175,10 +889,8 @@ mod tests {
         write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
         fs::write(distdir.join("hello-1.0.tar.gz"), b"hello world").unwrap();
 
-        // The URI is deliberately unreachable (a reserved, non-routable
-        // TEST-NET address, RFC 5737) -- if the already-verified skip
-        // logic didn't work, this would hang/fail on the real network
-        // instead of returning immediately.
+        // Deliberately unreachable address: reaching the network at all would
+        // hang/fail instead of returning immediately.
         let result = fetch_src_uri(
             &pkg_dir,
             "https://192.0.2.1/hello-1.0.tar.gz",
@@ -1192,9 +904,8 @@ mod tests {
         assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
     }
 
-    /// #37 S4 (L2 real set, `app-shells/bash-completion[eselect]`): a
-    /// `flag?` group reduces against the resolved `USE`, so an enabled
-    /// conditional distfile is part of `A`, and a `!flag?` one is not.
+    /// Expected values from Portage (`app-shells/bash-completion[eselect]`):
+    /// an enabled conditional distfile is part of `A`; a `!flag?` one is not.
     #[test]
     fn fetch_src_uri_reduces_use_conditional_groups_against_the_resolved_use() {
         let pkg_dir = tempdir();
@@ -1221,9 +932,7 @@ mod tests {
 
     #[test]
     fn fetch_src_uri_runs_a_configured_fetchcommand() {
-        // #70 S1: FETCHCOMMAND from the config replaces the built-in
-        // `wget` template; `${DISTDIR}`/`${FILE}`/`${URI}` are
-        // substituted and the command is spawned directly.
+        // A configured FETCHCOMMAND is spawned directly, with substitutions.
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
         let uri = format!("{uri_base} -> hello-1.0.tar.gz");
         let pkg_dir = tempdir();
@@ -1277,19 +986,15 @@ mod tests {
 
     #[test]
     fn fetch_commands_from_config_defaults_an_absent_fetchcommand() {
-        // #70 R2 / T2: a config without FETCHCOMMAND/RESUMECOMMAND (every
-        // fixture config root, which has no make.globals) resolves to the
-        // shipped default templates -- never `None`. `None` is only
-        // reachable from a hand-built `FetchCommands`.
+        // Without FETCHCOMMAND/RESUMECOMMAND the shipped defaults resolve,
+        // never `None`.
         let commands = fetch_commands_from_config(&portage_profile::Config::default());
         assert_eq!(commands, portage_fetch::FetchCommands::default());
     }
 
     #[test]
     fn portage_ssh_opts_from_config_reads_the_scalar() {
-        // #70 R4: the FETCHCOMMAND_SSH/SFTP templates' `"${PORTAGE_SSH_OPTS}"`
-        // argument comes from the resolved settings; absent stays None
-        // (which expands to empty, like real).
+        // Absent `PORTAGE_SSH_OPTS` stays None (expands to empty, like Portage).
         let mut config = portage_profile::Config::default();
         config.other_vars.insert(
             "PORTAGE_SSH_OPTS".to_string(),
@@ -1307,11 +1012,8 @@ mod tests {
 
     #[test]
     fn fetch_src_uri_uses_the_make_globals_default_without_a_config_value() {
-        // #70 R2 end-to-end through the production parser: the config
-        // comes from `resolve_config` on a root with no
-        // `usr/share/portage/config/make.globals` (T2's fixture shape);
-        // the default `wget` template must still download `serve_once`'s
-        // file.
+        // A config root without make.globals still downloads via the default
+        // template.
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
         let uri = format!("{uri_base} -> hello-1.0.tar.gz");
         let pkg_dir = tempdir();
@@ -1320,15 +1022,15 @@ mod tests {
 
         let config_root = tempdir();
         let eroot = tempdir();
-        let config = portage_profile::resolve_config(
-            &config_root,
-            &config_root,
-            &[],
-            &[],
-            "gentoo",
-            &std::collections::HashMap::new(),
-            &eroot,
-        )
+        let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+            config_root: &config_root,
+            main_repo_location: &config_root,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "gentoo",
+            repo_masters: &std::collections::HashMap::new(),
+            eroot: &eroot,
+        })
         .unwrap();
         assert!(
             !config_root
@@ -1357,8 +1059,7 @@ mod tests {
 
     #[test]
     fn fetch_src_uri_symlinks_a_verified_portage_ro_distdirs_file() {
-        // #70 S2: PORTAGE_RO_DISTDIRS -- a verified read-only copy is
-        // symlinked into a writable DISTDIR, never downloaded.
+        // A verified read-only copy is symlinked, never downloaded.
         let pkg_dir = tempdir();
         let distdir = tempdir();
         let ro = tempdir();
@@ -1445,11 +1146,8 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// Serves `body` in two halves: connection 1 gets the real
-    /// `Content-Length` header but only the first `split` bytes before the
-    /// socket closes (a dropped transfer); connection 2, which `wget -c`
-    /// makes with a `Range: bytes=<split>-` header, gets a real `206
-    /// Partial Content` with the rest.
+    /// Serves `body` in two halves: the first connection drops mid-transfer;
+    /// the second answers `wget -c`'s `Range` request with the rest.
     fn serve_dropped_then_resumed(
         body: Vec<u8>,
         split: usize,
@@ -1526,9 +1224,7 @@ mod tests {
 
     #[test]
     fn fetch_src_uri_rejects_a_real_download_that_fails_digest_verification() {
-        // The server returns different content entirely from what the
-        // Manifest (still claiming the "hello world" digests/size)
-        // expects.
+        // Serves content that mismatches the Manifest's digests/size.
         let (uri_base, handle) = serve_once(b"this is not hello world at all".to_vec());
         let uri = format!("{uri_base} -> wrong-1.0.tar.gz");
 
@@ -1554,23 +1250,13 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// Real, end-to-end `mirror://` resolution: `pkg_dir` sits under a
-    /// real (if fixture-only) repo checkout (`profiles/repo_name` +
-    /// `profiles/thirdpartymirrors`, exactly the layout `repo_root_for`
-    /// already looks for), whose own `thirdpartymirrors` names a mirror
-    /// pointing at a real local HTTP server -- a genuine `mirror://
-    /// testmirror/foo-1.0.tar.gz` SRC_URI is resolved through that file,
-    /// fetched via a real `wget` subprocess, and digest-verified,
-    /// proving the whole chain (`repo_root_for` -> `parse_
-    /// thirdpartymirrors` -> `resolve_mirror_candidates` ->
-    /// `Fetcher::fetch` -> `verify_digests`) works together, not just
-    /// each piece in isolation.
+    /// End-to-end `mirror://` resolution through a fixture repo checkout's own
+    /// `thirdpartymirrors`, fetched and digest-verified.
     #[test]
     fn fetch_src_uri_resolves_a_real_mirror_uri_via_thirdpartymirrors() {
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
-        // `serve_once`'s own handler doesn't look at the request path at
-        // all, so appending an extra path segment (the way a real
-        // `mirror://` expansion would: `<mirror_root>/<path>`) is safe.
+        // The stub handler ignores the request path, so appending a
+        // `mirror://`-style extra segment is safe.
         let mirror_root = uri_base.trim_end_matches("/file");
 
         let repo_root = tempdir();
@@ -1606,13 +1292,8 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// Real, end-to-end `custommirrors` proof: a real
-    /// `${config_root}/etc/portage/mirrors` file (real `grabdict()`
-    /// format, same as `profiles/thirdpartymirrors`) resolves a
-    /// `mirror://<name>` token via a real local HTTP server, with no
-    /// `profiles/thirdpartymirrors` entry for that name at all --
-    /// proving `custommirrors` is consulted independently, not merely
-    /// as a fallback when `thirdpartymirrors` already has the name.
+    /// End-to-end `custommirrors` proof: resolves with no `thirdpartymirrors`
+    /// entry for the name, proving independent consultation.
     #[test]
     fn fetch_src_uri_resolves_a_real_mirror_uri_via_custommirrors() {
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
@@ -1649,16 +1330,8 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// Regression test for a real bug this slice's own implementation
-    /// hit and fixed: `FetchOptions::default()`'s own deliberately
-    /// impossible `config_root` sentinel (`/dev/null/...`) makes
-    /// `${config_root}/etc/portage/mirrors` fail with `ENOTDIR` (an
-    /// *ancestor* path component isn't a directory), not the `NotFound`
-    /// `parse_thirdpartymirrors` itself already tolerates -- an earlier
-    /// version of this code propagated that as a raw I/O error instead
-    /// of degrading gracefully to "no custommirrors", producing a
-    /// confusing low-level error instead of the real, clean "no working
-    /// candidate mirror" message for an unknown `mirror://` name.
+    /// The default `config_root` sentinel fails with `ENOTDIR`, not `NotFound`:
+    /// must still degrade to "no custommirrors" with a clean error.
     #[test]
     fn fetch_src_uri_degrades_gracefully_when_config_root_is_the_default_sentinel() {
         let pkg_dir = tempdir();
@@ -1678,15 +1351,8 @@ mod tests {
         assert!(err.contains("no working candidate mirror"), "{err}");
     }
 
-    /// Real, end-to-end `GENTOO_MIRRORS` fallback: the literal `SRC_URI`
-    /// itself is deliberately unreachable (port 1, which real,
-    /// unprivileged `wget` gets an immediate real "Connection refused"
-    /// for -- fast and deterministic, unlike a black-holed address that
-    /// would make this test hang for real `wget -t 3 -T 60`'s own full
-    /// multi-minute retry budget), so the fetch only succeeds because
-    /// `FetchOptions.gentoo_mirrors` names a real local HTTP server. That
-    /// mirror has no `layout.conf` (404), so real `async_mirror_url` uses
-    /// the flat `<root>/distfiles/<filename>` path and caches nothing.
+    /// End-to-end `GENTOO_MIRRORS` fallback: the literal URI is unreachable, so
+    /// only the mirror can serve the file (flat path, nothing cached).
     #[test]
     fn fetch_src_uri_falls_back_to_gentoo_mirrors_when_the_primary_uri_is_unreachable() {
         let (mirror_root, requested, handle) = serve_mirror(
@@ -1724,12 +1390,10 @@ mod tests {
         );
     }
 
-    /// The real Gentoo mirrors' layout (`0=filename-hash BLAKE2B 8`,
-    /// where the flat path 404s): the file is fetched from the hashed
-    /// path real portage computes (`ce/hello-1.0.tar.gz`, real
-    /// `FilenameHashLayout('BLAKE2B', '8').get_path`), the downloaded
+    /// A mirror's filename-hash layout: the file is fetched from the hashed
+    /// path Portage computes, the downloaded
     /// `layout.conf` is left as `.layout.conf.<host>`, and the structure
-    /// is cached in real's `.mirror-cache.json` shape.
+    /// is cached in Portage's `.mirror-cache.json` shape.
     #[test]
     fn fetch_src_uri_follows_a_mirrors_filename_hash_layout_and_caches_it() {
         let (mirror_root, requested, handle) = serve_mirror(
@@ -1769,9 +1433,8 @@ mod tests {
         );
     }
 
-    /// Real `ts >= time.time() - 86400`: a cache entry younger than a day
-    /// is used without asking the mirror again; an older one is
-    /// refreshed (and rewritten with the new time).
+    /// A cache entry younger than a day is used as-is; an older one is
+    /// refreshed and rewritten.
     #[test]
     fn fetch_src_uri_uses_a_fresh_mirror_cache_entry_and_refreshes_a_stale_one() {
         let now = 1800000000.0;
@@ -1825,9 +1488,8 @@ mod tests {
         }
     }
 
-    /// Real resolves a mirror candidate lazily (`functools.partial`): a
-    /// file fetched from an earlier candidate never asks the later
-    /// mirror for its `layout.conf`.
+    /// A file fetched from an earlier candidate never asks a later mirror for
+    /// its `layout.conf`.
     #[test]
     fn fetch_src_uri_never_contacts_a_mirror_it_does_not_reach() {
         let (literal_root, _, literal_handle) =
@@ -1855,15 +1517,8 @@ mod tests {
         assert!(!distdir.join(".mirror-cache.json").exists());
     }
 
-    /// Real `RESTRICT=mirror` (`file_restrict_mirror`,
-    /// `fetch.py:1117-1127`): the public `GENTOO_MIRRORS`
-    /// fallback is NOT tried. Identical setup to
-    /// `fetch_src_uri_falls_back_to_gentoo_mirrors_when_the_primary_uri_is_unreachable`
-    /// (its "without restrict" counterpart -- there the mirror server
-    /// rescues the fetch), but with `restrict_mirror: true`: the primary
-    /// URI is unreachable (`127.0.0.1:1` -> immediate "Connection
-    /// refused") and the mirror is barred, so the whole fetch fails and
-    /// the mirror server is never contacted.
+    /// `RESTRICT=mirror`: the public fallback is not tried, so an unreachable
+    /// primary URI fails the fetch and the mirror is never contacted.
     #[test]
     fn fetch_src_uri_restrict_mirror_skips_the_gentoo_mirrors_fallback() {
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
@@ -1897,13 +1552,8 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// Real `mirror+` SRC_URI prefix (`fetch.py:1103` -> real
-    /// `override_mirror`): re-permits the public `GENTOO_MIRRORS`
-    /// fallback for this file even under `RESTRICT=mirror`. Identical
-    /// setup to `fetch_src_uri_restrict_mirror_skips_the_gentoo_mirrors_
-    /// fallback` (unreachable primary URI, `restrict_mirror: true`) --
-    /// but the SRC_URI token has a `mirror+` prefix, so the mirror
-    /// server IS tried and rescues the fetch.
+    /// A `mirror+` prefix re-permits the public fallback under
+    /// `RESTRICT=mirror`, so the mirror rescues the fetch.
     #[test]
     fn fetch_src_uri_mirror_prefix_re_permits_the_gentoo_mirrors_fallback_under_restrict_mirror() {
         // No `layout.conf` on this mirror (404): flat path.
@@ -1935,12 +1585,8 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// `RESTRICT=mirror` bars only the *public* `GENTOO_MIRRORS`
-    /// mirror list -- a `mirror://` URI's own `custommirrors`
-    /// expansion is still tried (real portage keeps `local_mirrors` in
-    /// `location_lists` regardless, `fetch.py:1125`). Same fixture as
-    /// `fetch_src_uri_resolves_a_real_mirror_uri_via_custommirrors`,
-    /// plus `restrict_mirror: true`.
+    /// `RESTRICT=mirror` bars only the public list: a `mirror://` URI's own
+    /// `custommirrors` expansion is still tried.
     #[test]
     fn fetch_src_uri_restrict_mirror_still_allows_a_custommirror() {
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
@@ -1978,12 +1624,8 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// Real `fsmirrors` (`fetch.py:1503-1513`): a `/`-rooted
-    /// `GENTOO_MIRRORS` entry is a local directory the missing file is
-    /// copied from -- flat (`<dir>/<file>`, real `os.path.join`, no
-    /// `distfiles/`) without a `layout.conf`, per the directory's own
-    /// `layout.conf` otherwise -- before any download, and even when
-    /// `RESTRICT=fetch` leaves nothing to download at all.
+    /// A `/`-rooted `GENTOO_MIRRORS` entry is a local directory the missing
+    /// file is copied from -- before any download, whatever the restrictions.
     #[test]
     fn fetch_src_uri_copies_a_missing_file_from_an_on_filesystem_mirror() {
         for (layout_conf, rel) in [
@@ -2025,10 +1667,8 @@ mod tests {
         }
     }
 
-    /// Real order: `custommirrors["local"]` `/` entries before `/`-rooted
-    /// `GENTOO_MIRRORS`, first mirror that has the file wins, a mirror
-    /// without it is skipped. The public directory holds a corrupt
-    /// same-size copy, so only the local one can satisfy the digest.
+    /// `custommirrors["local"]` `/` entries come before `/`-rooted
+    /// `GENTOO_MIRRORS`; first mirror with a digest-satisfying copy wins.
     #[test]
     fn fetch_src_uri_tries_local_fsmirrors_before_gentoo_mirrors_dirs() {
         let empty_local = tempdir();
@@ -2064,8 +1704,7 @@ mod tests {
         );
     }
 
-    /// A `/`-rooted `GENTOO_MIRRORS` entry is never handed to `wget` as a
-    /// URL: when the directory lacks the file, only the real download
+    /// A `/`-rooted entry is never handed to `wget`: only the download
     /// candidates are tried and reported.
     #[test]
     fn fetch_src_uri_never_downloads_from_a_slash_rooted_gentoo_mirror() {
@@ -2133,11 +1772,8 @@ mod tests {
         );
     }
 
-    /// Real `RESTRICT=fetch` (`fetch.py:1061`/`:1167`): a plain `SRC_URI`
-    /// URI is not a fetchable candidate, and the public mirrors are
-    /// barred -- so a fetch-restricted package whose distfile isn't
-    /// already in `DISTDIR` fails, without ever contacting the URI or
-    /// the mirror server.
+    /// `RESTRICT=fetch`: a missing distfile fails without ever contacting the
+    /// URI or the mirror server.
     #[test]
     fn fetch_src_uri_restrict_fetch_bars_the_plain_uri_and_public_mirrors() {
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
@@ -2172,9 +1808,7 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// `RESTRICT=fetch` still accepts an already-verified `DISTDIR` copy
-    /// (the normal way a fetch-restricted package is satisfied -- the
-    /// user placed the file by hand).
+    /// `RESTRICT=fetch` still accepts an already-verified `DISTDIR` copy.
     #[test]
     fn fetch_src_uri_restrict_fetch_uses_an_already_verified_distdir_copy() {
         let pkg_dir = tempdir();
@@ -2196,9 +1830,7 @@ mod tests {
         assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
     }
 
-    /// A `fetch+` `SRC_URI` prefix (`override_fetch`) re-permits the
-    /// plain URI even under `RESTRICT=fetch` (real `fetch.py:1167`, `if
-    /// (restrict_fetch and not override_fetch)`).
+    /// A `fetch+` prefix re-permits the plain URI under `RESTRICT=fetch`.
     #[test]
     fn fetch_src_uri_fetch_prefix_re_permits_the_uri_under_restrict_fetch() {
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
@@ -2247,10 +1879,8 @@ mod tests {
         }
     }
 
-    /// Real `fetch.py:1112-1192` order for a plain URI: local
-    /// mirrors, public `GENTOO_MIRRORS`, then the literal
-    /// URI itself last (no `mirror://` expansions, no third-party
-    /// tail).
+    /// A plain URI sorts after the mirror lists, last (Portage's `fetch`
+    /// order).
     #[test]
     fn assemble_candidates_orders_plain_uri_after_the_mirror_lists() {
         use std::collections::HashMap;
@@ -2287,10 +1917,8 @@ mod tests {
         Candidate::Uri(uri.to_string())
     }
 
-    /// Real `fetch.py:1187-1189` (`RESTRICT=primaryuri`): the literal
-    /// URI (plus the third-party expansions) moves ahead of the mirror
-    /// lists -- including real's own double listing of the third-party
-    /// expansions (inline below, and again in the primary-uri group).
+    /// Under `RESTRICT=primaryuri` the literal (plus third-party expansions)
+    /// moves ahead of the mirror lists.
     #[test]
     fn assemble_candidates_prepends_the_literal_under_restrict_primaryuri() {
         use std::collections::HashMap;
@@ -2345,14 +1973,9 @@ mod tests {
         );
     }
 
-    /// Several `SRC_URI` entries for one distfile share one list (real
-    /// `filedict[myfile]`). Expected orders are real portage's own
-    /// `fetch(OrderedDict({file: uris}), settings, listonly=1)` output
-    /// (portage 3.0.82.2, `GENTOO_MIRRORS` = one mirror, `gnome` = its
-    /// single-root `thirdpartymirrors` entry): the public mirror once,
-    /// inline `mirror://` expansions, then the literals LAST-LISTED FIRST
-    /// and the third-party expansions again (tried once) -- or that
-    /// primary-uri group first under `RESTRICT=primaryuri`.
+    /// Expected values from Portage's `fetch(..., listonly=1)`: the public
+    /// mirror once, inline expansions, then literals last-listed-first plus
+    /// third-party expansions again -- or that group first under primaryuri.
     #[test]
     fn assemble_candidates_groups_a_files_uris_like_portage_listonly() {
         use std::collections::HashMap;
@@ -2413,12 +2036,8 @@ mod tests {
         }
     }
 
-    /// Three public mirrors serving a corrupt same-size copy, then the
-    /// file's own (good) literal URI. Real `fetch.py:1975-2000`: the
-    /// second digest failure jumps to the primary URIs ahead of the
-    /// remaining mirror, so mirror 3 is never contacted; with a cap of 2
-    /// (`PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS=2`) nothing after the second
-    /// failure is tried at all.
+    /// The second digest failure jumps to the primary URIs (mirror 3 never
+    /// contacted); with a cap of 2 nothing after the second failure is tried.
     #[test]
     fn fetch_src_uri_checksum_failures_switch_to_primary_uris_then_stop_at_the_cap() {
         for (cap, expect_success) in [(5, true), (2, false)] {
@@ -2559,8 +2178,7 @@ mod tests {
         }
     }
 
-    /// Real `_parse_uri_map`: entries grouped by distfile in first-seen
-    /// order, an identical URI listed once.
+    /// Entries grouped by distfile in first-seen order, duplicates dropped.
     #[test]
     fn group_by_filename_keeps_first_seen_order_and_drops_repeated_uris() {
         let entries = vec![
@@ -2585,8 +2203,7 @@ mod tests {
         );
     }
 
-    /// Real `A` lists a distfile once however many `SRC_URI` entries
-    /// name it.
+    /// A multiply-sourced file is still listed once.
     #[test]
     fn fetch_src_uri_returns_a_multiply_sourced_file_once() {
         let pkg_dir = tempdir();
@@ -2606,9 +2223,8 @@ mod tests {
         assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
     }
 
-    /// `RESTRICT=fetch` bars the literal (real `fetch.py:1167`) while
-    /// `FEATURES=force-mirror` bars even a re-permitted one; the
-    /// mirror lists are unaffected.
+    /// `RESTRICT=fetch` bars the literal (and `force-mirror` even a
+    /// re-permitted one); the mirror lists are unaffected.
     #[test]
     fn assemble_candidates_bars_the_literal_under_fetch_restrictions() {
         use std::collections::HashMap;
@@ -2632,18 +2248,15 @@ mod tests {
         );
     }
 
-    /// A definitely-closed localhost port (bound, then released): `wget`
-    /// fails fast with "connection refused", so the "every candidate
-    /// failed" error text pins the tried order without any real server.
+    /// A definitely-closed localhost port, so the failure text pins the tried
+    /// order without any server.
     fn closed_port() -> u16 {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.local_addr().unwrap().port()
     }
 
-    /// The assembled order is the tried order end to end: with every
-    /// candidate refusing connections, the failure report lists the
-    /// public `GENTOO_MIRRORS` fallback *before* the literal URI --
-    /// and with `restrict_primaryuri` the literal first.
+    /// The failure report lists candidates in tried order: mirrors before
+    /// literals by default, literal first under primaryuri.
     #[test]
     fn fetch_src_uri_tries_candidates_in_assembled_order() {
         let public = format!("http://127.0.0.1:{}", closed_port());
@@ -2680,11 +2293,8 @@ mod tests {
         );
     }
 
-    /// Real `fetch.py`'s `tried_locations`: a `mirror://` URI's
-    /// third-party expansion is listed twice by `assemble_candidates`
-    /// (inline, and again in the primary-uri group -- in both
-    /// `RESTRICT=primaryuri` modes), but an unreachable mirror is
-    /// attempted exactly once.
+    /// A twice-listed third-party expansion is still attempted exactly once,
+    /// in both primaryuri modes.
     #[test]
     fn fetch_src_uri_attempts_a_repeated_candidate_only_once() {
         let mirror_root = format!("http://127.0.0.1:{}", closed_port());

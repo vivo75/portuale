@@ -1,5 +1,5 @@
-// The `vdb` applet (feat#157 / backlog #305, plan S2.7): convert and verify
-// installed-package databases between backends.
+// The `vdb` applet: convert and verify installed-package databases
+// between backends.
 //
 //   portuale vdb convert --from KIND:PATH --to KIND:PATH [--force]
 //   portuale vdb verify  KIND:PATH KIND:PATH
@@ -20,7 +20,7 @@
 //
 //   portuale vdb mount [--foreground] [--allow-other] KIND:PATH MOUNTPOINT
 //
-// `mount` serves a read-only FUSE view of the database (S7; the view is
+// `mount` serves a read-only FUSE view of the database (the view is
 // `vdb_view.rs`, the `fuser` adapter `vdb_fuse.rs`; feature `vdb-fuse`).
 //
 //   portuale vdb status  KIND:PATH
@@ -28,10 +28,10 @@
 //
 //   portuale vdb rebuild-index KIND:PATH
 //
-// `rebuild-index` (S8.3) recomputes a database's derived index (`owner`,
+// `rebuild-index` recomputes a database's derived index (`owner`,
 // `dep_atom`, `needed`) from the stored entry files in one transaction.
 //
-// `status` lists the entries left mid-merge (S4.3, design §9.1): `merging`
+// `status` lists the entries left mid-merge: `merging`
 // rows on a database, `-MERGING-<pf>` directories on files. `sweep` deletes
 // the named ones in one write transaction; it refuses a key that is not
 // pending, so an installed entry is never removed by it.
@@ -459,11 +459,13 @@ fn mount_spec(
     drop(open_db()?);
     if foreground {
         crate::vdb_fuse::serve(
-            open_db()?,
-            &mountpoint,
-            &fsname,
-            allow_other,
-            opts.as_ref(),
+            crate::vdb_fuse::ServeArgs {
+                db: open_db()?,
+                mountpoint: &mountpoint,
+                fsname: &fsname,
+                allow_other,
+                rw: opts.as_ref(),
+            },
             || {},
         )
         .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
@@ -643,10 +645,10 @@ impl std::fmt::Display for StoresReport {
     }
 }
 
-/// Copy the stores real emerge keeps outside the VDB tree (world,
+/// Copy the stores Portage's emerge keeps outside the VDB tree (world,
 /// world_sets, the preserved-libs registry, config memory, the counter)
 /// from the files tree under `root` into `db`, in one transaction. The
-/// counter becomes the larger of the two, so it never goes back (#317 S4).
+/// counter becomes the larger of the two, so it never goes back.
 pub(crate) fn import_stores(
     root: &Path,
     db: &dyn InstalledDb,
@@ -704,7 +706,7 @@ fn import_stores_cmd(args: &[String], out: &mut dyn Write) -> Result<u8, String>
     Ok(0)
 }
 
-/// `portuale vdb rebuild-index KIND:PATH` (S8.3).
+/// `portuale vdb rebuild-index KIND:PATH`.
 fn rebuild_index(args: &[String], out: &mut dyn Write) -> Result<u8, String> {
     let mut specs = Vec::new();
     for a in args {
@@ -1088,8 +1090,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// #317 S4: `import-stores` copies the five stores real emerge keeps
-    /// outside the VDB tree into a database; the counter never goes back.
+    /// `import-stores` copies the five files-tree stores into a database;
+    /// the counter never goes back.
     #[cfg(all(feature = "vdb-sqlite", feature = "vdb-redb"))]
     #[test]
     fn import_stores_copies_the_files_stores_and_keeps_the_larger_counter() {
@@ -1135,9 +1137,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// S8.3: `rebuild-index` on a converted fixture VDB reports the same
-    /// row counts on sqlite and redb, leaves the entries equal to the
-    /// files source, and refuses files and a missing database.
+    /// `rebuild-index` on a converted fixture VDB reports the same
+    /// row counts on sqlite and redb.
     #[cfg(all(feature = "vdb-sqlite", feature = "vdb-redb"))]
     #[test]
     fn rebuild_index_counts_agree_across_databases() {

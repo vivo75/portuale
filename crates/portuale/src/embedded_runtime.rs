@@ -1,16 +1,7 @@
-// The phase runtime and package-set definitions compiled into the binary
-// (backlog #322 S2). `build.rs` walks the repository's `bin/` and `cnf/`
-// and writes `ENTRIES`; this module turns that table back into files.
-//
-// Why: the vendored `bin/` is the bash half of Portage (`ebuild.sh` and its
-// source closure, the `ebuild-helpers/`), located at run time through the
-// path of the tree the binary was built in. A binary copied to a container
-// or a minimal host has no such tree. With the table embedded, it extracts
-// its own copy (see `ebuild_phases::bin_dir`), so the one file is enough.
-//
-// Fidelity: modes are normalised to 0o755 (any exec bit) / 0o644, symlinks
-// are kept with their relative targets, order is sorted so a directory comes
-// before its contents. No mtimes are recorded.
+//! The phase runtime and package-set definitions compiled into the binary.
+//!
+//! `build.rs` embeds `bin/` and `cnf/`; this module extracts them back to
+//! files so a relocated binary runs phases without a build tree.
 
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -151,10 +142,7 @@ mod tests {
             .collect()
     }
 
-    /// Backlog #322 S2.1: the compiled-in table is exactly the live `bin/`
-    /// and `cnf/` trees: same paths, bytes, exec bits, symlink targets, no
-    /// extra and no missing entries. (A stale table would mean a missed
-    /// `rerun-if-changed`.)
+    /// The embedded table is exactly the live `bin/` and `cnf/` trees.
     #[test]
     fn the_embedded_table_is_exactly_the_live_bin_and_cnf_trees() {
         for prefix in ["bin", "cnf"] {
@@ -168,9 +156,7 @@ mod tests {
         );
     }
 
-    /// S2.2: extraction reproduces `bin/` (bytes, exec bits, relative
-    /// symlinks), sets the normalised modes explicitly, and is idempotent
-    /// (a second extraction over the first changes nothing).
+    /// Extraction reproduces `bin/` and is idempotent.
     #[test]
     fn extracting_the_embedded_bin_reproduces_the_live_tree_and_is_idempotent() {
         let tmp = TempDir::new("embedded-runtime-extract");
@@ -179,7 +165,6 @@ mod tests {
         extract("bin", &dest).unwrap();
 
         let mut got = BTreeMap::new();
-        // Re-key the extracted tree under `bin` to compare with the live one.
         let mut raw = BTreeMap::new();
         live(&tmp.join("rt"), "bin", &mut raw);
         got.extend(raw);
@@ -195,16 +180,13 @@ mod tests {
         assert_eq!(mode("ebuild.sh"), 0o755);
         assert_eq!(mode("isolated-functions.sh"), 0o644);
         assert_eq!(mode("ebuild-helpers"), 0o755);
-        // A symlink stays a symlink to the same relative target.
         assert_eq!(
             std::fs::read_link(dest.join("ebuild-helpers/ewarn")).unwrap(),
             Path::new("elog")
         );
     }
 
-    /// #326 S2.2: the extracted shims and `ecompress-file` are executable
-    /// (the `bin/chmod-lite` call at the end of every unpack and the
-    /// `ecompress-file` call in `docompress` both exec them).
+    /// The extracted portuale-owned helpers are executable.
     #[test]
     fn the_extracted_portuale_owned_helpers_are_executable() {
         let tmp = TempDir::new("embedded-runtime-helpers-exec");
@@ -225,13 +207,8 @@ mod tests {
         }
     }
 
-    /// S2.5 in-process half: a phase-running remote merge (the hook-ordering
-    /// fixture: `pkg_setup`, `pkg_preinst`, `pkg_postinst` on the client) driven
-    /// by the binary with `PORTUALE_BIN_DIR` at an *extracted* copy of the
-    /// embedded runtime, never the live `bin/`. Proves the extracted tree
-    /// works as a phase runtime (modes, symlinks, helper lookups). The
-    /// relocated-binary half (no build tree at all) is the container run in
-    /// `LLM/evidence/322-s2.md`.
+    /// A phase-running merge works from an extracted runtime, never the
+    /// live `bin/`.
     #[test]
     fn a_phase_running_merge_works_from_an_extracted_runtime() {
         let tmp = TempDir::new("embedded-runtime-merge");
@@ -280,9 +257,8 @@ mod tests {
         );
     }
 
-    /// S2.7: the set definitions fall back to the embedded copy, and the
-    /// copy is the checkout's file when both exist (so `--list-sets` is
-    /// byte-identical in-tree and relocated).
+    /// Set definitions fall back to the embedded copy, which matches the
+    /// checkout file when both exist.
     #[test]
     fn the_embedded_package_sets_conf_equals_the_checkout_file() {
         let embedded = file("cnf/sets/portage.conf").expect("embedded");

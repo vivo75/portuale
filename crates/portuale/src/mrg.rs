@@ -1,104 +1,12 @@
-// `mrg`: a new applet with deliberately relaxed requirements. The whole
-// point is that `emerge`'s tight constraints do NOT apply to it: `mrg`
-// is a from-scratch, plain-spoken re-take on the package-manager front
-// end, allowed to lean on major mainstream crates (`clap` here, `serde`
-// and friends later) instead of portuale's hand-rolled, minimal-
-// dependency machinery. It does not have to live on a minimal static
-// musl box, match real `emerge` byte-for-byte, or stay near-zero-
-// dependency. `mrg` is a **portuale-only applet -- there will never be a
-// portage counterpart**; only this
-// Rust code and its tests define it. What it DOES share is real
-// `emerge`'s actual option surface:
-// every short option and every long option keeps real emerge's own
-// spelling exactly (the authoritative source is `lib/_emerge/main.py`'s
-// `options` list, `shortmapping` dict, `longopt_aliases` dict,
-// `argument_options` dict, and `actions` frozenset), so muscle memory
-// carries straight over. What may differ is only the *semantics* beyond
-// the names (and even those mostly line up, where clap lets them
-// cheaply).
-//
-// `mrg` is a clap front end over portuale's OWN emerge codepath: it
-// parses the real emerge option surface, translates the match into a
-// canonical long-form argv (options in definition order,
-// `--long=value` for value kinds, the target package atoms last -- see
-// `to_emerge_argv`), and hands it to `pretend::run`, the exact function
-// the `emerge` applet runs. So `portuale mrg --pretend
-// app-portage/eix` resolves and prints exactly what
-// `portuale emerge --pretend app-portage/eix` does -- the same engine
-// behind a clap front end, keeping clap's parser, help, and exit
-// behaviour. The rules `to_emerge_argv` folds into that canonical form:
-//
-//   - Every `Flag` goes BARE (`--pretend`), never `--pretend=y` -- the
-//     emerge codepath's peek-based parser treats a plain Boolean flag
-//     and a following (unrelated) token correctly on its own.
-//   - `Value` and `Append` options the codepath implements go
-//     `--long=<value>` (per occurrence for `Append`); ones it does NOT
-//     implement yet are forwarded BARE (`--fetchonly`, `--root`, ...)
-//     so `pretend::run` names them honestly ("a real emerge option, but
-//     is not yet implemented in portuale...") instead of rejecting a
-//     `--long=value` spelling it never heard of. `emerge_handles`
-//     encodes the implemented surface, keyed to the parse-loop section
-//     in `pretend.rs`.
-//   - `OptionalValue`s mirror real argparse's inserted literals: the
-//     bare forms (`-D`, `-j`, `-l`) carry value `"True"` internally and
-//     forward BARE (the codepath's own strict `=` validation would
-//     reject `--deep=True`); `--jobs`'s separate-value `y`/`n` unlimited
-//     forms also forward BARE (that is their real meaning); any numeric
-//     value forwards `--long=N`.
-//
-// FULL option-surface fidelity notes (grounded in main.py, read before
-// deviating):
-//
-//   - Every plain boolean from `options` + `actions` becomes a clap
-//     `ArgAction::SetTrue` flag with its real short alias (from
-//     `shortmapping`) attached. clap's native short-flag bundling
-//     (`-pv`, `-aN`, ...) therefore behaves like real `argparse`.
-//     `--cols`/`--skip-first` are real `longopt_aliases` secondary
-//     names for `--columns`/`--skipfirst`, modelled as clap `alias`es.
-//   - `-h`/`--help` is clap's own (real emerge declares `help` in its
-//     `actions` set, and `-h` in `shortmapping`; clap's built-in help
-//     keeps that exact spelling).
-//   - Deliberate cuts, all within the "full equality is NOT required,
-//     keep short and long options as-is" licence:
-//       * The y/n/`True` *optional-value* options (main.py's own
-//         `insert_optional_args`/`default_arg_opts`: `--ask`, `--verbose`,
-//         `--quiet`, `--buildpkg`, `--usepkg`, ...) are
-//         modelled as plain `SetTrue` flags. That keeps the
-//         overwhelmingly common bare forms (`-a`, `-v`, `-k`) AND the
-//         `-av <pkg>` / `-pv <pkg>`
-//         atom-after-flag spellings working exactly like real emerge,
-//         instead of clap greedily swallowing the following atom as an
-//         (invalid) value -- which is the one real failure mode a
-//         `num_args(0..=1)` + choices clap arg would introduce. The
-//         explicit `=y`/`=n` forms are not parsed yet.
-//       * The three real `argument_options` with an *optional* numeric
-//         value (`--deep`/`-D`, `--jobs`/`-j`, `--load-average`/`-l`)
-//         mirror real emerge's own `insert_optional_args` semantics
-//         exactly: a following token is consumed as the value only when
-//         real emerge's own validator would accept it (`int(s) >= 0`
-//         for `--deep`/`--jobs`, which also accept `y`/`n`, and
-//         `float(s) >= 0` for `--load-average`); otherwise the option is
-//         bare and gets real emerge's own literal inserted default,
-//         `"True"`. This is achieved by marking the clap arg
-//         `require_equals(true)` (so it can never swallow a following
-//         atom) plus a small pre-pass (`join_optional_values`) that
-//         joins the space-separated valid-value forms (e.g. `-j 4`) into
-//         the explicit `--jobs=4` spelling before clap sees them.
-//       * `--with-bdeps`, `--color`, the y/n choice
-//         options, and the other real *required*-value
-//         choice options keep their required value (with the real
-//         possible values). A bare `--color` is as much an error here as
-//         in real argparse.
-//       * `action: "append"` options (`--exclude`/`-X`,
-//         `--buildpkg-exclude`, the `--*binpkg-exclude` /
-//         `--*binpkg-include` family, `--reinstall-atoms`,
-//         `--useoldpkg-atoms`, `--usepkg-include`) are
-//         clap `Append` args, repeatable per the
-//         real `"append"` action.
-//
-// Exit code conventions match real emerge/argparse: 0 for success and
-// help, 2 for a usage error (unknown option, missing/extra value), all
-// via clap's own rendering.
+//! `mrg`: a portuale-only applet (there will never be a Portage counterpart)
+//! offering Portage's `emerge` option surface -- every short and long option
+//! keeps Portage's spelling -- over portuale's own emerge codepath. A clap
+//! front end parses the options, translates the match into canonical
+//! long-form argv (see `to_emerge_argv`), and hands it to `pretend::run`,
+//! the exact function the `emerge` applet runs. Only the option *names* are
+//! shared; semantics beyond the names may differ. Exit codes follow argparse
+//! (0 for success/help, 2 for usage errors) via clap's own rendering.
+// Portage: _emerge/main.py (options, shortmapping, longopt_aliases, argument_options, actions)
 
 use clap::builder::PossibleValuesParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
@@ -111,45 +19,40 @@ use std::process::ExitCode;
 /// can never drift apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    /// Real plain boolean (`options`/`actions`, plus the y/n optional-
-    /// value family modelled as a flag -- see the module-level cuts):
-    /// `ArgAction::SetTrue`.
+    /// Plain boolean: `ArgAction::SetTrue`. (The y/n optional-value family
+    /// is modelled as flags too; see the notes.)
     Flag,
-    /// Required value (`argument_options` with `action: "store"`, or a
-    /// required `choices` option): `ArgAction::Set`.
+    /// Required value: `ArgAction::Set`.
     Value,
-    /// Real optional numeric value (`--deep`/`--jobs`/`--load-average`):
+    /// Optional numeric value (`--deep`/`--jobs`/`--load-average`):
     /// `ArgAction::Set`, `num_args(0..=1)`, bare -> `missing`.
     OptionalValue,
-    /// Repeatable (`argument_options` with `action: "append"`):
-    /// `ArgAction::Append`.
+    /// Repeatable: `ArgAction::Append`.
     Append,
 }
 
 struct Opt {
     /// clap arg id (the dest), also the `to_emerge_argv` lookup key.
     id: &'static str,
-    /// Canonical long option, exactly as real emerge spells it.
+    /// Canonical long option, exactly as Portage spells it.
     long: &'static str,
-    /// Secondary long name for the real `longopt_aliases` pair
+    /// Secondary long name for the `longopt_aliases` pair
     /// (`--cols`/`--skip-first`); `None` for everything else.
     alias: Option<&'static str>,
-    /// Real short option, exactly as real emerge's `shortmapping` /
-    /// `argument_options` spells it; `None` when real emerge has none.
+    /// Short option, exactly as Portage's `shortmapping` /
+    /// `argument_options` spells it; `None` when Portage has none.
     short: Option<char>,
     kind: Kind,
-    /// Real `choices` for required-value options (empty = accept any
-    /// string, like the real `action: "store"`).
+    /// Value choices for required-value options (empty = accept any string).
     choices: &'static [&'static str],
     /// Bare-flag default for `OptionalValue` options.
     missing: &'static str,
-    /// One-line help shown by `mrg --help` (short, honest, portuale's
-    /// own wording -- not a transcription of real main.py's help text).
+    /// One-line help shown by `mrg --help` (short, honest, portuale's own
+    /// wording).
     help: &'static str,
 }
 
-/// Splits `OPTIONS` into "Actions" (the real `actions` frozenset) and
-/// everything else, for clap's help headings.
+/// Splits `OPTIONS` into "Actions" and everything else, for clap's help headings.
 const ACTION_IDS: &[&str] = &[
     "clean",
     "config",
@@ -164,10 +67,10 @@ const ACTION_IDS: &[&str] = &[
     "version",
 ];
 
-/// Real `actions` frozenset + `options` list + y/n optional-value family
-/// (the non-value options). Every entry keeps real emerge's spelling.
+/// The `actions` frozenset + `options` list + y/n optional-value family
+/// (the non-value options). Every entry keeps Portage's spelling.
 const OPTIONS: &[Opt] = &[
-    // --- The real `actions` frozenset: a standalone action replaces the
+    // --- The `actions` frozenset: a standalone action replaces the
     // ordinary resolve-and-show behavior. (`help` is clap's own.)
     Opt {
         id: "clean",
@@ -279,8 +182,8 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "show the version of the package manager",
     },
-    // --- The real `options` list (plain boolean store_true options),
-    // with `shortmapping` shorts where real emerge defines one.
+    // --- The `options` list (plain boolean store_true options), with
+    // `shortmapping` shorts where Portage defines one.
     Opt {
         id: "buildpkgonly",
         long: "--buildpkgonly",
@@ -461,9 +364,9 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "update packages to the best available version",
     },
-    // --- The real y/n/True optional-value family (insert_optional_args'
-    // `default_arg_opts`), modelled as plain flags -- see the module
-    // doc comment's cut for why. Short aliases are real main.py's own.
+    // --- The y/n/True optional-value family (`default_arg_opts`),
+    // modelled as plain flags (see the notes for why). Short aliases are
+    // Portage's own.
     Opt {
         id: "ask",
         long: "--ask",
@@ -475,9 +378,6 @@ const OPTIONS: &[Opt] = &[
         help: "prompt before performing any actions",
     },
     Opt {
-        // Backlog #231 (c): with `--ask`, offer `eselect news read`
-        // while calculating dependencies (real
-        // `_emerge/actions.py:4266-4281`).
         id: "read_news",
         long: "--read-news",
         alias: None,
@@ -667,8 +567,8 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "pull in test deps for matched packages",
     },
-    // --- Required-value options. `choices` non-empty = the real closed
-    // choice set; empty = accept any store value like the real action.
+    // --- Required-value options. `choices` non-empty = the closed choice
+    // set; empty = accept any store value like the `action: "store"` case.
     Opt {
         id: "color",
         long: "--color",
@@ -729,7 +629,7 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "how many times to backtrack if dep calculation fails",
     },
-    // Portuale-only (real emerge has no `--solver`): which dependency
+    // Portuale-only (Portage has no `--solver`): which dependency
     // solver resolves the graph. Forwarded `--solver=<value>` to the
     // emerge codepath, which parses and validates it.
     Opt {
@@ -802,9 +702,8 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "location for build deps during cross compilation",
     },
-    // --- The real optional-value numeric options. Bare form inserts real
-    // emerge's own literal default "True" (main.py's
-    // `insert_optional_args`); `join_optional_values` + `require_equals`
+    // --- The optional-value numeric options. Bare form inserts Portage's
+    // own literal default "True"; `join_optional_values` + `require_equals`
     // keep the conditional "consume only valid values" semantics.
     Opt {
         id: "deep",
@@ -836,7 +735,7 @@ const OPTIONS: &[Opt] = &[
         missing: "True",
         help: "no new builds when the load average is at least this",
     },
-    // --- Real `action: "append"` options (repeatable).
+    // --- `action: "append"` options (repeatable).
     Opt {
         id: "buildpkg_exclude",
         long: "--buildpkg-exclude",
@@ -1121,9 +1020,9 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "absolute client directory holding the portuale binary (default: first writable of /opt/bin, /usr/local/bin); a non-root login needs this pointing at a directory it can write",
     },
-    // mrg-only (feat#157, backlog #305 S3.1): which installed-package
-    // database backend the run reads. Never reaches `to_emerge_argv`
-    // (ids start with `vdb_`) and is not an `emerge` option.
+    // mrg-only: which installed-package database backend the run reads.
+    // Never reaches `to_emerge_argv` (ids start with `vdb_`) and is not an
+    // `emerge` option.
     Opt {
         id: "vdb_backend",
         long: "--vdb-backend",
@@ -1146,8 +1045,8 @@ const OPTIONS: &[Opt] = &[
     },
 ];
 
-/// Builds the clap `Arg` for one `Opt` entry, keeping real emerge's
-/// short/long spellings and the real short alias.
+/// Builds the clap `Arg` for one `Opt` entry, keeping Portage's short/long
+/// spellings.
 fn build_arg(opt: &Opt) -> Arg {
     let mut arg = Arg::new(opt.id)
         .long(opt.long.trim_start_matches("--"))
@@ -1177,9 +1076,9 @@ fn build_arg(opt: &Opt) -> Arg {
     }
 }
 
-/// The clap `Command` for the whole `mrg` surface: every real emerge
-/// option (grouped into clap's "Actions"/"Options" help sections) plus
-/// the target package atoms as positionals.
+/// The clap `Command` for the whole `mrg` surface: every emerge option
+/// (grouped into clap's "Actions"/"Options" help sections) plus the target
+/// package atoms as positionals.
 pub fn command() -> Command {
     let mut cmd = Command::new("mrg")
         .about("a modern command-line front end for the Portuale package manager");
@@ -1199,22 +1098,20 @@ pub fn command() -> Command {
     cmd
 }
 
-/// The action flag set on this invocation, if any (real `actions`
-/// frozenset members that select something other than a merge).
-/// Remote execution only runs installs: any action with
-/// `--remote-hostname` is a usage error (checked in `remote.rs`).
+/// The action flag set on this invocation, if any (the `actions` frozenset
+/// members that select something other than a merge). Remote execution only
+/// runs installs: any action with `--remote-hostname` is a usage error
+/// (checked in `remote.rs`).
 pub(crate) fn action_selected(matches: &ArgMatches) -> Option<&'static str> {
     ACTION_IDS.iter().find(|id| matches.get_flag(id)).copied()
 }
 
 /// Whether the emerge codepath (`pretend::run`, the parse loop in
-/// `pretend.rs`) has a branch for `long`. Options it handles are
-/// forwarded with their value (`--long=<value>`); the rest go BARE so
-/// `pretend::run`'s `report_option` names them by their real spelling
-/// ("a real emerge action/option, but is not yet implemented in
-/// portuale") rather than rejecting a `--long=value` form it never saw.
-/// The list is keyed to the parse-loop sections in `pretend.rs` and the
-/// real `lib/_emerge/main.py` option table that `emerge_options.rs` pins.
+/// `pretend.rs`) has a branch for `long`. Options it handles are forwarded
+/// with their value (`--long=<value>`); the rest go BARE so `pretend::run`
+/// names them honestly instead of rejecting a `--long=value` form it never
+/// saw. The list is keyed to the parse-loop sections in `pretend.rs` and the
+/// `lib/_emerge/main.py` option table that `emerge_options.rs` pins.
 fn emerge_handles(long: &str) -> bool {
     matches!(
         long,
@@ -1323,17 +1220,16 @@ fn to_emerge_argv(matches: &ArgMatches) -> Vec<String> {
                         && (v == "True" || (long == "--jobs" && matches!(v.as_str(), "y" | "n")))
                     {
                         // The bare/inserted-literal and `-j y|n` unlimited
-                        // forms forward BARE: the codepath's strict `=`
-                        // validation would reject `"--deep=True"` /
-                        // `"--jobs=y"`, and bare `--jobs` is precisely
-                        // what `-j y` means on the real side.
+                        // forms forward BARE (the codepath's strict `=`
+                        // validation would reject them, and bare `--jobs`
+                        // is what `-j y` means on the Portage side).
                         argv.push(long.to_string());
                     } else if emerge_handles(long) {
                         argv.push(format!("{long}={v}"));
                     } else {
                         // Not implemented by the codepath (unreachable for
                         // the three current optionals, but keep the rule
-                        // uniform): report the option under its real name.
+                        // uniform): report the option under its own name.
                         argv.push(long.to_string());
                     }
                 }
@@ -1360,8 +1256,7 @@ fn to_emerge_argv(matches: &ArgMatches) -> Vec<String> {
     argv
 }
 
-/// Real emerge's own `valid_integers` (`int(s) >= 0`), matching main.py's
-/// `insert_optional_args`.
+/// Portage's `valid_integers` (`int(s) >= 0`).
 fn valid_integer(s: &str) -> bool {
     let Ok(v) = s.parse::<i128>() else {
         return false;
@@ -1369,13 +1264,13 @@ fn valid_integer(s: &str) -> bool {
     v >= 0
 }
 
-/// The `--jobs` variant: real emerge's `valid_integers_or_y_or_n`.
+/// The `--jobs` variant: Portage's `valid_integers_or_y_or_n`.
 fn valid_integer_or_y_or_n(s: &str) -> bool {
     valid_integer(s) || s == "y" || s == "n"
 }
 
-/// Real emerge's own `valid_floats` (`float(s) >= 0`). A non-finite
-/// result still compares against 0 like Python's `float(s) >= 0` does.
+/// Portage's `valid_floats` (`float(s) >= 0`). A non-finite result still
+/// compares against 0 like Python's `float(s) >= 0` does.
 fn valid_float(s: &str) -> bool {
     let Ok(v) = s.parse::<f64>() else {
         return false;
@@ -1383,24 +1278,22 @@ fn valid_float(s: &str) -> bool {
     v >= 0.0
 }
 
-/// Real emerge's `insert_optional_args`, trimmed to just what this parser
-/// needs: `--deep`/`-D`, `--jobs`/`-j`, `--load-average`/`-l` consume the
-/// *separate* following token as their value only when it passes real
-/// emerge's own validator, and never otherwise. Since the clap arg is
-/// `require_equals(true)`, that join has to happen here: a bare `-D
-/// cat/pkg` must stay `-D` (bare, `"True"`) with `cat/pkg` as an atom,
-/// and `-j 4` must become `--jobs=4`. Attached short forms (`-j4`,
-/// `-D2`, `-l2.5`) are joined to their explicit long form too, since
-/// require_equals also rejects those. Every other token passes through
-/// untouched.
+/// Portage's `insert_optional_args`, trimmed to what this parser needs:
+/// `--deep`/`-D`, `--jobs`/`-j`, `--load-average`/`-l` consume the *separate*
+/// following token as their value only when it passes Portage's own
+/// validator, and never otherwise. Since the clap arg is
+/// `require_equals(true)`, that join happens here: a bare `-D cat/pkg` stays
+/// `-D` (bare, `"True"`) with `cat/pkg` as an atom, and `-j 4` becomes
+/// `--jobs=4`. Attached short forms (`-j4`, `-D2`, `-l2.5`) are joined to
+/// their explicit long form too. Every other token passes through untouched.
 fn join_optional_values(args: &[String]) -> Vec<String> {
     let mut out = Vec::with_capacity(args.len());
     let mut iter = args.iter();
     'outer: while let Some(arg) = iter.next() {
-        // Attached short forms (`-j4`, `-D2`, `-l2.5`): real emerge's
-        // insert_optional_args expands these itself, and clap's
-        // require_equals rejects the attached spelling, so join them into
-        // the explicit long form here when the suffix is a valid value.
+        // Attached short forms (`-j4`, `-D2`, `-l2.5`): Portage expands
+        // these itself, and clap's require_equals rejects the attached
+        // spelling, so join them into the explicit long form here when the
+        // suffix is a valid value.
         for (short, long, validator) in [
             ("-D", "--deep", valid_integer as fn(&str) -> bool),
             ("-j", "--jobs", valid_integer_or_y_or_n as fn(&str) -> bool),
@@ -1438,13 +1331,12 @@ fn join_optional_values(args: &[String]) -> Vec<String> {
 }
 
 /// `mrg`'s entry point, dispatched from main.rs's multicall `run`. Parses
-/// `args` (already stripped of the applet name) with the clap command,
-/// then either runs the remote preflight/executor (`--remote-hostname`
-/// present -- see `remote.rs`, docs/remote-merge.md) or translates the
-/// match into canonical long-form argv and hands it to the emerge
-/// codepath -- `pretend::run`, the exact function the `emerge` applet
-/// runs, so resolution output and exit codes are literally emerge's.
-/// clap keeps its own parser, help, and exit behaviour (help -> 0, usage
+/// `args` (already stripped of the applet name) with the clap command, then
+/// either runs the remote preflight/executor (`--remote-hostname` present)
+/// or translates the match into canonical long-form argv and hands it to the
+/// emerge codepath -- `pretend::run`, the exact function the `emerge` applet
+/// runs, so resolution output and exit codes are literally emerge's. clap
+/// keeps its own parser, help, and exit behaviour (help -> 0, usage
 /// error -> 2); everything else is the emerge codepath's.
 pub fn run(args: &[String]) -> ExitCode {
     let bin = "mrg";
@@ -1453,14 +1345,14 @@ pub fn run(args: &[String]) -> ExitCode {
     match command().try_get_matches_from(argv) {
         Ok(matches) => match crate::remote::check_remote(&matches) {
             Ok(remote) => {
-                // A remote run whose VDB is `client:` (the default)
-                // keeps the files layout on the client; the backend
-                // options do not apply to it.
+                // A remote run whose VDB is `client:` (the default) keeps
+                // the files layout on the client; the backend options do not
+                // apply to it.
                 let client_vdb = matches!(&remote, Some(ctx)
                     if !matches.get_flag("pretend")
                         && matches!(ctx.vdb, crate::remote::ConfigPlacement::Client(_)));
-                // Held for the whole run: the redb parent pipe (S6.3)
-                // stops and its socket is removed when this drops.
+                // Held for the whole run: the redb parent pipe stops and its
+                // socket is removed when this drops.
                 let vdb_ipc = match setup_vdb(&matches, client_vdb) {
                     Ok(server) => server,
                     Err((message, code)) => {
@@ -1505,7 +1397,7 @@ pub fn run(args: &[String]) -> ExitCode {
 }
 
 // ---------------------------------------------------------------------
-// VDB backend selection (feat#157, backlog #305 S3.1)
+// VDB backend selection
 // ---------------------------------------------------------------------
 
 use portage_vdb::BackendKind;
@@ -1528,9 +1420,9 @@ pub(crate) struct VdbSelection {
     pub(crate) path: Option<PathBuf>,
 }
 
-/// Default database file for `backend` under `root` (Q1):
-/// `${EROOT}/var/lib/portage/vdb.{sqlite,redb}`. portuale has no
-/// `EPREFIX`, so `EROOT` is `ROOT`.
+/// Default database file for `backend` under `root`:
+/// `${EROOT}/var/lib/portage/vdb.{sqlite,redb}` (no `EPREFIX`, so `EROOT` is
+/// `ROOT`).
 fn default_vdb_path(root: &Path, backend: BackendKind) -> PathBuf {
     let name = match backend {
         BackendKind::Redb => "vdb.redb",
@@ -1540,13 +1432,12 @@ fn default_vdb_path(root: &Path, backend: BackendKind) -> PathBuf {
     root.join("var/lib/portage").join(name)
 }
 
-/// Pure precedence logic (Q2: explicit only, no auto-detect).
-/// Backend: `--vdb-backend` > `PORTUALE_VDB_BACKEND` in the process
-/// environment > the same variable in make.conf (`conf`, only called
-/// when needed) > `files`. Path: `--vdb-path` > `PORTUALE_VDB_PATH`
+/// Pure precedence logic. Backend: `--vdb-backend` > `PORTUALE_VDB_BACKEND`
+/// in the process environment > the same variable in make.conf (`conf`, only
+/// called when needed) > `files`. Path: `--vdb-path` > `PORTUALE_VDB_PATH`
 /// (environment, then make.conf) > the per-backend default under `root`.
-/// An empty value counts as unset. Errors carry the exit code (2 for a
-/// bad value, a usage error).
+/// An empty value counts as unset. Errors carry the exit code (2 for a bad
+/// value, a usage error).
 pub(crate) fn resolve_vdb_selection(
     flag_backend: Option<&str>,
     flag_path: Option<&str>,
@@ -1612,7 +1503,6 @@ fn open_vdb_backend(
 }
 
 /// Check if the database backend is stale (the source files VDB changed since conversion).
-/// Returns a warning message if stale, `None` if not stale or if no import mark is set.
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 fn stale_db_warning(
     mark: Option<(u64, String)>,
@@ -1642,11 +1532,9 @@ fn stale_db_warning(
     None
 }
 
-/// One `!!!` line per entry a crashed merge left in the `merging` state
-/// (design §9.1). Nothing is removed automatically. Called once, right
-/// after the database is opened and before any merge of this run, so the
-/// pending entry of mrg's own merge (legitimate while it runs) is never
-/// listed.
+/// One `!!!` line per entry a crashed merge left in the `merging` state.
+/// Nothing is removed automatically. Called once, right after the database
+/// is opened and before any merge of this run.
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 pub(crate) fn pending_entries_warnings(
     pending: &[portage_vdb::EntryKey],
@@ -1759,7 +1647,7 @@ fn open_redb_backend(
     readonly: bool,
 ) -> Result<Option<std::sync::Arc<dyn portage_vdb::InstalledDb>>, String> {
     // redb allows one process per file: a read-write mrg holds it until
-    // it exits (its ebuild phases reach it through the parent pipe, S6.3).
+    // it exits (its ebuild phases reach it through the parent pipe).
     open_db_backend(path, root, BackendKind::Redb, |p| {
         if readonly {
             portage_vdb::RedbDb::open_readonly(p)
@@ -1783,12 +1671,10 @@ fn open_redb_backend(
 }
 
 /// make.conf lookup for the backend variables, the same config stack
-/// `pretend::run` resolves (`load_repos_and_config`: make.globals,
-/// profile chain, make.conf under `PORTAGE_CONFIGROOT`, `other_vars`).
-/// It runs a second full config resolve, so it is only reached when the
-/// flag and the environment leave the choice open. A config that fails
-/// to load yields no value here; `pretend::run` reports that error
-/// itself.
+/// `pretend::run` resolves. It runs a second full config resolve, so it is
+/// only reached when the flag and the environment leave the choice open. A
+/// config that fails to load yields no value here; `pretend::run` reports
+/// that error itself.
 pub(crate) fn make_conf_lookup(root: &Path) -> impl FnMut(&str) -> Option<String> {
     let mut loaded: Option<Option<portage_profile::Config>> = None;
     let root = root.to_path_buf();
@@ -1827,23 +1713,23 @@ fn setup_vdb(
 
 /// Select, open and register the VDB backend for the target ROOT, then
 /// export it to child processes. `mrg` runs it before `pretend::run`;
-/// `emerge` and `ebuild` run it before their own work, from the
-/// environment and make.conf only (#318). `who` prefixes every message.
+/// `emerge` and `ebuild` run it before their own work, from the environment
+/// and make.conf only. `who` prefixes every message.
 ///
-/// The choice is always exported, `files` included (#318): an ebuild
-/// phase's `portageq` then never has to resolve make.conf itself, and
-/// every process of the run agrees on one database.
+/// The choice is always exported, `files` included: an ebuild phase's
+/// `portageq` then never has to resolve make.conf itself, and every process
+/// of the run agrees on one database.
 ///
 /// redb (not `readonly`): this process now holds the file, so the ebuild
 /// phases' `has_version` / `best_version` cannot open it. The parent pipe
-/// (S6.3, `vdb_ipc.rs`, Q5: redb only) is started here and its socket
-/// exported as `PORTUALE_VDB_IPC`; the returned guard keeps it running
-/// until the caller's run returns. Failing to start it is an error (exit
-/// 1) rather than a merge whose first `has_version` would fail half-way.
+/// (`vdb_ipc.rs`, redb only) is started here and its socket exported as
+/// `PORTUALE_VDB_IPC`; the returned guard keeps it running until the caller's
+/// run returns. Failing to start it is an error (exit 1) rather than a merge
+/// whose first `has_version` would fail half-way.
 ///
-/// Only the target ROOT is registered: the running root (`/`, consulted
-/// for `--root-deps`/BDEPEND style lookups when ROOT is not `/`) keeps
-/// the files layout.
+/// Only the target ROOT is registered: the running root (`/`, consulted for
+/// `--root-deps`/BDEPEND style lookups when ROOT is not `/`) keeps the files
+/// layout.
 pub(crate) fn select_vdb(
     who: &str,
     flag_backend: Option<&str>,
@@ -1885,7 +1771,7 @@ pub(crate) fn select_vdb(
                 )
             })?);
         }
-        // For the ebuild phases (and the native portageq, S6.2).
+        // For the ebuild phases (and the native portageq).
         // Nothing else reads the environment yet: the only other thread
         // is the pipe's accept thread, blocked in `accept` (nobody knows
         // the socket before this export).
@@ -1914,8 +1800,8 @@ mod tests {
         command().try_get_matches_from(argv)
     }
 
-    /// Every table short option must be unique, so no real emerge short
-    /// spelling is ever shadowed by a clap-invented duplicate.
+    /// Every table short option must be unique, so no Portage short spelling
+    /// is ever shadowed by a clap-invented duplicate.
     #[test]
     fn shorts_are_pairwise_distinct() {
         let mut seen = std::collections::HashSet::new();
@@ -1930,8 +1816,8 @@ mod tests {
         }
     }
 
-    /// `-pv pkg` bundles two flags exactly like real argparse does, and
-    /// forwards independently to the emerge codepath.
+    /// `-pv pkg` bundles two flags exactly like argparse does, and forwards
+    /// independently to the emerge codepath.
     #[test]
     fn bundled_shorts_parse_independently() {
         let m = parse(&["-pv", "cat/pkg"]).unwrap();
@@ -1943,8 +1829,8 @@ mod tests {
         assert_eq!(argv, ["--pretend", "--verbose", "cat/pkg"]);
     }
 
-    /// `-j4` (attached), `-j 4`/`--jobs=4` (separate) all carry the
-    /// value; a bare `-j` falls back to real emerge's inserted "True".
+    /// `-j4` (attached), `-j 4`/`--jobs=4` (separate) all carry the value;
+    /// a bare `-j` falls back to the inserted "True".
     #[test]
     fn jobs_value_forms_and_bare_default() {
         for args in [
@@ -1963,9 +1849,9 @@ mod tests {
         );
     }
 
-    /// A bare `-D` must matching real emerge: a following flag OR a
-    /// following atom is NOT consumed as the (non-valid) value -- the
-    /// option stays "True" and the token stays wherever it belongs.
+    /// A bare `-D` matches Portage: a following flag OR a following atom is
+    /// NOT consumed as the (non-valid) value -- the option stays "True" and
+    /// the token stays wherever it belongs.
     #[test]
     fn bare_optional_value_does_not_eat_flags_or_atoms() {
         let m = parse(&["-D", "--pretend", "cat/pkg"]).unwrap();
@@ -1986,8 +1872,8 @@ mod tests {
         assert_eq!(atoms, vec!["cat/a"]);
     }
 
-    /// `--jobs y`/`--load-average 2.5` join the separate valid-value
-    /// forms like real insert_optional_args does.
+    /// `--jobs y`/`--load-average 2.5` join the separate valid-value forms
+    /// like `insert_optional_args` does.
     #[test]
     fn optional_value_separate_valid_values_are_consumed() {
         let m = parse(&["-j", "y"]).unwrap();
@@ -1999,7 +1885,7 @@ mod tests {
         );
     }
 
-    /// `--columns` and its real `--cols` alias name the same flag.
+    /// `--columns` and its `--cols` alias name the same flag.
     #[test]
     fn longopt_alias_columns() {
         for args in [&["--columns"][..], &["--cols"][..]] {
@@ -2030,8 +1916,8 @@ mod tests {
         assert_eq!(argv, ["--pretend", "cat/pkg"]);
     }
 
-    /// A required value missing (bare `--color`) is a clap usage error,
-    /// and so is any short spelling real emerge never defined.
+    /// A required value missing (bare `--color`) is a clap usage error, and
+    /// so is any short spelling Portage never defined.
     #[test]
     fn usage_errors_are_errors() {
         for args in [&["--color"][..], &["-I"][..], &["--bogus"][..]] {
@@ -2040,7 +1926,7 @@ mod tests {
         }
     }
 
-    /// A repeatable option collects its real `action: "append"` list.
+    /// A repeatable option collects its `action: "append"` list.
     #[test]
     fn append_collects_repeats() {
         let m = parse(&["-X", "cat/a", "--exclude", "cat/b", "--exclude=cat/c"]).unwrap();
@@ -2081,9 +1967,8 @@ mod tests {
         );
     }
 
-    /// Backlog #231 (c): `mrg --read-news` parses and forwards bare
-    /// to the emerge codepath (which pairs it with `--ask` for the
-    /// `eselect news read` prompt).
+    /// `mrg --read-news` parses and forwards bare to the emerge codepath
+    /// (which pairs it with `--ask` for the `eselect news read` prompt).
     #[test]
     fn read_news_forwards_bare() {
         let m = parse(&["--ask", "--read-news", "cat/pkg"]).unwrap();
@@ -2094,7 +1979,7 @@ mod tests {
 
     /// Implemented `Value` options forward `--long=<value>`; ones the
     /// emerge codepath does not implement yet forward BARE so it can name
-    /// them honestly ("a real emerge option, but is not yet implemented").
+    /// them honestly.
     #[test]
     fn value_options_carry_or_shed_their_value() {
         let m = parse(&["--color", "n", "--with-bdeps", "y", "cat/pkg"]).unwrap();
@@ -2124,8 +2009,8 @@ mod tests {
     /// The `OptionalValue` bare/inserted-literal and `-j y|n` unlimited
     /// forms forward BARE (the emerge codepath's strict `=` validation
     /// would reject `--deep=True` / `--jobs=y`); numeric values forward
-    /// `--long=N`. This makes `-D`/`-j`/`-j y` mean what real emerge
-    /// means, and `-D 2`/`-j 4` explicit.
+    /// `--long=N`. This makes `-D`/`-j`/`-j y` mean what Portage means, and
+    /// `-D 2`/`-j 4` explicit.
     #[test]
     fn optional_values_bare_or_numeric() {
         let m = parse(&["-D", "-j", "y", "-l", "2.5", "cat/pkg"]).unwrap();
@@ -2263,8 +2148,8 @@ mod tests {
             ctx.etc_portage,
             crate::remote::ConfigPlacement::Client("/etc/portage".to_string())
         );
-        // Slice-6 placements: vdb/edb default off the (default) root,
-        // no ledger override, protect lists unflagged.
+        // vdb/edb default off the (default) root, no ledger override,
+        // protect lists unflagged.
         assert_eq!(
             ctx.vdb,
             crate::remote::ConfigPlacement::Client("/var/db/pkg".to_string())
@@ -2277,8 +2162,8 @@ mod tests {
         assert!(!ctx.require_ledger_match);
         assert!(!ctx.config_protect_explicit);
         assert!(!ctx.config_protect_mask_explicit);
-        // Slice-8 binary placement: ship this binary, default dirs,
-        // unresolved until preflight.
+        // Binary placement: ship this binary, default dirs, unresolved until
+        // preflight.
         assert_eq!(ctx.portuale_binary, None);
         assert_eq!(ctx.portuale_dir, None);
         assert_eq!(ctx.bin_plan, crate::remote::ClientBinPlan::Unresolved);
@@ -2305,8 +2190,8 @@ mod tests {
                 .contains("--remote-max-clock-skew")
         );
 
-        // Slice-6 placements: vdb takes either side, edb only server:,
-        // ledger-dir is a plain path, protect flags mark explicitness.
+        // vdb takes either side, edb only server:, ledger-dir is a plain
+        // path, protect flags mark explicitness.
         let m = parse(&[
             "--remote-hostname",
             "h",
@@ -2335,8 +2220,8 @@ mod tests {
         let ctx = check_remote(&m).unwrap().expect("remote mode");
         assert!(ctx.require_ledger_match);
 
-        // Slice-8 binary placement: the shipped file rides along, the
-        // dir must be absolute, and both options require the hostname.
+        // Binary placement: the shipped file rides along, the dir must be
+        // absolute, and both options require the hostname.
         let m = parse(&[
             "--remote-hostname",
             "h",
@@ -2377,7 +2262,7 @@ mod tests {
         assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
     }
 
-    // ---- VDB backend selection (feat#157 S3.1) ----
+    // ---- VDB backend selection ----
 
     fn sel(
         flag_backend: Option<&str>,
@@ -2623,15 +2508,15 @@ mod tests {
         assert!(setup_vdb(&m, true).is_ok());
     }
 
-    /// #318: with `PORTUALE_VDB_BACKEND` / `PORTUALE_VDB_PATH` set only in
-    /// make.conf, `emerge`, `ebuild` (its phases' `has_version` too) and a
-    /// standalone `portageq` all read the sqlite database, not the files
-    /// tree. The database is the fixture root's VDB minus
-    /// `dev-libs/samepkg`, so each answer shows which one was read; the
-    /// same commands under the plain fixture config (no variable) read
-    /// the files tree, where `samepkg` is installed. `mrg` applies the
-    /// same rule (`resolve_vdb_selection`); Portage has no such
-    /// setting, so the expectation is portuale's own `mrg` behaviour.
+    /// With `PORTUALE_VDB_BACKEND` / `PORTUALE_VDB_PATH` set only in make.conf,
+    /// `emerge`, `ebuild` (its phases' `has_version` too) and a standalone
+    /// `portageq` all read the sqlite database, not the files tree. The
+    /// database is the fixture root's VDB minus `dev-libs/samepkg`, so each
+    /// answer shows which one was read; the same commands under the plain
+    /// fixture config (no variable) read the files tree, where `samepkg` is
+    /// installed. `mrg` applies the same rule (`resolve_vdb_selection`).
+    /// Portage has no such setting, so the expectation is portuale's own
+    /// `mrg` behaviour.
     #[cfg(feature = "vdb-sqlite")]
     #[test]
     fn make_conf_backend_reaches_emerge_ebuild_and_portageq() {
@@ -2889,7 +2774,7 @@ mod tests {
             assert!(!missing.exists());
         }
         // redb: a file held by this process is Busy for the mrg child (a
-        // real cross-process refusal), read-only and read-write alike.
+        // genuine cross-process refusal), read-only and read-write alike.
         #[cfg(feature = "vdb-redb")]
         {
             let p = tmp.join("vdb.redb");
@@ -2918,17 +2803,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// feat#157 S6.3, end to end: real `mrg --vdb-backend=redb` merges
-    /// (the binary, so the redb file is held read-write by the merging
-    /// process for the whole run) whose `pkg_preinst` / `pkg_postinst` call
-    /// `has_version` / `best_version`. The phases reach the parent over
-    /// `PORTUALE_VDB_IPC`; without it the helper would get `Busy` and exit
-    /// 4, failing the merge. ROOT has no `var/db/pkg` at all, so every hit
-    /// comes from the redb database. Upgrading 1.0 -> 2.0: `pkg_preinst`
-    /// sees the old instance (1.0 installed, 2.0 not yet, best = 1.0), and
-    /// `pkg_postinst` the new one (real `has_version` semantics: the new
-    /// instance is published between the two). The socket and its private
-    /// directory are gone after each run.
+    /// End to end: `mrg --vdb-backend=redb` merges (the redb file is held
+    /// read-write by the merging process for the whole run) whose
+    /// `pkg_preinst` / `pkg_postinst` call `has_version` / `best_version`.
+    /// The phases reach the parent over `PORTUALE_VDB_IPC`; without it the
+    /// helper would get `Busy` and exit 4, failing the merge. ROOT has no
+    /// `var/db/pkg` at all, so every hit comes from the redb database.
+    /// Upgrading 1.0 -> 2.0: `pkg_preinst` sees the old instance (1.0
+    /// installed, 2.0 not yet, best = 1.0), and `pkg_postinst` the new one
+    /// (the new instance is published between the two). The socket and its
+    /// private directory are gone after each run.
     #[cfg(feature = "vdb-redb")]
     #[test]
     fn redb_merge_phases_query_the_parent_over_the_pipe() {

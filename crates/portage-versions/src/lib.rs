@@ -1,13 +1,8 @@
-// Rust port of the comparison semantics implemented by
-// `lib/portage/versions.py` (functions `ververify` and `vercmp`) in the
-// Python codebase. Ported by hand, structurally close to the Python
-// original so it stays easy to diff against on future changes -- this is
-// a portuale artifact, not yet idiomatic-first Rust; see LLM/agent-context.md.
+// Port of `lib/portage/versions.py` (`ververify`, `vercmp`), kept
+// structurally close to the original for diffing.
 //
-// Version components are parsed as `i128`, but any component too wide for
-// `i128` is compared as an arbitrary-length decimal string instead of
-// panicking. That mirrors the Python original's unbounded `int` exactly, so
-// no width of numeric component can crash or miscompare a version.
+// Components wider than `i128` compare as decimal strings, mirroring
+// Python's unbounded `int`, so no width of component can miscompare.
 
 use regex::Regex;
 use std::cmp::Ordering;
@@ -26,16 +21,13 @@ fn suffix_regexp() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^(alpha|beta|rc|pre|p)(\d*)$").unwrap())
 }
 
-/// Sentinel for an implicit missing dotted-version component (e.g. the
-/// missing third component of "1.0" compared against "1.0.0"), comparing
-/// less than any explicit component so that "1.0.0" > "1.0".
+/// Sentinel for a missing dotted-version component (e.g. the third of
+/// "1.0" against "1.0.0"): sorts less than any explicit component.
 ///
-/// A single numeric component is either an in-range `i128` (`Num`) or, when
-/// the digit string is wider than `i128` can hold, a `BigNum` decimal
-/// string compared by length-then-digits. Components are non-negative
-/// (`\d+` in the grammar) and `BigNum` only ever arises from genuine
-/// overflow (verified: Rust's `parse` accepts arbitrary leading zeros), so
-/// any `BigNum` exceeds `i128::MAX` and therefore any `Num`.
+/// A single numeric component is either an in-range `i128` (`Num`) or,
+/// past its width, a decimal string compared by length-then-digits
+/// (`BigNum`). `BigNum` only arises from genuine overflow, so it always
+/// exceeds any `Num`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Part {
     ImplicitZero,
@@ -91,8 +83,8 @@ fn parse_component(s: &str) -> Part {
     }
 }
 
-/// Revision and suffix numbers may be absent, in which case Python treats
-/// the implicit value as zero (`int("")` would raise, so it fudges to 0).
+/// Revision and suffix numbers may be absent, in which case Portage treats
+/// the implicit value as zero.
 fn parse_uint_or_zero(s: &str) -> Part {
     if s.is_empty() {
         Part::Num(0)
@@ -101,10 +93,9 @@ fn parse_uint_or_zero(s: &str) -> Part {
     }
 }
 
-/// Builds the paired dotted-component lists (the parts after the first
-/// integer, e.g. the ".2.3" in "1.2.3"), applying Portage's implicit-zero
-/// and leading-zero ("float-like") comparison rules. Must be built jointly
-/// because both rules compare same-index components across both versions.
+/// Builds the paired dotted-component lists (e.g. the ".2.3" in "1.2.3"),
+/// applying the implicit-zero and leading-zero rules jointly, since both
+/// compare same-index components across the two versions.
 fn build_dotted_lists(dotted1: &str, dotted2: &str) -> (Vec<Part>, Vec<Part>) {
     let vlist1: Vec<&str> = if dotted1.is_empty() {
         Vec::new()
@@ -132,10 +123,9 @@ fn build_dotted_lists(dotted1: &str, dotted2: &str) -> (Vec<Part>, Vec<Part>) {
             list1.push(parse_component(a));
             list2.push(parse_component(b));
         } else {
-            // At least one side has a leading zero, so plain integer
-            // comparison would be wrong (e.g. "01" vs "1"): pad both with
-            // trailing zeros to the same width and compare as integers,
-            // matching Python's float-like comparison.
+            // A leading zero on either side needs the float-like comparison
+            // ("01" vs "1"): pad both with trailing zeros and compare as
+            // integers.
             let width = a.len().max(b.len());
             list1.push(parse_component(&format!("{a:0<width$}")));
             list2.push(parse_component(&format!("{b:0<width$}")));
@@ -174,7 +164,7 @@ fn parse_suffix_chain(chain: &str) -> Vec<&str> {
     if chain.is_empty() {
         Vec::new()
     } else {
-        // chain looks like "_pre1_p2"; split('_') yields ["", "pre1", "p2"].
+        // "_pre1_p2".split('_') starts with "", hence skip(1).
         chain.split('_').skip(1).collect()
     }
 }
@@ -184,7 +174,7 @@ fn cmp_suffixes(chain1: &str, chain2: &str) -> Ordering {
     let list2 = parse_suffix_chain(chain2);
     let max_len = list1.len().max(list2.len());
     for i in 0..max_len {
-        // Implicit "_p0" is less than any explicit suffix, so "1" < "1_p0".
+        // An implicit "_p0" is less than any explicit suffix.
         let (name1, num1) = match list1.get(i) {
             Some(s) => split_suffix(s),
             None => ("p".to_string(), "-1".to_string()),
@@ -243,10 +233,8 @@ pub fn vercmp(ver1: &str, ver2: &str) -> Option<i32> {
     list1.extend(d1);
     list2.extend(d2);
 
-    // NOTE: behavior changed between portage-2.0.x and portage-2.1: a bare
-    // letter suffix now sorts *after* the same version without one (e.g.
-    // "12.2.5" > "12.2b"), because it's appended to the same comparison
-    // list rather than compared as its own component.
+    // Since 2.1 the letter suffix sorts after the bare version: it is
+    // appended to the comparison list, not compared as its own component.
     if let Some(c) = letter1.chars().next() {
         list1.push(Part::Num(c as i128));
     }
@@ -281,14 +269,12 @@ mod tests {
     fn oversized_main_components_do_not_panic() {
         assert_eq!(cmp(&"9".repeat(39), &"9".repeat(39)), 0);
         assert_eq!(cmp(&"9".repeat(39), &format!("{}8", "9".repeat(38))), 1);
-        // 1e39 (40 digits) beats the 39-digit ~9.99e38.
         assert_eq!(cmp(&format!("1{}", "0".repeat(39)), &"9".repeat(39)), 1);
     }
 
     #[test]
     fn oversized_leading_zero_components_still_compare_by_value() {
-        // Leading zeros must not count toward width: value is 1, so this is
-        // `BigNum` on the overflowing side but still equal to "1".
+        // Leading zeros must not count toward width.
         assert_eq!(
             cmp(
                 &format!("0{}", "9".repeat(39)),
@@ -320,8 +306,8 @@ mod tests {
 
     #[test]
     fn oversized_suffix_numbers_match_python_bignum() {
-        // Python wraps these in `int()` (unbounded) when the suffix numeral
-        // is not empty, so a huge suffix digit outranks the smaller one.
+        // Portage wraps these in unbounded `int()`, so a huge suffix digit
+        // outranks the smaller one.
         assert_eq!(
             cmp(
                 &format!("1.0_p{}", "9".repeat(30)),

@@ -1,0 +1,6 @@
+unpack
+prepare
+configure
+compile
+test
+install

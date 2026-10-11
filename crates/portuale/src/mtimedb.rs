@@ -1,88 +1,16 @@
-// Real `/var/cache/edb/mtimedb` `resume` support (`_emerge/Scheduler.py::
-// _save_resume_list` + `_emerge/actions.py`'s `--resume` handling): the
-// resolved plan's own mergelist is saved to `mtimedb["resume"]`
-// **before the first merge runs** (real `Scheduler.merge()`'s own
-// `_save_resume_list` call, #168), so a SIGKILL mid-merge still leaves a
-// list for `emerge --resume`. Each successful merge then removes its own
-// entry (`remove_merged_entry`, real `Scheduler.py:1595-1602`), deleting
-// the key once the list empties; a clean failure re-saves the
-// still-unmerged tail. Each entry is `[type, root, cpv,
-// operation]` along with the original atom args
-// (`mtimedb["resume"]["favorites"]`). `emerge --resume` reads them back
-// and merges them in order; `emerge --resume --skipfirst` drops the first
-// (the one that failed) before continuing.
-//
-// The file is real portage's JSON `mtimedb`. Portuale writes a
-// real-compatible `{"resume": {...}, "resume_backup": {...}}` (hand-rolled,
-// tab-indented like real `json.dumps(indent="\t", sort_keys=True)`); it
-// does NOT preserve any other top-level keys an existing file had
-// (`info`/`ldpath`/`updates` are `--sync`/`env-update` state portuale never
-// manages). Reading extracts each section with a regex/brace-match rather
-// than a full JSON parse -- enough for a portuale-written file, and
-// tolerant of a real-portage-written one with the same shape.
-//
-// `resume_backup` rotation IS real now (`rotate_resume_to_backup`,
-// `actions.py:664-672`): right before a fresh, non-`--resume` merge starts,
-// an existing `resume` entry whose own mergelist has more than one item is
-// preserved as `resume_backup` (replacing whatever backup existed before)
-// rather than just being overwritten -- `emerge --resume` later promotes
-// `resume_backup` back to `resume` when `resume` itself is absent
-// (`actions.py:222-224`, `read_resume_list`'s own fallback), so an
-// accidental fresh `emerge <atom>` doesn't destroy a still-recoverable
-// resume point. `clear_resume_list` only ever removes `resume` itself
-// (real `Scheduler.py:1599-1601`'s own `del mtimedb["resume"]` once the
-// mergelist empties), leaving `resume_backup` untouched.
-//
-// `mtimedb["info"]` IS real now too: real `MtimeDB` (`util/mtimedb.py`)
-// carries an `"info"` key mapping each absolute GNU-info directory to
-// that directory's `st_mtime` (whole seconds) the last time real
-// `chk_updated_info_files` (`util/_info_files.py`) regenerated its
-// `dir` index -- or skipped regenerating because the mtime already
-// matched. `read_info_mtimes`/`write_info_mtimes` round-trip that map
-// through the same file without disturbing `resume`/`resume_backup`
-// (real `commit()` persists the whole dict at once).
-//
-// Two deliberate narrowings, both documented where they bite:
-//   - real's file always carries every `_MTIMEDBKEYS` key (`info`,
-//     `ldpath`, `resume`, `resume_backup`, `starttime`, `updates`,
-//     `version`); portuale only ever writes the sections it manages
-//     (`resume`, `resume_backup`, now `info`) and still drops the rest
-//     -- `ldpath`/`updates` are `--sync`/`env-update` state portuale
-//     never manages, `starttime`/`version` real bookkeeping with no
-//     reader here. An empty `info` map is omitted outright (real would
-//     write `"info": {}`); the file is removed when nothing at all is
-//     stored, as before.
-//   - values are whole-second `i64`s (real `os.stat(...)[stat.ST_MTIME]`
-//     is already an int). A foreign-written float (`123.0`) is accepted
-//     on read and truncated; what portuale writes back is always an
-//     integer, matching real's steady state.
-//
-// Binary-entry replay IS real now too: each mergelist item carries real
-// portage's own `type` tag (`"ebuild"` or `"binary"`, `ResumeEntryKind`),
-// so `emerge --resume` can dispatch a resumed binary package through
-// `emerge_getbinpkg::run_merge_plan` the same way `--getbinpkg` itself
-// does, rather than only ever replaying source entries. This also closes
-// the real "build-time flags (`--usepkg` etc.)" gap `myopts` used to have
-// no room for: real portage re-derives usepkg/getbinpkg preference from
-// `myopts` and re-decides binary-vs-source at resume time, but portuale's
-// own mergelist already records that *decision* directly (each entry's own
-// `ResumeEntryKind`, fixed at the point the original run resolved it) --
-// arguably more robust than re-deciding from restored flags, so `myopts`
-// itself still only carries `--oneshot`/`--onlydeps` (the two flags that
-// govern *world*-recording, unrelated to which entries are binary).
-// Cut: a resumed binary entry always resolves from the local `$PKGDIR`
-// (`ResumeEntryKind::Binary` maps to `GraphEntry::remote_binary: false`)
-// -- real re-fetches from a remote binhost too if the original run would
-// have; portuale doesn't try to re-derive "was this fetched remotely"
-// from the failed run's own state.
+//! `/var/cache/edb/mtimedb` persistence for three sections: the `resume`
+//! mergelist (`emerge --resume`), its `resume_backup` rotation, and the
+//! `info` dir-mtime memo. The file is Portage's JSON mtimedb shape
+//! (hand-rolled, tab-indented); reading extracts each section with a
+//! regex/brace-match rather than a full JSON parse.
+// Portage: Scheduler.py, _save_resume_list; actions.py (--resume handling); util/mtimedb.py, MtimeDB
 
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Real portage's own `mergelist` entry `type` tag
-/// (`["ebuild"|"binary", <root>, <cpv>, <action>]`) -- which kind of
-/// merge `emerge --resume` replays this entry as.
+/// One mergelist entry's `type` tag (`"ebuild"` or `"binary"`): which kind
+/// of merge `emerge --resume` replays this entry as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResumeEntryKind {
     Ebuild,
@@ -102,10 +30,9 @@ impl ResumeEntryKind {
 /// mergelist.
 pub type ResumeCpv = (ResumeEntryKind, String, String, String);
 
-/// The subset of `mtimedb["resume"]["myopts"]` that changes how
-/// `--resume` replays the mergelist: `--oneshot` (don't add the
-/// `favorites` to `world`) and `--onlydeps` (the target was never in the
-/// mergelist, so nothing is world-recorded).
+/// The subset of `mtimedb["resume"]["myopts"]` that changes how `--resume`
+/// replays the mergelist: `--oneshot` and `--onlydeps` govern
+/// world-recording.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResumeOpts {
     pub oneshot: bool,
@@ -115,9 +42,7 @@ pub struct ResumeOpts {
 /// `(favorites, mergelist, myopts)` from `mtimedb["resume"]`.
 pub type ResumeList = (Vec<String>, Vec<ResumeCpv>, ResumeOpts);
 
-/// One resume section's own data (`resume` or `resume_backup` both have
-/// this same shape) -- an owned counterpart to `ResumeList` so it can be
-/// stored, compared, and re-serialized freely.
+/// One resume section's data (`resume` and `resume_backup` share the shape).
 #[derive(Clone)]
 struct Section {
     favorites: Vec<String>,
@@ -147,9 +72,8 @@ fn json_str(s: &str) -> String {
     out
 }
 
-/// Real `json.dumps(..., sort_keys=True)` shape for one section's own
-/// body (no outer `"resume": { ... }` key wrapper -- the caller adds
-/// that) -- shared by every section a write ever produces.
+/// One section's body in `json.dumps(sort_keys=True)` shape (no outer key
+/// wrapper; the caller adds that). Shared by every section a write produces.
 fn format_section_body(root: &Path, section: &Section) -> String {
     let root_str = root.display().to_string();
     let favs: Vec<String> = section
@@ -170,8 +94,7 @@ fn format_section_body(root: &Path, section: &Section) -> String {
             )
         })
         .collect();
-    // Real `json.dumps(..., sort_keys=True)` -> myopts keys alphabetical
-    // (`--onlydeps` < `--oneshot`), value `true`.
+    // `myopts` keys alphabetical (`--onlydeps` < `--oneshot`), value `true`.
     let mut opt_pairs: Vec<String> = Vec::new();
     if section.opts.onlydeps {
         opt_pairs.push(format!("\t\t\t{}: true", json_str("--onlydeps")));
@@ -191,11 +114,8 @@ fn format_section_body(root: &Path, section: &Section) -> String {
     )
 }
 
-/// Writes the whole mtimedb file from scratch, with `resume` and/or
-/// `resume_backup` as given plus the `info` dir-mtime memo -- `None`
-/// for a section omits it entirely. Removes the file outright when
-/// there is nothing to store (an empty object has nothing real portage
-/// or portuale itself would ever read back).
+/// Writes the whole mtimedb file from scratch with the given sections (`None`
+/// omits a section). Removes the file outright when there is nothing to store.
 fn write_sections(
     root: &Path,
     resume: Option<&Section>,
@@ -219,9 +139,7 @@ fn write_sections(
     if let Some(mtimes) = info
         && !mtimes.is_empty()
     {
-        // Real `json.dumps(..., indent="\t", sort_keys=True)` shape for
-        // the flat `{path: mtime}` map (`BTreeMap` iterates sorted, like
-        // real's `sort_keys`).
+        // The flat `{path: mtime}` map, keys sorted.
         let entries: Vec<String> = mtimes
             .iter()
             .map(|(k, v)| format!("\t\t{}: {v}", json_str(k)))
@@ -235,26 +153,21 @@ fn write_sections(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    // Real `sort_keys=True` orders the top-level sections too
-    // (`info` < `resume` < `resume_backup`); the pushes above already
-    // append in that order.
+    // Top-level sections ordered `info` < `resume` < `resume_backup`;
+    // the pushes above already append in that order.
     let content = format!("{{\n{}\n}}\n", parts.join(",\n"));
     std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// The `{...}` object immediately following `"<key>":` in `content`,
-/// brace-depth-matched (quoted strings' own `{`/`}` don't count) --
-/// unlike a naive "split on the key, take up to the first `}`", this
-/// stays correct once a second top-level section (`resume_backup`
-/// trailing after `resume`, or vice versa) follows in the same file.
+/// brace-depth-matched (quoted strings' `{`/`}` don't count), so a second
+/// top-level section following in the same file can't confuse it.
 fn extract_object<'a>(content: &'a str, key: &str) -> Option<&'a str> {
     let marker = format!("\"{key}\"");
     let after_key = content.split_once(&marker)?.1;
-    // Only whitespace and a single `:` may separate the key from its
-    // own value -- real JSON's own `"key": {...}` shape. Not "find the
-    // first `{` anywhere later", which would skip straight past this
-    // key's own (possibly array-shaped, e.g. `"favorites"`) value into
-    // some sibling key's own object instead.
+    // Only whitespace and a single `:` may separate the key from its value;
+    // otherwise this key's own (possibly array-shaped) value could be skipped
+    // in favour of a sibling key's object.
     let body = after_key.trim_start().strip_prefix(':')?.trim_start();
     if !body.starts_with('{') {
         return None;
@@ -289,12 +202,11 @@ fn extract_object<'a>(content: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
-/// Parses one section's own object text (`extract_object`'s own
-/// return) into a `Section`, or `None` if it's missing/malformed.
+/// Parses one section's object text into a `Section`, or `None` if it is
+/// missing/malformed.
 fn parse_section(object: &str) -> Option<Section> {
-    // Match `["ebuild"|"binary", "<root>", "<cat/pkg-ver>", "merge"]`;
-    // the cpv is split into `(cat, pkg, ver)` in Rust below (the version
-    // grammar is too broad for a clean regex group).
+    // Match `["ebuild"|"binary", "<root>", "<cat/pkg-ver>", "merge"]`; the
+    // cpv is split into `(cat, pkg, ver)` below.
     let entry_re =
         Regex::new(r#"\[\s*"(ebuild|binary)"\s*,\s*"[^"]*"\s*,\s*"([^"]+)"\s*,\s*"merge"\s*\]"#)
             .ok()?;
@@ -328,8 +240,7 @@ fn parse_section(object: &str) -> Option<Section> {
         .map(|c| c[1].to_string())
         .collect();
 
-    // `myopts` -- its own brace-matched object (portuale only ever
-    // writes flat `"--flag": true` pairs, so a plain `{...}` suffices).
+    // `myopts` is a flat `"--flag": true` object.
     let myopts_block = extract_object(object, "myopts").unwrap_or("");
     let opts = ResumeOpts {
         oneshot: myopts_block.contains("\"--oneshot\""),
@@ -350,10 +261,9 @@ fn read_section(root: &Path, key: &str) -> Option<Section> {
     parse_section(extract_object(&content, key)?)
 }
 
-/// Real `mtimedb["info"]`: absolute GNU-info directory -> that
-/// directory's `st_mtime` (whole seconds) as real
-/// `chk_updated_info_files` last left it. Empty when the file is
-/// absent or carries no `info` section.
+/// `mtimedb["info"]`: absolute GNU-info directory -> that directory's
+/// `st_mtime` (whole seconds) as `chk_updated_info_files` last left it.
+/// Empty when the file is absent or carries no `info` section.
 pub fn read_info_mtimes(root: &Path) -> BTreeMap<String, i64> {
     let Ok(content) = std::fs::read_to_string(mtimedb_path(root)) else {
         return BTreeMap::new();
@@ -361,10 +271,8 @@ pub fn read_info_mtimes(root: &Path) -> BTreeMap<String, i64> {
     let Some(object) = extract_object(&content, "info") else {
         return BTreeMap::new();
     };
-    // `"path": 123` pairs (real `json.dumps` of `{str: int}`); a
-    // foreign-written float (`123.0`) is accepted and truncated --
-    // what portuale writes back is always an integer (see this
-    // module's own doc comment).
+    // `"path": 123` pairs; a foreign-written float (`123.0`) is accepted
+    // and truncated, while what portuale writes back is always an integer.
     let pair_re = Regex::new(r#""((?:[^"\\]|\\.)*)"\s*:\s*(-?\d+(?:\.\d+)?)"#).ok();
     let Some(pair_re) = pair_re else {
         return BTreeMap::new();
@@ -395,35 +303,22 @@ pub fn read_info_mtimes(root: &Path) -> BTreeMap<String, i64> {
     mtimes
 }
 
-/// Stores `mtimedb["info"]` (real `MtimeDB.commit()` persisting the
-/// whole dict at once): rewrites the file with `info` replaced,
-/// preserving any existing `resume`/`resume_backup` untouched. An empty
-/// map stores nothing for `info` itself (the file keeps just the resume
-/// sections, or is removed when there is nothing at all -- see
-/// `write_sections`).
+/// Stores `mtimedb["info"]`: rewrites the file with `info` replaced,
+/// preserving any existing `resume`/`resume_backup` untouched. An empty map
+/// stores nothing for `info` itself.
 pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<(), String> {
     let resume = read_section(root, "resume");
     let backup = read_section(root, "resume_backup");
     write_sections(root, resume.as_ref(), backup.as_ref(), Some(info))
 }
 
-/// Writes `mtimedb["resume"]` from `favorites` (the atom args), `mergelist`
-/// (one merge item per package, tagged `"ebuild"` or `"binary"` with its
-/// `<root>` and `"<cat/pkg-ver>"`) and `myopts` (the `--oneshot` /
-/// `--onlydeps` flags, so `--resume` replays with the same
-/// world-recording behaviour). Used both for the up-front save of the full
-/// resolved plan (real `Scheduler.merge()`'s own `_save_resume_list`, #168)
-/// and for re-saving the still-unmerged tail on a clean failure. Like
-/// real's own `_save_resume_list` (`Scheduler.py:2398-2431`) the assignment
-/// is unconditional: an empty `mergelist` (an all-noop plan whose entries
-/// all resolved `nomerge` / already-installed) still overwrites any stale
-/// list with the fresh empty one -- real reaches `Scheduler.merge()` for
-/// such a plan (no `--ask` early return, no `--pretend` early return) and
-/// commits the empty list. Callers on the *failure* path guard the empty
-/// case themselves (a failure with nothing unmerged leaves the per-merge
-/// shrink's own tail alone). An existing `resume_backup` is preserved
-/// untouched -- real's own resume assignment only ever touches the
-/// `"resume"` key.
+/// Writes `mtimedb["resume"]` from the atom args, one merge item per package
+/// (tagged `"ebuild"` or `"binary"` with its `<root>` and `"<cat/pkg-ver>"`)
+/// and the `--oneshot` / `--onlydeps` flags. Used for the up-front save of
+/// the full resolved plan and for re-saving the still-unmerged tail on a
+/// clean failure. The assignment is unconditional: an empty `mergelist`
+/// still overwrites any stale list. An existing `resume_backup` is preserved
+/// untouched.
 pub fn write_resume_list(
     root: &Path,
     favorites: &[&str],
@@ -440,17 +335,10 @@ pub fn write_resume_list(
     write_sections(root, Some(&resume), backup.as_ref(), Some(&info))
 }
 
-/// Real `Scheduler.py:1595-1602`: after each successful merge (committed
-/// at once, "so that --resume still works after being interrupted by
-/// reboot, sigkill or similar"), the merged package leaves
-/// `mtimedb["resume"]["mergelist"]`; once the list empties,
-/// `del mtimedb["resume"]`. Removes the first entry equal to `entry`
-/// (real's own `list.remove` semantics); a no-op when there is no
-/// `resume` section at all or the entry isn't listed (an
-/// already-installed no-op "merge" reports success without ever being
-/// saved). An emptied list deletes the `resume` key outright (removing
-/// the file when no `resume_backup` survives); a non-empty remainder is
-/// re-committed with an existing `resume_backup` preserved untouched.
+/// After each successful merge the merged package leaves
+/// `mtimedb["resume"]["mergelist"]`; once the list empties, the `resume` key
+/// is deleted. Removes the first entry equal to `entry`; a no-op when there
+/// is no `resume` section or the entry isn't listed.
 pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
     let Some(mut resume) = read_section(root, "resume") else {
         return;
@@ -473,15 +361,10 @@ pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
     );
 }
 
-/// Real `actions.py:664-672`: right before a fresh, non-`--resume`
-/// merge starts, an existing `resume` entry whose own mergelist has
-/// more than one item is preserved as `resume_backup` (replacing
-/// whatever backup existed before -- real's own unconditional
-/// `mtimedb["resume_backup"] = mtimedb["resume"]`), and `resume` itself
-/// is cleared. A single-item mergelist, or no `resume` entry at all, is
-/// a no-op -- matching real's own `len(...) > 1` guard exactly (a
-/// one-package resume list isn't worth preserving as a "you can still
-/// get this back" backup).
+/// Right before a fresh, non-`--resume` merge starts, an existing `resume`
+/// entry with more than one item is preserved as `resume_backup` (replacing
+/// whatever backup existed) and `resume` itself is cleared. A single-item
+/// list, or no `resume` entry, is a no-op.
 pub fn rotate_resume_to_backup(root: &Path) {
     let Some(resume) = read_section(root, "resume") else {
         return;
@@ -492,12 +375,9 @@ pub fn rotate_resume_to_backup(root: &Path) {
     let _ = write_sections(root, None, Some(&resume), Some(&read_info_mtimes(root)));
 }
 
-/// Reads back `(favorites, mergelist-cpvs, myopts)` from
-/// `mtimedb["resume"]`, or `None` when there's nothing to resume.
-/// Real `actions.py:220-225`: when `resume` itself is absent but
-/// `resume_backup` is present, `resume_backup` is promoted to `resume`
-/// (and removed from its own backup slot) rather than treated as
-/// "nothing to resume".
+/// Reads back `(favorites, mergelist-cpvs, myopts)` from `mtimedb["resume"]`,
+/// or `None` when there's nothing to resume. When `resume` is absent but
+/// `resume_backup` is present, the backup is promoted to `resume`.
 pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
     if let Some(s) = read_section(root, "resume") {
         return Some((s.favorites, s.mergelist, s.opts));
@@ -507,8 +387,8 @@ pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
     Some((backup.favorites, backup.mergelist, backup.opts))
 }
 
-/// `cat/pkg-1.2.3-r1` -> `("cat/pkg", "1.2.3-r1")`. Splits at the last
-/// `-` whose following char is a digit (real `pkgsplit` heuristic).
+/// `cat/pkg-1.2.3-r1` -> `("cat/pkg", "1.2.3-r1")`. Splits at the last `-`
+/// whose following char is a digit.
 fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
     let bytes = cpv.as_bytes();
     for (i, _) in cpv.match_indices('-') {
@@ -519,11 +399,8 @@ fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
     None
 }
 
-/// Clears `mtimedb["resume"]` after a successful `--resume` run -- real
-/// `Scheduler.py:1599-1601`'s own `del mtimedb["resume"]` once the
-/// mergelist empties. Only ever removes `resume` itself, leaving
-/// `resume_backup` (if any) untouched -- a real, if stale-by-then,
-/// recovery point real portage doesn't clear here either.
+/// Clears `mtimedb["resume"]` after a successful `--resume` run. Only ever
+/// removes `resume` itself, leaving `resume_backup` (if any) untouched.
 pub fn clear_resume_list(root: &Path) {
     let backup = read_section(root, "resume_backup");
     let _ = write_sections(root, None, backup.as_ref(), Some(&read_info_mtimes(root)));
@@ -540,8 +417,8 @@ mod tests {
 
     #[test]
     fn info_mtimes_round_trip_without_disturbing_the_resume_list() {
-        // Real `MtimeDB.commit()`: one file, every key at once -- an
-        // `info` write must not drop `resume`, and vice versa.
+        // One file, every key at once: an `info` write must not drop
+        // `resume`, and vice versa.
         let root = tmproot();
         write_resume_list(
             &root,
@@ -585,8 +462,7 @@ mod tests {
     #[test]
     fn info_mtimes_accepts_a_foreign_float_and_reads_empty_as_empty() {
         let root = tmproot();
-        // Absent file -> empty memo (real's own `setdefault("info", {})`
-        // shape: nothing recorded yet).
+        // Absent file -> empty memo: nothing recorded yet.
         assert!(read_info_mtimes(&root).is_empty());
 
         std::fs::create_dir_all(mtimedb_path(&root).parent().unwrap()).unwrap();
@@ -663,10 +539,7 @@ mod tests {
 
     #[test]
     fn a_mixed_ebuild_and_binary_mergelist_round_trips_its_own_kind_tags() {
-        // Real portage's own resume mergelist can hold both types
-        // together (`[type, root, cpv, action]`, `type` is `"ebuild"`
-        // or `"binary"`) -- portuale's own used to only ever write
-        // `"ebuild"`.
+        // A resume mergelist can hold both entry types together.
         let root = tmproot();
         let mergelist = vec![
             (
@@ -744,10 +617,8 @@ mod tests {
 
         rotate_resume_to_backup(&root);
 
-        // "resume" itself is gone -- a fresh emerge has nothing left to
-        // silently "resume" from.
+        // "resume" itself is gone, but it stays recoverable via the backup.
         assert!(read_section(&root, "resume").is_none());
-        // But it's recoverable: read_resume_list promotes resume_backup.
         let (favs, merges, _) = read_resume_list(&root).expect("promoted from resume_backup");
         assert_eq!(favs, vec!["dev-libs/a"]);
         assert_eq!(merges, mergelist);
@@ -767,8 +638,8 @@ mod tests {
 
         rotate_resume_to_backup(&root);
 
-        // Real's own `len(...) > 1` guard: a single-package list isn't
-        // worth preserving, so "resume" survives untouched.
+        // A single-package list isn't worth preserving, so "resume"
+        // survives untouched.
         assert!(read_section(&root, "resume_backup").is_none());
         assert_eq!(read_resume_list(&root).unwrap().1, mergelist);
         let _ = std::fs::remove_dir_all(&root);
@@ -848,10 +719,9 @@ mod tests {
 
     #[test]
     fn remove_merged_entry_shrinks_the_list_and_deletes_it_when_empty() {
-        // Real `Scheduler.py:1595-1602`: after each successful merge the
-        // merged package leaves `mtimedb["resume"]["mergelist"]` (committed,
-        // so a SIGKILL still leaves the tail for `--resume`); once the
-        // list empties, `del mtimedb["resume"]`.
+        // After each successful merge the merged package leaves the list
+        // (committed, so a SIGKILL still leaves the tail); once the list
+        // empties, the `resume` key is deleted.
         let root = tmproot();
         let full = vec![
             (
@@ -949,11 +819,11 @@ mod tests {
 
     #[test]
     fn driver_sequence_rotates_first_then_saves_up_front_and_shrinks_per_merge() {
-        // The whole #168 driver lifecycle in one hermetic sequence: (d) a
-        // stale multi-item list rotates to backup first; (a) the fresh run
-        // saves its full mergelist before the first merge; (b) each
-        // successful merge shrinks it to the remainder; (c) the last merge
-        // deletes the key -- while the rotated backup survives the run.
+        // The whole driver lifecycle in one hermetic sequence: (d) a stale
+        // multi-item list rotates to backup first; (a) the fresh run saves
+        // its full mergelist before the first merge; (b) each successful
+        // merge shrinks it; (c) the last merge deletes the key -- while the
+        // rotated backup survives the run.
         let root = tmproot();
         let stale = vec![
             (
@@ -1009,13 +879,11 @@ mod tests {
 
     #[test]
     fn up_front_save_of_an_all_noop_plan_overwrites_a_stale_list_with_empty() {
-        // #179: real `Scheduler._save_resume_list`
-        // (`Scheduler.py:2398-2431`) assigns `mtimedb["resume"]`
-        // unconditionally at merge start, so a run whose plan has
-        // nothing to merge still commits the fresh (empty) list -- no
-        // stale entry survives. The driver calls `write_resume_list`
-        // with exactly the up-front-filtered mergelist (empty for an
-        // all-noop plan), so the write itself must not no-op on empty.
+        // The up-front save assigns `mtimedb["resume"]` unconditionally at
+        // merge start, so a run whose plan has nothing to merge still
+        // commits the fresh (empty) list -- no stale entry survives. The
+        // driver passes exactly the up-front-filtered mergelist (empty for
+        // an all-noop plan), so the write itself must not no-op on empty.
         let root = tmproot();
         let stale = vec![(
             ResumeEntryKind::Ebuild,
@@ -1025,18 +893,16 @@ mod tests {
         )];
         write_resume_list(&root, &["dev-libs/stale"], &stale, &ResumeOpts::default()).unwrap();
 
-        // A single-item stale list does not rotate (real's own
-        // `len(...) > 1` guard, `actions.py:664-672`) -- the up-front
-        // save overwrites it directly.
+        // A single-item stale list does not rotate -- the up-front save
+        // overwrites it directly.
         rotate_resume_to_backup(&root);
         assert!(read_section(&root, "resume").is_some());
 
         write_resume_list(&root, &["dev-libs/noop"], &[], &ResumeOpts::default()).unwrap();
-        // Real-equal on disk: the file still records the fresh run
-        // (favorites present) with an empty mergelist -- and the stale
-        // entry is gone. Readers treat an empty list as nothing to
-        // resume (`parse_section` maps it to `None`), so behaviour
-        // matches real's "nothing left to merge" too.
+        // On disk the file still records the fresh run (favorites present)
+        // with an empty mergelist -- and the stale entry is gone. Readers
+        // treat an empty list as nothing to resume, so behaviour matches
+        // "nothing left to merge" too.
         let content = std::fs::read_to_string(mtimedb_path(&root)).expect("mtimedb written");
         assert!(
             !content.contains("stale-9.9"),

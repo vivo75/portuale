@@ -1,0 +1,676 @@
+>>> fixture-oracle-all: l0-fixture-oracle.txt (FX_HOST_RUNNING_ROOT=1)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  dev-libs/diamond  (real rc=0  ptl rc=0)
+  dev-libs/common  (real rc=0  ptl rc=0)
+  dev-libs/anyof  (real rc=0  ptl rc=0)
+  dev-libs/altconsumer  (real rc=0  ptl rc=0)
+  -D dev-libs/slotdedupconsumer  (real rc=0  ptl rc=0)
+  dev-libs/iusedefaultpkg  (real rc=0  ptl rc=0)
+  dev-libs/dualslotpkg  (real rc=0  ptl rc=0)
+  --update dev-libs/paired  (real rc=0  ptl rc=0)
+  dev-libs/autounmaskkeywordpkg  (real rc=1  ptl rc=1)
+  dev-libs/kwneedpkg  (real rc=1  ptl rc=1)
+  dev-libs/needer  (real rc=0  ptl rc=0)
+  dev-libs/needer dev-libs/othermod  (real rc=1  ptl rc=1)
+  dev-libs/othermod dev-libs/needer  (real rc=1  ptl rc=1)
+  dev-libs/plainuser dev-libs/needer  (real rc=0  ptl rc=0)
+  dev-libs/needer dev-libs/plainuser  (real rc=0  ptl rc=0)
+  =dev-libs/paired-2.0  (real rc=0  ptl rc=0)
+  dev-libs/blockusedeptarget  (real rc=0  ptl rc=0)
+  dev-libs/requiredusebadpkg  (real rc=1  ptl rc=1)
+  app-misc/mopodman  (real rc=0  ptl rc=0)
+  app-misc/mopodmanok  (real rc=0  ptl rc=0)
+  =dev-libs/nomtarget-1.5  (real rc=0  ptl rc=0)
+  --tree =dev-libs/nomtarget-1.5  (real rc=0  ptl rc=0)
+  --tree dev-libs/blockerpkg  (real rc=0  ptl rc=0)
+  --tree dev-libs/diamond  (real rc=0  ptl rc=0)
+  --tree --unordered-display dev-libs/treeorderpkg  (real rc=0  ptl rc=0)
+  -v dev-libs/treeslotuser  (real rc=0  ptl rc=0)
+  --tree dev-libs/treeslotuser  (real rc=0  ptl rc=0)
+  --tree dev-libs/slotorderroot  (real rc=0  ptl rc=0)
+  =dev-libs/rdisjtarget-2.0  (real rc=0  ptl rc=0)
+  --tree --update dev-libs/p2btarget dev-libs/p2bowner dev-libs/newpkg  (real rc=0  ptl rc=0)
+  -D dev-libs/deepusedepconsumer  (real rc=1  ptl rc=1)
+  -D dev-libs/deepusedepbconsumer  (real rc=0  ptl rc=0)
+  -D dev-libs/deepusedepokconsumer  (real rc=0  ptl rc=0)
+  -D dev-libs/deepusedepfconsumer  (real rc=1  ptl rc=1)
+  -D --root-deps dev-libs/deeprootdepconsumer  (real rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0a dev-libs/blk0c dev-libs/blk0b  (real rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0a dev-libs/blk0b dev-libs/blk0c  (real rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0b dev-libs/blk0a dev-libs/blk0c  (real rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0b dev-libs/blk0c dev-libs/blk0a  (real rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0c dev-libs/blk0a dev-libs/blk0b  (real rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0c dev-libs/blk0b dev-libs/blk0a  (real rc=0  ptl rc=0)
+  --buildpkgonly dev-libs/blk1c  (real rc=0  ptl rc=0)
+  --buildpkgonly dev-libs/blk1a  (real rc=1  ptl rc=1)
+  dev-libs/blockerpkg dev-libs/graphblockerparent  (real rc=1  ptl rc=1)
+  --update --deep --newuse --oneshot dev-libs/whpuller  (real rc=0  ptl rc=0)
+  -D --autounmask-use=n dev-libs/r135consumer  (real rc=1  ptl rc=1)
+  dev-libs/slcirc  (real rc=0  ptl rc=0)
+  dev-libs/condanyof  (real rc=1  ptl rc=1)
+done: 48 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 48
+  clean            : 42
+  parity_rate      : 0.875
+  explained        : 19
+  UNEXPLAINED      : 0
+
+## explained (allowlisted) findings
+
+### dev-libs_autounmaskkeywordpkg
+  [advice] (fixture-masked-path-suffix) real-only: masked: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/autounmaskkeywordpkg
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" have been masked.
+  [error] (fixture-masked-path-suffix) real-only message: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" have been masked.
+
+### dev-libs_kwneedpkg
+  [advice] (fixture-masked-path-suffix) real-only: masked: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/kwmaskeddep
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" have been masked.
+  [error] (fixture-masked-path-suffix) real-only message: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" have been masked.
+
+### dev-libs_requiredusebadpkg
+  [error] (fixture-problem-resolving-header) real-only message: !!! Problem resolving dependencies for dev-libs/requiredusebadpkg
+  [error] (fixture-masked-path-suffix) real-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+  [error] (fixture-unmet-requirements-wording) portuale-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" has unmet requirements.
+
+### -D_dev-libs_deepusedepfconsumer
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "~dev-libs/deepusedepfchild-1.0[flip=]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "~dev-libs/deepusedepfchild-1.0[flip=]".
+
+### -D_--autounmask-use_n_dev-libs_r135consumer
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "~dev-libs/r135leaf-1.0[flip=]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "~dev-libs/r135leaf-1.0[flip=]".
+
+### dev-libs_condanyof
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "__const__/empty-any-of" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "__const__/empty-any-of".
+
+## allowlist entries that matched nothing (candidates for removal)
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-host.txt (FX_HOST_ROOTS=1)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  =dev-libs/disjtarget-2.0  (real rc=0  ptl rc=0)
+done: 1 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 1
+  clean            : 1
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-host.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-rdcpin.txt (FX_WORLD_EXTRA=dev-libs/rdctarget)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  --update --deep --newuse --oneshot dev-libs/rdcpuller  (real rc=1  ptl rc=1)
+done: 1 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 1
+  clean            : 1
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-rdcpin.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-slotop.txt (FX_SLOTOP_BDEP=1 FX_HOST_ROOTS=1)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  -uDvN @world  (real rc=0  ptl rc=0)
+  -uDvN --usepkg @world  (real rc=0  ptl rc=0)
+  -uDvN --with-bdeps=y @world  (real rc=0  ptl rc=0)
+  -uDvN --oneshot dev-libs/consrdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot dev-libs/consdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot dev-libs/consbdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot dev-libs/conspdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot dev-libs/considep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --usepkg dev-libs/consrdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --usepkg dev-libs/consdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --usepkg dev-libs/consbdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --usepkg dev-libs/conspdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --usepkg dev-libs/considep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --with-bdeps=y dev-libs/consrdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --with-bdeps=y dev-libs/consdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --with-bdeps=y dev-libs/consbdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --with-bdeps=y dev-libs/conspdep  (real rc=0  ptl rc=0)
+  -uDvN --oneshot --with-bdeps=y dev-libs/considep  (real rc=0  ptl rc=0)
+done: 18 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 18
+  clean            : 15
+  parity_rate      : 0.833
+  explained        : 3
+  UNEXPLAINED      : 0
+
+## explained (allowlisted) findings
+
+### -uDvN__world
+  [order] (slotop-world-complete-graph-order) merge order diverges at #4: real dev-libs/consbdep vs portuale dev-libs/consrdep
+
+### -uDvN_--usepkg__world
+  [order] (slotop-world-complete-graph-order) merge order diverges at #4: real dev-libs/considep vs portuale dev-libs/consrdep
+
+### -uDvN_--with-bdeps_y__world
+  [order] (slotop-world-complete-graph-order) merge order diverges at #4: real dev-libs/consbdep vs portuale dev-libs/consrdep
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-slotop.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-whpin.txt (FX_WORLD_EXTRA=dev-libs/whtarget)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  --update --deep --newuse --oneshot dev-libs/whpuller  (real rc=0  ptl rc=0)
+done: 1 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 1
+  clean            : 1
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-whpin.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-r25.txt (FX_WORLD_EXTRA=dev-libs/r25consumer)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  --update --deep --newuse --oneshot dev-libs/r25target  (real rc=0  ptl rc=0)
+  --backtrack=0 --update --deep --newuse --oneshot dev-libs/r25target  (real rc=0  ptl rc=0)
+  --backtrack=0 --update --deep --newuse --oneshot =dev-libs/r25lib-2.0  (real rc=1  ptl rc=1)
+done: 3 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 3
+  clean            : 3
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-r25.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-g210.txt (FX_WORLD_EXTRA='dev-libs/reinstslotconsumer dev-libs/reinstslotbound')
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  --changed-slot dev-libs/reinstslottarget  (real rc=0  ptl rc=0)
+  --changed-slot --update --deep dev-libs/reinstslottarget  (real rc=0  ptl rc=0)
+  --changed-slot --update --deep --newuse @world  (real rc=0  ptl rc=0)
+done: 3 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 3
+  clean            : 3
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-g210.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-g212.txt
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  --usepkg dev-libs/somaskparent  (real rc=0  ptl rc=0)
+  --usepkg dev-libs/somaskvisparent  (real rc=0  ptl rc=0)
+done: 2 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 2
+  clean            : 2
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-g212.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-g213.txt (FX_PRUNE_VDB=1)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  -uDvN app-misc/pprov app-misc/pcons dev-libs/btparent  (real rc=0  ptl rc=0)
+done: 1 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 1
+  clean            : 1
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-g213.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-g214.txt (FX_WORLD_EXTRA='app-misc/abicons app-misc/abiforce')
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  --update --deep --backtrack 4 @world  (real rc=0  ptl rc=0)
+done: 1 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 1
+  clean            : 1
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-g214.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-g215.txt (FX_SOUSAT_UNSAT=1 FX_HOST_ROOTS=1)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  --update --deep app-misc/sousatpar  (real rc=0  ptl rc=0)
+  -uD @world  (real rc=0  ptl rc=0)
+  --backtrack 0 --update --deep app-misc/sousatpar  (real rc=0  ptl rc=0)
+  app-misc/sousatpar  (real rc=0  ptl rc=0)
+done: 4 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 4
+  clean            : 4
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-g215.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-g216.txt (FX_HOST_RUNNING_ROOT=1)
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  app-misc/g216top  (real rc=0  ptl rc=0)
+  dev-lang/g216comp  (real rc=0  ptl rc=0)
+  --backtrack=0 app-misc/g216top  (real rc=1  ptl rc=1)
+  --backtrack=0 dev-lang/g216comp  (real rc=1  ptl rc=1)
+done: 4 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 4
+  clean            : 4
+  parity_rate      : 1.000
+  explained        : 0
+  UNEXPLAINED      : 0
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-g216.txt green
+>>> fixture-oracle-all: l0-fixture-oracle-244.txt
+>>> building portuale (profile release, registry version 531009e4-dirty)
+    Finished `release` profile [optimized] target(s) in 0.09s
+>>> PM under test: portuale 531009e4-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-)
+staging the fixture tree
+running fixture-oracle cases
+  --autounmask-backtrack=y dev-libs/aub0c dev-libs/aub0b dev-libs/aub0a  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=y dev-libs/aub0c dev-libs/aub0a dev-libs/aub0b  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=y dev-libs/aub0b dev-libs/aub0c dev-libs/aub0a  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=y dev-libs/aub0b dev-libs/aub0a dev-libs/aub0c  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0c dev-libs/aub0b  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=n dev-libs/aub0c dev-libs/aub0b dev-libs/aub0a  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=n dev-libs/aub0c dev-libs/aub0a dev-libs/aub0b  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=n dev-libs/aub0b dev-libs/aub0c dev-libs/aub0a  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=n dev-libs/aub0b dev-libs/aub0a dev-libs/aub0c  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=n dev-libs/aub0a dev-libs/aub0c dev-libs/aub0b  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=n dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=y dev-libs/aub0b dev-libs/aub0a  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0b  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=n dev-libs/aub0b dev-libs/aub0a  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=n dev-libs/aub0a dev-libs/aub0b  (real rc=1  ptl rc=1)
+  dev-libs/aubreaktop  (real rc=1  ptl rc=1)
+  --autounmask-backtrack=y dev-libs/aubreaktop  (real rc=1  ptl rc=1)
+done: 18 case(s) -> /TEST/logs/l0-fx-
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 18
+  clean            : 5
+  parity_rate      : 0.278
+  explained        : 26
+  UNEXPLAINED      : 0
+
+## explained (allowlisted) findings
+
+### --autounmask-backtrack_y_dev-libs_aub0c_dev-libs_aub0b_dev-libs_aub0a
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_y_dev-libs_aub0c_dev-libs_aub0a_dev-libs_aub0b
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_y_dev-libs_aub0b_dev-libs_aub0c_dev-libs_aub0a
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_y_dev-libs_aub0b_dev-libs_aub0a_dev-libs_aub0c
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_y_dev-libs_aub0a_dev-libs_aub0c_dev-libs_aub0b
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_y_dev-libs_aub0a_dev-libs_aub0b_dev-libs_aub0c
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_n_dev-libs_aub0c_dev-libs_aub0b_dev-libs_aub0a
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_n_dev-libs_aub0b_dev-libs_aub0c_dev-libs_aub0a
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_n_dev-libs_aub0b_dev-libs_aub0a_dev-libs_aub0c
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_y_dev-libs_aub0b_dev-libs_aub0a
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_y_dev-libs_aub0a_dev-libs_aub0b
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_n_dev-libs_aub0b_dev-libs_aub0a
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]".
+
+### --autounmask-backtrack_y_dev-libs_aubreaktop
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aubreaksub[brk]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aubreaksub[brk]".
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-/l0-report.txt   (rc=0)
+>>> fixture-oracle-all: l0-fixture-oracle-244.txt green
+>>> fixture-oracle-all: 13/13 lists green

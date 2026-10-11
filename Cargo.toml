@@ -40,4 +40,3 @@ rust-version = "1.95"
 [profile.release]
 panic = "abort"
 lto = "thin"
-codegen-units = 1

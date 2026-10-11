@@ -201,3 +201,111 @@ The owner approved items 1-27 and commented on two of them: item 2
 
     `agent-context.md` cited a `helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
     that no longer exists. Its pointer is dropped.
+
+## 2026-10-10, owner approvals for Phases 5-7
+
+29. **The Phase 7 pilot is approved as is** (`LLM/code-notes/portage-dep/lib.md`).
+    It is the template for the comment rollout. The owner adds that the
+    `portage-dep` scope cut against the Portage grammar is temporary:
+    portuale must support the full grammar of every supported EAPI and
+    apply each ebuild's declared EAPI rules. Filed as #341.
+30. **The split map is approved** (`2026-10-10-split-map.md`). The
+    owner's answers to its section 12:
+    1. Layout is "best practice", which is the repo's rust-skills rule
+       `proj-mod-rs-dir`: directory modules use `foo/mod.rs`,
+       consistently. Blame preservation does not matter (single
+       committer).
+    2. Tests go in `tests/` directories (`foo/tests/mod.rs`, …). The VDB
+       lint already skips `tests` path components, so it needs no change.
+    3. `portage-repo/src/lib.rs` is split into the ~38 modules in one go.
+    4. `pretend::run` phase S and `ebuild_merge.rs` go last.
+    5. Large shell/data consts (`MERGE_FLOW`, `SANDBOXED_SRC_PHASES`,
+       `ENVIRON_WHITELIST`, …) move to data files read with
+       `include_str!`.
+    6. No extra files are added to the map for now.
+31. **Execution order: Phase 6, then 5, then 7.** Phase 6 moves every file.
+    Phase 5's remaining display functions need the `pretend::run` split.
+    Phase 7's comments and code-notes must describe the final layout.
+    Branch `refactor/readability-2` in both repos. Commits stay local
+    until the owner asks for a push.
+
+## 2026-10-10, Phase 6 execution notes
+
+32. **`ebuild_merge.rs` is split but parked.** The mechanical split was
+    run and verified (gate, L1, L2, glibc+bash gate) before I noticed it
+    broke answer 30.4's order (phase S and `ebuild_merge.rs` last). The
+    commit is parked on the local branch `park/ebuild-merge-split`
+    (`de2fc0be`, portuale only, not pushed) and gets cherry-picked after
+    phase S, with its verification run again.
+33. **`pretend::run` cuts take typed per-call arguments for now.**
+    `LLM/tools/extract_block.py` moves a statement range verbatim and
+    gets the signature from the compiler. More than five values become
+    a `<Fname>Args` struct; several returned locals become a
+    `<Fname>Out` struct (`ResolvePlan` for phase H). The structs repeat
+    many option fields, because `run` destructures `EmergeOpts` into
+    locals. Once phase S is cut and `run` is only calls, a consolidation
+    step keeps `EmergeOpts`/`ResolvePlan` whole, and each function takes
+    `&EmergeOpts` (destructured with `let &EmergeOpts { .. } = opts;`, so
+    bodies don't change) instead of repeating the fields.
+
+34. **Long checks run once, at the end of #336.** The owner, 2026-10-10,
+    for #336 only: checks over 3-4 minutes (the contract suite, L0,
+    fixture-oracle, L1/L2, the glibc/bash merge gate, l31b) run only at
+    the end of the work. Every step still runs fmt, clippy, the release
+    build and the unit tests of the touched crate; the full workspace
+    `cargo test` runs once per phase. Commits stay one per step, so a
+    failure at the end is found with `git bisect` over them. Nothing
+    merges to `main` before the final pass is green.
+
+35. **Phase 6.3 cuts the four giants, then stops; the rest is measured
+    after Phase 7.** `run_pass` (4,028), `resolve_config` (1,140) and
+    `collect_feedback` (1,024) are cut, and `pretend::run` will be once
+    phase S is. A scan on 2026-10-10 still finds 58 production functions
+    over 200 lines, comments included; some were born from these cuts
+    (a cut block keeps its length). Phase 7 moves most comment lines to
+    `LLM/code-notes/`, so the list is measured again after it, by code
+    lines. Functions still over 200 code lines then go to #339 with
+    their length and the extraction hint from split-map section 10.
+
+36. **Phase 5 worklist: one `<Fname>Args` struct per function.** Every
+    function that carried a worklist `#[allow(clippy::too_many_arguments)]`
+    or `#[allow(clippy::fn_params_excessive_bools)]` now takes
+    `args: <Fname>Args` with one named field per old parameter and
+    destructures it on its first line, so bodies don't change. Call
+    sites name every argument. `LLM/tools/args_struct.py` does it from
+    the compiler's E0061 errors. A method keeps `self` and its struct
+    goes above the `impl`; an `impl Trait` parameter stays a separate
+    parameter after `args`. An allow on a function where neither lint
+    fires (clippy.toml: at most 5 parameters with `self`, at most 2
+    bools) is just removed. Two functions were done by hand with two
+    lifetimes, because their result borrows only one argument
+    (`find_remote_binpkg_instance`) or a `&mut` holds an invariant
+    lifetime (`scan_binpkg_file`); so was `MemoryDb::add_package`
+    (`#![deny(missing_docs)]` wants field docs). Grouping bools into
+    enums is not done here: the struct field names already say what
+    each value means at the call site. The worklist allow count is 0.
+
+## 2026-10-10, Phase 7 execution notes
+
+37. **Comment pass: proofs, then a fact check, then repair.** Phase 7 ran
+    in 33 file batches (opencode workers, one brief each). Each batch was
+    committed only after `LLM/tools/strip_comments_eq.py HEAD <files>`
+    proved that no code token changed. Owner review asked whether the
+    workers' content was checked too. That showed paraphrase losses
+    (identifiers and Portage citations dropped instead of moved), so
+    `LLM/tools/fact_coverage.py BASE FILE...` now lists every concrete
+    fact on a removed comment line that is absent from both the kept
+    code and the notes file: backticked spans, file:line, `#NNN`,
+    quoted strings, dates and versions. A repair pass restored the
+    facts it found, verbatim, into the notes. The first two repairs
+    were a side-by-side trial: a Sonnet subagent restored 261 facts in
+    77 s, opencode 130 in about 12 min, with equal quality. Sonnet did
+    the rest of the repairs. The final check over all 400 files leaves
+    only fragments between two backtick spans (regex artifacts). Then a
+    cleanup pass over the 401 notes files rewrote "real" meaning
+    Portage and merged duplicate bullets.
+    `LLM/tools/code_notes_index.py` regenerates `LLM/code-notes/INDEX.md`.
+    From here on, execution goes back to opencode, because Claude
+    credit is the limit; only review and commits stay with Claude.
+    Functions over 200 code lines after the pass (40, syn-parsed) are
+    listed in `2026-10-10-long-functions.md` for #339.

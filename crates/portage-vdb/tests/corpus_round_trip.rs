@@ -1,8 +1,6 @@
-//! Round trip of the #305 corpus (LLM/evidence/305-s0-corpus.md, plan
-//! S2.8, S5.3): every corpus member is copied files -> sqlite -> files
-//! (feature `vdb-sqlite`), files -> redb -> files (`vdb-redb`) and, with
-//! both, files -> sqlite -> redb -> files, and `verify` must find nothing
-//! on every leg.
+//! Corpus round trip: every corpus member is copied files -> sqlite ->
+//! files, files -> redb -> files and, with both, files -> sqlite -> redb
+//! -> files, and `verify` must find nothing on every leg.
 //!
 //! Members: the two pmtest fixture VDBs (always, read only through the
 //! `fixtures` symlink), plus the host `/` when `PORTUALE_VDB_HOST_CORPUS=1`
@@ -94,7 +92,7 @@ fn host_vdb_round_trips_when_enabled() {
     round_trip("host", Arc::new(FilesDb::new(Path::new("/"))));
 }
 
-// ------------------------------------------------------------ S8 indexes
+// Index queries.
 
 const CLASSES: [portage_vdb::DepClass; 5] = [
     portage_vdb::DepClass::Depend,
@@ -128,7 +126,7 @@ fn naive_cps(tok: &str) -> Vec<String> {
     out
 }
 
-/// S8.1 and S8.2 on the corpus: for every `cp` any entry's deps mention,
+/// On the corpus: for every `cp` any entry's deps mention,
 /// `reverse_dependents` of each database backend is a superset of the
 /// entries whose raw deps (read from `files`) have a token for that `cp`,
 /// and `owners` equals the `files` answer for every `CONTENTS` path (all

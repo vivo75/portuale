@@ -1,43 +1,10 @@
-// Native `xpak-helper.py recompose` (#326 S5, D1/D3/D4/D7): a byte-level
-// port of `bin/xpak-helper.py` (`main` + `command_recompose`) over
-// `lib/portage/xpak.py` (`addtolist`, `xpak`, `xpak_mem`, `encodeint`,
-// `tbz2.scan`, `tbz2.recompose_mem`), routed from the `python`
-// dispatcher when the script argument's basename is `xpak-helper.py`.
-// It is the inverse of the reader in `binpkg.rs`
-// (`read_xpak_segment`/`parse_xpak_members`).
-//
-// Behaviour is real's, in real's order:
-// - argv: no command -> argparse error (usage + `<prog>: error: missing
-//   command argument`, rc 2); a command other than `recompose` -> rc 2
-//   `invalid command: '<cmd>'`; `recompose` with argc != 2, arg 1 not a
-//   regular file, arg 2 not a directory -> rc 1 with real's messages
-//   (stderr is raw argv bytes, like Python's surrogateescape).
-// - `xpak(dir)`: `addtolist` walks the tree (a real subdirectory is
-//   listed as `sub/`, a symlink to a directory is skipped). Real's
-//   UTF-8 checks there only fire on `bytes`, and its `os.walk` yields
-//   `str`, so a non-UTF-8 name is NOT skipped: it is a surrogateescape
-//   `str`, sorted by code point, and packed by `xpak_mem` with
-//   `backslashreplace`. The invalid byte 0xff becomes the six bytes
-//   `\udcff` (probed live 2026-10-08 on tmpfs). `CONTENTS` is skipped
-//   and every other entry is read as raw bytes. Reading a `sub/` entry
-//   dies in real with
-//   `IsADirectoryError` (traceback, rc 1, binpkg untouched): reproduced
-//   as rc 1, the binpkg untouched and a one-line message (the traceback
-//   text is not reproduced).
-// - `xpak_mem`: `XPAKPACK be32(indexlen) be32(datalen) index data
-//   XPAKSTOP`, index records `be32(len(name)) name be32(datapos)
-//   be32(size)`.
-// - `recompose_mem`: `scan()` (last 16 bytes `XPAKSTOP be32(infosize)
-//   STOP` -> `xpaksize = infosize + 8`, else 0); when `st_nlink > 1`
-//   the hardlink is broken by a content-only copy (real
-//   `util.file_copy.copyfile`) to a new file in the same directory,
-//   renamed over. Real's `apply_stat_permissions(self.file, ...)` targets
-//   the original path before the rename, so it changes nothing. The new
-//   file ends up with mode `0o666 & ~umask` and the caller's owner, not
-//   the old file's (probed live: a 0600 binpkg comes out 0644 under
-//   umask 022). Then
-//   `xpaksize` bytes are truncated from the end and `segment +
-//   be32(len(segment)) + "STOP"` appended.
+//! Native `xpak-helper.py recompose`: packs a metadata dir into a tbz2.
+//!
+//! The inverse of the `binpkg.rs` reader. `xpak(dir)` walks the tree
+//! (`sub/` for real subdirectories, symlinked dirs skipped, `CONTENTS`
+//! skipped, non-UTF-8 names packed surrogateescape-style), and
+//! `recompose_mem` swaps the trailing segment, breaking hardlinks first.
+// Portage: bin/xpak-helper.py, command_recompose
 
 use std::ffi::OsString;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -68,12 +35,12 @@ fn basename_bytes(arg: &OsString) -> &[u8] {
     }
 }
 
-/// Entry point: `script` is the `xpak-helper.py` element (real's
+/// Entry point: `script` is the `xpak-helper.py` element (Portage's
 /// `sys.argv[0]`), `args` everything after it.
 pub(crate) fn run(script: &OsString, args: &[OsString]) -> i32 {
     let prog = basename_bytes(script);
-    // real passes `usage="usage: ..."` and argparse prefixes `usage: `
-    // again: the doubled prefix is real's (checked against real).
+    // Portage passes `usage="usage: ..."` and argparse prefixes `usage: `
+    // again: the doubled prefix is Portage's (checked against Portage).
     let usage = [b"usage: usage: ", prog, b" COMMAND [args]\n"].concat();
     // argparse: `-h`/`--help` prints the help and exits 0.
     if args.iter().any(|a| raw(a) == b"-h" || raw(a) == b"--help") {
@@ -133,13 +100,12 @@ fn command_recompose(args: &[OsString]) -> i32 {
     }
 }
 
-/// Real `encodeint`.
+/// Portage `encodeint`.
 fn encodeint(n: usize) -> [u8; 4] {
     (n as u32).to_be_bytes()
 }
 
-/// Real `addtolist`: the relative names under `root`, as raw bytes (`sub/`
-/// for a real subdirectory, then its contents).
+/// Portage `addtolist`: the relative names under `root`, as raw bytes.
 fn addtolist(root: &Path, rel: &[u8], list: &mut Vec<Vec<u8>>) -> std::io::Result<()> {
     let dir = root.join(std::ffi::OsStr::from_bytes(rel));
     for entry in std::fs::read_dir(&dir)? {
@@ -161,8 +127,7 @@ fn addtolist(root: &Path, rel: &[u8], list: &mut Vec<Vec<u8>>) -> std::io::Resul
 }
 
 /// A name as the code points of Python's surrogateescape `str`: each
-/// byte of an invalid UTF-8 sequence becomes U+DC80+byte. Real sorts
-/// these `str`s, so this is the sort key.
+/// byte of an invalid UTF-8 sequence becomes U+DC80+byte (the sort key).
 fn py_code_points(name: &[u8]) -> Vec<u32> {
     let mut out = Vec::with_capacity(name.len());
     for chunk in name.utf8_chunks() {
@@ -172,9 +137,8 @@ fn py_code_points(name: &[u8]) -> Vec<u32> {
     out
 }
 
-/// Real `xpak_mem`'s `k.encode("utf-8", "backslashreplace")` of a
-/// surrogateescape name: valid UTF-8 kept, each invalid byte written as
-/// the text `\udcXX`.
+/// Portage `xpak_mem`'s `backslashreplace` encoding of a surrogateescape
+/// name: valid UTF-8 kept, each invalid byte as the text `\udcXX`.
 fn py_name_bytes(name: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(name.len());
     for chunk in name.utf8_chunks() {
@@ -186,7 +150,7 @@ fn py_name_bytes(name: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Real `xpak(rootdir)` returning the segment.
+/// Portage `xpak(rootdir)`, returning the segment.
 fn xpak(root: &Path) -> Result<Vec<u8>, String> {
     let mut list = Vec::new();
     addtolist(root, b"", &mut list).map_err(|e| format!("{}: {e}", root.display()))?;
@@ -203,7 +167,7 @@ fn xpak(root: &Path) -> Result<Vec<u8>, String> {
     Ok(xpak_mem(&members))
 }
 
-/// Real `xpak_mem`.
+/// Portage `xpak_mem`.
 fn xpak_mem(members: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
     let mut index = Vec::new();
     let mut data = Vec::new();
@@ -224,7 +188,7 @@ fn xpak_mem(members: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-/// Real `tbz2.scan()`'s `xpaksize`: `infosize + 8` when the last 16
+/// Portage `tbz2.scan()`'s `xpaksize`: `infosize + 8` when the last 16
 /// bytes are `XPAKSTOP be32(infosize) STOP`, else 0.
 fn scan_xpaksize(file: &Path) -> std::io::Result<u64> {
     let mut f = std::fs::File::open(file)?;
@@ -242,9 +206,8 @@ fn scan_xpaksize(file: &Path) -> std::io::Result<u64> {
     Ok(infosize + 8)
 }
 
-/// Real `recompose_mem`'s hardlink break: a content-only copy into a new
-/// file in the same directory (mode `0o666 & ~umask`, the caller's
-/// owner, as real's `copyfile` leaves it), renamed over.
+/// Portage `recompose_mem`'s hardlink break: a content-only copy into a
+/// new file in the same directory, renamed over.
 fn break_hardlink(file: &Path) -> std::io::Result<()> {
     let dir = file.parent().filter(|p| !p.as_os_str().is_empty());
     let dir = dir.unwrap_or_else(|| Path::new("."));
@@ -280,7 +243,7 @@ fn break_hardlink(file: &Path) -> std::io::Result<()> {
     result
 }
 
-/// Real `tbz2.recompose_mem(xpdata)`.
+/// Portage `tbz2.recompose_mem(xpdata)`.
 fn recompose_mem(file: &Path, segment: &[u8]) -> Result<(), String> {
     let fail = |e: std::io::Error| format!("{}: {e}", file.display());
     let meta = std::fs::metadata(file).map_err(fail)?;
@@ -357,7 +320,7 @@ mod tests {
     }
 
     /// One oracle case (`pmtest fixtures/helpers/xpak/<case>`, generated
-    /// by running the real `bin/xpak-helper.py`): asserts rc, stderr and
+    /// by running the Portage `bin/xpak-helper.py`): asserts rc, stderr and
     /// the resulting bytes.
     fn check_case(case: &str) {
         let dir = fixtures().join(case);
@@ -474,7 +437,8 @@ mod tests {
         );
     }
 
-    /// The writer is the inverse of `binpkg.rs`'s reader.
+    /// The writer is the inverse of the `binpkg.rs` reader; `CONTENTS`
+    /// is skipped, so it is written here to prove it stays out.
     #[test]
     fn recompose_round_trips_through_the_binpkg_reader() {
         let tmp = TempDir::new("xpak-rt");
@@ -509,12 +473,8 @@ mod tests {
         assert!(std::fs::read(&tbz2).unwrap().starts_with(b"BZh-payload"));
     }
 
-    /// A non-UTF-8 name is packed, not skipped: real's `str` from
-    /// `os.walk` is surrogateescape, sorted by code point (U+DCFF before
-    /// U+E000, the reverse of byte order) and encoded with
-    /// backslashreplace. Expected bytes are real `xpak-helper.py`'s on
-    /// this input (probed live 2026-10-08, tmpfs; /var/tmp is utf8only
-    /// zfs here and refuses the name).
+    /// A non-UTF-8 name is packed, not skipped: sorted by code point and
+    /// backslashreplace-encoded; the expected bytes are Portage's.
     #[test]
     fn non_utf8_names_are_packed_like_portage_surrogateescape() {
         let tmp = if Path::new("/dev/shm").is_dir() {
@@ -543,10 +503,8 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// Breaking the hardlink leaves the file with the caller's creation
-    /// mode, not the old one: real `copyfile` copies content only, and
-    /// its `apply_stat_permissions` hits the original path before the
-    /// rename (probed live: 0600 in, 0644 out under umask 022).
+    /// Breaking the hardlink leaves the creation mode, not the old one
+    /// (a content-only copy; 0600 in, 0644 out under umask 022).
     #[test]
     fn broken_hardlink_gets_the_creation_mode_like_portage() {
         use std::os::unix::fs::PermissionsExt;
@@ -574,9 +532,8 @@ mod tests {
         assert_eq!(other.permissions().mode() & 0o7777, 0o600);
     }
 
-    /// The two real `package` scenarios re-run in a child process with
-    /// no Portage checkout and no real Python reachable, so the native
-    /// `xpak-helper.py` is the only thing that can pack the metadata.
+    /// Re-run package tests with no checkout and no Python, so only the
+    /// native `xpak-helper.py` can pack the metadata.
     fn rerun_without_checkout(test: &str) {
         let out = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--nocapture", "--test-threads=1"])

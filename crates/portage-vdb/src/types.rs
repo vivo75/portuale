@@ -12,9 +12,9 @@ use crate::{Error, METADATA_FILE_FIELDS};
 pub enum BackendKind {
     /// The historic `var/db/pkg` directory tree.
     Files,
-    /// One SQLite file (feature `vdb-sqlite`, S2).
+    /// One SQLite file.
     Sqlite,
-    /// One redb file (feature `vdb-redb`, S5).
+    /// One redb file.
     Redb,
 }
 
@@ -75,8 +75,8 @@ impl fmt::Display for EntryKey {
     }
 }
 
-/// Size, mode and mtime of one stored file of an entry (§6.1 meaning;
-/// not a `CONTENTS` line).
+/// Size, mode and mtime of one stored file of an entry
+/// (not a `CONTENTS` line).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileMeta {
     /// File name inside the entry (`CONTENTS`, `environment.bz2`, ...).
@@ -97,8 +97,7 @@ pub struct EntryFile {
 }
 
 /// State of the `#dir_mtime=` stamp of an entry's consolidated
-/// `metadata` file (S0.3 corpus: a stale stamp must stay stale, and a
-/// converter never adds a `metadata` file).
+/// `metadata` file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataStamp {
     /// The entry has no `metadata` file.
@@ -115,7 +114,7 @@ pub enum MetadataStamp {
 pub(crate) const DIR_MODE_MASK: u32 = 0o7777;
 
 /// An entry without its bytes ([`InstalledDb::entry_stat`]): what a
-/// read-only view (FUSE, S7) needs for `getattr` and `readdir`. The same
+/// read-only view needs for `getattr` and `readdir`. The same
 /// facts as [`EntryImage`] minus the file contents.
 ///
 /// [`InstalledDb::entry_stat`]: crate::InstalledDb::entry_stat
@@ -124,8 +123,7 @@ pub struct EntryStat {
     /// Every file, sorted by name.
     pub files: Vec<FileMeta>,
     /// The entry directory's permission bits (`st_mode & 0o7777`, no
-    /// file-type bits): every backend reports it this way, so a files
-    /// entry and a natively merged sqlite/redb one compare equal (#307).
+    /// file-type bits).
     pub dir_mode: u32,
     /// The entry directory's mtime in nanoseconds.
     pub dir_mtime_ns: i128,
@@ -155,8 +153,7 @@ pub struct EntryImage {
     /// Every file, `metadata` included when present, in name order.
     pub files: Vec<EntryFile>,
     /// The entry directory's permission bits (`st_mode & 0o7777`, no
-    /// file-type bits): every backend reports it this way, so a files
-    /// entry and a natively merged sqlite/redb one compare equal (#307).
+    /// file-type bits).
     pub dir_mode: u32,
     /// The entry directory's mtime in nanoseconds.
     pub dir_mtime_ns: i128,
@@ -255,8 +252,8 @@ impl DepClass {
 }
 
 /// Raw dependency data of one entry for reverse-dependency matching
-/// (§0.7: `portage-vdb` cannot reduce `USE` conditionals; the caller
-/// does). Values are normalised like [`EntryFields`].
+/// (the caller reduces `USE` conditionals). Values are normalised
+/// like [`EntryFields`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DepRecord {
     pub key: EntryKey,
@@ -291,26 +288,25 @@ pub struct WorldSets {
 }
 
 /// One preserved-libs registry record, keyed by `cp:slot` in
-/// [`PreservedLibs`] (real `PreservedLibsRegistry` `_data`).
+/// [`PreservedLibs`] (Portage's `PreservedLibsRegistry` `_data`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreservedLibsEntry {
     pub cpv: String,
-    /// The owner's `COUNTER`, as the string real stores.
+    /// The owner's `COUNTER`, as the string Portage stores.
     pub counter: String,
     pub paths: Vec<String>,
 }
 
 /// The preserved-libs registry. `loaded` is the state as read (before any
 /// pruning), `entries` the state to write; `set_preserved_libs` skips the
-/// write when they are equal (N6, real `store()`'s `_data == _data_orig`).
+/// write when they are equal.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreservedLibs {
     pub entries: BTreeMap<String, PreservedLibsEntry>,
     pub loaded: BTreeMap<String, PreservedLibsEntry>,
 }
 
-/// The config-protect memory (`var/lib/portage/config` on `files`):
-/// path → md5 of the last offered source (N7).
+/// The config-protect memory: path → md5 of the last offered source.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConfigMemory {
     pub entries: BTreeMap<String, String>,

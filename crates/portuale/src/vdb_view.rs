@@ -1,6 +1,4 @@
-// The read-only filesystem view of an installed-package database
-// (feat#157 / backlog #305, plan S7.2 and S7.3; design `docs/vdb_to_db.md`
-// §12).
+// The read-only filesystem view of an installed-package database.
 //
 // This is the pure half of `portuale vdb mount`. Nothing here knows about
 // FUSE: the tree, the inode numbers, `lookup`/`getattr`/`readdir`/`open`/
@@ -17,25 +15,17 @@
 // so a path keeps its inode across commits, even when the entry is deleted
 // and published again.
 //
-// Attributes (S0 finding `_bump_mtime`, `vartree.py:578-583`: it touches the
-// category directory and the VDB root, not the entry directory):
-//   - entry directory: mode = the stored directory mode (permission bits),
-//     mtime = the stored `dir_mtime_ns`;
-//   - category directory: mtime = the latest `dir_mtime_ns` of its entries;
-//   - root: mtime = the latest over all categories;
-//   - other directories 0755; files: the stored mode (permission bits), size
-//     and mtime.
+// Attributes: entry directory mode and mtime are the stored ones; a
+// category shows the latest of its entries, the root the latest category;
+// other directories are 0755; files show the stored mode, size and mtime.
 // FUSE carries nanoseconds, so a shown mtime is exact.
 //
 // The `metadata` file follows the stamp state stored with the entry
 // (`MetadataStamp`):
 //   - Valid  -> the stored bytes with every `#dir_mtime=` line rewritten to
-//     the entry directory mtime this view shows (real `_read_metadata_file`
-//     accepts the file iff `#format=1` and `#dir_mtime=` equals the
-//     directory's `st_mtime_ns`, `vartree.py:176-185`). The size is that of
+//     the entry directory mtime this view shows. The size is that of
 //     the rewritten bytes.
-//   - Stale  -> served exactly as stored; it does not match and stays stale
-//     (S0.3: a converter never repairs a stamp).
+//   - Stale  -> served exactly as stored; it does not match and stays stale.
 //   - Absent -> there is no `metadata` file.
 //
 // Generations. `InstalledDb::generation` is the cache key. Every operation
@@ -110,7 +100,7 @@ pub enum ViewError {
     Rofs,
     /// A pinned file changed or went away under an open handle.
     Stale,
-    /// A write the read-write layer (`vdb_rw`, #317) does not map.
+    /// A write the read-write layer (`vdb_rw`) does not map.
     Perm,
     /// `rmdir` of a directory that still has children.
     NotEmpty,
@@ -219,7 +209,7 @@ pub(crate) enum Node {
     Cat(String),
     Entry(EntryKey),
     File(EntryKey, String),
-    /// An object of the read-write layer (`vdb_rw`, #317): a volatile
+    /// An object of the read-write layer (`vdb_rw`): a volatile
     /// file, a staged directory or file. This view never serves it.
     Obj(u64),
 }
@@ -342,8 +332,7 @@ enum Handle {
         listing: Arc<Vec<DirEnt>>,
     },
     File {
-        /// The generation the handle opened on; only the tests ask (a read
-        /// no longer compares it, #316).
+        /// The generation the handle opened on; only the tests ask.
         #[cfg_attr(not(test), allow(dead_code))]
         generation: u64,
         attr: Attr,
@@ -564,11 +553,9 @@ impl View {
                 let e = self.entry_snap(gn, key)?.ok_or(ViewError::NoEnt)?;
                 let snap_meta = e.file(name).ok_or(ViewError::NoEnt)?;
                 // `files`: an in-place `replace_file` moves neither the
-                // directory mtimes nor so the generation, so the cached
-                // stat of an ordinary field file is re-read (one stat; a
-                // database commit moves the generation instead, and this
-                // is then the same value). `metadata` is served from its
-                // own rewritten bytes (#316).
+                // directory mtimes nor the generation, so the cached
+                // stat of an ordinary field file is re-read (one stat).
+                // `metadata` is served from its own rewritten bytes.
                 let fresh;
                 let meta = if name == METADATA {
                     snap_meta
@@ -801,9 +788,8 @@ impl View {
                 Ok(b[start..end].to_vec())
             }
             Pinned::Stat { len, mtime_ns } => {
-                // Checked on every read, not only once the generation has
-                // moved: on `files` an in-place rewrite does not move it
-                // (#316). One stat (a query on a database) per read.
+                // Checked on every read: on `files` an in-place rewrite
+                // does not move the generation. One stat per read.
                 match self.db.file_meta(&key, &name)? {
                     Some(m) if m.len == len && m.mtime_ns == mtime_ns => {}
                     _ => return Err(ViewError::Stale),
@@ -1008,9 +994,10 @@ mod tests {
         out
     }
 
-    /// Real `_read_metadata_file`'s acceptance rule (`vartree.py:157-185`):
-    /// `#format=1` present, `#dir_mtime=<int>` present, equal to the
-    /// directory's `st_mtime_ns`.
+    /// Portage's `_read_metadata_file` acceptance rule: `#format=1`
+    /// present, `#dir_mtime=<int>` present, equal to the directory's
+    /// `st_mtime_ns`.
+    // Portage: vartree.py, _read_metadata_file
     fn portage_reader_accepts(bytes: &[u8], dir_mtime_ns: i128) -> bool {
         let text = std::str::from_utf8(bytes).unwrap();
         let (mut version, mut stamp) = (None, None);
@@ -1413,10 +1400,8 @@ mod tests {
         }
     }
 
-    /// #316: on `files` an in-place `replace_file` moves no directory
-    /// mtime, so the generation stays; the view must still report the new
-    /// size of a rewritten file, and a big file's open handle must go
-    /// stale instead of mixing the old and the new bytes.
+    /// An in-place rewrite on `files` is seen by `getattr` and by an open
+    /// big handle (which goes stale instead of mixing bytes).
     #[test]
     fn an_in_place_rewrite_on_files_is_seen_by_getattr_and_by_an_open_big_handle() {
         let env = envs("inplace")

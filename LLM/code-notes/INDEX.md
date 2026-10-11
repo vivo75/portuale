@@ -1,3 +1,432 @@
 # Code notes (#336): context moved out of code comments, keyed by file and symbol
 
-- [crates/portage-dep/src/lib.rs](portage-dep/lib.md) — Portage `portage.dep` atom parsing/matching, USE-dep evaluation and `extract_affecting_use`
+## atom-harness
+- [crates/atom-harness/src/main.rs](atom-harness/main.md) — Neutral CLI test-harness binary for portuale's atom matching.
+
+## harness-common
+- [crates/harness-common/src/lib.rs](harness-common/lib.md) — Shared CLI scaffolding for portuale's neutral test-harness binaries.
+
+## mrg-director
+- [crates/mrg-director/src/lib.rs](mrg-director/lib.md) — The `mrg` director component contracts: traits, their filesystem-backed implementations, and the `Director` wiring struct.
+
+## portage-dep
+- [crates/portage-dep/src/lib.rs](portage-dep/lib.md) — Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, `match_from_list`, USE-dep evaluation, `extract_affecting_use`).
+
+## portage-fetch
+- [crates/portage-fetch/src/layout.rs](portage-fetch/layout.md) — Portage's distfiles mirror layouts: the path math and `layout.conf` parsing.
+- [crates/portage-fetch/src/lib.rs](portage-fetch/lib.md) — Portage SRC_URI flattening, Manifest digest parsing, and content-digest verification.
+- [crates/portage-fetch/src/mirror_cache.rs](portage-fetch/mirror_cache.md) — Portage's `${DISTDIR}/.mirror-cache.json` round-trip plus the URL helpers `async_mirror_url` builds on.
+
+## portage-profile
+- [crates/portage-profile/src/binrepo.rs](portage-profile/binrepo.md) — `binrepos.conf` plus implicit `PORTAGE_BINHOST` entries for `--getbinpkg` resolution.
+- [crates/portage-profile/src/config.rs](portage-profile/config.md) — The resolved configuration (`Config`): every USE layer, visibility list, and fingerprint base.
+- [crates/portage-profile/src/env_layer.rs](portage-profile/env_layer.md) — The process-environment (`env` `USE_ORDER`) layer over make.conf and the profile.
+- [crates/portage-profile/src/envd.rs](portage-profile/envd.md) — Reading `<eroot>/etc/profile.env` (env.d): the scalar layer, the tracked incremental layers, and the `USE=` tokens.
+- [crates/portage-profile/src/fingerprints.rs](portage-profile/fingerprints.md) — Content fingerprints of the USE-context and visibility `Config` fields that `portage-repo` memo keys hash.
+- [crates/portage-profile/src/incrementals.rs](portage-profile/incrementals.md) — Incremental-variable token semantics (USE, FEATURES, and the tracked set behind `emerge --info`).
+- [crates/portage-profile/src/lib.rs](portage-profile/lib.md) — Profile-chain + make.conf + package.* resolution for USE, ACCEPT_KEYWORDS and visibility.
+- [crates/portage-profile/src/make_conf.rs](portage-profile/make_conf.md) — make.conf-style parsing: logical lines, shell tokens, `${VAR}` substitution, and `source` handling.
+- [crates/portage-profile/src/package_files.rs](portage-profile/package_files.md) — Line readers for `package.mask`/`.unmask`, `package.accept_keywords`, `package.license`/`.properties`/`.accept_restrict`, `package.use`, and `license_groups`.
+- [crates/portage-profile/src/phase_environ.rs](portage-profile/phase_environ.md) — Portage `config.environ()` for build-phase environments: the export set a source build's phases see.
+- [crates/portage-profile/src/profile_chain.rs](portage-profile/profile_chain.md) — The profile inheritance chain: `parent` files, per-profile `make.defaults`, cross-repo `reponame:path` expansion.
+- [crates/portage-profile/src/resolve/licenses.rs](portage-profile/resolve/licenses.md) — ACCEPT_LICENSE, ACCEPT_PROPERTIES, ACCEPT_RESTRICT and their `package.*` files.
+- [crates/portage-profile/src/resolve/mod.rs](portage-profile/resolve/mod.md) — `resolve_config`: building the full `Config` from disk and the environment.
+- [crates/portage-profile/src/resolve/package_masks.rs](portage-profile/resolve/package_masks.md) — `package.mask`/`package.unmask` and `package.accept_keywords`.
+- [crates/portage-profile/src/resolve/package_sets.rs](portage-profile/resolve/package_sets.md) — The profile's `packages` (system and @profile sets) and `package.provided`.
+- [crates/portage-profile/src/resolve/package_use.rs](portage-profile/resolve/package_use.md) — `package.use` from repos, profiles and the user, plus the FEATURES=test and env.d USE.
+- [crates/portage-profile/src/resolve/scalar_layers.rs](portage-profile/resolve/scalar_layers.md) — The scalar layers in Portage's order: env.d, make.globals, the profile chain, make.conf.
+- [crates/portage-profile/src/resolve/use_expand.rs](portage-profile/resolve/use_expand.md) — USE_EXPAND, USE_EXPAND_UNPREFIXED and IUSE_EFFECTIVE from the folded scalars.
+- [crates/portage-profile/src/resolve/use_force_mask.rs](portage-profile/resolve/use_force_mask.md) — package.use.force/mask and their stable variants, repo and profile levels.
+- [crates/portage-profile/src/resolve/use_levels.rs](portage-profile/resolve/use_levels.md) — The per-level use.mask/use.force stack the USE-flip suggestions read.
+- [crates/portage-profile/src/resolve/use_masks.rs](portage-profile/resolve/use_masks.md) — Profile `use.mask`, `use.force` and `arch.list`.
+- [crates/portage-profile/src/tests/incrementals.rs](portage-profile/tests/incrementals.md) — Incremental-variable folding tests (USE token replay, wildcard removal, snapshots).
+- [crates/portage-profile/src/tests/resolve.rs](portage-profile/tests/resolve.md) — `resolve_config` end-to-end and per-file folding tests over hand-built and fixture trees.
+
+## portage-repo
+- [crates/portage-repo/src/binary_index.rs](portage-repo/binary_index.md) — The binary package index (`Packages`) and binary candidates.
+- [crates/portage-repo/src/binpkg_use.rs](portage-repo/binpkg_use.md) — `--binpkg-respect-use` checks and binary metadata readers.
+- [crates/portage-repo/src/candidates.rs](portage-repo/candidates.md) — Ebuild candidates for a package.
+- [crates/portage-repo/src/config_match.rs](portage-repo/config_match.md) — Per-package index over `package.*` config atoms.
+- [crates/portage-repo/src/dep_chain.rs](portage-repo/dep_chain.md) — The "required by" chain printed under a masked dependency.
+- [crates/portage-repo/src/depclean.rs](portage-repo/depclean.md) — depclean, prune and clean selection.
+- [crates/portage-repo/src/env_roots.rs](portage-repo/env_roots.md) — ROOT, PORTAGE_CONFIGROOT and PORTAGE_TMPDIR from the environment.
+- [crates/portage-repo/src/error.rs](portage-repo/error.md) — The crate's error type.
+- [crates/portage-repo/src/fetch_restrict.rs](portage-repo/fetch_restrict.md) — SRC_URI and RESTRICT=fetch helpers.
+- [crates/portage-repo/src/globals.rs](portage-repo/globals.md) — Process-wide switches the CLI sets once per run.
+- [crates/portage-repo/src/info_pkgs.rs](portage-repo/info_pkgs.md) — Package rows for `emerge --info`.
+- [crates/portage-repo/src/installed.rs](portage-repo/installed.md) — Installed packages read from the VDB.
+- [crates/portage-repo/src/lib.rs](portage-repo/lib.md) — Repo/metadata/vdb access for the `emerge --pretend` port.
+- [crates/portage-repo/src/license.rs](portage-repo/license.md) — LICENSE parsing and ACCEPT_LICENSE acceptance.
+- [crates/portage-repo/src/masked_deps.rs](portage-repo/masked_deps.md) — Masked-dependency reports.
+- [crates/portage-repo/src/md5_dict.rs](portage-repo/md5_dict.md) — The `md5-dict` aux-cache validator shared by `--regen` and the depend-phase fallback.
+- [crates/portage-repo/src/merge_order/alt_edges.rs](portage-repo/merge_order/alt_edges.md) — Suppression of unchosen `||` branches and the kept/resolved views over it.
+- [crates/portage-repo/src/merge_order/build.rs](portage-repo/merge_order/build.md) — Building the digraph and biasing it toward Portage's order.
+- [crates/portage-repo/src/merge_order/cycles.rs](portage-repo/merge_order/cycles.md) — Cycle search and the circular-dependency report.
+- [crates/portage-repo/src/merge_order/debug.rs](portage-repo/merge_order/debug.md) — `--debug` merge-order dumps and node-selection traces.
+- [crates/portage-repo/src/merge_order/digraph.rs](portage-repo/merge_order/digraph.md) — The merge-order digraph and the serialize frontier.
+- [crates/portage-repo/src/merge_order/installed_closure.rs](portage-repo/merge_order/installed_closure.md) — Installed packages pulled into the merge-order graph.
+- [crates/portage-repo/src/merge_order/mod.rs](portage-repo/merge_order/mod.md) — Portage's merge-order scheduler over a typed dependency digraph.
+- [crates/portage-repo/src/merge_order/prelude.rs](portage-repo/merge_order/prelude.md) — Per-run lookups shared by the digraph build.
+- [crates/portage-repo/src/merge_order/priority.rs](portage-repo/merge_order/priority.md) — Dependency priorities, the edges they label and the ignore rungs.
+- [crates/portage-repo/src/merge_order/replay.rs](portage-repo/merge_order/replay.md) — Replaying `_create_graph` for fail-fast passes.
+- [crates/portage-repo/src/merge_order/select_nodes.rs](portage-repo/merge_order/select_nodes.md) — Choosing the next nodes to merge (Portage `_serialize_tasks`).
+- [crates/portage-repo/src/merge_order/tests/alt_edges.rs](portage-repo/merge_order/tests/alt_edges.md) — Alternative (`||`) branch suppression and target-ranking pins.
+- [crates/portage-repo/src/merge_order/tests/build.rs](portage-repo/merge_order/tests/build.md) — `build_digraph` scheduling-graph pins.
+- [crates/portage-repo/src/merge_order/tests/cycles.rs](portage-repo/merge_order/tests/cycles.md) — Cycle enumeration, smallest-cycle search, and cycle-harvest pins.
+- [crates/portage-repo/src/merge_order/tests/digraph.rs](portage-repo/merge_order/tests/digraph.md) — `SerializeFrontier` parity with the direct digraph scans.
+- [crates/portage-repo/src/merge_order/tests/mod.rs](portage-repo/merge_order/tests/mod.md) — Shared helpers for the merge-order unit tests.
+- [crates/portage-repo/src/merge_order/tests/prelude.rs](portage-repo/merge_order/tests/prelude.md) — `select_dep_target` narrowing/ranking and `rank_best` pins.
+- [crates/portage-repo/src/merge_order/tests/priority.rs](portage-repo/merge_order/tests/priority.md) — Dep-key/priority mapping and ignore-ladder pins.
+- [crates/portage-repo/src/merge_order/tests/select_nodes.rs](portage-repo/merge_order/tests/select_nodes.md) — `select_nodes` scheduling-loop pins.
+- [crates/portage-repo/src/merge_order/tests/tree_display.rs](portage-repo/merge_order/tests/tree_display.md) — Tree-mode stuck-branch pins.
+- [crates/portage-repo/src/merge_order/tree_display.rs](portage-repo/merge_order/tree_display.md) — `--tree` display order and stuck-node handling.
+- [crates/portage-repo/src/metadata_cache.rs](portage-repo/metadata_cache.md) — md5-cache reading, the aux-metadata provider and pregen/regen switches.
+- [crates/portage-repo/src/provenance.rs](portage-repo/provenance.md) — Where a candidate's mask or keyword decision comes from.
+- [crates/portage-repo/src/reinstall.rs](portage-repo/reinstall.md) — When an installed package needs a reinstall (changed deps, slot, repo, USE).
+- [crates/portage-repo/src/repo_config.rs](portage-repo/repo_config.md) — repos.conf discovery and per-repository configuration.
+- [crates/portage-repo/src/resolve/assemble.rs](portage-repo/resolve/assemble.md) — Assembling the final result.
+- [crates/portage-repo/src/resolve/autounmask.rs](portage-repo/resolve/autounmask.md) — Autounmask dependency chains and suggestions.
+- [crates/portage-repo/src/resolve/backtrack_params.rs](portage-repo/resolve/backtrack_params.md) — Parameters a backtracking pass runs with.
+- [crates/portage-repo/src/resolve/backtracker.rs](portage-repo/resolve/backtracker.md) — The backtracking search tree.
+- [crates/portage-repo/src/resolve/blockers.rs](portage-repo/resolve/blockers.md) — Blocker collection and resolution.
+- [crates/portage-repo/src/resolve/complete_graph.rs](portage-repo/resolve/complete_graph.md) — Auto-enables complete mode when a first-pass merge changes an installed package.
+- [crates/portage-repo/src/resolve/conflict_use_display.rs](portage-repo/resolve/conflict_use_display.md) — `USE="…"` display pairs shared by the slot-conflict and skipped-update reports.
+- [crates/portage-repo/src/resolve/ctx.rs](portage-repo/resolve/ctx.md) — The per-run resolver context: BFS request fields plus the derived required-set closures.
+- [crates/portage-repo/src/resolve/cycles.rs](portage-repo/resolve/cycles.md) — Circular dependencies: hard-cycle detection, restart triggers, virtual cycles and USE-fix suggestions.
+- [crates/portage-repo/src/resolve/direct_solve.rs](portage-repo/resolve/direct_solve.md) — Solves slot conflicts directly, without backtracking.
+- [crates/portage-repo/src/resolve/driver.rs](portage-repo/resolve/driver.md) — The backtracking loop: one pass per node, settle or feed back.
+- [crates/portage-repo/src/resolve/enqueue.rs](portage-repo/resolve/enqueue.md) — Queueing one package's dependencies.
+- [crates/portage-repo/src/resolve/entry.rs](portage-repo/resolve/entry.md) — Graph entries and their edges: blocker rows, per-entry display facts, and merge-order inputs.
+- [crates/portage-repo/src/resolve/feedback/autounmask.rs](portage-repo/resolve/feedback/autounmask.md) — Autounmask breakage reporting and grown --autounmask-use config re-runs.
+- [crates/portage-repo/src/resolve/feedback/circular_dead_end.rs](portage-repo/resolve/feedback/circular_dead_end.md) — Fresh-self-loop circular dead-end arm: record the cycle edge and retry so `||` demotion breaks it.
+- [crates/portage-repo/src/resolve/feedback/missing_dep.rs](portage-repo/resolve/feedback/missing_dep.md) — Missing-dependency feedback: mask the parent of an unsatisfiable dep and re-run.
+- [crates/portage-repo/src/resolve/feedback/mod.rs](portage-repo/resolve/feedback/mod.md) — Feedback hub: one pass's problems packaged into the next pass's backtrack input.
+- [crates/portage-repo/src/resolve/feedback/no_leaf_restart.rs](portage-repo/resolve/feedback/no_leaf_restart.md) — General no-leaf restart arm for multi-node hard cycles the merge-order walk strands on.
+- [crates/portage-repo/src/resolve/feedback/reverse_dep_pins.rs](portage-repo/resolve/feedback/reverse_dep_pins.md) — Reverse-dependency pins: an upgrade breaking an installed consumer's recorded dep is pinned or dropped.
+- [crates/portage-repo/src/resolve/feedback/slot_conflict_abi.rs](portage-repo/resolve/feedback/slot_conflict_abi.md) — ABI backtrack arm: rebuild a built parent whose soname/`:=` conflict atom the update probe resolves.
+- [crates/portage-repo/src/resolve/feedback/slot_conflict_backtrack.rs](portage-repo/resolve/feedback/slot_conflict_backtrack.md) — Mask-feedback arm for the first conflicting slot's ranked choices.
+- [crates/portage-repo/src/resolve/feedback/slot_operator_probe.rs](portage-repo/resolve/feedback/slot_operator_probe.md) — Dead-end-pass trigger seeding an installed parent's unsatisfiable built `:=` dep into the replace set.
+- [crates/portage-repo/src/resolve/feedback/solvable_slot_conflicts.rs](portage-repo/resolve/feedback/solvable_slot_conflicts.md) — Config-feedback retry when one version satisfies every atom behind a slot conflict.
+- [crates/portage-repo/src/resolve/feedback/unsatisfied_dead_end.rs](portage-repo/resolve/feedback/unsatisfied_dead_end.md) — Settle-tail trigger scans: the slot-operator rebuild trigger, prune-rebuilds, and eliminate-rebuilds.
+- [crates/portage-repo/src/resolve/graph_lookup.rs](portage-repo/resolve/graph_lookup.md) — Whether an atom is installed or already in the graph: the `||`-preference predicates.
+- [crates/portage-repo/src/resolve/installed_meta.rs](portage-repo/resolve/installed_meta.md) — Installed packages' metadata as the resolver sees it: raw vdb records vs the dynamic-deps overlay.
+- [crates/portage-repo/src/resolve/merge_bound.rs](portage-repo/resolve/merge_bound.md) — Lookups over the entries a run will merge.
+- [crates/portage-repo/src/resolve/or_preference.rs](portage-repo/resolve/or_preference.md) — Which alternative of an `||` group to prefer: Portage `dep_zapdeps`'s choice bins and in-bin ordering.
+- [crates/portage-repo/src/resolve/outcome.rs](portage-repo/resolve/outcome.md) — The outcome of resolving one atom.
+- [crates/portage-repo/src/resolve/pass/candidate_pool.rs](portage-repo/resolve/pass/candidate_pool.md) — Re-derives the source (ebuild, PKGDIR or binhost binary) of the resolved version.
+- [crates/portage-repo/src/resolve/pass/enqueue_deps.rs](portage-repo/resolve/pass/enqueue_deps.md) — Folds the entry's dependency keys and queues the atoms they name.
+- [crates/portage-repo/src/resolve/pass/entry_fetch.rs](portage-repo/resolve/pass/entry_fetch.md) — Records the entry's fetch restriction and the bytes left to download.
+- [crates/portage-repo/src/resolve/pass/entry_use_display.rs](portage-repo/resolve/pass/entry_use_display.md) — Records the entry's USE display: changed flags, IUSE and USE_EXPAND groups.
+- [crates/portage-repo/src/resolve/pass/entry_use_flags.rs](portage-repo/resolve/pass/entry_use_flags.md) — Computes the entry's USE flags: baked for a binary, profiled otherwise, plus any autounmask-use flip.
+- [crates/portage-repo/src/resolve/pass/existing_slot.rs](portage-repo/resolve/pass/existing_slot.md) — Keeps, replaces or conflicts the already-resolved slot.
+- [crates/portage-repo/src/resolve/pass/graph_entry.rs](portage-repo/resolve/pass/graph_entry.md) — Adds the chosen candidate to the graph, with its autounmask suggestions.
+- [crates/portage-repo/src/resolve/pass/mod.rs](portage-repo/resolve/pass/mod.md) — One resolver pass (BFS walk) over the dependency graph.
+- [crates/portage-repo/src/resolve/pass/parent_use_flip.rs](portage-repo/resolve/pass/parent_use_flip.md) — Records a parent USE flip that alone can satisfy a failed dependency, then re-walks.
+- [crates/portage-repo/src/resolve/pass/slot_conflicts.rs](portage-repo/resolve/pass/slot_conflicts.md) — Solves the pass's slot conflicts directly where one instance can go, and drops the loser.
+- [crates/portage-repo/src/resolve/pass/top_level_unsatisfied.rs](portage-repo/resolve/pass/top_level_unsatisfied.md) — Drops or aborts a top-level atom with no visible candidate, Portage's argument handling.
+- [crates/portage-repo/src/resolve/pass/unresolved_dep.rs](portage-repo/resolve/pass/unresolved_dep.md) — Handles a dependency with no version to merge: backtracking feedback and its unsatisfied entry.
+- [crates/portage-repo/src/resolve/pass_helpers.rs](portage-repo/resolve/pass_helpers.md) — Small helpers of the resolver pass.
+- [crates/portage-repo/src/resolve/pass_state.rs](portage-repo/resolve/pass_state.md) — The state and result of one resolver pass.
+- [crates/portage-repo/src/resolve/pretend.rs](portage-repo/resolve/pretend.md) — Selecting one atom's candidate (`resolve_pretend`).
+- [crates/portage-repo/src/resolve/queue.rs](portage-repo/resolve/queue.md) — The walk queue.
+- [crates/portage-repo/src/resolve/replay.rs](portage-repo/resolve/replay.md) — Fail-fast replay of the best pass.
+- [crates/portage-repo/src/resolve/request.rs](portage-repo/resolve/request.md) — A resolve request: the atoms and the emerge options.
+- [crates/portage-repo/src/resolve/resolver.rs](portage-repo/resolve/resolver.md) — The resolver trait and solver selection.
+- [crates/portage-repo/src/resolve/result.rs](portage-repo/resolve/result.md) — The resolver's result and how a run aborts.
+- [crates/portage-repo/src/resolve/rev_dep.rs](portage-repo/resolve/rev_dep.md) — Constraints that installed reverse dependencies put on an upgrade.
+- [crates/portage-repo/src/resolve/root_deps.rs](portage-repo/resolve/root_deps.md) — `--root-deps` build entries for the running root.
+- [crates/portage-repo/src/resolve/skipped.rs](portage-repo/resolve/skipped.md) — Skipped-update records (withheld upgrades, backtrack-mask rows) and their grouping.
+- [crates/portage-repo/src/resolve/slot_conflict.rs](portage-repo/resolve/slot_conflict.md) — Slot conflicts: records, merging and rendering.
+- [crates/portage-repo/src/resolve/slot_expand.rs](portage-repo/resolve/slot_expand.md) — Re-expanding a resolved slot when USE changes.
+- [crates/portage-repo/src/resolve/withhold.rs](portage-repo/resolve/withhold.md) — Updates withheld by constraints, and missed updates to backtrack on.
+- [crates/portage-repo/src/resolver_trace.rs](portage-repo/resolver_trace.md) — `emerge --pretend --debug` resolver trace.
+- [crates/portage-repo/src/slot_operator/abi_probe.rs](portage-repo/slot_operator/abi_probe.md) — The slot-conflict ABI probe.
+- [crates/portage-repo/src/slot_operator/bind.rs](portage-repo/slot_operator/bind.md) — Binding `:=` dependencies to the selected slot.
+- [crates/portage-repo/src/slot_operator/eliminate.rs](portage-repo/slot_operator/eliminate.md) — Eliminating unnecessary slot-operator rebuilds.
+- [crates/portage-repo/src/slot_operator/force_scan.rs](portage-repo/slot_operator/force_scan.md) — Slot-operator update-force and slot-change probes.
+- [crates/portage-repo/src/slot_operator/rebuild_scan.rs](portage-repo/slot_operator/rebuild_scan.md) — Rebuilds triggered by slot-operator dependencies.
+- [crates/portage-repo/src/slot_operator/unsat_probe.rs](portage-repo/slot_operator/unsat_probe.md) — The unsatisfied slot-operator dependency probe.
+- [crates/portage-repo/src/solver_bridge.rs](portage-repo/solver_bridge.md) — Alternate `--solver=` backends: PubGrub and resolvo over the same repo facts.
+- [crates/portage-repo/src/tests/abi_probe.rs](portage-repo/tests/abi_probe.md) — ABI conflict probe tests: rebuild-vs-report gates and display continuity.
+- [crates/portage-repo/src/tests/autounmask.rs](portage-repo/tests/autounmask.md) — Autounmask suggestion, abort-path, cascade, and breakage tests.
+- [crates/portage-repo/src/tests/backtrack_params.rs](portage-repo/tests/backtrack_params.md) — `slot_conflict_mask_choices` unit tests: missed-update sibling grouping.
+- [crates/portage-repo/src/tests/backtracker.rs](portage-repo/tests/backtracker.md) — Backtracker unit tests: `--backtrack=0` shape, mask predicate, circular retry.
+- [crates/portage-repo/src/tests/binary_index.rs](portage-repo/tests/binary_index.md) — Binary candidate tests: local/remote indexes, multi-instance dedup, slot triggers.
+- [crates/portage-repo/src/tests/bind.rs](portage-repo/tests/bind.md) — Slot-operator binder unit tests: prune-rebuilds latch and token binding order.
+- [crates/portage-repo/src/tests/binpkg_use.rs](portage-repo/tests/binpkg_use.md) — `binpkg_respect_use_ok` tests: ebuild comparison, memo keys, force/mask handling.
+- [crates/portage-repo/src/tests/blockers.rs](portage-repo/tests/blockers.md) — Blocker resolution tests: seed holds, buildpkgonly gate, per-cell classification.
+- [crates/portage-repo/src/tests/complete_graph.rs](portage-repo/tests/complete_graph.md) — Complete-graph mode tests: the missing deep dep is never merged.
+- [crates/portage-repo/src/tests/conflict_use_display.rs](portage-repo/tests/conflict_use_display.md) — Skipped-update and slot-conflict USE display tests: vdb sourcing, expand groups.
+- [crates/portage-repo/src/tests/cycles.rs](portage-repo/tests/cycles.md) — Cycle detector and suggestion tests: restart/hard/virtual cycles, per-edge labels.
+- [crates/portage-repo/src/tests/depclean.rs](portage-repo/tests/depclean.md) — Depclean and prune selection tests: cleanlist, removal order, nodeps split.
+- [crates/portage-repo/src/tests/direct_solve.rs](portage-repo/tests/direct_solve.md) — Direct-solve unit tests: tuple forcing, gates, sink fallbacks.
+- [crates/portage-repo/src/tests/eliminate.rs](portage-repo/tests/eliminate.md) — Slot-operator eliminate/scan tests: bridge arm, lookup, eight rules, reachability.
+- [crates/portage-repo/src/tests/entry.rs](portage-repo/tests/entry.md) — Merge-order entry unit tests: cycle breaking, discovery stamps, root attribution.
+- [crates/portage-repo/src/tests/feedback.rs](portage-repo/tests/feedback.md) — `collect_feedback` and dep-chain fill unit tests: prune triggers, overlays, pins.
+- [crates/portage-repo/src/tests/force_scan.rs](portage-repo/tests/force_scan.md) — Slot-change probe and update force-scan tests: moved children, stale binaries.
+- [crates/portage-repo/src/tests/graph.rs](portage-repo/tests/graph.md) — Graph-level resolution tests over the shared fixture tree.
+- [crates/portage-repo/src/tests/info_pkgs.rs](portage-repo/tests/info_pkgs.md) — `--info` display data tests: the info_pkgs table, ebuild/installed/binary candidates, and env-file parsing.
+- [crates/portage-repo/src/tests/installed.rs](portage-repo/tests/installed.md) — Installed-db (vdb) read, snapshot, memo, and candidate-cache tests.
+- [crates/portage-repo/src/tests/installed_meta.rs](portage-repo/tests/installed_meta.md) — Live-metadata overlay for installed packages (`FakeVartree` port) tests.
+- [crates/portage-repo/src/tests/license.rs](portage-repo/tests/license.md) — LICENSE string parsing and masking unit tests.
+- [crates/portage-repo/src/tests/masked_deps.rs](portage-repo/tests/masked_deps.md) — Masked-candidate disclosure, invalid USE-conditional masking, and bug-515584 USE-probe tests.
+- [crates/portage-repo/src/tests/merge_bound.rs](portage-repo/tests/merge_bound.md) — Cross-root DEPEND, missing-dep backtrack, missed-update notices, and blocker merge-order tests.
+- [crates/portage-repo/src/tests/merge_order.rs](portage-repo/tests/merge_order.md) — Merge-order and tree-display-order tests.
+- [crates/portage-repo/src/tests/metadata_cache.rs](portage-repo/tests/metadata_cache.md) — md5-cache presence, `cache-formats` handling, and `--regen` write-gate tests.
+- [crates/portage-repo/src/tests/mod.rs](portage-repo/tests/mod.md) — Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, and the #164 masking-stack legs.
+- [crates/portage-repo/src/tests/pass.rs](portage-repo/tests/pass.md) — Single-walk (`run_pass`) unit tests: binary instances, blockers, masks, and report channels.
+- [crates/portage-repo/src/tests/pass_helpers.rs](portage-repo/tests/pass_helpers.md) — Classification-level pins for onlydeps IDEPEND handling and `_minimize_children` collapsing.
+- [crates/portage-repo/src/tests/pretend.rs](portage-repo/tests/pretend.md) — `resolve_pretend` single-selection pins: usepkgonly, USE-flag reinstalls, sub-slot matching.
+- [crates/portage-repo/src/tests/queue.rs](portage-repo/tests/queue.md) — Queue-walk pins: --exclude, slot-keyed dedup, surviving slot conflicts, deep levels.
+- [crates/portage-repo/src/tests/rebuild_scan.rs](portage-repo/tests/rebuild_scan.md) — Slot-operator rebuild-scan pins: pin-forced downgrades, new-slot arm, refusal vetoes.
+- [crates/portage-repo/src/tests/reinstall.rs](portage-repo/tests/reinstall.md) — Reinstall-trigger pins: binary identity, --newuse/--changed-use/--changed-deps/--newrepo.
+- [crates/portage-repo/src/tests/repo_config.rs](portage-repo/tests/repo_config.md) — `find_repos` config-layer pins: masters tiers, repo-name canonicalization, sync fields.
+- [crates/portage-repo/src/tests/rev_dep.rs](portage-repo/tests/rev_dep.md) — Reverse-dependency constraint pins: built slot-op atoms, reinstall pins, USE-break drops.
+- [crates/portage-repo/src/tests/root_deps.rs](portage-repo/tests/root_deps.md) — `--root-deps` running-root pins: BDEPEND satisfaction, disjunctive branches, stale slot-ops.
+- [crates/portage-repo/src/tests/skipped.rs](portage-repo/tests/skipped.md) — Skipped-update collapse/group pins mirroring Portage's missed-update rendering.
+- [crates/portage-repo/src/tests/slot_conflict.rs](portage-repo/tests/slot_conflict.md) — Residual slot-conflict record pins: merge/installed versions, puller filing, re-file.
+- [crates/portage-repo/src/tests/slot_undo.rs](portage-repo/tests/slot_undo.md) — Single-pass (`run_161`) walk pins: leaf/NVC/reinstall, update, newuse, use-deps, slots.
+- [crates/portage-repo/src/tests/tests_162.rs](portage-repo/tests/tests_162.md) — Direct unit tests for the eight pure selection predicates (mutation cluster 2).
+- [crates/portage-repo/src/tests/tests_163.rs](portage-repo/tests/tests_163.md) — Result/display-assembly unit tests: abort outcomes, USE rows, pretend decisions, result assembly.
+- [crates/portage-repo/src/tests/tests_165.rs](portage-repo/tests/tests_165.md) — Graph-input unit tests (mutation cluster 5): walk/installed/vdb, merge-order, blockers, use.
+- [crates/portage-repo/src/tests/tests_166.rs](portage-repo/tests/tests_166.md) — Direct predicate-result legs for rebuild/circular/instance-use residue.
+- [crates/portage-repo/src/tests/tests_184.rs](portage-repo/tests/tests_184.md) — Shadowed-arm order legs for `direct_solve_instance_use` / `direct_solve_atom_matches`.
+- [crates/portage-repo/src/tests/tests_195d.rs](portage-repo/tests/tests_195d.md) — Operator-level pins for `violated_parent_flags` against Portage's `Atom.violated_conditionals`.
+- [crates/portage-repo/src/tests/unsat_probe.rs](portage-repo/tests/unsat_probe.md) — Dead-end pass seeding a replacement parent for an unsatisfiable built `:=` dep.
+- [crates/portage-repo/src/tests/updates.rs](portage-repo/tests/updates.md) — Update-command parsing and dep-string rewrite tests.
+- [crates/portage-repo/src/tests/use_display.rs](portage-repo/tests/use_display.md) — `build_use_expand_display` grouping, diff-marker and force-wrap tests.
+- [crates/portage-repo/src/tests/use_flags.rs](portage-repo/tests/use_flags.md) — Effective-USE layer-precedence, stable-flag and memo tests.
+- [crates/portage-repo/src/tests/use_unsat.rs](portage-repo/tests/use_unsat.md) — USE-unsatisfied candidate-classification tests.
+- [crates/portage-repo/src/tests/visibility.rs](portage-repo/tests/visibility.md) — Visibility license/keyword/mask and memo-key tests.
+- [crates/portage-repo/src/updates.rs](portage-repo/updates.md) — `profiles/updates` package and slot moves, applied at read time.
+- [crates/portage-repo/src/use_display.rs](portage-repo/use_display.md) — USE flag display columns for `emerge --pretend -v`.
+- [crates/portage-repo/src/use_flags.rs](portage-repo/use_flags.md) — Effective USE and USE mask/force resolution.
+- [crates/portage-repo/src/use_unsat.rs](portage-repo/use_unsat.md) — Reports for dependencies whose USE requirements no candidate meets.
+- [crates/portage-repo/src/visibility.rs](portage-repo/visibility.md) — Keyword, mask and license visibility of a candidate.
+- [crates/portage-repo/src/visibility_use_flip.rs](portage-repo/visibility_use_flip.md) — USE-flip suggestions for autounmask.
+
+## portage-required-use
+- [crates/portage-required-use/src/lib.rs](portage-required-use/lib.md) — Port of Portage's `portage.dep.check_required_use`: the REQUIRED_USE evaluator.
+
+## portage-use-reduce
+- [crates/portage-use-reduce/src/lib.rs](portage-use-reduce/lib.md) — Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
+
+## portage-util
+- [crates/portage-util/src/lib.rs](portage-util/lib.md) — Filesystem helpers shared by the portage-* crates.
+- [crates/portage-util/src/temp_dir.rs](portage-util/temp_dir.md) — A scratch directory that removes itself, plus a process-level stale sweep.
+
+## portage-vdb
+- [crates/portage-vdb/src/convert.rs](portage-vdb/convert.md) — Generic copy and comparison between two installed databases.
+- [crates/portage-vdb/src/dep_cp.rs](portage-vdb/dep_cp.md) — Conservative `category/package` extraction behind the `dep_atom` prefilter index.
+- [crates/portage-vdb/src/error.rs](portage-vdb/error.md) — Hand-written error type for the VDB crate (no dependencies, no `thiserror`).
+- [crates/portage-vdb/src/files.rs](portage-vdb/files.md) — `FilesDb`: the historic `var/db/pkg` directory tree.
+- [crates/portage-vdb/src/files_write.rs](portage-vdb/files_write.md) — `FilesDb`'s write side: the merge's pending entry, counter, registry and config memory.
+- [crates/portage-vdb/src/lib.rs](portage-vdb/lib.md) — The installed-package database ("VDB") behind one interface.
+- [crates/portage-vdb/src/redb_db.rs](portage-vdb/redb_db.md) — The redb backend: tables, open, reads, and the generation-validated cache.
+- [crates/portage-vdb/src/redb_db/write.rs](portage-vdb/redb_db/write.md) — `RedbDb`'s write side: `RedbTxn` and the derived multimaps.
+- [crates/portage-vdb/src/registry.rs](portage-vdb/registry.md) — The process-wide backend registry: root path to `InstalledDb` backend.
+- [crates/portage-vdb/src/scratch.rs](portage-vdb/scratch.md) — Scratch copies of an entry for code that needs a filesystem path.
+- [crates/portage-vdb/src/sqlite.rs](portage-vdb/sqlite.md) — The SQLite backend: schema, open, reads, and the `data_version`-validated cache.
+- [crates/portage-vdb/src/sqlite/write.rs](portage-vdb/sqlite/write.md) — `SqliteDb`'s write side: `SqliteTxn` and the derived tables.
+- [crates/portage-vdb/tests/conformance.rs](portage-vdb/tests/conformance.md) — Backend conformance suite for `portage-vdb`: every backend answers the same reads.
+- [crates/portage-vdb/tests/corpus_round_trip.rs](portage-vdb/tests/corpus_round_trip.md) — Corpus round trip: files -> sqlite/redb -> files must `verify` clean, and index queries must match the scan.
+- [crates/portage-vdb/tests/no_hand_built_vdb_paths.rs](portage-vdb/tests/no_hand_built_vdb_paths.md) — Lint test: production code must not build installed-database paths by hand.
+- [crates/portage-vdb/src/types.rs](portage-vdb/types.md) — Value types of the `InstalledDb` interface: entry keys, file metadata, snapshots, world sets, preserved-libs, config memory, counters.
+
+## portage-versions
+- [crates/portage-versions/src/lib.rs](portage-versions/lib.md) — Port of Portage's `lib/portage/versions.py` version comparison (`ververify`, `vercmp`).
+
+## portuale
+- [crates/portuale/src/binpkg/digest.rs](portuale/binpkg/digest.md) — Digest checks of a `$PKGDIR` binpkg against the index, and checksum-failure renames.
+- [crates/portuale/src/binpkg/extract.rs](portuale/binpkg/extract.md) — Extracting a binary package's image and metadata at merge time.
+- [crates/portuale/src/binpkg/gpg.rs](portuale/binpkg/gpg.md) — GPG binpkg signature policy and verification via the system `gpg`.
+- [crates/portuale/src/binpkg/inner.rs](portuale/binpkg/inner.md) — The gpkg inner `metadata.tar`: limits, members, links.
+- [crates/portuale/src/binpkg/local_index.rs](portuale/binpkg/local_index.md) — The local `$PKGDIR` scan: per-file entries with index fast-path, stale vouching, and orphan re-injection.
+- [crates/portuale/src/binpkg/manifest.rs](portuale/binpkg/manifest.md) — Verifying a gpkg `Manifest` at merge time.
+- [crates/portuale/src/binpkg/metadata.rs](portuale/binpkg/metadata.md) — Reading gpkg and xpak metadata for the `$PKGDIR` scan.
+- [crates/portuale/src/binpkg/mod.rs](portuale/binpkg/mod.md) — The `$PKGDIR` directory-scan fallback: per-format binpkg readers and shared helpers.
+- [crates/portuale/src/binpkg/outer.rs](portuale/binpkg/outer.md) — The gpkg outer-tar reader: member enumeration and single-member streaming.
+- [crates/portuale/src/binpkg/tests/digest.rs](portuale/binpkg/tests/digest.md) — Binpkg digest-verification tests: structure guards, xattr restore, index checks.
+- [crates/portuale/src/binpkg/tests/extract.rs](portuale/binpkg/tests/extract.md) — Binpkg extraction tests: xpak verbatim writes, gpkg image/metadata handling.
+- [crates/portuale/src/binpkg/tests/inner.rs](portuale/binpkg/tests/inner.md) — Inner-tar reader tests: links, types, names, duplicates.
+- [crates/portuale/src/binpkg/tests/local_index.rs](portuale/binpkg/tests/local_index.md) — Local `$PKGDIR` scan tests: fast path, stale vouch, reindex, orphans.
+- [crates/portuale/src/binpkg/tests/manifest.rs](portuale/binpkg/tests/manifest.md) — Manifest verification tests: digests, membership, signatures.
+- [crates/portuale/src/binpkg/tests/metadata.rs](portuale/binpkg/tests/metadata.md) — Metadata reader tests: gpkg scalars, xpak index, error classes.
+- [crates/portuale/src/binpkg/tests/mod.rs](portuale/binpkg/tests/mod.md) — Shared binpkg test helpers: XPAK/gpgk builders, GPG keyring, inner-tar craft.
+- [crates/portuale/src/binpkg/tests/outer.rs](portuale/binpkg/tests/outer.md) — Outer-member type-check tests: one crafted container per hostile member.
+- [crates/portuale/src/color.rs](portuale/color.md) — ANSI colour for `emerge --pretend` output.
+- [crates/portuale/src/difflib.rs](portuale/difflib.md) — Minimal `difflib.SequenceMatcher` port for `emerge --search` fuzzy matching.
+- [crates/portuale/src/ebuild.rs](portuale/ebuild.md) — The `ebuild <file> <command>` CLI: option/command recognition plus real execution.
+- [crates/portuale/src/ebuild_merge/after_install.rs](portuale/ebuild_merge/after_install.md) — The post-install merge driver and same-slot unmerge.
+- [crates/portuale/src/ebuild_merge/collisions.rs](portuale/ebuild_merge/collisions.md) — Blockers against installed packages and file collisions.
+- [crates/portuale/src/ebuild_merge/from_binpkg.rs](portuale/ebuild_merge/from_binpkg.md) — Merging a binary package.
+- [crates/portuale/src/ebuild_merge/installed_instance.rs](portuale/ebuild_merge/installed_instance.md) — INSTALL_MASK and what is already installed.
+- [crates/portuale/src/ebuild_merge/mod.rs](portuale/ebuild_merge/mod.md) — The merge driver: `merge`/`qmerge` entry points, shared helpers, submodules.
+- [crates/portuale/src/ebuild_merge/options.rs](portuale/ebuild_merge/options.md) — Env-var-sourced merge options for `run_merge` plus the `movefile` xattr policy.
+- [crates/portuale/src/ebuild_merge/plib_merge.rs](portuale/ebuild_merge/plib_merge.md) — Merge-side preserved-library handling: collision takeover, CONTENTS/NEEDED stripping, preserve-libs computation and registration.
+- [crates/portuale/src/ebuild_merge/plib_registry.rs](portuale/ebuild_merge/plib_registry.md) — The preserved-libs registry: in-memory shape, deferred unmerge writes, load/prune/store and small path/inode helpers.
+- [crates/portuale/src/ebuild_merge/plib_unmerge.rs](portuale/ebuild_merge/plib_unmerge.md) — Unmerge-side preserved-library handling: the prune-registry step, the unused-library computation and the prune that deletes files and rewrites owners.
+- [crates/portuale/src/ebuild_merge/protect.rs](portuale/ebuild_merge/protect.md) — CONFIG_PROTECT decisions, `._cfgNNNN_` allocation, atomic replaces and xattr comparison.
+- [crates/portuale/src/ebuild_merge/tests/after_install.rs](portuale/ebuild_merge/tests/after_install.md) — Replace-loop prune coverage for the unmerge path: the replacing package's `-MERGING-` NEEDED feed.
+- [crates/portuale/src/ebuild_merge/tests/collisions.rs](portuale/ebuild_merge/tests/collisions.md) — Collision, stale-entry, blocker and owner-lookup coverage for the merge path.
+- [crates/portuale/src/ebuild_merge/tests/db_merge.rs](portuale/ebuild_merge/tests/db_merge.md) — Database-backend equivalence coverage: binpkg/source merges, upgrades, crash recovery, unmerges, and index-vs-scan agreement on sqlite/redb vs files.
+- [crates/portuale/src/ebuild_merge/tests/installed_instance.rs](portuale/ebuild_merge/tests/installed_instance.md) — Installed-instance, SLOT-reading, CONTENTS-lookup and install-mask coverage for the merge path.
+- [crates/portuale/src/ebuild_merge/tests/mod.rs](portuale/ebuild_merge/tests/mod.md) — Shared test helpers and the test-module list for the ebuild-merge suite.
+- [crates/portuale/src/ebuild_merge/tests/options.rs](portuale/ebuild_merge/tests/options.md) — `MergeOptions` resolution coverage: config-protect folds and FEATURES re-derivation.
+- [crates/portuale/src/ebuild_merge/tests/plib_merge.rs](portuale/ebuild_merge/tests/plib_merge.md) — Merge-side preserved-libs coverage: register/unregister semantics, the `-MERGING-` feed, and `NEEDED.ELF.2` pruning.
+- [crates/portuale/src/ebuild_merge/tests/plib_registry.rs](portuale/ebuild_merge/tests/plib_registry.md) — Preserved-libs registry coverage: serialization, reload ordering, write suppression, soname bumps, and empty-contents unregistering.
+- [crates/portuale/src/ebuild_merge/tests/plib_unmerge.rs](portuale/ebuild_merge/tests/plib_unmerge.md) — Unmerge-side preserved-libs prune coverage: replacement mode, linkage exclusion, just-preserved feed, and cycle handling.
+- [crates/portuale/src/ebuild_merge/tests/run_merge.rs](portuale/ebuild_merge/tests/run_merge.md) — Full `run_merge`/`run_qmerge` merge tests: preinst/postinst ordering, vdb content, collisions, protect-owned, preserve-libs, blockers.
+- [crates/portuale/src/ebuild_merge/tests/tree.rs](portuale/ebuild_merge/tests/tree.md) — `merge_tree` unit tests: atomic replacement, xattrs, ownership, config protection, special nodes.
+- [crates/portuale/src/ebuild_merge/tree.rs](portuale/ebuild_merge/tree.md) — Merging the image tree onto ROOT.
+- [crates/portuale/src/ebuild_merge/vdb_entry.rs](portuale/ebuild_merge/vdb_entry.md) — Writing and publishing the VDB entry; env.d updates.
+- [crates/portuale/src/ebuild_options.rs](portuale/ebuild_options.md) — Portage's `ebuild` CLI option and command surface, recognized but not executed.
+- [crates/portuale/src/ebuild_package.rs](portuale/ebuild_package.md) — Binary-package building (`ebuild package`, `--buildpkg`, quickpkg).
+- [crates/portuale/src/ebuild_phases/commands.rs](portuale/ebuild_phases/commands.md) — Runs a phase command list (with logging): fetch once, then each command's phase chain.
+- [crates/portuale/src/ebuild_phases/depend_phase.rs](portuale/ebuild_phases/depend_phase.md) — The `depend` phase and its metadata cache (run + depcachedir rung).
+- [crates/portuale/src/ebuild_phases/environment.rs](portuale/ebuild_phases/environment.md) — One package's build environment: paths, directories, fake DISTDIR.
+- [crates/portuale/src/ebuild_phases/fetch_sources.rs](portuale/ebuild_phases/fetch_sources.md) — Fetching and linking the distfiles a build needs (`A`/`AA`).
+- [crates/portuale/src/ebuild_phases/misc_functions.rs](portuale/ebuild_phases/misc_functions.md) — `misc-functions.sh` steps (`install_qa_check ...`, `__dyn_package`).
+- [crates/portuale/src/ebuild_phases/mod.rs](portuale/ebuild_phases/mod.md) — Real ebuild phase execution: module root, helpers, phase-command routing.
+- [crates/portuale/src/ebuild_phases/package_env.rs](portuale/ebuild_phases/package_env.md) — `package.env` matching and its incremental variables.
+- [crates/portuale/src/ebuild_phases/phase_env.rs](portuale/ebuild_phases/phase_env.md) — The environment variables and PATH a phase runs with.
+- [crates/portuale/src/ebuild_phases/post_install_meta.rs](portuale/ebuild_phases/post_install_meta.md) — VDB metadata written after `src_install` (build-info keys, soname deps, libc dep, SIZE).
+- [crates/portuale/src/ebuild_phases/run_phase.rs](portuale/ebuild_phases/run_phase.md) — Running one phase on brush or bash.
+- [crates/portuale/src/ebuild_phases/runtime_paths.rs](portuale/ebuild_phases/runtime_paths.md) — Where the phase runtime (`bin/`, `pym/`) and the repository live; the embedded runtime.
+- [crates/portuale/src/ebuild_phases/sandbox.rs](portuale/ebuild_phases/sandbox.md) — The phase shell backend, the calling-environment filter, and sandbox/isolation.
+- [crates/portuale/src/ebuild_phases/scheduler_registry.rs](portuale/ebuild_phases/scheduler_registry.md) — Child processes registered for the build scheduler to kill.
+- [crates/portuale/src/ebuild_phases/single_phase.rs](portuale/ebuild_phases/single_phase.md) — Single phases, clean, instprep, and phases run from a saved environment.
+- [crates/portuale/src/ebuild_phases/standalone_config.rs](portuale/ebuild_phases/standalone_config.md) — Configuration for standalone `ebuild` phases and unmerge.
+- [crates/portuale/src/ebuild_phases/tests/commands.rs](portuale/ebuild_phases/tests/commands.md) — Phase-command end-to-end tests.
+- [crates/portuale/src/ebuild_phases/tests/environment.rs](portuale/ebuild_phases/tests/environment.md) — Environment-setup unit tests (md5-cache reads, FILESDIR/distdir links, builddir layout).
+- [crates/portuale/src/ebuild_phases/tests/package_env.rs](portuale/ebuild_phases/tests/package_env.md) — `package.env` matching unit tests.
+- [crates/portuale/src/ebuild_phases/tests/phase_env.rs](portuale/ebuild_phases/tests/phase_env.md) — Phase-environment unit tests (path vars, PATH composition, quoting, eclass locations, standalone package.env).
+- [crates/portuale/src/ebuild_phases/tests/phase_runs.rs](portuale/ebuild_phases/tests/phase_runs.md) — Phase-run integration tests (subprocess-driven).
+- [crates/portuale/src/ebuild_phases/tests/runtime_paths.rs](portuale/ebuild_phases/tests/runtime_paths.md) — Runtime-path resolution unit tests (bin overlay, bin-dir order, scratch base, pym path, FEATURES layering).
+- [crates/portuale/src/ebuild_phases/tests/sandbox.rs](portuale/ebuild_phases/tests/sandbox.md) — Sandbox/isolation unit tests for phase execution.
+- [crates/portuale/src/ebuild_phases/tests/single_phase.rs](portuale/ebuild_phases/tests/single_phase.md) — Single-phase and clean-phase end-to-end tests.
+- [crates/portuale/src/ebuild_phases/tests/standalone_config.rs](portuale/ebuild_phases/tests/standalone_config.md) — Standalone-config resolver unit tests (RESTRICT gates, depend-phase reduction, tmpdir, binpkg scalars).
+- [crates/portuale/src/ebuild_unmerge.rs](portuale/ebuild_unmerge.md) — Package removal: `ebuild <file> unmerge`.
+- [crates/portuale/src/elog.rs](portuale/elog.md) — Elog message collection and dispatch (Portage's `lib/portage/elog/`).
+- [crates/portuale/src/embedded_runtime.rs](portuale/embedded_runtime.md) — The phase runtime and package-set definitions compiled into the binary.
+- [crates/portuale/src/emerge_build/buildpkgonly.rs](portuale/emerge_build/buildpkgonly.md) — `--buildpkgonly`: builds binary packages without merging, serially, with `--keep-going` support.
+- [crates/portuale/src/emerge_build/entry_env.rs](portuale/emerge_build/entry_env.md) — The per-entry build environment: tmpdir, FEATURES, USE, identity and metadata rows.
+- [crates/portuale/src/emerge_build/logs.rs](portuale/emerge_build/logs.md) — Build logs: per-package `build.log` placement, `PORTAGE_LOGDIR` symlinks, and failure tails.
+- [crates/portuale/src/emerge_build/mod.rs](portuale/emerge_build/mod.md) — `--buildpkgonly` execution without `--pretend`: builds a binary package per entry the pretend gate proved safe.
+- [crates/portuale/src/emerge_build/resume.rs](portuale/emerge_build/resume.md) — `--resume` entries and their repositories.
+- [crates/portuale/src/emerge_build/scheduler.rs](portuale/emerge_build/scheduler.md) — The parallel build scheduler (`--jobs`): concurrent `install` builds, serialized vdb merges.
+- [crates/portuale/src/emerge_build/source_merge.rs](portuale/emerge_build/source_merge.md) — The source-merge loop: build, then merge, one entry at a time (serial), or via the parallel scheduler.
+- [crates/portuale/src/emerge_build/status.rs](portuale/emerge_build/status.md) — Progress and status lines of the build scheduler: counters, background mode, `>>> Jobs:` and progress lines.
+- [crates/portuale/src/emerge_build/tests/buildpkgonly.rs](portuale/emerge_build/tests/buildpkgonly.md) — `--buildpkgonly` execution tests (end-to-end builds plus failure-mode pins).
+- [crates/portuale/src/emerge_build/tests/entry_env.rs](portuale/emerge_build/tests/entry_env.md) — Per-entry environment unit tests.
+- [crates/portuale/src/emerge_build/tests/logs.rs](portuale/emerge_build/tests/logs.md) — Build-log path, `PORTAGE_LOGDIR` symlink, and capture tests.
+- [crates/portuale/src/emerge_build/tests/resume.rs](portuale/emerge_build/tests/resume.md) — Resume-list unit tests.
+- [crates/portuale/src/emerge_build/tests/source_merge.rs](portuale/emerge_build/tests/source_merge.md) — Source-merge loop tests (serial, parallel, keep-going, and kill behavior).
+- [crates/portuale/src/emerge_build/tests/status.rs](portuale/emerge_build/tests/status.md) — Progress-line and scheduler-display unit tests.
+- [crates/portuale/src/emerge_getbinpkg.rs](portuale/emerge_getbinpkg.md) — `emerge --getbinpkg` / `--getbinpkgonly` execution: binhost index refresh, resolve, per-entry merge.
+- [crates/portuale/src/emerge_options.rs](portuale/emerge_options.md) — Recognition tables for Portage's full `emerge` CLI option surface; every implemented flag is excluded and handled by the caller.
+- [crates/portuale/src/env_update.rs](portuale/env_update.md) — Portage's `env_update()`: regenerate shell/systemd/ld.so state from `/etc/env.d` after a merge.
+- [crates/portuale/src/fetch.rs](portuale/fetch.md) — Network fetch of a package's distfiles via `wget` (locking, mirrors, resume, digest verification).
+- [crates/portuale/src/helpers/chmod_lite.rs](portuale/helpers/chmod_lite.md) — Native `chmod-lite` helper: recursive permission normalization ported from Portage.
+- [crates/portuale/src/helpers/doins.rs](portuale/helpers/doins.md) — Native `doins.py`: installs files/dirs into the image with Portage's semantics.
+- [crates/portuale/src/helpers/filter_env.rs](portuale/helpers/filter_env.md) — Native `filter-bash-environment` helper: byte-level port of Portage's environment filter.
+- [crates/portuale/src/helpers/gpkg.rs](portuale/helpers/gpkg.md) — Native `gpkg-helper.py compress`: builds signed/compressed gpkg binpkgs from dirs.
+- [crates/portuale/src/helpers/locale.rs](portuale/helpers/locale.md) — Native answer for the QA locale probe (`has_utf8_ctype`).
+- [crates/portuale/src/helpers/mod.rs](portuale/helpers/mod.md) — The `portuale __helper` dispatcher and its helper table.
+- [crates/portuale/src/helpers/python.rs](portuale/helpers/python.md) — The `$PORTAGE_PYTHON` dispatcher: routes vendored-script calls to the native helpers.
+- [crates/portuale/src/helpers/xattr.rs](portuale/helpers/xattr.md) — Native `xattr-helper.py` + `install.py`: extended-attribute dump/restore and install wrapper.
+- [crates/portuale/src/helpers/xpak.rs](portuale/helpers/xpak.md) — Native `xpak-helper.py recompose`: packs metadata dirs into tbz2 XPAK segments.
+- [crates/portuale/src/info_files.rs](portuale/info_files.md) — Regeneration of stale GNU info directory indexes after a vdb-changing merge.
+- [crates/portuale/src/install_mask.rs](portuale/install_mask.md) — `INSTALL_MASK` filtering applied to the install image before anything is copied to `${ROOT}`.
+- [crates/portuale/src/main.rs](portuale/main.md) — Multicall binary dispatch (`emerge`, `ebuild`, `mrg`, `vdb`, `portageq`).
+- [crates/portuale/src/merge_engines.rs](portuale/merge_engines.md) — `MergeEngine` adapters executing the actual source/binary merges.
+- [crates/portuale/src/mrg.rs](portuale/mrg.md) — `mrg`: a portuale-only clap front end over portuale's own emerge codepath.
+- [crates/portuale/src/mtimedb.rs](portuale/mtimedb.md) — `/var/cache/edb/mtimedb` persistence for the `resume` mergelist, its `resume_backup` rotation, and the `info` dir-mtime memo.
+- [crates/portuale/src/needed_elf.rs](portuale/needed_elf.md) — `NEEDED.ELF.2` parsing and linkage-map computation for preserve-libs decisions.
+- [crates/portuale/src/portage_lock.rs](portuale/portage_lock.md) — Advisory file lock in the shape of Portage's `lockfile` primitive.
+- [crates/portuale/src/portageq.rs](portuale/portageq.md) — Native `has_version` / `best_version` over the installed-package database.
+- [crates/portuale/src/preserved_libs.rs](portuale/preserved_libs.md) — Advisory "run `emerge @preserved-rebuild`" notice printed after a vdb-changing run.
+- [crates/portuale/src/pretend/args.rs](portuale/pretend/args.md) — Parsing `emerge` arguments into `EmergeOpts`.
+- [crates/portuale/src/pretend/atoms.rs](portuale/pretend/atoms.md) — Expanding command-line tokens to atoms (`dep_expand`), plus the unmerge path-arg handling.
+- [crates/portuale/src/pretend/autounmask_report.rs](portuale/pretend/autounmask_report.md) — The autounmask suggestion blocks and the `--autounmask-only` / `--autounmask-continue` exits.
+- [crates/portuale/src/pretend/config_action.rs](portuale/pretend/config_action.md) — `emerge --config` and the misspell-suggestion block.
+- [crates/portuale/src/pretend/conflicts.rs](portuale/pretend/conflicts.md) — Slot-conflict text helpers.
+- [crates/portuale/src/pretend/deselect.rs](portuale/pretend/deselect.md) — `emerge --deselect`.
+- [crates/portuale/src/pretend/display/attrs.rs](portuale/pretend/display/attrs.md) — Merge-list row attributes: columns, version decoration, USE suffix, sizes.
+- [crates/portuale/src/pretend/display/blockers.rs](portuale/pretend/display/blockers.md) — Blocker rows in the merge list.
+- [crates/portuale/src/pretend/display/circular.rs](portuale/pretend/display/circular.md) — The circular-dependency block.
+- [crates/portuale/src/pretend/display/counters.rs](portuale/pretend/display/counters.md) — The `Total:` summary line for `emerge -pv`.
+- [crates/portuale/src/pretend/display/entry_line.rs](portuale/pretend/display/entry_line.md) — One merge-list row.
+- [crates/portuale/src/pretend/display/tree.rs](portuale/pretend/display/tree.md) — The `--tree` display.
+- [crates/portuale/src/pretend/early_actions.rs](portuale/pretend/early_actions.md) — Option checks that end the run early, and the actions that need no resolve.
+- [crates/portuale/src/pretend/env_config.rs](portuale/pretend/env_config.md) — Config and repo loading, EMERGE_DEFAULT_OPTS, scheduling policy.
+- [crates/portuale/src/pretend/expand_targets.rs](portuale/pretend/expand_targets.md) — Expanding the command-line arguments (sets, package moves, bare names) into the atoms to resolve.
+- [crates/portuale/src/pretend/final_gates.rs](portuale/pretend/final_gates.md) — The last gates before execution: ABI rebuilds, changed-deps report, buildpkgonly deps, circular dependencies.
+- [crates/portuale/src/pretend/gates.rs](portuale/pretend/gates.md) — Pure predicates for what a run shows: merge-list gating, the empty-plan arms, and resolution-phase display.
+- [crates/portuale/src/pretend/info.rs](portuale/pretend/info.md) — `emerge --info`.
+- [crates/portuale/src/pretend/json.rs](portuale/pretend/json.md) — `--json` output.
+- [crates/portuale/src/pretend/merge_list.rs](portuale/pretend/merge_list.md) — The counts and summary lines under the merge list, and the redisplay before a merge.
+- [crates/portuale/src/pretend/merge_run.rs](portuale/pretend/merge_run.md) — Build and merge the plan from source, after saving it as the resume list.
+- [crates/portuale/src/pretend/merge_setup.rs](portuale/pretend/merge_setup.md) — The options every merge path shares: status mode, package and merge options, PORTAGE_TMPDIR.
+- [crates/portuale/src/pretend/mod.rs](portuale/pretend/mod.md) — `emerge --pretend`: resolve and display, never build.
+- [crates/portuale/src/pretend/news.rs](portuale/pretend/news.md) — GLEP 42 news.
+- [crates/portuale/src/pretend/post_merge.rs](portuale/pretend/post_merge.md) — After a merge: the info-dir update, the preserved-libs and news notices, and the world-file record.
+- [crates/portuale/src/pretend/problem_reports.rs](portuale/pretend/problem_reports.md) — Missing arguments, and the abort reports for cycles and unsatisfied dependencies.
+- [crates/portuale/src/pretend/process_globals.rs](portuale/pretend/process_globals.md) — Set the resolver's process-wide options from the parsed command line.
+- [crates/portuale/src/pretend/prompt.rs](portuale/pretend/prompt.md) — `--ask` prompts and their terminal handling.
+- [crates/portuale/src/pretend/removal/depclean.rs](portuale/pretend/removal/depclean.md) — `--depclean`.
+- [crates/portuale/src/pretend/removal/prune_clean.rs](portuale/pretend/removal/prune_clean.md) — `--prune` and `--clean`.
+- [crates/portuale/src/pretend/removal/unmerge.rs](portuale/pretend/removal/unmerge.md) — `--unmerge`: listing and removing installed packages.
+- [crates/portuale/src/pretend/resolve_phases.rs](portuale/pretend/resolve_phases.md) — Running the resolver: the first pass, the locked merges, the complete-graph pass, and the running-root repaint.
+- [crates/portuale/src/pretend/resolve_plan.rs](portuale/pretend/resolve_plan.md) — The resolver parameters derived from the options: bdeps, selective, autounmask, binary packages, rebuild and complete-graph switches, seed atoms.
+- [crates/portuale/src/pretend/resume.rs](portuale/pretend/resume.md) — `--resume`.
+- [crates/portuale/src/pretend/search.rs](portuale/pretend/search.md) — `--list-sets` and `--search`.
+- [crates/portuale/src/pretend/standalone_actions.rs](portuale/pretend/standalone_actions.md) — The standalone actions: --resume, --config, --search, --check-news, --info, --clean, --rage-clean, --unmerge, --depclean, --prune.
+- [crates/portuale/src/pretend/tests/attrs.rs](portuale/pretend/tests/attrs.md) — Root suffixes, the mask column, USE suffixes, and nomerge rows.
+- [crates/portuale/src/pretend/tests/blockers.rs](portuale/pretend/tests/blockers.md) — Replacement-satisfied blocker rows: hidden, inline, and counted.
+- [crates/portuale/src/pretend/tests/conflicts.rs](portuale/pretend/tests/conflicts.md) — Slot-conflict reasons, caret spans, and colorized-marker alignment.
+- [crates/portuale/src/pretend/tests/env_config.rs](portuale/pretend/tests/env_config.md) — Config-derived pretend gates: buildpkg, pkgdir trust, shell splitting, default opts, compressor, root-deps.
+- [crates/portuale/src/pretend/tests/flag_spellings.rs](portuale/pretend/tests/flag_spellings.md) — `=True` spellings of eleven options behave exactly like the bare flags.
+- [crates/portuale/src/pretend/tests/gates.rs](portuale/pretend/tests/gates.md) — Display and early-return gates for non-pretend runs.
+- [crates/portuale/src/pretend/tests/mod.rs](portuale/pretend/tests/mod.md) — Shared fixtures and pty helpers for the pretend tests.
+- [crates/portuale/src/pretend/tests/news.rs](portuale/pretend/tests/news.md) — News parsing, selection, notices, and the read-news prompt arms.
+- [crates/portuale/src/pretend/tests/prompt.rs](portuale/pretend/tests/prompt.md) — Prompt EOF/SIGINT behavior, the --ask privilege offer, and the prompt line buffer.
+- [crates/portuale/src/pretend/tests/remote.rs](portuale/pretend/tests/remote.md) — Remote execution prints no post-merge news notice.
+- [crates/portuale/src/pretend/tests/resume.rs](portuale/pretend/tests/resume.md) — Resume news notices, pretend write isolation, and the not-merged tail.
+- [crates/portuale/src/pretend/tests/unmerge.rs](portuale/pretend/tests/unmerge.md) — Unmerge info-regen wiring, the end notice, and set-parent detection.
+- [crates/portuale/src/pretend/tests/world.rs](portuale/pretend/tests/world.md) — World and world_sets recording, usersets candidacy, and the installed set.
+- [crates/portuale/src/pretend/world.rs](portuale/pretend/world.md) — The world and world_sets files.
+- [crates/portuale/src/privileges.rs](portuale/privileges.md) — The privilege check for merging into a root.
+- [crates/portuale/src/regen.rs](portuale/regen.md) — `emerge --regen`: regenerate every repo's md5-cache from the `depend` phases.
+- [crates/portuale/src/remote/binpkg_flow.rs](portuale/remote/binpkg_flow.md) — Checking the binary plan and running the binpkg flow: bundle, stream, unpack, phases, merge, postinst.
+- [crates/portuale/src/remote/client_binary.rs](portuale/remote/client_binary.md) — Finding, checking and installing portuale on the client.
+- [crates/portuale/src/remote/config_place.rs](portuale/remote/config_place.md) — Placing the client's config root on the server for resolve runs.
+- [crates/portuale/src/remote/host_keys.rs](portuale/remote/host_keys.md) — Known-hosts lookups and host-key fingerprints for the ssh transport.
+- [crates/portuale/src/remote/ledger.rs](portuale/remote/ledger.md) — The server/client merge ledger: per-host provenance lines on both sides.
+- [crates/portuale/src/remote/merge_script.rs](portuale/remote/merge_script.md) — The phase and merge shell scripts sent to the client.
+- [crates/portuale/src/remote/mod.rs](portuale/remote/mod.md) — Remote binary-package merge over SSH (`mrg --remote-*`): option validation and shared context.
+- [crates/portuale/src/remote/plan.rs](portuale/remote/plan.md) — The remote entry points: resolve, plan, and run each unit.
+- [crates/portuale/src/remote/preflight.rs](portuale/remote/preflight.md) — Read-only preflight gates checked before a remote merge, plus the bundle unpack driver.
+- [crates/portuale/src/remote/ssh.rs](portuale/remote/ssh.md) — The ssh transport: argv, control sockets, running scripts, copying files.
+- [crates/portuale/src/remote/stages.rs](portuale/remote/stages.md) — The merge, regen, old-hook and phase stages run against the client.
+- [crates/portuale/src/remote/tests/client_binary.rs](portuale/remote/tests/client_binary.md) — Client-binary gate unit tests and install/reuse end-to-end tests.
+- [crates/portuale/src/remote/tests/config_place.rs](portuale/remote/tests/config_place.md) — Config-placement resolve tests: both placements, profile remap, repos.conf seeding.
+- [crates/portuale/src/remote/tests/context.rs](portuale/remote/tests/context.md) — Small context unit tests: exec handoff, locale split, option parsing.
+- [crates/portuale/src/remote/tests/merge_script.rs](portuale/remote/tests/merge_script.md) — Merge-script render and dispatch tests.
+- [crates/portuale/src/remote/tests/mod.rs](portuale/remote/tests/mod.md) — Shared remote-test fixtures: contexts, synthetic units, server roots, S8 trees.
+- [crates/portuale/src/remote/tests/preflight.rs](portuale/remote/tests/preflight.md) — Preflight-gate, unpack-driver and merge-driver behaviour tests.
+- [crates/portuale/src/remote/tests/stages.rs](portuale/remote/tests/stages.md) — Merge-driver and regen-stage behaviour tests.
+- [crates/portuale/src/remote_bundle.rs](portuale/remote_bundle.md) — Remote-merge wire bundles: one binpkg prepared for stdin streaming.
+- [crates/portuale/src/self_exe.rs](portuale/self_exe.md) — The running binary's path, resolved once for `PORTUALE_BIN` re-execs.
+- [crates/portuale/src/vdb_cmd.rs](portuale/vdb_cmd.md) — The `vdb` applet: convert, verify, status, sweep, rebuild-index, import-stores and mount.
+- [crates/portuale/src/vdb_fuse.rs](portuale/vdb_fuse.md) — The FUSE adapter of `portuale vdb mount`: `fuser` callbacks to the pure views.
+- [crates/portuale/src/vdb_ipc.rs](portuale/vdb_ipc.md) — The parent pipe (`PORTUALE_VDB_IPC`): installed-package lookups mid-merge.
+- [crates/portuale/src/vdb_rw.rs](portuale/vdb_rw.md) — The read-write layer of `portuale vdb mount --rw` over the read-only view.
+- [crates/portuale/src/vdb_rw/ops.rs](portuale/vdb_rw/ops.md) — Test harness for `vdb_rw`: replay operation scripts through an `RwView` and a `files` directory.
+- [crates/portuale/src/vdb_view.rs](portuale/vdb_view.md) — The read-only filesystem view of an installed-package database for `vdb mount`.
+
+## required-use-harness
+- [crates/required-use-harness/src/main.rs](required-use-harness/main.md) — Neutral CLI test-harness binary for REQUIRED_USE checking.
+
+## use-reduce-harness
+- [crates/use-reduce-harness/src/main.rs](use-reduce-harness/main.md) — Neutral CLI test-harness binary for `use_reduce(flat=True)`.

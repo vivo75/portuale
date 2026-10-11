@@ -1,61 +1,33 @@
-//! The `mrg` **director** component contracts.
+//! The `mrg` **director** component contracts: traits, their
+//! portuale/portage-repo implementations, and the `Director` wiring struct
+//! routing every stage through its slots.
 //!
-//! The `mrg` applet is positioned as a *director*: it does not solve,
-//! read the cache, or merge anything itself — it orchestrates a set of
-//! interchangeable, runtime-swappable components, each behind a Rust
-//! trait so a different algorithm can be dropped in wholesale without
-//! touching the director or any other component.
+//! The `mrg` applet is a *director*: it does not solve, read the cache, or
+//! merge itself -- it orchestrates interchangeable, runtime-swappable
+//! components, each behind a Rust trait. Every type in the method
+//! signatures is a `portage-*` crate type or primitive, so an alternate
+//! implementation needs no other dependency.
 //!
-//! This crate is the contract layer **plus the filesystem-backed
-//! implementations those contracts name**: the traits, their
-//! portuale/portage-repo implementations, the `Director` wiring struct
-//! (whose delegation methods route every stage through its slots), and
-//! the tests that pin both the contract shape and the backed
-//! implementations against real on-disk layouts (a temp vdb, a temp
-//! md5-cache dir, a temp distdir). Every type in the method signatures
-//! is either a `portage-*` crate type or primitive, so an alternate
-//! implementation can be written against the traits without pulling in
-//! the code it replaces.
+//! Slot grounding (Portage source -> implementation here):
 //!
-//! Here is the component matrix the directors orchestrate, with each
-//! slot's real-Portage grounding and its current implementation:
+//! | Slot | Portage | Portuale |
+//! |------|---------|----------|
+//! | Solver | `_emerge/depgraph.py` + `_emerge/resolver/backtracking.py` | `portage_repo::Resolver` (via `active_resolver()`) |
+//! | PkgDatabase | `portage/dbapi/{vartree,porttree,bintree}.py` | `VdbReader` (filesystem) / `MemoryDb` (in-memory) |
+//! | RepoCache | `portage/cache/template.py::database` | `Md5Cache` (flat file) / `VolatileCache` (in-memory) |
+//! | BinpkgFetch | `portage/package/ebuild/fetch.py` + `_emerge/*binpkg*` | `WgetFetcher` (shared `wget` transport) |
+//! | MergeEngine | `_emerge/MergeListItem.py` + `PackageMerge.py` / `EbuildMerge.py` | `SourceMergeEngine` / `BinaryMergeEngine` kind routing |
+//! | BinpkgIndex | `portage/dbapi/bintree.py` (local `$PKGDIR` + remote `PORTAGE_BINHOST`) | `PkgdirBinIndex` / `RemoteBinhostIndex` |
+//! | NewsSet | `portage/news.py::Item.isRelevant`/`isValid` | `FilesystemNews` in the binary crate; `MetadataNews` pins the shape |
+//! | SchedulerPolicy | `_emerge/Scheduler.py::Scheduler._run` | `LoadAwarePolicy` (`--jobs=N`) / `UnlimitedPolicy` (bare `-j`) |
+//! | Director | `actions.py::action_build` | `struct Director` below |
 //!
-//! | Slot | Real Portage | Portuale implementation |
-//! |------|--------------|--------------------------|
-//! | Solver | `_emerge/depgraph.py` (`depgraph` class) + `_emerge/resolver/backtracking.py` | `portage_repo::Resolver` (`BacktrackingResolver`, via `active_resolver()`) |
-//! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | `VdbReader` (filesystem vdb read side; live on the merge collision path through `ebuild_merge::find_owners`/`owns_path`, otherwise exercised through `Director`'s test wiring -- production depclean/unmerge still read `portage_repo` directly) / `MemoryDb` (in-memory snapshot, real `FakeVartree.py`) |
-//! | RepoCache (md5-cache backends) | `portage/cache/template.py::database` (flat_hash/sqlite/anydbm/volatile) | `Md5Cache` (flat file, real `flat_hash.py`) / `VolatileCache` (in-memory, real `volatile.py`) |
-//! | BinpkgFetch | `portage/package/ebuild/fetch.py` + `_emerge/*binpkg*` | `WgetFetcher` (real `wget` transport, shared `portage_fetch::download_via_wget` with `portuale::fetch`) + `portage_repo` remote binpkg index |
-//! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `SourceMergeEngine` (`"ebuild"` arm) / `BinaryMergeEngine` (`"binary"` arm) kind routing + the binary crate's `RealSourceEngine`/`RealBinaryEngine` adapters executing through the seam |
-//! | BinpkgIndex | `portage/dbapi/bintree.py` (local `$PKGDIR`/`Packages` + remote `PORTAGE_BINHOST` backends) | `PkgdirBinIndex` (local) / `RemoteBinhostIndex` (remote), delegating to `portage_repo::BinaryIndex` reads |
-//! | NewsSet | `portage/news.py::Item.isRelevant`/`isValid` (+ a future GLSA `@security` selector) | `FilesystemNews` in the binary crate (real evaluation over `metadata/news`, live on the `--check-news` path); `MetadataNews` stays the state-free shape pin |
-//! | SchedulerPolicy | `_emerge/Scheduler.py::Scheduler._run` (jobs + load-average gate) | `LoadAwarePolicy` (`--jobs=N`) / `UnlimitedPolicy` (bare `-j`, real `max_jobs is True`); `run_build_scheduler` runs under one of them |
-//! | Director | `actions.py::action_build` (build the depgraph from `create_depgraph_params`, walk the merge list via `Scheduler`) | `struct Director` below (resolve-then-hand-to-engine wiring; merge dispatch and news evaluation run through its slots) |
-//!
-//! Each contract documents: the real source it names, the single
-//! portuale/portage-repo implementation that satisfies it today, and the
-//! rationale for the method set (why *this* input, *this* output).
-//!
-//! ## Why separate "contract" from "implementation"
-//!
-//! A trait in the same crate as its only implementation, with no other
-//! implementor, is usually dead abstraction. It earns its place here for
-//! one specific reason: **the director needs a stable spine before the
-//! interchangeable algorithms land.** The contracts are the agreement the
-//! future algorithms must satisfy; writing them against the *existing*
-//! implementations (and pinning that in tests) makes the
-//! `portage_repo::Resolver` precedent explicit, and gives every later
-//! algorithm a fixed seam to plug into. Slots whose production path runs
-//! through the trait (`SchedulerPolicy` via `run_build_scheduler`,
-//! `MergeEngine` via the merge dispatch, `NewsSelector` via
-//! `--check-news`, `Fetcher` via `portuale::fetch::fetch_src_uri`'s
-//! candidate loop, `PackagesDb`'s `contents_files` via the merge
-//! collision walk) prove the seam carries real traffic; the rest stay
-//! swappable behind `Director`'s delegation methods until their second
-//! algorithm lands. (`Fetcher`'s transport is shared with
-//! `portuale::fetch` via `portage_fetch::download_via_wget`; Manifest
-//! verification stays at that call site, the seam's documented
-//! narrowing.)
+//! A trait with a single implementation earns its place here for one
+//! reason: **the director needs a stable spine before the interchangeable
+//! algorithms land** (see notes). Slots carrying production traffic prove
+//! the seam (`SchedulerPolicy`, `MergeEngine`, `NewsSelector`, `Fetcher`,
+//! `PackagesDb::contents_files`); the rest stay swappable behind
+//! `Director`'s delegation methods until their second algorithm lands.
 
 #![deny(missing_docs)]
 
@@ -68,23 +40,13 @@ use std::path::{Path, PathBuf};
 /// A dependency-resolution strategy: [`ResolveRequest`] in, merge-ordered
 /// [`GraphResult`] out (or a hard-error string).
 ///
-/// This is a **re-export** of `portage_repo::Resolver` — not a second,
-/// parallel definition — so there is exactly one solver seam in the
-/// workspace. The director (and every tool that wants a plan) calls
-/// [`Resolver::resolve`], and a component can be swapped by changing the
-/// request. The current and only implementation is
-/// [`portage_repo::BacktrackingResolver`], selected by
-/// [`portage_repo::active_resolver`].
+/// A **re-export** of `portage_repo::Resolver`, so there is exactly one
+/// solver seam in the workspace. The only implementation is
+/// [`portage_repo::BacktrackingResolver`], via [`portage_repo::active_resolver`].
 ///
-/// Grounding: real Portage's solver input/output boundary is
-/// `_emerge/actions.py` constructing `_emerge/depgraph.py`'s `depgraph`
-/// class from `create_depgraph_params(...)` plus the myopts/trees/settings
-/// (`depgraph.__init__`, `actions.py:1028-1030`), and reading the merged
-/// graph back out of it. `ResolveRequest` is the whole
-/// `create_depgraph_params` + user-visible options surface captured as
-/// one value; `GraphResult` is the merge list plus the notices
-/// (`SlotConflict`, autounmask changes, abi rebuilds, circular deps) real
-/// `depgraph.display_problems()` reports.
+/// Grounding: Portage's solver boundary is `_emerge/actions.py`
+/// constructing `_emerge/depgraph.py`'s `depgraph` from
+/// `create_depgraph_params(...)` and reading the merged graph back out.
 pub use portage_repo::Resolver;
 
 // ---------------------------------------------------------------------------
@@ -92,44 +54,20 @@ pub use portage_repo::Resolver;
 // ---------------------------------------------------------------------------
 
 /// An **installed-packages database**: what the director needs from
-/// "/var/db/pkg" (real `portage/dbapi/vartree.py`'s `vartree`/`vardbapi`,
-/// the "vdb" half of the assignment's "edb, vdb and all caches" — the
-/// "edb" being the same installed-db read through the `dbapi` facade) to
-/// decide ownership, reverse deps, and slot occupancy.
-///
-/// This is deliberately *not* a faithful transcription of real
-/// `portage/dbapi/vartree.py`'s `vartree` class (6,667 lines with the
-/// whole dblink merge machinery). That is the full merge-side database;
-/// the director only needs the **read side** that resolution actually
-/// consults. v1 therefore models the small, stable subset that every
-/// resolver, unmerge walk, and depclean runs over — the same subset
-/// portuale already reads ad hoc via
-/// `portage_repo::{installed_candidates, installed_refs,
-/// installed_slot_owners, protected_set_member, get_installed_…}` and
-/// `pretend.rs`'s `installed_cp_versions`.
-///
-/// An alternate implementation in the future (say, an in-memory snapshot
-/// for benchmarking, or the full `vartree` facade that also owns
-/// `unmerge`) must satisfy these three queries; the director and the
-/// resolvers are written against exactly these and need no more.
+/// `/var/db/pkg` to decide ownership, reverse deps, and slot occupancy.
+/// Portage: `portage/dbapi/vartree.py` (`vartree` read side; see notes
+/// for the v1 subset and the future-implementation rule).
 pub trait PackagesDb {
-    /// The CPVs installed under `root` for one `category/package`, in real
-    /// portage's order (highest version first — real `dbapi.cp_list`
-    /// sorts with `_cmp_cpv`). Empty when nothing of that package is
-    /// installed.
+    /// The CPVs installed under `root` for one `category/package`,
+    /// highest version first (Portage `dbapi.cp_list` order).
     fn installed_versions(&self, category: &str, package: &str) -> Vec<String>;
 
-    /// The paths one installed CPV owns: its vdb `CONTENTS`
-    /// `obj`/`sym`/`dir`/`dev`/`fif`/`bin` entries' path fields, with one
-    /// leading `/` stripped (the vdb records `${ROOT}`-absolute paths,
-    /// the seam speaks `${ROOT}`-relative ones). Empty for a CPV with
-    /// nothing recorded.
+    /// The paths one installed CPV owns: its vdb `CONTENTS` entries' path
+    /// fields, with one leading `/` stripped.
     fn contents_files(&self, category: &str, package: &str, version: &str) -> Vec<String>;
 
-    /// The packages that directly depend on `consumer_cpv`: every
-    /// installed package whose `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`
-    /// pulls in an atom that `consumer_cpv` satisfies, per
-    /// `portage_dep::match_from_list`. Empty when nothing depends on it.
+    /// The installed CPVs directly depending on `consumer_cpv` (via
+    /// `portage_dep::match_from_list` over their dep strings).
     fn reverse_dependents(
         &self,
         consumer_category: &str,
@@ -137,10 +75,8 @@ pub trait PackagesDb {
         consumer_version: &str,
     ) -> Vec<String>;
 
-    /// The single current `root` this database reads. Keeping the root
-    /// on the provider (rather than a per-call argument) makes a database
-    /// value portable as one unit — the director can hold several at
-    /// different roots without threading the root through every query.
+    /// The single current `root` this database reads, so a database
+    /// value is portable as one unit across roots.
     fn root(&self) -> &Path;
 }
 
@@ -150,41 +86,18 @@ pub trait PackagesDb {
 
 /// A **repository metadata cache backend**: a `cat/pkg-ver` →
 /// `(aux key → value)` map read from a repo's cache directory.
-///
-/// Grounding: real Portage abstracts the repo cache behind
-/// `portage/cache/template.py::database` — a key/value store where the
-/// value is the flat aux dictionary (`DEPEND`, `RDEPEND`, `KEYWORDS`,
-/// `SLOT`, `EAPI`, `IUSE`, …) and the `EAPI`/`KEYWORDS`/`SLOT`/`
-/// repository` `_pkg_str_aux_keys` are special-cased by
-/// `portdbapi.aux_get`. Different backing stores are the derived backends
-/// in `portage/cache/` (`flat_hash.py`, `sqlite.py`, `anydbm.py`,
-/// `volatile.py`). Portuale's single implementation today is the flat
-/// **md5-cache** directory read by `portage_repo::read_md5_cache` (the
-/// `metadata/md5-cache/<cat>/<pf>` files), which is exactly
-/// `flat_hash.py`'s layout.
-///
-/// The method set is the two operations the resolver actually needs
-/// (get one package's aux dict, and enumerate what a category holds) —
-/// kept minimal so a different cache backend only has to satisfy read
-/// access, never the eclass-serialization/commit machinery
-/// (`_eclasses_` reconstruction, `_mtime_`/`_md5_` validation, LCD) that
-/// real `database.__getitem__` owns but portuale's md5-cache reader
-/// already narrows out.
+/// Portage: `portage/cache/template.py::database` (see notes for the
+/// backends and the narrowed-out machinery).
 pub trait RepoCache {
     /// The full aux dictionary for one `category/package-revision`
-    /// ("pf"), or `Err` when the cache has no entry for it. Keys use the
-    /// real md5-cache uppercase spelling (`DEPEND`, `KEYWORDS`, …).
+    /// ("pf"), or `Err` when absent (`DEPEND`, `KEYWORDS`, … spelling).
     fn metadata(
         &self,
         category: &str,
         pf: &str,
     ) -> Result<std::collections::HashMap<String, String>, String>;
 
-    /// The `pf` names present for one category, in stable sort order:
-    /// the directory entries under `metadata/md5-cache/<category>` when
-    /// the repo has a usable md5-cache, else the `<pkg>-<version>` stems
-    /// of the ebuilds under `<repo>/<category>/<pkg>/` (the repo without
-    /// a cache, whose metadata must come from the ebuild itself).
+    /// The `pf` names present for one category, in stable sort order.
     fn category(&self, category: &str) -> Vec<String>;
 
     /// The repo this cache reads (`::reponame`), for provenance.
@@ -196,85 +109,38 @@ pub trait RepoCache {
 // ---------------------------------------------------------------------------
 
 /// A source that can materialize a package's files locally so a merge or
-/// build can consume them.
+/// build can consume them. The implementation is [`WgetFetcher`].
+/// Portage: `portage/package/ebuild/fetch.py` (see notes for the seam's
+/// narrowing: no Manifest verification, no `fsmirror` copy).
 ///
-/// Grounding: real `portage/package/ebuild/fetch.py` downloads one
-/// `SRC_URI` file at a time via `FETCHCOMMAND`/`RESUMECOMMAND` (real
-/// `wget` by default) into `DISTDIR`, gated on a real `FEATURES=
-/// distlocks` lock, after the offline candidate-resolution half
-/// (`flatten_src_uri` + `resolve_mirror_candidates` +
-/// `MirrorDistfiles`+`file_getsize`/Manifest)`). Portuale's
-/// implementation is [`WgetFetcher`] below, running the shared
-/// `portage_fetch::download_via_wget` transport (the same `FETCHCOMMAND`
-/// `portuale::fetch::fetch_src_uri`'s own candidate loop runs). A
-/// separate *remote binpkg* download (from a `PORTAGE_BINHOST`/
-/// `binrepos.conf` `Packages` index, the `g` bracket column) lives in
-/// `portage-repo` and is not named here — a director that needs it wraps
-/// that function behind an identical shaped trait.
-///
-/// The trait takes one already-assembled [`FetchRequest`] -- the exact
-/// resolved candidate URI the caller's candidate loop popped (a
-/// `mirror_url` for a mirror root, else the entry's literal/expanded
-/// URI), the local `dest` it must land in, and the fresh-vs-resume bit
-/// -- not raw `SRC_URI` text or a [`portage_fetch::SrcUriEntry`], so
-/// candidate assembly and the `mirror+`/`fetch+` override policy stay at
-/// the call site while the transport owns only the download.
-///
-/// Deliberate narrowing: real's Manifest digest verification and the
-/// local-`fsmirror` copy are *not* behind this seam, because both need
-/// the file's `Manifest` entry and a [`FetchRequest`] deliberately
-/// carries no Manifest context. Both shipped in `portuale::fetch`
-/// itself: `fsmirrors`/`copy_from_fsmirrors` (real `fetch.py:1503`, the
-/// `/`-rooted `custommirrors["local"]`/`GENTOO_MIRRORS` dirs copied via
-/// `shutil.copyfile` before any `FETCHCOMMAND`) and the `verify_digests`
-/// call after each candidate attempt. The fsmirror copy is a
-/// pre-download step of that one call-site sequence, not a swappable
-/// transport, so it is no second `Fetcher` implementation either;
-/// Manifest digest verification stays at the `fetch_src_uri` call site,
-/// which holds the `Manifest` entry -- see [`WgetFetcher`]. The one
-/// Manifest-derived value the transport *does* need is real's
-/// `DIGESTS` command variable (`fetch.py:1797-1803`), carried
-/// pre-formatted in [`FetchRequest::vars`] so the seam still never sees
-/// a `Manifest`.
+/// The trait takes one already-assembled [`FetchRequest`]: candidate
+/// assembly and the `mirror+`/`fetch+` override policy stay at the call
+/// site; the transport owns only the download. The Manifest-derived
+/// `DIGESTS` variable travels pre-formatted in [`FetchRequest::vars`].
 pub trait Fetcher {
-    /// Download `request.uri` to `request.dest`, continuing a non-empty
-    /// partial when `request.resume` is set (real `RESUMECOMMAND`) and
-    /// starting fresh otherwise (real `FETCHCOMMAND`). `Err` with an
-    /// explanation when the transport fails; digest verification is the
-    /// caller's, per the trait's documented narrowing.
+    /// Download `request.uri` to `request.dest` (resume when
+    /// `request.resume` is set); digest verification is the caller's.
     fn fetch(&self, request: &FetchRequest<'_>) -> Result<(), String>;
 }
 
-/// One resolved candidate download the candidate loop hands to a
-/// [`Fetcher`]: the URI it popped, the local distfile path it must land
-/// in, and whether the transport should continue an existing partial
-/// (real `RESUMECOMMAND`) or start fresh (real `FETCHCOMMAND`).
+/// One resolved candidate download for a [`Fetcher`]: the URI, the local
+/// distfile path it must land in, and whether to resume a partial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FetchRequest<'a> {
-    /// The `SRC_URI` filename this candidate serves (the `dest`
-    /// basename; carried for implementations that need the file
-    /// identity).
+    /// The `SRC_URI` filename this candidate serves (the `dest` basename).
     pub filename: &'a str,
     /// The fully resolved URI to download.
     pub uri: &'a str,
     /// The local path the download must be written to (the call site's
-    /// already-computed `distdir/<filename>`; never re-derived here, so
-    /// an implementation cannot drift from the path the caller locks and
-    /// verifies).
+    /// already-computed `distdir/<filename>`; never re-derived here).
     pub dest: &'a Path,
-    /// `true` to continue a non-empty partial at `dest` -- real
-    /// `make.globals`'s default `RESUMECOMMAND`, byte-for-byte
-    /// `FETCHCOMMAND` plus `-c` -- or `false` for `FETCHCOMMAND`.
+    /// Resume a non-empty partial at `dest` (Portage `RESUMECOMMAND`).
     pub resume: bool,
-    /// The resolved `FETCHCOMMAND`/`RESUMECOMMAND` family (real
-    /// `fetch.py:1652-1700`); `None` uses the `make.globals` defaults
-    /// (`portage_fetch::default_commands`).
+    /// The `FETCHCOMMAND`/`RESUMECOMMAND` family; `None` uses the
+    /// `make.globals` defaults (`portage_fetch::default_commands`).
     pub commands: Option<&'a portage_fetch::FetchCommands>,
-    /// Real `fetch.py:1795-1811`'s `DIGESTS` and `PORTAGE_SSH_OPTS`
-    /// substitution inputs, pre-formatted by the caller (the `DIGESTS`
-    /// string needs the file's `Manifest` entry, which the request
-    /// deliberately does not carry). `Default` leaves both unset; an
-    /// unset variable expands to empty, same as real.
+    /// Portage `DIGESTS` and `PORTAGE_SSH_OPTS` inputs, pre-formatted by
+    /// the caller; unset variables expand to empty, same as Portage.
     pub vars: portage_fetch::FetchCommandVars<'a>,
 }
 
@@ -282,16 +148,9 @@ pub struct FetchRequest<'a> {
 // MergeEngine
 // ---------------------------------------------------------------------------
 
-/// How one merge unit is built: from source (the ebuild phase chain +
-/// vdb write) or from a binary package (download + unpack + vdb write).
-///
-/// Grounding: real `_emerge/MergeListItem.py::_start` dispatches on
-/// `pkg.type_name` — a source package through the `EbuildBuild` chain,
-/// a `"binary"` one through `_emerge/Binpkg.py`, an already-installed
-/// one straight to the uninstall path. Portuale's entry carries the
-/// same bit as `portage_repo::CandidateSource::{Ebuild, Binary}`, and
-/// `emerge_getbinpkg::run_merge_plan` dispatches per resolved entry on
-/// exactly it (`Binary` → `merge_binpkg`, else → `merge_one_source_entry`).
+/// How one merge unit is built: from source or from a binary package.
+/// Portage: `_emerge/MergeListItem.py::_start` on `pkg.type_name` (same
+/// bit as `portage_repo::CandidateSource::{Ebuild, Binary}`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeKind {
     /// Build from the ebuild, then merge (`EbuildBuild` + `EbuildMerge`).
@@ -300,12 +159,9 @@ pub enum MergeKind {
     Binary,
 }
 
-/// Real `Scheduler._pkg_count` (`3rdparty/portage/lib/_emerge/
-/// Scheduler.py:110-114`, `:296-304`): the per-package `(curval, maxval)`
-/// snapshot each `MergeListItem` carries. `maxval` counts only the
-/// `operation == "merge"` entries (uninstalls and nomerge nodes are not
-/// counted); `curval` is the 1-based ordinal in start order. Every merge
-/// progress line (`Emerging`, `Installing`, `Completed`) prints it.
+/// Portage `Scheduler._pkg_count`: the per-package `(curval, maxval)`
+/// snapshot each `MergeListItem` carries (`maxval` counts only merges).
+/// Every merge progress line prints it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MergeProgress {
     /// 1-based ordinal of this unit among the run's merging entries.
@@ -315,22 +171,16 @@ pub struct MergeProgress {
 }
 
 impl MergeProgress {
-    /// A lone unit executed outside a merge run (hand-built units in
-    /// tests, single-package drivers): it is the only package, so it is
-    /// 1 of 1.
+    /// A lone unit executed outside a merge run: it is the only package,
+    /// so it is 1 of 1.
     pub fn single() -> Self {
         Self { cur: 1, max: 1 }
     }
 }
 
-/// A single unit of merge work at the boundary between the director's
-/// plan and whatever executes the copy/install: one resolved entry.
-///
-/// The director derives this from the solver's [`portage_repo::GraphEntry`]
-/// (`category`/`package` + the resolved version inside `outcome`, `slot`,
-/// `repo_name`) plus the entry's `CandidateSource`. It carries *what* to
-/// merge as plain data — never how a source merge is executed (that is
-/// the engine's business).
+/// A single unit of merge work: one resolved entry as plain data (never
+/// how a source merge is executed). Derived from the solver's
+/// [`portage_repo::GraphEntry`] plus the entry's `CandidateSource`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeUnit {
     /// The resolved target, `category/package-version`.
@@ -342,38 +192,28 @@ pub struct MergeUnit {
     /// The `${ROOT}` this unit merges into.
     pub root: PathBuf,
     /// The in-slot installed version an in-place same-slot replace must
-    /// unmerge first (`ebuild_merge::unmerge_replaced_same_slot`).
-    /// `None` when nothing is replaced.
+    /// unmerge first. `None` when nothing is replaced.
     pub replaces_same_slot: Option<String>,
-    /// A binary unit whose binpkg is not under local `$PKGDIR` may be
-    /// fetched from a binhost (`GraphEntry::remote_binary`, set by the
-    /// resolver for a binhost-sourced candidate). Source units ignore it.
+    /// A binary unit fetchable from a binhost. Source units ignore it.
     pub remote_binary: bool,
-    /// A build-id-qualified binary (`GraphEntry::build_id`): selects the
-    /// exact `$PKGDIR` file among multi-instance same-version binpkgs.
-    /// `None` means "the unqualified file". Source units ignore it.
+    /// A build-id-qualified binary: the exact `$PKGDIR` file among
+    /// multi-instance same-version binpkgs. Source units ignore it.
     pub build_id: Option<String>,
-    /// The resolved slot/sub-slot (`GraphEntry::slot`/`sub_slot`): the
-    /// source engine threads them into the build-phase env (slot-qualified
-    /// `package.env` matching). `None` behaves like the resolver's own
-    /// `unwrap_or("0")` default.
+    /// The resolved slot/sub-slot, threaded into the build-phase env.
+    /// `None` behaves like the resolver's own `unwrap_or("0")` default.
     pub slot: Option<String>,
     /// See [`MergeUnit::slot`].
     pub sub_slot: Option<String>,
-    /// The entry's resolved IUSE flags (`GraphEntry::use_flags_display`:
-    /// `(flag, enabled)` pairs): the source engine exports the enabled
-    /// ones as the build-phase `USE`. Empty means `USE=""` stands.
+    /// The entry's resolved IUSE flags: the source engine exports the
+    /// enabled ones as the build-phase `USE`. Empty means `USE=""`.
     pub use_flags: Vec<(String, bool)>,
-    /// This unit's own `(curval, maxval)` snapshot (see [`MergeProgress`]):
-    /// the merge progress lines print it. Set by whoever derives the unit
-    /// from a merge run; hand-built units keep `single()`.
+    /// This unit's `(curval, maxval)` snapshot; hand-built units keep `single()`.
     pub progress: MergeProgress,
 }
 
 impl MergeUnit {
     /// A source-build unit for `cpv` into `root` (no replace, local,
-    /// unqualified -- the common case; the remaining fields are set
-    /// directly when they differ).
+    /// unqualified -- the common case).
     pub fn source(cpv: &str, root: &Path) -> Self {
         Self {
             cpv: cpv.to_string(),
@@ -399,31 +239,24 @@ impl MergeUnit {
     }
 }
 
-/// The execution context a merge engine runs under: the two knobs real
-/// `_emerge/Scheduler.py` threads through every merge (`--jobs` parallelism
-/// and `--keep-going` failure policy), plus the paths the merge writes to.
-/// Deliberately coarse — an engine that needs finer control (build-log
-/// capture, sandbox flags, resume lists) takes it from its own
-/// constructor, not from this call.
+/// The execution context a merge engine runs under: Portage
+/// `_emerge/Scheduler.py`'s two knobs (`--jobs`, `--keep-going`) plus the
+/// paths the merge writes to. Deliberately coarse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeContext {
     /// The `${ROOT}` the engine merges into.
     pub root: PathBuf,
     /// `PORTAGE_TMPDIR`-adjacent build root (`${PORTAGE_BUILDDIR}` base).
     pub builddir: PathBuf,
-    /// Max concurrent builds (`--jobs=N`; 1 = serial, like real's
-    /// default single `EbuildBuild` at a time for the merge step).
+    /// Max concurrent builds (`--jobs=N`; 1 = serial).
     pub jobs: usize,
     /// On a unit failure, drop its transitive dependents and merge the
-    /// rest instead of aborting (real `Scheduler._calc_resume_list`).
+    /// rest instead of aborting (Portage `Scheduler._calc_resume_list`).
     pub keep_going: bool,
 }
 
-/// The coarse three-valued outcome real portage reports in the `>>>`/`!!!`
-/// merge lines, plus the resume diagnostic `--keep-going`/`--resume`
-/// needs. An engine returns one per [`MergeUnit`]; the director turns a
-/// run of these into the scheduler's report (merged count, failed list,
-/// resume list) without knowing which engine produced them.
+/// The coarse three-valued outcome Portage reports in the `>>>`/`!!!`
+/// merge lines. An engine returns one per [`MergeUnit`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeOutcome {
     /// The unit merged (vdb entry written).
@@ -436,38 +269,19 @@ pub enum MergeOutcome {
 }
 
 /// An **ebuild merge method**: whatever turns merge units into an
-/// installed system. One method call per unit; the director owns ordering
-/// (merge-list order comes from the solver's plan) and failure policy
-/// (`keep_going`), the engine owns the copy/install itself.
-///
-/// Grounding: real `_emerge/PackageMerge.py` (`PackageMerge._start`,
-/// via the `EbuildMerge.py` chain) and `vartree.py::dblink.merge()` are
-/// today's single implementation behind `MergeListItem`; portuale's is
-/// `ebuild_merge::{run_merge, run_qmerge, merge_binpkg}` driven by
-/// `emerge_build`'s serial loop and the `-jN` parallel scheduler (which
-/// keeps the vdb merge itself serial, like real portage). An alternate
-/// method in the future (a content-addressed merger, a container-based
-/// one) satisfies this one method and the director never notices.
+/// installed system. One call per unit; the director owns ordering and
+/// failure policy, the engine owns the copy/install.
+/// Portage: `_emerge/PackageMerge.py` + `vartree.py::dblink.merge()`.
 pub trait MergeEngine {
-    /// Execute `unit` under `ctx`, returning its coarse outcome. Must be
-    /// safe to call concurrently up to `ctx.jobs` for the *build* half;
-    /// the director serializes the vdb-write half (real portage merges
-    /// one at a time).
+    /// Execute `unit` under `ctx`. Safe to call concurrently up to
+    /// `ctx.jobs` for the *build* half; the vdb-write half is serialized.
     fn execute(&self, unit: &MergeUnit, ctx: &MergeContext) -> MergeOutcome;
 }
 
-/// The source-build `MergeEngine`: real `_emerge/MergeListItem.py`'s
-/// `"ebuild"` arm (`EbuildBuild`, `MergeListItem.py:87-106`).
-///
-/// The real phase chain + vdb write live in the `portuale` binary
-/// crate (`ebuild_merge::{run_merge, run_qmerge}` driven by
-/// `emerge_build`'s serial loop and the `-jN` parallel scheduler, not
-/// linkable from a library — the standing pattern); this marker exists
-/// so the *trait* is exercised and the kind dispatch is pinned. A unit
-/// of its own [`MergeKind::Source`] is declined as [`MergeOutcome::Skipped`]
-/// (never merged, never failed); a [`MergeKind::Binary`] unit is
-/// refused as [`MergeOutcome::Failed`] — the same `type_name` routing
-/// real `MergeListItem._start` performs, split across the two engines.
+/// The source-build `MergeEngine`: Portage `_emerge/MergeListItem.py`'s
+/// `"ebuild"` arm. The phase chain lives in the `portuale` binary crate;
+/// this marker pins the kind dispatch (own kind `Skipped`, other kind
+/// `Failed`).
 pub struct SourceMergeEngine;
 impl MergeEngine for SourceMergeEngine {
     fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
@@ -485,13 +299,8 @@ impl MergeEngine for SourceMergeEngine {
     }
 }
 
-/// The binary-unpack `MergeEngine`: real `_emerge/MergeListItem.py`'s
-/// `"binary"` arm (`Binpkg`, `MergeListItem.py:108+`).
-///
-/// The real download + unpack + vdb write live in the `portuale`
-/// binary crate (`emerge_getbinpkg::merge_binpkg` via
-/// `run_merge_plan`'s per-entry dispatch, not linkable from a library);
-/// this marker mirrors [`SourceMergeEngine`] for the other kind: a
+/// The binary-unpack `MergeEngine`: Portage `_emerge/MergeListItem.py`'s
+/// `"binary"` arm. Mirrors [`SourceMergeEngine`] for the other kind: a
 /// [`MergeKind::Binary`] unit is declined as [`MergeOutcome::Skipped`],
 /// a [`MergeKind::Source`] unit refused as [`MergeOutcome::Failed`].
 pub struct BinaryMergeEngine;
@@ -515,42 +324,18 @@ impl MergeEngine for BinaryMergeEngine {
 // BinpkgIndex
 // ---------------------------------------------------------------------------
 
-/// A source of **binary-package candidates**: what the director asks when
-/// it wants the built packages available for a `cat/pkg`, from whatever
-/// store backs them.
-///
-/// Grounding: real `portage/dbapi/bintree.py` models the binary-package
-/// database (a `dbapi` subclass) that real `depgraph.py` consults as the
-/// `"binary"` tree. It has exactly two real backends, both of which real
-/// `bintree` presents through the same `dbapi.cp_list`/`dbapi.aux_get`
-/// read facade:
-/// - the **local `$PKGDIR`** store — a `<pkgdir>/Packages` index, or a
-///   directory scan of each binpkg's own embedded metadata when there is
-///   no `Packages` (`bintree._populate_local`, real `packagesFile()` /
-///   `files()`); and
-/// - the **remote `PORTAGE_BINHOST`** store — a synced-`Packages` index
-///   served by a binhost (`bintree._populate`, real `packagesFile()`
-///   over the remote `Packages`), the `--getbinpkg` / `g` bracket
-///   candidate source.
-///
-/// The method set is the two reads resolution actually performs against
-/// a binary db — enumerate a cp's candidates, and pull one candidate's
-/// aux record — mirroring the `"binary"`-side of
-/// `portage_repo::CandidateSource` and the `Packages` `KEY: value` aux
-/// format `BinaryIndex` already parses. Both backends today funnel
-/// through `portage_repo::BinaryIndex`; the trait keeps them swappable
-/// (a content-addressed binpkg store, an OCI-backed one, … are each one
-/// `impl`).
+/// A source of **binary-package candidates** for a `cat/pkg`, from
+/// whatever store backs them. Both backends funnel through
+/// `portage_repo::BinaryIndex`; the trait keeps them swappable.
+/// Portage: `portage/dbapi/bintree.py` (local `$PKGDIR` + remote
+/// `PORTAGE_BINHOST`; see notes).
 pub trait BinpkgIndex {
-    /// The binary candidates for `category/package`, real
-    /// `bintree.cp_list` order (highest version first). Empty when the
-    /// store holds nothing of that cp.
+    /// The binary candidates for `category/package`, highest version
+    /// first (Portage `bintree.cp_list` order).
     fn candidates(&self, category: &str, package: &str) -> Vec<portage_repo::Candidate>;
 
-    /// One candidate's raw `Packages` aux record (`CPV`, `SLOT`, `USE`,
-    /// `SIZE`, `BUILD_TIME`, the dep strings, …) — the real
-    /// `bintree.aux_get` surface. `None` when the store has no record
-    /// for that exact CPV.
+    /// One candidate's raw `Packages` aux record -- the Portage
+    /// `bintree.aux_get` surface. `None` for an unknown exact CPV.
     fn metadata(
         &self,
         category: &str,
@@ -559,14 +344,8 @@ pub trait BinpkgIndex {
     ) -> Option<std::collections::HashMap<String, String>>;
 
     /// One candidate's aux record **plus the identity of the store that
-    /// held it** — the download-side counterpart of [`Self::metadata`].
-    /// [`PkgdirBinIndex`] returns its `$PKGDIR` path; [`RemoteBinhostIndex`]
-    /// returns the owning binrepo's section name, scanning the configured
-    /// binrepos in order with **no** local fallback (real
-    /// `bintree._populate_remote`/`_get_remote_pkg`'s fetch lookup, where
-    /// the record travels with the `sync-uri`/`verify-signature` of the
-    /// binrepo it came from — see
-    /// `portuale::emerge_getbinpkg::merge_one_binary_entry`).
+    /// held it** -- the download-side counterpart of [`Self::metadata`]
+    /// (see notes for the per-backend identity and lookup rules).
     fn metadata_with_source(
         &self,
         category: &str,
@@ -575,10 +354,8 @@ pub trait BinpkgIndex {
     ) -> Option<(String, std::collections::HashMap<String, String>)>;
 
     /// [`Self::metadata_with_source`] for the build the resolver planned
-    /// (binpkg-multi-instance, backlog #301): `Some(build_id)` must return
-    /// the record with exactly that `BUILD_ID` when the store has it. The
-    /// default ignores `build_id` and defers to `metadata_with_source`, so
-    /// single-instance backends need no change.
+    /// (binpkg-multi-instance; see notes). The default ignores
+    /// `build_id`, so single-instance backends need no change.
     fn metadata_with_source_instance(
         &self,
         category: &str,
@@ -590,9 +367,8 @@ pub trait BinpkgIndex {
         self.metadata_with_source(category, package, version)
     }
 
-    /// Where this index's candidates come from (`::reponame`, or the
-    /// local `$PKGDIR` path) for provenance in the `g` bracket / `-pv`
-    /// `::repo` decoration.
+    /// Where this index's candidates come from for the `g` bracket / `-pv`
+    /// `::repo` provenance decoration.
     fn source_name(&self) -> String;
 }
 
@@ -602,30 +378,11 @@ pub trait BinpkgIndex {
 
 /// A **news / security-item selector**: the swappable relevance decision
 /// behind `--check-news` (and a future `@security` GLSA read).
-///
-/// Grounding: real `portage/news/` defines the news-item model. The
-/// in-scope (`--check-news`) backend is `Item.isRelevant` (`news.py`,
-/// real `lib/portage/news.py`), which decides a `metadata/news/<id>`
-/// item should be shown by matching its `Display-If-Installed` atom
-/// (or `Display-If-Keyword`/`Display-If-Profile`) against the installed
-/// db; `isValid` (`news.py`) gates on `News-Item-Format`/EAPI.
-/// Portuale's single reading today is `pretend.rs::run_check_news`
-/// (`news_item_valid` + `news_item_relevant`), Rust-only in the binary
-/// crate.
-///
-/// A GLSA `@security` selector (real `_emerge/glsa.Class.glsl` /
-/// `GlsaSet`) would implement the *same* seam — match a security item
-/// against the installed set — which is why the trait is named a
-/// "news/GLSA selector" here: it is the one decision, two data sources.
-/// The GLSA half stays gated on `@security` entering scope
-/// (`scope-backlog.md` Part 3 non-goal), so `MetadataNews` below is the
-/// only implementation today.
+/// Portage: `portage/news.py` (`Item.isRelevant` / `isValid`); the GLSA
+/// half stays gated on `@security` entering scope (see notes).
 pub trait NewsSelector {
-    /// The `metadata/news/<id>` item id of every **valid, not-already-
-    /// read, currently-relevant** item under the repo/root this selector
-    /// reads (real `NewsManager.updateItems`'s unread/skip accumulation,
-    /// narrowed to the pure relevance decision). Empty when nothing is
-    /// pending.
+    /// The `metadata/news/<id>` item id of every valid, not-already-read,
+    /// currently-relevant item this selector reads.
     fn unread_ids(&self) -> Vec<String>;
 
     /// The repo whose `metadata/news` this selector reads, for the
@@ -637,29 +394,14 @@ pub trait NewsSelector {
 // SchedulerPolicy
 // ---------------------------------------------------------------------------
 
-/// A **build-scheduler dispatch policy**: when the `-jN` merge DAG is
-/// allowed to start another build.
-///
-/// Grounding: real `_emerge/Scheduler.py` — `Scheduler._run` decides per
-/// step whether to dispatch another `MergeListItem` from the forward-dep
-/// queue, bounded by `--jobs` and real `--load-average` (`_run`: never
-/// start an *additional* build while the system 1-minute load average is
-/// above the limit — the first build is always allowed so the scheduler
-/// cannot deadlock). Portuale's single reading today is
-/// `emerge_build.rs::run_build_scheduler`'s `in_flight < jobs` +
-/// `system_loadavg_1min` gate, Rust-only in the binary crate.
-///
-/// The policy is the one swappable decision: a different scheduler shape
-/// (a serial `--jobs=1`, a deadline-aware build queue, a throttle that
-/// consults a remote build farm) changes only this method, never the DAG
-/// walk that calls it.
+/// A **build-scheduler dispatch policy**: when the `-jN` merge DAG may
+/// start another build. A different scheduler shape changes only this
+/// method, never the DAG walk that calls it.
+/// Portage: `_emerge/Scheduler.py::Scheduler._run` (bounded by `--jobs`
+/// and `--load-average`; the first build is always allowed).
 pub trait SchedulerPolicy {
-    /// Whether to dispatch another build now. `running` is the count
-    /// currently in flight; `loadavg_1min` is the system 1-minute load
-    /// average read from `/proc/loadavg`. Callers guarantee `running <
-    /// [`Self::max_jobs`]` is enforced *before* consulting this, and that
-    /// at least one build is always permitted, so an implementer may
-    /// treat `running == 0` as unconditional.
+    /// Whether to dispatch another build now (`running` in flight,
+    /// `loadavg_1min` from `/proc/loadavg`); `running == 0` is unconditional.
     fn should_start(&self, running: usize, loadavg_1min: f64) -> bool;
 
     /// The hard concurrency ceiling (`--jobs=N`; 1 = serial merge).
@@ -671,26 +413,9 @@ pub trait SchedulerPolicy {
 // contracts today)
 // ---------------------------------------------------------------------------
 
-/// The filesystem `PackagesDb` implementation: a thin adapter whose
-/// queries go through `portage_repo` helpers, which reach the installed
-/// database through `portage_vdb::for_root(root)` (this crate builds no
-/// vdb path itself). One of two implementations (the other is
-/// [`MemoryDb` below); both satisfy the same three read queries.
-///
-/// Production traffic today runs through `contents_files` only: the real
-/// merge's own collision paths (`portuale::ebuild_merge::find_owners`
-/// and `owns_path`) build a `VdbReader` over the merge root and read
-/// every installed entry's file list through it. `installed_versions`
-/// and `reverse_dependents` are still exercised only by `Director`'s own
-/// wiring tests. `reverse_dependents` has no production consumer yet:
-/// depclean's reverse-dependency display is computed inside
-/// `portage_repo::depclean_cleanlist` (`DepcleanResult::kept_parents` /
-/// `unresolved`) from `(InstalledPackage, Vec<String>)` edges -- a shape
-/// this trait's flat `Vec<String>` CPV list does not model -- and
-/// `portage-repo` cannot depend on this contract crate to be handed a
-/// `VdbReader` from there. A second backend (`MemoryDb`, a snapshot) can
-/// still replace the filesystem behind every call site already written
-/// against the trait.
+/// The filesystem `PackagesDb`: queries go through `portage_repo`
+/// helpers over `portage_vdb::for_root(root)`. One of two implementations
+/// (the other is [`MemoryDb`]); see notes for the production traffic.
 pub struct VdbReader<'a> {
     root: &'a Path,
 }
@@ -704,10 +429,8 @@ impl<'a> VdbReader<'a> {
 
 impl PackagesDb for VdbReader<'_> {
     fn installed_versions(&self, category: &str, package: &str) -> Vec<String> {
-        // Real `dbapi.cp_list` sorts highest-first (`_cmp_cpv`); the vdb
-        // scan itself yields `read_dir` order, so sort here to honour the
-        // trait contract (same `vercmp` every other version ordering in
-        // portuale uses).
+        // Portage `dbapi.cp_list` sorts highest-first; the vdb scan yields
+        // `read_dir` order, so sort here to honour the trait contract.
         let mut versions = portage_repo::installed_versions(self.root, category, package);
         versions.sort_by(|a, b| portage_versions::vercmp(b, a).unwrap_or(0).cmp(&0));
         versions
@@ -733,32 +456,14 @@ impl PackagesDb for VdbReader<'_> {
     }
 }
 
-/// The in-memory `PackagesDb` implementation: the "second
-/// implementation per slot" for the installed-db slot, holding a
-/// recorded snapshot of installed packages instead of reading
-/// `<root>/var/db/pkg`.
-///
-/// Grounding: real `_emerge/FakeVartree.py::FakeVartree` — "an in-memory
-/// copy of a vartree instance that provides all the interfaces required
-/// for use by the depgraph", built so dependency calculations can run
-/// without holding a lock on the vardb. Like it, this snapshot serves
-/// resolution-shaped reads with no filesystem behind them (benchmarks,
-/// tests, and callers that already hold the facts).
-///
-/// Two deliberate narrowings, both documented on the trait. First,
-/// versions come back in the order the snapshot recorded them: callers
-/// provide highest-first (real `dbapi.cp_list` sorts with `_cmp_cpv`),
-/// the snapshot preserves. Second, reverse dependents are recorded
-/// edges, not recomputed matches: real `FakeVartree` re-resolves dep
-/// strings live, but recomputation needs `portage_dep` atom matching
-/// (a dependency this contract crate deliberately does not take), so
-/// the snapshot records each package's dependents as observed facts via
-/// [`MemoryDb::add_package`].
+/// The in-memory `PackagesDb`: the "second implementation per slot",
+/// holding a recorded snapshot instead of reading `<root>/var/db/pkg`.
+/// Portage: `_emerge/FakeVartree.py::FakeVartree` (see notes for the two
+/// deliberate narrowings).
 #[derive(Debug, Clone, Default)]
 pub struct MemoryDb {
-    /// The single `root` this snapshot stands in for (owned — unlike
-    /// [`VdbReader`'s] borrow — so a snapshot value is portable as one
-    /// unit).
+    /// The single `root` this snapshot stands in for (owned, so a
+    /// snapshot value is portable as one unit).
     root: PathBuf,
     /// `(category, package) → installed versions`, recorded order.
     versions: std::collections::HashMap<(String, String), Vec<String>>,
@@ -766,6 +471,20 @@ pub struct MemoryDb {
     contents: std::collections::HashMap<(String, String, String), Vec<String>>,
     /// `(category, package, version) → direct dependents` (CPVs).
     dependents: std::collections::HashMap<(String, String, String), Vec<String>>,
+}
+
+/// Arguments of [`MemoryDb::add_package`].
+pub struct AddPackageArgs<'a> {
+    /// The package's category.
+    pub category: &'a str,
+    /// The package name.
+    pub package: &'a str,
+    /// The installed version.
+    pub version: &'a str,
+    /// Its CONTENTS-files list.
+    pub contents_files: Vec<String>,
+    /// The CPVs that directly depend on it.
+    pub depended_on_by: Vec<String>,
 }
 
 impl MemoryDb {
@@ -779,19 +498,17 @@ impl MemoryDb {
         }
     }
 
-    /// Record one installed package: its CONTENTS-files list and the
-    /// CPVs that directly depend on it. Repeat calls for one
-    /// `category/package` accumulate versions in call order — provide
-    /// highest-first, real `dbapi.cp_list` order.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    pub fn add_package(
-        &mut self,
-        category: &str,
-        package: &str,
-        version: &str,
-        contents_files: Vec<String>,
-        depended_on_by: Vec<String>,
-    ) {
+    /// Record one installed package: CONTENTS-files plus direct
+    /// dependents. Repeat calls accumulate versions in call order --
+    /// provide highest-first, Portage `dbapi.cp_list` order.
+    pub fn add_package(&mut self, args: AddPackageArgs<'_>) {
+        let AddPackageArgs {
+            category,
+            package,
+            version,
+            contents_files,
+            depended_on_by,
+        } = args;
         self.versions
             .entry((category.to_string(), package.to_string()))
             .or_default()
@@ -852,13 +569,9 @@ impl PackagesDb for MemoryDb {
     }
 }
 
-/// The filesystem-backed `RepoCache` implementation: the flat md5-cache
-/// directory. Delegate to `portage_repo::repo_aux_metadata` (identical to
-/// real `flat_hash.py`'s layout on disk) and, when the repo has no usable
-/// cache, enumerate the category's ebuilds instead of cache-dir entries.
-/// Because `repo_aux_metadata` is the #41 decision point, this also
-/// carries the ebuild fallback (depcachedir + depend phase) for a
-/// cache-less repo.
+/// The filesystem-backed `RepoCache`: the flat md5-cache directory
+/// (Portage `flat_hash.py`'s layout), with an ebuild-tree fallback when
+/// the repo has no usable cache (see notes).
 pub struct Md5Cache<'a> {
     repo_location: &'a Path,
     repo_name: &'a str,
@@ -900,9 +613,8 @@ impl RepoCache for Md5Cache<'_> {
                 })
                 .unwrap_or_default()
         } else {
-            // No cache dir: the `<cat>/<pkg>/<pf>.ebuild` tree itself is
-            // the only source of `pf` names, so walk it and yield each
-            // ebuild file's `<pkg>-<version>` stem.
+            // No cache dir: walk the `<cat>/<pkg>/<pf>.ebuild` tree for
+            // each ebuild file's `<pkg>-<version>` stem.
             let dir = self.repo_location.join(category);
             let mut names: Vec<String> = portage_util::read_dir_entries(&dir)
                 .map(|it| {
@@ -936,21 +648,9 @@ impl RepoCache for Md5Cache<'_> {
 }
 
 /// The in-memory `RepoCache` backend: the "second implementation per
-/// slot" for the repo-cache slot, holding the same flat aux dictionaries
-/// `Md5Cache` reads off disk in an owned map instead.
-///
-/// Grounding: real `portage/cache/volatile.py::database` — the
-/// dict-backed cache backend (`self._data = {}`), which `deepcopy`s on
-/// every read and write (`__getitem__`/`_setitem`) so callers can never
-/// alias the store's internals. This port mirrors that ownership rule:
-/// `insert` clones in, [`RepoCache::metadata`] clones out. Real marks
-/// `serialize_eclasses = False` / `store_eclass_paths = False` (no
-/// eclass-string round-trip); the trait's read-only surface already
-/// narrows that machinery out, so there is nothing further to port.
-///
-/// Uses, beyond satisfying the contract's interchangeability: a
-/// pre-loaded snapshot cache for benchmarks and tests (no filesystem),
-/// and the read side of a generated cache before it is ever written.
+/// slot", holding `Md5Cache`'s flat aux dicts in an owned map.
+/// Portage: `portage/cache/volatile.py::database` (`deepcopy` on read and
+/// write: `insert` clones in, [`RepoCache::metadata`] clones out).
 #[derive(Debug, Clone, Default)]
 pub struct VolatileCache {
     /// `(category, pf) → aux dict`, the `volatile._data` dict.
@@ -981,7 +681,7 @@ impl VolatileCache {
         cache
     }
 
-    /// Store (a copy of) `metadata` under `category/pf` — real
+    /// Store (a copy of) `metadata` under `category/pf` -- Portage
     /// `volatile._setitem`'s `deepcopy` in.
     pub fn insert(
         &mut self,
@@ -1000,9 +700,8 @@ impl RepoCache for VolatileCache {
         category: &str,
         pf: &str,
     ) -> Result<std::collections::HashMap<String, String>, String> {
-        // A copy out, never a borrow of the store — real
-        // `volatile.__getitem__`'s `deepcopy`, so a caller mutating the
-        // returned dict cannot corrupt the cache.
+        // A copy out, never a borrow of the store -- Portage
+        // `volatile.__getitem__`'s `deepcopy`.
         self.entries
             .get(&(category.to_string(), pf.to_string()))
             .cloned()
@@ -1023,58 +722,32 @@ impl RepoCache for VolatileCache {
     }
 }
 
-/// The current `Fetcher`: real-src via the shared `wget` transport
-/// (`portage_fetch::download_via_wget`, the same `FETCHCOMMAND`/
-/// `RESUMECOMMAND` the `portuale::fetch::fetch_src_uri` candidate loop
-/// runs).
-///
-/// One request, one `wget` invocation: `request.resume` picks real
-/// `RESUMECOMMAND` (`wget -c`) over `FETCHCOMMAND`, and `request.dest`
-/// is written exactly as given. The already-materialized short-circuit
-/// real `fetch.py`'s own `_check_distfile` gives before ever spawning
-/// `FETCHCOMMAND` lives at the call sites (`Director::fetch`'s
-/// `distdir/<filename>` check and `fetch_src_uri`'s own
-/// `already_verified` check), not here -- only the caller can see the
-/// `Manifest` entry that verification needs.
-///
-/// Deliberate narrowing, documented on the trait: Manifest digest
-/// verification stays at the `fetch_src_uri` call site (it needs the
-/// `Manifest` entry for the file, context this seam deliberately does
-/// not pass), so a transport behind this seam downloads but never
-/// verifies on its own.
+/// The current `Fetcher`: source via the shared `wget` transport
+/// (`portage_fetch::download_via_wget`). One request, one `wget`
+/// invocation; the already-materialized short-circuit and Manifest
+/// verification live at the call sites, not here.
 pub struct WgetFetcher;
 impl Fetcher for WgetFetcher {
     fn fetch(&self, request: &FetchRequest<'_>) -> Result<(), String> {
         let distdir = request.dest.parent().unwrap_or_else(|| Path::new("."));
-        portage_fetch::download_with_commands(
-            request.uri,
-            request.dest,
-            request.resume,
+        portage_fetch::download_with_commands(portage_fetch::DownloadWithCommandsArgs {
+            uri: request.uri,
+            dest: request.dest,
+            resume: request.resume,
             distdir,
-            request.vars,
-            request
+            vars: request.vars,
+            commands: request
                 .commands
                 .unwrap_or_else(|| portage_fetch::default_commands()),
-        )
+        })
     }
 }
 
-/// The local `$PKGDIR` `BinpkgIndex` implementation: reads the binary
-/// candidates real `bintree.py` yields from the local store -- the
-/// `<pkgdir>/Packages` index, or the per-file directory scan when no
-/// `Packages` exists (`bintree._populate_local`) -- via
-/// `portage_repo::BinaryIndex`.
-///
-/// This is one of *two* real binary-package backends (the "second
-/// implementation" the director contract is built to admit): the other is
-/// [`RemoteBinhostIndex`] for a `PORTAGE_BINHOST`. Both satisfy the same
-/// [`BinpkgIndex`] methods over the same
-/// [`portage_repo::BinaryIndex`] aux records, exactly as real `bintree`
-/// presents both through one `dbapi` facade.
+/// The local `$PKGDIR` `BinpkgIndex`: Portage `bintree.py`'s local-store
+/// candidates via `portage_repo::BinaryIndex`. One of two backends (the
+/// other is [`RemoteBinhostIndex`]).
 pub struct PkgdirBinIndex<'a> {
-    /// The parsed `$PKGDIR` index the resolution already built (the
-    /// `BinaryIndex::from_pkgdir` / directory-scan value) and the `$PKGDIR`
-    /// path for provenance.
+    /// The parsed `$PKGDIR` index and path for provenance.
     pub index: &'a portage_repo::BinaryIndex,
     /// The `$PKGDIR` directory this reads, for [`BinpkgIndex::source_name`].
     pub pkgdir: &'a Path,
@@ -1105,27 +778,16 @@ impl BinpkgIndex for PkgdirBinIndex<'_> {
     }
 }
 
-/// The remote `PORTAGE_BINHOST` `BinpkgIndex` implementation: the
-/// synced-`Packages` candidate source behind `--getbinpkg` (the `g`
-/// bracket column).
-///
-/// This is the "second implementation per slot" for the binary-index
-/// slot: real `bintree` has exactly these two backends (local store /
-/// remote binhost), and the director contract admits both behind one
-/// [`BinpkgIndex`]. Delegates to
-/// `portage_repo::list_remote_binary_candidates` for the per-binrepo scan
-/// (which real `bintree._populate` + `dbapi` resolution shadow a locally
-/// present version, the `bintree.isremote` rule) and
-/// `read_binary_metadata_any` for the aux record.
+/// The remote `PORTAGE_BINHOST` `BinpkgIndex`: the synced-`Packages`
+/// source behind `--getbinpkg`. The "second implementation per slot"
+/// (see notes for the shadowing and remote-only rules).
 pub struct RemoteBinhostIndex<'a> {
-    /// The resolved binhost configuration (`binrepos.conf` / `PORTAGE_
-    /// BINHOST`), real `BinRepoConfig` values.
+    /// The resolved binhost configuration, Portage `BinRepoConfig` values.
     pub config: &'a portage_profile::Config,
-    /// The `root` whose `$PKGDIR` the sync lands in (real
-    /// `BinRepo.packages_dir(root)`).
+    /// The `root` whose `$PKGDIR` the sync lands in.
     pub root: &'a Path,
-    /// The local `$PKGDIR` index — remote candidates a local build already
-    /// provides are shadowed out (real `bintree.isremote`).
+    /// The local `$PKGDIR` index (locally-provided remotes are shadowed
+    /// out, Portage `bintree.isremote`).
     pub local: &'a portage_repo::BinaryIndex,
 }
 impl BinpkgIndex for RemoteBinhostIndex<'_> {
@@ -1144,14 +806,14 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
         package: &str,
         version: &str,
     ) -> Option<std::collections::HashMap<String, String>> {
-        portage_repo::read_binary_metadata_any(
-            self.config,
-            self.root,
-            self.local,
+        portage_repo::read_binary_metadata_any(portage_repo::ReadBinaryMetadataAnyArgs {
+            config: self.config,
+            root: self.root,
+            local: self.local,
             category,
             package,
             version,
-        )
+        })
     }
     fn metadata_with_source(
         &self,
@@ -1159,11 +821,8 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
         package: &str,
         version: &str,
     ) -> Option<(String, std::collections::HashMap<String, String>)> {
-        // Remote-only, binrepos in configuration order, first CPV hit
-        // wins -- exactly `portage_repo::find_remote_binpkg`'s scan
-        // (which this replaces on the merge path), with the owning
-        // binrepo's section name carried alongside the record so the
-        // caller can recover its `sync-uri`/`verify-signature`.
+        // Remote-only, binrepos in order, first CPV hit wins, carrying
+        // the owning binrepo's name for its `sync-uri`.
         self.metadata_with_source_instance(category, package, version, None)
     }
     fn metadata_with_source_instance(
@@ -1173,14 +832,14 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
         version: &str,
         build_id: Option<&str>,
     ) -> Option<(String, std::collections::HashMap<String, String>)> {
-        portage_repo::find_remote_binpkg_instance(
-            &self.config.binrepos,
-            self.root,
+        portage_repo::find_remote_binpkg_instance(portage_repo::FindRemoteBinpkgInstanceArgs {
+            binrepos: &self.config.binrepos,
+            root: self.root,
             category,
             package,
             version,
             build_id,
-        )
+        })
         .map(|(binrepo, m)| (binrepo.name.clone(), m))
     }
     fn source_name(&self) -> String {
@@ -1193,24 +852,15 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
     }
 }
 
-/// The current `NewsSelector`: real `--check-news` relevance over the
-/// repo's `metadata/news/<id>/<id>.en.txt` items, gated by
-/// `News-Item-Format`/EAPI validity + `Display-If-Installed` /
-/// `Display-If-Profile` / `Display-If-Keyword` matching against the
-/// installed db, the profile path and `ARCH` (real `portage/news.py::Item.isRelevant` /
-/// `isValid`; portuale's `pretend.rs::news_item_valid` /
-/// `news_item_relevant`).
-///
-/// The real evaluation lives in the `portuale` binary crate's
-/// `run_check_news` (not linkable from a library, the standing pattern);
-/// this marker exists so the *trait* is exercised and the seam stays
-/// pinned. A GLSA `@security` selector (real glsa-check / `GlsaSet`)
-/// would satisfy the same trait once `@security` enters scope — it is
-/// currently a `scope-backlog.md` Part 3 non-goal.
+/// The current `NewsSelector`: Portage `--check-news` relevance over the
+/// repo's `metadata/news` items. The evaluation lives in the `portuale`
+/// binary crate's `run_check_news` (not linkable from a library); this
+/// marker pins the seam. A GLSA `@security` selector would satisfy the
+/// same trait once `@security` enters scope.
 pub struct MetadataNews;
 impl NewsSelector for MetadataNews {
     fn unread_ids(&self) -> Vec<String> {
-        // The real accumulation lives in `pretend.rs::run_check_news`
+        // The accumulation lives in `pretend.rs::run_check_news`
         // (binary crate). A no-state marker: the seam, not the algorithm.
         Vec::new()
     }
@@ -1221,13 +871,10 @@ impl NewsSelector for MetadataNews {
     }
 }
 
-/// The capped-jobs `SchedulerPolicy`: real `Scheduler._run`'s per-step
-/// gate -- start another build while `running < jobs` and the system
-/// 1-minute load average is under the `--load-average` ceiling (never
-/// gating the first build, so the DAG cannot deadlock). One of two
-/// implementations (the other is [`UnlimitedPolicy`], real's
-/// `max_jobs is True` branch); `run_build_scheduler` runs under one of
-/// them, chosen by the `--jobs` spelling.
+/// The capped-jobs `SchedulerPolicy`: start another build while
+/// `running < jobs` and under the `--load-average` ceiling (never gating
+/// the first build). One of two implementations (the other is
+/// [`UnlimitedPolicy`]); `run_build_scheduler` runs under one of them.
 #[derive(Debug, Clone, Copy)]
 pub struct LoadAwarePolicy {
     /// `--jobs` ceiling (`max_jobs`).
@@ -1244,9 +891,8 @@ impl LoadAwarePolicy {
 }
 impl Default for LoadAwarePolicy {
     fn default() -> Self {
-        // Real portage's default scheduler has no `--jobs`/`--load-average`
-        // bound (bare `-j` = unlimited); the portable default is serial
-        // and ungated.
+        // Portage's default scheduler is unbounded (bare `-j`); the
+        // portable default here is serial and ungated.
         Self {
             jobs: 1,
             load_average: None,
@@ -1255,8 +901,7 @@ impl Default for LoadAwarePolicy {
 }
 impl SchedulerPolicy for LoadAwarePolicy {
     fn should_start(&self, running: usize, loadavg_1min: f64) -> bool {
-        // The first build is always allowed (real `Scheduler._run` never
-        // gates `in_flight == 0`), and additional ones only while under
+        // The first build is always allowed; additional ones only under
         // the ceilings.
         running == 0
             || (running < self.jobs && self.load_average.is_none_or(|la| loadavg_1min <= la))
@@ -1266,17 +911,9 @@ impl SchedulerPolicy for LoadAwarePolicy {
     }
 }
 
-/// The unlimited-jobs `SchedulerPolicy`: real `Scheduler` with
-/// `max_jobs is True` (a bare `--jobs`/`-j`, which portuale maps to
-/// `usize::MAX`) -- no concurrency ceiling at all, while the
-/// `--load-average` gate still holds off *additional* builds (real
-/// `PollScheduler._can_add_job` applies the load check whenever
-/// `max_jobs is True or max_jobs > 1`).
-///
-/// This is the scheduler slot's second implementation: the same two
-/// methods as [`LoadAwarePolicy`], the capped-vs-uncapped shapes real
-/// itself branches on, and the policy `run_build_scheduler` runs under
-/// for a bare `-j`.
+/// The unlimited-jobs `SchedulerPolicy` (Portage's `max_jobs is True`,
+/// a bare `-j`): no concurrency ceiling; `--load-average` still gates
+/// *additional* builds. The scheduler slot's second implementation.
 #[derive(Debug, Clone, Copy)]
 pub struct UnlimitedPolicy {
     /// `--load-average` ceiling; `None` disables load gating.
@@ -1305,26 +942,10 @@ impl SchedulerPolicy for UnlimitedPolicy {
 
 /// The `mrg` **director**: one solver, one installed-db, one repo cache,
 /// one fetcher, one merge engine, one binary-package index, one news
-/// selector, one scheduler policy — held together, never implemented here.
-///
-/// Grounding: real `actions.py::action_build` builds the depgraph from
-/// `create_depgraph_params(...)` (`actions.py:268`), resolves it, and
-/// hands the merge list to `_emerge/Scheduler.py` (`actions.py:679`),
-/// which walks it (fetch → build → merge per `MergeListItem`,
-/// `--keep-going` resume on failure). The director
-/// is that orchestration shape with every algorithm behind a trait: a
-/// different solver (`portage_solver`, `pubgrub`, `resolvo`), a different
-/// database or cache backend, or a different merge method is one
-/// constructor argument, never a call-site change.
-///
-/// Deliberate v1 narrowness: the fetch→build→merge walk's per-entry
-/// dispatch and the `--check-news` unread computation run through these
-/// slots (`emerge_getbinpkg::run_merge_plan` executes each entry's
-/// `MergeUnit` via its engine; `pretend.rs::run_check_news` reads each
-/// repo's unread ids via its news selector); the `-jN` DAG walk itself
-/// stays in `emerge_build.rs` under the scheduler policy, and the `mrg`
-/// applet still calls `pretend::run` directly until a second algorithm
-/// actually lands in one of the remaining read slots.
+/// selector, one scheduler policy -- held together, never implemented here.
+/// Portage: `actions.py::action_build` (resolve, then hand the merge list
+/// to the scheduler). V1 narrowness (see notes): the `-jN` DAG walk stays
+/// in `emerge_build.rs`; the `mrg` applet still calls `pretend::run` directly.
 pub struct Director<S, D, C, F, M, B, N, P> {
     /// Dependency-resolution strategy (the only slot used by `plan()`).
     pub solver: S,
@@ -1348,8 +969,7 @@ impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
 where
     S: Resolver,
 {
-    /// Resolve `req` through the director's solver: [`ResolveRequest`] in,
-    /// merge-ordered [`portage_repo::GraphResult`] out. Every later stage
+    /// Resolve `req` through the director's solver. Every later stage
     /// (fetch, merge) consumes that plan; none of them re-resolves.
     pub fn plan(
         &self,
@@ -1364,7 +984,7 @@ where
     D: PackagesDb,
 {
     /// The installed versions of `category/package` through the
-    /// director's installed-db (real `vartree` read side).
+    /// director's installed-db.
     pub fn installed_versions(&self, category: &str, package: &str) -> Vec<String> {
         self.packages_db.installed_versions(category, package)
     }
@@ -1406,11 +1026,10 @@ impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
 where
     F: Fetcher,
 {
-    /// Materialize one `SRC_URI` file through the director's fetcher:
-    /// an already-materialized `distdir/<filename>` is returned as-is
-    /// (real `fetch.py`'s own `_check_distfile` short-circuit), else the
-    /// entry's own `uri` is downloaded fresh (non-resume -- the director
-    /// holds no candidate loop and so no partial-file state).
+    /// Materialize one `SRC_URI` file through the director's fetcher: an
+    /// already-materialized `distdir/<filename>` is returned as-is
+    /// (Portage `_check_distfile`), else the entry's `uri` is downloaded
+    /// fresh (non-resume).
     pub fn fetch(
         &self,
         entry: &portage_fetch::SrcUriEntry,
@@ -1504,18 +1123,27 @@ mod tests {
         TempDir::new(prefix).keep()
     }
 
+    /// Arguments of [`write_vdb_entry`].
+    struct WriteVdbEntryArgs<'a> {
+        root: &'a Path,
+        category: &'a str,
+        package: &'a str,
+        version: &'a str,
+        slot: &'a str,
+        files: &'a [(&'a str, &'a str)],
+    }
+
     /// Write one vdb entry: `<root>/var/db/pkg/<cat>/<pkg>-<ver>/` with
-    /// the given `SLOT` plus `(filename, content)` files (`CONTENTS`,
-    /// `USE`, `RDEPEND`, …).
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn write_vdb_entry(
-        root: &Path,
-        category: &str,
-        package: &str,
-        version: &str,
-        slot: &str,
-        files: &[(&str, &str)],
-    ) {
+    /// `SLOT` plus the given `(filename, content)` files.
+    fn write_vdb_entry(args: WriteVdbEntryArgs<'_>) {
+        let WriteVdbEntryArgs {
+            root,
+            category,
+            package,
+            version,
+            slot,
+            files,
+        } = args;
         let dir = root
             .join("var/db/pkg")
             .join(category)
@@ -1527,28 +1155,23 @@ mod tests {
         }
     }
 
-    /// `mrg-director` must never regress to a second, parallel solver
-    /// seam: the director's `Resolver` IS `portage_repo::Resolver`, and
-    /// the runtime-selection hook is `active_resolver`. (This pins the
-    /// *seam*; actual resolution is exercised by portage-repo's own real,
-    /// fixture-driven suite, never here.)
+    /// The director's `Resolver` IS `portage_repo::Resolver` (never a
+    /// second, parallel seam); the runtime hook is `active_resolver`.
     #[test]
     fn resolver_seam_is_the_single_re_export() {
         let _solver: Box<dyn Resolver> = portage_repo::active_resolver();
     }
 
-    /// `Resolver::resolve` returns portage-repo's plan type (the merge
-    /// list + notices), so an alternate solver must speak real
-    /// portage-facing data, never a director-internal shape.
+    /// `Resolver::resolve` returns portage-repo's plan type, so an
+    /// alternate solver must speak Portage-facing data.
     #[test]
     fn resolver_speaks_graph_result() {
         let _plan: &dyn Fn(&ResolveRequest) -> Result<GraphResult, portage_repo::Error> =
             &|_req| Err(portage_repo::Error::Detail("inert pin".into()));
     }
 
-    /// `PackagesDb` models the three read queries the resolver actually
-    /// needs; a fake suffices to prove the director never reaches for
-    /// per-package internals beyond these.
+    /// `PackagesDb` is three read queries plus root; a fake proves the
+    /// director never reaches past them.
     #[test]
     fn packages_db_is_three_queries_plus_root() {
         let db = FakeDb {
@@ -1566,33 +1189,28 @@ mod tests {
         assert_eq!(db.root().to_str(), Some("/root"));
     }
 
-    /// `MemoryDb` is the installed-db slot's second implementation (real
-    /// `_emerge/FakeVartree.py`'s in-memory vartree copy): the same three
-    /// read queries as the filesystem vdb reader, served from a recorded
-    /// snapshot. The shape pins: versions come back in recorded
-    /// (caller-provided highest-first) order across repeat `add_package`
-    /// calls, contents and reverse edges read back per version, unknown
-    /// packages/versions read as empty (never a panic), and the snapshot
-    /// owns its root.
+    /// `MemoryDb` is the installed-db slot's second implementation
+    /// (Portage `_emerge/FakeVartree.py`): recorded order, per-version
+    /// contents/edges, unknown reads as empty.
     #[test]
     fn packages_db_memory_is_the_snapshot_second_backend() {
         let mut db = MemoryDb::new(Path::new("/root"));
         assert_eq!(db.root().to_str(), Some("/root"));
         assert!(db.installed_versions("dev-libs", "example").is_empty());
-        db.add_package(
-            "dev-libs",
-            "example",
-            "2.0",
-            vec!["usr/lib/libx.so.2".to_string()],
-            vec!["app/other-1.0".to_string()],
-        );
-        db.add_package(
-            "dev-libs",
-            "example",
-            "1.0",
-            vec!["usr/lib/libx.a".to_string()],
-            Vec::new(),
-        );
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "example",
+            version: "2.0",
+            contents_files: vec!["usr/lib/libx.so.2".to_string()],
+            depended_on_by: vec!["app/other-1.0".to_string()],
+        });
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "example",
+            version: "1.0",
+            contents_files: vec!["usr/lib/libx.a".to_string()],
+            depended_on_by: Vec::new(),
+        });
         assert_eq!(
             db.installed_versions("dev-libs", "example"),
             vec!["2.0", "1.0"]
@@ -1613,24 +1231,18 @@ mod tests {
         assert!(db.installed_versions("sys-apps", "missing").is_empty());
     }
 
-    /// `VdbReader` is the installed-db slot's live implementation: the
-    /// same three reads as `MemoryDb`, served from a real
-    /// `<root>/var/db/pkg` tree. Versions come out highest-first (real
-    /// `dbapi.cp_list` order), CONTENTS paths are the owned
-    /// `obj`/`sym`/`dir` entries, reverse dependents are recomputed atom
-    /// matches (a `dev-libs/consumer` whose vdb `RDEPEND` names
-    /// `dev-libs/example` shows up for `example`, never for itself), and
-    /// unknown packages/versions read as empty, never a panic.
+    /// `VdbReader` serves the same three reads from a `<root>/var/db/pkg`
+    /// tree; unknown reads as empty.
     #[test]
     fn packages_db_vdb_reader_reads_a_real_vdb_tree() {
         let root = tempdir("mrg_director_vdb");
-        write_vdb_entry(
-            &root,
-            "dev-libs",
-            "example",
-            "1.0",
-            "0",
-            &[
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "example",
+            version: "1.0",
+            slot: "0",
+            files: &[
                 (
                     "CONTENTS",
                     "obj /usr/lib/libx.a abc 123\nsym /usr/lib/libx.so -> libx.a 123\ndir /usr/lib\n",
@@ -1638,27 +1250,27 @@ mod tests {
                 ("USE", ""),
                 ("RDEPEND", ""),
             ],
-        );
-        write_vdb_entry(
-            &root,
-            "dev-libs",
-            "example",
-            "2.0",
-            "0",
-            &[("CONTENTS", "obj /usr/lib/libx.so.2 def 456\n")],
-        );
-        write_vdb_entry(
-            &root,
-            "dev-libs",
-            "consumer",
-            "1.0",
-            "0",
-            &[
+        });
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "example",
+            version: "2.0",
+            slot: "0",
+            files: &[("CONTENTS", "obj /usr/lib/libx.so.2 def 456\n")],
+        });
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "consumer",
+            version: "1.0",
+            slot: "0",
+            files: &[
                 ("CONTENTS", "obj /usr/lib/libc.a 000 1\n"),
                 ("USE", ""),
                 ("RDEPEND", "dev-libs/example"),
             ],
-        );
+        });
         let db = VdbReader::new(&root);
         assert_eq!(
             db.root().to_str(),
@@ -1704,11 +1316,8 @@ mod tests {
         }
     }
 
-    /// `RepoCache` reads one aux dict per package + lists a category;
-    /// different backends (flat / sqlite / volatile) are all *read-only*
-    /// views, so writes are intentionally out of contract. A non-existent
-    /// repo location reads as an empty cache (no panic), like real
-    /// `flat_hash` on a missing dir.
+    /// `RepoCache` is read-only: one aux dict per package plus a category
+    /// listing. A non-existent location reads as empty (see notes).
     #[test]
     fn repo_cache_is_read_only_query_by_key() {
         let cache = Md5Cache {
@@ -1720,12 +1329,8 @@ mod tests {
         assert!(cache.metadata("dev-libs", "example-1.0").is_err());
     }
 
-    /// `Md5Cache::category` names both shapes: a repo with a usable
-    /// `metadata/md5-cache` lists the cache-dir entries (no `.`), while a
-    /// repo without one lists the `<cat>/<pkg>/<pf>.ebuild` file stems --
-    /// the cache-less tree whose metadata C2 must generate from the
-    /// ebuild. A stray non-ebuild file is not a pf, and the stems come
-    /// out deduped + sorted.
+    /// `Md5Cache::category` covers both shapes: cache-dir entries, else
+    /// `<pf>.ebuild` file stems (deduped, sorted, non-ebuilds excluded).
     #[test]
     fn md5_cache_category_lists_cache_entries_or_ebuild_stems() {
         let bare = tempdir("mrg_director_bare_repo");
@@ -1758,12 +1363,8 @@ mod tests {
     }
 
     /// `VolatileCache` is the repo-cache slot's second implementation
-    /// (real `cache/volatile.py`'s dict backend): the same three reads as
-    /// `Md5Cache`, served from an owned in-memory map. The shape pins:
-    /// pre-loaded entries read back whole, `category` lists in stable
-    /// sort order, a missing entry is `Err` (never a panic), and the
-    /// returned dict is a copy — mutating it leaves the store intact
-    /// (real `volatile.__getitem__`'s `deepcopy`).
+    /// (Portage `cache/volatile.py`): sorted order, missing reads as
+    /// `Err`, reads return copies.
     #[test]
     fn repo_cache_volatile_is_the_in_memory_second_backend() {
         let aux = std::collections::HashMap::from([
@@ -1800,15 +1401,8 @@ mod tests {
         assert_eq!(empty.category("dev-libs"), vec!["c-3.0"]);
     }
 
-    /// `Fetcher::fetch` takes one already-assembled [`FetchRequest`]
-    /// (resolved candidate URI + local `dest` + fresh-vs-resume) and
-    /// downloads it through the shared transport; consuming the resolved
-    /// request keeps candidate assembly and Manifest verification at the
-    /// caller (`portuale::fetch::fetch_src_uri`'s candidate loop, where
-    /// the `has_partial` bit and the `Manifest` entry live -- the
-    /// already-materialized short-circuit is the caller's too). The
-    /// transport shells out to real `wget` and is live-tested in
-    /// `portuale::fetch`, not here -- this only pins the seam's shape.
+    /// `Fetcher::fetch` takes one resolved [`FetchRequest`] (live-tested
+    /// in `portuale::fetch`, not here -- this pins the seam's shape).
     #[test]
     fn fetcher_takes_one_resolved_candidate_request() {
         let fetcher = WgetFetcher;
@@ -1823,15 +1417,12 @@ mod tests {
             vars: Default::default(),
         };
         // Unfetchable host, no partial: the shared `wget` transport
-        // fails, and the seam reports it (no panic, no half-written file
-        // left behind -- the fresh-fetch cleanup is the shared
-        // transport's own).
+        // fails, and the seam reports it.
         assert!(fetcher.fetch(&request).is_err());
         assert!(!dest.exists());
 
-        // `resume` rides the same request (real `RESUMECOMMAND` vs
-        // `FETCHCOMMAND`): the candidate loop's partial-file bit is
-        // carried into the transport, not re-derived inside the seam.
+        // `resume` rides the same request (Portage `RESUMECOMMAND` vs
+        // `FETCHCOMMAND`).
         assert!(
             fetcher
                 .fetch(&FetchRequest {
@@ -1851,12 +1442,8 @@ mod tests {
         assert_eq!(unit.kind, MergeKind::Binary);
     }
 
-    /// `MergeEngine::execute` takes one [`MergeUnit`] (resolved cpv +
-    /// source/binary kind + same-slot replace) under a [`MergeContext`]
-    /// (`--jobs`/`--keep-going` + paths) and returns a coarse
-    /// [`MergeOutcome`]. A fake engine suffices to pin the seam: the
-    /// director never reaches past these three types into engine
-    /// internals.
+    /// `MergeEngine::execute` takes one [`MergeUnit`] under a
+    /// [`MergeContext`]; a fake engine pins the seam.
     #[test]
     fn merge_engine_executes_one_unit_to_one_outcome() {
         struct FakeEngine;
@@ -1910,13 +1497,8 @@ mod tests {
         ));
     }
 
-    /// The merge-engine slot's two implementations split on the unit
-    /// kind, exactly real `MergeListItem._start`'s `type_name` dispatch
-    /// (`"ebuild"` → `EbuildBuild`, `"binary"` → `Binpkg`): each engine
-    /// declines its own kind as [`MergeOutcome::Skipped`] (the real
-    /// execution lives in the `portuale` binary crate, the standing
-    /// pattern) and refuses the other kind as [`MergeOutcome::Failed`].
-    /// The shape pins the routing, not the merge itself.
+    /// The two engines split on the unit kind, exactly Portage
+    /// `MergeListItem._start`'s dispatch (own kind `Skipped`, other `Failed`).
     #[test]
     fn merge_engine_source_and_binary_split_by_unit_kind() {
         let ctx = MergeContext {
@@ -1970,16 +1552,8 @@ mod tests {
     }
 
     /// The [`Director`] holds one component per slot and `plan()` runs
-    /// through its solver: swapping the solver swaps the plan, and the
-    /// other seven slots ride along untouched. This pins the composition
-    /// *shape* — field access for the carried slots, plus a bound
-    /// assertion that the wired solver really is a [`Resolver`] (which is
-    /// exactly what `plan()`'s `S: Resolver` bound requires). It
-    /// deliberately never *calls* `plan`: building a real
-    /// `ResolveRequest` (a 40+-field value including a full profile
-    /// `Config`) is portage-repo's own fixture-driven business, never a
-    /// contract-shape test's. The delegation body itself is one line
-    /// (`self.solver.resolve(req)`), left to inspection.
+    /// through its solver; it never *calls* `plan` here (building a
+    /// `ResolveRequest` is portage-repo's business, not a shape test's).
     #[test]
     fn director_holds_eight_slots_and_plans_through_its_solver() {
         struct FakeSolver;
@@ -2032,13 +1606,8 @@ mod tests {
         assert_resolver::<FakeSolver>();
     }
 
-    /// Every `Director` delegation method routes through its slot: the
-    /// installed-db reads, the repo-cache reads, the fetch, the merge
-    /// execution, the binpkg-index reads, the news ids, and the scheduler
-    /// gates all answer from the held components. This pins that the
-    /// director is live wiring, not a field bag -- the production paths
-    /// (`run_merge_plan`, `run_check_news`, the unmerge reads) call these
-    /// same methods rather than reaching past the director.
+    /// Every `Director` delegation method routes through its slot; this
+    /// pins that the director is live wiring, not a field bag.
     #[test]
     fn director_delegates_every_stage_through_its_slots() {
         struct FakeSolver;
@@ -2077,13 +1646,13 @@ mod tests {
         ])];
         let idx = portage_repo::BinaryIndex::from_entries(entries);
         let mut db = MemoryDb::new(Path::new("/root"));
-        db.add_package(
-            "dev-libs",
-            "wired",
-            "1.0",
-            vec!["usr/lib/libw.a".to_string()],
-            vec!["app/dep-1.0".to_string()],
-        );
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "wired",
+            version: "1.0",
+            contents_files: vec!["usr/lib/libw.a".to_string()],
+            depended_on_by: vec!["app/dep-1.0".to_string()],
+        });
         type Wiring = Director<
             FakeSolver,
             MemoryDb,
@@ -2180,13 +1749,8 @@ mod tests {
         );
     }
 
-    /// `BinpkgIndex` admits the two real binary backends (`bintree.py`'s
-    /// local `$PKGDIR` store and its remote `PORTAGE_BINHOST`), both
-    /// satisfying the same three methods over the same aux records — the
-    /// "second implementation per slot" the director's binary-index slot
-    /// is built for. The shape pins: candidates come out as real
-    /// `portage_repo::Candidate`s, metadata as the raw `Packages` aux
-    /// dict, and the source is named for the `g` bracket provenance.
+    /// `BinpkgIndex` admits both Portage backends (local `$PKGDIR` and
+    /// remote `PORTAGE_BINHOST`) behind the same methods (see notes).
     #[test]
     fn binpkg_index_admits_both_local_and_remote_backends() {
         let entries = vec![std::collections::HashMap::from([
@@ -2215,9 +1779,8 @@ mod tests {
             Some("flag1".to_string())
         );
         assert!(local.metadata("dev-libs", "localbin", "9.9").is_none());
-        // `metadata_with_source` carries the store identity alongside
-        // the record (H3's download-side lookup): the local backend
-        // names its `$PKGDIR`.
+        // `metadata_with_source` carries the store identity (the local
+        // backend names its `$PKGDIR`).
         assert_eq!(
             local
                 .metadata_with_source("dev-libs", "localbin", "1.0")
@@ -2230,13 +1793,9 @@ mod tests {
                 .is_none()
         );
 
-        // The remote backend is genuinely a second implementation: it
-        // delegates to the whole-binrepos scan (`bintree.isremote`
-        // shadowing included) and metadata-any. With no binrepos
-        // configured the *candidate* scan is empty (nothing remote), but
-        // `read_binary_metadata_any` still falls back to the local store
-        // for the aux record — exactly real `bintree`'s local-wins read
-        // path. Same seam either way, no panic.
+        // The remote backend delegates to the whole-binrepos scan; with
+        // no binrepos the *candidate* scan is empty but metadata still
+        // falls back to the local store (Portage's local-wins read path).
         let config = portage_profile::Config {
             ..Default::default()
         };
@@ -2254,10 +1813,8 @@ mod tests {
         );
         assert!(remote.metadata("dev-libs", "localbin", "9.9").is_none());
         assert_eq!(remote.source_name(), "");
-        // The download-side lookup is remote-**only** (real
-        // `bintree._populate_remote` + `_get_remote_pkg`): it must not
-        // fall back to the local store the way `metadata`'s `aux_get`
-        // read does, so with no binrepos configured it reports nothing.
+        // The download-side lookup is remote-**only**: it must not fall
+        // back to the local store, so with no binrepos it reports nothing.
         assert!(
             remote
                 .metadata_with_source("dev-libs", "localbin", "1.0")
@@ -2265,12 +1822,8 @@ mod tests {
         );
     }
 
-    /// `NewsSelector` is the pure relevance seam behind `--check-news`:
-    /// the director asks for the valid, relevant, unread item ids and the
-    /// repo owning them; a GLSA `@security` selector would satisfy the
-    /// same two methods (still a Part 3 non-goal). The marker is
-    /// state-free — the real evaluation is `pretend.rs`'s, live-tested
-    /// there, this only pins the shape.
+    /// `NewsSelector` is the pure relevance seam behind `--check-news`.
+    /// The marker is state-free; the actual evaluation is `pretend.rs`'s.
     #[test]
     fn news_selector_is_unread_ids_plus_repo() {
         struct FakeNews;
@@ -2288,12 +1841,8 @@ mod tests {
         assert!(MetadataNews.unread_ids().is_empty());
     }
 
-    /// `SchedulerPolicy` is the one decision the `-jN` DAG asks: start
-    /// another build now? `should_start` always admits the first build
-    /// (so the scheduler can't deadlock, real `Scheduler._run`), then caps
-    /// by `--jobs` and `--load-average`. The marker implements the real
-    /// gate inline — a different policy (serial, deadline-aware, remote
-    /// build-farm) is one `impl` of the same two methods.
+    /// `SchedulerPolicy` is the `-jN` DAG's one decision: the first build
+    /// is always admitted, then `--jobs`/`--load-average` cap the rest.
     #[test]
     fn scheduler_policy_gates_by_jobs_and_load_average() {
         let serial = LoadAwarePolicy::default();
@@ -2312,13 +1861,8 @@ mod tests {
         assert!(capped.should_start(0, 99.0));
     }
 
-    /// `UnlimitedPolicy` is the scheduler slot's second implementation
-    /// (real's `max_jobs is True`, a bare `--jobs`/`-j`): no concurrency
-    /// ceiling (`max_jobs` is `usize::MAX`, the value the CLI maps bare
-    /// `-j` to), while the `--load-average` gate still holds off
-    /// *additional* builds exactly like the capped policy (real
-    /// `PollScheduler._can_add_job` load-checks whenever `max_jobs is
-    /// True or max_jobs > 1`).
+    /// `UnlimitedPolicy` (Portage's `max_jobs is True`, bare `-j`): no
+    /// ceiling; `--load-average` still gates *additional* builds.
     #[test]
     fn scheduler_policy_unlimited_never_caps_but_still_load_gates() {
         let unlimited = UnlimitedPolicy::new(Some(2.0));

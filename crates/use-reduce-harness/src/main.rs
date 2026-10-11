@@ -1,15 +1,11 @@
-// Neutral CLI test-harness binary for portuale's use_reduce(flat=True)
-// (see LLM/agent-context.md and portage-use-reduce/src/lib.rs's doc comment). Same
-// argv/output contract as python/use_reduce_harness.py.
+// Test-harness CLI for `use_reduce(flat=True)`: same argv/output contract
+// as the Python harness.
 //
 // Usage:
 //   use-reduce-harness reduce <mode> <uselist> <token...>
 //       mode: "normal" | "matchall" | "matchnone"
 //       uselist: comma-separated enabled flags, or "-" for none
-//       token...: the dep string's whitespace-separated tokens (the CLI
-//                 shell already splits argv on whitespace for us, which is
-//                 exactly what use_reduce's own depstr.split() first step
-//                 does internally)
+//       token...: the dep string's whitespace-separated tokens
 //     -> comma-joined flattened tokens (possibly empty), or "ERROR"
 //   use-reduce-harness batch
 //     -> reads "reduce <mode> <uselist> <token...>" lines from stdin, one

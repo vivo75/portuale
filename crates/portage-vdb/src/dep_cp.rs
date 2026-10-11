@@ -1,29 +1,20 @@
 //! `dep_cp`: the conservative `category/package` extraction behind the
 //! `dep_atom` prefilter index, shared by the sqlite and redb writers.
-//! Moved out of `sqlite/write.rs` unchanged (S5.3).
 
 /// The `category/package` of one whitespace-separated token of a `*DEPEND`
 /// string, or `None` when the token is not clearly an atom.
 ///
-/// `dep_atom` is a **prefilter index**: it holds a superset of the real
-/// dependency atoms, found without `portage-dep` (module doc, item 8). The
-/// caller of `reverse_dependents` still does the real `USE` reduction and
-/// atom match. A false positive is harmless, a false negative loses a
-/// dependent, so the routine skips a token only when it cannot be a
-/// `category/package` (or, for the version-stripping, when unsure). The rule:
+/// A prefilter: a false positive is harmless, a false negative loses a
+/// dependent, so a token is skipped only when it cannot be a
+/// `category/package`. The rule:
 ///
-/// - skip the structure tokens `(`, `)`, `||`, `^^`, `??` and anything
-///   ending in `?` (a `USE` conditional);
-/// - strip a leading `!!` or `!`, then one version operator (`<=`, `>=`,
-///   `<`, `>`, `=`, `~`);
-/// - cut at the first `[` (`USE` dependency) or `:` (slot, `::repo`);
-/// - the rest must be `category/name[-version]`: a category of
-///   `[A-Za-z0-9+_.-]`, a name of `[A-Za-z0-9+_-]` that does not start with
-///   `-`, exactly one `/`;
-/// - with an operator, the name must end in `-<version>[-r<N>][*]`
-///   (digits and dots, an optional lowercase letter, `_alpha|beta|pre|rc|p`
-///   suffixes), which is stripped; without one, a name that looks like it
-///   ends in a version is skipped.
+/// - skip structure tokens and `?`-suffixed conditionals; strip `!!`/`!`
+///   and one version operator;
+/// - cut at the first `[` or `:`; the rest must be `category/name[-version]`
+///   (exactly one `/`, a `[A-Za-z0-9+_.-]` category, a `[A-Za-z0-9+_-]`
+///   name not starting with `-`);
+/// - with an operator the name must end in `-<version>[-r<N>][*]` (stripped);
+///   without one, a version-looking name is skipped.
 pub(crate) fn dep_cp(tok: &str) -> Option<&str> {
     if matches!(tok, "(" | ")" | "||" | "^^" | "??") || tok.ends_with('?') {
         return None;
@@ -67,18 +58,14 @@ pub(crate) fn dep_cp(tok: &str) -> Option<&str> {
 }
 
 /// The marker `cp` of a `dep_atom` row for a token that [`dep_cp`] could not
-/// classify. No real `category/package` is empty, so the marker never
+/// classify. An empty `cp` never occurs in the data, so the marker never
 /// collides with a lookup key; `reverse_dependents` always adds it to its
-/// key set (S8.1).
+/// key set.
 pub(crate) const UNSURE_CP: &str = "";
 
-/// The index key of one token of a `*DEPEND` string (S8.1): `None` for a
-/// structure token that can never hold an atom (`(`, `)`, `||`, `^^`,
-/// `??`, `flag?`), `Some(cp)` when [`dep_cp`] reads a package out of it and
-/// `Some(`[`UNSURE_CP`]`)` for anything else, i.e. a token that might still
-/// be an atom the matcher accepts (a wildcard, a bare versioned name, an
-/// odd version). The marker keeps the prefilter a superset: an entry with
-/// such a token is returned for every `cp`.
+/// The index key of one token of a `*DEPEND` string: `None` for structure
+/// tokens, `Some(cp)` when [`dep_cp`] reads a package, `Some(UNSURE_CP)`
+/// otherwise, so the prefilter stays a superset.
 pub(crate) fn dep_index_key(tok: &str) -> Option<&str> {
     if matches!(tok, "(" | ")" | "||" | "^^" | "??") || tok.ends_with('?') {
         return None;

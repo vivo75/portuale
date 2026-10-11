@@ -1,41 +1,23 @@
 //! A scratch directory that removes itself, plus a process-level stale
-//! sweep. Backlog #260.
+//! sweep: [`TempDir`] closes the unwind/success paths with `Drop`, and the
+//! *next* process reclaims what a dead one left behind (nothing can run on
+//! the way out of an abort/kill).
 //!
-//! Every test scratch directory used to be `std::env::temp_dir().join(
-//! format!("{tag}-{pid}-{nanos}"))` with a trailing `remove_dir_all` at
-//! the end of the test -- which a panic skips, and which `panic =
-//! "abort"` (the release profile this workspace's verification pass
-//! runs under) skips even on a plain failed assert. A hung test killed
-//! from outside skips it too. The result was ~85k top-level `/tmp`
-//! entries exhausting the tmpfs inodes.
-//!
-//! [`TempDir`] closes the unwind/success paths with `Drop`. The stale
-//! sweep closes the abort/kill paths: nothing can run on the way out of
-//! those, so the *next* process reclaims what a dead one left behind --
-//! the same division of labour `ebuild_phases.rs::bin_dir` and pmtest's
-//! `_reclaim_portuale_bin_overlays` already use for the `portuale-bin.*`
-//! overlay (backlog #88).
-//!
-//! Naming: `$TMPDIR/portuale-td-{tag}-{pid}-{nanos}`. The `portuale-td-`
-//! prefix is what the sweep matches on, so the entries it owns are
-//! recognizable from the outside (and a `find /tmp -name 'portuale-td-*'`
-//! lists exactly ours). The pid/nanos tail keeps concurrent test threads
-//! and repeated runs from colliding; the sweep parses the pid back out
-//! to tell a live run's directories from a dead one's.
+//! Naming: `$TMPDIR/portuale-td-{tag}-{pid}-{nanos}`. The prefix is the
+//! sweep's match key; the pid/nanos tail avoids collisions and tells a
+//! live run's directories from a dead one's.
 
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-/// The name prefix every [`TempDir`] directory carries. Also the sweep's
-/// match key; see the module docs.
+/// The prefix every [`TempDir`] directory carries, and the sweep's match key.
 pub const TEMP_DIR_PREFIX: &str = "portuale-td-";
 
 /// A scratch directory under `$TMPDIR` that is removed when the guard
 /// drops -- including when the enclosing test panics and unwinds.
 ///
-/// Derefs to [`Path`], so the existing `tmp.join(..)` / `&tmp` call
-/// shapes keep working unchanged.
+/// Derefs to [`Path`].
 pub struct TempDir {
     path: PathBuf,
 }
@@ -47,8 +29,7 @@ impl TempDir {
         Self::new_in(&std::env::temp_dir(), tag)
     }
 
-    /// [`TempDir::new`] under an explicit parent (a test that wants its
-    /// scratch on real disk, or nested under another guard's tree).
+    /// [`TempDir::new`] under an explicit parent.
     pub fn new_in(parent: &Path, tag: &str) -> Self {
         stale_sweep_once(parent);
         let path = parent.join(format!(
@@ -65,9 +46,7 @@ impl TempDir {
         &self.path
     }
 
-    /// Relinquish cleanup and hand the path back. For the rare test that
-    /// leaves the tree to a subprocess outliving it (or deliberately
-    /// plants a leftover for a later assertion).
+    /// Relinquish cleanup and hand the path back.
     pub fn keep(self) -> PathBuf {
         let path = self.path.clone();
         std::mem::forget(self);
@@ -113,13 +92,8 @@ fn nanos() -> u128 {
         .unwrap_or(0)
 }
 
-/// Reclaim `portuale-td-*` directories left by processes that are no
-/// longer running. Runs at most once per process, at the first
-/// [`TempDir::new`].
-///
-/// A pid that has been recycled reads as alive and its predecessor's
-/// directories wait for a later sweep -- conservative in the safe
-/// direction (we never delete a live run's scratch out from under it).
+/// Reclaim dead processes' `portuale-td-*` directories, at most once per
+/// process (first [`TempDir::new`]). Recycled pids read as alive.
 fn stale_sweep_once(parent: &Path) {
     use std::sync::Once;
     static ONCE: Once = Once::new();
@@ -158,10 +132,8 @@ fn parse_owner_pid(rest: &str) -> Option<u32> {
     pid.parse().ok()
 }
 
-/// Linux: `/proc/{pid}` exists iff some process owns that pid. The
-/// workspace is a Linux/Gentoo package manager (musl static target); on
-/// a kernel without procfs this returns `true` and the sweep stays out
-/// of the way rather than deleting a live run's directories.
+/// Linux: `/proc/{pid}` exists iff some process owns that pid. Without
+/// procfs this returns `true` and the sweep stays out of the way.
 fn pid_is_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
 }
@@ -189,9 +161,8 @@ mod tests {
 
     #[test]
     fn temp_dir_removes_itself_on_unwind() {
-        // Backlog #260's actual failure mode: the trailing
-        // `remove_dir_all` at the end of a test is skipped when the test
-        // panics. `catch_unwind` stands in for the panic.
+        // The trailing `remove_dir_all` is skipped when the test panics;
+        // `catch_unwind` stands in for the panic.
         let probe = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
         let slot = probe.clone();
         let result = std::panic::catch_unwind(move || {
@@ -218,7 +189,6 @@ mod tests {
     #[test]
     fn temp_dir_derefs_to_path() {
         let tmp = TempDir::new("deref-probe");
-        // The shapes every converted call site uses.
         let child = tmp.join("child");
         std::fs::create_dir_all(&child).unwrap();
         assert!(child.is_dir());
@@ -228,10 +198,7 @@ mod tests {
 
     #[test]
     fn stale_sweep_reclaims_a_dead_pids_directories_and_keeps_our_own() {
-        // Plant two `portuale-td-*` directories: one owned by this
-        // process (must survive -- it is a live run's scratch) and one
-        // owned by a pid that cannot exist (`u32::MAX`, which /proc
-        // will not have). The sweep must reclaim only the dead one.
+        // One live directory (must survive) and one dead one (`u32::MAX`).
         let parent = TempDir::new("sweep-parent");
         let live = parent.path().join(format!(
             "{TEMP_DIR_PREFIX}sweep-live-{}-1",
@@ -242,7 +209,6 @@ mod tests {
             .join(format!("{TEMP_DIR_PREFIX}sweep-dead-{}-1", u32::MAX));
         fs::create_dir_all(&live).unwrap();
         fs::create_dir_all(&dead).unwrap();
-        // A non-`portuale-td-` neighbour is not ours and stays put.
         let foreign = parent.path().join("not-ours-1");
         fs::create_dir_all(&foreign).unwrap();
 

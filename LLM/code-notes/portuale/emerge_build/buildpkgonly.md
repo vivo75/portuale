@@ -1,0 +1,27 @@
+# crates/portuale/src/emerge_build/buildpkgonly.rs
+`--buildpkgonly`: builds binary packages without merging, serially, with `--keep-going` support.
+
+## struct RunBuildpkgonlyArgs, field mode
+- Backlog #197: the scheduler-display mode (background + Jobs visibility). `--buildpkgonly` prints Portage's `Emerging (N of M)` line through the same `_status_msg` path, so the blank rule applies; its serial loop emits no `>>> Jobs:` events (a cut, stated on `StatusDisplay`), so the mode only carries the blank half here.
+
+## fn run_buildpkgonly
+- Without `keep_going`, returns the first failure (message already names the package) and stops, portuale's long-established default. With Portage's `--keep-going` (Portage `main.py`'s own `y_or_n` option, narrowed by portuale's own CLI transcription to the bare/`y` form -- see `pretend.rs`'s own `keep_going` doc comment), every entry is still attempted. Safe here specifically because the pretend gate (`GraphResult::buildpkgonly_deps_unsatisfied`) guarantees no entry depends on another, so unlike Portage's general `--keep-going` (which must also skip every dependent of a failed package, tracked via Portage `Scheduler.py`'s mergelist recalculation), nothing here can invalidate a later entry. `Ok(())` only once every entry has a binary package on disk.
+- The run-wide half of Portage's `config.environ()`, computed once for the whole run: `--buildpkgonly` has no `MergeOptions`; `entry_phase_env_tail` adds the per-entry half (#37 S2).
+- One `JobStatusDisplay` per merge run (backlog #197); no Jobs events fire on this path.
+- The per-package line is Portage's `MergeListItem._start` line (backlog #177): Portage's `--buildpkgonly` prints the same `Emerging (N of M)` line (it is not fetch-only), and, like Portage whose `PackageMerge._should_show_status` is false for buildpkgonly, no `Installing`/`Completed` line follows. This replaced the `>>> Building binary for ...` line portuale used to print, which has no Portage counterpart (Portage builds the binpkg silently on stdout; only `emerge.log` records it, which portuale does not write).
+- Per-package `package.env` (backlog #129): `--buildpkgonly` carries no `MergeOptions`, but `config` already has the resolved `package_env_vars` table (`Config::package_env_vars`), so this matches the same `cat/pkg-ver:slot/sub` identity the merge scheduler's `entry_build_env` does, just reading `config` directly instead of threading it through a `MergeOptions`.
+- Per-package `PORTAGE_TMPDIR` (backlog #99, #129 residue): same re-derivation as the merge scheduler's `entry_portage_tmpdir`. A missing matched directory is Portage's `_check_temp_dir` failure.
+- Pre/post `clean`: Ports Portage's `_emerge/EbuildBuild._start_pre_clean` before the build and `_buildpkgonly_success_hook_exit` (`EbuildBuild.py:525-535`) after the package. `--buildpkgonly` pre-cleans like every other build and post-cleans unconditionally; the phase itself, not a `noclean` gate, honors `keeptemp`/`keepwork` (Portage's `_clean_exit` treats a failed clean as a failed build). Backlog #42.
+- Per-package `FEATURES` (backlog #130): `build_env` already carries the entry's fully resolved `FEATURES` (the per-entry `package.env` fold when one matched, the run-wide value otherwise), re-derived here rather than using the caller's single shared run-wide value.
+- Failures are collected and returned together at the end as a single combined error listing every one. The gate `pretend.rs` already checks before calling this at all is `GraphResult::buildpkgonly_deps_unsatisfied`.
+- The progress map is Portage's `Scheduler._pkg_count` for this run (backlog #177).
+
+## fn env_d_reloaded
+- Ports Portage's `Scheduler._allocate_config` (`Scheduler.py:1899-1913`), which calls `config.reload()` for every package task, and `reload()` re-reads `env.d` (`config.py:2691-2699`), so a package built after a merge that installed an `/etc/env.d/*` file (and ran `env-update`) sees the new variables (backlog #332). Returns the reloaded config when `<eroot>/etc/profile.env` changed since `config` was resolved (or last reloaded), `None` otherwise. A config without a recorded `eroot` never reloads; otherwise the caller keeps its old code path byte for byte.
+
+## fn reloaded_config_protect
+- Backlog #333 on top of #332: Portage's per-task `config.reload()` also feeds the task's `dblink`, whose protect object reads `settings["CONFIG_PROTECT"]` / `["CONFIG_PROTECT_MASK"]` (`vartree.py:2063-2072`), so a path an earlier merge of the same run added to `CONFIG_PROTECT` through `/etc/env.d` is protected for the later merges. Returns the new `(config_protect, config_protect_mask)` pair when `profile.env` changed since `options.resolved_config` was resolved, `None` otherwise (the run-wide values stand).
+
+## fn buildpkgonly_entry_build_env
+- Ports Portage's per-entry `config.environ()` (backlog #129). Incrementals layer before the tail so the base is the run-wide value, matching `entry_build_env`'s order; then the resolved `USE`/`IUSE_EFFECTIVE`/`USE_EXPAND` and `SLOT`/repo identity rows.
+- Per-package `BINPKG_COMPRESS` (backlog #147 S2): the matched scalars are layered above, so the xpak pipe command is re-derived here; the install phases save this env and Portage's `__dyn_package` reads it back through the saved `${T}/environment`. Unmatched entries recompute the run-wide command byte-identically (backlog #180: the re-derivation falls back through the calling env to the config's own file chain, so a `make.conf` value survives it).

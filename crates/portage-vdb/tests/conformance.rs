@@ -1,4 +1,4 @@
-//! Backend conformance suite for `portage-vdb` (feat#157 / #305, plan S2.2).
+//! Backend conformance suite for `portage-vdb`.
 //!
 //! Every test body is generic over the backend: it gets a factory
 //! (`fn(&Path) -> Arc<dyn InstalledDb>`, one fresh database per call) and a
@@ -740,10 +740,9 @@ mod suite {
         let ctx = Ctx::new(f, "setcounter");
         let mut txn = ctx.db.begin_write().unwrap();
         match caps.set_counter {
-            // TODO(plan S2.6 / S2.7, `files` stub says "S2.6"): FilesDb::set_counter
-            // is still Unsupported. When it is implemented, flip the
-            // backend's `Caps::set_counter` to `None`; the branch below
-            // then runs on files too.
+            // `FilesDb::set_counter` is still Unsupported. When it is
+            // implemented, flip the backend's `Caps::set_counter` to `None`;
+            // the branch below then runs on files too.
             Some(step) => {
                 assert_unsupported(txn.set_counter(Counter(41)), step, "set_counter");
             }
@@ -848,7 +847,7 @@ mod suite {
         let ctx = Ctx::new(f, "plib");
         let mut libs = ctx.db.preserved_libs().unwrap();
         assert_eq!(libs, PreservedLibs::default());
-        // entries == loaded: nothing is written (N6).
+        // entries == loaded: nothing is written.
         let mut txn = ctx.db.begin_write().unwrap();
         txn.set_preserved_libs(&libs).unwrap();
         txn.commit().unwrap();
@@ -1121,9 +1120,9 @@ mod suite {
             .reverse_dependents("dev-libs/lib", &[DepClass::Rdepend, DepClass::Depend]);
         match caps.reverse_dependents {
             // Per module-doc item 19 FilesDb does not implement this (the
-            // scan stays in portage-repo over aux_get). TODO(plan S8.1):
-            // flip `Caps::reverse_dependents` to `None` for `files` if S8.1
-            // implements it there; the branch below then runs.
+            // scan stays in portage-repo over aux_get). If it ever does,
+            // flip `Caps::reverse_dependents` to `None` for `files` and
+            // the branch below then runs.
             Some(step) => assert_unsupported(r, step, "reverse_dependents"),
             None => {
                 let recs = r.unwrap();
@@ -1145,7 +1144,7 @@ mod suite {
         }
     }
 
-    /// S8.2: the edge cases of the path rule, on every backend (the
+    /// The edge cases of the path rule, on every backend (the
     /// database backends answer from the `owner` index): one leading `/`
     /// ignored on both sides, a path written without it, `//`, a repeated
     /// line, the first matching input path reported, and the order (entries
@@ -1213,7 +1212,7 @@ mod suite {
         assert_eq!(got, want);
     }
 
-    /// S8.1: `reverse_dependents` is a superset of the real dependents and
+    /// `reverse_dependents` is a superset of the true dependents and
     /// an indexed backend still returns an entry whose deps it could not
     /// fully index (a `USE` conditional, an `||` group, a wildcard or other
     /// odd token), follows `replace_file` and `delete_entry`, and leaves out
@@ -1314,7 +1313,7 @@ mod suite {
         assert!(!keys("dev-libs/lib", &all).contains(&none));
     }
 
-    /// S8.3: `rebuild_index` recomputes `owner`, `dep_atom` and `needed`
+    /// `rebuild_index` recomputes `owner`, `dep_atom` and `needed`
     /// from the stored files of the live entries only; the queries that
     /// read the index answer the same before and after, and a second
     /// rebuild writes the same rows. Repairing a damaged row is tested per
@@ -1417,7 +1416,7 @@ mod suite {
         let k = key("dev-libs", "a-1");
         put(&ctx, &k, &[("DATA", b"0123456789"), ("EMPTY", b"")], false);
         match caps.read_file_at {
-            // Every backend implements it now (files: S7.2); the arm stays
+            // Every backend implements it now; the arm stays
             // for a future backend that names a step.
             Some(step) => {
                 assert_unsupported(ctx.db.read_file_at(&k, "DATA", 0, 4), step, "read_file_at")
@@ -1460,8 +1459,7 @@ mod suite {
         );
         put(&ctx, &b, &[("SLOT", b"!bad\n")], true);
         match caps.snapshot {
-            // TODO(plan S3.2): FilesDb::snapshot is Unsupported ("nothing on
-            // files uses it").
+            // `FilesDb::snapshot` is Unsupported.
             Some(step) => assert_unsupported(ctx.db.snapshot(), step, "snapshot"),
             None => {
                 let s = ctx.db.snapshot().unwrap();
@@ -1497,9 +1495,8 @@ mod suite {
             false,
         );
         match caps.entry_image {
-            // TODO(plan S2.6/S2.7; the `files` stubs say "S2.6"): FilesDb
-            // entry_image / insert_entry are Unsupported. The converters
-            // need them; then flip `Caps::entry_image` to `None`.
+            // `FilesDb` entry_image / insert_entry are Unsupported. The
+            // converters need them; then flip `Caps::entry_image` to `None`.
             Some(step) => {
                 assert_unsupported(ctx.db.entry_image(&k), step, "entry_image");
                 let image = EntryImage {
@@ -1597,7 +1594,7 @@ mod suite {
         );
     }
 
-    /// #307: `dir_mode` is permission bits on every backend -- a merged
+    /// `dir_mode` is permission bits on every backend: a merged
     /// entry's directory reports `0o7xx`, never `0o040xxx`, in both the
     /// image and the stat -- so `verify` of a files VDB against a natively
     /// merged sqlite/redb one has no "directory mode" finding.
@@ -1710,7 +1707,7 @@ conformance_suite!(
     files,
     |root| Arc::new(FilesDb::new(root)),
     Caps {
-        // S2.6: `entry_image`, `insert_entry` and `set_counter` are
+        // `entry_image`, `insert_entry` and `set_counter` are
         // implemented on files too.
         set_counter: None,
         reverse_dependents: Some("reverse_dependents"),
@@ -1722,7 +1719,7 @@ conformance_suite!(
     }
 );
 
-// S2.5: every method is implemented on sqlite. `seal_entry` stores the
+// Every method is implemented on sqlite. `seal_entry` stores the
 // consolidated `metadata` file as a row, like `files` stores the file.
 #[cfg(feature = "vdb-sqlite")]
 conformance_suite!(
@@ -1743,7 +1740,7 @@ conformance_suite!(
 /// too (`Error::Busy`), but the generic tests call the factory again for
 /// "a second handle on the same storage" while the first is alive. The
 /// factory therefore hands out the one live handle of a path (a `Weak`
-/// table, so it closes with its `Ctx`). Persistence across a real reopen
+/// table, so it closes with its `Ctx`). Persistence across an actual reopen
 /// is covered by the unit tests in `redb_db.rs`.
 #[cfg(feature = "vdb-redb")]
 fn redb_handle(root: &Path) -> Arc<dyn InstalledDb> {
@@ -1762,7 +1759,7 @@ fn redb_handle(root: &Path) -> Arc<dyn InstalledDb> {
     db
 }
 
-// S5.3: every method is implemented on redb, in one redb write
+// Every method is implemented on redb, in one redb write
 // transaction per `begin_write`.
 #[cfg(feature = "vdb-redb")]
 conformance_suite!(
@@ -1782,7 +1779,7 @@ conformance_suite!(
 // --------------------------------------------------- backend-independent
 
 /// `parse_preserved_libs` / `format_preserved_libs` are the `files`
-/// formats the converters read and write (real `json.dumps` layout).
+/// formats the converters read and write (Python `json.dumps` layout).
 #[test]
 fn preserved_libs_format_and_parse_round_trip() {
     use portage_vdb::{format_preserved_libs, parse_preserved_libs};
@@ -2081,9 +2078,8 @@ mod files_only {
         assert_eq!(aux(&ctx, &k, "SLOT").as_deref(), Some("0"));
     }
 
-    /// #309: a sealed entry serves the lossy text of a non-UTF-8 field,
-    /// like an unsealed one (real's consolidation reads with
-    /// `errors="replace"`, `vartree.py:268`; `_aux_get` too, `:1029`).
+    /// A sealed entry serves the lossy text of a non-UTF-8 field,
+    /// like an unsealed one (Portage's consolidation).
     #[test]
     fn sealed_entry_serves_a_non_utf8_field_lossily_like_an_unsealed_one() {
         let ctx = files_ctx("fprobe");
@@ -2100,11 +2096,11 @@ mod files_only {
         }
     }
 
-    /// #309: the `aux_get` memo is validated by the entry directory's
+    /// The `aux_get` memo is validated by the entry directory's
     /// mtime only, so an in-place `replace_file` of a field file is not
-    /// seen until the directory changes -- real's own property
-    /// (`vartree.py:938-951`; its `aux_update` calls `_bump_mtime` for
-    /// that reason). Pinned so a change is deliberate.
+    /// seen until the directory changes (Portage's own property; its
+    /// `aux_update` bumps the mtime for that reason). Pinned so a change
+    /// is deliberate.
     #[test]
     fn an_in_place_field_rewrite_is_served_stale_until_the_dir_mtime_moves() {
         let ctx = files_ctx("fstale");
@@ -2138,7 +2134,7 @@ mod files_only {
         assert!(matches!(txn.next_counter(), Err(Error::Unsupported(_))));
     }
 
-    // ---------------------------------------------- S2.6: whole entries
+    // ---------------------------------------------- whole entries
 
     fn mtime_ns(p: &Path) -> i128 {
         let st = fs::metadata(p).unwrap();

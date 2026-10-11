@@ -1,34 +1,17 @@
-//! `emerge --pretend --debug` resolver trace -- portuale's port of real
-//! portage's `initialize_logger(logging.DEBUG)` resolution trace.
+//! `emerge --pretend --debug` resolver trace: the DEBUG-level per-package
+//! narration (`tr!`, stdout) and the digraph/candidate dumps (`tr_err!`,
+//! stderr). Emitting Portage's shapes makes the two implementations directly
+//! diffable.
 //!
-//! Real `_emerge/depgraph.py` is full of `writemsg_level(..., level=
-//! logging.DEBUG)` / plain `portage.writemsg(...)` calls that only fire
-//! under `--debug`. Together they are the single most useful debugging
-//! artifact real portage has, and the one this project has already
-//! exploited once (the 2026-09-06 `_serialize_tasks` port was validated
-//! by replaying real's dumped `digraph:`). Emitting the same shapes
-//! makes the two implementations directly diffable. Design note and the
-//! full message inventory: `docs/history/emerge-pretend-debug.md`.
+//! Deliberate divergences: plain-text node labels (no ANSI colour);
+//! portuale's post-prune merge closure as the node set, with top-level atoms
+//! as pseudo-arg nodes; and `Child:`/`Parent Dep:` interleaving in portuale's
+//! BFS queue order, not Portage's LIFO stack order (the `digraph:` dump
+//! matches; the narration order does not).
 //!
-//! **Stream split, matching real exactly** (real `writemsg_level`,
-//! `portage/util/__init__.py:119`: `level >= logging.WARNING` -> stderr,
-//! else stdout):
-//!
-//! * `tr!` -> **stdout** -- the DEBUG-level per-package narration
-//!   (`Arg:`/`Atom:`, `Parent:`/`Depstring:`/`Priority:`/`Candidates:`,
-//!   `Child:`/`Parent Dep:`/`Exiting...`, the rebuild summaries).
-//! * `tr_err!` -> **stderr** -- the `\ndigraph:\n\n` + `debug_print()`
-//!   dump, the `runtime cycle digraph` dumps, and the per-atom
-//!   `ebuild:`/`binary:`/`installed:` candidate list.
-//!
-//! **Deliberate divergences from real** (see the design note): plain-text
-//! node labels (no ANSI colour -- portuale is deterministic);
-//! portuale's post-prune merge closure as the node set, with top-level
-//! atoms printed as pseudo-arg nodes, rather than real's full
-//! `@world`/`@system` universe; and the `Child:`/`Parent Dep:` line
-//! *interleaving* follows portuale's BFS queue, not real's LIFO stack
-//! (the resulting graph -- the `digraph:` dump -- matches; the narration
-//! order does not).
+//! Design note and the full message inventory:
+//! `docs/history/emerge-pretend-debug.md`.
+// Portage: _emerge/depgraph.py, portage/util/__init__.py (writemsg_level)
 
 use std::fmt;
 use std::path::Path;
@@ -39,37 +22,34 @@ use crate::{
     installed_pkg_repo, list_candidates, read_vdb_slot,
 };
 
-/// Emit `args` to stdout only when the trace is active. Real
-/// `writemsg_level(..., level=logging.DEBUG)` (`level < WARNING` ->
-/// stdout). The per-package narration.
+/// Emit `args` to stdout only when the trace is active (the per-package
+/// narration).
 pub(crate) fn out(args: fmt::Arguments) {
     if crate::resolver_debug() {
         print!("{args}");
     }
 }
 
-/// Emit `args` to stderr only when the trace is active. Real plain
-/// `portage.writemsg(...)`. The `digraph:` / `runtime cycle digraph` /
-/// candidate-list dumps.
+/// Emit `args` to stderr only when the trace is active (the `digraph:` /
+/// candidate-list dumps).
 pub(crate) fn err(args: fmt::Arguments) {
     if crate::resolver_debug() {
         eprint!("{args}");
     }
 }
 
-/// `tr!(...)` -> stdout narration, no-op unless `--pretend --debug` is
-/// active. (`err()` is called directly for the stderr dumps.)
+/// `tr!(...)` -> stdout narration, no-op unless `--pretend --debug` is active.
 macro_rules! tr {
     ($($arg:tt)*) => { $crate::resolver_trace::out(format_args!($($arg)*)) };
 }
 pub(crate) use tr;
 
-/// Real `_emerge/DepPriority.py::DepPriority.__str__` -- the single
-/// highest classification on the priority. Used for a `digraph:` edge
-/// label (`priorities[-1]`) and every `Priority:` line.
+/// The single highest priority classification, for `Priority:` lines and
+/// `digraph:` edge labels.
+// Portage: _emerge/DepPriority.py, DepPriority.__str__
 pub(crate) fn dep_priority_str(p: &DepPriority) -> &'static str {
-    // Real has no `ignored` field modelled here (see `DepPriority`'s doc
-    // comment); `optional` is the widest portuale expresses.
+    // No `ignored` field modelled here; `optional` is the widest portuale
+    // expresses.
     if p.optional {
         "optional"
     } else if p.buildtime_slot_op {
@@ -87,10 +67,9 @@ pub(crate) fn dep_priority_str(p: &DepPriority) -> &'static str {
     }
 }
 
-/// Real `DepPriority.__int__` -- the hardness measure `digraph.add`'s
-/// `bisect.insort` orders a per-edge priority list by, so the label is
-/// the `max`. `buildtime_slot_op` 0, `buildtime` -1, `runtime_slot_op`
-/// -2, `runtime` -3, `runtime_post` -4, `optional` -5, none -6.
+/// The hardness measure a per-edge priority list is ordered by, so the label
+/// is the max. `buildtime_slot_op` 0 down to `optional` -5, none -6.
+// Portage: _emerge/DepPriority.py, DepPriority.__int__
 pub(crate) fn dep_priority_rank(p: &DepPriority) -> i8 {
     if p.optional {
         -5
@@ -109,9 +88,8 @@ pub(crate) fn dep_priority_rank(p: &DepPriority) -> i8 {
     }
 }
 
-/// The `DepPriority` with the greatest `dep_priority_rank` in `prios`
-/// (real `priorities[-1]` after `bisect.insort`). `prios` is never
-/// empty at a real digraph edge.
+/// The `DepPriority` with the greatest [`dep_priority_rank`] in `prios`.
+/// `prios` is never empty at a digraph edge.
 pub(crate) fn max_priority(prios: &[DepPriority]) -> DepPriority {
     prios
         .iter()
@@ -120,11 +98,10 @@ pub(crate) fn max_priority(prios: &[DepPriority]) -> DepPriority {
         .unwrap_or_default()
 }
 
-/// Real `_emerge.Package.__str__` (`_emerge/Package.py:568`), minus the
-/// ANSI colour real wraps the cpv in:
-/// `(cat/pkg-ver[-build_id]:slot/sub_slot::repo, <state>)` where
-/// `<state>` is `installed` for a nomerge node and
-/// `<type_name> scheduled for merge` for a merge-bound one.
+/// `(cat/pkg-ver[-build_id]:slot/sub_slot::repo, <state>)` for a graph node:
+/// `installed` for a nomerge node, `<type> scheduled for merge` otherwise
+/// (minus Portage's ANSI colour).
+// Portage: _emerge/Package.py, Package.__str__
 pub(crate) fn node_label(e: &GraphEntry, root: &Path, installed: bool) -> String {
     let ver = entry_version(e).unwrap_or("");
     let (slot, sub_slot, repo) = if installed {
@@ -143,10 +120,7 @@ pub(crate) fn node_label(e: &GraphEntry, root: &Path, installed: bool) -> String
                 .unwrap_or_else(|| "__unknown__".to_string()),
         )
     };
-    // Real `build_id_str` -- only a merge-bound multi-instance binary
-    // carries one here (portuale doesn't track an installed package's
-    // vdb `BUILD_ID` on `GraphEntry`; that only shows for the rare
-    // `binpkg-multi-instance` vdb, a documented cut).
+    // Only a merge-bound multi-instance binary carries a build id here.
     let build_id_str = if installed {
         String::new()
     } else {
@@ -170,15 +144,9 @@ pub(crate) fn node_label(e: &GraphEntry, root: &Path, installed: bool) -> String
     )
 }
 
-/// Whether a `GraphEntry` is a nomerge (installed / no-visible-candidate)
-/// node -- real `pkg.operation == "nomerge"`, the same test
-/// `merge_order::build_digraph` makes for `Digraph::installed`.
-///
-/// #72 B3: a `Uninstall` removal reports `true` as well. Real's uninstall
-/// node has its own `operation`, but every *merge-list* consumer of this
-/// helper treats "not a merge" the same way (`is_nomerge` gates the
-/// merge-order trace's merge set and the `_serialize_tasks` port's
-/// selection), and portuale's removal must never be selected as a merge.
+/// Whether a `GraphEntry` is a nomerge node (installed, no-visible-candidate,
+/// or removal): never selected as a merge.
+// Portage: depgraph.py, pkg.operation == "nomerge"
 pub(crate) fn is_nomerge(e: &GraphEntry) -> bool {
     matches!(
         e.outcome,
@@ -188,9 +156,7 @@ pub(crate) fn is_nomerge(e: &GraphEntry) -> bool {
     )
 }
 
-/// `USE="flag -flag …"` -- `use_flags_display` (bare-name-sorted
-/// `(flag, enabled)`, same on both sides) rendered the way real
-/// `pkg_use_display` opens its string.
+/// `USE="flag -flag …"`, bare-name-sorted the way Portage opens its string.
 fn use_str(e: &GraphEntry) -> String {
     e.use_flags_display
         .iter()
@@ -199,16 +165,10 @@ fn use_str(e: &GraphEntry) -> String {
         .join(" ")
 }
 
-/// `emerge --pretend --debug` Stage 3: real
-/// `_wrapped_select_pkg_highest_available_imp`'s candidate list
-/// (`depgraph.py:8347`) -- `f"{type_name + ':':>10} {cpv}::{repo}\n"`
-/// for every candidate that matched `atom`, in real's `dbs` order
-/// (ebuild, then binary, then installed), to stderr.
-///
-/// **Divergence from real:** portuale lists ebuild and installed
-/// candidates only. Binary (`$PKGDIR` / binhost) candidates would need
-/// a `BinaryIndex` threaded here that this call site doesn't hold; for a
-/// fixture with no binaries the list is identical to real's.
+/// Stage 3: the per-atom candidate list, in ebuild-then-installed order, to
+/// stderr. Binary candidates are not listed (no `BinaryIndex` at this call
+/// site); for a fixture with no binaries the list is identical to Portage's.
+// Portage: _emerge/depgraph.py, _wrapped_select_pkg_highest_available_imp
 pub(crate) fn dump_atom_candidates(
     repos: &[RepoConfig],
     root: &Path,
@@ -269,12 +229,9 @@ pub(crate) fn dump_atom_candidates(
     }
 }
 
-/// #59 S1: one `Parent Dep:` narration row -- real `_add_pkg`'s own
-/// per-package parent-atom list (`_add_parent_atom`,
-/// `depgraph.py:3583-3604`). Collected during the walk, where the child
-/// instance an atom actually resolved to is known -- including an
-/// `AlreadyInstalled` instance that a later merge-bound visit of the
-/// same cp shadows in `entries` (the #57 `paired-1.0` case).
+/// One `Parent Dep:` narration row, collected during the walk where the child
+/// instance an atom actually resolved to is known.
+// Portage: _emerge/depgraph.py, _add_parent_atom
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParentAtom {
     pub child_category: String,
@@ -284,13 +241,12 @@ pub(crate) struct ParentAtom {
     /// `None` for a top-level argument / internal set seed.
     pub parent: Option<(String, String)>,
     pub atom: String,
-    /// Real's `unevaluated_atom` -- present only when evaluating the
-    /// parent's conditional use-deps rewrote the atom.
+    /// Present only when evaluating the parent's conditional use-deps rewrote
+    /// the atom.
     pub unevaluated: Option<String>,
 }
 
-/// `USE="flag -flag …"` for an installed-only child (`read_vdb_iuse` /
-/// `USE`), the vdb equivalent of `use_str` in bare-name-sorted order.
+/// `USE="…"` for an installed-only child, read from the vdb.
 fn installed_use_str(root: &Path, cat: &str, pkg: &str, ver: &str) -> String {
     let iuse = crate::read_vdb_flag_set(root, cat, pkg, ver, "IUSE");
     let enabled = crate::read_vdb_flag_set(root, cat, pkg, ver, "USE");
@@ -309,12 +265,8 @@ fn installed_use_str(root: &Path, cat: &str, pkg: &str, ver: &str) -> String {
         .join(" ")
 }
 
-/// The `Child:` row's `USE="…"` column: an installed keep renders
-/// its vdb-recorded USE via [`installed_use_str`] (real's
-/// `installed_use_str`), every other row renders the entry's own
-/// `use_flags_display` via [`use_str`]. #134: the primary printer used
-/// `use_str` unconditionally, so every installed `Child:` row printed
-/// `USE=""` (the resolver never builds display fields for a keep).
+/// The `Child:` row's `USE="…"` column: an installed keep renders its
+/// vdb-recorded USE, every other row the entry's own display flags.
 pub(crate) fn child_use_str(e: &GraphEntry, root: &Path) -> String {
     if is_nomerge(e) {
         let ver = entry_version(e).unwrap_or("");
@@ -324,29 +276,13 @@ pub(crate) fn child_use_str(e: &GraphEntry, root: &Path) -> String {
     }
 }
 
-/// Backlog #277: emission order for the bounded inner-ring re-narration
-/// (see [`dump_resolution_walk`]).
-///
-/// Real's `--debug` trace is a live LIFO narration: every `_add_pkg`
-/// call prints its `Child:`/`Parent Dep:` pair, including re-visits of
-/// an already-graphed node (the innermost chain of each slot-conflict
-/// node on the oldslot shape). Portuale's dump is post-hoc (one stanza
-/// per final entry), so a re-visit prints nothing at its use site --
-/// only the first-visit (outer) chain appears. This planner recovers
-/// the missing inner chains without re-running the walk: for every
-/// recorded `(parent, child, atom)` edge whose child stanza was already
-/// emitted (a back edge in entries order, i.e. a revisit or cycle step),
-/// it schedules the compact two-line re-narration real prints there.
-///
-/// Returns `(parent_entry_idx, parent_atom_idx)` pairs in emission
-/// order (parents in entries order, each parent's edges in walk
-/// order). Pure and total: no recursion (re-visits never re-expand in
-/// real either -- they print only the two-line chain), so termination
-/// needs no visited set; `budget` caps the volume instead (at most
-/// `budget` edges per dump call -- the caller passes `entries.len()`,
-/// mirroring the existing guard style). Single-root local by
-/// construction: both inputs come from one pass's walk, which never
-/// crosses a root (Track X resolves each root in its own pass).
+/// Emission order for the bounded inner-ring re-narration (see
+/// [`dump_resolution_walk`]): for every recorded `(parent, child, atom)` edge
+/// whose child stanza was already emitted (a back edge, i.e. a revisit or cycle
+/// step), the compact two-line re-narration Portage prints there.
+/// Returns `(parent_entry_idx, parent_atom_idx)` pairs in emission order.
+/// Pure and total: re-visits never re-expand, so no visited set is needed;
+/// `budget` caps the volume instead.
 pub(crate) fn renarration_order(
     entry_cps: &[(String, String)],
     entry_keys: &[(String, String, String, bool)],
@@ -362,17 +298,13 @@ pub(crate) fn renarration_order(
         let Some((pc, pp)) = pa.parent.as_ref() else {
             continue;
         };
-        // Host stanza: the first entry with this (category, package).
-        // The walk records the parent without a version, so a cp with
-        // two entries (a slot conflict's pair) hosts under the first --
-        // a deterministic approximation, documented at the call site.
+        // The walk records the parent without a version, so a cp with two
+        // entries hosts under the first.
         let Some(i) = entry_cps.iter().position(|(c, p)| c == pc && p == pp) else {
             continue;
         };
-        // Re-narrate only back edges: the child stanza must already be
-        // emitted (at or before the host in entries order, self
-        // included). Forward edges are covered by the child's own
-        // later stanza, so DAG walks schedule nothing.
+        // Only back edges re-narrate: forward edges are covered by the
+        // child's own later stanza, so DAG walks schedule nothing.
         let child_key = (
             pa.child_category.clone(),
             pa.child_package.clone(),
@@ -389,21 +321,14 @@ pub(crate) fn renarration_order(
         }
     }
     // Emission order: hosts in entries order, each host's edges in walk
-    // order (stable: the per-host walk sequence is preserved). The
-    // caller re-sorts each host's edges into dependency-text order
-    // (see [`sort_by_dep_position`]) so the ring reads like real's
-    // expansion order.
+    // order. The caller re-sorts each host's edges into dependency-text
+    // order.
     out.sort_by_key(|(i, _)| *i);
     out
 }
 
-/// Re-sort one host's scheduled re-narration edges (`parent_atoms`
-/// indices, in walk order) into the host's dependency-text order --
-/// real re-narrates in expansion order, while portuale's BFS visit
-/// order is an accident of queue dynamics. `deps` carries the host
-/// entry's `(atom, evaluated)` pairs in ebuild-text order; an edge
-/// matches on either form (queue texts are evaluated, dep records
-/// keep both). Edges matching no dep keep walk order at the end
+/// Re-sorts one host's scheduled re-narration edges into the host's
+/// dependency-text order. Edges matching no dep keep walk order at the end
 /// (stable). Pure.
 pub(crate) fn sort_by_dep_position(
     deps: &[(String, String)],
@@ -425,37 +350,15 @@ pub(crate) fn sort_by_dep_position(
     indexed.into_iter().map(|(_, pi)| pi).collect()
 }
 
-/// `emerge --pretend --debug` stages 2 / 4 / 6: the per-package
-/// resolution narration -- real `_add_pkg` (`Child:`/`Parent Dep:`),
-/// `_add_pkg_deps` (`Parent:`/`Depstring:`/`Priority:`/`Candidates:`),
-/// `dep_check` (`Virtual Parent:`/`Virtual Depstring:`) and the
-/// `\nExiting... <pkg>\n` end marker (`depgraph.py:3568/4298/4747`,
-/// `dep/dep_check.py:225`).
-///
-/// `parent_atoms` (#59 S1) carries the walk's own per-instance
-/// `Parent Dep:` data. Each entry's rows are looked up by its resolved
-/// instance; an installed child the walk created but `entries` no longer
-/// holds (shadowed by a same-slot merge) gets its own `Child:` block
-/// after the entries loop. Real interleaves that block at the atom's
-/// LIFO position; appending keeps portuale's documented BFS-order
-/// divergence while emitting the same content.
-///
-/// **Divergence from real** (see this module's header, stated once as a
-/// comment line at the top of the block): real interleaves these as a
-/// LIFO `_create_graph` walk; portuale emits them in one pass over the
-/// final `entries` (BFS-push order -- roots before their dependencies),
-/// on the successful backtracking pass only. The information is the
-/// same; the interleaving is not, which is why the Stage 1 `digraph:`
+/// Stages 2 / 4 / 6: the per-package resolution narration (`Child:` /
+/// `Parent Dep:`, `Parent:` / `Depstring:` / `Priority:` / `Candidates:`,
+/// virtual recursion, `\nExiting...`), emitted in one pass over the final
+/// `entries` on the successful backtracking pass only. The Stage 1 `digraph:`
 /// dump (emitted from `.order`) is the authoritative diff surface.
-///
-/// Backlog #277 adds the bounded inner-ring re-narration (see
-/// [`renarration_order`]): after an entry's own dependency groups, the
-/// dump re-prints the compact `Child:`/`Parent Dep:` pair for every
-/// already-emitted dependency child -- the chains real's live walk
-/// re-narrates on revisit (each slot-conflict node's innermost chain).
-/// At most `entries.len()` such pairs per dump, so the cost stays
-/// bounded per abort; DAG walks schedule none (no back edges), so their
-/// traces are byte-identical to before.
+/// After an entry's own groups, the bounded inner-ring re-narration re-prints
+/// the compact pair for every already-emitted dependency child (at most
+/// `entries.len()` pairs per dump; DAG walks schedule none).
+// Portage: _emerge/depgraph.py (_add_pkg, _add_pkg_deps), dep/dep_check.py
 pub(crate) fn dump_resolution_walk(
     entries: &[GraphEntry],
     root: &Path,
@@ -466,11 +369,9 @@ pub(crate) fn dump_resolution_walk(
         return;
     }
     const KEYS: [&str; 5] = ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"];
-    // #277: a withheld (never merged) entry carries no slot/sub-slot or
-    // repo on its `GraphEntry`, which would render as `:0/0::__unknown__`.
-    // Its true identity is the ebuild the walk withheld, so resolve the
-    // display triple from the candidate list (trace-only, `--debug`
-    // only; the resolver record itself is untouched).
+    // A withheld (never merged) entry carries no slot/sub-slot or repo, which
+    // would render as `:0/0::__unknown__`; resolve the display triple from
+    // the candidate list instead (trace-only; the resolver record is untouched).
     let enriched = |e: &GraphEntry| -> GraphEntry {
         if e.repo_name.is_some() {
             return e.clone();
@@ -528,9 +429,7 @@ pub(crate) fn dump_resolution_walk(
             None => (format!("({cat}/{pkg})"), String::new()),
         }
     };
-    // #59 S1: per-instance rows, keyed by `(cat, pkg, version,
-    // installed)`; a BTreeMap keeps the block order deterministic while
-    // each key's rows stay in walk order. Dedup by
+    // Per-instance rows, keyed by `(cat, pkg, version, installed)`; dedup by
     // `(child, parent, atom, unevaluated)`.
     let mut rows: std::collections::BTreeMap<(String, String, String, bool), Vec<&ParentAtom>> =
         std::collections::BTreeMap::new();
@@ -585,9 +484,8 @@ pub(crate) fn dump_resolution_walk(
     ));
     let mut consumed: std::collections::BTreeSet<(String, String, String, bool)> =
         std::collections::BTreeSet::new();
-    // #277: schedule the bounded inner-ring re-narration before emitting
-    // anything (at most `entries.len()` edges per dump -- bounded per
-    // abort; DAG walks schedule none).
+    // Schedule the bounded inner-ring re-narration before emitting anything
+    // (at most `entries.len()` edges per dump; DAG walks schedule none).
     let entry_cps: Vec<(String, String)> = entries
         .iter()
         .map(|e| (e.category.clone(), e.package.clone()))
@@ -608,8 +506,7 @@ pub(crate) fn dump_resolution_walk(
     for (host, pi) in plan {
         renarrate_at[host].push(pi);
     }
-    // #277: read each host's ring in dependency-text order (real's
-    // expansion order), not BFS visit order.
+    // Read each host's ring in dependency-text order, not BFS visit order.
     for (host, list) in renarrate_at.iter_mut().enumerate() {
         let deps: Vec<(String, String)> = entries[host]
             .deps
@@ -653,9 +550,9 @@ pub(crate) fn dump_resolution_walk(
                 }
             }
         });
-        // Stage 6: a new-style virtual's own RDEPEND recursion, which
-        // real's `dep_check` traces as a distinct step. Portuale walks a
-        // `virtual/*` entry like any other, so synthesise the pair.
+        // Stage 6: a new-style virtual's own RDEPEND recursion, traced as a
+        // distinct step. Portuale walks a `virtual/*` entry like any other,
+        // so synthesise the pair.
         if e.category == "virtual" && !is_nomerge(e) {
             let rdep: Vec<&str> = e
                 .deps
@@ -689,12 +586,9 @@ pub(crate) fn dump_resolution_walk(
                 atoms.join(" "),
                 dep_priority_str(&prio)
             ));
-            // #138: real's `--debug` prints `Depstring:` raw and
-            // `Candidates:` evaluated (`logs/l111-s0-20260921/real-rest-
-            // debug.log`) -- the evaluated form rides `DepEdge` beside
-            // the (already reduced-raw) token, so the walk itself is
-            // untouched. Real's true-raw first stanza has no
-            // counterpart here (see `DepEdge::evaluated`'s doc).
+            // `Depstring:` prints raw, `Candidates:` evaluated; the evaluated
+            // form rides `DepEdge` beside the token, so the walk itself is
+            // untouched.
             let evaluated: Vec<&str> = e
                 .deps
                 .iter()
@@ -710,12 +604,8 @@ pub(crate) fn dump_resolution_walk(
                     .join(", ")
             ));
         }
-        // #277: the bounded inner-ring re-narration -- the compact
-        // `Child:`/`Parent Dep:` pair real's live walk prints when it
-        // re-visits an already-graphed node (each slot-conflict node's
-        // innermost chain). Only back edges were scheduled (forward
-        // edges are covered by the child's own later stanza), in walk
-        // order, so DAG traces emit nothing new here.
+        // The bounded inner-ring re-narration: only back edges were scheduled,
+        // so DAG traces emit nothing new here.
         for pi in &renarrate_at[idx] {
             let pa = &parent_atoms[*pi];
             let child_key = (
@@ -740,18 +630,8 @@ pub(crate) fn dump_resolution_walk(
         }
         out(format_args!("\nExiting... {node}\n"));
     }
-    // #59 S1: installed children the walk created but `entries` no
-    // longer holds (a same-slot merge shadows them). Real adds both
-    // instances; this block reproduces the one portuale's `entries`
-    // lost. `paired-1.0` under `<dev-libs/paired-2.0` is the canonical
-    // case.
-    //
-    // #277: the same gap covers a *withheld* ebuild child (never
-    // merged, so no entry at all -- the oldslot shape's `prov-2.0`,
-    // dropped by the direct solve while its `Parent Dep:` rows
-    // survive). There is no vdb record to read for one, so resolve
-    // the display triple from the candidate list instead of printing
-    // the `:0/0::__unknown__` placeholder fallback.
+    // Installed children the walk created but `entries` no longer holds (a
+    // same-slot merge shadows them): reproduce the one lost block.
     for (key, list) in &rows {
         if consumed.contains(key) {
             continue;

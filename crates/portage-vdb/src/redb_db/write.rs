@@ -1,33 +1,29 @@
-//! `RedbDb`'s write side (S5.3): [`RedbTxn`] and the derived multimaps.
+//! `RedbDb`'s write side: [`RedbTxn`] and the derived multimaps.
 //!
 //! See the crate module doc, "Write transactions", for the model; this
 //! file follows `sqlite/write.rs` method by method.
 //!
 //! One [`RedbTxn`] is one `redb::WriteTransaction`, opened by
 //! `RedbDb::begin_write` and committed by [`WriteTxn::commit`]; dropping it
-//! without a commit aborts it (redb's own drop). Every method opens the
-//! tables it needs, uses them and lets them go before the next call, so no
-//! table is ever open twice.
+//! without a commit aborts it. Every method opens the tables it needs,
+//! uses them and lets them go before the next call, so no table is ever
+//! open twice.
 //!
 //! # Derived multimap rows
 //!
 //! They exist only for live (`installed`) entries and are rebuilt from the
-//! stored files, so removing them re-derives the rows from the stored file
-//! first (the invariant "rows = f(files)").
+//! stored files.
 //!
 //! - `owner`: key = the path bytes as written in `CONTENTS`; value =
-//!   `id u64`, `seq u32`, `kind` (u32-length string), `md5` (flag `u8`,
-//!   string), `mtime` (flag `u8`, `i64`), `target` (flag `u8`, u32-length
-//!   bytes). Same line rule as sqlite's `owner` table; `id` first, so the
-//!   rows of one entry for one path sort together.
+//!   `id u64`, `seq u32`, `kind`, `md5`, `mtime`, `target`. Same line rule
+//!   as sqlite's `owner` table; `id` first, so one entry's rows for one
+//!   path sort together.
 //! - `dep_atom`: key = `cp`; value = `id u64`, `class u8` (index in
-//!   `DEP_CLASSES`: DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND), then the
-//!   atom token as the remaining bytes. One value per distinct `(class,
-//!   cp, token)`, from the shared `dep_cp`; a token it cannot classify is
-//!   stored under the key `""` (S8.1, `reverse_dependents` always reads it).
-//! - `needed`: key = `id u64`; value = `seq u32`, `arch`, `obj` (bytes),
-//!   `soname`, `rpath`, `needed` (u32-length strings; the no-rpath
-//!   sentinel is stored as `""`). Removal is `remove_all(id)`.
+//!   `DEP_CLASSES`), then the atom token. One value per distinct `(class,
+//!   cp, token)`, from the shared `dep_cp`; an unclassifiable token is
+//!   stored under the key `""`, which `reverse_dependents` always reads.
+//! - `needed`: key = `id u64`; value = `seq u32`, `arch`, `obj`, `soname`,
+//!   `rpath`, `needed`. Removal is `remove_all(id)`.
 
 use std::collections::BTreeSet;
 use std::os::unix::fs::MetadataExt as _;
@@ -258,7 +254,7 @@ impl WriteTxn for RedbTxn<'_> {
                 let Some(raw) = read_file(t, rec.id, field)? else {
                     continue;
                 };
-                // Lossy, like real's consolidation (`errors="replace"`, #309).
+                // Lossy, like Portage's consolidation.
                 let text = String::from_utf8_lossy(&raw);
                 data.push((
                     field.to_string(),
@@ -275,7 +271,14 @@ impl WriteTxn for RedbTxn<'_> {
                 body.push_str(&format!("{k}={v}\n"));
             }
             body.push_str(&format!("#dir_mtime={now}\n"));
-            put_file(t, rec.id, "metadata", body.as_bytes(), FILE_MODE, now)?;
+            put_file(PutFileArgs {
+                t,
+                id: rec.id,
+                name: "metadata",
+                data: body.as_bytes(),
+                mode: FILE_MODE,
+                mtime_ns: now,
+            })?;
             rec.stamp = MetadataStamp::Valid;
             rec.dir_mtime_ns = now;
             put_rec(t, PENDING, key, &rec)?;
@@ -342,7 +345,14 @@ impl WriteTxn for RedbTxn<'_> {
             };
             put_rec(t, INSTALLED, &image.key, &rec)?;
             for (name, data, mode, mtime) in files {
-                put_file(t, rec.id, name, data, mode, mtime)?;
+                put_file(PutFileArgs {
+                    t,
+                    id: rec.id,
+                    name,
+                    data,
+                    mode,
+                    mtime_ns: mtime,
+                })?;
             }
             index_all(t, &image.key, rec.id)?;
             Ok(())
@@ -369,7 +379,14 @@ impl WriteTxn for RedbTxn<'_> {
             };
             let mode = file_rec(t, rec.id, name)?.map_or(FILE_MODE, |r| r.mode);
             unindex_file(t, rec.id, name)?;
-            put_file(t, rec.id, name, data, mode, now_ns())?;
+            put_file(PutFileArgs {
+                t,
+                id: rec.id,
+                name,
+                data,
+                mode,
+                mtime_ns: now_ns(),
+            })?;
             index_file(t, key, rec.id, name)
         })
     }
@@ -613,16 +630,26 @@ fn read_file(t: &WriteTransaction, id: u64, name: &str) -> Tx<Option<Vec<u8>>> {
     Ok(Some(out))
 }
 
-/// Store (or replace) one file: its record and its 64 KiB chunks.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn put_file(
-    t: &WriteTransaction,
+/// Arguments of [`put_file`].
+struct PutFileArgs<'a> {
+    t: &'a WriteTransaction,
     id: u64,
-    name: &str,
-    data: &[u8],
+    name: &'a str,
+    data: &'a [u8],
     mode: u32,
     mtime_ns: i64,
-) -> Tx<()> {
+}
+
+/// Store (or replace) one file: its record and its 64 KiB chunks.
+fn put_file(args: PutFileArgs<'_>) -> Tx<()> {
+    let PutFileArgs {
+        t,
+        id,
+        name,
+        data,
+        mode,
+        mtime_ns,
+    } = args;
     {
         let mut ch = t.open_table(ENTRY_FILE_CHUNK)?;
         ch.retain_in((id, name, 0u32)..=(id, name, u32::MAX), |_, _| false)?;
@@ -666,7 +693,14 @@ fn put_pending(t: &WriteTransaction, key: &EntryKey, name: &str, data: &[u8], mo
     let mut rec = pending(t, key)?;
     let now = now_ns();
     let existed = file_rec(t, rec.id, name)?.is_some();
-    put_file(t, rec.id, name, data, mode, now)?;
+    put_file(PutFileArgs {
+        t,
+        id: rec.id,
+        name,
+        data,
+        mode,
+        mtime_ns: now,
+    })?;
     if !existed {
         rec.dir_mtime_ns = now;
         if rec.stamp == MetadataStamp::Valid {

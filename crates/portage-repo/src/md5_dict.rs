@@ -1,32 +1,22 @@
-//! The `md5-dict` aux-cache validator (real `portdbapi._pull_valid_cache`
-//! -> `cache/template.py::validate_entry`), shared by `--regen`'s
-//! repo-cache shortcut and the depcachedir rung of the depend-phase
-//! fallback.
+//! The `md5-dict` aux-cache validator (shared by `--regen`'s repo-cache shortcut
+//! and the depcachedir rung of the depend-phase fallback): `true` when an
+//! on-disk cache entry still validates, so the `depend` phase can be skipped.
 //!
-//! Real walks three auxdb rungs for a cpv -- the repo's pregen
-//! `metadata/md5-cache`, the writable depcachedir, then
-//! `doebuild(mydo="depend")` -- and runs the same validator on the first
-//! two. The formats differ in exactly one field: the pregen cache is
-//! `flat_hash.md5_database` (`store_eclass_paths = False`), the writable
-//! depcachedir is `mtime_md5_database` via `portdbapi.auxdbmodule`
-//! (`config.py:524`), which writes `_eclasses_` as
-//! `name\tpath\tmd5` triples (`cache/template.py:23`); real's
-//! `validate_and_rewrite_cache` compares the checksum field and ignores
-//! the path (`eclass_cache.py:150-170`). `store_eclass_paths` selects
-//! which shape a caller's entry is in.
+//! The formats differ in exactly one field: the pregen cache stores eclasses as
+//! `name\tmd5` pairs, the writable depcachedir as `name\tpath\tmd5` triples
+//! (`store_eclass_paths` selects which); validation compares the checksum only.
+// Portage: portdbapi._pull_valid_cache, cache/template.py, eclass_cache.py
 
 use md5::{Digest as _, Md5};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
-/// Real `portage.eapi_is_supported` (`portage/__init__.py:391`): `EAPI`
-/// in `0..=9` (`const.EAPI = 9`) plus the `_testing_eapis`
-/// (`9-pre1`) and `_deprecated_eapis` (`3_pre1`/`3_pre2`/`4_pre1`/
-/// `5_pre1`/`5_pre2`/`6_pre1`/`7_pre1`) sets. Anything else (including
-/// an empty string, which the caller normalizes to `"0"` first, like
-/// real `porttree.py:644-648`) means the cache entry is disregarded
-/// and the `depend` phase runs.
+/// Whether `EAPI` is supported: `0..=9` plus the testing (`9-pre1`) and
+/// deprecated (`3_pre1`/`3_pre2`/`4_pre1`/`5_pre1`/`5_pre2`/`6_pre1`/`7_pre1`)
+/// sets. Anything else means the cache entry is disregarded so `depend` re-runs.
+/// Callers normalize a missing/empty string to `"0"` first.
+// Portage: portage.eapi_is_supported, porttree.py
 pub fn eapi_is_supported(eapi: &str) -> bool {
     let eapi = eapi.trim();
     matches!(
@@ -51,17 +41,11 @@ pub fn eapi_is_supported(eapi: &str) -> bool {
     )
 }
 
-/// Real `_get_eapi_attrs(eapi).slot_operator` (`portage/eapi.py`): whether
-/// `:=` slot-operator dependencies exist in this EAPI. Call only with an
-/// `eapi_is_supported` EAPI -- real evaluates the attribute strictly after
-/// the support gate in `FakeVartree._apply_dynamic_deps`
-/// (`lib/_emerge/FakeVartree.py:158-169`). The rule is
-/// `Eapi(eapi) >= Eapi("5")` (`eapi.py` else-branch), where `Eapi`
-/// compares only the integer before any `-` suffix (`"9-pre1"` reads as
-/// 9). The deprecated underscore EAPIs (`3_pre1`, …) make real's `Eapi()`
-/// raise `ValueError` (no `-` to partition on); no vdb or tree can carry
-/// one in practice, so they read by numeric prefix here -- the only
-/// reachable inputs are `"0"`–`"9"`.
+/// Whether `:=` slot-operator dependencies exist in this EAPI (EAPI 5+).
+/// Call only with an `eapi_is_supported` EAPI; reads by numeric prefix, so the
+/// deprecated underscore EAPIs (which Portage's own parser rejects) read by
+/// prefix here -- unreachable in any vdb or tree in practice.
+// Portage: _get_eapi_attrs(eapi).slot_operator, FakeVartree._apply_dynamic_deps
 pub fn eapi_has_slot_operator(eapi: &str) -> bool {
     let digits: String = eapi
         .trim()
@@ -71,17 +55,10 @@ pub fn eapi_has_slot_operator(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 5)
 }
 
-/// Real `eapi_empty_groups_always_true` (`portage/eapi.py:139-140`):
-/// whether a `||` group an inactive conditional emptied is dropped
-/// (`_get_eapi_attrs(eapi).empty_groups_always_true`, `eapi.py:295`:
-/// `empty_groups_always_true = eapi <= Eapi("6")`, same
-/// dash-suffix-insensitive integer comparison `eapi_has_slot_operator`
-/// documents). Call only with an `eapi_is_supported` EAPI -- real
-/// evaluates the attribute strictly after the support gate, and an
-/// unparseable input reads `false`, matching real's own defaults struct
-/// for `None`/unsupported EAPIs (`eapi.py:247-253`, which is also what
-/// real `dep_check` feeds `use_reduce` for installed packages,
-/// `dep_check.py:865-877`).
+/// Whether a `||` group an inactive conditional emptied is dropped (EAPI 6 and
+/// below). Call only with an `eapi_is_supported` EAPI; unparseable input reads
+/// `false`, matching Portage's defaults for `None`/unsupported EAPIs.
+// Portage: _get_eapi_attrs(eapi).empty_groups_always_true
 pub fn eapi_empty_groups_always_true(eapi: &str) -> bool {
     let digits: String = eapi
         .trim()
@@ -91,13 +68,10 @@ pub fn eapi_empty_groups_always_true(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n <= 6)
 }
 
-/// Backlog #230: real `_get_eapi_attrs(eapi).iuse_effective`
-/// (`portage/eapi.py`): whether `IUSE_EFFECTIVE` exists in this EAPI and
-/// therefore governs the `PORTAGE_USE` masking (`config.py` setcpv) and
-/// the valid-flag domain, instead of the pre-EAPI-5
-/// `_get_implicit_iuse` rule. PMS defines `IUSE_EFFECTIVE` beginning
-/// with EAPI 5; same numeric-prefix reading as `eapi_has_slot_operator`
-/// (both attributes share the `Eapi(eapi) >= Eapi("5")` gate).
+/// Whether `IUSE_EFFECTIVE` exists in this EAPI (EAPI 5+) and therefore governs
+/// the `PORTAGE_USE` masking and the valid-flag domain. Same numeric-prefix
+/// reading as `eapi_has_slot_operator`.
+// Portage: _get_eapi_attrs(eapi).iuse_effective
 pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
     let digits: String = eapi
         .trim()
@@ -107,16 +81,9 @@ pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 5)
 }
 
-/// Real `eapi_has_idepend` (`portage/eapi.py:135`): whether `IDEPEND`
-/// exists in this EAPI (`_get_eapi_attrs(eapi).idepend`, `eapi.py:304`:
-/// `idepend = eapi >= Eapi("8")`, same dash-suffix-insensitive integer
-/// comparison `eapi_has_slot_operator` documents). Real `bin/ebuild.sh`'s
-/// own `depend` phase unsets `IDEPEND` when the EAPI lacks it (`if !
-/// ___eapi_has_IDEPEND; then unset IDEPEND; fi`), so an EAPI-7 ebuild's
-/// `IDEPEND` assignment never reaches saved metadata -- `portdb.aux_get`
-/// serves `""`, and `depgraph.py` never walks it. Backlog #194: the
-/// `--onlydeps-with-rdeps=y` oracle cell on an EAPI-7 root merges
-/// `[B, C, D]` with no `E` for exactly this reason.
+/// Whether `IDEPEND` exists in this EAPI (EAPI 8+). An older EAPI's `IDEPEND`
+/// assignment never reaches saved metadata, so it reads as empty.
+// Portage: eapi_has_idepend, bin/ebuild.sh depend phase
 pub fn eapi_has_idepend(eapi: &str) -> bool {
     let digits: String = eapi
         .trim()
@@ -126,41 +93,29 @@ pub fn eapi_has_idepend(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 8)
 }
 
-/// Real `portdbapi._pull_valid_cache` (`porttree.py:603-658`) against a
-/// single on-disk `md5-cache` entry: `true` when
-/// `metadata/md5-cache/<category>/<pf>` validates, so the `depend` phase
-/// can be skipped.
-///
-/// Validation mirrors real `cache/template.py::validate_entry`:
-/// - the entry parses as `KEY=value` lines (a corrupt line invalidates,
-///   real `flat_hash._parse_data` raising `CacheCorruption`);
-/// - `_md5_` equals the md5 of the current ebuild file bytes;
-/// - `EAPI` (defaulting to `"0"` when missing/empty, real
-///   `porttree.py:644-648`) is supported -- unsupported-EAPI entries
-///   are disregarded so the `depend` phase re-runs;
-/// - every `_eclasses_` pair/triple still matches the eclass file that
-///   wins across the `masters`-then-self chain (real
-///   `eclass_cache.py::validate_and_rewrite_cache`; the last tree in
-///   the chain holding the file wins, the same rule
-///   `portuale::regen::eclasses_field` documents). A missing/empty
-///   `_eclasses_` validates (nothing inherited, real's empty-dict
-///   success); a missing eclass file, a differing md5, or a malformed
-///   field length invalidates. `store_eclass_paths` selects the
-///   `name\tpath\tmd5` triple form (the depcachedir) over the
-///   `name\tmd5` pair form (the repo cache).
-///
-/// Any I/O failure (no cache file, no ebuild, no eclass dir) is
-/// `false` -- the `depend` phase runs, exactly like real falling
-/// through to `EbuildMetadataPhase` when no auxdb hits.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn cache_entry_is_valid(
-    ebuild_path: &Path,
-    repo_location: &Path,
-    masters: &[PathBuf],
-    category: &str,
-    pf: &str,
-    store_eclass_paths: bool,
-) -> bool {
+/// Arguments of [`cache_entry_is_valid`].
+pub struct CacheEntryIsValidArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub repo_location: &'a Path,
+    pub masters: &'a [PathBuf],
+    pub category: &'a str,
+    pub pf: &'a str,
+    pub store_eclass_paths: bool,
+}
+
+/// `true` when `metadata/md5-cache/<category>/<pf>` validates, so the `depend`
+/// phase can be skipped. Any I/O failure (no cache file, no ebuild, no eclass
+/// dir) is `false` -- `depend` runs, as when no auxdb hits.
+// Portage: portdbapi._pull_valid_cache, porttree.py, cache/template.py
+pub fn cache_entry_is_valid(args: CacheEntryIsValidArgs<'_>) -> bool {
+    let CacheEntryIsValidArgs {
+        ebuild_path,
+        repo_location,
+        masters,
+        category,
+        pf,
+        store_eclass_paths,
+    } = args;
     let cache_file = repo_location
         .join("metadata/md5-cache")
         .join(category)
@@ -178,12 +133,10 @@ pub fn cache_entry_is_valid(
     )
 }
 
-/// The path-independent half of [`cache_entry_is_valid`]: one entry's
-/// bytes in real's `flat_hash` format, accepted or not against the
-/// current ebuild. Shared by `--regen` (the repo's pregen
-/// `metadata/md5-cache`, pairs), the depcachedir rung
-/// (`ebuild_phases::depend_phase_metadata`, triples) and
-/// `repo_aux_metadata`'s read-path validation.
+/// The path-independent half of [`cache_entry_is_valid`]: one entry's bytes in
+/// `flat_hash` format, accepted or not against the current ebuild. Shared by
+/// `--regen`, the depcachedir rung and `repo_aux_metadata`'s read-path validation.
+// Portage: cache/template.py::validate_entry
 pub fn entry_is_valid(
     text: &str,
     ebuild_path: &Path,
@@ -226,15 +179,14 @@ pub fn entry_is_valid(
         .chain(std::iter::once(repo_location))
         .collect();
     for pair in parts.chunks(width) {
-        // Triple form: `name\tpath\tmd5`; pair form: `name\tmd5`. Real's
-        // `validate_and_rewrite_cache` compares the checksum entry only.
+        // Only the checksum is compared; a triple's path element is ignored.
         let (name, want_md5) = if store_eclass_paths {
             (pair[0], pair[2])
         } else {
             (pair[0], pair[1])
         };
-        // `md5` values are 32 hex digits (real `_md5_deserializer`
-        // rejects anything else as corruption).
+        // `md5` values are 32 hex digits; anything else is corruption.
+        // Portage: _md5_deserializer
         if want_md5.len() != 32 || !want_md5.bytes().all(|b| b.is_ascii_hexdigit()) {
             return false;
         }
@@ -252,11 +204,10 @@ pub fn entry_is_valid(
     true
 }
 
-/// The md5 of one eclass file, memoised per path and invalidated when
-/// the file's mtime/size change -- real `eclass_cache.hashed_path`'s own
-/// mtime check. The memo only matters when one process reads the same
-/// eclass many times (the resolver's per-candidate validation), which is
-/// exactly real's hot path.
+/// The md5 of one eclass file, memoised per path and invalidated on mtime/size
+/// change. Only matters when one process reads the same eclass many times (the
+/// resolver's per-candidate validation).
+// Portage: eclass_cache.hashed_path
 fn eclass_md5(path: &Path) -> Option<String> {
     struct Cached {
         mtime: Option<std::time::SystemTime>,
@@ -294,11 +245,9 @@ fn eclass_md5(path: &Path) -> Option<String> {
     md5
 }
 
-/// The `masters`-then-self chain a validator needs for `_eclasses_`,
-/// memoised per repo location. A repo the resolved config does not
-/// describe (or an unreadable config) yields an empty chain:
-/// `_eclasses_` then fails validation, so the depend phase re-runs --
-/// the safe direction.
+/// The `masters`-then-self chain a validator needs for `_eclasses_`, memoised per
+/// repo location. An undescribed repo (or unreadable config) yields an empty
+/// chain: `_eclasses_` then fails validation, so `depend` re-runs (the safe side).
 pub fn repo_masters_for_location(repo_location: &Path) -> Vec<PathBuf> {
     type Memo = HashMap<PathBuf, Vec<PathBuf>>;
     static MEMO: OnceLock<RwLock<Memo>> = OnceLock::new();
@@ -389,14 +338,14 @@ mod tests {
     ) -> bool {
         let dir = Layout::new();
         let (ebuild_path, repo, masters) = write_repo(&dir, ebuild, eclass, cache);
-        cache_entry_is_valid(
-            &ebuild_path,
-            &repo,
-            &masters,
-            "dev-libs",
-            "pkg-1.0",
-            store_paths,
-        )
+        cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: store_paths,
+        })
     }
 
     #[test]
@@ -432,14 +381,14 @@ mod tests {
     fn corrupt_line_and_unsupported_eapi_invalidate() {
         let ebuild = "EAPI=8\n";
         let md5 = md5_hex(ebuild.as_bytes());
-        // No "=" on one line: real `flat_hash._parse_data` corruption.
+        // No "=" on one line: `flat_hash._parse_data` corruption.
         assert!(!valid_repo(
             ebuild,
             None,
             Some(&format!("EAPI=8\nNOEQUALS\n_md5_={md5}\n")),
             false,
         ));
-        // Unsupported EAPI is disregarded (real `porttree.py:648-653`).
+        // Unsupported EAPI is disregarded (Portage: porttree.py, _pull_valid_cache).
         assert!(!valid_repo(
             ebuild,
             None,
@@ -470,11 +419,7 @@ mod tests {
         assert!(!valid_repo(ebuild, Some("# eclass\n"), Some(&good), true));
     }
 
-    /// S0 cell (a): the writable depcachedir is `mtime_md5_database`
-    /// (`store_eclass_paths = True`), so its `_eclasses_` is
-    /// `name\tpath\tmd5`; the path is ignored for validation (real
-    /// `validate_and_rewrite_cache`'s `itemgetter(1)` on the
-    /// `(dir, checksum)` tuple).
+    /// Triple form (`store_eclass_paths`): `name\tpath\tmd5`, path ignored.
     #[test]
     fn triple_eclass_format() {
         let ebuild = "EAPI=8\n";
@@ -504,8 +449,7 @@ mod tests {
         assert!(!valid_repo(ebuild, Some("# eclass\n"), Some(&good), false));
     }
 
-    /// A changed eclass must be re-hashed, not served from the memo
-    /// (real `eclass_cache.hashed_path`'s mtime check).
+    /// A changed eclass must be re-hashed, not served from the memo.
     #[test]
     fn eclass_change_after_a_validation_is_seen() {
         let dir = Layout::new();
@@ -515,24 +459,24 @@ mod tests {
         let cache = format!("EAPI=8\n_eclasses_=myclass\t{first}\n_md5_={ebuild_md5}\n");
         let (ebuild_path, repo, masters) =
             write_repo(&dir, ebuild, Some("# eclass\n"), Some(&cache));
-        assert!(cache_entry_is_valid(
-            &ebuild_path,
-            &repo,
-            &masters,
-            "dev-libs",
-            "pkg-1.0",
-            false
-        ));
+        assert!(cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: false
+        }));
         // Content changes (size and mtime change) -> invalid.
         std::fs::write(repo.join("eclass/myclass.eclass"), "# changed!\n").unwrap();
-        assert!(!cache_entry_is_valid(
-            &ebuild_path,
-            &repo,
-            &masters,
-            "dev-libs",
-            "pkg-1.0",
-            false
-        ));
+        assert!(!cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: false
+        }));
     }
 
     #[test]
@@ -547,8 +491,6 @@ mod tests {
 
     #[test]
     fn eapi_slot_operator_matches_portage() {
-        // Real `_get_eapi_attrs(eapi).slot_operator` (`portage/eapi.py`):
-        // `Eapi(eapi) >= Eapi("5")`, dash-suffix-insensitive.
         for eapi in ["5", "6", "7", "8", "9", "9-pre1", " 8 "] {
             assert!(eapi_has_slot_operator(eapi), "{eapi}");
         }
@@ -559,9 +501,6 @@ mod tests {
 
     #[test]
     fn eapi_idepend_matches_portage() {
-        // Real `eapi_has_idepend` (`portage/eapi.py:135`): `idepend =
-        // eapi >= Eapi("8")`, dash-suffix-insensitive like the slot
-        // operator above.
         for eapi in ["8", "9", "9-pre1", " 8 "] {
             assert!(eapi_has_idepend(eapi), "{eapi}");
         }
@@ -572,9 +511,6 @@ mod tests {
 
     #[test]
     fn eapi_empty_groups_matches_portage() {
-        // Real `_get_eapi_attrs(eapi).empty_groups_always_true`
-        // (`portage/eapi.py:295`): `eapi <= Eapi("6")`,
-        // dash-suffix-insensitive like the slot operator above.
         for eapi in ["0", "1", "5", "6", " 6 "] {
             assert!(eapi_empty_groups_always_true(eapi), "{eapi}");
         }

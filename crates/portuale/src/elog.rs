@@ -1,57 +1,16 @@
-// Real `lib/portage/elog/`. After every package merge, real
-// `elog_process(cpv, settings)` reads the per-phase message files
-// `bin/isolated-functions.sh::__elog_base` wrote under `${T}/logging/`,
-// filters them by `PORTAGE_ELOG_CLASSES` (default `"log warn error"`),
-// and hands them to each module named in `PORTAGE_ELOG_SYSTEM` (default
-// `"save_summary:log,warn,error,qa echo"`).
-//
-// This module ports:
-//   - `mod_echo` -- `collect` reads one package's `${T}/logging/`,
-//     `echo_summary` prints the accumulated `* Messages for package
-//     <cpv>:` blocks (real `finalize()`, an atexit handler).
-//   - `mod_save` -- one `<logdir>/elog/[<cat>/]<pf>:<ts>.log` file per
-//     package (`save_process`).
-//   - `mod_save_summary` -- append every package's messages to a single
-//     `<logdir>/elog/summary.log` (`save_summary_process`). This one is
-//     ON by default (it's in `make.globals`'s `PORTAGE_ELOG_SYSTEM`).
-//   - `mod_syslog` -- one real `syslog(3)` call per elog line, tagged
-//     `"portage"`, facility `LOG_LOCAL5` (`syslog_process`).
-//   - `mod_custom` -- always saves the file first (real, unconditional
-//     `mod_save.process` call), then runs the real, unmodified
-//     `$PORTAGE_ELOG_COMMAND` with `${LOGFILE}`/`${PACKAGE}` substituted
-//     (`custom_process`).
-//   - `mod_mail` -- one MIME mail per package, sent immediately via a
-//     sendmail binary (`PORTAGE_ELOG_MAILURI` naming an absolute path)
-//     or hand-rolled plain SMTP (AUTH LOGIN/PLAIN, dot-stuffing),
-//     `mail_process`.
-//   - `mod_mail_summary` -- accumulates every package's messages and
-//     sends ONE multipart mail at process exit (real atexit `finalize`,
-//     armed on first use), `mail_summary_accumulate` /
-//     `mail_summary_finalize`.
-//
-// Portuale never deletes the builddir, so the driver (`pretend.rs`)
-// re-scans each entry's `${T}/logging/` after the merge loop (and after
-// the `emerge -C`/`--depclean`/`--prune` removal loop, filtered to the
-// `prerm`/`postrm` phases -- real `dblink.unmerge`'s own
-// `_elog_process(phasefilter=...)`) via `process_batch` -- no message
-// buffer threaded through the (un)merge machinery.
-//
-// `PORTAGE_ELOG_CLASSES` / `PORTAGE_ELOG_SYSTEM` / the three
-// `PORTAGE_ELOG_MAIL*` settings are read from the
-// env only (no `make.conf`), defaulting to `make.globals`. The `logdir`
-// is `$PORTAGE_LOGDIR` else `<root>/var/log/portage` -- root-relative, a
-// deliberate divergence from real `mod_save`'s `<BROOT>/var/log/portage`
-// (`BROOT` is `/`, needs privileges), matching portuale's other
-// `<root>`-relative path choices for a relocatable tree. The real
-// uid/gid/mode chmod dance on the log dir/files is a documented cut, like
-// every other privilege-preserving `chown` in portuale.
+//! Elog message collection and dispatch (Portage's `lib/portage/elog/`).
+//!
+//! After a merge, per-phase `${T}/logging/` files are filtered by class
+//! and handed to the modules in `PORTAGE_ELOG_SYSTEM` (`echo`, `save`,
+//! `save_summary`, `syslog`, `custom`, `mail`, `mail_summary`).
+//! Settings come from the env only; the logdir is root-relative.
 
 use crate::color::Colorizer;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Real `portage.const.EBUILD_PHASES`, in order -- `mod_echo._finalize`
-/// walks this so messages print in phase order regardless of file mtime.
+/// Phase order for message printing, regardless of file mtime.
+/// Portage: const.EBUILD_PHASES.
 const EBUILD_PHASES: &[&str] = &[
     "pretend",
     "setup",
@@ -75,9 +34,8 @@ const EBUILD_PHASES: &[&str] = &[
 
 /// One `<TYPE> <message>` line from a `${T}/logging/<phase>` file.
 pub struct ElogMessage {
-    /// Which `${T}/logging/<phase>` file this came from -- real
-    /// `collect_ebuild_messages` keys on it, and `_combine_logentries`
-    /// emits a `<LEVEL>: <phase>` header on every phase/level change.
+    /// Which `${T}/logging/<phase>` file this came from; headers emit on
+    /// every phase/level change.
     pub phase: String,
     /// `LOG` / `INFO` / `WARN` / `ERROR` / `QA`.
     pub level: String,
@@ -86,7 +44,7 @@ pub struct ElogMessage {
 
 /// One package's worth of collected, class-filtered elog messages.
 pub struct ElogPackage {
-    /// `cat/pkg-ver` (real `mod_echo`'s `key`).
+    /// `cat/pkg-ver`.
     pub cpv: String,
     /// The `ROOT` the package merged to (`/` renders the short header).
     pub root: String,
@@ -101,23 +59,20 @@ fn elog_system_tokens() -> Vec<String> {
         .collect()
 }
 
-/// Whether the module named `name` (`echo`, `save`, `save_summary`, …)
-/// is listed in `PORTAGE_ELOG_SYSTEM` -- its token is either the bare
-/// name or `name:levels`. `-` is accepted for `_` (real `elog_process`:
-/// `s = s.replace("-", "_")`), so `save-summary` == `save_summary`.
+/// Whether module `name` is listed in `PORTAGE_ELOG_SYSTEM` (bare name
+/// or `name:levels`); `-` is accepted for `_`.
 pub fn module_enabled(name: &str) -> bool {
     elog_system_tokens()
         .iter()
         .any(|t| t.split(':').next().map(|m| m.replace('-', "_")).as_deref() == Some(name))
 }
 
-/// Whether the `echo` module is enabled (real default: yes).
+/// Whether the `echo` module is enabled (default: yes).
 pub fn echo_enabled() -> bool {
     module_enabled("echo")
 }
 
-/// `PORTAGE_ELOG_CLASSES` (real `make.globals` default `"log warn
-/// error"`), uppercased.
+/// `PORTAGE_ELOG_CLASSES`, uppercased (default `"log warn error"`).
 fn portage_elog_classes() -> HashSet<String> {
     std::env::var("PORTAGE_ELOG_CLASSES")
         .unwrap_or_else(|_| "log warn error".to_string())
@@ -126,10 +81,8 @@ fn portage_elog_classes() -> HashSet<String> {
         .collect()
 }
 
-/// The uppercased message classes module `name` shows -- its own
-/// `name:levels` override in `PORTAGE_ELOG_SYSTEM` if present (real
-/// `elog_process`'s per-module `filter_loglevels(..., levels)`), else
-/// `PORTAGE_ELOG_CLASSES`.
+/// The uppercased message classes module `name` shows: its own
+/// `name:levels` override if present, else `PORTAGE_ELOG_CLASSES`.
 fn module_classes(name: &str) -> HashSet<String> {
     for t in elog_system_tokens() {
         if let Some((m, levels)) = t.split_once(':')
@@ -145,9 +98,9 @@ fn module_classes(name: &str) -> HashSet<String> {
     portage_elog_classes()
 }
 
-/// Reads `${t_dir}/logging/*` for one package -- every `LOG`/`INFO`/
-/// `WARN`/`ERROR`/`QA` line, in real `EBUILD_PHASES` order, unfiltered
-/// (real `collect_ebuild_messages`). Empty when there is nothing there.
+/// Reads `${t_dir}/logging/*` for one package, in phase order, unfiltered.
+/// Empty when there is nothing there.
+/// Portage: collect_ebuild_messages.
 pub fn collect_all(t_dir: &Path) -> Vec<ElogMessage> {
     let logging = t_dir.join("logging");
     let mut out = Vec::new();
@@ -175,12 +128,8 @@ pub fn collect_all(t_dir: &Path) -> Vec<ElogMessage> {
     out
 }
 
-/// `collect_all`, restricted to the named phases -- real
-/// `_elog_process(phasefilter=...)`, which `dblink.unmerge()` calls with
-/// `("prerm", "postrm")` so a package's stale install-time `${T}/logging`
-/// files don't resurface on removal. The builddir is cleaned after every
-/// merge since backlog #42, but `FEATURES=noclean`/`keepwork` can still
-/// keep one, so the filter stays load-bearing.
+/// `collect_all` restricted to the named phases; the unmerge path reads
+/// `prerm`/`postrm` only so stale install-time files don't resurface.
 pub fn collect_all_phases(t_dir: &Path, phases: &[&str]) -> Vec<ElogMessage> {
     collect_all(t_dir)
         .into_iter()
@@ -188,7 +137,7 @@ pub fn collect_all_phases(t_dir: &Path, phases: &[&str]) -> Vec<ElogMessage> {
         .collect()
 }
 
-/// `collect_all` filtered to `classes` (real `filter_loglevels`).
+/// `collect_all` filtered to `classes`.
 fn filter_by_classes<'a>(
     msgs: &'a [ElogMessage],
     classes: &HashSet<String>,
@@ -199,8 +148,7 @@ fn filter_by_classes<'a>(
 }
 
 /// `collect_all` filtered by the `echo` module's classes -- the shape
-/// `echo_summary` consumes. `phases` optionally restricts which
-/// `${T}/logging/<phase>` files are read (real `phasefilter`).
+/// `echo_summary` consumes. `phases` optionally restricts the files read.
 pub fn collect(t_dir: &Path, phases: Option<&[&str]>) -> Vec<ElogMessage> {
     let classes = module_classes("echo");
     let all = match phases {
@@ -212,10 +160,10 @@ pub fn collect(t_dir: &Path, phases: Option<&[&str]>) -> Vec<ElogMessage> {
         .collect()
 }
 
-/// Real `_combine_logentries`: one flat string, phases in `EBUILD_PHASES`
-/// order, a `<LEVEL>: <phase>` header emitted whenever the (phase, level)
-/// pair changes, a trailing blank line when anything was written.
+/// One flat string in phase order, with a `<LEVEL>: <phase>` header on
+/// every (phase, level) change and a trailing blank line when non-empty.
 /// `msgs` must already be in `collect_all`'s phase order.
+/// Portage: _combine_logentries.
 fn combine_logentries(msgs: &[&ElogMessage]) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut prev: Option<(&str, &str)> = None;
@@ -233,25 +181,20 @@ fn combine_logentries(msgs: &[&ElogMessage]) -> String {
     lines.join("\n")
 }
 
-/// `$PORTAGE_LOGDIR` if set, else `<root>/var/log/portage` -- see this
-/// module's own doc comment on the `<BROOT>` divergence.
+/// `$PORTAGE_LOGDIR` if set, else `<root>/var/log/portage`.
 pub fn logdir(root: &Path) -> PathBuf {
     std::env::var_os("PORTAGE_LOGDIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("var/log/portage"))
 }
 
-/// UTC `%Y%m%d-%H%M%S` of the current time (real `mod_save`'s
-/// `time.strftime(..., time.gmtime())`).
+/// UTC `%Y%m%d-%H%M%S` of the current time.
 fn utc_stamp() -> String {
     utc_stamp_at(std::time::SystemTime::now())
 }
 
-/// UTC `%Y%m%d-%H%M%S` of an arbitrary `SystemTime` -- `utc_stamp`'s own
-/// formatting, generalized so `emerge_build`'s own `PORTAGE_LOGDIR`
-/// build-log naming can reuse it against a `.logid` marker file's mtime
-/// (real `prepare_build_dirs.py`'s own `time.gmtime(os.stat(logid_path)
-/// .st_mtime)`) instead of "now".
+/// `utc_stamp`'s formatting for an arbitrary `SystemTime`, reused for
+/// `.logid`-mtime-based build-log naming instead of "now".
 pub(crate) fn utc_stamp_at(time: std::time::SystemTime) -> String {
     let secs = time
         .duration_since(std::time::UNIX_EPOCH)
@@ -274,12 +217,10 @@ pub(crate) fn utc_stamp_at(time: std::time::SystemTime) -> String {
     format!("{y:04}{m:02}{d:02}-{hh:02}{mm:02}{ss:02}")
 }
 
-/// Real `mod_save.process`: write one package's `fulltext` to
-/// `<logdir>/elog/<pf>:<utc-stamp>.log` (or, with `FEATURES=split-elog`,
-/// `<logdir>/elog/<cat>/<pf>:<stamp>.log`; otherwise the `<cat>:` is
-/// prefixed onto the filename). `key` is `cat/pkg-ver`. Returns the path
-/// written. Skipped entirely by the caller when the package has no
-/// class-filtered messages.
+/// Writes one package's `fulltext` to `<logdir>/elog/<pf>:<stamp>.log`
+/// (or `<logdir>/elog/<cat>/<pf>:<stamp>.log` with `split-elog`).
+/// Returns the path written.
+/// Portage: mod_save.process.
 pub fn save_process(
     logdir: &Path,
     key: &str,
@@ -299,12 +240,9 @@ pub fn save_process(
     Ok(path)
 }
 
-/// Real `mod_save_summary.process`: append one package's block to
-/// `<logdir>/elog/summary.log` -- a `>>> Messages generated by process
-/// <pid> on <local-time> for package <key>:\n\n` header, then `fulltext`,
-/// then `\n`. Portuale uses the same UTC stamp `mod_save` does (with a
-/// `UTC` suffix) rather than real `time.localtime()` + `%Z`, for a
-/// deterministic, timezone-independent line.
+/// Appends one package's block to `<logdir>/elog/summary.log`, with a UTC
+/// stamp (not local time) for a deterministic, timezone-independent line.
+/// Portage: mod_save_summary.process.
 pub fn save_summary_process(logdir: &Path, key: &str, fulltext: &str) -> Result<PathBuf, String> {
     use std::io::Write as _;
     let elogdir = logdir.join("elog");
@@ -325,12 +263,8 @@ pub fn save_summary_process(logdir: &Path, key: &str, fulltext: &str) -> Result<
     Ok(path)
 }
 
-/// Real `mod_syslog.py`'s own `_pri` map: `INFO`/`ERROR`/`LOG` each get
-/// their own real syslog level; `WARN` and `QA` (a real, distinct level
-/// -- see `ElogMessage::level`'s own vocabulary) both fall to
-/// `LOG_WARNING`, matching real `_pri["QA"] = syslog.LOG_WARNING`. Split
-/// out from `syslog_process` so the mapping is directly unit-testable
-/// without any real `syslog(3)` call involved.
+/// Maps a level to its syslog priority; `WARN` and `QA` fall to
+/// `LOG_WARNING`. Split out for direct unit tests without `syslog(3)`.
 fn syslog_priority(level: &str) -> libc::c_int {
     match level {
         "INFO" => libc::LOG_INFO,
@@ -340,24 +274,15 @@ fn syslog_priority(level: &str) -> libc::c_int {
     }
 }
 
-/// Real `mod_syslog.process`'s own per-line format: `"{key}: {phase}:
-/// {line}"`, trailing newline stripped (real `line.rstrip("\n")`). Split
-/// out from `syslog_process` for the same direct-unit-test reason
-/// `syslog_priority` is.
+/// `"{key}: {phase}: {line}"` with the trailing newline stripped.
+/// Split out for direct unit tests.
 fn syslog_line(key: &str, msg: &ElogMessage) -> String {
     format!("{key}: {}: {}", msg.phase, msg.text.trim_end_matches('\n'))
 }
 
-/// Real `mod_syslog.process` (`elog/mod_syslog.py`): one `syslog(3)`
-/// message per elog line, tagged `"portage"`, facility `LOG_LOCAL5`,
-/// priority mapped from that line's own level (`syslog_priority`).
-/// `key` is `cat/pkg-ver`. The real `openlog()` "logopt" argument is
-/// literally `LOG_ERR | LOG_WARNING | LOG_INFO | LOG_NOTICE` in real
-/// portage's own source -- those are priority-level constants, not
-/// `LOG_PID`/`LOG_CONS`-style option flags, almost certainly a
-/// copy-paste mistake upstream -- but this ports real behavior
-/// bug-for-bug rather than the (more sensible) `0` an author fixing it
-/// today would likely use.
+/// One `syslog(3)` message per elog line, tagged `"portage"`, facility
+/// `LOG_LOCAL5`, priority mapped from the line's level.
+/// Portage: elog/mod_syslog.py, process.
 pub fn syslog_process(key: &str, msgs: &[&ElogMessage]) {
     if msgs.is_empty() {
         return;
@@ -381,10 +306,8 @@ pub fn syslog_process(key: &str, msgs: &[&ElogMessage]) {
         let Ok(c_line) = std::ffi::CString::new(line) else {
             continue;
         };
-        // SAFETY: a real, fixed `"%s"` format string -- `c_line` (which
-        // may contain `%` from arbitrary ebuild output) is never itself
-        // interpreted as a format string, matching real Python's own
-        // `syslog.syslog()` (which always does the same internally).
+        // SAFETY: a fixed `"%s"` format string -- `c_line` (which may
+        // contain `%` from ebuild output) is never itself a format string.
         unsafe {
             libc::syslog(priority, c"%s".as_ptr(), c_line.as_ptr());
         }
@@ -396,17 +319,10 @@ pub fn syslog_process(key: &str, msgs: &[&ElogMessage]) {
     }
 }
 
-/// Real `mod_custom.process` (`elog/mod_custom.py`): always calls
-/// `mod_save.process` first (real, unconditionally, even when the
-/// `save` module itself isn't separately enabled -- `${LOGFILE}` below
-/// needs a real path to substitute), then runs `$PORTAGE_ELOG_COMMAND`
-/// (real, unmodified `bash -c`, matching portuale's own "run the real
-/// external process" precedent) with `${LOGFILE}`/`${PACKAGE}`
-/// substituted. Errors if `PORTAGE_ELOG_COMMAND` is unset/empty (real
-/// `MissingParameter`) or the command exits non-zero (real
-/// `PortageException`). Returns the saved log file's own path, for the
-/// caller's "written to" line -- the same file `${LOGFILE}` pointed the
-/// command at.
+/// Saves the file first, then runs `$PORTAGE_ELOG_COMMAND` (`bash -c`)
+/// with `${LOGFILE}`/`${PACKAGE}` substituted. Returns the saved path.
+/// Errors when the command is unset/empty or exits non-zero.
+/// Portage: elog/mod_custom.py, process.
 pub fn custom_process(
     logdir: &Path,
     key: &str,
@@ -437,60 +353,7 @@ pub fn custom_process(
 
 // --- mail settings / MIME / delivery -------------------------------------
 
-/// Real `lib/portage/elog/mod_mail.py` + `mod_mail_summary.py` +
-/// `lib/portage/mail.py`, in one place.
-///
-/// `mod_mail.process` sends one mail per package right away:
-/// `PORTAGE_ELOG_MAILURI` picks the recipient (default
-/// `root@localhost`, real `make.globals`) and optionally the route --
-/// `"address [[user:passwd@]mailserver[:port]]"`, where a `mailserver`
-/// that is an absolute path means "pipe the message to that sendmail
-/// binary" (`sendmail -f <from> <recipient>` on stdin) instead of SMTP.
-/// `PORTAGE_ELOG_MAILFROM` (default `portage@localhost`) and
-/// `PORTAGE_ELOG_MAILSUBJECT` (default
-/// `"[portage] ebuild log for ${PACKAGE} on ${HOST}"`) take the same
-/// `${HOST}`/`${PACKAGE}`/`${ACTION}` substitutions real does;
-/// `${ACTION}` is `merged`, or `unmerged` when only `prerm`/`postrm`
-/// (or `other`) phases appear, else `unknown`.
-///
-/// `mod_mail_summary.process` only accumulates
-/// (`header + fulltext` per package, with a snapshot of the three
-/// settings -- real's `_items[config_root]`); its `finalize` (an atexit
-/// handler in real, registered from `elog/__init__.py`) sends ONE mail
-/// for the whole run -- subject's `${PACKAGE}` is `one package` /
-/// `multiple packages`, the body lists every package, each package's
-/// messages ride as a MIME attachment.
-///
-/// MIME shape mirrors real `portage.mail.create_message` (single
-/// `text/plain` UTF-8 part, `multipart/mixed` with one text part plus
-/// one part per attachment, `From `/`To`/`From`/`Subject`/`Date`
-/// headers, bodies base64-wrapped at 76 columns exactly like Python's
-/// `email` package with an explicit UTF-8 charset). `Date` is a local
-/// RFC-2822 stamp (`formatdate(localtime=True)`); the `From ` mbox
-/// separator carries the same stamp in asctime shape, as Python's
-/// `set_unixfrom` flattening does.
-///
-/// Delivery without new dependencies: the sendmail-binary route spawns
-/// the binary directly (real `os.popen`s a shell word-split command
-/// line -- argv is the same for sane addresses and safer for odd
-/// ones); the SMTP route is a small hand-rolled conversation over
-/// `std::net::TcpStream` (EHLO extensions, `AUTH LOGIN` then `AUTH
-/// PLAIN`, `MAIL`/`RCPT`/`DATA` with dot-stuffing, `QUIT`, 60 s
-/// I/O timeouts matching real's finalize alarm). Deliberate cut:
-/// STARTTLS (`:port` above 100000) needs a TLS stack portuale doesn't
-/// carry -- attempting it prints a one-line cut notice and skips, the
-/// same "message still logged elsewhere, action skipped" shape the old
-/// `mail*`-unsupported notice had. `socket.getfqdn()` for `${HOST}` is
-/// approximated with `gethostname()` (no DNS lookup); on a system
-/// without DNS-backed names these already agree.
-///
-/// Errors follow real's own `PortageException` text: SMTP protocol
-/// failures print `!!! An error occurred while trying to send
-/// logmail:`, unreachable hosts `!!! A network error occurred ... Sure
-/// you configured PORTAGE_ELOG_MAILURI correctly?`, a failing sendmail
-/// binary its own `!!! <path> returned with a non-zero exit code`
-/// line -- all to stderr, delivery of the other modules unaffected.
-/// Real `make.globals` defaults for the three mail settings.
+/// `PORTAGE_ELOG_MAILURI` (default `root@localhost`).
 fn elog_mailuri() -> String {
     std::env::var("PORTAGE_ELOG_MAILURI").unwrap_or_else(|_| "root@localhost".to_string())
 }
@@ -504,10 +367,8 @@ fn elog_mailsubject() -> String {
         .unwrap_or_else(|_| "[portage] ebuild log for ${PACKAGE} on ${HOST}".to_string())
 }
 
-/// `${HOST}` for subject/from substitution: real
-/// `socket.getfqdn()` (a DNS-backed canonical name); portuale reads
-/// the local hostname via `gethostname(2)` with no DNS lookup, which
-/// agrees on every system whose hostname already is the FQDN.
+/// `${HOST}` for subject/from substitution: the local hostname via
+/// `gethostname(2)`, no DNS lookup.
 fn mail_host() -> String {
     let mut buf = [0 as libc::c_char; 256];
     // SAFETY: `buf` is a valid 256-byte stack array; `gethostname`
@@ -524,10 +385,9 @@ fn mail_host() -> String {
         .into_owned()
 }
 
-/// Real `portage.mail._force_ascii_if_necessary` (gentoo bug #291331):
-/// smtplib is ASCII-only, so non-ASCII becomes `\xNN`/`\uNNNN`
-/// backslash escapes. Subjects go through this; bodies travel
-/// base64'd instead.
+/// Non-ASCII becomes `\xNN`/`\uNNNN` backslash escapes (smtplib is
+/// ASCII-only). Subjects go through this; bodies travel base64'd.
+/// Portage: mail._force_ascii_if_necessary.
 fn force_ascii(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -547,8 +407,8 @@ fn force_ascii(s: &str) -> String {
     out
 }
 
-/// Minimal base64 (AUTH credentials, MIME bodies) -- no new dependency
-/// for ~20 lines; standard alphabet, `=` padding.
+/// Minimal base64 (AUTH credentials, MIME bodies); standard alphabet,
+/// `=` padding.
 fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -568,8 +428,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Wrap base64 at 76 columns, the way Python's `email` package emits a
-/// UTF-8-charset payload.
+/// Base64 wrapped at 76 columns, like a UTF-8 `email` payload.
 fn base64_wrapped(text: &str) -> String {
     let encoded = base64_encode(text.as_bytes());
     let mut out = String::new();
@@ -584,14 +443,9 @@ fn base64_wrapped(text: &str) -> String {
     out
 }
 
-/// Real `email.utils.formatdate(localtime=True)`: local RFC-2822 stamp
-/// (`Thu, 10 Sep 2026 07:45:00 +0200`). `%a`/`%b` follow the process
-/// locale like any C `strftime` (real Python always renders English --
-/// portuale runs under the C locale in practice, same result).
+/// Local RFC-2822 stamp for the mail `Date` header.
 // `libc::time_t` is deprecated in the libc crate's musl definitions
-// ("changed to 64-bit in musl 1.2.0, we'll follow that change in a
-// future release", libc#1848) while `localtime_r` still takes it. Keep
-// the ABI-correct alias for this one call; the value is epoch seconds.
+// while `localtime_r` still takes it; keep the alias for this call.
 #[allow(deprecated)]
 fn rfc2822_now() -> String {
     let now = std::time::SystemTime::now()
@@ -625,9 +479,7 @@ fn rfc2822_now() -> String {
 
 // --- MIME --------------------------------------------------------------
 
-/// One `text/plain` MIME part, real `MIMEText(body)` +
-/// `set_charset("UTF-8")` (which is why the payload is base64, even
-/// when it happens to be pure ASCII).
+/// One `text/plain` UTF-8 MIME part (base64 even when pure ASCII).
 fn mime_text_part(body: &str) -> String {
     format!(
         "Content-Type: text/plain; charset=\"utf-8\"\n\
@@ -639,11 +491,10 @@ fn mime_text_part(body: &str) -> String {
     )
 }
 
-/// Real `portage.mail.create_message`: `From ` mbox separator, then
-/// `To`/`From`/`Subject`/`Date`, then either one text part or
-/// `multipart/mixed` (text body first, then one part per attachment).
-/// `subject` must already be `${...}`-substituted; it is
-/// ASCII-forced here, like real's `Header(...)` assignment.
+/// `From ` mbox separator, headers, then one text part or
+/// `multipart/mixed` (text first, then one part per attachment).
+/// `subject` must already be `${...}`-substituted and ASCII-forced.
+/// Portage: mail.create_message.
 fn create_message(
     from: &str,
     recipient: &str,
@@ -663,10 +514,8 @@ fn create_message(
     if attachments.is_empty() {
         msg.push_str(&mime_text_part(body));
     } else {
-        // Real's boundary is `email`'s random token; portuale mints
-        // one from pid + time (same uniqueness role, and -- unlike a
-        // fixed string -- it cannot collide with a logged payload).
-        // Tests match the structure, never the token.
+        // Minted from pid + time (cannot collide with a logged payload);
+        // tests match the structure, never the token.
         let boundary = format!(
             "portuale-elog-{}-{}",
             std::process::id(),
@@ -694,12 +543,11 @@ fn create_message(
 
 // --- routing ------------------------------------------------------------
 
-/// Where one message goes: real `PORTAGE_ELOG_MAILURI`
-/// `"address [[user:passwd@]mailserver[:port]]"` -- an absolute-path
-/// `mailserver` pipes to that sendmail binary, anything else is SMTP
-/// (`localhost:25` when bare). A `:port` above 100000 means STARTTLS
-/// on `port - 100000` (real `mail.py`); portuale cannot do TLS and
-/// reports that as a cut at send time.
+/// Where one message goes: an absolute-path `mailserver` pipes to that
+/// sendmail binary, anything else is SMTP (`localhost:25` when bare).
+/// A `:port` above 100000 means STARTTLS on `port - 100000` (a cut:
+/// reported at send time, since there is no TLS stack).
+/// Portage: PORTAGE_ELOG_MAILURI.
 enum MailRoute {
     Sendmail {
         path: String,
@@ -714,9 +562,8 @@ enum MailRoute {
     },
 }
 
-/// Split `PORTAGE_ELOG_MAILURI` into its recipient and route. Returns
-/// the recipient alone (direct-SMTP-default shape) when there is no
-/// second word, exactly like real's `else` branch.
+/// Splits `PORTAGE_ELOG_MAILURI` into its recipient and route; with no
+/// second word the recipient alone (direct-SMTP default).
 fn parse_mailuri(uri: &str) -> (String, Option<MailRoute>) {
     let mut words = uri.split_whitespace();
     let recipient = words.next().unwrap_or("root@localhost").to_string();
@@ -766,11 +613,10 @@ fn parse_mailuri(uri: &str) -> (String, Option<MailRoute>) {
     )
 }
 
-/// Real `portage.mail.send_mail` over the parsed route: the sendmail
-/// binary gets `-f <from> <recipient>` on argv and the message on
-/// stdin; SMTP runs the hand-rolled conversation below. `Ok(())`
-/// means accepted; `Err` text already follows real's own
-/// `PortageException` shapes (the caller just prints it).
+/// Sends one message over the parsed route: the sendmail binary gets
+/// `-f <from> <recipient>` on argv and the message on stdin, else the
+/// hand-rolled SMTP conversation below. `Err` text is already caller-ready.
+/// Portage: mail.send_mail.
 fn send_mail(
     from: &str,
     message: &str,
@@ -778,16 +624,21 @@ fn send_mail(
     default_recipient: &str,
 ) -> Result<(), String> {
     match route {
-        // No second MAILURI word: real still SMTPs to localhost:25,
-        // addressed to the whole URI word.
-        None => smtp_send("localhost", 25, "", "", default_recipient, from, message),
+        // No second MAILURI word: SMTP to localhost:25, addressed to
+        // the whole URI word.
+        None => smtp_send(SmtpSendArgs {
+            host: "localhost",
+            port: 25,
+            user: "",
+            passwd: "",
+            recipient: default_recipient,
+            from,
+            message,
+        }),
         Some(MailRoute::Sendmail { path }) => {
             if !std::path::Path::new(path).exists() {
-                // Real `os.path.exists` gate: a missing sendmail path
-                // falls through to SMTP against the path as a host
-                // (which then fails as a network error). Portuale
-                // reports the missing binary directly -- same failure,
-                // less confusing detour.
+                // A missing sendmail path is reported directly instead of
+                // falling through to SMTP against the path as a host.
                 return Err(format!("!!! sendmail binary {path} does not exist"));
             }
             let mut child = std::process::Command::new(path)
@@ -825,21 +676,28 @@ fn send_mail(
             passwd,
         }) => {
             if *starttls {
-                // Portuale carries no TLS stack: report the cut and
-                // skip, keeping every other module's output.
+                // No TLS stack: report the cut and skip, keeping every
+                // other module's output.
                 eprintln!(
                     " elog STARTTLS delivery is not supported by portuale \
                      (no TLS stack) -- mail to {recipient} skipped"
                 );
                 return Ok(());
             }
-            smtp_send(host, *port, user, passwd, recipient, from, message)
+            smtp_send(SmtpSendArgs {
+                host,
+                port: *port,
+                user,
+                passwd,
+                recipient,
+                from,
+                message,
+            })
         }
     }
 }
 
-/// One SMTP response: `(code, lines)` -- `250-...` continues,
-/// `250 ...` ends (real `smtplib` parses the same way).
+/// One SMTP response: `(code, lines)` -- `250-...` continues, `250 ...` ends.
 fn smtp_read_response(reader: &mut impl std::io::BufRead) -> Result<(u16, Vec<String>), String> {
     let mut lines = Vec::new();
     let code = loop {
@@ -866,21 +724,30 @@ fn smtp_read_response(reader: &mut impl std::io::BufRead) -> Result<(u16, Vec<St
     Ok((code, lines))
 }
 
-/// Hand-rolled `smtplib` subset: greeting, EHLO (extensions parsed for
-/// the AUTH choice), optional `AUTH LOGIN` (then `AUTH PLAIN`),
-/// `MAIL`/`RCPT`/`DATA` with dot-stuffing, `QUIT`. Response codes
-/// follow real's `SMTPException`-on-error shape; transport failures
-/// follow its `OSError` shape.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn smtp_send(
-    host: &str,
+/// Arguments of [`smtp_send`].
+struct SmtpSendArgs<'a> {
+    host: &'a str,
     port: u16,
-    user: &str,
-    passwd: &str,
-    recipient: &str,
-    from: &str,
-    message: &str,
-) -> Result<(), String> {
+    user: &'a str,
+    passwd: &'a str,
+    recipient: &'a str,
+    from: &'a str,
+    message: &'a str,
+}
+
+/// Hand-rolled SMTP subset: greeting, EHLO (extensions pick the AUTH
+/// choice), optional `AUTH LOGIN` (then `AUTH PLAIN`), `MAIL`/`RCPT`/`DATA`
+/// with dot-stuffing, `QUIT`.
+fn smtp_send(args: SmtpSendArgs<'_>) -> Result<(), String> {
+    let SmtpSendArgs {
+        host,
+        port,
+        user,
+        passwd,
+        recipient,
+        from,
+        message,
+    } = args;
     use std::io::{BufReader, Write};
     use std::net::{TcpStream, ToSocketAddrs};
     fn net_err(e: impl std::fmt::Display) -> String {
@@ -943,8 +810,7 @@ fn smtp_send(
                 }
             }
             if !authed {
-                // Empty authorize-id, like `smtplib`'s own PLAIN
-                // initial response (`\0user\0pass`).
+                // Empty authorize-id (`\0user\0pass` initial response).
                 let token = base64_encode(format!("\0{user}\0{passwd}").as_bytes());
                 cmd(&format!("AUTH PLAIN {token}"))?;
                 let (code, _) = smtp_read_response(&mut reader)?;
@@ -962,7 +828,7 @@ fn smtp_send(
     cmd("DATA")?;
     expect(&mut reader, &[354], "DATA")?;
     for line in force_ascii(message).lines() {
-        // Dot-stuffing (real `smtplib.sendmail` does the same).
+        // Dot-stuffing.
         if let Some(stripped) = line.strip_prefix('.') {
             cmd(&format!(".{stripped}"))?;
         } else {
@@ -979,10 +845,8 @@ fn smtp_send(
 
 // --- modules --------------------------------------------------------------
 
-/// Real `mod_mail.process`'s own `${ACTION}` call: `merged` normally;
-/// `unmerged` when only `*rm` (or `other`) phases appear; `unknown`
-/// when an `*rm` phase is mixed with anything else (to "avoid
-/// misinformation").
+/// The `${ACTION}` substitution: `merged` normally, `unmerged` when only
+/// `*rm` (or `other`) phases appear, `unknown` when mixed.
 fn mail_action(phases: &[&str]) -> &'static str {
     if !phases.iter().any(|p| matches!(*p, "postrm" | "prerm")) {
         return "merged";
@@ -995,12 +859,9 @@ fn mail_action(phases: &[&str]) -> &'static str {
     }
     "unmerged"
 }
-/// Real `mod_mail.process`: one mail for package `key` right away.
-/// `phases` are the phases present in this package's logentries (for
-/// the merged/unmerged/unknown `${ACTION}` call); `fulltext` is the
-/// class-filtered combined text. Delivery failures print real's own
-/// `PortageException` line; nothing is returned (real `process`
-/// returns `None`).
+/// One mail for package `key` right away. `phases` feeds the `${ACTION}`
+/// call; `fulltext` is the class-filtered combined text.
+/// Portage: mod_mail.process.
 fn mail_process(key: &str, phases: &[&str], fulltext: &str) {
     let uri = elog_mailuri();
     let (recipient, route) = parse_mailuri(&uri);
@@ -1016,24 +877,23 @@ fn mail_process(key: &str, phases: &[&str], fulltext: &str) {
     }
 }
 
-/// Accumulated `mod_mail_summary` state: real `_items[config_root]`
-/// (first-seen settings snapshot + per-package header+fulltext),
-/// narrowed to portuale's single config per process.
+/// Accumulated `mod_mail_summary` state: first-seen settings snapshot +
+/// per-package header+fulltext, narrowed to one config per process.
 struct MailSummaryState {
     config: Option<(String, String, String)>,
     items: Vec<(String, String)>,
 }
 
-/// Process-lifetime `mail_summary` accumulation (real module-global
-/// `_items`); finalized once at process exit (real atexit `finalize`).
+/// Process-lifetime `mail_summary` accumulation, finalized once at
+/// process exit.
 static MAIL_SUMMARY: std::sync::Mutex<MailSummaryState> = std::sync::Mutex::new(MailSummaryState {
     config: None,
     items: Vec::new(),
 });
 
-/// Real `mod_mail_summary.process`: stash `header + fulltext` for
-/// `key`, snapshotting the three settings on first use (real
-/// `setdefault` keeps the first config for the whole run).
+/// Stashes `header + fulltext` for `key`, snapshotting the three settings
+/// on first use (the first config wins for the whole run).
+/// Portage: mod_mail_summary.process.
 fn mail_summary_accumulate(key: &str, fulltext: &str) {
     let header = format!(
         ">>> Messages generated for package {key} by process {} on {}:\n\n",
@@ -1052,24 +912,22 @@ fn mail_summary_accumulate(key: &str, fulltext: &str) {
             .items
             .push((key.to_string(), format!("{header}{fulltext}"))),
     }
-    // First accumulation arms the exit-time finalize (real atexit
-    // registration); `Once` keeps one registration per process.
+    // First accumulation arms the exit-time finalize; `Once` keeps one
+    // registration per process.
     static REGISTER_ONCE: std::sync::Once = std::sync::Once::new();
     REGISTER_ONCE.call_once(|| {
         // SAFETY: plain function pointer, no captures; the handler
         // only locks `MAIL_SUMMARY` and does I/O, and process exit
-        // (not `_exit`/abort) is the only path that runs it -- the
-        // same contract real's `atexit_register` relies on.
+        // (not `_exit`/abort) is the only path that runs it.
         unsafe {
             libc::atexit(mail_summary_atexit);
         }
     });
 }
 
-/// Real `mod_mail_summary.finalize` (via `_finalize`): one
-/// multipart mail for every accumulated package (or nothing when no
-/// package produced messages -- real returns early on zero items).
-/// Always clears the accumulation, sent or not.
+/// One multipart mail for every accumulated package (or nothing when no
+/// package produced messages). Always clears the accumulation, sent or not.
+/// Portage: mod_mail_summary.finalize.
 fn mail_summary_finalize() {
     let (config, items) = match MAIL_SUMMARY.lock() {
         Ok(mut state) => (state.config.take(), std::mem::take(&mut state.items)),
@@ -1099,8 +957,7 @@ fn mail_summary_finalize() {
     let mut attachments = Vec::new();
     for (key, item) in &items {
         body.push_str(&format!("- {key}\n"));
-        // Real attaches one `TextMessage` per package (its own
-        // `header + fulltext`), each base64'd like the lead part.
+        // One part per package, each base64'd like the lead part.
         attachments.push(mime_text_part(item));
     }
     let message = create_message(&from, &recipient, &subject, &body, &attachments);
@@ -1118,19 +975,12 @@ extern "C" fn mail_summary_atexit() {
     mail_summary_finalize();
 }
 
-/// Real `mod_save` / `mod_save_summary` / `mod_syslog` / `mod_custom`
-/// / `mod_mail` / `mod_mail_summary`
-/// for one merged package: build the per-module `fulltext` from
-/// `all_msgs` (unfiltered `collect_all`) and hand it to whichever
-/// modules are enabled. Each module's own `filter_loglevels` runs here
-/// (`save_summary`'s default token carries `:log,warn,error,qa`). A
-/// module is skipped for this package when the filter leaves nothing
-/// (real `if len(mod_logentries) == 0: continue`). Returns the paths
-/// written (`save`/`save_summary`/`custom`; `syslog`/`mail`/
-/// `mail_summary` write no file),
-/// for the caller's log line. `mail_summary` only accumulates here --
-/// its single run-wide mail goes out from `mail_summary_finalize` at
-/// process exit (real atexit `finalize`).
+/// `save` / `save_summary` / `syslog` / `custom` / `mail` / `mail_summary`
+/// for one merged package: per-module `fulltext` from `all_msgs`, handed
+/// to whichever modules are enabled. A module with nothing left after
+/// filtering is skipped. Returns the paths written, for the caller's log
+/// line. `mail_summary` only accumulates; its mail goes out at exit.
+/// Portage: per-module `process`.
 pub fn save_modules_process(
     logdir: &Path,
     key: &str,
@@ -1170,8 +1020,7 @@ pub fn save_modules_process(
     if module_enabled("mail") {
         let filtered = filter_by_classes(all_msgs, &module_classes("mail"));
         if !filtered.is_empty() {
-            // Real hands the module its filtered logentries; only the
-            // phases present matter (`${ACTION}` detection).
+            // Only the phases present matter (`${ACTION}` detection).
             let phases: Vec<&str> = {
                 let mut seen = std::collections::HashSet::new();
                 filtered
@@ -1194,47 +1043,39 @@ pub fn save_modules_process(
     Ok(written)
 }
 
-/// Real `elog_process` over a batch of packages that just merged or
-/// unmerged. Each item is `(cpv, t_dir)` where `t_dir` is that package's
-/// `${T}` (`${PORTAGE_BUILDDIR}/temp`). `phases` restricts which
-/// `${T}/logging/<phase>` files are read (real
-/// `_elog_process(phasefilter=...)`): `None` after a merge (every
-/// phase), `Some(&["prerm", "postrm"])` for `dblink.unmerge()`.
-/// `root_display` is the `ROOT` string for the `echo` header (`/` gives
-/// the short form).
+/// Arguments of [`process_batch`].
+pub struct ProcessBatchArgs<'a> {
+    pub logdir: &'a Path,
+    pub root_display: &'a str,
+    pub items: &'a [(String, PathBuf)],
+    pub phases: Option<&'a [&'a str]>,
+    pub color: &'a Colorizer,
+    pub split_elog: bool,
+}
+
+/// `elog_process` over packages that just merged or unmerged. Each item
+/// is `(cpv, t_dir)` with that package's `${T}`. `phases` restricts the
+/// files read: `None` after a merge, `Some(&["prerm", "postrm"])` for an
+/// unmerge. `root_display` is the `ROOT` string for the `echo` header.
+/// Portage: elog_process.
 ///
-/// The `save` / `save_summary` modules run immediately per package (real
-/// `mod_save.process`), printing the `Elog messages ... written to ...`
-/// line; `echo` is accumulated for the call and printed by
-/// `echo_summary` at its end (real accumulates across the whole run and
-/// prints once at exit via `mod_echo._finalize`; portuale flushes per
-/// package before the post-merge clean, #42, so each merged package gets
-/// its own block). `mail` sends immediately
-/// per package (real `mod_mail.process`); `mail_summary` accumulates
-/// and sends once at process exit (real atexit `finalize`, armed on
-/// first use). A no-op when no module is enabled
-/// or nothing has messages. The caller hands in each package's
-/// `${T}/logging/` at real's own position -- for a merge that is inside
-/// `dblink.merge()` before the post-merge clean (backlog #42), see
-/// `ebuild_merge::process_merge_elog` -- rather than threading a message
-/// buffer through the (un)merge machinery. `split_elog` is real
-/// `settings.features`' `split-elog` token: the `emerge` callers pass
-/// the resolved list (#37 S3), the standalone unmerge path the raw env
-/// fallback.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn process_batch(
-    logdir: &Path,
-    root_display: &str,
-    items: &[(String, PathBuf)],
-    phases: Option<&[&str]>,
-    color: &Colorizer,
-    split_elog: bool,
-) {
+/// `save` / `save_summary` run immediately per package; `echo` accumulates
+/// for the call and prints at its end; `mail` sends immediately per
+/// package; `mail_summary` accumulates and sends once at process exit.
+/// A no-op when no module is enabled or nothing has messages.
+/// `split_elog` is the `split-elog` feature token.
+pub fn process_batch(args: ProcessBatchArgs<'_>) {
+    let ProcessBatchArgs {
+        logdir,
+        root_display,
+        items,
+        phases,
+        color,
+        split_elog,
+    } = args;
     let echo = echo_enabled();
-    // "save_any" gates the one `collect_all`/`save_modules_process` call
-    // below, so it needs every module that call also dispatches to --
-    // `syslog`/`custom`/`mail`/`mail_summary` included, not just the
-    // `save`/`save_summary` pair its own name still refers to.
+    // Gates the one `collect_all`/`save_modules_process` call below, so it
+    // needs every module that call dispatches to, not just save/summary.
     let save_any = module_enabled("save")
         || module_enabled("save_summary")
         || module_enabled("syslog")
@@ -1282,9 +1123,9 @@ pub fn process_batch(
     }
 }
 
-/// Real `mod_echo._finalize`: the `* Messages for package <cpv>:` block
-/// for every accumulated package, all message types on stdout, each line
-/// `<colour> * </colour><msg>` (`EOutput.e{info,log,warn,error,qawarn}`).
+/// The `* Messages for package <cpv>:` block for every accumulated
+/// package, all message types on stdout.
+/// Portage: mod_echo._finalize.
 pub fn echo_summary(packages: &[ElogPackage], color: &Colorizer) {
     for pkg in packages {
         println!();
@@ -1322,8 +1163,6 @@ mod tests {
 
     #[test]
     fn collect_reads_phase_files_in_order_and_filters_by_class() {
-        // Default classes ("log warn error") -- INFO/QA are dropped, and
-        // phase order (install before postinst) is honoured.
         let t = tmpdir();
         std::fs::write(
             t.join("logging/postinst"),
@@ -1361,9 +1200,9 @@ mod tests {
 
     #[test]
     fn collect_phasefilter_keeps_only_the_named_phases() {
-        // A builddir portuale never cleaned: install-time logs still
-        // sit next to the removal-time ones. `dblink.unmerge`'s
-        // `phasefilter=("prerm","postrm")` must ignore the install log.
+        // A builddir never cleaned: install-time logs still sit next to
+        // the removal-time ones. The `("prerm","postrm")` filter must
+        // ignore the install log.
         let t = tmpdir();
         std::fs::write(t.join("logging/install"), "LOG built fine\n").unwrap();
         std::fs::write(t.join("logging/prerm"), "WARN leaving config behind\n").unwrap();
@@ -1381,7 +1220,7 @@ mod tests {
                 ("postrm", "run revdep-rebuild"),
             ]
         );
-        // The echo-filtered variant drops the WARN only if classes say so;
+        // The echo-filtered variant drops WARN only if classes say so;
         // default classes keep it, so both survive here.
         assert_eq!(collect(&t, Some(&["prerm", "postrm"])).len(), 2);
         let _ = std::fs::remove_dir_all(&t);
@@ -1406,15 +1245,15 @@ mod tests {
                 },
             ],
         };
-        // No colour -> plain " * " prefixes; capture is via a real run in
+        // No colour -> plain " * " prefixes; capture is covered by a run in
         // test_portuale.py, this just exercises the non-panicking path.
         echo_summary(std::slice::from_ref(&pkg), &color);
     }
 
     #[test]
     fn module_classes_honours_the_per_module_override() {
-        // `save_summary:log,warn,error,qa` (the make.globals default token)
-        // overrides the bare PORTAGE_ELOG_CLASSES for that module only.
+        // `save_summary:log,warn,error,qa` (the default token) overrides
+        // the bare PORTAGE_ELOG_CLASSES for that module only.
         temp_env(
             &[(
                 "PORTAGE_ELOG_SYSTEM",
@@ -1424,7 +1263,6 @@ mod tests {
                 let sc = module_classes("save_summary");
                 assert!(sc.contains("QA"));
                 assert!(sc.contains("LOG"));
-                // `echo` has no override -> the bare default {LOG,WARN,ERROR}.
                 let ec = module_classes("echo");
                 assert!(!ec.contains("QA"));
                 assert!(ec.contains("WARN"));
@@ -1694,31 +1532,27 @@ mod tests {
 
     #[test]
     fn parse_mailuri_covers_recipient_only_sendmail_and_smtp() {
-        // Bare recipient: direct SMTP to localhost:25 (real `else`).
+        // Bare recipient: direct SMTP to localhost:25.
         let (to, route) = parse_mailuri("root@localhost");
         assert_eq!(to, "root@localhost");
         assert!(route.is_none());
-        // Absolute-path server: the sendmail binary route.
         let (to, route) = parse_mailuri("root@localhost /usr/sbin/sendmail");
         assert_eq!(to, "root@localhost");
         assert!(
             matches!(route, Some(MailRoute::Sendmail { path }) if path == "/usr/sbin/sendmail")
         );
-        // SMTP host, default port, no auth.
         let (to, route) = parse_mailuri("me@example.com mail.example.com");
         assert_eq!(to, "me@example.com");
         assert!(
             matches!(route, Some(MailRoute::Smtp { host, port, starttls, user, .. })
                 if host == "mail.example.com" && port == 25 && !starttls && user.is_empty())
         );
-        // AUTH + explicit port.
         let (to, route) = parse_mailuri("me@example.com user:secret@mail.example.com:587");
         assert_eq!(to, "me@example.com");
         assert!(
             matches!(route, Some(MailRoute::Smtp { host, port, user, passwd, .. })
                 if host == "mail.example.com" && port == 587 && user == "user" && passwd == "secret")
         );
-        // Port above 100000: STARTTLS on port-100000.
         let (_, route) = parse_mailuri("me@example.com mail.example.com:100465");
         assert!(matches!(route, Some(MailRoute::Smtp { port, starttls: true, .. }) if port == 465));
     }
@@ -1741,7 +1575,7 @@ mod tests {
         );
         assert!(msg.contains("\nDate: "), "{msg}");
         assert!(msg.contains("Content-Transfer-Encoding: base64"), "{msg}");
-        // Python's `email` base64-codes even pure-ASCII UTF-8 bodies.
+        // Bodies are base64 even when pure ASCII.
         assert!(msg.contains("TE9HOiBpbnN0YWxsCmhlbGxvCg=="), "{msg}");
     }
 
@@ -1820,10 +1654,8 @@ mod tests {
                 );
                 let body = std::fs::read_to_string(dir.join("body")).unwrap();
                 assert!(body.contains("multipart/mixed"), "{body}");
-                // Real's summary substitutes only `${PACKAGE}` (the
-                // one/multiple-packages count) and `${HOST}` -- a
-                // `${ACTION}` in the template stays literal, exactly
-                // as real `mod_mail_summary._finalize` leaves it.
+                // The summary substitutes only `${PACKAGE}` and `${HOST}`;
+                // a `${ACTION}` in the template stays literal.
                 assert!(
                     body.contains(&format!(
                         "Subject: [portage] ${{ACTION}} multiple packages on {}",
@@ -1831,20 +1663,17 @@ mod tests {
                     )),
                     "{body}"
                 );
-                // The lead part is base64 (like real), so the package
-                // list is asserted in its encoded form.
+                // The lead part is base64, so the package list is asserted
+                // in its encoded form.
                 let lead = format!(
                     "elog messages for the following packages generated by process {} on host {}:\n- dev-libs/foo-1.0\n- dev-libs/bar-2.0\n",
                     std::process::id(),
                     mail_host(),
                 );
                 assert!(body.contains(base64_wrapped(&lead).trim_end()), "{body}");
-                // Lead part + one MIME part per attachment (real
-                // attaches a `TextMessage` per package), on top of the
-                // first mail's own single part. Full MIME
-                // round-trip (decode each part) is covered end to end
-                // in test_portuale.py with Python's own `email`
-                // parser.
+                // Lead part + one MIME part per attachment, on top of the
+                // first mail's own single part. Full MIME round-trip is
+                // covered end to end in test_portuale.py.
                 assert_eq!(
                     body.matches("Content-Type: text/plain").count(),
                     4,

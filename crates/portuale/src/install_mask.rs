@@ -1,30 +1,14 @@
-// Real `lib/portage/util/install_mask.py` (`InstallMask` +
-// `install_mask_dir`) plus the `no{man,info,doc}` `FEATURES` fold that
-// real `preinst_mask()` in `bin/misc-functions.sh` does before writing
-// `build-info/INSTALL_MASK`.
-//
-// Real `dblink.treewalk()` (`vartree.py:4581-4610`) runs the
-// `preinst_mask` misc-function, reads the `INSTALL_MASK` it wrote into
-// `build-info`, and -- *before* collision-protect and before a single
-// file is copied to `${ROOT}` -- deletes every image path the mask
-// matches, then `rmdir`s a now-empty `ED/usr/share` when any of
-// `nodoc`/`noman`/`noinfo` is in `FEATURES`. portuale ports that logic
-// directly to Rust (the same "port the shell/Python step, don't spawn a
-// shell for it" approach the vdb-merge code already takes) and calls it
-// from both `merge_after_install` (source) and `merge_binpkg` (binary).
-//
-// This is real-execution code, covered by Rust unit tests and the L1/L2
-// merge beds.
+//! `INSTALL_MASK` filtering: fold the `no{man,info,doc}` `FEATURES` tokens
+//! into the mask, then delete every masked path from the install image
+//! before anything is copied to `${ROOT}`.
+// Portage: install_mask.py, InstallMask; misc-functions.sh, preinst_mask; vartree.py, dblink.treewalk
 
 use std::path::Path;
 
-/// Real `preinst_mask()`: fold the `no{man,info,doc}` `FEATURES` tokens
-/// into the configured `INSTALL_MASK` (each becomes
-/// `${EPREFIX}/usr/share/<man|info|doc>`; portuale assumes an empty
-/// `EPREFIX`, like every other real-execution path here). The loop order
-/// is real's own `for f in man info doc`. Returns the resolved mask
-/// string plus whether a `no*` token was folded in -- the latter gates
-/// real `dblink`'s own `rmdir(ED/usr/share)`.
+/// Fold the `no{man,info,doc}` `FEATURES` tokens into the configured mask
+/// (each becomes `/usr/share/<man|info|doc>`; empty `EPREFIX` assumed).
+/// Returns the mask plus whether a `no*` token was folded in, which gates
+/// the caller's `rmdir(ED/usr/share)`.
 pub(crate) fn resolve<S: AsRef<str>>(configured: &str, features: &[S]) -> (String, bool) {
     let mut tokens: Vec<String> = configured.split_whitespace().map(String::from).collect();
     let mut prunes_usr_share = false;
@@ -40,19 +24,18 @@ pub(crate) fn resolve<S: AsRef<str>>(configured: &str, features: &[S]) -> (Strin
 struct Pattern {
     is_inclusive: bool,
     leading_slash: bool,
-    /// The pattern with any leading `-` stripped (still keeps a leading
-    /// `/` when `leading_slash`), exactly real's `_pattern.pattern`.
+    /// The pattern with any leading `-` stripped.
     pattern: String,
 }
 
-/// Real `InstallMask`.
+/// Mask pattern list: `install_mask.split()`, a leading `-` flips a token
+/// non-inclusive.
 pub(crate) struct InstallMask {
     patterns: Vec<Pattern>,
 }
 
 impl InstallMask {
-    /// Real `InstallMask.__init__`: `install_mask.split()`, each token a
-    /// `_pattern` (a leading `-` flips it non-inclusive).
+    /// One `install_mask.split()` token: a leading `-` flips it non-inclusive.
     pub(crate) fn new(install_mask: &str) -> Self {
         let patterns = install_mask
             .split_whitespace()
@@ -74,12 +57,8 @@ impl InstallMask {
         self.patterns.is_empty()
     }
 
-    /// Real `InstallMask.match(path)` -- `path` is relative to `${ED}`,
-    /// and ends with `/` when testing a directory. Real iterates
-    /// "relevant" patterns (an fnmatch-call optimisation) but the final
-    /// `ret` is just "the last matching pattern's inclusiveness" in
-    /// `orig_index` order, so iterating every pattern in order is
-    /// equivalent. `self.patterns` is built in `orig_index` order.
+    /// `path` is relative to `${ED}`, ending with `/` for a directory. The
+    /// result is the last matching pattern's inclusiveness, in order.
     pub(crate) fn matches(&self, path: &str) -> bool {
         let mut ret = false;
         for p in &self.patterns {
@@ -107,11 +86,8 @@ impl InstallMask {
     }
 }
 
-/// Real `install_mask_dir(base_dir, install_mask)`: delete every masked
-/// file under `base_dir`, then remove any directory the mask matches
-/// (with a trailing `/`) that ended up empty. Errors on individual
-/// `unlink`/`rmdir` calls are swallowed the way real's default
-/// `onerror`/`except OSError` path does for the common cases.
+/// Delete every masked file under `base_dir`, then remove masked directories
+/// left empty. Per-path `unlink`/`rmdir` errors are swallowed.
 pub(crate) fn install_mask_dir(base_dir: &Path, mask: &InstallMask) -> std::io::Result<()> {
     let rel_of = |p: &Path| -> String {
         p.strip_prefix(base_dir)
@@ -119,7 +95,7 @@ pub(crate) fn install_mask_dir(base_dir: &Path, mask: &InstallMask) -> std::io::
             .unwrap_or_default()
     };
 
-    // Remove masked files (iterative DFS, matching real's `todo` stack).
+    // Remove masked files (iterative DFS).
     let mut dir_stack: Vec<std::path::PathBuf> = Vec::new();
     let mut todo: Vec<std::path::PathBuf> = vec![base_dir.to_path_buf()];
     while let Some(parent) = todo.pop() {
@@ -142,10 +118,8 @@ pub(crate) fn install_mask_dir(base_dir: &Path, mask: &InstallMask) -> std::io::
         }
     }
 
-    // Remove masked dirs (deepest first: `dir_stack` is in the order
-    // parents were visited, so popping is child-before-parent). `rmdir`
-    // silently fails on a non-empty dir -- real relies on exactly that
-    // for exclusion (`-`) patterns.
+    // Remove masked dirs, deepest first. `rmdir` silently fails on a
+    // non-empty dir, which is what makes exclusion (`-`) patterns work.
     while let Some(dir_path) = dir_stack.pop() {
         if mask.matches(&format!("{}/", rel_of(&dir_path))) {
             let _ = std::fs::remove_dir(&dir_path);
@@ -154,13 +128,10 @@ pub(crate) fn install_mask_dir(base_dir: &Path, mask: &InstallMask) -> std::io::
     Ok(())
 }
 
-/// Python `fnmatch.fnmatch` semantics (case-sensitive, `/` is *not*
-/// special, `*` spans everything): translate to an anchored regex.
-/// Supports `*`, `?`, and `[...]`/`[!...]` character classes -- the
-/// whole of what real `INSTALL_MASK` patterns ever use. Also reused by
-/// `needed_elf`'s `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` matcher (real
-/// `SonameDepsProcessor._exclude_pattern`, the same `fnmatch.translate`
-/// semantics).
+/// Python `fnmatch.fnmatch` semantics (case-sensitive, `/` not special, `*`
+/// spans everything), as an anchored regex. Supports `*`, `?` and
+/// `[...]`/`[!...]` classes. Also reused by `needed_elf`'s
+/// `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` matcher.
 pub(crate) fn fnmatch(name: &str, pattern: &str) -> bool {
     thread_local! {
         static CACHE: std::cell::RefCell<std::collections::HashMap<String, regex::Regex>> =
@@ -266,7 +237,7 @@ mod tests {
 
     #[test]
     fn exclusion_pattern_re_includes_a_path_a_later_lower_index_rule_masked() {
-        // Real: order is by orig_index; a `-` after a broad mask rescues.
+        // A `-` after a broad mask rescues the path.
         let mask = InstallMask::new("/usr/share/doc -/usr/share/doc/keepme");
         assert!(mask.matches("usr/share/doc/gone/readme"));
         assert!(!mask.matches("usr/share/doc/keepme"));

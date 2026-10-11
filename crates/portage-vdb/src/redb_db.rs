@@ -1,11 +1,12 @@
-//! The redb backend (feat#157, backlog #305 S5.2: tables, open and the
-//! read side; S5.3: writes). Design: `docs/vdb_to_db.md` §4, §7.2.
+//! The redb backend: one file, typed tables, one write transaction per
+//! commit.
 //!
-//! One redb file, typed tables, one write transaction per commit (S5.3).
 //! The file tables are the truth; `owner`, `dep_atom` and `needed` are
-//! derived from them and are filled by the writer (S5.3), like on sqlite.
+//! derived from them and are filled by the writer, like on sqlite.
 //! `meta.schema_version` ([`SCHEMA_VERSION`]) is independent of
 //! `METADATA_FILE_FORMAT_VERSION` and of the sqlite schema version.
+//!
+//! Design: `docs/vdb_to_db.md` §4, §7.2.
 //!
 //! # One process only
 //!
@@ -39,16 +40,15 @@
 //! | `meta` | table | name | 8-byte little-endian integer (text for `imported_files_source`) |
 //!
 //! Differences from `vdb_to_db.md` §7.2, all from the current interface
-//! (lib.rs module doc) and from sqlite's model:
+//! and from sqlite's model:
 //!
 //! - `entry` is keyed by `(state, category, pf)`: the interface has no
-//!   `pn`/`ver` split (item 1), and a pending entry is its own row beside a
-//!   live row of the same key (item 3, sqlite's `UNIQUE (category, pf,
-//!   state)`). State first, so "every live entry in order" and "every
-//!   pending entry" are single range scans.
+//!   `pn`/`ver` split, and a pending entry is its own row beside a live
+//!   row of the same key. State first, so "every live entry in order" and
+//!   "every pending entry" are single range scans.
 //! - `entry_by_counter` is not unique in sqlite's sense: a corpus can hold
-//!   duplicate counters, so the writer (S5.3) keeps the first claimant; no
-//!   read uses it.
+//!   duplicate counters, so the writer keeps the first claimant; no read
+//!   uses it.
 //! - Entry ids are never stored in `meta`: the next id is the last key of
 //!   `entry_by_id` plus one.
 //! - `world` / `world_sets` are keyed by position (the written order is
@@ -91,9 +91,8 @@
 //! is validated by comparing `generation`, read inside the same read
 //! transaction as the data, on every cached call (one point lookup).**
 //! redb is single-process, so the only writer of the file is this handle's
-//! own commits; the S5.3 writer bumps `generation` on every effective
-//! commit (the policy of sqlite), so nothing else needs to invalidate the
-//! cache. A read-only handle never sees a commit (nobody can hold the file
+//! own commits; the writer bumps `generation` on every effective commit
+//! (the policy of sqlite), so nothing else needs to invalidate the cache. A read-only handle never sees a commit (nobody can hold the file
 //! read-write while it is open). `has_entry`, `list_files`, `file_meta`,
 //! `read_file*` and the D4 stores read the tables directly.
 
@@ -634,6 +633,15 @@ struct Rd {
     chunk: ReadOnlyTable<(u64, &'static str, u32), &'static [u8]>,
 }
 
+/// Arguments of [`Rd::chunks`].
+struct ChunksArgs<'a> {
+    id: u64,
+    name: &'a str,
+    len: u64,
+    first: u32,
+    last: u32,
+}
+
 impl Rd {
     fn new(txn: &ReadTransaction) -> R<Self> {
         Ok(Rd {
@@ -710,8 +718,14 @@ impl Rd {
 
     /// Chunks `first..=last` of a file of `len` bytes, concatenated; every
     /// one must exist and have its exact size.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn chunks(&self, id: u64, name: &str, len: u64, first: u32, last: u32) -> R<Vec<u8>> {
+    fn chunks(&self, args: ChunksArgs<'_>) -> R<Vec<u8>> {
+        let ChunksArgs {
+            id,
+            name,
+            len,
+            first,
+            last,
+        } = args;
         let mut out = Vec::new();
         let mut next = first;
         for item in self.chunk.range((id, name, first)..=(id, name, last))? {
@@ -745,7 +759,14 @@ impl Rd {
             return Ok(Some(Vec::new()));
         }
         let last = chunk_count(rec.len) - 1;
-        self.chunks(id, name, rec.len, 0, last).map(Some)
+        self.chunks(ChunksArgs {
+            id,
+            name,
+            len: rec.len,
+            first: 0,
+            last,
+        })
+        .map(Some)
     }
 
     /// Up to `n` bytes from `off`: only the chunks that range touches.
@@ -759,7 +780,13 @@ impl Rd {
         }
         let first = (off / CHUNK as u64) as u32;
         let last = ((end - 1) / CHUNK as u64) as u32;
-        let data = self.chunks(id, name, rec.len, first, last)?;
+        let data = self.chunks(ChunksArgs {
+            id,
+            name,
+            len: rec.len,
+            first,
+            last,
+        })?;
         let skip = (off - u64::from(first) * CHUNK as u64) as usize;
         Ok(Some(data[skip..skip + (end - off) as usize].to_vec()))
     }
@@ -829,7 +856,7 @@ impl InstalledDb for RedbDb {
         None
     }
 
-    /// `meta.generation`: +1 on every effective commit (S5.3). One point
+    /// `meta.generation`: +1 on every effective commit. One point
     /// lookup.
     fn generation(&self) -> Result<u64> {
         let wrap = |e| rerr(&self.path, e);
@@ -1003,9 +1030,8 @@ impl InstalledDb for RedbDb {
     /// The live entries whose `dep_atom` rows name `cp` in one of `classes`,
     /// or carry the unsure marker (`cp = ""`, see `dep_cp::dep_index_key`),
     /// in `(category, pf)` order, with their `USE` and the requested classes
-    /// normalised like `aux_get`. A superset of the real dependents (lib.rs
-    /// module doc, item 8); an entry none of whose tokens is, or might be,
-    /// `cp` is not read (S8.1).
+    /// normalised like `aux_get`. A superset of the true dependents; an
+    /// entry none of whose tokens is, or might be, `cp` is not read.
     fn reverse_dependents(&self, cp: &str, classes: &[DepClass]) -> Result<Vec<DepRecord>> {
         if classes.is_empty() {
             return Ok(Vec::new());
@@ -1064,7 +1090,7 @@ impl InstalledDb for RedbDb {
             .collect())
     }
 
-    /// From the `owner` multimap (S8.2): an indexed lookup of each distinct
+    /// From the `owner` multimap: an indexed lookup of each distinct
     /// path (both spellings `CONTENTS` can have, see `owner_spellings`),
     /// with the rule of `FilesDb::owners` (`claim_paths`): one leading `/`
     /// ignored on both sides, the first matching input path reported, the
@@ -1265,7 +1291,7 @@ mod tests {
 
     type Rows = Vec<(String, Vec<u8>, u32, i64)>;
 
-    /// Raw table writers for the tests (the real writer is S5.3).
+    /// Raw table writers for the tests (bypassing the production writer).
     impl RedbDb {
         fn seed_entry(&self, key: &EntryKey, state: u8, stamp: MetadataStamp, files: &Rows) {
             let txn = rw(self).begin_write().unwrap();
@@ -1310,8 +1336,8 @@ mod tests {
                 }
             }
             if state == INSTALLED {
-                // The owner / dep_atom rows of a live entry, as a real write
-                // fills them (the columns stay as seeded).
+                // The owner / dep_atom rows of a live entry, as a production
+                // write fills them (the columns stay as seeded).
                 for (name, ..) in files {
                     if matches!(name.as_str(), "CONTENTS")
                         || write::DEP_CLASSES.iter().any(|d| d.field() == name)
@@ -1400,9 +1426,7 @@ mod tests {
         out
     }
 
-    /// S8.3: damaged index rows (a missing owner, a foreign owner, the
-    /// unsure `dep_atom` marker an older build never wrote (R18), a junk
-    /// `needed` row) give wrong answers until `rebuild_index` restores
+    /// Damaged index rows give wrong answers until `rebuild_index` restores
     /// exactly the rows the merge wrote.
     #[test]
     fn rebuild_index_repairs_damaged_rows() {
@@ -1967,8 +1991,8 @@ mod tests {
             .rdb
             .reverse_dependents("x/y", &[DepClass::Rdepend, DepClass::Depend])
             .unwrap();
-        // Only the entries whose deps carry a token (here the non-atoms "x" and
-        // "y", i.e. the unsure marker) come back (S8.1).
+        // Only the entries whose deps carry an unclassifiable token (the
+        // unsure marker) come back.
         assert_eq!(recs.len(), 3);
         let ra = recs.iter().find(|r| r.key == f.keys[0]).unwrap();
         assert_eq!(ra.use_flags, "a b");
@@ -1995,9 +2019,9 @@ mod tests {
             &f.rdb.cached(false).unwrap().1,
             &f.rdb.cached(true).unwrap().1
         ));
-        // A commit that changes the data and bumps the generation (the
-        // contract of the S5.3 writer) is seen without any explicit
-        // invalidation: write raw, bypassing `seed_entry`'s invalidate.
+        // A commit that changes the data and bumps the generation is seen
+        // without any explicit invalidation: write raw, bypassing
+        // `seed_entry`'s invalidate.
         let txn = rw(&f.rdb).begin_write().unwrap();
         {
             let mut t = txn.open_table(ENTRY).unwrap();
@@ -2209,7 +2233,7 @@ mod tests {
         assert_eq!(chunk_len(CHUNK as u64, 1), 0);
     }
 
-    // --- the write side (S5.3), mirroring sqlite's S2.5 tests ---------
+    // --- the write side, mirroring sqlite's tests ---------
 
     use redb::{ReadableMultimapTable, ReadableTableMetadata};
 

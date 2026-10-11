@@ -1,11 +1,6 @@
-//! Remote-merge wire bundles (slice 2, `docs/remote-merge.md` §13).
+//! Remote-merge wire bundles: one binpkg prepared for stdin streaming.
 //!
-//! A bundle is one binpkg prepared for stdin streaming: the extracted
-//! `image/` + `build-info/` (via `binpkg::extract_binpkg`, the same
-//! extraction the local merge runs), a server-decompressed `environment`
-//! file (the `bzip2 -dc` step `run_phase_from_saved_env` runs locally --
-//! the client never needs `bzip2`), and a `remote-manifest` the client
-//! sanity-checks before unpacking. Layout inside the tar:
+//! Layout inside the uncompressed tar:
 //!
 //! ```text
 //! <pf>/image/...           the merge image (${D} on the client)
@@ -13,16 +8,11 @@
 //! <pf>/environment         decompressed hook env (absent when the binpkg
 //!                          carries no environment.bz2)
 //! <pf>/remote-manifest     FORMAT=1 + CPV/SLOT/REPO/HAS_ENVIRONMENT
-//! <pf>/bin/...             the ebuild runtime (`bash bin/ebuild.sh`),
-//!                          plus the `bzip2-passthrough`
-//!                          `${PORTAGE_BZIP2_COMMAND}` stand-in (backlog
-//!                          #171) for the env-regeneration postinst run
+//! <pf>/bin/...             the ebuild runtime (`bash bin/ebuild.sh`)
 //! ```
 //!
-//! Tarred uncompressed (`tar -cf`, system tar like `binpkg::run_tar` --
-//! wire compression is a future slice); the byte count travels beside the
-//! stream, not inside it, so the client can reject a truncated transfer
-//! before touching anything.
+//! The byte count travels beside the stream, not inside it, so the client
+//! can reject a truncated transfer before touching anything.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -94,10 +84,8 @@ impl BundleManifest {
 pub struct StagedBundle {
     /// `bundle.tar` bytes, ready for stdin streaming.
     pub tarball: PathBuf,
-    /// Server-side `_pkgsplit` values, re-exported by the phase driver:
-    /// the binary-branch load filter strips `CATEGORY/PVR/PF/PN/PR/PV/P`
-    /// from the saved environment (see `portage_repo::split_pf`), so -- like local
-    /// `phase_env_vars` -- these travel outside the file.
+    /// Server-side `_pkgsplit` values, re-exported by the phase driver
+    /// (they travel outside the saved environment file).
     pub eapi: String,
     pub category: String,
     pub pn: String,
@@ -106,41 +94,27 @@ pub struct StagedBundle {
     pub pvr: String,
     pub p: String,
     pub pf: String,
-    /// Byte count the client must observe (`wc -c` equality gate).
+    /// Byte count the client must observe.
     pub byte_count: u64,
-    /// The manifest shipped inside (and parsed back here for the
-    /// server-side report line).
+    /// The manifest shipped inside.
     pub manifest: BundleManifest,
     /// Phases the client may run, in order: `pretend`/`setup`/`preinst`
     /// intersected with the binpkg's own `DEFINED_PHASES`, and only when
-    /// both the ebuild file and the hook environment shipped (the local
-    /// `merge_binpkg` degrade, mirrored).
+    /// both the ebuild file and the hook environment shipped.
     pub phases: Vec<String>,
     /// Whether the client may run `postinst` after the merge (same gate
-    /// as `phases`, checked against the `postinst` word). Non-fatal on
-    /// failure, like the local merge.
+    /// as `phases`, checked against the `postinst` word).
     pub postinst_defined: bool,
 }
 
 /// The client's `${PORTAGE_BZIP2_COMMAND}` stand-in for the merge-time
-/// environment-regeneration postinst run (backlog #171): a tiny
-/// pass-through the bundle ships in the runtime `bin` dir. Real's
-/// `phase-functions.sh` `PORTAGE_UPDATE_ENV` block runs
-/// `${PORTAGE_BZIP2_COMMAND} -c -f9 > "${PORTAGE_UPDATE_ENV}"`
-/// (`bin/phase-functions.sh:1141-1153`), and the client must have no
-/// `bzip2` (`docs/remote-merge.md` §6, §14.1) -- so this ignores its
-/// arguments and copies stdin to stdout (`cat` itself would choke on
-/// `-c -f9`), leaving the regen'd environment plain text for the server
-/// to compress. Only ever invoked through that one block: nothing else
-/// in the phase run resolves through it.
+/// environment-regeneration postinst run: ignores its arguments and copies
+/// stdin to stdout. Shipped in the runtime `bin` dir; only ever invoked
+/// through Portage's `PORTAGE_UPDATE_ENV` block.
 pub const BZIP2_PASSTHROUGH: &str = "#!/bin/sh\n# Backlog #171: PORTAGE_BZIP2_COMMAND stand-in -- ignore flags, pass stdin through.\nexec cat\n";
 
-/// Copy the ebuild runtime into the bundle: always the real files, never
-/// an overlay's symlinks (`cp -aL` dereferences them). `bin_dir()` may be
-/// a symlink overlay of absolute links into the checkout
-/// (`build_bin_overlay`); a client on another host would get dangling
-/// links from a plain `cp -a` (l31 hid this: its client is the same
-/// container with the repo mounted at the same path).
+/// Copy the ebuild runtime into the bundle: always the files, never
+/// an overlay's symlinks (`cp -aL` dereferences them).
 pub(crate) fn copy_bin_runtime(bin_dir: &Path, dest: &Path) -> Result<(), String> {
     let status = std::process::Command::new("cp")
         .args(["-aL"])
@@ -154,7 +128,7 @@ pub(crate) fn copy_bin_runtime(bin_dir: &Path, dest: &Path) -> Result<(), String
     Ok(())
 }
 /// Split `PVR` into `(PV, PR)`: trailing `-r<digits>` is the revision,
-/// else `PR` is real portage's own `"r0"` default.
+/// else `PR` is `"r0"`.
 pub fn split_pvr(pvr: &str) -> (String, String) {
     if let Some((stem, rev)) = pvr.rsplit_once('-')
         && rev.starts_with('r')
@@ -168,8 +142,7 @@ pub fn split_pvr(pvr: &str) -> (String, String) {
 }
 
 /// EAPI for the driver exports: `build-info/EAPI` first, else the
-/// `EAPI=` line of the ebuild itself (PMS 7.3.1 rule). `None` when
-/// neither exists (fail-early: real binpkgs always carry it).
+/// `EAPI=` line of the ebuild itself. `None` when neither exists.
 pub fn read_eapi(build_info: &Path, ebuild_file: &Path) -> Option<String> {
     if let Ok(text) = std::fs::read_to_string(build_info.join("EAPI")) {
         let value = text.trim().to_string();
@@ -191,17 +164,13 @@ pub fn read_eapi(build_info: &Path, ebuild_file: &Path) -> Option<String> {
 }
 
 /// One image entry for the client's merge: type, content hash (files
-/// only), source mtime, and `/`-rooted relative path. The client joins on
-/// the path to write CONTENTS lines and make protect decisions -- it never
-/// hashes (no md5sum on the client) and only stats for the mtime check on
-/// paths the *old* version owned.
+/// only), source mtime, and `/`-rooted relative path.
 pub struct FileMeta {
     /// `obj`, `dir` or `sym`.
     pub kind: &'static str,
     /// Hex MD5 of file bytes (`obj`), `-` otherwise.
     pub md5: String,
-    /// Source mtime seconds (recorded verbatim into CONTENTS; the client
-    /// reproduces it with `cp -p` / `touch -h -r`, best-effort).
+    /// Source mtime seconds, recorded verbatim into CONTENTS.
     pub mtime: i64,
     /// Path relative to the image root, `/`-separated, no leading `/`.
     pub rel: String,
@@ -210,8 +179,7 @@ pub struct FileMeta {
 }
 
 /// Render `filemeta` lines: `<kind> <md5|-> <mtime> <relpath>[ <target>]`.
-/// Paths with whitespace or newlines are rejected at build time
-/// (fail-early: the line format cannot carry them).
+/// Paths with whitespace or newlines are rejected at build time.
 pub fn render_filemeta(entries: &[FileMeta]) -> Result<String, String> {
     let mut out = String::new();
     for entry in entries {
@@ -233,11 +201,9 @@ pub fn render_filemeta(entries: &[FileMeta]) -> Result<String, String> {
     Ok(out)
 }
 
-/// Walk `image/` (sorted, like local `merge_tree`) recording type, MD5
-/// and mtime per entry. Symlink targets read via `read_link`; anything
-/// else (fifo/socket/device) is an error -- real binpkgs never carry
-/// those (block/char devices are v1 cuts documented in the merge
-/// modules, and the client could not create them portably anyway).
+/// Walk `image/` (sorted, like the local `merge_tree`) recording type, MD5
+/// and mtime per entry. Anything but a file, directory or symlink is an
+/// error.
 pub fn collect_filemeta(image: &Path) -> Result<Vec<FileMeta>, String> {
     use std::os::unix::fs::MetadataExt as _;
     fn md5_file(path: &Path) -> Result<String, String> {
@@ -301,10 +267,9 @@ pub fn collect_filemeta(image: &Path) -> Result<Vec<FileMeta>, String> {
     Ok(out)
 }
 
-/// Which of the slice-3 client phases (`pretend`/`setup`/`preinst`) a
+/// Which of the client phases (`pretend`/`setup`/`preinst`) a
 /// binpkg's `DEFINED_PHASES` actually defines -- and only when the ebuild
-/// file plus the hook environment are present to run them from (same
-/// gate as the local merge's `extracted_ebuild` + `phase_defined`).
+/// file plus the hook environment are present to run them from.
 pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bool) -> Vec<String> {
     if !(has_ebuild && has_environment) {
         return Vec::new();
@@ -316,34 +281,32 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
         .collect()
 }
 
+/// Arguments of [`build_bundle`].
+pub struct BuildBundleArgs<'a> {
+    pub binpkg_path: &'a Path,
+    pub staging_tmp: &'a Path,
+    pub repo_override: Option<&'a str>,
+    pub gpg: &'a crate::binpkg::GpgVerify,
+    pub install_mask: &'a str,
+    pub install_mask_prunes_usr_share: bool,
+}
+
 /// Stage one binpkg file (`.gpkg.tar` or `.tbz2`) into a wire bundle
 /// under `staging_tmp` (a fresh temp dir per call; caller removes it).
-/// `repo_override` is the resolver-known repo name (the resolve flow's
-/// `repo_position`): used only when the binpkg's own embedded metadata
-/// carries no `repository`/`REPO` key (the `--remote-binpkg` trial path
-/// passes `None`, honestly reporting the bytes as-is).
-/// `install_mask` / `install_mask_prunes_usr_share` are the resolve's own
-/// `config_install_mask` values for the placed config (the client's under
-/// `ConfigPlacement::Client`, the server's under `ConfigPlacement::Server`;
-/// empty on the `--remote-binpkg` trial path, which resolves no config):
-/// the same `ebuild_merge::apply_install_mask` the local `merge_binpkg`
-/// runs prunes the staged image *before* `collect_filemeta`, so the
-/// client's copy loop, CONTENTS and collision checks see the masked set
-/// exactly like real `vartree.py:4581` `treewalk` (mask before
-/// collision-protect, before `pkg_preinst`), and `build-info/INSTALL_MASK`
-/// rides the bundle into the vdb verbatim.
-/// `gpg` is the same merge-time signature policy `merge_binpkg` runs
-/// (see `crate::binpkg::GpgVerify`) -- the bundle stages exactly what
-/// the merge would see, verified the same way.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn build_bundle(
-    binpkg_path: &Path,
-    staging_tmp: &Path,
-    repo_override: Option<&str>,
-    gpg: &crate::binpkg::GpgVerify,
-    install_mask: &str,
-    install_mask_prunes_usr_share: bool,
-) -> Result<StagedBundle, String> {
+/// `repo_override` fills the manifest only when the binpkg's own metadata
+/// carries no `repository`/`REPO` key. `install_mask` /
+/// `install_mask_prunes_usr_share` prune the staged image before
+/// `collect_filemeta`, like the local merge. `gpg` is the same
+/// merge-time signature policy the local merge runs.
+pub fn build_bundle(args: BuildBundleArgs<'_>) -> Result<StagedBundle, String> {
+    let BuildBundleArgs {
+        binpkg_path,
+        staging_tmp,
+        repo_override,
+        gpg,
+        install_mask,
+        install_mask_prunes_usr_share,
+    } = args;
     let name = binpkg_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -384,8 +347,7 @@ pub fn build_bundle(
     let unit = staging_tmp.join(&pf);
     let image = unit.join("image");
     let build_info = unit.join("build-info");
-    // The remote client merges through its own generated scripts; the
-    // #334 xattr restore covers the local merge only.
+    // The xattr restore covers the local merge only.
     crate::binpkg::extract_binpkg(
         binpkg_path,
         &image,
@@ -394,23 +356,17 @@ pub fn build_bundle(
         &crate::ebuild_merge::XattrPolicy::default(),
     )?;
 
-    // Real `_emerge/Binpkg._start_task`: "Store the md5sum in the vdb."
-    // The same digest the local `merge_binpkg` records (whole binpkg
-    // file, `"{md5}\n"`), written into the staged `build-info/` so the
-    // client's verbatim `build-info/*` vdb copy lands it (backlog #170).
+    // The same BINPKGMD5 digest the local merge records (whole binpkg
+    // file), written into the staged `build-info/` so the client's
+    // verbatim vdb copy lands it.
+    // Portage: _emerge/Binpkg.py, _start_task
     let binpkg_md5 = crate::ebuild_merge::md5_hex(binpkg_path)?;
     std::fs::write(build_info.join("BINPKGMD5"), format!("{binpkg_md5}\n"))
         .map_err(|e| format!("{}: {e}", build_info.join("BINPKGMD5").display()))?;
 
-    // Real `dblink.treewalk()`'s `preinst_mask` (`vartree.py:4581`,
-    // `bin/misc-functions.sh:373-387`): the same
-    // `ebuild_merge::apply_install_mask` the local merge runs prunes the
-    // staged image here -- before `collect_filemeta` below -- so the
-    // client's copy loop, CONTENTS and shadow pre-check all see the
-    // masked set, and `build-info/INSTALL_MASK` rides the bundle into
-    // the vdb verbatim when the resolved mask is non-empty (#170). A
-    // no-op with an empty mask (the `--remote-binpkg` trial path, which
-    // resolves no config, masks nothing and writes no file).
+    // The same `apply_install_mask` the local merge runs prunes the staged
+    // image here, before `collect_filemeta` below.
+    // Portage: vartree.py, treewalk (mask before collision-protect)
     let mask_options = crate::ebuild_merge::MergeOptions {
         install_mask: install_mask.to_string(),
         install_mask_prunes_usr_share,
@@ -418,7 +374,7 @@ pub fn build_bundle(
     };
     crate::ebuild_merge::apply_install_mask(&image, &build_info, &mask_options)?;
 
-    // Server-side `bzip2 -dc`: the client never needs bzip2 (plan §6).
+    // Server-side `bzip2 -dc`: the client never needs bzip2.
     let saved_env = build_info.join("environment.bz2");
     let has_environment = if saved_env.is_file() {
         let dest_env = unit.join("environment");
@@ -449,23 +405,19 @@ pub fn build_bundle(
         has_environment,
     };
     let manifest_text = manifest.render();
-    // Fail-early: prove the manifest parses back before it ever ships
-    // (the client greps the same shape).
+    // Prove the manifest parses back before it ever ships.
     if BundleManifest::parse(&manifest_text).is_none() {
         return Err("remote-manifest does not parse back".to_string());
     }
     std::fs::write(unit.join("remote-manifest"), manifest_text)
         .map_err(|e| format!("remote-manifest: {e}"))?;
 
-    // The ebuild runtime the client phases run under (`bash bin/ebuild.sh
-    // <phase>`, same files the local merge drives). Per unit for now; a
-    // per-session ship is the obvious later optimization (note the ~500K
-    // in the trial logs if it ever matters).
+    // The ebuild runtime the client phases run under (same files the
+    // local merge drives).
     let bin_dir = crate::ebuild_phases::bin_dir()?;
     copy_bin_runtime(bin_dir, &unit.join("bin"))?;
-    // Backlog #171: the `PORTAGE_BZIP2_COMMAND` pass-through rides the
-    // shipped runtime `bin` dir (see `BZIP2_PASSTHROUGH`). `0o755` must
-    // survive the tar below (`tar -cf` preserves modes).
+    // The `PORTAGE_BZIP2_COMMAND` pass-through rides the shipped runtime
+    // `bin` dir (see `BZIP2_PASSTHROUGH`).
     {
         use std::os::unix::fs::PermissionsExt as _;
         let passthrough = unit.join("bin").join("bzip2-passthrough");
@@ -482,13 +434,11 @@ pub fn build_bundle(
         && ebuild_file.is_file()
         && defined.split_whitespace().any(|word| word == "postinst");
 
-    // Uncompressed tar of `<pf>/` (wire compression is a future slice).
-    // Per-file type/hash/mtime for the client's merge (CONTENTS lines,
-    // protect decisions) -- the client never hashes.
+    // Per-file type/hash/mtime for the client's merge.
     let filemeta = render_filemeta(&collect_filemeta(&image)?)?;
     std::fs::write(unit.join("filemeta"), &filemeta).map_err(|e| format!("filemeta: {e}"))?;
 
-    // Uncompressed tar of `<pf>/` (wire compression is a future slice).
+    // Uncompressed tar of `<pf>/`.
     let tarball = staging_tmp.join("bundle.tar");
     let status = std::process::Command::new("tar")
         .args(["-cf"])
@@ -581,8 +531,7 @@ mod tests {
                 "preinst".to_string(),
             ]
         );
-        // Missing ebuild or environment degrades to no phases (the local
-        // merge's extracted_ebuild gate, mirrored).
+        // Missing ebuild or environment degrades to no phases.
         assert!(select_phases("pretend setup preinst", false, true).is_empty());
         assert!(select_phases("pretend setup preinst", true, false).is_empty());
         assert!(select_phases("-", true, true).is_empty());
@@ -591,14 +540,14 @@ mod tests {
     #[test]
     fn bundle_stages_image_build_info_environment_and_manifest() {
         let tmp = tempdir("stage");
-        let staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.cpv, "dev-libs/packagepkg-1.0");
         assert!(staged.byte_count > 0);
@@ -606,17 +555,14 @@ mod tests {
             std::fs::metadata(&staged.tarball).unwrap().len(),
             staged.byte_count
         );
-        // The tar lists exactly one top-level unit dir with the four
-        // expected members.
+        // The tar lists one top-level unit dir with the four members below.
         let listing = std::process::Command::new("tar")
             .args(["-tf"])
             .arg(&staged.tarball)
             .output()
             .expect("tar -tf runs");
         assert!(listing.status.success());
-        // The tar lists exactly one top-level unit dir with the
-        // guaranteed members (image/, build-info/, remote-manifest;
-        // environment because this fixture carries environment.bz2).
+        // `environment` rides along because this fixture carries one.
         let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
         for member in [
             "packagepkg-1.0/image/",
@@ -631,54 +577,49 @@ mod tests {
 
     #[test]
     fn bundle_repo_falls_back_to_resolver_override() {
-        // The fixture tbz2 carries no `repository`/`REPO` key, so the
-        // resolver-known repo fills the manifest; an explicit override
-        // of `"__unknown__"` (a vdb-less resolve) stays unknown.
+        // The fixture carries no `repository`/`REPO` key, so the
+        // resolver-known repo fills the manifest.
         let tmp = tempdir("repo-override");
-        let staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            Some("testrepo"),
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: Some("testrepo"),
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "testrepo");
         let _ = std::fs::remove_dir_all(&tmp);
         let tmp = tempdir("repo-unknown");
-        let staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            Some("__unknown__"),
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: Some("__unknown__"),
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "__unknown__");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Backlog #170: the bundle carries `build-info/BINPKGMD5` = the md5
-    /// of the binpkg file being shipped + `\n` (33 B) -- real
-    /// `_emerge/Binpkg.py:374` `_start_task` ("Store the md5sum in the
-    /// vdb"), the same digest the local `merge_binpkg` records. It rides
-    /// the bundle's `build-info/` into the vdb verbatim, so the tar must
-    /// carry it too.
+    /// The bundle carries `build-info/BINPKGMD5` into the vdb verbatim,
+    /// and the tar carries it too.
     #[test]
     fn bundle_writes_binpkgmd5_of_the_shipped_binpkg() {
         use md5::Digest as _;
         let tmp = tempdir("binpkgmd5");
         let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
-        let staged = build_bundle(
-            &binpkg,
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &binpkg,
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         let bytes = std::fs::read(&binpkg).unwrap();
         let expected = format!("{:x}\n", md5::Md5::digest(&bytes));
@@ -701,26 +642,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Backlog #170: with a non-empty resolved mask the bundle prunes the
-    /// staged image *before* `collect_filemeta` (via the same
-    /// `ebuild_merge::apply_install_mask` the local merge runs) and ships
-    /// `build-info/INSTALL_MASK` = value + `\n` -- real
-    /// `vartree.py:4581` `treewalk` running `preinst_mask`
-    /// (`bin/misc-functions.sh:373-387`) before collision-protect. The
-    /// fixture image ships `usr/share/packagepkg/hello.txt`, so an
-    /// anchored `/usr/share/packagepkg` mask must drop it from the image,
-    /// from `filemeta`, and from the tarball's image listing.
+    /// With a non-empty mask the bundle prunes the staged image before
+    /// `collect_filemeta` and ships `build-info/INSTALL_MASK`.
     #[test]
     fn bundle_applies_install_mask_before_filemeta() {
         let tmp = tempdir("mask");
-        let staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "/usr/share/packagepkg",
-            false,
-        )
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "/usr/share/packagepkg",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert_eq!(
             std::fs::read_to_string(tmp.join("packagepkg-1.0/build-info/INSTALL_MASK")).unwrap(),
@@ -754,20 +688,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Backlog #170: with an empty mask nothing is pruned and no
-    /// `INSTALL_MASK` file ships -- real's own `[[ -n ${x} ]] && echo …
-    /// `> INSTALL_MASK` gate in `preinst_mask`.
+    /// With an empty mask nothing is pruned and no `INSTALL_MASK` file ships.
     #[test]
     fn bundle_empty_mask_prunes_nothing_and_writes_no_file() {
         let tmp = tempdir("mask-empty");
-        let _staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let _staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         assert!(
             tmp.join("packagepkg-1.0/image/usr/share/packagepkg/hello.txt")
@@ -786,22 +718,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Backlog #171: the bundle ships `bin/bzip2-passthrough` (the
-    /// client's `${PORTAGE_BZIP2_COMMAND}` stand-in for the env-regen
-    /// postinst run): executable, inside the tar, and ignoring
+    /// The bundle ships an executable `bin/bzip2-passthrough` that ignores
     /// compression flags while passing stdin through.
     #[test]
     fn bundle_ships_bzip2_passthrough_for_regen() {
         use std::os::unix::fs::PermissionsExt as _;
         let tmp = tempdir("passthrough");
-        let _staged = build_bundle(
-            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
-            &tmp,
-            None,
-            &crate::binpkg::GpgVerify::default(),
-            "",
-            false,
-        )
+        let _staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
         .expect("fixture tbz2 stages");
         let passthrough = tmp.join("packagepkg-1.0/bin/bzip2-passthrough");
         assert_eq!(
@@ -828,7 +758,7 @@ mod tests {
             listing.contains("packagepkg-1.0/bin/bzip2-passthrough"),
             "passthrough must ride the bundle:\n{listing}"
         );
-        // Ignores real's `-c -f9`, copies stdin to stdout.
+        // Ignores Portage's `-c -f9`, copies stdin to stdout.
         let output = std::process::Command::new("sh")
             .arg(&passthrough)
             .args(["-c", "-f9"])
@@ -846,19 +776,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// #326 S8.5: the bundle ships real files, never an overlay's
-    /// symlinks. A runtime dir holding an absolute symlink (the
-    /// `build_bin_overlay` shape: absolute links into a checkout that a
-    /// client on another host cannot resolve) copies as the target's
-    /// bytes -- a regular file, not a dangling link.
+    /// The bundle ships files, never an overlay's symlinks: an absolute
+    /// symlink copies as the target's bytes.
     #[test]
     fn copy_bin_runtime_dereferences_symlinks() {
         let tmp = tempdir("dereference");
         let runtime = tmp.join("runtime");
         std::fs::create_dir_all(&runtime).unwrap();
         std::fs::write(runtime.join("ebuild.sh"), "#!/bin/bash\n").unwrap();
-        // An absolute symlink elsewhere, like an overlay entry pointing
-        // into the checkout.
         let elsewhere = tmp.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         std::fs::write(elsewhere.join("helper.sh"), "helper bytes\n").unwrap();

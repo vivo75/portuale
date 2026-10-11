@@ -1,85 +1,20 @@
-// Real SRC_URI flattening, real Manifest digest parsing, and real
-// content-digest verification -- the non-network half of "actually
-// fetch a package's real sources" (see portuale's own `fetch.rs` for
-// the network half, the real `wget` subprocess invocation this crate
-// deliberately has nothing to do with, kept out of this crate so its
-// own logic stays 100% testable offline).
+// Portage SRC_URI flattening, Manifest digest parsing, and content-digest
+// verification -- the non-network half of fetching a package's sources
+// (`portuale/src/fetch.rs` holds the network half, the `wget` subprocess
+// invocation this crate deliberately has nothing to do with, so its logic
+// stays 100% testable offline).
 //
-// SRC_URI grammar supported (PMS 3.1.6, real `mirror://` resolution
-// included -- see `resolve_mirror_candidates` below, and `layout` for
-// how a mirror root becomes a file URL): a whitespace-
-// separated list of plain URIs, each optionally followed by `-> name`
-// (real "arrow" rename -- PMS's own local-filename override), grouped
-// under `flag? ( ... )` / `!flag? ( ... )` USE-conditional groups,
-// recursively nested. A URI token may also carry a real `mirror+` or
-// `fetch+` prefix (real `fetch.py:1103-1106` -- a portage extension, not
-// PMS): the prefix is stripped from the URI and recorded on the entry as
-// `override_mirror` / `override_fetch` (`mirror+` sets both). See
-// `SrcUriEntry`'s own doc comment and `portuale/src/fetch.rs` for what
-// each override actually relaxes.
-// Real SRC_URI explicitly does NOT support `||`
-// (any-of) groups the way DEPEND-family strings do (PMS 8.2.6.5: "any-
-// of dependencies (`||`) are not allowed" there) -- this parser doesn't
-// implement `||` at all, matching that real grammar restriction, not a
-// simplification.
+// SRC_URI grammar (PMS 3.1.6, plus Portage's `mirror://`, `mirror+` and
+// `fetch+` extensions): whitespace-separated URIs with optional `-> name`
+// renames, under recursively nested `flag? ( ... )` / `!flag? ( ... )`
+// groups. No `||` groups (PMS 8.2.6.5). See `SrcUriEntry` and `layout`
+// for how a mirror root becomes a file URL.
 //
-// Real Manifest2 format (`lib/portage/manifest.py`'s own `_manifest_re`,
-// confirmed by reading it): `DIST <filename> <size> <HASH1> <hex1>
-// [<HASH2> <hex2> ...]`, one real, unmodified `blake2b`-hashers
-// hex digest, plus a `sha512` one -- `MANIFEST2_HASH_DEFAULTS =
-// frozenset(("BLAKE2B", "SHA512"))` (`lib/portage/const.py`) -- verified
-// here via the real, standard BLAKE2b-512 and SHA-512 algorithms
-// (`blake2`/`sha2` crates), not reimplemented from scratch.
-//
-// KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
-// "narrow v1, document the cut" pattern):
-//   - `mirror://` resolution (`resolve_mirror_candidates`) consults both
-//     real `profiles/thirdpartymirrors` (the ebuild's own repo's copy,
-//     via `ebuild_phases::repo_root_for` at the call site in
-//     `portuale/src/fetch.rs`) and real `custommirrors` (an admin-
-//     configured `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file,
-//     "user-defined mirrors first" -- real `grabdict(...,
-//     recursive=1)`'s own directory-form (`/etc/portage/mirrors/` as a
-//     directory of drop-in files) isn't reproduced, only the plain-file
-//     form, the same narrowing `profiles/thirdpartymirrors` itself
-//     already has). Real `custommirrors["local"]`'s own separate
-//     filesystem-path/local-network fast-path lookup (real
-//     `fetch.py:1017-1029`) isn't reproduced either -- see
-//     `resolve_mirror_candidates`'s own doc comment for why a real
-//     `mirror://local/...` token still resolves correctly regardless.
-//     Real portage's own `random.shuffle`s the `thirdpartymirrors` half
-//     of the resulting candidate list (load-balancing across equally-
-//     valid mirrors) -- not replicated here: portuale's own "pinned,
-//     reproducible" test philosophy already rules out non-determinism
-//     elsewhere, and shuffling only affects *which* mirror is tried
-//     first, not correctness (every candidate is still real-digest-
-//     verified after fetching regardless).
-//   - Mirror roots (`custommirrors["local"]` and public `GENTOO_MIRRORS`)
-//     become file URLs through the mirror's own `layout.conf` -- real
-//     `async_mirror_url`: `layout` (the `flat`/`filename-hash`/
-//     `content-hash` path math) and `mirror_cache` (real
-//     `.mirror-cache.json`, URL quoting) here, the download and caching
-//     in `portuale/src/fetch.rs::mirror_url`. Flat is NOT a safe default:
-//     `distfiles.gentoo.org` publishes only `0=filename-hash BLAKE2B 8`
-//     and 404s the flat path (checked 2026-09-14).
-//   - Real fetch ordering is `assemble_candidates`' own shape
-//     (`portuale/src/fetch.rs`, real `fetch.py:1099-1192`), one list per
-//     distfile however many `SRC_URI` entries name it: local mirrors,
-//     public `GENTOO_MIRRORS`, inline `mirror://` expansions, then the
-//     literals last-listed first plus the third-party expansions
-//     (appended, or prepended under `RESTRICT=primaryuri`), each location
-//     attempted once (real `tried_locations`); pinned against real
-//     `fetch(..., listonly=1)` output. Deliberately still cut: real
-//     shuffles the `thirdpartymirrors` half (load-balancing; portuale
-//     stays deterministic).
-//   - Only `BLAKE2B`/`SHA512` are verified (real `MANIFEST2_HASH_DEFAULTS`
-//     exactly) -- any other hash name appearing in a Manifest entry is
-//     silently ignored, the same "real, standard hash, not reimplemented
-//     from scratch" reasoning `ebuild_merge.rs`'s own real MD5 CONTENTS
-//     digest already established for `obj` entries.
-//   - No AUX/MISC/EBUILD Manifest line support (`parse_manifest` only
-//     reads `DIST` lines) -- portuale never needs to verify anything
-//     else a Manifest records.
+// Manifest2 `DIST` lines (`lib/portage/manifest.py`), verified via the
+// standard BLAKE2b-512 and SHA-512 algorithms. Known v1 scope cuts (see
+// notes): deterministic (unshuffled) `mirror://` candidates, no
+// `custommirrors["local"]` fast path, only `BLAKE2B`/`SHA512` verified,
+// `DIST` lines only.
 
 pub mod layout;
 pub mod mirror_cache;
@@ -87,20 +22,18 @@ pub mod mirror_cache;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// One real `Manifest` `DIST` line's own digest record.
+/// One Portage `Manifest` `DIST` line's digest record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistfileDigests {
     pub size: u64,
-    /// Hash algorithm name (`"BLAKE2B"`/`"SHA512"`, real Manifest2
-    /// casing) -> lowercase hex digest, exactly as the real `Manifest`
-    /// file records it.
+    /// Hash algorithm name (`"BLAKE2B"`/`"SHA512"`, Portage Manifest2
+    /// casing) -> lowercase hex digest, as the `Manifest` records it.
     pub hashes: HashMap<String, String>,
 }
 
-/// Error from Manifest/SRC_URI/digest handling. Distinct variants mirror
-/// the real `lib/portage/manifest.py` / `fetch.py` error message shapes
-/// so `Display` reproduces them byte-for-byte (the contract suite pins
-/// the CLI-visible strings).
+/// Error from Manifest/SRC_URI/digest handling. The variants mirror
+/// Portage `lib/portage/manifest.py` / `fetch.py` message shapes so
+/// `Display` reproduces them byte-for-byte (the contract suite pins them).
 #[derive(Debug)]
 pub enum Error {
     /// `{path}: {source}` -- an `io::Error` while reading a real file.
@@ -176,11 +109,8 @@ impl From<Error> for String {
     }
 }
 
-/// Real `Manifest.parseManifest2`, narrowed to `DIST` lines only (see
-/// the module doc comment). A missing `Manifest` file is an empty map,
-/// not an error -- same "nothing recorded yet" tolerance
-/// `portage_repo::list_candidates` already gives a missing repo
-/// directory.
+/// Portage `Manifest.parseManifest2`, narrowed to `DIST` lines only. A
+/// missing `Manifest` file is an empty map, not an error.
 pub fn parse_manifest(manifest_path: &Path) -> Result<HashMap<String, DistfileDigests>, Error> {
     let text = match std::fs::read_to_string(manifest_path) {
         Ok(text) => text,
@@ -215,27 +145,18 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<HashMap<String, DistfileDi
     Ok(out)
 }
 
-/// One flattened `SRC_URI` entry: the real remote URI, and the real
-/// local filename it should be saved as (either the real "arrow"
-/// rename, or the URI's own basename -- PMS's own default when no `->`
-/// is given).
+/// One flattened `SRC_URI` entry: the remote URI, and the local filename
+/// it should be saved as (the `->` rename, or the URI's own basename).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SrcUriEntry {
     pub uri: String,
     pub filename: String,
-    /// Real `override_mirror` (`fetch.py:1103`): this URI token had a
-    /// `mirror+` prefix. Real `file_restrict_mirror = (restrict_fetch or
-    /// restrict_mirror) and not override_mirror` -- so a `mirror+` URI
-    /// re-permits the public mirror list for its file even
-    /// under `RESTRICT=mirror`. Implies `override_fetch` too.
+    /// Portage `override_mirror` (`fetch.py`): this URI token had a
+    /// `mirror+` prefix, re-permitting the public mirror list even under
+    /// `RESTRICT=mirror`. Implies `override_fetch` too.
     pub override_mirror: bool,
-    /// Real `override_fetch` (`fetch.py:1104`): `mirror+` OR `fetch+`
-    /// prefix. Real `if (restrict_fetch and not override_fetch)` skips a
-    /// normal URI entirely under `RESTRICT=fetch` -- `fetch+` exempts
-    /// this one URI. (Portuale's fetch path doesn't model
-    /// `RESTRICT=fetch` yet, so today this only guarantees the `fetch+`
-    /// prefix is stripped so the URL is valid -- see
-    /// `portuale/src/fetch.rs`.)
+    /// Portage `override_fetch` (`fetch.py`): `mirror+` or `fetch+`
+    /// prefix, exempting this one URI under `RESTRICT=fetch`. (See notes.)
     pub override_fetch: bool,
 }
 
@@ -243,14 +164,8 @@ fn basename(uri: &str) -> String {
     uri.rsplit('/').next().unwrap_or(uri).to_string()
 }
 
-/// Recursive-descent parser for the grammar described in the module doc
-/// comment. `active(negated, flag)` decides whether a `flag?`/`!flag?`
-/// group's own contents should be collected -- callers pass a real USE
-/// membership check for `SRC_URI` itself (portuale's own always-empty
-/// USE set, same v1 cut every other real-execution slice already has),
-/// or an always-true closure to compute the real `AA` variable (every
-/// file `SRC_URI` could ever reference, regardless of USE -- PMS's own
-/// definition of `AA`).
+/// Recursive-descent parser for the module grammar. `active(negated, flag)`
+/// decides whether a `flag?`/`!flag?` group's contents are collected (see notes).
 fn parse_list(
     tokens: &[&str],
     pos: &mut usize,
@@ -287,10 +202,8 @@ fn parse_list(
             });
         } else {
             *pos += 1;
-            // Real `fetch.py:1103-1106`: strip a `mirror+`/`fetch+`
-            // prefix off the URI token and record which restriction(s)
-            // it overrides. `mirror+` implies `fetch+` (real
-            // `override_fetch = override_mirror or ...`).
+            // Portage `fetch.py`: strip a `mirror+`/`fetch+`
+            // prefix and record the override (`mirror+` implies `fetch+`).
             let (uri, override_mirror, override_fetch) =
                 if let Some(rest) = tok.strip_prefix("mirror+") {
                     (rest, true, true)
@@ -320,9 +233,8 @@ fn parse_list(
     Ok(out)
 }
 
-/// Flattens a real `SRC_URI` string into the real, ordered list of
-/// `(uri, filename)` pairs it names -- see the module doc comment for
-/// the grammar and `active`'s own meaning.
+/// Flattens a Portage `SRC_URI` string into its ordered `(uri, filename)`
+/// pairs; see the module docs for the grammar and `active`'s meaning.
 pub fn flatten_src_uri(
     src_uri: &str,
     active: impl Fn(bool, &str) -> bool,
@@ -338,16 +250,10 @@ pub fn flatten_src_uri(
     Ok(entries)
 }
 
-/// Real `grabdict()` (`lib/portage/util/__init__.py`), narrowed to what
-/// portuale needs: real `profiles/thirdpartymirrors`'s own format --
-/// one `<name> <url1> [<url2> ...]` entry per line. A whole line
-/// starting with `#`, or any token from the first `#`-prefixed one
-/// onward, is a comment (real `grabdict`'s own per-token truncation,
-/// not just whole-line); a line left with fewer than 2 tokens after
-/// that (a bare name with zero URLs, or a blank line) is skipped (real
-/// `grabdict`'s own `empty=0` default). A missing file is an empty
-/// map, not an error -- the same tolerance `parse_manifest` already
-/// gives a missing `Manifest`.
+/// Portage `grabdict()` (`lib/portage/util/__init__.py`), narrowed to
+/// `profiles/thirdpartymirrors`: one `<name> <url1> [<url2> ...]` entry
+/// per line. `#` starts a comment; lines left with fewer than 2 tokens
+/// are skipped; a missing file is an empty map (see notes).
 pub fn parse_thirdpartymirrors(path: &Path) -> Result<HashMap<String, Vec<String>>, Error> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -377,32 +283,12 @@ pub fn parse_thirdpartymirrors(path: &Path) -> Result<HashMap<String, Vec<String
     Ok(out)
 }
 
-/// Real `mirror://<name>/<path>` resolution (real `fetch.py:1136-1160`):
-/// `<name>` is looked up in `custommirrors` *and* `thirdpartymirrors`
-/// (real comment: "Try user-defined mirrors first" -- `custommirrors`'s
-/// own roots for the name, if any, are listed before
-/// `thirdpartymirrors`'s own, real portage's own exact real order),
-/// expanding to `<mirror_root>/<path>` for every root under that name in
-/// each map (real `cmirr.rstrip("/") + "/" + path` /
-/// `locmirr.rstrip("/") + "/" + path`, string-built identically for
-/// both -- real portage `random.shuffle`s the `thirdpartymirrors` half
-/// only, deliberately not replicated here, see this module's own doc
-/// comment). A `mirror://` token whose name isn't known to *either* map,
-/// or that's malformed (`mirror://` with no further `/` at all), yields
-/// no candidates -- real portage's own `writemsg` warning, not a hard
-/// error; the caller still fails loudly if this leaves a file with no
-/// working candidate at all, the same real end result. A non-
-/// `mirror://` URI is returned unchanged, as its own single candidate --
-/// so every `SrcUriEntry.uri` can be passed through this function
-/// uniformly, regardless of whether it's actually a `mirror://` token.
-///
-/// Real `custommirrors["local"]`'s own *separate* meaning (local mirrors
-/// tried before any other candidate, real `fetch.py:1017-1029`'s own
-/// `fsmirrors`/`local_mirrors` split) is handled by the fetch loop
-/// (`portuale/src/fetch.rs`), not here -- a `mirror://local/...` token
-/// still resolves normally through this function (real portage's own
-/// `if mirrorname in custommirrors:` check doesn't treat `"local"`
-/// specially either).
+/// Portage `mirror://<name>/<path>` resolution (Portage `fetch.py`):
+/// `<name>` is looked up in `custommirrors` first, then
+/// `thirdpartymirrors`, expanding to `<mirror_root>/<path>` per root.
+/// Unknown names and malformed tokens yield no candidates (Portage warns;
+/// the caller still fails loudly when no candidate works). A
+/// non-`mirror://` URI is returned unchanged (see notes).
 pub fn resolve_mirror_candidates(
     uri: &str,
     custommirrors: &HashMap<String, Vec<String>>,
@@ -436,23 +322,20 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Real `make.globals`'s own default `FETCHCOMMAND` template, verbatim.
+/// Portage `make.globals`'s default `FETCHCOMMAND` template, verbatim.
 pub const DEFAULT_FETCHCOMMAND: &str = concat!(
     "wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) ",
     "distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\""
 );
 
-/// Real `make.globals`'s `RESUMECOMMAND`, byte-for-byte the
-/// `FETCHCOMMAND` template plus `-c`.
+/// Portage `make.globals`'s `RESUMECOMMAND`: `FETCHCOMMAND` plus `-c`.
 pub const DEFAULT_RESUMECOMMAND: &str = concat!(
     "wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) ",
     "distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\""
 );
 
-/// Real `fetch.py:1652-1700`'s fetch-command family, resolved from the
-/// config (`FETCHCOMMAND`, `RESUMECOMMAND`, and the per-protocol
-/// `FETCHCOMMAND_<PROTO>` / `RESUMECOMMAND_<PROTO>` variants). `None`
-/// (and an absent protocol key) means the `make.globals` default.
+/// Portage `fetch.py`'s fetch-command family, resolved from the
+/// config. `None` (and an absent protocol key) means the `make.globals` default.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchCommands {
     pub fetchcommand: Option<String>,
@@ -483,33 +366,23 @@ pub fn default_commands() -> &'static FetchCommands {
     &DEFAULT
 }
 
-/// Real `fetch.py:1795-1811`'s non-path substitution inputs: the
-/// distfile's `DIGESTS` string and the `PORTAGE_SSH_OPTS` setting. Real
-/// inserts each into `variables` only when the settings carry it; an
-/// unset key still expands to empty in `varexpand`, so `None` and
-/// `Some("")` produce the same command line.
+/// Portage `fetch.py`'s non-path substitution inputs: the
+/// distfile's `DIGESTS` string and the `PORTAGE_SSH_OPTS` setting.
+/// `None` and `Some("")` expand identically (both to empty).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FetchCommandVars<'a> {
     /// `" ".join(f"{k.lower()}:{v}" ...)` over the Manifest hashes, size
     /// excluded -- build it with [`digests_variable`].
     pub digests: Option<&'a str>,
-    /// Real `mysettings.get("PORTAGE_SSH_OPTS")` (used by the shipped
+    /// Portage `mysettings.get("PORTAGE_SSH_OPTS")` (used by the shipped
     /// `FETCHCOMMAND_SSH`/`_SFTP` templates as `"${PORTAGE_SSH_OPTS}"`).
     pub portage_ssh_opts: Option<&'a str>,
 }
 
-/// The `DIGESTS` fetch-command variable for one Manifest entry, real
-/// `fetch.py:1797-1803`: `" ".join(f"{k.lower()}:{v}")` over every hash
-/// (the `size` entry excluded), e.g.
-/// `blake2b:<hex> sha512:<hex>`.
-///
-/// Real preserves the `Manifest` line's hash order (`portage.manifest`'s
-/// parser builds an insertion-ordered dict); portuale's
-/// [`DistfileDigests`] carries a `HashMap`, so the names are sorted
-/// instead. The shipped tree's `BLAKE2B`-then-`SHA512` order matches the
-/// sort (200/200 sampled `DIST` lines, 2026-09-16) -- a hand-written
-/// reverse-order Manifest would differ; recorded in `docs/history/02.68-74.md`
-/// §6.
+/// The `DIGESTS` fetch-command variable for one Manifest entry (Portage
+/// `fetch.py`): `" ".join(f"{k.lower()}:{v}")` over every hash
+/// (the `size` entry excluded), e.g. `blake2b:<hex> sha512:<hex>`.
+/// Names are sorted (see notes); the shipped tree's order matches the sort.
 pub fn digests_variable(digests: &DistfileDigests) -> String {
     let mut names: Vec<&String> = digests.hashes.keys().collect();
     names.sort();
@@ -521,8 +394,8 @@ pub fn digests_variable(digests: &DistfileDigests) -> String {
 }
 
 impl FetchCommands {
-    /// Real's selection (`fetch.py:1652-1662` for fetch, `:1680-1690` for
-    /// resume): the protocol variant first, then the plain name.
+    /// Portage's selection (Portage `fetch.py`): the protocol variant
+    /// first, then the plain name.
     fn select(&self, proto: &str, resume: bool) -> Result<(String, String), String> {
         let (plain_var, plain, proto_var, proto_map) = if resume {
             (
@@ -552,10 +425,9 @@ impl FetchCommands {
     }
 }
 
-/// Real `varexpand` + `shlex.split` over the selected command
-/// (`fetch.py:1813-1820`): the variables are substituted, then the string
-/// is split into argv with POSIX quoting rules -- real never runs it
-/// through a shell.
+/// Portage `varexpand` + `shlex.split` over the selected command
+/// (Portage `fetch.py`): variables are substituted, then the string is
+/// split into argv with POSIX quoting rules -- never run through a shell.
 pub fn expand_and_split(command: &str, vars: &HashMap<String, String>) -> Vec<String> {
     shell_split(&portage_util::varexpand(command, |name| {
         vars.get(name).cloned()
@@ -563,7 +435,7 @@ pub fn expand_and_split(command: &str, vars: &HashMap<String, String>) -> Vec<St
 }
 
 /// POSIX-ish argv splitting, public for callers parsing a config value
-/// real runs through `shlex.split` (e.g. `PORTAGE_RO_DISTDIRS`).
+/// Portage runs through `shlex.split` (e.g. `PORTAGE_RO_DISTDIRS`).
 pub fn split_shell_words(s: &str) -> Vec<String> {
     shell_split(s)
 }
@@ -571,8 +443,7 @@ pub fn split_shell_words(s: &str) -> Vec<String> {
 /// Python `shlex.split` (posix) argv splitting: whitespace separates,
 /// single quotes are literal, a backslash escapes the next character
 /// outside single quotes, and inside double quotes only `\"`/`\\` lose
-/// the backslash (`\$`, `` \` ``, `\ ` keep it -- see the in-double
-/// branch).
+/// the backslash.
 fn shell_split(s: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut cur = String::new();
@@ -597,11 +468,8 @@ fn shell_split(s: &str) -> Vec<String> {
                 && let Some(&next) = chars.peek()
                 && matches!(next, '"' | '\\')
             {
-                // Python `shlex` (posix) removes the backslash only
-                // before the closing quote and before another
-                // backslash; `\$`, `` \` `` and `\ ` keep it (real
-                // fetch commands run through `shlex.split`, not a
-                // shell).
+                // Python `shlex` (posix) removes the backslash only before
+                // the closing quote and before another backslash.
                 cur.push(chars.next().unwrap());
             } else {
                 cur.push(c);
@@ -642,57 +510,52 @@ fn shell_split(s: &str) -> Vec<String> {
     args
 }
 
-/// Real `fetch.py:1652-1716` through `:1830`: select `FETCHCOMMAND` (or
-/// its protocol variant) and `RESUMECOMMAND` (both are selected and
-/// checked, regardless of which one this attempt runs), warn about a
-/// command without `${FILE}`, substitute
-/// `${URI}`/`${FILE}`/`${DIGESTS}`/`${DISTDIR}`/`${PORTAGE_SSH_OPTS}`,
-/// and spawn the real subprocess (never an in-process HTTP client). A
-/// failed fresh fetch removes whatever partial file it left behind; a
-/// failed resume keeps it for the next candidate -- the split
-/// `portuale::fetch::fetch_src_uri`'s candidate loop relies on.
+/// Portage `fetch.py`: select `FETCHCOMMAND`
+/// (or its protocol variant) and `RESUMECOMMAND`, substitute the
+/// variables, and spawn the subprocess (never an in-process HTTP
+/// client). A failed fresh fetch removes its partial; a failed resume
+/// keeps it for the next candidate.
 ///
-/// The `${FILE}` refusal is real's, not a blanket one: each command
-/// missing the parameter prints its own
-/// `!!! <VAR> does not contain the required ${FILE} parameter.` line,
-/// then the shared make.conf(5) hint, and the fetch aborts **only when
-/// the distfile name differs from the URL basename**
-/// (`fetch.py:1713-1715`: `if myfile != os.path.basename(loc): return 0`).
-/// When the names match, real falls through and runs the command anyway
-/// -- `wget -P "${DISTDIR}" "${URI}"` still lands the right file.
+/// The `${FILE}` refusal is Portage's (see notes): each command missing
+/// the parameter is reported, and the fetch aborts only when the
+/// distfile name differs from the URL basename.
 ///
-/// `FILE` is `dest`'s own basename, **not** real's
-/// `basename(download_path)`: real downloads to
-/// `<myfile>.__download__` (`_download_suffix`, `fetch.py:63`) and
-/// renames after verification, while portuale writes `dest` directly.
-/// This slice deliberately does not change portuale's download path --
-/// recorded in `docs/history/02.68-74.md` §6.
-/// The fetch command real's selection + `${FILE}` check + variable
-/// substitution reduce to: the make.conf variable name to blame, the
-/// program, and its argv -- everything short of the spawn itself, so the
-/// inheriting transport ([`download_with_commands`]) and the capturing
-/// one ([`download_with_commands_quiet`]) run byte-identical command
-/// lines and differ only in where the child's output goes.
+/// `FILE` is `dest`'s own basename, **not** Portage's
+/// `basename(download_path)` (see notes).
+/// The fetch command's selection + `${FILE}` check + substitution reduce
+/// to: the make.conf variable name to blame, the program, and its argv
+/// -- everything short of the spawn itself, so the inheriting transport
+/// ([`download_with_commands`]) and the capturing one
+/// ([`download_with_commands_quiet`]) run byte-identical command lines
+/// and differ only in where the child's output goes.
 struct PlannedFetch {
     prog: String,
     args: Vec<String>,
-    /// Real's `${FILE}`-less-command warning (the `!!! <VAR> does not
-    /// contain ...` lines plus the make.conf(5) hint), when the distfile
-    /// name matched the URL basename so real runs the command anyway.
-    /// The caller decides where it goes: real stderr for the inheriting
-    /// transport, the captured stream for the quiet one.
+    /// Portage's `${FILE}`-less-command warning (emitted when the
+    /// distfile name matched the URL basename so Portage runs the
+    /// command anyway). The caller decides where it goes: stderr for the
+    /// inheriting transport, the captured stream for the quiet one.
     file_param_warning: Option<String>,
 }
-
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-fn plan_fetch_command(
-    uri: &str,
-    dest: &Path,
+/// Arguments of [`plan_fetch_command`].
+struct PlanFetchCommandArgs<'a> {
+    uri: &'a str,
+    dest: &'a Path,
     resume: bool,
-    distdir: &Path,
-    vars: FetchCommandVars<'_>,
-    commands: &FetchCommands,
-) -> Result<PlannedFetch, String> {
+    distdir: &'a Path,
+    vars: FetchCommandVars<'a>,
+    commands: &'a FetchCommands,
+}
+
+fn plan_fetch_command(args: PlanFetchCommandArgs<'_>) -> Result<PlannedFetch, String> {
+    let PlanFetchCommandArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    } = args;
     let proto = uri
         .split_once("://")
         .map(|(p, _)| p.to_ascii_uppercase())
@@ -715,11 +578,11 @@ fn plan_fetch_command(
         let message = format!("{missing_file_param}{hint}");
         let url_basename = uri.rsplit('/').next().unwrap_or("");
         if file != url_basename {
-            // Real `return 0`: abort the fetch, never spawn.
+            // Portage `return 0`: abort the fetch, never spawn.
             return Err(message);
         }
-        // Names match: real still prints the warning before running the
-        // command; there is no `Err` to carry it here, so the caller
+        // Names match: Portage still prints the warning before running
+        // the command; there is no `Err` to carry it here, so the caller
         // emits it on the transport's own channel.
         file_param_warning = Some(message);
     }
@@ -748,20 +611,36 @@ fn plan_fetch_command(
         file_param_warning,
     })
 }
+/// Arguments of [`download_with_commands`].
+pub struct DownloadWithCommandsArgs<'a> {
+    pub uri: &'a str,
+    pub dest: &'a Path,
+    pub resume: bool,
+    pub distdir: &'a Path,
+    pub vars: FetchCommandVars<'a>,
+    pub commands: &'a FetchCommands,
+}
 
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-pub fn download_with_commands(
-    uri: &str,
-    dest: &Path,
-    resume: bool,
-    distdir: &Path,
-    vars: FetchCommandVars<'_>,
-    commands: &FetchCommands,
-) -> Result<(), String> {
-    let planned = plan_fetch_command(uri, dest, resume, distdir, vars, commands)?;
+pub fn download_with_commands(args: DownloadWithCommandsArgs<'_>) -> Result<(), String> {
+    let DownloadWithCommandsArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    } = args;
+    let planned = plan_fetch_command(PlanFetchCommandArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    })?;
     if let Some(warning) = planned.file_param_warning {
-        // Names match: real still prints the warning before running the
-        // command; there is no `Err` to carry it here, so it goes to
+        // Names match: Portage still prints the warning before running
+        // the command; there is no `Err` to carry it here, so it goes to
         // stderr.
         eprint!("{warning}");
     }
@@ -783,37 +662,51 @@ pub fn download_with_commands(
 
 /// A quiet fetch failure: the same one-line summary
 /// [`download_with_commands`] would return, plus everything the fetch
-/// command wrote to stderr (its stdout is discarded). Carries the
-/// transcript as data so the caller can shape a real-style message from
-/// it instead of leaking it onto the terminal.
+/// command wrote to stderr (its stdout is discarded).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuietFetchError {
     pub summary: String,
     pub stderr: String,
 }
 
-/// The capturing sibling of [`download_with_commands`]: the same
-/// command selection, `${FILE}` check, and substitution, but the child's
-/// stdout is dropped and its stderr captured -- never inherited. For
-/// callers whose failure message is shaped from the transcript (real
-/// `bintree._populate_remote`'s `!!! [repo] Error fetching ...` shape),
-/// not printed raw.
-#[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
+/// Arguments of [`download_with_commands_quiet`].
+pub struct DownloadWithCommandsQuietArgs<'a> {
+    pub uri: &'a str,
+    pub dest: &'a Path,
+    pub resume: bool,
+    pub distdir: &'a Path,
+    pub vars: FetchCommandVars<'a>,
+    pub commands: &'a FetchCommands,
+}
+
+/// The capturing sibling of [`download_with_commands`]: the same command
+/// selection, `${FILE}` check, and substitution, but the child's stdout
+/// is dropped and its stderr captured -- never inherited. For callers
+/// whose failure message is shaped from the transcript (Portage
+/// `bintree._populate_remote`'s `!!! [repo] Error fetching ...` shape).
 pub fn download_with_commands_quiet(
-    uri: &str,
-    dest: &Path,
-    resume: bool,
-    distdir: &Path,
-    vars: FetchCommandVars<'_>,
-    commands: &FetchCommands,
+    args: DownloadWithCommandsQuietArgs<'_>,
 ) -> Result<(), QuietFetchError> {
-    let planned =
-        plan_fetch_command(uri, dest, resume, distdir, vars, commands).map_err(|summary| {
-            QuietFetchError {
-                summary,
-                stderr: String::new(),
-            }
-        })?;
+    let DownloadWithCommandsQuietArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    } = args;
+    let planned = plan_fetch_command(PlanFetchCommandArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    })
+    .map_err(|summary| QuietFetchError {
+        summary,
+        stderr: String::new(),
+    })?;
     let output = std::process::Command::new(&planned.prog)
         .args(&planned.args)
         .stdout(std::process::Stdio::null())
@@ -841,53 +734,46 @@ pub fn download_with_commands_quiet(
 }
 
 /// The `make.globals` default transport, for callers with no resolved
-/// config in hand: `download_with_commands` over [`FetchCommands`]'s
-/// defaults and no extra variables. `resume` selects `RESUMECOMMAND`
-/// (byte-for-byte `FETCHCOMMAND` plus `-c`). This is the one `wget`
-/// invocation both the `portuale` fetch path and the `mrg-director`
-/// `Fetcher` seam run when no override is configured; it lives here so
-/// the transport is shared, not duplicated per caller.
+/// config: `download_with_commands` over the defaults, no extra
+/// variables. Shared by the `portuale` fetch path and the `mrg-director`
+/// `Fetcher` seam so the transport is never duplicated per caller.
 pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
     let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
-    download_with_commands(
+    download_with_commands(DownloadWithCommandsArgs {
         uri,
         dest,
         resume,
         distdir,
-        FetchCommandVars::default(),
-        &FetchCommands::default(),
-    )
+        vars: FetchCommandVars::default(),
+        commands: &FetchCommands::default(),
+    })
 }
 
 /// The quiet `make.globals` default transport: [`download_via_wget`]'s
 /// own command line, but output-captured ([`download_with_commands_quiet`])
 /// -- for callers that shape the failure themselves (a binhost index
-/// refresh prints real's `!!! [repo] ...` lines, never wget's raw
+/// refresh prints Portage's `!!! [repo] ...` lines, never wget's raw
 /// transcript).
 pub fn download_via_wget_quiet(uri: &str, dest: &Path) -> Result<(), QuietFetchError> {
     let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
-    download_with_commands_quiet(
+    download_with_commands_quiet(DownloadWithCommandsQuietArgs {
         uri,
         dest,
-        false,
+        resume: false,
         distdir,
-        FetchCommandVars::default(),
-        &FetchCommands::default(),
-    )
+        vars: FetchCommandVars::default(),
+        commands: &FetchCommands::default(),
+    })
 }
 
-/// Real digest verification: file size (a cheap, real `_check_distfile`
-/// pre-check before ever hashing) plus every `BLAKE2B`/`SHA512` entry
-/// `digests` carries -- see the module doc comment for why only those
-/// two. Any other hash name present is silently skipped (not
-/// mismatched, not verified). An empty `digests.hashes` (a `Manifest`
-/// entry with no recognized hash at all) still passes once the size
-/// matches, the same "size alone is still something" tolerance real
-/// `_check_distfile` gives.
+/// Portage digest verification: file size first (Portage `_check_distfile`'s
+/// cheap pre-check before hashing) plus every `BLAKE2B`/`SHA512` entry
+/// `digests` carries (see notes for why only those two). Any other hash
+/// name is silently skipped. An empty `digests.hashes` still passes once
+/// the size matches (Portage's "size alone is still something" tolerance).
 pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), Error> {
-    // `blake2`/`sha2` both re-export the same underlying `digest::Digest`
-    // trait under their own name -- importing it once is enough for
-    // both `Blake2b512::digest`/`Sha512::digest` below.
+    // `blake2`/`sha2` re-export the same `digest::Digest` trait under
+    // their own names -- one import covers both hashers below.
     use blake2::Digest as _;
 
     let bytes = std::fs::read(path).map_err(|e| Error::Io {
@@ -919,19 +805,17 @@ pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), Erro
     Ok(())
 }
 
-/// The streaming sibling of [`verify_digests`]: the same size-first
-/// check and the same BLAKE2B/SHA512 set, but the bytes come from a
-/// reader -- the gpkg outer-container member stream (`#58` S5), so a
-/// large member is neither buffered in memory nor copied to a scratch
-/// file. `name` labels the member in the error messages (the `path`
-/// field the file variant fills with the on-disk path).
+/// The streaming sibling of [`verify_digests`]: the same size-first check
+/// and the same BLAKE2B/SHA512 set, but the bytes come from a reader --
+/// the gpkg outer-container member stream, so a large member is neither
+/// buffered nor copied to scratch. `name` labels the member in errors.
 pub fn verify_digests_reader<R: std::io::Read>(
     name: &str,
     mut reader: R,
     digests: &DistfileDigests,
 ) -> Result<(), Error> {
-    // `blake2`/`sha2` both re-export the same underlying `digest::Digest`
-    // trait; see `verify_digests`.
+    // `blake2`/`sha2` re-export the same `digest::Digest` trait; see
+    // `verify_digests`.
     use blake2::Digest as _;
 
     let mut blake2b = blake2::Blake2b512::new();
@@ -984,30 +868,7 @@ mod tests {
     use std::fs;
 
     /// Serialises stub-script creation against every stub spawn across
-    /// the parallel test threads (#128).
-    ///
-    /// `ETXTBSY` here is a cross-thread fd race, not a name collision,
-    /// and `fs::write`'s own handle is not the one that matters: it
-    /// closes before the spawn. All threads of one test process share a
-    /// single fd table, so a `Command` fork that happens while *any*
-    /// thread still has a script open `O_WRONLY` copies that fd into the
-    /// child. `fork` shares the file description, so the writer's own
-    /// `close` does not drop the inode's write count — the child's copy
-    /// still pins it until that child itself execs (dropping the
-    /// `O_CLOEXEC` fd). Captured with `strace -f -tt` (2026-09-21):
-    /// thread A opens `wget-p.sh` for write at t0 and closes at t2;
-    /// thread B's `clone3(CLONE_VM|CLONE_VFORK)` for another test's child
-    /// lands at t1, between them; A's own child then `execve`s
-    /// `wget-p.sh` before B's child has exec'd, and the kernel answers
-    /// `Text file busy` even though A's write handle is long closed.
-    ///
-    /// Holding this lock across each script write ([`stub_fetch_script`])
-    /// and across each spawn ([`download_serialized`], which returns only
-    /// after the child has exited) makes fork-during-write impossible: at
-    /// any spawn's fork no script write-fd is open process-wide, so no
-    /// child can inherit one and pin the inode. Data-file writes
-    /// (`source.tar.gz`, manifests, …) stay outside the lock: pinning
-    /// those is harmless, since `execve` only checks the exec'd file.
+    /// the parallel test threads (see notes for the `ETXTBSY` story).
     static SPAWN_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -1017,14 +878,8 @@ mod tests {
     }
 
     fn tempdir() -> std::path::PathBuf {
-        // The clock alone cannot discriminate two tests: parallel test
-        // threads in one process share the pid and can start within the
-        // same tick, so two `tempdir()` calls could return the same path
-        // and clobber each other's files. The process-wide counter makes
-        // the name unique by construction whatever the clock resolution
-        // is; the timestamp stays as a run marker only. (Uniqueness alone
-        // does not fix #128's `ETXTBSY` — see `SPAWN_SERIAL` — but a
-        // shared dir would still break the tests' file assertions.)
+        // Unique per call across parallel test threads (pid + counter);
+        // the timestamp is a run marker only (see notes).
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = TempDir::new(&format!("portage_fetch_test_{}_{}", std::process::id(), n)).keep();
@@ -1059,8 +914,7 @@ mod tests {
             )
         );
         // A default-constructed family selects the shipped make.globals
-        // templates: an absent config key means "default", never "unset"
-        // (#70 R2 / T2).
+        // templates: an absent config key means "default", never "unset".
         let defaults = FetchCommands::default();
         assert_eq!(
             defaults.select("HTTPS", false).unwrap(),
@@ -1073,7 +927,7 @@ mod tests {
                 DEFAULT_RESUMECOMMAND.to_string()
             )
         );
-        // An unset plain command is real's own error, reachable only
+        // An unset plain command is Portage's own error, reachable only
         // from a hand-built family.
         let empty = FetchCommands {
             fetchcommand: None,
@@ -1112,7 +966,7 @@ mod tests {
                 "Mozilla x",
             ]
         );
-        // The bare `$VAR` form is real `varexpand`'s too.
+        // The bare `$VAR` form is Portage `varexpand`'s too.
         let argv = expand_and_split(
             "cp $URI ${DISTDIR}/${FILE}",
             &vars(&[
@@ -1124,22 +978,8 @@ mod tests {
         assert_eq!(argv, vec!["cp", "file:///src/foo", "/d/foo"]);
     }
 
-    /// #70 R4 oracle: the real `FETCHCOMMAND_SSH`
-    /// (`make.globals:70`, resolved by R1) expanded with the fetch
-    /// variables, captured 2026-09-16 (portage 3.0.82.2) with
-    /// `python3 -c "from portage.util import varexpand; import shlex;
-    /// print(shlex.split(varexpand(CMD, mydict=VARS)))"`:
-    ///
-    /// unset `PORTAGE_SSH_OPTS`:
-    /// ['bash', '-c', 'x=${2#ssh://} ; host=${x%%/*} ;
-    ///  port=${host##*:} ; host=${host%:*} ; [[ ${host} = ${port} ]] &&
-    ///  port= ; exec rsync --rsh="ssh ${port:+-p${port}} ${3}" -avP
-    ///  "${host}:/${x#*/}" "$1"', 'rsync',
-    ///  '/var/cache/distfiles/foo-1.0.tar.gz',
-    ///  'https://example.org/distfiles/foo-1.0.tar.gz', '']
-    ///
-    /// set to `-o ServerAliveInterval=5 -o User=portage`: same argv with
-    /// that string as the last element.
+    /// Oracle: Portage's `FETCHCOMMAND_SSH` expanded with the fetch
+    /// variables (see notes for the verbatim vectors).
     #[test]
     fn expand_and_split_matches_portage_varexpand_on_fetchcommand_ssh() {
         let command = r#"bash -c "x=\${2#ssh://} ; host=\${x%%/*} ; port=\${host##*:} ; host=\${host%:*} ; [[ \${host} = \${port} ]] && port= ; exec rsync --rsh=\"ssh \${port:+-p\${port}} \${3}\" -avP \"\${host}:/\${x#*/}\" \"\$1\"" rsync "${DISTDIR}/${FILE}" "${URI}" "${PORTAGE_SSH_OPTS}""#;
@@ -1181,10 +1021,8 @@ mod tests {
         );
     }
 
-    /// The rest of real's fetch-time `varexpand` over a command
-    /// template: unknown names empty, `\$` literal, `\\` unescaped,
-    /// single-quote suspension (captured with the same python command;
-    /// `['cp', 'x']` for the unknown-vars line).
+    /// Portage fetch-time `varexpand` over a command template: unknown
+    /// names empty, `\$` literal, `\\` unescaped, single-quote suspension.
     #[test]
     fn expand_and_split_varexpand_unknown_vars_and_escapes_match_portage() {
         assert_eq!(
@@ -1213,9 +1051,8 @@ mod tests {
         assert_eq!(digests_variable(&digests), "blake2b:aa sha512:bb");
     }
 
-    /// A stub "fetch command": `cp <uri-path> <dest>` (the URI is a
-    /// `file://` path in the tests below). Spawned directly, exactly the
-    /// way a real `FETCHCOMMAND` is.
+    /// A stub "fetch command": `cp <uri-path> <dest>`. Spawned directly,
+    /// exactly the way a Portage `FETCHCOMMAND` is.
     fn stub_fetch_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
         // Under the spawn lock: no other test may fork (spawn) while
         // this write-fd is open — see `SPAWN_SERIAL`.
@@ -1229,21 +1066,36 @@ mod tests {
         path
     }
 
-    /// The only way these tests spawn a stub: the real
-    /// [`download_with_commands`] under the spawn lock, so no other test
-    /// thread can fork while this one's contract is scanning the shared
-    /// fd table — see `SPAWN_SERIAL`.
-    #[allow(clippy::too_many_arguments, reason = "#336 Phase 5 worklist")]
-    fn download_serialized(
-        uri: &str,
-        dest: &std::path::Path,
+    /// Arguments of [`download_serialized`].
+    struct DownloadSerializedArgs<'a> {
+        uri: &'a str,
+        dest: &'a std::path::Path,
         resume: bool,
-        distdir: &std::path::Path,
-        vars: FetchCommandVars<'_>,
-        commands: &FetchCommands,
-    ) -> Result<(), String> {
+        distdir: &'a std::path::Path,
+        vars: FetchCommandVars<'a>,
+        commands: &'a FetchCommands,
+    }
+
+    /// The only way these tests spawn a stub: [`download_with_commands`]
+    /// under the spawn lock (see `SPAWN_SERIAL`).
+    fn download_serialized(args: DownloadSerializedArgs<'_>) -> Result<(), String> {
+        let DownloadSerializedArgs {
+            uri,
+            dest,
+            resume,
+            distdir,
+            vars,
+            commands,
+        } = args;
         let _guard = spawn_guard();
-        download_with_commands(uri, dest, resume, distdir, vars, commands)
+        download_with_commands(DownloadWithCommandsArgs {
+            uri,
+            dest,
+            resume,
+            distdir,
+            vars,
+            commands,
+        })
     }
 
     #[test]
@@ -1261,28 +1113,28 @@ mod tests {
             ..FetchCommands::default()
         };
         let uri = format!("file://{}", source.display());
-        download_serialized(
-            &uri,
-            &dest,
-            false,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"payload");
 
-        // A command without ${FILE} is refused with real's message and
+        // A command without ${FILE} is refused with Portage's message and
         // never spawned.
         commands.fetchcommand = Some(format!("{} \"${{URI}}\"", script.display()));
-        let err = download_serialized(
-            &uri,
-            &dest,
-            false,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(
             err.contains("does not contain the required ${FILE} parameter"),
@@ -1299,23 +1151,21 @@ mod tests {
         );
         commands.fetchcommand = Some("false".to_string());
         let dest2 = dir.join("dest2.tar.gz");
-        download_serialized(
-            &uri,
-            &dest2,
-            false,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest2,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap();
         assert!(dest2.exists());
     }
 
-    /// #70 R3: real checks **both** the fetch and resume commands for
-    /// `${FILE}` (`fetch.py:1667-1716`) and aborts only when the distfile
-    /// name differs from the URL basename; on matching names it warns and
-    /// runs anyway. The abort's messages travel in the `Err` (that is
-    /// where this crate's callers surface command diagnostics).
+    /// Portage checks both fetch and resume commands for `${FILE}`
+    /// and aborts only when the distfile name differs from the URL
+    /// basename (see notes).
     #[test]
     fn download_with_commands_warns_for_both_commands_and_aborts_only_when_renamed() {
         let srcdir = tempdir();
@@ -1340,30 +1190,30 @@ mod tests {
             fetchcommand: Some(no_file.clone()),
             ..FetchCommands::default()
         };
-        download_serialized(
-            &uri,
-            &dest,
-            false,
-            &dldir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap();
         assert!(marker.is_file(), "the ${{FILE}}-less command ran");
         assert_eq!(fs::read(&dest).unwrap(), b"payload");
         fs::remove_file(&marker).unwrap();
 
-        // (b) a renamed distfile differs from the URL basename: real
+        // (b) a renamed distfile differs from the URL basename: Portage
         // aborts before spawning.
         let renamed = dldir.join("renamed.tar.gz");
-        let err = download_serialized(
-            &uri,
-            &renamed,
-            false,
-            &dldir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &renamed,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(
             err.contains("FETCHCOMMAND does not contain the required ${FILE} parameter"),
@@ -1380,14 +1230,14 @@ mod tests {
             resumecommand: Some(no_file),
             ..FetchCommands::default()
         };
-        let err = download_serialized(
-            &uri,
-            &renamed,
-            false,
-            &dldir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &renamed,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(
             err.contains("RESUMECOMMAND does not contain the required ${FILE} parameter"),
@@ -1409,24 +1259,24 @@ mod tests {
             ..FetchCommands::default()
         };
         commands.resumecommand = commands.fetchcommand.clone();
-        download_serialized(
-            "file:///nonexistent",
-            &dest,
-            false,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: "file:///nonexistent",
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(!dest.exists(), "a failed fresh fetch removes the partial");
-        download_serialized(
-            "file:///nonexistent",
-            &dest,
-            true,
-            &dir,
-            FetchCommandVars::default(),
-            &commands,
-        )
+        download_serialized(DownloadSerializedArgs {
+            uri: "file:///nonexistent",
+            dest: &dest,
+            resume: true,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
         .unwrap_err();
         assert!(
             dest.exists(),
@@ -1525,11 +1375,9 @@ mod tests {
 
     #[test]
     fn flatten_src_uri_negated_conditional_is_active_when_the_flag_is_unset() {
-        // Portuale's own always-empty USE set (see the module doc
-        // comment) means every `!flag?` group is always active -- the
-        // real, common way an optional dependency's SRC_URI still gets
-        // fetched by default. `is_set` here stands in for that
-        // always-empty USE set: every flag is unset.
+        // Portuale's always-empty USE set means every `!flag?` group is
+        // active -- the common way an optional dependency's SRC_URI still
+        // gets fetched by default.
         let is_set = |_flag: &str| false;
         let active = |negated: bool, flag: &str| {
             if negated { !is_set(flag) } else { is_set(flag) }
@@ -1558,11 +1406,9 @@ mod tests {
 
     #[test]
     fn flatten_src_uri_rejects_a_double_bar_any_of_group() {
-        // Real SRC_URI grammar has no `||` at all (PMS 8.2.6.5) -- "||"
-        // is just an ordinary, unfetchable URI token here, not a syntax
-        // error, matching how real portage's own use_reduce(is_src_uri=
-        // True) would also just leave a bare "||" token alone rather
-        // than parsing it as a group opener the way DEPEND strings do.
+        // Portage's SRC_URI grammar has no `||` at all (PMS 8.2.6.5):
+        // `"||"` is an ordinary URI token, and `"("` with no preceding
+        // `"flag?"` is the syntax error.
         let entries = flatten_src_uri("|| ( a-1.0.tar.gz )", |_, _| true);
         assert!(
             entries.is_err(),
@@ -1585,9 +1431,7 @@ mod tests {
         let dir = tempdir();
         let path = dir.join("hello.txt");
         fs::write(&path, b"hello world").unwrap();
-        // Real, independently-known BLAKE2b-512 and SHA-512 digests of
-        // the literal bytes "hello world" (not invented -- these are
-        // the real, standard test-vector values for that exact input).
+        // Standard BLAKE2b-512 / SHA-512 test vectors for "hello world".
         let mut hashes = HashMap::new();
         hashes.insert(
             "BLAKE2B".to_string(),
@@ -1639,9 +1483,8 @@ mod tests {
 
     #[test]
     fn verify_digests_reader_matches_verify_digests_on_the_same_bytes() {
-        // The gpkg outer-container path (`#58` S5) streams a member
-        // through this variant; the bytes and the two digests are the
-        // same real "hello world" vectors as the file tests above.
+        // The gpkg outer-container path streams a member through this
+        // variant; same "hello world" vectors as the file tests above.
         let mut hashes = HashMap::new();
         hashes.insert(
             "BLAKE2B".to_string(),
@@ -1732,7 +1575,7 @@ mod tests {
 
     #[test]
     fn resolve_mirror_candidates_tries_custommirrors_before_thirdpartymirrors() {
-        // Real "Try user-defined mirrors first" (fetch.py:1143).
+        // Portage "Try user-defined mirrors first".
         let mut custommirrors = HashMap::new();
         custommirrors.insert(
             "gentoo".to_string(),
