@@ -1,0 +1,12 @@
+# crates/portage-repo/src/resolve/feedback/circular_dead_end.rs
+Fresh-self-loop circular dead-end arm: record the cycle edge and retry so `||` demotion breaks it.
+
+## fn step_circular_dead_end
+- Backlog #216: Portage `_serialize_tasks`' circular dead-end (`depgraph.py:10262-10289`). The walk finished but the merge-bound graph does not serialize: a hard build-time cycle -- now including a true self-loop (see `find_hard_cycles`) -- leaves nodes unselectable. Portage records every (node -> its predecessor in the cycle) edge into the `circular_dependency` backtrack map and retries, and the next pass's `dep_zapdeps` demotes the matching `||` branch to `other` (see `disjunction_preference`'s `circular_dependency` argument). A cycle that adds nothing new is unsolved (Portage's `unsolved_cycle` -> `_skip_restart`): a dead end, reported from the best run, not retried.
+- Scope (`cycle_restartable`): only the fresh self-pick shape retries HERE. Every other hard cycle falls through to the later arms exactly as before (a walk-time NVC still beats it below; multi-node rings reach backlog #221's general restart arm, which shares this map), so their reports are byte-identical with and without this slice.
+- Placed before the slot-conflict arms: a deadlocked graph pre-empts conflict repair (Portage never reaches conflict processing with a failed serialize); a re-pass whose demotion clears the cycle re-runs those arms normally.
+- Pre-sort pass: only the single-node `cycle_restartable` gate reads the result, so the insertion rank (a post-sort notion) is meaningless here; `None` falls back to `discovery` order.
+- Track X Slice C (#242): the cycle cpv may name two merge-bound instances (one per root) -- Portage records the node that actually dead-ends (`circular_dependency.setdefault(node, ...)` keyed by package object). The true cycler is the instance with the hard self edge in the root-qualified walk map; the other instance's self pick resolves to it, not to itself. No hard self pair (the slot-op-only shapes) keeps the legacy target-root key.
+- Portage's own predecessor formula: `cycle[-1]` for index 0, `cycle[index-1]` otherwise.
+- An empty version builds a `cat/pkg-` candidate that no atom ever matches (M1): skip the record instead of recording a dead edge that would still count as `new_info` and force a futile retry.
+- Slot fidelity like #221's ring records below: the merge-bound entry behind the child cpv carries the slot/sub-slot an atom's `:slot` pin matches against.

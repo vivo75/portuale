@@ -1,0 +1,19 @@
+# crates/portage-repo/src/resolve/pass/outcome_fallbacks.rs
+The installed fallbacks and reinstall flips applied to a resolved outcome.
+
+## fn apply_outcome_fallbacks
+- Backlog #285: Portage `find_existing_node` (`depgraph.py:7854/8180-8215/8370-8371`).
+
+- Portage `_iter_match_pkgs(root_config, "installed", atom)` (`depgraph.py:7799-7840`). The stale built slot-operator atom on an installed world member (`dev-libs/reinstslottarget:0/1=`, target moved `0/1 -> 0/2` without a revbump) still matches in vartree: satisfied nomerge edge, Portage merges the unrelated `@world` updates and withholds the reinstall silently (rc 0; S0 probe `probe.log`). Without the fallback the walk aborted (rc 1) before the #210 reverse-dependency scan engaged.
+- Scoping: a pure `DEPEND`/`BDEPEND` edge targets the running root in Portage (EAPI-7+ `dep_root`), unconsultable outside the `--root-deps` feed-in, so its long-pinned "reported, not satisfied from the target vdb" behaviour stands (`rootdepsprovider` unit + contract pins). `--emptytree` excluded like `resolve_pretend`'s own fallback (Portage selects no installed candidates). The USE filter is Portage `vardb.match` semantics, shared with `dependency_avoid_update_candidate` and the `||` installed classification; an evaluated `[-flip]` "matching" the installed `+flip` child wrongly dropped the dep as satisfied instead of surfacing unsatisfied (`deep_walk_*_installed_parents` arm A).
+- `||` arm: Portage `dep_check.py` soft 715-724; the `opartlya` pin. Slot-operator atoms (`:slot`, `:slot/sub=`, `:=`, `:*`) name the built slot, so with no ebuild carrying it the installed instance is the only satisfaction and no competing ebuild candidate needs pass-mask protection. Bare/version-range NVCs keep the old path (the needer/othermod triangle keeps its restart count; `oldmovepkg` keeps reporting).
+- Backtrack `extra_constraints` not consulted: the `!=cpv` negatives are portuale's own transient conflict-before-scan artifacts (masking the instance the #210 assembly scan is about to withhold to), which Portage's integrated scan never creates.
+
+- Track X Slice B fix (#242): a running-root `BDEPEND`/`IDEPEND` (and `DEPEND`) no ebuild satisfies but the running root has installed settles `AlreadyInstalled`, never `NoVisibleCandidate` -- Portage `_add_pkg_deps` resolves those groups against the running root's installed db (`depgraph.py:4218-4291`). This loosens both gates the #233 fallback keeps for target-rooted atoms: `buildtime_hard` (a `BDEPEND` is always hard) and the slot-operator requirement (a bare `BDEPEND` like `rootdepsprovider` carries no slot). Scoped to running atoms with an installed match in their own resolving root.
+- Cross-root build without `--root-deps`: `rootdepspkg`'s `BDEPEND` on `rootdepsprovider` (installed in the running root, no ebuild anywhere) drops silently. The `cyc0z-3`/`cyc0y` fixture-only CPs are never in the host vdb (the #207 flip's determinism basis), nor are `rdrtool*`/`rdrcyc*` in `/`, so that flip and the recursion pins are untouched.
+
+- Keyed on `cat/pkg`, not the seeded atom: whichever visit comes first -- seed or ordinary edge -- flips; patching the entry afterwards would leave its deps unenqueued.
+- `--reinstall-atoms`: a matching already-installed package is forced to re-merge (Portage `depgraph.py` drops it from every `inst_pkgs` list); in portuale's model that is the `--emptytree` rewrite, scoped to the matched atom.
+- Backlog #24 (S3): the same flip point carries Portage's `__auto_slot_operator_replace_installed__` `force_reinstall=True` (`_gen_reinstall_sets` 5457-5480).
+- Backlog #236 (A): an installed child the update probe forced (see `BacktrackParams::slot_operator_forced_upgrade`) is never kept: whichever visit reaches it first selects the probe's candidate, like Portage's `force_reinstall` excluding the installed instance.
+
