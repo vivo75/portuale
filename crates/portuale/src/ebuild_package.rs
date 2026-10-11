@@ -482,11 +482,18 @@ fn built_binpkg_stanza_fields<'a>(
 /// (the config-less standalone path) keeps the legacy minimal header and
 /// preserves a stored one verbatim.
 ///
-/// The whole read-modify-write runs under the same `flock`-based
-/// `PortageLockfile` Portage wraps this sequence in, so a concurrent write to
-/// the same `Packages` file cannot interleave.
-// Portage: bintree.py, bintree.inject/update_pkgindex/remove;
-//   getbinpkg.py, PackageIndex.write
+/// Like Portage's `bintree.inject`, the `Packages` lock is the
+/// `wantnewlockfile` shape, so the `.Packages.portage_lockfile` sibling is
+/// removed on release. A `Packages.gz` copy (same bytes, gzip level 9, no
+/// original-filename field, header mtime = the index `TIMESTAMP`) is written
+/// when `compress-index` is in the snapshot's resolved `FEATURES`, and any
+/// stale copy is removed when it is not; `None` leaves it alone (no resolved
+/// features to judge by).
+///
+/// The whole read-modify-write runs under that lock, so a concurrent write
+/// to the same `Packages` file cannot interleave.
+// Portage: bintree.py, bintree.inject/_pkgindex_write;
+//   locks.py, lockfile/unlockfile; getbinpkg.py, PackageIndex.write
 fn write_packages_index_entry(
     pkgdir: &Path,
     cpv: &str,
@@ -499,7 +506,7 @@ fn write_packages_index_entry(
     // Makedirs first, then the lock: the lock file is a sibling of `Packages`,
     // so its parent dir must exist first (Portage's order).
     std::fs::create_dir_all(pkgdir).map_err(|e| format!("{}: {e}", pkgdir.display()))?;
-    let _lock = crate::portage_lock::PortageLockfile::acquire(&path)?;
+    let _lock = crate::portage_lock::PortageLockfile::acquire_new_lockfile(&path)?;
 
     let mut blocks: Vec<String> = Vec::new();
     if let Ok(text) = std::fs::read_to_string(&path) {
@@ -573,8 +580,64 @@ fn write_packages_index_entry(
     // Portage: getbinpkg.py, PackageIndex._writepkgindex
     text.push_str("\n\n");
 
-    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
-    // `_lock` drops here, releasing the flock.
+    std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
+
+    // Portage's `_pkgindex_write` gzip half. The snapshot's `FEATURES` is
+    // the resolved fold (`make.globals` carries `compress-index` by
+    // default), so a config-less (`None`) write has nothing to judge by
+    // and leaves any existing copy alone.
+    let compress_index = header
+        .and_then(|snapshot| {
+            snapshot
+                .iter()
+                .find(|(key, _)| key == "FEATURES")
+                .and_then(|(_, value)| value.as_ref())
+        })
+        .is_some_and(|features| features.split_whitespace().any(|t| t == "compress-index"));
+    if compress_index {
+        // The header just written carries `TIMESTAMP: {now}` (inserted
+        // above), which is the mtime Portage stamps into the gzip header.
+        write_packages_gz(pkgdir, text.as_bytes(), now)?;
+    } else if header.is_some() {
+        let gz_path = pkgdir.join("Packages.gz");
+        match std::fs::remove_file(&gz_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", gz_path.display())),
+        }
+    }
+    Ok(())
+    // `_lock` drops here, releasing the flock and unlinking the lock file.
+}
+
+/// Portage's `_pkgindex_write` gzip half: the same bytes as `Packages`,
+/// compressed at level 9 with no original-filename field and the header
+/// mtime set to the index `TIMESTAMP`. Written through a same-directory
+/// temp file renamed into place, like Portage's `atomic_ofstream`.
+// Portage: bintree.py, _pkgindex_write
+fn write_packages_gz(pkgdir: &Path, contents: &[u8], timestamp: u64) -> Result<(), String> {
+    use std::io::Write as _;
+    let gz_path = pkgdir.join("Packages.gz");
+    let tmp_path = gz_path.with_extension(format!("gz.tmp{}", std::process::id()));
+    let result = (|| {
+        let file =
+            std::fs::File::create(&tmp_path).map_err(|e| format!("{}: {e}", tmp_path.display()))?;
+        let mut encoder = flate2::GzBuilder::new()
+            .mtime(timestamp as u32)
+            .write(file, flate2::Compression::new(9));
+        encoder
+            .write_all(contents)
+            .map_err(|e| format!("{}: {e}", tmp_path.display()))?;
+        encoder
+            .finish()
+            .map_err(|e| format!("{}: {e}", tmp_path.display()))?;
+        std::fs::rename(&tmp_path, &gz_path)
+            .map_err(|e| format!("{} -> {}: {e}", tmp_path.display(), gz_path.display()))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    result
 }
 
 /// With `FEATURES=binpkg-signing` on a gpkg build, the signing keyring and key
@@ -1871,6 +1934,115 @@ mod tests {
         let text = std::fs::read_to_string(tmp.join("Packages")).unwrap();
         assert!(text.contains("CPV: dev-libs/foo-1.0"));
         assert!(text.contains("CPV: dev-libs/bar-2.0"));
+    }
+
+    fn compress_index_snapshot(features: &str) -> portage_profile::HeaderSnapshot {
+        vec![("FEATURES".to_string(), Some(features.to_string()))]
+    }
+
+    /// Portage's `_pkgindex_write` writes `Packages.gz` (same bytes as
+    /// `Packages`) when `compress-index` is in the resolved `FEATURES`,
+    /// with Python's `GzipFile(filename="", mtime=TIMESTAMP)` header: no
+    /// original-filename field, mtime = the index `TIMESTAMP`, level 9
+    /// (`XFL` 2), OS 255. The lock file is gone afterwards, like Portage's
+    /// `unlockfile` with the implied `unlinkfile=1`.
+    // Portage: bintree.py, _pkgindex_write; locks.py, unlockfile
+    #[test]
+    fn write_packages_index_entry_writes_packages_gz_under_compress_index() {
+        use std::io::Read as _;
+        let tmp = tempdir();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[("CPV", "dev-libs/foo-1.0"), ("SLOT", "0")],
+            Some(&compress_index_snapshot("sandbox compress-index")),
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(tmp.join("Packages")).unwrap();
+        let timestamp: u64 = text
+            .lines()
+            .find(|l| l.starts_with("TIMESTAMP: "))
+            .and_then(|l| l["TIMESTAMP: ".len()..].parse().ok())
+            .expect("header carries TIMESTAMP");
+        let gz = std::fs::read(tmp.join("Packages.gz")).expect("Packages.gz is written");
+        assert!(gz.len() > 10, "a real gzip stream, not an empty file");
+        assert_eq!(&gz[0..3], &[0x1f, 0x8b, 8], "gzip magic + deflate");
+        assert_eq!(gz[3], 0, "no FNAME field (Portage passes filename=\"\")");
+        assert_eq!(
+            u32::from_le_bytes([gz[4], gz[5], gz[6], gz[7]]),
+            timestamp as u32,
+            "gzip header mtime is the index TIMESTAMP"
+        );
+        assert_eq!(gz[8], 2, "XFL for level 9, like Portage's default");
+        assert_eq!(gz[9], 255, "unknown OS byte, like Python's gzip");
+        let mut decoded = Vec::new();
+        flate2::read::GzDecoder::new(&gz[..])
+            .read_to_end(&mut decoded)
+            .expect("Packages.gz decodes");
+        assert_eq!(decoded, text.as_bytes(), "same content as Packages");
+        assert!(
+            !tmp.join(".Packages.portage_lockfile").exists(),
+            "Portage unlinks the wantnewlockfile sibling on release"
+        );
+    }
+
+    /// Without `compress-index` Portage unlinks a stale `Packages.gz`
+    /// (`ENOENT` ignored); the lock file goes just the same.
+    // Portage: bintree.py, _pkgindex_write; locks.py, unlockfile
+    #[test]
+    fn write_packages_index_entry_removes_a_stale_packages_gz_without_compress_index() {
+        let tmp = tempdir();
+        std::fs::write(tmp.join("Packages.gz"), b"stale").unwrap();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[("CPV", "dev-libs/foo-1.0"), ("SLOT", "0")],
+            Some(&compress_index_snapshot("sandbox -compress-index")),
+        )
+        .unwrap();
+        assert!(
+            !tmp.join("Packages.gz").exists(),
+            "stale copy removed, like Portage's else branch"
+        );
+        assert!(
+            !tmp.join(".Packages.portage_lockfile").exists(),
+            "lock released as usual"
+        );
+    }
+
+    /// A config-less (`None`) write has no resolved `FEATURES` to judge by,
+    /// so it neither creates nor removes `Packages.gz` — but the lock file
+    /// is still Portage's `wantnewlockfile` shape and goes.
+    // Portage: bintree.py, _pkgindex_write; locks.py, unlockfile
+    #[test]
+    fn write_packages_index_entry_leaves_packages_gz_alone_without_a_snapshot() {
+        let tmp = tempdir();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[("CPV", "dev-libs/foo-1.0"), ("SLOT", "0")],
+            None,
+        )
+        .unwrap();
+        assert!(!tmp.join("Packages.gz").exists(), "no snapshot, no copy");
+        std::fs::write(tmp.join("Packages.gz"), b"stale").unwrap();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/bar-2.0",
+            &[("CPV", "dev-libs/bar-2.0"), ("SLOT", "0")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(tmp.join("Packages.gz")).unwrap(),
+            b"stale",
+            "a stale copy survives a snapshot-less write"
+        );
+        assert!(
+            !tmp.join(".Packages.portage_lockfile").exists(),
+            "lock released as usual"
+        );
     }
 
     #[test]
