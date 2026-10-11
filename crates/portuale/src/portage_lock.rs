@@ -100,3 +100,34 @@ impl Drop for PortageLockfile {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The unlink-on-release shape keeps mutual exclusion: a waiter granted
+    /// the lock on an inode the previous holder just unlinked retries on the
+    /// new file instead of running beside a newcomer that created it.
+    // Portage: locks.py, _lockfile_was_removed
+    #[test]
+    fn new_lockfile_holders_never_overlap() {
+        let dir = portage_util::TempDir::new("portage_lock_overlap");
+        let target = dir.path().join("Packages");
+        let inside = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                let (target, inside) = (&target, inside.clone());
+                s.spawn(move || {
+                    for _ in 0..200 {
+                        let _lock = PortageLockfile::acquire_new_lockfile(target).unwrap();
+                        let n = inside.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        assert_eq!(n, 0, "two holders inside the lock at once");
+                        std::thread::yield_now();
+                        inside.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert!(!dir.path().join(".Packages.portage_lockfile").exists());
+    }
+}

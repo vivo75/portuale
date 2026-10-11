@@ -1940,6 +1940,53 @@ mod tests {
         vec![("FEATURES".to_string(), Some(features.to_string()))]
     }
 
+    /// Portage's `_pkgindex_write` writes `Packages.gz` (same bytes as
+    /// `Packages`) when `compress-index` is in the resolved `FEATURES`,
+    /// with Python's `GzipFile(filename="", mtime=TIMESTAMP)` header: no
+    /// original-filename field, mtime = the index `TIMESTAMP`, level 9
+    /// (`XFL` 2), OS 255. The lock file is gone afterwards, like Portage's
+    /// `unlockfile` with the implied `unlinkfile=1`.
+    // Portage: bintree.py, _pkgindex_write; locks.py, unlockfile
+    #[test]
+    fn write_packages_index_entry_writes_packages_gz_under_compress_index() {
+        use std::io::Read as _;
+        let tmp = tempdir();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[("CPV", "dev-libs/foo-1.0"), ("SLOT", "0")],
+            Some(&compress_index_snapshot("sandbox compress-index")),
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(tmp.join("Packages")).unwrap();
+        let timestamp: u64 = text
+            .lines()
+            .find(|l| l.starts_with("TIMESTAMP: "))
+            .and_then(|l| l["TIMESTAMP: ".len()..].parse().ok())
+            .expect("header carries TIMESTAMP");
+        let gz = std::fs::read(tmp.join("Packages.gz")).expect("Packages.gz is written");
+        assert!(gz.len() > 10, "a real gzip stream, not an empty file");
+        assert_eq!(&gz[0..3], &[0x1f, 0x8b, 8], "gzip magic + deflate");
+        assert_eq!(gz[3], 0, "no FNAME field (Portage passes filename=\"\")");
+        assert_eq!(
+            u32::from_le_bytes([gz[4], gz[5], gz[6], gz[7]]),
+            timestamp as u32,
+            "gzip header mtime is the index TIMESTAMP"
+        );
+        assert_eq!(gz[8], 2, "XFL for level 9, like Portage's default");
+        assert_eq!(gz[9], 255, "unknown OS byte, like Python's gzip");
+        let mut decoded = Vec::new();
+        flate2::read::GzDecoder::new(&gz[..])
+            .read_to_end(&mut decoded)
+            .expect("Packages.gz decodes");
+        assert_eq!(decoded, text.as_bytes(), "same content as Packages");
+        assert!(
+            !tmp.join(".Packages.portage_lockfile").exists(),
+            "Portage unlinks the wantnewlockfile sibling on release"
+        );
+    }
+
     /// Without `compress-index` Portage unlinks a stale `Packages.gz`
     /// (`ENOENT` ignored); the lock file goes just the same.
     // Portage: bintree.py, _pkgindex_write; locks.py, unlockfile
