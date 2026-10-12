@@ -472,6 +472,7 @@ fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
         remote: false,
         build_id: None,
         build_time: None,
+        eapi: "8".to_string(),
         binary_deps: HashMap::new(),
     }
 }

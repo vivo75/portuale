@@ -52,6 +52,7 @@
 - [crates/portage-repo/src/candidates.rs](portage-repo/candidates.md) — Ebuild candidates for a package.
 - [crates/portage-repo/src/config_match.rs](portage-repo/config_match.md) — Per-package index over `package.*` config atoms.
 - [crates/portage-repo/src/dep_chain.rs](portage-repo/dep_chain.md) — The "required by" chain printed under a masked dependency.
+- [crates/portage-repo/src/dep_validate.rs](portage-repo/dep_validate.md) — Ebuild and binary `*DEPEND` validation (#341 S4).
 - [crates/portage-repo/src/depclean.rs](portage-repo/depclean.md) — depclean, prune and clean selection.
 - [crates/portage-repo/src/env_roots.rs](portage-repo/env_roots.md) — ROOT, PORTAGE_CONFIGROOT and PORTAGE_TMPDIR from the environment.
 - [crates/portage-repo/src/error.rs](portage-repo/error.md) — The crate's error type.

@@ -48,6 +48,7 @@ fn cand_166(version: &str) -> Candidate {
         remote: false,
         build_id: None,
         build_time: None,
+        eapi: "8".to_string(),
         binary_deps: HashMap::new(),
     }
 }

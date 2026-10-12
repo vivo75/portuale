@@ -191,7 +191,11 @@ pub(crate) fn is_visible_fingerprint(config: &portage_profile::Config) -> u64 {
 ///
 /// Memoised per (visibility fingerprint, candidate identity and full
 /// metadata); thread-local, lock-free. The metadata joins the key
-/// because a binary and the ebuild for the same string can differ.
+/// because a binary and the ebuild for the same string can differ: the
+/// `invalid` verdict reads the instance's own dep keys (`repo_location`
+/// for ebuilds, `binary_deps` for binaries) under its own `eapi`, so all
+/// three join the key or a masked binary poisons its ebuild twin's lookup
+/// (and vice versa).
 /// Portage: Package.py, _masks
 pub fn is_visible(
     candidate: &Candidate,
@@ -225,9 +229,18 @@ pub fn is_visible(
         candidate.keywords.hash(&mut h);
         // The `invalid` verdict depends on the instance's own dep keys,
         // so same-version binary instances (distinct `BUILD_ID`s) must
-        // not share a memo entry.
+        // not share a memo entry — and neither may an ebuild with its
+        // binary twin: ebuild deps re-read from `repo_location` while
+        // binary deps come from `binary_deps`, each under its own `eapi`.
         candidate.build_id.hash(&mut h);
         candidate.build_time.hash(&mut h);
+        (candidate.source == CandidateSource::Binary).hash(&mut h);
+        candidate.repo_location.hash(&mut h);
+        candidate.eapi.hash(&mut h);
+        // Sorted so iteration order never perturbs the key.
+        let mut dep_keys: Vec<(&String, &String)> = candidate.binary_deps.iter().collect();
+        dep_keys.sort_unstable();
+        dep_keys.hash(&mut h);
         (config_fp, h.finish(), candidate_str.clone())
     };
     if let Some(hit) = IV_CACHE.with(|c| c.borrow().get(&key).copied()) {
@@ -315,7 +328,7 @@ pub(crate) fn is_visible_uncached(
     // A candidate whose own dep conditionals reference flags outside
     // its effective IUSE is masked (`invalid`); checked last, never
     // relaxed (see `visible_with_relax`).
-    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+    invalid_dep_reasons(candidate, category, package, config).is_empty()
 }
 
 pub(crate) struct VisibleWithRelaxArgs<'a> {
@@ -396,7 +409,7 @@ pub(crate) fn visible_with_relax(args: VisibleWithRelaxArgs<'_>) -> bool {
 
     // The `invalid` mask is never relaxed (Portage offers no autounmask
     // for it).
-    if !invalid_use_conditional_reasons(candidate, category, package, config).is_empty() {
+    if !invalid_dep_reasons(candidate, category, package, config).is_empty() {
         return false;
     }
 
@@ -475,7 +488,7 @@ pub(crate) fn keyword_masked_only(
         return false;
     }
     // "Masked by X alone" also requires the candidate not be `invalid`.
-    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+    invalid_dep_reasons(candidate, category, package, config).is_empty()
 }
 
 /// True iff `candidate` is masked by `package.mask` alone (every other
@@ -536,7 +549,7 @@ pub(crate) fn mask_masked_only(
         return false;
     }
     // "Masked by X alone" also requires the candidate not be `invalid`.
-    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+    invalid_dep_reasons(candidate, category, package, config).is_empty()
 }
 
 /// The best `--autounmask-keep-masks=n` candidate for
@@ -620,7 +633,7 @@ pub(crate) fn license_masked_only(
         return false;
     }
     // "Masked by X alone" also requires the candidate not be `invalid`.
-    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+    invalid_dep_reasons(candidate, category, package, config).is_empty()
 }
 
 /// The keyword `--autounmask` would suggest for `candidate`: the first

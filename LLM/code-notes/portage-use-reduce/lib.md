@@ -3,7 +3,9 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 
 ## module
 - Origin: the depgraph/config-resolution slice after atom matching (see LLM/agent-context.md).
-- Unlike the atom port, NOT a narrowed grammar: flat mode's tokenizer and bracket/use-conditional handling is fully self-contained in Portage. Out-of-scope optional parameters the harness never exercises: `masklist`, `excludeall` (rare flag-override sets), `is_src_uri`/the `->` SRC_URI arrow token (fetch-restriction syntax), `opconvert` (the operator-into-argument-list shape, which nothing in portuale needs). `token_class`/`is_valid_flag` stay out because tokens stay opaque strings, matching how config.py itself calls use_reduce for RESTRICT/PROPERTIES/IUSE-like values.
+- Unlike the atom port, NOT a narrowed grammar: flat mode's tokenizer and bracket/use-conditional handling is fully self-contained in Portage. Out-of-scope optional parameters the harness never exercises: `masklist`, `excludeall` (rare flag-override sets), `is_src_uri`/the `->` SRC_URI arrow token (fetch-restriction syntax), `opconvert` (the operator-into-argument-list shape, which nothing in portuale needs).
+- S4 (#341) wires the two remaining parameters through `use_reduce_flat_validated`: `token_class=Atom` arrives as the per-atom-token hook, `is_valid_flag` as the flag closure checked in `is_active_validated` (Portage dep:700-715). `use_reduce_flat` itself stays atom-agnostic (tokens stay opaque strings, matching how config.py itself calls use_reduce for RESTRICT/PROPERTIES/IUSE-like values).
+- Both entry points share `walk_flat` (one stack/`need_bracket` machine); only the conditional test and the plain-token sink differ (push vs. hook).
 - `flat=True` is a heavily-used Portage invocation mode: `lib/portage/package/ebuild/config.py`, `_emerge/resolver/`, and `_emirrordist` all call `use_reduce(..., flat=True)`.
 - `subset` is the `--with-test-deps` follow-up: `select_subset` needs the full nested `paren_reduce` structure (not `flat=True`'s eagerly-flattened one) to know where a `"||"` group's boundaries are before filtering.
 - `use_reduce_structured` is the `--changed-deps` structured-comparison follow-up: ports `flat=False`/`opconvert=False` (`_use_reduce_cached`), every redundant-bracket optimization (`is_single`/`special_append`/`ends_in_any_of_dep`/`last_any_of_operator_level`).
@@ -18,6 +20,14 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 
 ## enum Error
 - Distinct variants mirror Portage's messages; the contract suite pins these strings.
+- S4 (#341) adds the `token_class`-path errors: `InvalidAtom` (`Invalid atom (…), token N`), `MissingWhitespace` (`missing_white_space_check`, dep:788-796 — checked *after* the atom fails), and `Categorized` (a hook/`is_valid_flag` failure with `IUSE.missing`/`EAPI.incompatible`, rendering as the bare message like Portage's `InvalidDependString` with `errors=(e,)`).
+- S4 also fixes the empty-group token: Portage reports the `(` token 1-based (`x? ( )` → token 2, `( )` → token 1), which the old `pos + 2` missed by one. The differential never caught it (it compares ERROR-vs-output, not messages).
+
+## fn use_reduce_flat_validated
+- One dep string like `use_reduce(matchall=True, flat=True, token_class=Atom, is_valid_flag=…)`: the flat walk with a per-atom-token hook (`hook(token, pos)`, 0-based position; the caller keeps whatever it parsed). `^^`/`??` need no special case: `^^` is a plain token (the hook rejects it: `Invalid atom (^^)`), `??` is a conditional on flag `?` (checked at its `)`). A hook syntax rejection first runs `missing_whitespace_check`, else wraps as `Invalid atom (…), token N`; categorized rejections stay bare (see `map_hook_error`).
+
+## fn is_active_validated
+- Portage `use_reduce`'s `is_active` with `is_valid_flag` (dep:700-715): validity first (the `IUSE.missing` error at the matching `)`), then matchall (every valid conditional active). No `useflag_re` check — Portage checks one or the other.
 
 ## fn is_active
 - Exported for portage-repo's LICENSE-grammar parser (PMS 7.3.2): it needs the `||`-group structure `use_reduce_flat` deliberately discards (hence a separate parser), but its USE-conditional semantics are identical, so this piece is shared rather than reimplemented.

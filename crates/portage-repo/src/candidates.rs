@@ -47,6 +47,10 @@ pub struct Candidate {
     /// suffix and newest-instance ordering.
     pub build_id: Option<String>,
     pub build_time: Option<i64>,
+    /// The package's `EAPI` (`repo_aux_metadata` for ebuilds, the `Packages`
+    /// `EAPI` field for binaries): which grammar `*DEPEND` validation parses
+    /// with. Portage: `Package.eapi` (`_validate_deps`' `dep_eapi`).
+    pub eapi: String,
     /// This binary instance's own recorded `*DEPEND` strings, so
     /// `--binpkg-changed-deps` compares the exact instance. Empty for ebuilds.
     pub binary_deps: HashMap<String, String>,
@@ -165,6 +169,12 @@ pub(crate) fn list_candidates_uncached(
                 remote: false,
                 build_id: None,
                 build_time: None,
+                // Every cache entry carries `EAPI` (egencache writes it);
+                // without one the ebuild predates the format: EAPI 0.
+                eapi: metadata
+                    .get("EAPI")
+                    .cloned()
+                    .unwrap_or_else(|| "0".to_string()),
                 binary_deps: HashMap::new(),
             });
         }

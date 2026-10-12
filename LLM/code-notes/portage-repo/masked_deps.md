@@ -29,16 +29,8 @@ Masked-dependency reports.
 - Portage's `match_pkgs` returns matches ascending by version and takes `[-1]`; `candidate_strs` is in repo/readdir order, so the highest-VERSIONED match is picked explicitly. Same `runtime_pkg_mask` filter as `atom_currently_satisfiable`.
 - #212/#276 per-instance negatives hide no tree candidate (see `is_instance_only_mask`).
 
-## fn invalid_use_conditional_reasons
-- Portage's `Package._validate_deps` IUSE-missing-conditional mask (`_emerge/Package.py`, backlog #153): every `flag? ( … )` group and every `[flag?]`/`[!flag?]`/`[flag=]`/`[!flag=]` use-dep conditional in the five dep keys must reference a flag valid for the *atom-owning* package's own effective IUSE (`is_valid_flag`, i.e. explicit IUSE ∪ implicit: arch.list, use.mask/force, `build`/`bootstrap`, `iuse_effective` -- `implicit_iuse_set`), or the whole candidate is masked `invalid`. Skipped for installed packages in Portage (`dep_valid_flag = None` when `self.installed`); portuale only ever calls this for repo/binary candidates, never vdb ones, so the exemption holds structurally. The check runs with `matchall=True` semantics: every conditional is validated regardless of the candidate's own USE state (an inactive `off? ( … )` group with an undeclared flag is still invalid -- Portage validates at group close, not at evaluation).
-- The scan mirrors Portage's `use_reduce(..., matchall=True, token_class=Atom, flat=True)` single left-to-right pass: an atom token is validated the moment it is scanned (Portage constructs the `Atom`, whose `__init__` runs `_validate_conditional_flags` immediately), a group conditional when its own `)` closes (innermost first, emerging from the stack). First failure per key wins (Portage raises, aborting that key's reduction); keys run in Portage's `_dep_keys` order and every key still runs after a failure, so a candidate can carry several `invalid: …` reasons at once.
-- Message shapes, both confirmed live against Portage 3.0.82.2 on the fixture tree (via a `cp -a` copy, never the live checkout): group: `{KEY}: USE flag 'soflag' referenced in conditional 'soflag?' is not in IUSE` (the raw conditional token, no atom part -- `dev-vcs/somercurial-5.5.1`'s own `RDEPEND`); atom: `{KEY}: USE flag 'x' referenced in conditional 'x?' in atom 'dev-libs/fucyclea[x?]' is not in IUSE` (conditional from Portage's `_conditional_strings`: `f?`/`!f?`/`f=`/`!f=`; the atom exactly as written, defaults like `[baz(+)?]` kept -- `dev-libs/usedeppkg-1.0`'s own `RDEPEND`).
-- Within one atom, Portage checks its `_conditionals_class` slot order (`disabled`, `enabled`, `equal`, `not_equal`); the scan does the same.
-- Deliberate narrowings, all without a fixture instance: EAPI gating (Portage passes `dep_eapi`, so an ancient EAPI reports `EAPI.incompatible` instead -- portuale's atom grammar already accepts what it accepts, independently of this check); `LICENSE`/`PROPERTIES`/`RESTRICT` group conditionals and `SRC_URI` (Portage validates those too, but the `LICENSE` shortcut's doc parks that pathway separately); syntactically malformed dep strings (Portage reports those as `*.syntax` invalid instead -- an unparseable atom token is skipped here, an unbalanced bracket ends the scan silently).
-- A `Packages` index carries the binpkg's own dep keys (Portage validates a built, non-installed binary exactly like an ebuild here); there is no fixture binpkg oracle for the message text, so this arm is fidelity without a pin.
-
-## fn first_invalid_conditional
-- Encounter order matches `invalid_use_conditional_reasons` (Portage's own order).
+## fn invalid_dep_reasons
+- S4 (#341) replaced this with `dep_validate::invalid_dep_reasons` (same 6 callers); the old IUSE-only scan is retired with it (see `dep_validate.md`). The #153 fixture messages are unchanged (categorized text was already bare); the S0 `t341-*` cells pin the new syntax/`Improper context` reasons.
 
 ## fn candidate_masking_reasons
 - Reason order mirrors Portage: `package.mask`, `LICENSE`, `PROPERTIES`, `RESTRICT`, `KEYWORDS`, then `invalid` (Portage appends the invalid reasons after `_getmaskingstatus` in `_get_masking_status`). `package.mask` and the `KEYWORDS` string (`"~<arch> keyword"` / `"-<arch> keyword"` / `"missing keyword"`) and the `LICENSE` string (`"<names> license(s)"`) match Portage verbatim; `PROPERTIES`/`RESTRICT` are the bare key name (Portage names the specific tokens -- portuale has no missing-token list for those two, and neither the L0 comparator nor the contract suite checks this line against Portage anyway; the two `!!!` header lines are what matter).
@@ -64,3 +56,9 @@ Masked-dependency reports.
 
 ## fn all_masked_report
 - The header/footer live here (top-level shape); the masked list itself is shared with the dependency disclosure below.
+
+## fn masked_rows_for_pool
+- S4 (#341) split of `masked_candidates_for_atom`'s match/visible/rows body so the `--usepkgonly` binary pool reuses it: same version/slot filter, same all-masked-or-None gate, same descending-version cpv-deduped rows.
+
+## fn all_binary_masked_report
+- S4 (#341): binary-only twin of `all_masked_report` for `--usepkgonly`, where ebuilds are ineligible rather than masked. When every version-matching binary is masked the block lists the binary rows (Portage's `_show_unsatisfied_dep` over the binary pool; S0 cell `F-binary-rewritten` shows the binary row under the same "All ebuilds" header). `None` when no binary matches or some match is visible. Wired only at the top-level unsatisfied step; `--usepkg` (ebuild fallback alive) keeps the ebuild-side report. Remote-binrepo rows are not included (no S0 cell).

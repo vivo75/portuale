@@ -5,8 +5,10 @@
 //
 // Out of scope are only optional parameters the harness never exercises:
 // `masklist`, `excludeall`, `is_src_uri`/the `->` arrow token,
-// `opconvert`, and `token_class`/`is_valid_flag` (tokens stay opaque
-// strings here).
+// `opconvert`, and `subset` (which has its own entry point below).
+// `token_class`/`is_valid_flag` arrive as [`use_reduce_flat_validated`]'s
+// per-atom-token hook and flag closure (tokens stay opaque strings in
+// [`use_reduce_flat` itself).
 //
 // `subset` IS ported (`use_reduce_flat_subset`, against Portage's
 // `select_subset`) via its own tree type (`DepNode`) feeding into the
@@ -30,6 +32,29 @@ pub enum MatchMode {
     All,
     /// Every conditional is inactive, regardless of `uselist` (Portage's `matchnone=True`).
     None,
+}
+
+/// Category of a per-atom-token hook or `is_valid_flag` failure, mirroring
+/// Portage's `InvalidAtom`/`InvalidData` `category=` (`dependency.syntax` is
+/// the uncategorized walk error; these two file under their own bucket).
+/// Portage: lib/portage/dep/__init__.py (the `category=` sites),
+/// lib/_emerge/Package.py:534-557 (`_metadata_exception`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenErrorCategory {
+    IuseMissing,
+    EapiIncompatible,
+}
+
+/// What the per-atom-token hook of [`use_reduce_flat_validated`] reports for
+/// one atom token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenError {
+    /// For `category: None` (syntax): the inner atom message; the walk wraps
+    /// it as `Invalid atom ({message}), token {N}` (after the
+    /// missing-whitespace check below). For `Some(_)`: the full bare message
+    /// (no wrapper, no token suffix).
+    pub message: String,
+    pub category: Option<TokenErrorCategory>,
 }
 
 /// Parse/reduce error from a USE dependency string. `Display` reproduces
@@ -60,6 +85,27 @@ pub enum Error {
     MissingCloseParen,
     /// `Missing '(' at end of string`
     MissingOpenParen,
+    /// `Invalid atom ({message}), token {token}`: an atom token the hook
+    /// rejected with an uncategorized ([`TokenErrorCategory`]-less) error.
+    /// Portage: lib/portage/dep/__init__.py, the `token_class` except path.
+    InvalidAtom { message: String, token: usize },
+    /// `missing whitespace around '{what}' at '{text}', token {at}`: the
+    /// hook rejected a token glued to `(`, `)` or `||`.
+    /// Portage: lib/portage/dep/__init__.py:788-796 (`missing_white_space_check`).
+    MissingWhitespace {
+        what: &'static str,
+        text: String,
+        at: usize,
+    },
+    /// A categorized (`IUSE.missing`/`EAPI.incompatible`) failure from the
+    /// hook or `is_valid_flag`: Portage's `InvalidDependString` with
+    /// `errors=(e,)` renders as the bare message (Package.py:534-557 files
+    /// it under its category, dropping the `Invalid atom (…), token N`
+    /// wrapper).
+    Categorized {
+        message: String,
+        category: TokenErrorCategory,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -95,6 +141,16 @@ impl std::fmt::Display for Error {
             Error::OrNotFollowedByGroup => write!(f, "'||' not followed by a group"),
             Error::MissingCloseParen => write!(f, "Missing ')' at end of string"),
             Error::MissingOpenParen => write!(f, "Missing '(' at end of string"),
+            Error::InvalidAtom { message, token } => {
+                write!(f, "Invalid atom ({message}), token {token}")
+            }
+            Error::MissingWhitespace { what, text, at } => {
+                write!(
+                    f,
+                    "missing whitespace around '{what}' at '{text}', token {at}"
+                )
+            }
+            Error::Categorized { message, .. } => write!(f, "{message}"),
         }
     }
 }
@@ -138,12 +194,108 @@ pub fn is_active(
     })
 }
 
+/// Portage `use_reduce`'s `is_active` with `is_valid_flag` (dep:700-715):
+/// validity is checked first, raising the `IUSE.missing` error at the
+/// matching `)`, and `matchall` semantics apply (every valid conditional is
+/// active). Unlike [`is_active`], no `useflag_re` check runs when the caller
+/// supplies `is_valid_flag` (Portage checks one or the other).
+pub fn is_active_validated(
+    conditional: &str,
+    is_valid_flag: &dyn Fn(&str) -> bool,
+) -> Result<bool, Error> {
+    let flag = match conditional.strip_prefix('!') {
+        Some(rest) => &rest[..rest.len() - 1],
+        None => &conditional[..conditional.len() - 1],
+    };
+    if !is_valid_flag(flag) {
+        return Err(Error::Categorized {
+            message: format!(
+                "USE flag '{flag}' referenced in conditional '{conditional}' is not in IUSE"
+            ),
+            category: TokenErrorCategory::IuseMissing,
+        });
+    }
+    Ok(true)
+}
+
+/// Portage `use_reduce`'s `missing_white_space_check` (dep:788-796): after an
+/// atom token fails, a token glued to `(`, `)` or `||` reports the glue.
+/// `pos` is the token's 0-based index; the message carries `pos + 1`.
+fn missing_whitespace_check(token: &str, pos: usize) -> Result<(), Error> {
+    for x in [")", "(", "||"] {
+        if token.starts_with(x) || token.ends_with(x) {
+            return Err(Error::MissingWhitespace {
+                what: x,
+                text: token.to_string(),
+                at: pos + 1,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Maps one hook rejection to the walk error Portage raises at that token:
+/// categorized errors stay bare; a syntax rejection first runs
+/// [`missing_whitespace_check`], else wraps as `Invalid atom (…), token N`.
+fn map_hook_error(token: &str, pos: usize, err: TokenError) -> Error {
+    match err.category {
+        Some(category) => Error::Categorized {
+            message: err.message,
+            category,
+        },
+        None => match missing_whitespace_check(token, pos) {
+            Err(glue) => glue,
+            Ok(()) => Error::InvalidAtom {
+                message: err.message,
+                token: pos + 1,
+            },
+        },
+    }
+}
+
 /// `tokens` is the dep string pre-split on whitespace; returns the
 /// flattened token list, or an `InvalidDependString`-mirroring error.
 pub fn use_reduce_flat(
     tokens: &[String],
     uselist: &HashSet<String>,
     mode: MatchMode,
+) -> Result<Vec<String>, Error> {
+    walk_flat(tokens, &mut |cond| is_active(cond, uselist, mode), None)
+}
+
+/// One dep string like `use_reduce(matchall=True, flat=True,
+/// token_class=Atom, is_valid_flag=…)`: the flat walk with a per-atom-token
+/// hook. Each plain (non-conditional, non-operator) token goes through
+/// `atom_hook(token, pos)` with the 0-based token position; the caller keeps
+/// whatever the hook parsed. `^^`/`??` need no special case: `^^` is a plain
+/// token (the hook rejects it), `??` is a conditional on flag `?` (checked
+/// at its `)` like any other).
+/// Portage: lib/portage/dep/__init__.py, `use_reduce` (the `token_class`
+/// branch and `is_active` with `is_valid_flag`).
+pub fn use_reduce_flat_validated(
+    tokens: &[String],
+    is_valid_flag: &dyn Fn(&str) -> bool,
+    atom_hook: &mut AtomHook<'_>,
+) -> Result<(), Error> {
+    walk_flat(
+        tokens,
+        &mut |cond| is_active_validated(cond, is_valid_flag),
+        Some(atom_hook),
+    )
+    .map(|_| ())
+}
+
+/// The per-atom-token hook of [`use_reduce_flat_validated`]: called with each
+/// plain token and its 0-based position; the caller keeps whatever it parsed.
+pub type AtomHook<'a> = dyn FnMut(&str, usize) -> Result<(), TokenError> + 'a;
+
+/// Shared body of [`use_reduce_flat`] and [`use_reduce_flat_validated`]:
+/// the stack/`need_bracket` machine is identical; only the conditional test
+/// and the plain-token sink differ (push vs. hook).
+fn walk_flat(
+    tokens: &[String],
+    on_conditional: &mut dyn FnMut(&str) -> Result<bool, Error>,
+    mut on_atom: Option<&mut AtomHook<'_>>,
 ) -> Result<Vec<String>, Error> {
     let mut stack: Vec<Vec<String>> = vec![Vec::new()];
     let mut need_bracket = false;
@@ -152,9 +304,10 @@ pub fn use_reduce_flat(
         match token.as_str() {
             "(" => {
                 if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    // Portage reports the `(` token (1-based), not the `)`.
                     return Err(Error::ExpectedCloseParen {
                         expected: "dependency string",
-                        token: pos + 2,
+                        token: pos + 1,
                     });
                 }
                 // "(" satisfies any pending "||"/"flag?" requirement.
@@ -179,7 +332,7 @@ pub fn use_reduce_flat(
                 };
                 match conditional {
                     Some(cond) => {
-                        if is_active(&cond, uselist, mode)? {
+                        if on_conditional(&cond)? {
                             stack.last_mut().unwrap().extend(l);
                         }
                     }
@@ -206,8 +359,12 @@ pub fn use_reduce_flat(
                 }
                 if token.ends_with('?') {
                     need_bracket = true;
+                    stack.last_mut().unwrap().push(token.clone());
+                } else if let Some(hook) = on_atom.as_mut() {
+                    hook(token, pos).map_err(|err| map_hook_error(token, pos, err))?;
+                } else {
+                    stack.last_mut().unwrap().push(token.clone());
                 }
-                stack.last_mut().unwrap().push(token.clone());
             }
         }
     }
@@ -933,6 +1090,143 @@ mod tests {
         } else {
             AltPreference::Unsatisfiable
         }
+    }
+
+    /// Portage `use_reduce('x? ( a/b ) c/d::x', eapi='8', matchall=True,
+    /// `is_valid_flag=…`, `token_class=Atom`, `flat=True)` visits atom tokens
+    /// in order (live probe, 2026-10-11; S0 cell `t341-token` shows token 5).
+    #[test]
+    fn validated_walk_visits_atom_tokens_in_order() {
+        let mut seen: Vec<(String, usize)> = Vec::new();
+        let mut hook = |tok: &str, pos: usize| {
+            seen.push((tok.to_string(), pos));
+            Ok(())
+        };
+        use_reduce_flat_validated(
+            &toks("x? ( dev-libs/a dev-libs/b ) dev-libs/c"),
+            &|_| true,
+            &mut hook,
+        )
+        .expect("clean dep string validates");
+        assert_eq!(
+            seen,
+            vec![
+                ("dev-libs/a".to_string(), 2),
+                ("dev-libs/b".to_string(), 3),
+                ("dev-libs/c".to_string(), 5),
+            ]
+        );
+    }
+
+    /// Portage: the same probe with a bad trailing atom reports
+    /// `Invalid atom (c/d::x), token 5` (token counts `(`, `)`, `||`, `flag?`).
+    #[test]
+    fn validated_walk_reports_the_first_bad_atom_with_portage_token_count() {
+        let mut hook = |tok: &str, _pos: usize| {
+            if tok == "c/d::x" {
+                Err(TokenError {
+                    message: tok.to_string(),
+                    category: None,
+                })
+            } else {
+                Ok(())
+            }
+        };
+        let err = use_reduce_flat_validated(&toks("x? ( a/b ) c/d::x"), &|_| true, &mut hook)
+            .expect_err("bad trailing atom fails");
+        assert_eq!(err.to_string(), "Invalid atom (c/d::x), token 5");
+    }
+
+    /// Portage runs `missing_white_space_check` after the atom fails
+    /// (dep:788-796, called at dep:1031-1041): `'a/b('` reports the glue,
+    /// not the atom (S0 cell `t341-glued`).
+    #[test]
+    fn validated_walk_reports_a_glued_paren_after_the_atom_fails() {
+        let mut hook = |tok: &str, _pos: usize| {
+            Err(TokenError {
+                message: format!("no such atom {tok}"),
+                category: None,
+            })
+        };
+        let err = use_reduce_flat_validated(&toks("dev-libs/t341-dep("), &|_| true, &mut hook)
+            .expect_err("glued paren fails");
+        assert_eq!(
+            err.to_string(),
+            "missing whitespace around '(' at 'dev-libs/t341-dep(', token 1"
+        );
+    }
+
+    /// Categorized hook failures (IUSE.missing, EAPI.incompatible) render
+    /// the bare message, without the `Invalid atom (…), token N` wrapper
+    /// (Package.py:534-557; S0 cells `t341-badcond`, `t341-qq`).
+    #[test]
+    fn validated_walk_reports_categorized_hook_errors_bare() {
+        let msg = "USE flag 'x' referenced in conditional 'x?' in atom \
+                   'dev-libs/t341-dep[x?]' is not in IUSE";
+        let mut hook = |_tok: &str, _pos: usize| {
+            Err(TokenError {
+                message: msg.to_string(),
+                category: Some(TokenErrorCategory::IuseMissing),
+            })
+        };
+        let err = use_reduce_flat_validated(&toks("dev-libs/t341-dep[x?]"), &|_| true, &mut hook)
+            .expect_err("categorized failure fails");
+        assert_eq!(err.to_string(), msg);
+    }
+
+    /// Portage raises the IUSE.missing error in `is_active`, at the matching
+    /// `)` (dep:700-715): no token suffix (S0 cell `t341-mixcat`).
+    #[test]
+    fn validated_walk_checks_conditionals_at_the_closing_paren() {
+        let mut hook = |_tok: &str, _pos: usize| Ok(());
+        let err = use_reduce_flat_validated(&toks("y? ( dev-libs/a )"), &|_| false, &mut hook)
+            .expect_err("invalid conditional flag fails");
+        assert_eq!(
+            err.to_string(),
+            "USE flag 'y' referenced in conditional 'y?' is not in IUSE"
+        );
+    }
+
+    /// An invalid atom inside an invalid conditional group is reported first:
+    /// the atom token is scanned before its group's `)` closes (S0 cell
+    /// `t341-condfirst`: `Invalid atom (dev-libs/t341-dep::a), token 3`).
+    #[test]
+    fn validated_walk_reports_an_invalid_atom_inside_an_invalid_conditional_first() {
+        let mut hook = |tok: &str, _pos: usize| {
+            if tok == "dev-libs/t341-dep::a" {
+                Err(TokenError {
+                    message: tok.to_string(),
+                    category: None,
+                })
+            } else {
+                Ok(())
+            }
+        };
+        let err =
+            use_reduce_flat_validated(&toks("y? ( dev-libs/t341-dep::a )"), &|_| false, &mut hook)
+                .expect_err("atom inside invalid conditional fails");
+        assert_eq!(
+            err.to_string(),
+            "Invalid atom (dev-libs/t341-dep::a), token 3"
+        );
+    }
+
+    /// Portage reports the empty group at the `(` token (1-based): `x? ( )`
+    /// → token 2, `( )` → token 1 (live probe, 2026-10-11; S0 `t341-emptygrp`).
+    #[test]
+    fn flat_empty_group_reports_the_open_paren_token() {
+        let err = use_reduce_flat(&toks("x? ( )"), &set(&[]), MatchMode::All)
+            .expect_err("empty group fails");
+        assert_eq!(
+            err.to_string(),
+            "expected: dependency string, got: ')', token 2"
+        );
+        let bare = use_reduce_flat(&toks("( )"), &set(&[]), MatchMode::All)
+            .expect_err("bare empty group fails");
+        assert_eq!(
+            bare.to_string(),
+            "expected: dependency string, got: ')', token 1"
+        );
     }
 
     #[test]

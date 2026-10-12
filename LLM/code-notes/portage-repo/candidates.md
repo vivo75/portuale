@@ -17,6 +17,7 @@ Ebuild candidates for a package.
 - `build_id`: the `BUILD_ID` field from this binary's own `Packages` index entry (Portage binpkg-multi-instance / binhost `_pkg_str.build_id`) -- `Some("4")` for a binary, `None` for an ebuild or a `Packages` entry with no `BUILD_ID`. Portage `output.py::_append_build_id` appends `-{build_id}` to the displayed version of a `type_name == "binary"` package (before the `:slot` / `::repo` decoration).
 - `binary_deps`: this binary instance's own recorded `*DEPEND` strings (its `Packages` entry's `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND` -- absent keys omitted), kept so `--binpkg-changed-deps` compares the *exact* instance's deps rather than re-looking-up the cpv (a binpkg-multi-instance cpv has one dep set per build). Empty for an ebuild candidate.
 - `build_time`: from Portage `_pkg_str.build_time`. Portage `dbapi._cmp_cpv` sorts same-version instances by `build_time`, and `_iter_match_pkgs` reverses that and `break`s on the first acceptable one -- so the highest `BUILD_TIME` passing the checks wins (`dedup_binary_instances`).
+- `eapi`: the package's own EAPI -- `repo_aux_metadata`'s `EAPI` field for ebuilds, the `Packages` index `EAPI` field for binaries (S4, #341: `dep_validate` parses each `*DEPEND` with it). Absent in either source means the metadata predates the format: EAPI 0. Portage: `Package.eapi` (`_validate_deps`' `dep_eapi`).
 
 ## fn strip_version_prefix
 - Same disambiguation principle as the PMS package-name grammar ported in portage-dep's atom parser.

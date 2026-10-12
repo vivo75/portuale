@@ -311,6 +311,12 @@ pub(crate) fn binary_candidates_from_index(
             remote,
             build_id: entry.get("BUILD_ID").filter(|s| !s.is_empty()).cloned(),
             build_time: entry.get("BUILD_TIME").and_then(|s| s.trim().parse().ok()),
+            // The index `EAPI` field; without one the binpkg predates the
+            // format: EAPI 0 (same default as the ebuild cache path above).
+            eapi: entry
+                .get("EAPI")
+                .cloned()
+                .unwrap_or_else(|| "0".to_string()),
             binary_deps: ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
                 .iter()
                 .filter_map(|k| entry.get(*k).map(|v| (k.to_string(), v.clone())))

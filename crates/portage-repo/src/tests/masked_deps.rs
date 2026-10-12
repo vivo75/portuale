@@ -90,7 +90,7 @@ fn invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases() {
             .find(|c| c.version == version)
             .expect("fixture version");
         assert_eq!(
-            invalid_use_conditional_reasons(c, cat, pkg, &config),
+            invalid_dep_reasons(c, cat, pkg, &config),
             vec![expected.to_string()],
             "{cat}/{pkg}"
         );
@@ -99,7 +99,7 @@ fn invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases() {
     // Negative control: `gpcyclea` conditions on `x` with `IUSE="+x"`.
     let gpl = list_candidates(&repos, "dev-libs", "gpcyclea").expect("list_candidates");
     let g = gpl.iter().find(|c| c.version == "1.0").expect("version");
-    assert!(invalid_use_conditional_reasons(g, "dev-libs", "gpcyclea", &config).is_empty());
+    assert!(invalid_dep_reasons(g, "dev-libs", "gpcyclea", &config).is_empty());
     assert!(is_visible(g, "dev-libs", "gpcyclea", &config));
     // End to end: the masked-candidates disclosure carries the reason.
     let masked = masked_candidates_for_atom(&repos, "dev-libs/fucyclec", &config)
@@ -114,8 +114,12 @@ fn invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases() {
 }
 
 #[test]
-fn first_invalid_conditional_covers_forms_nesting_and_order() {
-    let valid: HashSet<String> = ["x".to_string()].into_iter().collect();
+fn dep_validation_covers_forms_nesting_and_order() {
+    // Ported from the retired `first_invalid_conditional` scan: the same
+    // encounter order through `validate_dep_string` (EAPI 8, `x` valid).
+    // Portage: `use_reduce(matchall=True, flat=True, token_class=Atom,
+    // is_valid_flag=…)` (dep:700-715, 1031-1041).
+    let text = |dep: &str| validate_dep_string(dep, "8", &|flag| flag == "x").map_err(|e| e.text);
     // Clean strings pass, whatever the form.
     for dep in [
         "dev-libs/a[x?] dev-libs/b",
@@ -124,7 +128,7 @@ fn first_invalid_conditional_covers_forms_nesting_and_order() {
         "|| ( dev-libs/a dev-libs/b )",
         "dev-libs/a[x(+)?]",
     ] {
-        assert_eq!(first_invalid_conditional(dep, &valid), None, "{dep}");
+        assert!(text(dep).is_ok(), "{dep}");
     }
     // Every conditional form reports with Portage's conditional text.
     for (dep, msg) in [
@@ -153,26 +157,68 @@ fn first_invalid_conditional_covers_forms_nesting_and_order() {
             "USE flag 'y' referenced in conditional '!y?' is not in IUSE",
         ),
     ] {
-        assert_eq!(
-            first_invalid_conditional(dep, &valid).as_deref(),
-            Some(msg),
-            "{dep}"
-        );
+        assert_eq!(text(dep).err().as_deref(), Some(msg), "{dep}");
     }
     // Encounter order: an atom before a group reports the atom (Portage
     // validates each token as scanned, groups at their `)` close).
     assert_eq!(
-        first_invalid_conditional("dev-libs/a[y?] z? ( dev-libs/b )", &valid).as_deref(),
+        text("dev-libs/a[y?] z? ( dev-libs/b )").err().as_deref(),
         Some("USE flag 'y' referenced in conditional 'y?' in atom 'dev-libs/a[y?]' is not in IUSE")
     );
     assert_eq!(
-        first_invalid_conditional("z? ( dev-libs/b ) dev-libs/a[y?]", &valid).as_deref(),
+        text("z? ( dev-libs/b ) dev-libs/a[y?]").err().as_deref(),
         Some("USE flag 'z' referenced in conditional 'z?' is not in IUSE")
     );
     // Nested groups validate innermost first.
     assert_eq!(
-        first_invalid_conditional("z? ( y? ( dev-libs/b ) )", &valid).as_deref(),
+        text("z? ( y? ( dev-libs/b ) )").err().as_deref(),
         Some("USE flag 'y' referenced in conditional 'y?' is not in IUSE")
+    );
+}
+
+#[test]
+fn binary_masked_report_lists_masked_binaries_like_the_ebuild_block() {
+    // S0 cell `F-binary-rewritten`: every version-matching binary masked
+    // reports its rows under the same header Portage prints
+    // (`emerge -pv --usepkgonly=y app-misc/t341-good`, container
+    // `localhost/test-portuale:latest`).
+    let binary = Candidate {
+        source: CandidateSource::Binary,
+        binary_deps: HashMap::from([(
+            "RDEPEND".to_string(),
+            "dev-libs/t341-dep::gentoo".to_string(),
+        )]),
+        binary_use: Some(HashSet::new()),
+        eapi: "8".to_string(),
+        repo_name: "t341".to_string(),
+        ..candidate("1", &["amd64"])
+    };
+    let config = test_config();
+    let report = all_binary_masked_report(
+        std::slice::from_ref(&binary),
+        "app-misc/t341-good",
+        &config,
+        "\"app-misc/t341-good\"",
+    )
+    .expect("masked binary reports");
+    assert!(
+        report.contains(
+            "- app-misc/t341-good-1::t341 (masked by: invalid: RDEPEND: \
+             Invalid atom (dev-libs/t341-dep::gentoo), token 1)"
+        ),
+        "{report}"
+    );
+    // A visible binary reports nothing (the resolve proceeds instead).
+    let mut visible = binary.clone();
+    visible.binary_deps = HashMap::from([("RDEPEND".to_string(), "dev-libs/t341-dep".to_string())]);
+    assert!(
+        all_binary_masked_report(
+            std::slice::from_ref(&visible),
+            "app-misc/t341-good",
+            &config,
+            "\"app-misc/t341-good\"",
+        )
+        .is_none()
     );
 }
 

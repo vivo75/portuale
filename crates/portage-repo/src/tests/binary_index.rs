@@ -75,6 +75,7 @@ fn dedup_binary_instances_keeps_newest_build_time_per_group() {
         remote: true,
         build_id: Some(bid.to_string()),
         build_time: Some(bt),
+        eapi: "8".to_string(),
         binary_deps: HashMap::new(),
     };
     let cfg = test_config();

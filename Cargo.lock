@@ -2464,6 +2464,7 @@ name = "use-reduce-harness"
 version = "0.1.0"
 dependencies = [
  "harness-common",
+ "portage-dep",
  "portage-use-reduce",
 ]
 

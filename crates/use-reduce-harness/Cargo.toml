@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 harness-common = { path = "../harness-common" }
+portage-dep = { path = "../portage-dep" }
 portage-use-reduce = { path = "../portage-use-reduce" }
 
 [lints]

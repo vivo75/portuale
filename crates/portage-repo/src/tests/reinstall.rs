@@ -21,6 +21,7 @@ fn candidate_iuse_and_use_reads_a_binarys_own_baked_use() {
         remote: true,
         build_id: Some("1".to_string()),
         build_time: Some(1),
+        eapi: "8".to_string(),
         binary_deps: HashMap::new(),
     };
     let (iuse, use_flags) = candidate_iuse_and_use(&c, "dev-libs", "x", &test_config()).unwrap();
@@ -50,6 +51,7 @@ fn best_binary_build_time_is_the_newest_binary_of_the_version() {
         remote: false,
         build_id: None,
         build_time: bt,
+        eapi: "8".to_string(),
         binary_deps: HashMap::new(),
     };
     let cands = vec![

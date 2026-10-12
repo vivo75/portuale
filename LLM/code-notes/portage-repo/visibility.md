@@ -21,6 +21,7 @@ Keyword, mask and license visibility of a candidate.
 - Portage `Package.py`'s `_masks` dict collects `package.mask`, `LICENSE`, `PROPERTIES`, and `RESTRICT` as four independent masking reasons the same way.
 - Memo: the reference workload calls it ~40k times against 1,503 distinct inputs (backlog #114). Backlog #122: the literal `candidate_str` bounds any 64-bit digest collision to same-candidate inputs (`EUF_CACHE`'s shape).
 - Backlog #153: one version is one ebuild is one DEPEND for ebuild candidates, so nothing extra is needed there.
+- S4 (#341): the memo key also hashes `source`, `repo_location`, `eapi` and the sorted `binary_deps` -- the `invalid` verdict reads the instance's own dep keys under its own EAPI, so without them a masked binary poisons its ebuild twin's lookup (found via S0 `F-binary-rewritten`: same version/slot/repo/IUSE, different `RDEPEND`).
 
 ## fn is_visible_uncached
 - Backlog #153: Portage masks a candidate whose own dep conditionals reference flags outside its effective IUSE (`invalid`), after every `_getmaskingstatus` reason -- so this check sits last here too.

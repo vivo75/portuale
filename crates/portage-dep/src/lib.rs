@@ -749,6 +749,14 @@ pub fn check_conditional_flags(
 
 /// Rebuilds the atom text Portage prints for `str(atom)` (which is the
 /// original string): blocker, operator, `cp-ver[-rN][-bid]`, slot, repo, use.
+/// For a valid atom the rebuild equals the parsed token, so validators can
+/// quote it (Portage's `unevaluated_atom` is that same original string).
+pub fn atom_to_string(atom: &Atom) -> String {
+    render_atom(atom)
+}
+
+/// Rebuilds the atom text Portage prints for `str(atom)` (which is the
+/// original string): blocker, operator, `cp-ver[-rN][-bid]`, slot, repo, use.
 fn render_atom(atom: &Atom) -> String {
     let mut out = String::new();
     match atom.blocker {

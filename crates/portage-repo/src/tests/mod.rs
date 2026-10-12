@@ -2174,6 +2174,7 @@ fn candidate(version: &str, keywords: &[&str]) -> Candidate {
         remote: false,
         build_id: None,
         build_time: None,
+        eapi: "8".to_string(),
         binary_deps: HashMap::new(),
     }
 }
@@ -3519,6 +3520,7 @@ mod complete_graph;
 mod config_match;
 mod conflict_use_display;
 mod cycles;
+mod dep_validate;
 mod depclean;
 mod direct_solve;
 mod eliminate;

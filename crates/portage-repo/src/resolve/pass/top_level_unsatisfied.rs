@@ -66,6 +66,21 @@ pub(crate) fn step_top_level_unsatisfied(
         if let Some(version) = withheld_version {
             *outcome = PretendOutcome::AlreadyInstalled { version };
         } else {
+            // Under `--usepkgonly` ebuilds are ineligible rather than
+            // masked, so a masked-only binary pool reports its own rows
+            // (S4; Portage lists the binary, e.g. S0 `F-binary-rewritten`).
+            // Otherwise the ebuild-side report below applies unchanged.
+            if ctx.usepkgonly {
+                let binaries = list_binary_candidates(&ctx.local_binpkg, &key.0, &key.1);
+                if let Some(report) = all_binary_masked_report(
+                    &binaries,
+                    current_atom,
+                    config,
+                    &format!("{current_atom:?}"),
+                ) {
+                    return Err(Error::Detail(report));
+                }
+            }
             // An atom matching only masked ebuilds reports the "all masked"
             // block, not the "no ebuilds" one. Portage: _show_unsatisfied_dep
             if let Some(report) = all_masked_report(
