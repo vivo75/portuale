@@ -30,6 +30,20 @@ pub(crate) fn fold_package_sets(
             warnings,
         ));
     }
+    // The user profile's `packages` stacks last (it is Portage's last
+    // profile node), with `eapi=None`, repo and build-id on, no wildcards
+    // (a leading `*` is still stripped before parsing, kept after).
+    // Portage: config.py:655-666 (the profiles_complex loop covers the
+    // user node), oracle Q2e
+    packages_sources.push(filter_atom_lines(
+        &read_config_lines_with_sources(&config_root.join("etc/portage/profile/packages"))?,
+        &user_atom_rules(false, true),
+        AtomLineKind::File {
+            packages_file: true,
+        },
+        WARN_RANK_PACKAGES,
+        warnings,
+    ));
     config.system_packages = stack_mask_lines(&packages_sources)
         .into_iter()
         .filter_map(|line| line.strip_prefix('*').map(String::from))

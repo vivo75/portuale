@@ -8,6 +8,7 @@ pub(crate) struct FoldPackageUseForceMaskArgs<'a> {
     pub(crate) main_repo_name: &'a str,
     pub(crate) overlay_repos: &'a [(String, PathBuf)],
     pub(crate) chain: &'a [PathBuf],
+    pub(crate) config_root: &'a Path,
     pub(crate) config: &'a mut Config,
     pub(crate) warnings: &'a mut Vec<ProfileWarning>,
 }
@@ -21,14 +22,16 @@ pub(crate) fn fold_package_use_force_mask(
         main_repo_name,
         overlay_repos,
         chain,
+        config_root,
         config,
         warnings,
     } = args;
     // package.use.mask/.force: repo-level (every repo, `::repo`-scoped like
-    // package.use) plus every profile level's file -- no user-level source.
+    // package.use) plus every profile level's file plus the user profile's
+    // (`eapi=None`, wildcards on, repo and build-id on, use dropped).
     // No masters merge at load (Portage only consults masters per-package
     // later); specificity ordering decides at application time.
-    // Portage: UseManager
+    // Portage: UseManager._parse_profile_files_to_tuple_of_dicts
     //
     // Every source validates first (use dropped, no wildcards); Portage
     // reads all of them with `allow_use=False` and the profile flags.
@@ -81,6 +84,23 @@ pub(crate) fn fold_package_use_force_mask(
         use_mask_lines.extend(filter_atom_lines(
             &read_config_lines_with_sources(&level.join("package.use.mask"))?,
             &rules,
+            dict,
+            WARN_RANK_USE,
+            warnings,
+        ));
+    }
+    // The user profile's files stack last, with the user-config wildcard
+    // syntax (`extended_syntax = eapi is None and user_config`).
+    // Portage: UseManager.py:277-288
+    let user_profile = config_root.join("etc/portage/profile");
+    let user_use_rules = user_atom_rules(true, true);
+    for (file, lines) in [
+        ("package.use.force", &mut use_force_lines),
+        ("package.use.mask", &mut use_mask_lines),
+    ] {
+        lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&user_profile.join(file))?,
+            &user_use_rules,
             dict,
             WARN_RANK_USE,
             warnings,
@@ -156,6 +176,19 @@ pub(crate) fn fold_package_use_force_mask(
         use_stable_mask_lines.extend(filter_atom_lines(
             &read_config_lines_with_sources(&level.join("package.use.stable.mask"))?,
             &rules,
+            dict,
+            WARN_RANK_USE,
+            warnings,
+        ));
+    }
+    // Same for the `.stable` pair (same reader, same flags).
+    for (file, lines) in [
+        ("package.use.stable.force", &mut use_stable_force_lines),
+        ("package.use.stable.mask", &mut use_stable_mask_lines),
+    ] {
+        lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&user_profile.join(file))?,
+            &user_use_rules,
             dict,
             WARN_RANK_USE,
             warnings,

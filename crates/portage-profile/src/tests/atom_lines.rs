@@ -310,3 +310,255 @@ fn repo_eapi_prefers_top_level_default_then_gated_key() {
     assert_eq!(rr[0].file_eapi, "5");
     assert!(warn.is_empty());
 }
+
+/// S0 run6's eight user-config lines through the user `package.mask`
+/// rules (`eapi=None`, wildcards/repo/build-id on): only the leading-zero
+/// build-id and the bare version drop; blockers and use-dep lines are kept
+/// (mask files take any atom).
+// Portage: MaskManager.py:214-232; live `Atom(x, allow_wildcard=True,
+// allow_repo=True, allow_build_id=True)` over the eight lines,
+// host Portage 3.0.82.2, 2026-10-12; S0 cell C-userconfig.
+#[test]
+fn user_mask_lines_keep_wildcards_repo_build_id_and_use_deps() {
+    let path = Path::new("/cfg/etc/portage/package.mask");
+    let lines = [
+        "*/t341-dep",
+        "dev-libs/t341-*",
+        "dev-libs/t341-dep::t341",
+        "=dev-libs/t341-dep-1-2",
+        "=dev-libs/t341-dep-1-02",
+        "dev-libs/t341-dep-1",
+        "!dev-libs/t341-dep",
+        "dev-libs/t341-dep[x]",
+    ];
+    let mut warn = Vec::new();
+    let kept = filter_atom_lines(
+        &src(path, &lines),
+        &user_atom_rules(true, true),
+        AtomLineKind::File {
+            packages_file: false,
+        },
+        WARN_RANK_MASK,
+        &mut warn,
+    );
+    assert_eq!(
+        kept,
+        vec![
+            "*/t341-dep".to_string(),
+            "dev-libs/t341-*".to_string(),
+            "dev-libs/t341-dep::t341".to_string(),
+            "=dev-libs/t341-dep-1-2".to_string(),
+            "!dev-libs/t341-dep".to_string(),
+            "dev-libs/t341-dep[x]".to_string(),
+        ]
+    );
+    assert_eq!(
+        warn.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(),
+        vec![
+            "--- Invalid atom in /cfg/etc/portage/package.mask: =dev-libs/t341-dep-1-02",
+            "--- Invalid atom in /cfg/etc/portage/package.mask: dev-libs/t341-dep-1",
+        ]
+    );
+}
+
+/// User `package.license`: same as the mask rules but WITHOUT build-ids
+/// (Portage never passes `allow_build_id` there), while use-dep lines are
+/// still kept (the LicenseManager takes any atom).
+// Portage: LicenseManager.py:37-42; live probe as above with
+// allow_build_id=False; S0 cell C-userconfig.
+#[test]
+fn user_license_lines_drop_build_id_but_keep_use_deps() {
+    let path = Path::new("/cfg/etc/portage/package.license");
+    let lines = [
+        "dev-libs/t341-dep::t341",
+        "=dev-libs/t341-dep-1-2",
+        "=dev-libs/t341-dep-1-02",
+        "dev-libs/t341-dep-1",
+        "dev-libs/t341-dep[x]",
+    ];
+    let mut warn = Vec::new();
+    let kept = filter_atom_lines(
+        &src(
+            path,
+            &lines
+                .iter()
+                .map(|l| format!("{l} MIT"))
+                .collect::<Vec<_>>()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ),
+        &user_atom_rules(true, false),
+        AtomLineKind::Dict { allow_use: true },
+        WARN_RANK_LICENSE,
+        &mut warn,
+    );
+    assert_eq!(
+        kept,
+        vec![
+            "dev-libs/t341-dep::t341 MIT".to_string(),
+            "dev-libs/t341-dep[x] MIT".to_string(),
+        ]
+    );
+    assert_eq!(
+        warn.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(),
+        vec![
+            "--- Invalid atom in /cfg/etc/portage/package.license: =dev-libs/t341-dep-1-2",
+            "--- Invalid atom in /cfg/etc/portage/package.license: =dev-libs/t341-dep-1-02",
+            "--- Invalid atom in /cfg/etc/portage/package.license: dev-libs/t341-dep-1",
+        ]
+    );
+}
+
+/// User `package.use` (and `package.accept_keywords`): build-ids on, but a
+/// use-carrying atom drops with Portage's other message.
+// Portage: UseManager.py:337-348, KeywordsManager.py:73-104;
+// S0 cell C-userconfig.
+#[test]
+fn user_use_lines_drop_use_deps_with_their_own_message() {
+    let path = Path::new("/cfg/etc/portage/package.use");
+    let lines = [
+        "dev-libs/t341-dep::t341 x",
+        "=dev-libs/t341-dep-1-2 x",
+        "=dev-libs/t341-dep-1-02 x",
+        "dev-libs/t341-dep-1 x",
+        "dev-libs/t341-dep[x] x",
+    ];
+    let mut warn = Vec::new();
+    let kept = filter_atom_lines(
+        &src(path, &lines),
+        &user_atom_rules(true, true),
+        AtomLineKind::Dict { allow_use: false },
+        WARN_RANK_USE,
+        &mut warn,
+    );
+    assert_eq!(
+        kept,
+        vec![
+            "dev-libs/t341-dep::t341 x".to_string(),
+            "=dev-libs/t341-dep-1-2 x".to_string(),
+        ]
+    );
+    assert_eq!(
+        warn.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(),
+        vec![
+            "--- Invalid atom in /cfg/etc/portage/package.use: =dev-libs/t341-dep-1-02",
+            "--- Invalid atom in /cfg/etc/portage/package.use: dev-libs/t341-dep-1",
+            "--- Atom is not allowed to have USE flag(s) in /cfg/etc/portage/package.use: dev-libs/t341-dep[x]",
+        ]
+    );
+}
+
+/// User-profile `package.mask` (and `packages`): `eapi=None`, repo and
+/// build-id on, but NO wildcards — like a repo profile that always passes
+/// both flags explicitly.
+// Portage: MaskManager.py:171-193 over the user node (eapi None, no
+// allow_wildcard), oracle Q2e; S0 cell C-userconfig.
+#[test]
+fn user_profile_mask_lines_reject_wildcards() {
+    let path = Path::new("/cfg/etc/portage/profile/package.mask");
+    let lines = [
+        "*/t341-dep",
+        "dev-libs/t341-*",
+        "dev-libs/t341-dep::t341",
+        "=dev-libs/t341-dep-1-2",
+        "=dev-libs/t341-dep-1-02",
+        "dev-libs/t341-dep-1",
+        "!dev-libs/t341-dep",
+        "dev-libs/t341-dep[x]",
+    ];
+    let mut warn = Vec::new();
+    let kept = filter_atom_lines(
+        &src(path, &lines),
+        &user_atom_rules(false, true),
+        AtomLineKind::File {
+            packages_file: false,
+        },
+        WARN_RANK_MASK,
+        &mut warn,
+    );
+    assert_eq!(
+        kept,
+        vec![
+            "dev-libs/t341-dep::t341".to_string(),
+            "=dev-libs/t341-dep-1-2".to_string(),
+            "!dev-libs/t341-dep".to_string(),
+            "dev-libs/t341-dep[x]".to_string(),
+        ]
+    );
+    assert_eq!(
+        warn.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(),
+        vec![
+            "--- Invalid atom in /cfg/etc/portage/profile/package.mask: */t341-dep",
+            "--- Invalid atom in /cfg/etc/portage/profile/package.mask: dev-libs/t341-*",
+            "--- Invalid atom in /cfg/etc/portage/profile/package.mask: =dev-libs/t341-dep-1-02",
+            "--- Invalid atom in /cfg/etc/portage/profile/package.mask: dev-libs/t341-dep-1",
+        ]
+    );
+}
+
+/// User-profile `packages`: the leading `*` strips before parsing (kept
+/// after), so `*/t341-dep` warns as `/t341-dep`.
+// Portage: config.py:655-666 over the user node, util/__init__.py:572-581;
+// S0 cell C-userconfig.
+#[test]
+fn user_profile_packages_lines_strip_star_before_parsing() {
+    let path = Path::new("/cfg/etc/portage/profile/packages");
+    let mut warn = Vec::new();
+    let kept = filter_atom_lines(
+        &src(path, &["*/t341-dep", "dev-libs/t341-dep::t341"]),
+        &user_atom_rules(false, true),
+        AtomLineKind::File {
+            packages_file: true,
+        },
+        WARN_RANK_PACKAGES,
+        &mut warn,
+    );
+    assert_eq!(kept, vec!["dev-libs/t341-dep::t341".to_string()]);
+    assert_eq!(
+        warn.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(),
+        vec!["--- Invalid atom in /cfg/etc/portage/profile/packages: /t341-dep",]
+    );
+}
+
+/// User-profile `package.use*`: wildcards ON (`extended_syntax = eapi is
+/// None and user_config`), build-ids on, use-dep lines dropped.
+// Portage: UseManager.py:277-288; S0 cell C-userconfig.
+#[test]
+fn user_profile_use_lines_accept_wildcards() {
+    let path = Path::new("/cfg/etc/portage/profile/package.use");
+    let lines = [
+        "*/t341-dep x",
+        "dev-libs/t341-* x",
+        "dev-libs/t341-dep::t341 x",
+        "=dev-libs/t341-dep-1-2 x",
+        "=dev-libs/t341-dep-1-02 x",
+        "dev-libs/t341-dep-1 x",
+        "dev-libs/t341-dep[x] x",
+    ];
+    let mut warn = Vec::new();
+    let kept = filter_atom_lines(
+        &src(path, &lines),
+        &user_atom_rules(true, true),
+        AtomLineKind::Dict { allow_use: false },
+        WARN_RANK_USE,
+        &mut warn,
+    );
+    assert_eq!(
+        kept,
+        vec![
+            "*/t341-dep x".to_string(),
+            "dev-libs/t341-* x".to_string(),
+            "dev-libs/t341-dep::t341 x".to_string(),
+            "=dev-libs/t341-dep-1-2 x".to_string(),
+        ]
+    );
+    assert_eq!(
+        warn.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(),
+        vec![
+            "--- Invalid atom in /cfg/etc/portage/profile/package.use: =dev-libs/t341-dep-1-02",
+            "--- Invalid atom in /cfg/etc/portage/profile/package.use: dev-libs/t341-dep-1",
+            "--- Atom is not allowed to have USE flag(s) in /cfg/etc/portage/profile/package.use: dev-libs/t341-dep[x]",
+        ]
+    );
+}

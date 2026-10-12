@@ -7,6 +7,7 @@ pub(crate) fn fold_package_env(
     config_root: &Path,
     config: &mut Config,
     scalars: &HashMap<String, String>,
+    warnings: &mut Vec<ProfileWarning>,
 ) -> Result<(), Error> {
     // package.env (real config.py:894 `grabdict_package` +
     // `_grab_pkg_env`): `/etc/portage/package.env` maps an atom to one or
@@ -17,7 +18,19 @@ pub(crate) fn fold_package_env(
     // half of each file lands in `package_env_use` (the `pkg` `USE_ORDER`
     // layer, before user `package.use`); the non-`USE` scalar half lands
     // in `package_env_vars` (a per-package build-phase env override).
-    let package_env_lines = read_config_lines(&config_root.join("etc/portage/package.env"))?;
+    //
+    // Lines validate with `eapi=None`, wildcards, repo and build-ids on;
+    // use-dep lines are kept: Portage's reader accepts them (the later
+    // `AssertionError: setcpv recursion detected` when one matches is a
+    // Portage bug, not behaviour to copy — no pin covers that cell).
+    // Portage: config.py:894-902, oracle Q2e
+    let package_env_lines = filter_atom_lines(
+        &read_config_lines_with_sources(&config_root.join("etc/portage/package.env"))?,
+        &user_atom_rules(true, true),
+        AtomLineKind::Dict { allow_use: true },
+        WARN_RANK_LICENSE,
+        warnings,
+    );
     config.package_env = parse_package_accept_keywords_lines(&package_env_lines)
         .into_iter()
         .filter(|(_, files)| !files.is_empty())

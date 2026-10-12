@@ -65,11 +65,18 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         .collect();
 
     // Profile atom warnings, collected per file above: Portage order is by
-    // manager (`packages`, `package.use`, `package.accept_keywords`,
-    // `package.mask`), not by this fold order, so stable-sort by rank; files
-    // read twice (chain `package.use`) warn twice identically, and Portage
-    // prints each warning once (owner Q3), so dedupe exactly.
+    // manager (`packages`, `package.use`, `package.license` /
+    // `package.properties` / `package.accept_restrict` / `package.env`,
+    // `package.accept_keywords`, `package.mask`), not by this fold order,
+    // so stable-sort by rank; files read twice (chain `package.use`) warn
+    // twice identically, and Portage prints each warning once (owner Q3),
+    // so dedupe exactly.
+    //
+    // Within the `package.use` rank the user file's warnings are appended
+    // after the force fold (see above), so profile `package.use*` files
+    // precede it the way Portage's UseManager reads them.
     let mut warnings: Vec<ProfileWarning> = Vec::new();
+    let mut user_use_warnings: Vec<ProfileWarning> = Vec::new();
     let LoadScalarLayersOut {
         chain,
         level_scalar_deltas,
@@ -118,18 +125,24 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         scalars: &scalars,
         eroot,
         warnings: &mut warnings,
+        user_warnings: &mut user_use_warnings,
     })?;
-
-    fold_package_env(config_root, &mut config, &scalars)?;
 
     fold_package_use_force_mask(FoldPackageUseForceMaskArgs {
         main_repo_location,
         main_repo_name,
         overlay_repos,
         chain: &chain,
+        config_root,
         config: &mut config,
         warnings: &mut warnings,
     })?;
+    // The user `package.use` warnings sort after every profile `package.use*`
+    // file: Portage's UseManager parses the profile files before the user
+    // ones (S0 cell C-userconfig: `profile/package.use.force` warnings
+    // precede the user `package.use` ones), and the rank sort below keeps
+    // fold order within a rank. The folds are independent.
+    warnings.append(&mut user_use_warnings);
 
     use_mask_force_levels(UseMaskForceLevelsArgs {
         main_repo_location,
@@ -142,7 +155,20 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
 
     fold_package_sets(&chain, &mut config, &all_repos, config_root, &mut warnings)?;
 
-    fold_licenses_and_accepts(&all_repos, config_root, &mut config, &scalars)?;
+    fold_licenses_and_accepts(
+        &all_repos,
+        config_root,
+        &mut config,
+        &scalars,
+        &mut warnings,
+    )?;
+
+    // `package.env` folds after the license files so its warnings sort
+    // after theirs: Portage reads `package.license` (LicenseManager),
+    // then `package.properties` / `package.accept_restrict` /
+    // `package.env` inline (config.py:855-902). The two folds are
+    // independent (both read only `config` + `scalars`).
+    fold_package_env(config_root, &mut config, &scalars, &mut warnings)?;
 
     // PKGDIR: last-level-wins scalar, `/var/cache/binpkgs` default.
     config.pkgdir = scalars

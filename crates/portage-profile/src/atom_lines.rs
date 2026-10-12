@@ -12,12 +12,17 @@ use portage_dep::{AtomEapi, AtomOptions};
 /// Warning ranks. Portage reads profile files manager by manager, so every
 /// `packages` warning precedes every `package.use` one no matter in which
 /// order this crate folds the files; `resolve_config` stable-sorts by rank.
-// Portage: config.py (`packages`), UseManager, KeywordsManager, MaskManager
+/// User-config-only files (`package.license`, `package.properties`,
+/// `package.accept_restrict`, `package.env`) warn between `package.use` and
+/// `package.accept_keywords`, where Portage's LicenseManager and the
+/// config.py inline readers run (config.py:855-902, oracle Q2e).
+// Portage: config.py (`packages`), UseManager, LicenseManager, KeywordsManager, MaskManager
 pub(crate) const WARN_RANK_REPO: u8 = 0;
 pub(crate) const WARN_RANK_PACKAGES: u8 = 1;
 pub(crate) const WARN_RANK_USE: u8 = 2;
-pub(crate) const WARN_RANK_KEYWORDS: u8 = 3;
-pub(crate) const WARN_RANK_MASK: u8 = 4;
+pub(crate) const WARN_RANK_LICENSE: u8 = 3;
+pub(crate) const WARN_RANK_KEYWORDS: u8 = 4;
+pub(crate) const WARN_RANK_MASK: u8 = 5;
 
 /// One collected config-load warning plus its file-kind rank.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +249,22 @@ pub(crate) fn rules_for_node(
         default
     };
     node_atom_rules(node, &formats, &default)
+}
+
+/// User-config (`/etc/portage/package.*`) and user-profile
+/// (`/etc/portage/profile/*`) rules: Portage reads both with `eapi=None`
+/// (`verify_eapi=False`) and `allow_repo=True`; wildcards and build-ids
+/// are per file (the caller picks them from the table below).
+// Portage: MaskManager.py:214-232, KeywordsManager.py:73-104,
+// UseManager.py:277-288,337-348, LicenseManager.py:37-42,
+// config.py:655-666,855-902 (oracle Q2e)
+pub(crate) fn user_atom_rules(allow_wildcard: bool, allow_build_id: bool) -> NodeAtomRules {
+    NodeAtomRules {
+        eapi: None,
+        allow_repo: true,
+        allow_build_id,
+        allow_wildcard,
+    }
 }
 
 /// A repo's own repo-level file rules: parsed with the file-adjacent

@@ -13,6 +13,10 @@ pub(crate) struct FoldPackageUseArgs<'a> {
     pub(crate) scalars: &'a HashMap<String, String>,
     pub(crate) eroot: &'a Path,
     pub(crate) warnings: &'a mut Vec<ProfileWarning>,
+    /// The user `package.use` warnings, collected apart so the caller can
+    /// append them after the profile `package.use*` files (Portage's
+    /// UseManager reads the user file last).
+    pub(crate) user_warnings: &'a mut Vec<ProfileWarning>,
 }
 
 /// `package.use` from repos, profiles and the user, plus the FEATURES=test and env.d USE.
@@ -27,21 +31,27 @@ pub(crate) fn fold_package_use(args: FoldPackageUseArgs<'_>) -> Result<(), Error
         scalars,
         eroot,
         warnings,
+        user_warnings,
     } = args;
     // package.use: three sources into three fields at three USE_ORDER positions
     // (repo `::repo`-scoped, profile-chain, user-level with USE_EXPAND shorthand).
     // Purely additive; parsed independently. Portage: UseManager
     //
     // Repo and chain lines validate first (node rules, use dropped, no
-    // wildcards); the user file is S6 scope and stays raw. Chain lines were
+    // wildcards); the user profile (`/etc/portage/profile`, Portage's last
+    // profile node) validates with `eapi=None`, wildcards on, repo and
+    // build-id on, use dropped; the user file the same. Chain lines were
     // already validated (and warned) in `load_scalar_layers`: identical
     // warnings dedupe at the end of `resolve_config`.
+    // Portage: UseManager._parse_file_to_dict (profiles, with
+    // user_config=True on the user node) and _parse_user_files_to_extatomdict
     let all_repos: Vec<(String, PathBuf)> =
         std::iter::once((main_repo_name.to_string(), main_repo_location.to_path_buf()))
             .chain(overlay_repos.iter().cloned())
             .collect();
     let repo_rules = repo_rules_for(&all_repos, warnings);
     let dict = AtomLineKind::Dict { allow_use: false };
+    let user_use_rules = user_atom_rules(true, true);
     let mut repo_use_lines: Vec<String> = filter_atom_lines(
         &read_config_lines_with_sources(&main_repo_location.join("profiles/package.use"))?,
         &repo_file_rules(&repo_rules, main_repo_name),
@@ -70,7 +80,20 @@ pub(crate) fn fold_package_use(args: FoldPackageUseArgs<'_>) -> Result<(), Error
             warnings,
         ));
     }
-    let user_use_lines = read_config_lines(&config_root.join("etc/portage/package.use"))?;
+    profile_use_lines.extend(filter_atom_lines(
+        &read_config_lines_with_sources(&config_root.join("etc/portage/profile/package.use"))?,
+        &user_use_rules,
+        dict,
+        WARN_RANK_USE,
+        warnings,
+    ));
+    let user_use_lines = filter_atom_lines(
+        &read_config_lines_with_sources(&config_root.join("etc/portage/package.use"))?,
+        &user_use_rules,
+        dict,
+        WARN_RANK_USE,
+        user_warnings,
+    );
     config.package_use_repo = parse_package_use_lines(&repo_use_lines, false);
 
     // Repo `make.defaults` USE (global half of `configdict["repo"]`): each repo's

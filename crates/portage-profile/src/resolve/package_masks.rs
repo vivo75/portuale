@@ -38,8 +38,10 @@ pub(crate) fn fold_package_masks_and_keywords(
     // unscoped. Portage: MaskManager repo_pkgmasklines/repo_pkgunmasklines
     //
     // Every source is validated first (Portage `grabfile_package` with the
-    // repo's own rules: file-adjacent EAPI, no wildcards); user-level files
-    // are S6 scope and stay raw.
+    // repo's own rules: file-adjacent EAPI, no wildcards); the user
+    // profile validates with `eapi=None`, repo and build-id on, no
+    // wildcards; user-level files with `eapi=None`, wildcards, repo and
+    // build-ids on.
     let main_rules = repo_file_rules(&repo_rules, main_repo_name);
     let main_repo_mask_lines = filter_atom_lines(
         &read_config_lines_with_sources(&main_repo_location.join("profiles/package.mask"))?,
@@ -150,12 +152,54 @@ pub(crate) fn fold_package_masks_and_keywords(
             warnings,
         ));
     }
-    mask_sources.push(read_config_lines(
-        &config_root.join("etc/portage/package.mask"),
-    )?);
-    unmask_sources.push(read_config_lines(
-        &config_root.join("etc/portage/package.unmask"),
-    )?);
+    // The user profile (`/etc/portage/profile`) is Portage's last profile
+    // node: its `package.mask`/`.unmask` stack after the chain, before the
+    // user files, with `eapi=None`, repo and build-id on, no wildcards.
+    // A missing directory reads as empty, like every other absent file.
+    // Portage: MaskManager.py:171-193 (the profiles loop covers the user
+    // node; `portage1_directories` is true there too), oracle Q2e
+    let user_profile_rules = user_atom_rules(false, true);
+    let user_profile = config_root.join("etc/portage/profile");
+    mask_sources.push(filter_atom_lines(
+        &read_config_lines_with_sources(&user_profile.join("package.mask"))?,
+        &user_profile_rules,
+        AtomLineKind::File {
+            packages_file: false,
+        },
+        WARN_RANK_MASK,
+        warnings,
+    ));
+    unmask_sources.push(filter_atom_lines(
+        &read_config_lines_with_sources(&user_profile.join("package.unmask"))?,
+        &user_profile_rules,
+        AtomLineKind::File {
+            packages_file: false,
+        },
+        WARN_RANK_MASK,
+        warnings,
+    ));
+    // User-level files validate like Portage's `user_config` readers:
+    // `eapi=None`, wildcards and repo on, build-ids on.
+    // Portage: MaskManager.py:214-232
+    let user_mask_rules = user_atom_rules(true, true);
+    mask_sources.push(filter_atom_lines(
+        &read_config_lines_with_sources(&config_root.join("etc/portage/package.mask"))?,
+        &user_mask_rules,
+        AtomLineKind::File {
+            packages_file: false,
+        },
+        WARN_RANK_MASK,
+        warnings,
+    ));
+    unmask_sources.push(filter_atom_lines(
+        &read_config_lines_with_sources(&config_root.join("etc/portage/package.unmask"))?,
+        &user_mask_rules,
+        AtomLineKind::File {
+            packages_file: false,
+        },
+        WARN_RANK_MASK,
+        warnings,
+    ));
 
     config.package_mask = stack_mask_lines(&mask_sources);
     config.package_unmask = stack_mask_lines(&unmask_sources);
@@ -165,8 +209,12 @@ pub(crate) fn fold_package_masks_and_keywords(
     // source exists in Portage. Chain lines validate with the node's rules
     // (no wildcards, use dropped) but never with build-ids: Portage does
     // not pass `allow_build_id` there even with the `build-id` format
-    // (S0 `formats` cell still warns on `=…-1-2`); user lines are S6 scope.
-    // Portage: KeywordsManager.py:49-60
+    // (S0 `formats` cell still warns on `=…-1-2`); the user file takes
+    // build-ids instead, still dropping use-dep lines.
+    // Portage: KeywordsManager.py:49-60 (profiles), :73-104 (user).
+    // Neither the chain nor the user profile `package.keywords` file is
+    // read here (Portage merges it into the same dict): S6 residue, see
+    // the code note.
     let mut accept_keywords_lines: Vec<String> = Vec::new();
     for level in chain {
         let mut rules = rules_for_node(level, &all_repos, &repo_rules)?;
@@ -179,9 +227,17 @@ pub(crate) fn fold_package_masks_and_keywords(
             warnings,
         ));
     }
-    accept_keywords_lines.extend(read_config_lines(
-        &config_root.join("etc/portage/package.accept_keywords"),
-    )?);
+    // User-level lines validate like Portage's `user_config` reader:
+    // `eapi=None`, wildcards and repo on, build-ids on, use-dep lines
+    // dropped. Portage: KeywordsManager.py:73-104
+    let user_accept_rules = user_atom_rules(true, true);
+    accept_keywords_lines.extend(filter_atom_lines(
+        &read_config_lines_with_sources(&config_root.join("etc/portage/package.accept_keywords"))?,
+        &user_accept_rules,
+        AtomLineKind::Dict { allow_use: false },
+        WARN_RANK_KEYWORDS,
+        warnings,
+    ));
     config.package_accept_keywords = parse_package_accept_keywords_lines(&accept_keywords_lines);
     // A bare atom (empty token list) gets the implicit `~` + plain global
     // ACCEPT_KEYWORDS meaning, computed against the fully-resolved global
