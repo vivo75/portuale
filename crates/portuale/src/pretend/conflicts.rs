@@ -34,7 +34,7 @@ pub(crate) struct ClassifiedParent<'a> {
     pub(crate) use_display: &'a [(String, String)],
 }
 
-/// `atom` rendered back to `{op}{cat}/{pkg}-{ver}[-rN][*]`, optionally with
+/// `atom` rendered back to `{op}{cat}/{pkg}-{ver}[-rN][-bid][*]`, optionally with
 /// its `:slot[/sub]` -- the two forms Portage builds as
 /// `atom.without_use.without_slot` and `atom.without_use`.
 /// Portage: dep/slot_collision.py, findAtomForPackage
@@ -56,6 +56,11 @@ pub(crate) fn slot_conflict_atom_string(atom: &Atom, include_slot: bool) -> Stri
         }
         if atom.operator == Operator::EqGlob {
             s.push('*');
+        } else if let Some(bid) = &atom.build_id {
+            // S2 (review C-1): `=cat/pkg-1.0-2` prints with its build-id, like
+            // Portage's `str(atom)`.
+            s.push('-');
+            s.push_str(bid);
         }
     }
     if include_slot && let Some(slot) = &atom.slot {

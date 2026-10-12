@@ -4,15 +4,18 @@
 //!
 //! Scope cuts a caller must know:
 //! - `parse_atom` takes no extended/wildcard atoms (`*/foo-1`; see
-//!   `WildcardAtom` for the bounded variant) and no build-ids (`foo-1.0@2`).
-//! - Not EAPI-parametrized: slot operators, USE deps, `=*` and `::repo` are
-//!   always recognized.
+//!   `WildcardAtom` for the bounded variant); S3 ports the wildcard branch and
+//!   `allow_wildcard` changes nothing until then.
+//! - `parse_atom` (= `eapi=None`) accepts build-ids (`=cat/pkg-1.0-2`) and
+//!   `::repo`; `parse_atom_with` applies the caller's EAPI/flag options.
 //! - Candidates are plain strings `cat/pkg-ver[-rN][:slot[/subslot]][::repo]`,
 //!   not Package objects, so `match_from_list` never consults
 //!   `Atom::use_deps`; callers apply `use_deps_satisfied` afterwards.
 //! - A candidate without `::repo` always passes a repo constraint.
 //! - A bare atom whose name ends in something version-like (`foo-bar-2`) is
 //!   rejected as ambiguous, per PMS.
+//! - An `=` atom with a build-id matches no candidate: none carries one until
+//!   S9 threads binary build-ids in (review C-1).
 
 use portage_versions::vercmp;
 use regex::Regex;
@@ -21,23 +24,33 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+use eapi::{EapiValueError, SUPPORTED_EAPIS, eapi_attrs, eapi_is_supported};
+
 pub mod eapi;
+
+#[cfg(test)]
+mod tests_grammar;
 
 // Memoizes parse results: parsing is a pure function of the string, and the
 // resolver re-parses the same few atoms/candidates millions of times.
 // Thread-local to stay lock-free; never invalidated.
+type AtomOptsCache = HashMap<AtomOptions, HashMap<String, Result<Atom, AtomError>>>;
 thread_local! {
     static ATOM_CACHE: RefCell<HashMap<String, Option<Atom>>> = RefCell::new(HashMap::new());
     static CANDIDATE_CACHE: RefCell<HashMap<String, Option<Candidate>>> =
         RefCell::new(HashMap::new());
+    static ATOM_OPTS_CACHE: RefCell<AtomOptsCache> = RefCell::new(HashMap::new());
 }
 
 const CAT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
 // Non-greedy, like `_pkg` in lib/portage/versions.py: the following
 // `-<version>` decides where the package name ends.
 const PKG: &str = r"[A-Za-z0-9_][A-Za-z0-9+_-]*?";
-const VER: &str = r"\d+(?:\.\d+)*[a-z]?(?:_(?:pre|p|beta|alpha|rc)\d*)*";
-const SLOT: &str = r"[A-Za-z0-9][A-Za-z0-9+_.-]*";
+// Portage `_v` with every `\d` as `[0-9]`: the regex crate's `\d` is
+// Unicode-aware, but Portage compiles with `re.ASCII`.
+const VER: &str = r"[0-9]+(?:\.[0-9]+)*[a-z]?(?:_(?:pre|p|beta|alpha|rc)[0-9]*)*";
+// Portage `_slot` (`[\w][\w+.-]*`, ASCII): the leading `_` matters.
+const SLOT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
 // Portage: lib/portage/dep/__init__.py, _repo_name
 const REPO: &str = r"[A-Za-z0-9_][A-Za-z0-9_-]*";
 // Portage: lib/portage/dep/__init__.py, _useflag_re (duplicated from
@@ -144,6 +157,87 @@ pub struct Atom {
     pub use_deps: Option<Vec<UseDep>>,
     /// `::reponame` (PMS 3.1.5), `None` if absent; see `matches_repo`.
     pub repo: Option<String>,
+    /// `-<digits>` build-id tail of a versioned atom (`=cat/pkg-1.0-2`), ASCII
+    /// digits with no leading zero; Portage's int is unbounded, so the digits
+    /// are kept as a string. `None` if absent.
+    /// Portage: lib/portage/dep/__init__.py, Atom.__init__ (op arm)
+    pub build_id: Option<String>,
+    /// True for `_get_atom_wildcard_re` matches; set by S3, always false in S2.
+    pub extended: bool,
+}
+
+/// Portage `eapi=` as a `Copy` value; the original string is only needed for
+/// messages, and the caller has it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum AtomEapi {
+    #[default]
+    None,
+    Known(u8),
+    Unsupported,
+}
+
+impl AtomEapi {
+    /// `None` stays `None`; a supported spelling → `Known`, an unsupported one
+    /// → `Unsupported`; a supported spelling Portage cannot parse (`3_pre1`,
+    /// padded) → `Err` (S1's `EapiValueError`).
+    /// Portage: lib/portage/eapi.py:224-229 (`Eapi.__init__`).
+    pub fn parse(eapi: Option<&str>) -> Result<AtomEapi, EapiValueError> {
+        let Some(s) = eapi else {
+            return Ok(AtomEapi::None);
+        };
+        if !eapi_is_supported(s) {
+            return Ok(AtomEapi::Unsupported);
+        }
+        // Portage: `partition("-")[0]` checked against `ALL_EAPIS`.
+        let key = s.split_once('-').map(|(head, _)| head).unwrap_or(s);
+        if SUPPORTED_EAPIS.contains(&key) {
+            Ok(AtomEapi::Known(
+                key.parse().expect("SUPPORTED_EAPIS are digits"),
+            ))
+        } else {
+            Err(EapiValueError {
+                input: s.to_string(),
+            })
+        }
+    }
+}
+
+/// Per-context parse flags: one parser with options instead of one fixed
+/// superset. `parse_atom` is these defaults (= Portage `eapi=None`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct AtomOptions {
+    /// Portage `eapi=`.
+    pub eapi: AtomEapi,
+    /// S3 fills the wildcard branch; in S2 this changes nothing.
+    pub allow_wildcard: bool,
+    /// `None` = Portage's default rule.
+    pub allow_repo: Option<bool>,
+    /// `None` = Portage's default rule.
+    pub allow_build_id: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomErrorKind {
+    Invalid,
+    EapiIncompatible,
+    IuseMissing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtomError {
+    pub kind: AtomErrorKind,
+    pub message: String,
+}
+
+impl AtomError {
+    fn invalid(s: &str) -> AtomError {
+        // An `InvalidAtom` without a message renders as the atom string itself
+        // (that is what `str(e)` prints, oracle Q1).
+        AtomError {
+            kind: AtomErrorKind::Invalid,
+            message: s.to_string(),
+        }
+    }
 }
 
 impl Atom {
@@ -167,7 +261,7 @@ fn atom_regex() -> &'static Regex {
         // operator is `=`.
         // "repo" sits between the slot part and usedeps, as in Portage.
         Regex::new(&format!(
-            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?P<glob>\*)?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?:::(?P<repo>{REPO}))?(?P<usedeps>\[.*\])?$"
+            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})(?P<bidtail>-(?P<tailver>{VER})(?:-r(?P<tailrev>[0-9]+))?)?-(?P<ver>{VER})(?:-r(?P<rev>[0-9]+))?(?P<glob>\*)?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r[0-9]+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?:::(?P<repo>{REPO}))?(?P<usedeps>\[.*\])?$"
         ))
         .unwrap()
     })
@@ -185,20 +279,22 @@ fn use_dep_token_regex() -> &'static Regex {
 
 /// Validates the raw `[...]` text (brackets included) into `UseDep`s.
 ///
-/// Returns `None` for what Portage's `Atom` rejects: a bad token,
-/// `-flag=`/`-flag?`, or a flag whose `(+)`/`(-)` default differs between
-/// tokens of the same atom.
-fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
-    let inner = raw.strip_prefix('[')?.strip_suffix(']')?;
-    if inner.is_empty() {
-        return None;
-    }
+/// `Err(token)` for what Portage's `Atom` rejects with
+/// `Invalid use dep: '<token>'`: a bad token, `-flag=`/`-flag?`, or a flag
+/// whose `(+)`/`(-)` default differs between tokens of the same atom.
+/// Portage: lib/portage/dep/__init__.py, `_use_dep.__init__`
+fn parse_use_deps(raw: &str) -> Result<Vec<UseDep>, String> {
+    let Some(inner) = raw.strip_prefix('[').and_then(|r| r.strip_suffix(']')) else {
+        return Err(raw.to_string());
+    };
     let mut deps = Vec::new();
     // Default seen so far per flag; a later token with a different default state is invalid.
     let mut seen_defaults: std::collections::HashMap<String, Option<UseDepDefault>> =
         std::collections::HashMap::new();
     for token in inner.split(',') {
-        let caps = use_dep_token_regex().captures(token)?;
+        let Some(caps) = use_dep_token_regex().captures(token) else {
+            return Err(token.to_string());
+        };
         let flag = caps.name("flag").unwrap().as_str().to_string();
         let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
         let suffix = caps.name("suffix").map(|m| m.as_str()).unwrap_or("");
@@ -209,7 +305,8 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
             ("!", "?") => UseDepOp::IfParentDisabled,
             ("", "=") => UseDepOp::EqualParent,
             ("!", "=") => UseDepOp::OppositeParent,
-            _ => return None, // "-flag=" / "-flag?": syntactically matched, not a real operator
+            // "-flag=" / "-flag?": syntactically matched, not a real operator
+            _ => return Err(token.to_string()),
         };
         let default = match caps.name("default").map(|m| m.as_str()) {
             None => None,
@@ -220,7 +317,7 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
         match seen_defaults.entry(flag.clone()) {
             std::collections::hash_map::Entry::Occupied(e) => {
                 if *e.get() != default {
-                    return None;
+                    return Err(token.to_string());
                 }
             }
             std::collections::hash_map::Entry::Vacant(e) => {
@@ -229,7 +326,7 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
         }
         deps.push(UseDep { flag, op, default });
     }
-    Some(deps)
+    Ok(deps)
 }
 
 /// Strips the trailing `[use...]` block, leaving `cat/pkg[:slot[::repo]]`;
@@ -256,7 +353,77 @@ pub fn parse_atom(s: &str) -> Option<Atom> {
 }
 
 fn parse_atom_uncached(s: &str) -> Option<Atom> {
-    let caps = atom_regex().captures(s)?;
+    parse_atom_with_uncached(s, &AtomOptions::default(), "").ok()
+}
+
+/// Ports `Atom.__init__` with the caller's flags; `eapi_str` is the original
+/// EAPI text, used only in messages ("… in EAPI {eapi_str}").
+/// Portage: lib/portage/dep/__init__.py:1900-2153 (3.0.82.2).
+///
+/// Default rule (dep:1926-1937): `eapi` given ⇒ `allow_repo = repo_deps`
+/// (False for every EAPI 0–9), `allow_build_id = false`; `eapi = None` ⇒ both
+/// `true`. An explicit `Some(b)` always wins.
+///
+/// Post-parse checks run in Portage's order, `eapi` given only: `slot_deps`,
+/// `use_deps`, `use_dep_defaults`, then `strong_blocks`. The conditional-flag
+/// check sits between `use_dep_defaults` and `strong_blocks` in Portage; it
+/// lives in `check_conditional_flags` (it needs the owner's IUSE, which would
+/// not be hashable in the cache key). The order cannot change an observable
+/// result: strong blocks are off only in EAPI 0/1, where use deps already fail
+/// first (review I-1, proven live).
+pub fn parse_atom_with(s: &str, opts: &AtomOptions, eapi_str: &str) -> Result<Atom, AtomError> {
+    // Nested per-options map, looked up by `&str`: no allocation on a hit,
+    // and the default-options `ATOM_CACHE` above stays exactly as it is.
+    if let Some(hit) = ATOM_OPTS_CACHE.with(|c| {
+        c.borrow()
+            .get(opts)
+            .and_then(|by_string| by_string.get(s))
+            .cloned()
+    }) {
+        return hit;
+    }
+    let parsed = parse_atom_with_uncached(s, opts, eapi_str);
+    ATOM_OPTS_CACHE.with(|c| {
+        c.borrow_mut()
+            .entry(*opts)
+            .or_default()
+            .insert(s.to_string(), parsed.clone());
+    });
+    parsed
+}
+
+fn slot_plain_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // Portage `_get_slot_dep_re` without `slot_operator`: plain `_slot`.
+    RE.get_or_init(|| Regex::new(&format!(r"^{SLOT}$")).unwrap())
+}
+
+fn parse_atom_with_uncached(
+    s: &str,
+    opts: &AtomOptions,
+    eapi_str: &str,
+) -> Result<Atom, AtomError> {
+    let attrs = match opts.eapi {
+        AtomEapi::None | AtomEapi::Unsupported => {
+            // Unsupported strings take the permissive set (eapi.py:247-287).
+            eapi_attrs(None).expect("None never errs")
+        }
+        AtomEapi::Known(n) => {
+            let key = SUPPORTED_EAPIS.get(n as usize).copied().unwrap_or("10");
+            eapi_attrs(Some(key)).expect("a digit or an unsupported string never errs")
+        }
+    };
+    let allow_repo = opts.allow_repo.unwrap_or(match opts.eapi {
+        AtomEapi::None => true,
+        AtomEapi::Known(_) | AtomEapi::Unsupported => attrs.repo_deps,
+    });
+    let allow_build_id = opts
+        .allow_build_id
+        .unwrap_or(matches!(opts.eapi, AtomEapi::None));
+
+    let caps = atom_regex()
+        .captures(s)
+        .ok_or_else(|| AtomError::invalid(s))?;
 
     let blocker = match caps.name("blocker").map(|m| m.as_str()) {
         None => Blocker::None,
@@ -265,62 +432,149 @@ fn parse_atom_uncached(s: &str) -> Option<Atom> {
         Some(_) => unreachable!(),
     };
 
-    let (operator, category, package, version, revision) = if let Some(op) = caps.name("op") {
-        let operator = match caps.name("glob") {
-            // PMS 8.3.1: `*` is illegal with any operator but `=`.
-            Some(_) if op.as_str() != "=" => return None,
-            Some(_) => Operator::EqGlob,
-            None => Operator::from_str(op.as_str()),
+    let (operator, category, package, version, revision, build_id) =
+        if let Some(op) = caps.name("op") {
+            let tail = caps.name("bidtail");
+            let glob = caps.name("glob");
+            // PMS 8.3.1: `*` is illegal with any operator but `=`, and a
+            // `=*` tail is always invalid (dep:2023-2033).
+            if glob.is_some() && (op.as_str() != "=" || tail.is_some()) {
+                return Err(AtomError::invalid(s));
+            }
+            let operator = if glob.is_some() {
+                Operator::EqGlob
+            } else {
+                Operator::from_str(op.as_str())
+            };
+            // Portage's ambiguous `-vr` tail, tried before a longer package
+            // name (dep:1998-2022): when present, the version comes from the
+            // tail and the outer `-vr` is the build-id, valid only with
+            // `allow_build_id` and only as plain digits (Portage parses it
+            // with `int()`, dep:2014-2019). A leading zero is rejected.
+            let (version, revision, build_id) = match tail {
+                None => (
+                    Some(caps.name("ver").unwrap().as_str().to_string()),
+                    caps.name("rev").map(|m| m.as_str().to_string()),
+                    None,
+                ),
+                Some(_) => {
+                    if !allow_build_id {
+                        return Err(AtomError::invalid(s));
+                    }
+                    let outer = caps.name("ver").unwrap().as_str();
+                    if caps.name("rev").is_some() || !outer.bytes().all(|b| b.is_ascii_digit()) {
+                        return Err(AtomError::invalid(s));
+                    }
+                    if outer.len() > 1 && outer.starts_with('0') {
+                        return Err(AtomError::invalid(s));
+                    }
+                    (
+                        Some(caps.name("tailver").unwrap().as_str().to_string()),
+                        caps.name("tailrev").map(|m| m.as_str().to_string()),
+                        Some(outer.to_string()),
+                    )
+                }
+            };
+            (
+                operator,
+                caps.name("vcat").unwrap().as_str().to_string(),
+                caps.name("vpkg").unwrap().as_str().to_string(),
+                version,
+                revision,
+                build_id,
+            )
+        } else {
+            // Ambiguous per PMS (`foo-bar-2`).
+            // Portage: lib/portage/dep/__init__.py, Atom.__init__
+            if caps.name("ambiguous").is_some() {
+                return Err(AtomError::invalid(s));
+            }
+            (
+                Operator::None,
+                caps.name("cat").unwrap().as_str().to_string(),
+                caps.name("pkg").unwrap().as_str().to_string(),
+                None,
+                None,
+                None,
+            )
         };
-        (
-            operator,
-            caps.name("vcat").unwrap().as_str().to_string(),
-            caps.name("vpkg").unwrap().as_str().to_string(),
-            Some(caps.name("ver").unwrap().as_str().to_string()),
-            caps.name("rev").map(|m| m.as_str().to_string()),
-        )
-    } else {
-        // Ambiguous per PMS (`foo-bar-2`).
-        // Portage: lib/portage/dep/__init__.py, Atom.__init__
-        if caps.name("ambiguous").is_some() {
-            return None;
-        }
-        (
-            Operator::None,
-            caps.name("cat").unwrap().as_str().to_string(),
-            caps.name("pkg").unwrap().as_str().to_string(),
-            None,
-            None,
-        )
-    };
 
     // A bare trailing ":" matches the regex but is invalid.
-    let (slot, sub_slot, slot_operator) = (match caps.name("slotpart") {
-        None => Some((None, None, None)),
-        Some(m) if m.as_str().is_empty() => None,
+    let (slot, sub_slot, slot_operator) = match caps.name("slotpart") {
+        None => (None, None, None),
+        Some(m) if m.as_str().is_empty() => return Err(AtomError::invalid(s)),
         Some(_) => {
-            let slot = caps.name("slot").map(|m| m.as_str().to_string());
-            let sub_slot = caps.name("subslot").map(|m| m.as_str().to_string());
-            let slot_operator = match caps.name("slotop").map(|m| m.as_str()) {
-                None => None,
-                // An explicit slot combined with "*" is invalid.
-                Some("*") if slot.is_some() => return None,
-                Some("*") => Some(SlotOperator::Star),
-                Some("=") => Some(SlotOperator::Equals),
-                Some(_) => unreachable!(),
-            };
-            Some((slot, sub_slot, slot_operator))
+            if attrs.slot_operator {
+                let slot = caps.name("slot").map(|m| m.as_str().to_string());
+                let sub_slot = caps.name("subslot").map(|m| m.as_str().to_string());
+                let slot_operator = match caps.name("slotop").map(|m| m.as_str()) {
+                    None => None,
+                    // An explicit slot combined with "*" is invalid.
+                    Some("*") if slot.is_some() => return Err(AtomError::invalid(s)),
+                    Some("*") => Some(SlotOperator::Star),
+                    Some("=") => Some(SlotOperator::Equals),
+                    Some(_) => unreachable!(),
+                };
+                // Both parts are optional, so an empty match is possible.
+                if slot.is_none() && slot_operator.is_none() {
+                    return Err(AtomError::invalid(s));
+                }
+                (slot, sub_slot, slot_operator)
+            } else {
+                // Portage `_get_slot_dep_re` without `slot_operator`: the whole
+                // text must be a plain slot, so `:0/1` and `:0=` are bare
+                // `InvalidAtom`s here.
+                let text = caps.name("slotpart").unwrap().as_str();
+                if !slot_plain_re().is_match(text) {
+                    return Err(AtomError::invalid(s));
+                }
+                (Some(text.to_string()), None, None)
+            }
         }
-    })?;
+    };
 
     let use_deps = match caps.name("usedeps") {
         None => None,
-        Some(m) => Some(parse_use_deps(m.as_str())?),
+        Some(m) => Some(parse_use_deps(m.as_str()).map_err(|token| AtomError {
+            kind: AtomErrorKind::Invalid,
+            message: format!("Invalid use dep: '{token}'"),
+        })?),
     };
 
     let repo = caps.name("repo").map(|m| m.as_str().to_string());
+    if repo.is_some() && !allow_repo {
+        return Err(AtomError::invalid(s));
+    }
 
-    Some(Atom {
+    if !matches!(opts.eapi, AtomEapi::None) {
+        if slot.is_some() && !attrs.slot_deps {
+            return Err(AtomError {
+                kind: AtomErrorKind::EapiIncompatible,
+                message: format!("Slot deps are not allowed in EAPI {eapi_str}: '{s}'"),
+            });
+        }
+        if let Some(deps) = &use_deps {
+            if !attrs.use_deps {
+                return Err(AtomError {
+                    kind: AtomErrorKind::EapiIncompatible,
+                    message: format!("Use deps are not allowed in EAPI {eapi_str}: '{s}'"),
+                });
+            } else if !attrs.use_dep_defaults && deps.iter().any(|d| d.default.is_some()) {
+                return Err(AtomError {
+                    kind: AtomErrorKind::EapiIncompatible,
+                    message: format!("Use dep defaults are not allowed in EAPI {eapi_str}: '{s}'"),
+                });
+            }
+        }
+        if blocker == Blocker::Strong && !attrs.strong_blocks {
+            return Err(AtomError {
+                kind: AtomErrorKind::EapiIncompatible,
+                message: format!("Strong blocks are not allowed in EAPI {eapi_str}: '{s}'"),
+            });
+        }
+    }
+
+    Ok(Atom {
         blocker,
         operator,
         category,
@@ -332,7 +586,148 @@ fn parse_atom_uncached(s: &str) -> Option<Atom> {
         slot_operator,
         use_deps,
         repo,
+        build_id,
+        extended: false,
     })
+}
+
+/// Portage `Atom.__init__`'s conditional-flag check (dep:2125-2144): every
+/// conditional use-dep flag (`?`/`=` forms) must be valid in the owner's IUSE.
+/// Runs only when `eapi` is given (with `eapi=None` Portage skips it); kept
+/// separate from `parse_atom_with` so the cache key stays hashable.
+///
+/// Conditional types are visited in first-occurrence order (Portage iterates
+/// `self.use.conditional`, a dict keyed by type); within one type the first
+/// invalid flag in sorted order is reported (Portage iterates a set there, so
+/// its pick among several is arbitrary — a deliberate micro-cut).
+pub fn check_conditional_flags(
+    atom: &Atom,
+    eapi: AtomEapi,
+    is_valid_flag: &dyn Fn(&str) -> bool,
+) -> Result<(), AtomError> {
+    if matches!(eapi, AtomEapi::None) {
+        return Ok(());
+    }
+    let Some(deps) = &atom.use_deps else {
+        return Ok(());
+    };
+    let mut order: Vec<&str> = Vec::new();
+    let mut by_type: HashMap<&str, Vec<&str>> = HashMap::new();
+    for ud in deps {
+        let (cond_type, cond_str) = match ud.op {
+            UseDepOp::IfParentEnabled => ("enabled", "?"),
+            UseDepOp::IfParentDisabled => ("disabled", "!?"),
+            UseDepOp::EqualParent => ("equal", "="),
+            UseDepOp::OppositeParent => ("not_equal", "!="),
+            UseDepOp::Enabled | UseDepOp::Disabled => continue,
+        };
+        let _ = cond_str;
+        if !by_type.contains_key(cond_type) {
+            order.push(cond_type);
+        }
+        by_type.entry(cond_type).or_default().push(ud.flag.as_str());
+    }
+    for cond_type in order {
+        let mut flags = by_type[cond_type].clone();
+        flags.sort_unstable();
+        for flag in flags {
+            if !is_valid_flag(flag) {
+                let conditional = match cond_type {
+                    "enabled" => format!("{flag}?"),
+                    "disabled" => format!("!{flag}?"),
+                    "equal" => format!("{flag}="),
+                    _ => format!("!{flag}="),
+                };
+                return Err(AtomError {
+                    kind: AtomErrorKind::IuseMissing,
+                    message: format!(
+                        "USE flag '{flag}' referenced in conditional '{conditional}' \
+                         in atom '{}' is not in IUSE",
+                        render_atom(atom),
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Rebuilds the atom text Portage prints for `str(atom)` (which is the
+/// original string): blocker, operator, `cp-ver[-rN][-bid]`, slot, repo, use.
+fn render_atom(atom: &Atom) -> String {
+    let mut out = String::new();
+    match atom.blocker {
+        Blocker::None => {}
+        Blocker::Weak => out.push('!'),
+        Blocker::Strong => out.push_str("!!"),
+    }
+    out.push_str(atom.operator.as_str());
+    out.push_str(&atom.category);
+    out.push('/');
+    out.push_str(&atom.package);
+    if let Some(v) = &atom.version {
+        out.push('-');
+        out.push_str(v);
+        if let Some(r) = &atom.revision {
+            out.push_str("-r");
+            out.push_str(r);
+        }
+        if atom.operator == Operator::EqGlob {
+            out.push('*');
+        } else if let Some(bid) = &atom.build_id {
+            out.push('-');
+            out.push_str(bid);
+        }
+    }
+    if let Some(slot) = &atom.slot {
+        out.push(':');
+        out.push_str(slot);
+        if let Some(sub) = &atom.sub_slot {
+            out.push('/');
+            out.push_str(sub);
+        }
+        match atom.slot_operator {
+            None => {}
+            Some(SlotOperator::Star) => out.push('*'),
+            Some(SlotOperator::Equals) => out.push('='),
+        }
+    } else if let Some(sop) = &atom.slot_operator {
+        out.push(':');
+        match sop {
+            SlotOperator::Star => out.push('*'),
+            SlotOperator::Equals => out.push('='),
+        }
+    }
+    if let Some(repo) = &atom.repo {
+        out.push_str("::");
+        out.push_str(repo);
+    }
+    if let Some(deps) = &atom.use_deps {
+        out.push('[');
+        out.push_str(
+            &deps
+                .iter()
+                .map(|ud| {
+                    let default = match ud.default {
+                        None => "",
+                        Some(UseDepDefault::Enabled) => "(+)",
+                        Some(UseDepDefault::Disabled) => "(-)",
+                    };
+                    match ud.op {
+                        UseDepOp::Enabled => format!("{}{default}", ud.flag),
+                        UseDepOp::Disabled => format!("-{}{default}", ud.flag),
+                        UseDepOp::IfParentEnabled => format!("{}{default}?", ud.flag),
+                        UseDepOp::IfParentDisabled => format!("!{}{default}?", ud.flag),
+                        UseDepOp::EqualParent => format!("{}{default}=", ud.flag),
+                        UseDepOp::OppositeParent => format!("!{}{default}=", ud.flag),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        out.push(']');
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,7 +755,7 @@ fn candidate_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r"^(?P<cat>{CAT})/(?P<pkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?::(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?:::(?P<repo>{REPO}))?$"
+            r"^(?P<cat>{CAT})/(?P<pkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>[0-9]+))?(?::(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?:::(?P<repo>{REPO}))?$"
         ))
         .unwrap()
     })
@@ -419,7 +814,18 @@ fn glob_compare_string(version: &str, revision: &Option<String>) -> String {
 fn matches_version(atom: &Atom, candidate: &Candidate) -> bool {
     match atom.operator {
         Operator::None => true,
-        Operator::Eq => vercmp(&candidate.full_version(), &atom.full_version().unwrap()) == Some(0),
+        Operator::Eq => {
+            // S2 (review C-1): an `=` atom with a build-id matches no
+            // candidate without one — every portuale candidate models
+            // Portage's `_pkg_str`/`Package`, and none carries a build-id
+            // until S9 threads binary build-ids in. S9 adds the positive
+            // equal-build-id match.
+            // Portage: lib/portage/dep/__init__.py:2994-3008.
+            if atom.build_id.is_some() {
+                return false;
+            }
+            vercmp(&candidate.full_version(), &atom.full_version().unwrap()) == Some(0)
+        }
         // `=*` is a literal prefix match, not vercmp, but only at a component
         // boundary: "1*" must not match "10".
         // Portage: lib/portage/dep/__init__.py, match_from_list

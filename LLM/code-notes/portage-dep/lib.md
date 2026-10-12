@@ -3,8 +3,8 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 
 ## module
 - Owner, 2026-10-10: the grammar scope cut below is temporary. The target is the full grammar of each supported EAPI, applied per ebuild according to its declared EAPI (backlog #341).
+- S2 (#341) closed two cuts: build-ids (`=cat/pkg-1.0-2`, via `Atom.build_id` + `AtomOptions.allow_build_id`) and EAPI parametrization of the strict grammar (`parse_atom_with` + `AtomEapi`, EAPI gates verbatim from `Atom.__init__`). Still open: the wildcard branch (`allow_wildcard` changes nothing; S3 fills it).
 - Origin: the "atom matching" slice from LLM/agent-context.md's depgraph/config resolution follow-up work. Ports `portage.dep.Atom` and `portage.dep.match_from_list` (lib/portage/dep/__init__.py).
-- Scope cut vs. the Portage grammar (PMS chapter 8): no extended/wildcard atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), no EAPI parametrization (Portage's grammar changes shape per EAPI; slot-operator support is EAPI 5+, but nothing here is EAPI-parametrized, so it is always recognized, like every other EAPI-gated feature already ported).
 - The Python harness (python/atom_harness.py) explicitly rejected atoms using the still-excluded features as INVALID, so both sides agreed on the same input language rather than Rust silently accepting a narrower one. (The bounded wildcard-atom API further down the file, for package.mask/.unmask/.accept_keywords matching only, does not change any of this.) NOTE: the Python mirror no longer exists (see AGENTS.md rule 4).
 - Slot operators (`:=`, `:*`, `:slot=` -- PMS 8.3.3): see `SlotOperator`, `atom_regex` (two-stage parse mirroring Portage's `_get_atom_re`/`_get_slot_dep_re` split) and `matches_slot` (matching needed zero changes: Portage's `_match_slot` ignores `slot_operator` entirely and consults only `Atom.slot`/`.sub_slot`, both already modeled correctly before slot operators existed).
 - History: adding slot operators closed a real, previously-silent bug in `portage-repo`'s dependency recursion: any DEPEND/RDEPEND token using a slot operator (extremely common, e.g. `dev-libs/foo:0=`) failed to parse under the old grammar and was silently dropped from the graph entirely -- no entry, no `NoVisibleCandidate`, no warning -- because `resolve_pretend_graph`'s BFS loop treats a parse failure as "not a dependency at all" (`let Some(atom) = parse_atom(..) else { continue };`), not as an unresolvable one.
@@ -19,6 +19,38 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 
 ## const / thread_local (parse caches)
 - A single `emerge -puD` on a live tree calls `parse_atom`/`parse_candidate` tens of millions of times, almost always on an already-parsed string (the same handful of `package.*` config atoms and candidate `cat/pkg-ver:slot::repo` strings, re-checked once per package per graph-walk visit). Both parsers run a ~15-group backtracking regex, which `perf` put at ~65% of the whole run. A thread-local memo table makes a hit one hash lookup + one clone of the small parsed struct. Thread-local rather than a locked global so the parse path stays lock-free; the resolver is single-threaded, other threads get their own table. See docs/performances-tuning.md.
+- S2 (#341): the default-options cache is untouched (still `HashMap<String, Option<Atom>>` looked up by `&str`, no allocation on a hit); non-default options use a nested `HashMap<AtomOptions, HashMap<String, Result<Atom, AtomError>>>`, also looked up by `&str`. `AtomOptions` is `Copy` (the EAPI is the small `AtomEapi` enum) so the outer key never allocates. `std` has no borrowed tuple-key lookup on stable and no new deps are allowed, hence the nesting (review M-6/I-4).
+
+## const VER
+- ASCII `[0-9]`, not `\d`: the `regex` crate's `\d` matches Unicode digits (so `=dev-libs/foo-١` parsed), but Portage compiles every atom regex with `re.ASCII` (oracle Q4). Same for the two `-r[0-9]+` revision groups.
+
+## const SLOT
+- Leading `_` accepted (`[A-Za-z0-9_]` first char): Portage `_slot` is `([\w][\w+.-]*)` under `re.ASCII`, so `\w` includes `_` (oracle Q4: `dev-libs/foo:_a` parses).
+
+## enum AtomEapi
+- Portage `eapi=` as a `Copy` value (`None` / `Known(u8)` / `Unsupported`); the original string lives with the caller and is passed as `eapi_str` only for messages. `parse` mirrors `Eapi.__init__` (`partition("-")[0]` against `ALL_EAPIS`): unsupported → `Unsupported`, supported-but-unparseable (`3_pre1`, padded) → `Err` (S1's `EapiValueError`; Portage raises `ValueError`, eapi.py:224-229). Never splits on `_`.
+
+## struct AtomOptions
+- One parser with options instead of one fixed superset (#341 architecture). Default rule verbatim from dep:1926-1937: `eapi` given ⇒ `allow_repo = repo_deps` (False for every EAPI 0–9), `allow_build_id = false`; `eapi = None` ⇒ both true; explicit `Some(b)` always wins (profile readers rely on it). `parse_atom` is the defaults (= Portage `eapi=None`).
+
+## enum AtomErrorKind / struct AtomError
+- Portage `InvalidAtom`'s category mapped: none → `Invalid`, `EAPI.incompatible` → `EapiIncompatible`, `IUSE.missing` → `IuseMissing`. A messageless `InvalidAtom` renders as the atom string itself (`str(e)`).
+
+## struct Atom
+- `use_deps`: `foo[]` is invalid, same as Portage. Original doc said "never consulted by matching -- see the module doc comment" (true of `match_from_list`; `use_deps_satisfied` is the explicit second step).
+- `build_id` (#341 S2): the ambiguous `-vr` tail of a versioned atom as a digit string (Portage's int is unbounded: `=dev-libs/foo-1.0-18446744073709551616` parses, live). `extended`: always false until S3 fills the wildcard branch.
+
+## fn parse_atom_with
+- Transcription of `Atom.__init__` (dep:1900-2153), keeping the crate's two-stage shape (permissive outer regex, validated slot/use stages). The op branch carries Portage's ambiguous tail as `bidtail` + outer `-vr`, tried before a longer package name (the regex backtracking order is the semantics: `<a/1-1-02-1.0` is a leading-zero build-id ERR, not package `1-1-02-1` version `0` — found by the S2 fuzz acceptance, 1 in 60k). `=*` with a tail is always invalid (dep:2023-2033); `=*` with an operator other than `=` is rejected outright (PMS 8.3.1 "an asterisk used with any other operator is illegal": `>=cat/pkg-1.2*` is invalid, not truncated); the simple branch tail is always invalid (`foo-bar-2` ambiguity). Slot parsing follows `_get_slot_dep_re` per `attrs.slot_operator` (without it the whole text must be a plain slot, so `:0/1`/`:0=` are bare `InvalidAtom`s). EAPI gates only when `eapi` is given, in Portage's order (`slot_deps`, `use_deps`, `use_dep_defaults`, `strong_blocks`; messages verbatim with the caller's `eapi_str`). The conditional-flag check is `check_conditional_flags`, not here: it needs the owner's IUSE, which is not hashable for the cache key — and the order is unobservable anyway (strong blocks are off only in EAPI 0/1, where use deps already fail first; review I-1, proven live).
+
+## fn check_conditional_flags
+- Portage dep:2125-2144: conditional use-dep flags vs `is_valid_flag`, gated on `eapi is not None`. Types visited in first-occurrence order (Portage iterates the `conditional` dict); within one type the first flag in sorted order is reported (Portage iterates a set there — its pick among several invalid flags is arbitrary; deliberate micro-cut). The message's atom text comes from `render_atom` (Portage prints `str(atom)`, which is the original string).
+
+## fn render_atom
+- Private rebuild of the text Portage prints for `str(atom)` (original string): blocker, operator, `cp-ver[-rN][-bid]`, slot, repo, use (tokens in `prefix+flag+default+suffix` order). Only reader is `check_conditional_flags`; Step 6 audit (`pretend/conflicts.rs` gained `-bid`; every other `format!` site builds candidate/entry strings, not atom text, or operates on the raw token).
+
+## fn matches_version
+- `Eq` + `build_id.is_some()` matches nothing (review C-1): every portuale candidate models `_pkg_str`/`Package` and none carries a build-id until S9 threads binary build-ids in; without this a `package.mask` line `=dev-libs/foo-1.0-2` would mask every `foo-1.0` (dep:2994-3008, oracle `probe_match.py`). `>=`/`<`/`~` ignore the build-id, like Portage.
 
 ## const PKG
 - Non-greedy like Python's `_pkg` in lib/portage/versions.py, e.g. "utf8-scanner-1.0" splits as pkg="utf8-scanner", version="1.0".
@@ -65,8 +97,7 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 - Cut at the first `[` mirrors dep/__init__.py:1792 `s.index("[")` (the same as the `find('[')` used here).
 
 ## fn parse_atom_uncached
-- `=*` with an operator other than `=`: PMS 8.3.1 "an asterisk used with any other operator is illegal" -- e.g. `>=cat/pkg-1.2*` must be rejected outright, not truncated to `>=cat/pkg-1.2` or accepted as a glob under the wrong operator.
-- Ambiguity check mirrors `Atom.__init__`'s check on the "simple" branch's trailing optional "-<version>" group in lib/portage/dep/__init__.py.
+- Default-options body: `parse_atom_with_uncached` with `AtomOptions::default()`, `Err` → `None`. `parse_atom` (= `eapi=None`) therefore accepts build-ids and `::repo`, like Portage.
 - Empty "slotpart": a bare trailing ":" is syntactically matched (slot and operator sub-groups are individually optional) but explicitly invalid per PMS/`Atom.__init__` (see atom_regex).
 - "*" with an explicit slot is invalid: "*" means "any slot", meaningless alongside a specific one (`Atom.__init__`'s corresponding check).
 
