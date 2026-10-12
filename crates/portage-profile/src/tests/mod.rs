@@ -83,6 +83,7 @@ fn with_test_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
     }
 }
 
+mod atom_lines;
 mod binrepo;
 mod env_layer;
 mod fingerprints;

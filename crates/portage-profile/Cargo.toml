@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+portage-dep = { path = "../portage-dep" }
 portage-util = { path = "../portage-util" }
 regex = "1"
 

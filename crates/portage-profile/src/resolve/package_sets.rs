@@ -8,12 +8,27 @@ pub(crate) fn fold_package_sets(
     config: &mut Config,
     all_repos: &[(String, PathBuf)],
     config_root: &Path,
+    warnings: &mut Vec<ProfileWarning>,
 ) -> Result<(), Error> {
     // @system: every level's `packages` stacked with `-atom` removal; only
     // `*`-prefixed lines (stripped) contribute. Portage: PackagesSystemSet
+    //
+    // Each node's file validates first with its own rules (a leading `*`
+    // is stripped before parsing, kept after); `package.provided` below is
+    // a CPV list Portage validates differently (S8 family): untouched here.
+    let repo_rules = repo_rules_for(all_repos, warnings);
     let mut packages_sources: Vec<Vec<String>> = Vec::new();
     for level in chain {
-        packages_sources.push(read_config_lines(&level.join("packages"))?);
+        let rules = rules_for_node(level, all_repos, &repo_rules)?;
+        packages_sources.push(filter_atom_lines(
+            &read_config_lines_with_sources(&level.join("packages"))?,
+            &rules,
+            AtomLineKind::File {
+                packages_file: true,
+            },
+            WARN_RANK_PACKAGES,
+            warnings,
+        ));
     }
     config.system_packages = stack_mask_lines(&packages_sources)
         .into_iter()

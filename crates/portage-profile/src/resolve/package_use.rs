@@ -5,37 +5,70 @@ use crate::resolve::*;
 /// The values [`fold_package_use`] reads from its caller.
 pub(crate) struct FoldPackageUseArgs<'a> {
     pub(crate) main_repo_location: &'a Path,
+    pub(crate) main_repo_name: &'a str,
     pub(crate) overlay_repos: &'a [(String, PathBuf)],
     pub(crate) chain: &'a [PathBuf],
     pub(crate) config_root: &'a Path,
     pub(crate) config: &'a mut Config,
     pub(crate) scalars: &'a HashMap<String, String>,
     pub(crate) eroot: &'a Path,
+    pub(crate) warnings: &'a mut Vec<ProfileWarning>,
 }
 
 /// `package.use` from repos, profiles and the user, plus the FEATURES=test and env.d USE.
 pub(crate) fn fold_package_use(args: FoldPackageUseArgs<'_>) -> Result<(), Error> {
     let FoldPackageUseArgs {
         main_repo_location,
+        main_repo_name,
         overlay_repos,
         chain,
         config_root,
         config,
         scalars,
         eroot,
+        warnings,
     } = args;
     // package.use: three sources into three fields at three USE_ORDER positions
     // (repo `::repo`-scoped, profile-chain, user-level with USE_EXPAND shorthand).
     // Purely additive; parsed independently. Portage: UseManager
-    let mut repo_use_lines: Vec<String> =
-        read_config_lines(&main_repo_location.join("profiles/package.use"))?;
+    //
+    // Repo and chain lines validate first (node rules, use dropped, no
+    // wildcards); the user file is S6 scope and stays raw. Chain lines were
+    // already validated (and warned) in `load_scalar_layers`: identical
+    // warnings dedupe at the end of `resolve_config`.
+    let all_repos: Vec<(String, PathBuf)> =
+        std::iter::once((main_repo_name.to_string(), main_repo_location.to_path_buf()))
+            .chain(overlay_repos.iter().cloned())
+            .collect();
+    let repo_rules = repo_rules_for(&all_repos, warnings);
+    let dict = AtomLineKind::Dict { allow_use: false };
+    let mut repo_use_lines: Vec<String> = filter_atom_lines(
+        &read_config_lines_with_sources(&main_repo_location.join("profiles/package.use"))?,
+        &repo_file_rules(&repo_rules, main_repo_name),
+        dict,
+        WARN_RANK_USE,
+        warnings,
+    );
     for (repo_name, repo_location) in overlay_repos {
-        let overlay_use_lines = read_config_lines(&repo_location.join("profiles/package.use"))?;
+        let overlay_use_lines = filter_atom_lines(
+            &read_config_lines_with_sources(&repo_location.join("profiles/package.use"))?,
+            &repo_file_rules(&repo_rules, repo_name),
+            dict,
+            WARN_RANK_USE,
+            warnings,
+        );
         repo_use_lines.extend(scope_repo_package_use_lines(&overlay_use_lines, repo_name));
     }
     let mut profile_use_lines: Vec<String> = Vec::new();
     for level in chain {
-        profile_use_lines.extend(read_config_lines(&level.join("package.use"))?);
+        let rules = rules_for_node(level, &all_repos, &repo_rules)?;
+        profile_use_lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&level.join("package.use"))?,
+            &rules,
+            dict,
+            WARN_RANK_USE,
+            warnings,
+        ));
     }
     let user_use_lines = read_config_lines(&config_root.join("etc/portage/package.use"))?;
     config.package_use_repo = parse_package_use_lines(&repo_use_lines, false);

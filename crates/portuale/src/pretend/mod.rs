@@ -168,10 +168,22 @@ pub fn run(args: &[String]) -> ExitCode {
     let (repos, mut config) = match load_repos_and_config(&config_root, &root) {
         Ok(loaded) => loaded,
         Err(message) => {
-            eprintln!("emerge: {message}");
+            // Profile-layer errors already carry their Portage `!!!`
+            // framing (see `portage_profile::Error`); print those verbatim.
+            if message.starts_with("!!!") {
+                eprintln!("{message}");
+            } else {
+                eprintln!("emerge: {message}");
+            }
             return ExitCode::from(1);
         }
     };
+    // Config-load warnings (`--- Invalid atom …`): stderr, once each, at
+    // config-load position, i.e. before `Calculating dependencies`.
+    // Portage: writemsg(…, noiselevel=-1) during config load (owner Q2+Q3).
+    for warning in &config.config_warnings {
+        eprintln!("{warning}");
+    }
 
     // `EMERGE_DEFAULT_OPTS` prepends to argv so argv wins for last-wins options.
     // Portage: _emerge/main.py

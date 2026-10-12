@@ -30,6 +30,13 @@ pub struct UseMaskForceLevel {
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub use_flags: HashSet<String>,
+    /// Portage config-load warnings (`--- Invalid atom …`, the layout
+    /// `SyntaxWarning`, …) in file-read order, each exactly once (owner
+    /// Q3: no mtimedb-miss doubling, no user-profile re-read doubling).
+    /// The CLI prints them to stderr at config-load position, before
+    /// `Calculating dependencies`.
+    // Portage: writemsg(…, noiselevel=-1) during config load
+    pub config_warnings: Vec<String>,
     /// Raw `USE=` values from every profile `make.defaults` (chain
     /// order). A hand-built `Config` must set this, `conf_use_tokens`
     /// and `use_flags` together; `resolve_config` keeps them in sync.

@@ -64,6 +64,12 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         .map(|(name, _)| name.clone())
         .collect();
 
+    // Profile atom warnings, collected per file above: Portage order is by
+    // manager (`packages`, `package.use`, `package.accept_keywords`,
+    // `package.mask`), not by this fold order, so stable-sort by rank; files
+    // read twice (chain `package.use`) warn twice identically, and Portage
+    // prints each warning once (owner Q3), so dedupe exactly.
+    let mut warnings: Vec<ProfileWarning> = Vec::new();
     let LoadScalarLayersOut {
         chain,
         level_scalar_deltas,
@@ -76,6 +82,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         all_repos: &all_repos,
         repo_aliases,
         parent_colon_repos: &parent_colon_repos,
+        warnings: &mut warnings,
     })?;
 
     // The process environment's `USE_ORDER` layer, over profile chain + make.conf.
@@ -98,25 +105,42 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         chain: &chain,
         config_root,
         config: &mut config,
+        warnings: &mut warnings,
     })?;
 
     fold_package_use(FoldPackageUseArgs {
         main_repo_location,
+        main_repo_name,
         overlay_repos,
         chain: &chain,
         config_root,
         config: &mut config,
         scalars: &scalars,
         eroot,
+        warnings: &mut warnings,
     })?;
 
     fold_package_env(config_root, &mut config, &scalars)?;
 
-    fold_package_use_force_mask(main_repo_location, overlay_repos, &chain, &mut config)?;
+    fold_package_use_force_mask(FoldPackageUseForceMaskArgs {
+        main_repo_location,
+        main_repo_name,
+        overlay_repos,
+        chain: &chain,
+        config: &mut config,
+        warnings: &mut warnings,
+    })?;
 
-    use_mask_force_levels(main_repo_location, overlay_repos, &chain, &mut config)?;
+    use_mask_force_levels(UseMaskForceLevelsArgs {
+        main_repo_location,
+        main_repo_name,
+        overlay_repos,
+        chain: &chain,
+        config: &mut config,
+        warnings: &mut warnings,
+    })?;
 
-    fold_package_sets(&chain, &mut config, &all_repos, config_root)?;
+    fold_package_sets(&chain, &mut config, &all_repos, config_root, &mut warnings)?;
 
     fold_licenses_and_accepts(&all_repos, config_root, &mut config, &scalars)?;
 
@@ -178,6 +202,15 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
     // config is complete (the backtrack loop mutates only `autounmask_use`).
     config.use_context_base = Some(use_context_base_fingerprint(&config));
     config.is_visible_base = Some(is_visible_base_fingerprint(&config));
+
+    // Profile atom warnings, Portage-ordered and printed once (owner Q3):
+    // stable rank sort keeps file-read order within a rank; identical
+    // (rank, text) pairs (files read twice, e.g. chain `package.use`)
+    // collapse to the first occurrence.
+    let mut seen = std::collections::HashSet::new();
+    warnings.retain(|w| seen.insert((w.rank, w.text.clone())));
+    warnings.sort_by_key(|w| w.rank);
+    config.config_warnings = warnings.into_iter().map(|w| w.text).collect();
 
     Ok(config)
 }

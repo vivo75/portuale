@@ -43,6 +43,7 @@ use std::path::{Path, PathBuf};
 
 mod phase_environ;
 
+mod atom_lines;
 mod binrepo;
 mod config;
 mod env_layer;
@@ -58,6 +59,7 @@ mod resolve;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use atom_lines::*;
 pub use binrepo::*;
 pub use config::*;
 pub use env_layer::*;
@@ -100,6 +102,11 @@ pub enum Error {
         parents_file: String,
         repo_name: String,
     },
+    /// A profile node's `eapi` file holds an unsupported EAPI: Portage's
+    /// `ParseError`, which empties the whole profile list and aborts the
+    /// run. `Display` already carries the `!!!` framing, so the CLI prints
+    /// it verbatim (no `emerge: ` prefix).
+    UnsupportedProfileEapi { eapi: String, path: String },
 }
 
 impl std::fmt::Display for Error {
@@ -126,6 +133,16 @@ impl std::fmt::Display for Error {
                 f,
                 "parent {parent:?} not found: {parents_file} (no repo named {repo_name:?})"
             ),
+            Error::UnsupportedProfileEapi { eapi, path } => {
+                write!(
+                    f,
+                    "!!! ParseError: Profile contains unsupported EAPI '{eapi}': '{path}'\n\
+                     !!! Your current profile is invalid. If you have just changed your profile\n\
+                     !!! configuration, you should revert back to the previous configuration.\n\
+                     !!! Allowed actions are limited to --help, --info, --search, --sync, and\n\
+                     !!! --version."
+                )
+            }
         }
     }
 }

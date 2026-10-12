@@ -2,31 +2,89 @@
 
 use crate::resolve::*;
 
+/// The values [`fold_package_use_force_mask`] reads from its caller.
+pub(crate) struct FoldPackageUseForceMaskArgs<'a> {
+    pub(crate) main_repo_location: &'a Path,
+    pub(crate) main_repo_name: &'a str,
+    pub(crate) overlay_repos: &'a [(String, PathBuf)],
+    pub(crate) chain: &'a [PathBuf],
+    pub(crate) config: &'a mut Config,
+    pub(crate) warnings: &'a mut Vec<ProfileWarning>,
+}
+
 /// package.use.force/mask and their stable variants, repo and profile levels.
 pub(crate) fn fold_package_use_force_mask(
-    main_repo_location: &Path,
-    overlay_repos: &[(String, PathBuf)],
-    chain: &[PathBuf],
-    config: &mut Config,
+    args: FoldPackageUseForceMaskArgs<'_>,
 ) -> Result<(), Error> {
+    let FoldPackageUseForceMaskArgs {
+        main_repo_location,
+        main_repo_name,
+        overlay_repos,
+        chain,
+        config,
+        warnings,
+    } = args;
     // package.use.mask/.force: repo-level (every repo, `::repo`-scoped like
     // package.use) plus every profile level's file -- no user-level source.
     // No masters merge at load (Portage only consults masters per-package
     // later); specificity ordering decides at application time.
     // Portage: UseManager
-    let mut use_force_lines: Vec<String> =
-        read_config_lines(&main_repo_location.join("profiles/package.use.force"))?;
-    let mut use_mask_lines: Vec<String> =
-        read_config_lines(&main_repo_location.join("profiles/package.use.mask"))?;
+    //
+    // Every source validates first (use dropped, no wildcards); Portage
+    // reads all of them with `allow_use=False` and the profile flags.
+    let all_repos: Vec<(String, PathBuf)> =
+        std::iter::once((main_repo_name.to_string(), main_repo_location.to_path_buf()))
+            .chain(overlay_repos.iter().cloned())
+            .collect();
+    let repo_rules = repo_rules_for(&all_repos, warnings);
+    let dict = AtomLineKind::Dict { allow_use: false };
+    let mut use_force_lines: Vec<String> = filter_atom_lines(
+        &read_config_lines_with_sources(&main_repo_location.join("profiles/package.use.force"))?,
+        &repo_file_rules(&repo_rules, main_repo_name),
+        dict,
+        WARN_RANK_USE,
+        warnings,
+    );
+    let mut use_mask_lines: Vec<String> = filter_atom_lines(
+        &read_config_lines_with_sources(&main_repo_location.join("profiles/package.use.mask"))?,
+        &repo_file_rules(&repo_rules, main_repo_name),
+        dict,
+        WARN_RANK_USE,
+        warnings,
+    );
     for (repo_name, repo_location) in overlay_repos {
-        let overlay_force = read_config_lines(&repo_location.join("profiles/package.use.force"))?;
-        use_force_lines.extend(scope_repo_package_use_lines(&overlay_force, repo_name));
-        let overlay_mask = read_config_lines(&repo_location.join("profiles/package.use.mask"))?;
-        use_mask_lines.extend(scope_repo_package_use_lines(&overlay_mask, repo_name));
+        for (file, lines) in [
+            ("package.use.force", &mut use_force_lines),
+            ("package.use.mask", &mut use_mask_lines),
+        ] {
+            lines.extend(scope_repo_package_use_lines(
+                &filter_atom_lines(
+                    &read_config_lines_with_sources(&repo_location.join("profiles").join(file))?,
+                    &repo_file_rules(&repo_rules, repo_name),
+                    dict,
+                    WARN_RANK_USE,
+                    warnings,
+                ),
+                repo_name,
+            ));
+        }
     }
     for level in chain {
-        use_force_lines.extend(read_config_lines(&level.join("package.use.force"))?);
-        use_mask_lines.extend(read_config_lines(&level.join("package.use.mask"))?);
+        let rules = rules_for_node(level, &all_repos, &repo_rules)?;
+        use_force_lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&level.join("package.use.force"))?,
+            &rules,
+            dict,
+            WARN_RANK_USE,
+            warnings,
+        ));
+        use_mask_lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&level.join("package.use.mask"))?,
+            &rules,
+            dict,
+            WARN_RANK_USE,
+            warnings,
+        ));
     }
     // No shorthand here: none of these files have a user-level source, and
     // Portage's shorthand support is genuinely user-only.
@@ -51,27 +109,57 @@ pub(crate) fn fold_package_use_force_mask(
 
     // package.use.stable.mask/.force: repo-level plus profile-chain, same
     // sourcing as .mask/.force above. No shorthand, same reasoning.
-    let mut use_stable_force_lines: Vec<String> =
-        read_config_lines(&main_repo_location.join("profiles/package.use.stable.force"))?;
-    let mut use_stable_mask_lines: Vec<String> =
-        read_config_lines(&main_repo_location.join("profiles/package.use.stable.mask"))?;
+    let mut use_stable_force_lines: Vec<String> = filter_atom_lines(
+        &read_config_lines_with_sources(
+            &main_repo_location.join("profiles/package.use.stable.force"),
+        )?,
+        &repo_file_rules(&repo_rules, main_repo_name),
+        dict,
+        WARN_RANK_USE,
+        warnings,
+    );
+    let mut use_stable_mask_lines: Vec<String> = filter_atom_lines(
+        &read_config_lines_with_sources(
+            &main_repo_location.join("profiles/package.use.stable.mask"),
+        )?,
+        &repo_file_rules(&repo_rules, main_repo_name),
+        dict,
+        WARN_RANK_USE,
+        warnings,
+    );
     for (repo_name, repo_location) in overlay_repos {
-        let overlay_stable_force =
-            read_config_lines(&repo_location.join("profiles/package.use.stable.force"))?;
-        use_stable_force_lines.extend(scope_repo_package_use_lines(
-            &overlay_stable_force,
-            repo_name,
-        ));
-        let overlay_stable_mask =
-            read_config_lines(&repo_location.join("profiles/package.use.stable.mask"))?;
-        use_stable_mask_lines.extend(scope_repo_package_use_lines(
-            &overlay_stable_mask,
-            repo_name,
-        ));
+        for (file, lines) in [
+            ("package.use.stable.force", &mut use_stable_force_lines),
+            ("package.use.stable.mask", &mut use_stable_mask_lines),
+        ] {
+            lines.extend(scope_repo_package_use_lines(
+                &filter_atom_lines(
+                    &read_config_lines_with_sources(&repo_location.join("profiles").join(file))?,
+                    &repo_file_rules(&repo_rules, repo_name),
+                    dict,
+                    WARN_RANK_USE,
+                    warnings,
+                ),
+                repo_name,
+            ));
+        }
     }
     for level in chain {
-        use_stable_force_lines.extend(read_config_lines(&level.join("package.use.stable.force"))?);
-        use_stable_mask_lines.extend(read_config_lines(&level.join("package.use.stable.mask"))?);
+        let rules = rules_for_node(level, &all_repos, &repo_rules)?;
+        use_stable_force_lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&level.join("package.use.stable.force"))?,
+            &rules,
+            dict,
+            WARN_RANK_USE,
+            warnings,
+        ));
+        use_stable_mask_lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&level.join("package.use.stable.mask"))?,
+            &rules,
+            dict,
+            WARN_RANK_USE,
+            warnings,
+        ));
     }
     config.package_use_stable_force = parse_package_use_lines(&use_stable_force_lines, false);
     config.package_use_stable_mask = parse_package_use_lines(&use_stable_mask_lines, false);

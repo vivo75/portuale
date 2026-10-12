@@ -1,0 +1,345 @@
+//! Profile-file atom validation: a port of Portage's `grabfile_package`
+//! and `grabdict_package` with the per-node EAPI and per-repo formats
+//! those readers take. Invalid lines are dropped with a `---` warning
+//! (collected in [`ProfileWarning`], printed once by the CLI); valid
+//! lines keep their original text for the existing downstream folds.
+
+use crate::*;
+
+use portage_dep::eapi::{eapi_attrs, eapi_is_supported};
+use portage_dep::{AtomEapi, AtomOptions};
+
+/// Warning ranks. Portage reads profile files manager by manager, so every
+/// `packages` warning precedes every `package.use` one no matter in which
+/// order this crate folds the files; `resolve_config` stable-sorts by rank.
+// Portage: config.py (`packages`), UseManager, KeywordsManager, MaskManager
+pub(crate) const WARN_RANK_REPO: u8 = 0;
+pub(crate) const WARN_RANK_PACKAGES: u8 = 1;
+pub(crate) const WARN_RANK_USE: u8 = 2;
+pub(crate) const WARN_RANK_KEYWORDS: u8 = 3;
+pub(crate) const WARN_RANK_MASK: u8 = 4;
+
+/// One collected config-load warning plus its file-kind rank.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProfileWarning {
+    pub rank: u8,
+    pub text: String,
+}
+
+/// Per-profile-node atom rules: the node's `eapi` plus the `profile_formats`
+/// / `allow_build_id` of the repo containing it.
+// Portage: LocationsManager.py:204-343, repository/config.py:1476-1485
+#[derive(Debug, Clone)]
+pub(crate) struct NodeAtomRules {
+    pub eapi: Option<String>,
+    pub allow_repo: bool,
+    pub allow_build_id: bool,
+    pub allow_wildcard: bool,
+}
+
+/// One repo's atom rules: its `profile-formats`, the computed `repo.eapi`,
+/// and the file-adjacent `profiles/eapi` value repo-level readers parse with.
+// Portage: repository/config.py:524-547, util/__init__.py:441-475
+#[derive(Debug, Clone)]
+pub(crate) struct RepoRules {
+    pub name: String,
+    pub formats: Vec<String>,
+    pub eapi: String,
+    pub file_eapi: String,
+}
+
+/// Portage `allow_profile_repo_deps`: `eapi_has_repo_deps(eapi)` (false for
+/// every supported EAPI, true for `None`/unsupported) or `profile-repo-deps`
+/// in the formats.
+// Portage: repository/config.py:1476-1485, eapi.py:111-112
+pub(crate) fn allow_profile_repo_deps(eapi: Option<&str>, formats: &[String]) -> bool {
+    eapi_attrs(eapi).map(|a| a.repo_deps).unwrap_or(true)
+        || formats.iter().any(|f| f == "profile-repo-deps")
+}
+
+/// Whether `eapi` carries the `profile_eapi_default` attr (EAPI >= 9):
+/// a repo's top-level `profiles/eapi` only becomes `repo.eapi` then.
+// Portage: eapi.py:159-160, repository/config.py:524-547
+fn eapi_has_profile_eapi_default(eapi: &str) -> bool {
+    eapi_attrs(Some(eapi))
+        .map(|a| a.profile_eapi_default)
+        .unwrap_or(false)
+}
+
+/// This repo's `metadata/layout.conf`: the `profile-formats` tokens plus the
+/// raw `profile_eapi_when_unspecified` value. The underscore spelling is
+/// normative (S0 matrix §3; repository/config.py:529,547,1689).
+// Portage: repository/config.py, parse_layout_conf
+pub(crate) fn repo_layout_conf(location: &Path) -> (Vec<String>, Option<String>) {
+    let mut formats = Vec::new();
+    let mut key = None;
+    if let Ok(text) = fs::read_to_string(location.join("metadata/layout.conf")) {
+        for raw in text.lines() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
+            if k.trim() == "profile-formats" {
+                formats = v.split_whitespace().map(String::from).collect();
+            } else if k.trim() == "profile_eapi_when_unspecified" {
+                key = Some(v.trim().to_string());
+            }
+        }
+    }
+    (formats, key)
+}
+
+/// This repo's computed `repo.eapi` plus the file-adjacent `profiles/eapi`
+/// value its repo-level files parse with. Ranks `WARN_RANK_REPO`: the layout
+/// `SyntaxWarning` (if any) precedes every `---` line, as in Portage.
+// Portage: repository/config.py:524-547 (repo.eapi), :1688-1727 (the key
+// gate), util/__init__.py:441-475 (the file-adjacent reader)
+pub(crate) fn repo_rules_for(
+    repos: &[(String, PathBuf)],
+    warn: &mut Vec<ProfileWarning>,
+) -> Vec<RepoRules> {
+    repos
+        .iter()
+        .map(|(name, location)| {
+            let (formats, key) = repo_layout_conf(location);
+            let layout_file = location
+                .join("metadata/layout.conf")
+                .display()
+                .to_string();
+            // The key counts only with `profile-default-eapi` in the
+            // formats and only for a supported EAPI; otherwise it is
+            // dropped with a SyntaxWarning and the node default is "0".
+            let gated = match key {
+                Some(k)
+                    if formats.iter().any(|f| f == "profile-default-eapi")
+                        && eapi_is_supported(&k) =>
+                {
+                    Some(k)
+                }
+                Some(k) => {
+                    let text = if !formats.iter().any(|f| f == "profile-default-eapi") {
+                        format!(
+                            "SyntaxWarning: Repository named '{name}' has profile_eapi_when_unspecified setting in '{layout_file}', but 'profile-default-eapi' is not listed in the profile-formats field. Please report this issue to the repository maintainer."
+                        )
+                    } else {
+                        format!(
+                            "SyntaxWarning: Repository named '{name}' has unsupported EAPI '{k}' setting in '{layout_file}'; please upgrade portage."
+                        )
+                    };
+                    warn.push(ProfileWarning {
+                        rank: WARN_RANK_REPO,
+                        text,
+                    });
+                    None
+                }
+                None => None,
+            };
+            // The file-adjacent reader: exactly one line (rstrip `\n`
+            // only), else warn once and fall back; missing stays silent.
+            // Computed once per repo, like Portage's `_eapi_cache`.
+            let top = read_adjacent_eapi(&location.join("profiles"), warn);
+            // A `profiles/eapi` with `profile_eapi_default` (EAPI >= 9)
+            // wins over the layout key; anything else falls back to it.
+            // (Portage also warns when a present key conflicts with such a
+            // top-level default; no fixture reaches that: not ported.)
+            let eapi = match &top {
+                Some(t) if eapi_has_profile_eapi_default(t) => t.clone(),
+                _ => gated.unwrap_or_else(|| "0".to_string()),
+            };
+            let file_eapi = top.unwrap_or_else(|| eapi.clone());
+            RepoRules {
+                name: name.clone(),
+                formats,
+                eapi,
+                file_eapi,
+            }
+        })
+        .collect()
+}
+
+/// Portage `read_corresponding_eapi_file` for the directory `dir`: its
+/// `eapi` file must hold exactly one line (only `\n` stripped), else warn
+/// `--- Invalid 'eapi' file …` and return `None`; a missing file is `None`
+/// with no warning.
+// Portage: util/__init__.py:441-475
+pub(crate) fn read_adjacent_eapi(dir: &Path, warn: &mut Vec<ProfileWarning>) -> Option<String> {
+    let path = dir.join("eapi");
+    let text = fs::read_to_string(&path).ok()?;
+    // `readlines()` line count, not `str::lines()`: both agree on the
+    // fixture shapes (LF, optional single trailing newline); empty means
+    // zero lines, like Python.
+    let count = if text.is_empty() {
+        0
+    } else {
+        text.split('\n').count() - usize::from(text.ends_with('\n'))
+    };
+    if count != 1 {
+        warn.push(ProfileWarning {
+            rank: WARN_RANK_REPO,
+            text: format!(
+                "--- Invalid 'eapi' file (doesn't contain exactly one line): {}",
+                path.display()
+            ),
+        });
+        return None;
+    }
+    Some(text.split('\n').next().unwrap_or("").to_string())
+}
+
+/// This profile node's rules: its `eapi` file (`readline().strip()`), else
+/// the containing repo's `repo.eapi` (or `"0"` outside any known repo).
+/// An unsupported value raises Portage's `ParseError`, which empties the
+/// whole profile list (the caller aborts).
+// Portage: LocationsManager.py:216-242
+pub(crate) fn node_atom_rules(
+    node: &Path,
+    formats: &[String],
+    repo_default_eapi: &str,
+) -> Result<NodeAtomRules, Error> {
+    let eapi_file = node.join("eapi");
+    let eapi = match fs::read_to_string(&eapi_file) {
+        Err(_) => repo_default_eapi.to_string(),
+        Ok(text) => {
+            let first = text.split('\n').next().unwrap_or("").trim();
+            if !eapi_is_supported(first) {
+                return Err(Error::UnsupportedProfileEapi {
+                    eapi: first.to_string(),
+                    path: eapi_file.display().to_string(),
+                });
+            }
+            first.to_string()
+        }
+    };
+    Ok(NodeAtomRules {
+        allow_repo: allow_profile_repo_deps(Some(&eapi), formats),
+        allow_build_id: formats.iter().any(|f| f == "build-id"),
+        allow_wildcard: false,
+        eapi: Some(eapi),
+    })
+}
+
+/// This profile node's rules via the longest-prefix repo match (unknown
+/// nodes behave like Portage's empty-`intersecting_repos` case). Callers
+/// build `repo_rules` with [`repo_rules_for`] (cheap; its warnings dedupe
+/// at the end of `resolve_config`).
+// Portage: LocationsManager.py:204-233 (_addProfile's repo lookup)
+pub(crate) fn rules_for_node(
+    node: &Path,
+    all_repos: &[(String, PathBuf)],
+    repo_rules: &[RepoRules],
+) -> Result<NodeAtomRules, Error> {
+    let hit = repo_containing(node, all_repos).and_then(|(name, _)| {
+        repo_rules
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| (r.formats.clone(), r.eapi.clone()))
+    });
+    let (formats, default) = hit.unwrap_or_default();
+    let default = if default.is_empty() {
+        "0".to_string()
+    } else {
+        default
+    };
+    node_atom_rules(node, &formats, &default)
+}
+
+/// A repo's own repo-level file rules: parsed with the file-adjacent
+/// `profiles/eapi` value, but `allow_repo` follows the computed `repo.eapi`
+/// (Portage passes the whole `RepoConfig` to `allow_profile_repo_deps`).
+// Portage: MaskManager.py (grab_pmask), KeywordsManager, UseManager
+pub(crate) fn repo_file_rules(repo_rules: &[RepoRules], name: &str) -> NodeAtomRules {
+    let r = repo_rules
+        .iter()
+        .find(|r| r.name == name)
+        .unwrap_or_else(|| panic!("repo_file_rules: unknown repo {name:?}"));
+    NodeAtomRules {
+        allow_repo: allow_profile_repo_deps(Some(&r.eapi), &r.formats),
+        allow_build_id: r.formats.iter().any(|f| f == "build-id"),
+        allow_wildcard: false,
+        eapi: Some(r.file_eapi.clone()),
+    }
+}
+
+/// Which line grammar `filter_atom_lines` validates.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AtomLineKind {
+    /// `package.mask`/`package.unmask`/`packages`: whole-line atoms; a
+    /// leading `-` is removal (kept for the stacker), and `packages`
+    /// additionally strips a leading `*` before parsing (kept as well).
+    File { packages_file: bool },
+    /// `<atom> <flags...>` dict files; with `allow_use = false` a
+    /// use-carrying atom is dropped with Portage's other message.
+    Dict { allow_use: bool },
+}
+
+/// `grabfile_package` / `grabdict_package`: keep the valid lines (original
+/// text), warn `--- Invalid atom in <file>: <msg>` (or the use-deps variant)
+/// and drop the rest. `rank` orders the warnings Portage's way; `warn`
+/// collects them for one print at config load.
+// Portage: util/__init__.py:481-607
+pub(crate) fn filter_atom_lines(
+    sources: &[(PathBuf, String)],
+    rules: &NodeAtomRules,
+    kind: AtomLineKind,
+    rank: u8,
+    warn: &mut Vec<ProfileWarning>,
+) -> Vec<String> {
+    // A supported-but-unparseable EAPI (`3_pre1`, padded) makes Portage
+    // raise; here it falls back to the permissive set (see S1's cut).
+    let eapi = AtomEapi::parse(rules.eapi.as_deref()).unwrap_or(AtomEapi::Unsupported);
+    let eapi_str = rules.eapi.as_deref().unwrap_or("");
+    let opts = AtomOptions {
+        eapi,
+        allow_wildcard: rules.allow_wildcard,
+        allow_repo: Some(rules.allow_repo),
+        allow_build_id: Some(rules.allow_build_id),
+    };
+    let mut kept = Vec::new();
+    for (source, line) in sources {
+        let file = source.display().to_string();
+        match kind {
+            AtomLineKind::File { packages_file } => {
+                let mut text = line.as_str();
+                if text.starts_with('-') {
+                    if packages_file && text == "-*" {
+                        kept.push(line.clone());
+                        continue;
+                    }
+                    text = &text[1..];
+                }
+                if packages_file && text.starts_with('*') {
+                    text = &text[1..];
+                }
+                match portage_dep::parse_atom_with(text, &opts, eapi_str) {
+                    Ok(_) => kept.push(line.clone()),
+                    Err(e) => warn.push(ProfileWarning {
+                        rank,
+                        text: format!("--- Invalid atom in {file}: {}", e.message),
+                    }),
+                }
+            }
+            AtomLineKind::Dict { allow_use } => {
+                let atom_text = line.split_whitespace().next().unwrap_or("");
+                match portage_dep::parse_atom_with(atom_text, &opts, eapi_str) {
+                    Err(e) => warn.push(ProfileWarning {
+                        rank,
+                        text: format!("--- Invalid atom in {file}: {}", e.message),
+                    }),
+                    Ok(atom) if !allow_use && atom.use_deps.is_some() => {
+                        warn.push(ProfileWarning {
+                            rank,
+                            text: format!(
+                                "--- Atom is not allowed to have USE flag(s) in {file}: {atom_text}"
+                            ),
+                        });
+                    }
+                    Ok(_) => kept.push(line.clone()),
+                }
+            }
+        }
+    }
+    kept
+}

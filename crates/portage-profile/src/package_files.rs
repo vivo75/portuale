@@ -8,6 +8,16 @@ use crate::*;
 /// an empty list, not an error.
 // Portage: lib/portage/util/__init__.py, _recursive_file_list
 pub(crate) fn read_config_lines(path: &Path) -> Result<Vec<String>, Error> {
+    Ok(read_config_lines_with_sources(path)?
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect())
+}
+
+/// [`read_config_lines`] keeping each line's source file: profile atom
+/// warnings cite the fragment, as Portage's `remember_source_file` does.
+// Portage: lib/portage/util/__init__.py, grabfile_package
+pub(crate) fn read_config_lines_with_sources(path: &Path) -> Result<Vec<(PathBuf, String)>, Error> {
     fn read_file_lines(path: &Path) -> Result<Vec<String>, Error> {
         let text = fs::read_to_string(path).map_err(|e| Error::ReadFile {
             path: path.display().to_string(),
@@ -21,7 +31,7 @@ pub(crate) fn read_config_lines(path: &Path) -> Result<Vec<String>, Error> {
             .collect())
     }
 
-    let mut lines = Vec::new();
+    let mut lines: Vec<(PathBuf, String)> = Vec::new();
     // Missing paths stay empty (not an error); unreadable ones report.
     if path.symlink_metadata().is_err() {
         return Ok(lines);
@@ -31,7 +41,9 @@ pub(crate) fn read_config_lines(path: &Path) -> Result<Vec<String>, Error> {
         source: e,
     })?;
     for entry in files {
-        lines.extend(read_file_lines(&entry)?);
+        for line in read_file_lines(&entry)? {
+            lines.push((entry.clone(), line));
+        }
     }
     Ok(lines)
 }

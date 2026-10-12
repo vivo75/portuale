@@ -22,6 +22,7 @@
 - [crates/portage-fetch/src/mirror_cache.rs](portage-fetch/mirror_cache.md) — Portage's `${DISTDIR}/.mirror-cache.json` round-trip plus the URL helpers `async_mirror_url` builds on.
 
 ## portage-profile
+- [crates/portage-profile/src/atom_lines.rs](portage-profile/atom_lines.md) — Profile-file atom validation (`grabfile_package` / `grabdict_package` port, #341 S5).
 - [crates/portage-profile/src/binrepo.rs](portage-profile/binrepo.md) — `binrepos.conf` plus implicit `PORTAGE_BINHOST` entries for `--getbinpkg` resolution.
 - [crates/portage-profile/src/config.rs](portage-profile/config.md) — The resolved configuration (`Config`): every USE layer, visibility list, and fingerprint base.
 - [crates/portage-profile/src/env_layer.rs](portage-profile/env_layer.md) — The process-environment (`env` `USE_ORDER`) layer over make.conf and the profile.

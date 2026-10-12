@@ -18,6 +18,7 @@ pub(crate) struct LoadScalarLayersArgs<'a> {
     pub(crate) all_repos: &'a [(String, PathBuf)],
     pub(crate) repo_aliases: &'a [(String, PathBuf)],
     pub(crate) parent_colon_repos: &'a HashSet<String>,
+    pub(crate) warnings: &'a mut Vec<ProfileWarning>,
 }
 
 /// The scalar layers in Portage's order: env.d, make.globals, the profile chain, make.conf.
@@ -32,6 +33,7 @@ pub(crate) fn load_scalar_layers(
         all_repos,
         repo_aliases,
         parent_colon_repos,
+        warnings,
     } = args;
     // Layers in Portage `regenerate()` order: env.d, globals, the profile
     // chain (`defaults`), make.conf (`conf`). Portage: config.py `regenerate`
@@ -100,7 +102,14 @@ pub(crate) fn load_scalar_layers(
     // Per-level record of what this level's `make.defaults` set, for the
     // profile USE_EXPAND-defaults fold once USE_EXPAND itself is final.
     let mut level_scalar_deltas: Vec<HashMap<String, String>> = Vec::new();
+    // The profile nodes' atom rules, checked up front: an unsupported node
+    // `eapi` aborts the whole run here, like Portage's `_addProfile`.
+    let repo_rules = repo_rules_for(all_repos, warnings);
+    let mut node_rules: Vec<NodeAtomRules> = Vec::with_capacity(chain.len());
     for level in &chain {
+        node_rules.push(rules_for_node(level, all_repos, &repo_rules)?);
+    }
+    for (level, rules) in chain.iter().zip(node_rules.iter()) {
         // One level's `make.defaults` USE plus its own package.use; the
         // length delta slices out just this level's USE contribution.
         let before = config.use_tokens.len();
@@ -119,8 +128,16 @@ pub(crate) fn load_scalar_layers(
             snapshot.restore(&mut *config);
         }
         let level_make_defaults_use = config.use_tokens[before..].to_vec();
-        let level_package_use =
-            parse_package_use_lines(&read_config_lines(&level.join("package.use"))?, false);
+        let level_package_use = parse_package_use_lines(
+            &filter_atom_lines(
+                &read_config_lines_with_sources(&level.join("package.use"))?,
+                rules,
+                AtomLineKind::Dict { allow_use: false },
+                WARN_RANK_USE,
+                warnings,
+            ),
+            false,
+        );
         config.profile_use_layers.push(ProfileUseLayer {
             make_defaults_use: level_make_defaults_use,
             package_use: level_package_use,
