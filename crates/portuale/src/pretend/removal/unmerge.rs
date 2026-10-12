@@ -127,7 +127,7 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
             other if other.starts_with('@') => {
                 let mut seen = HashSet::new();
                 match resolve_custom_set(config_root, &other[1..], &mut seen) {
-                    Ok(atoms) => expanded.extend(atoms),
+                    Ok(out) => expanded.extend(out.atoms),
                     Err(e) => {
                         eprintln!("{e}");
                         return ExitCode::from(1);

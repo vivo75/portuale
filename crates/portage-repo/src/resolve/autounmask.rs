@@ -16,17 +16,22 @@ pub(crate) fn autounmask_dep_chain(
 ) -> Vec<String> {
     let Some(start) = owner else {
         // A top-level change prints the argument atom *as given*, not the
-        // change's own `>=<cpv>` left-hand form.
-        let arg = top_level
+        // change's own `>=<cpv>` left-hand form. Several top-level atoms
+        // can name the same package (e.g. two valid lines of one `@set`);
+        // the sorted-first wins so the line is deterministic (iterating
+        // the `HashSet` with `find` printed either atom from run to run).
+        let mut args: Vec<&str> = top_level
             .iter()
-            .find(|t| {
+            .copied()
+            .filter(|t| {
                 portage_dep::parse_atom(t).is_some_and(|a| {
                     portage_dep::parse_atom(current_atom)
                         .is_some_and(|c| a.category == c.category && a.package == c.package)
                 })
             })
-            .copied()
-            .unwrap_or(current_atom);
+            .collect();
+        args.sort_unstable();
+        let arg = args.first().copied().unwrap_or(current_atom);
         return vec![format!("required by {arg} (argument)")];
     };
     // Walks the whole parent chain to the argument, not just the immediate
@@ -42,7 +47,7 @@ pub(crate) fn autounmask_dep_chain(
         if !visited.insert(cur.clone()) {
             break;
         }
-        let args: Vec<String> = top_level
+        let mut args: Vec<String> = top_level
             .iter()
             .filter(|t| {
                 portage_dep::parse_atom(t).is_some_and(|a| {
@@ -53,6 +58,9 @@ pub(crate) fn autounmask_dep_chain(
             })
             .map(|t| format!("required by {t} (argument)"))
             .collect();
+        // Sorted: several top-level atoms can name one package (see
+        // above); the `HashSet` order would print them at random.
+        args.sort();
         let parent = entries.iter().find(|e| {
             e.category == cur.0
                 && e.package == cur.1
@@ -165,10 +173,17 @@ pub(crate) fn required_use_dep_chain(
             chain.push((node, node_type.to_string()));
         }
     }
-    if let Some(arg) = top_level
+    // Sorted-first, like `autounmask_dep_chain` above: several top-level
+    // atoms can name the same package and the `HashSet` order is random.
+    let mut matches: Vec<&str> = top_level
         .iter()
-        .find(|t| portage_dep::parse_atom(t).is_some_and(|a| a.category == *oc && a.package == *op))
-    {
+        .copied()
+        .filter(|t| {
+            portage_dep::parse_atom(t).is_some_and(|a| a.category == *oc && a.package == *op)
+        })
+        .collect();
+    matches.sort_unstable();
+    if let Some(arg) = matches.first() {
         chain.push(((*arg).to_string(), "argument".to_string()));
     }
     chain

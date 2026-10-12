@@ -9,6 +9,9 @@ pub(crate) struct ExpandTargetsOut {
     pub(crate) expanded_atoms: Vec<String>,
     pub(crate) selected_set_args: Vec<String>,
     pub(crate) set_args: HashSet<String>,
+    /// Named-set `Validation failed …` lines, printed after the merge list
+    /// (Portage depgraph.py:11142-11145); `@selected`/world drops silently.
+    pub(crate) set_validation_errors: Vec<String>,
 }
 
 /// The values [`expand_targets`] reads from its caller.
@@ -63,6 +66,8 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     // recorded in `world_sets` after a successful non-`--pretend` merge.
     // Portage: depgraph.py, saveNomergeFavorites
     let mut selected_set_args: Vec<String> = Vec::new();
+    // A named set's dropped lines, printed after the merge list (S8).
+    let mut set_validation_errors: Vec<String> = Vec::new();
     // Every non-set argument must be a valid package atom before anything
     // else runs (Portage `run_action`, `_emerge/actions.py:4244-4262`):
     // short names get `cat/` spliced in, repos and build-ids are allowed,
@@ -135,10 +140,11 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         } else if let Some(name) = atom_str.strip_prefix('@') {
             let mut seen = HashSet::new();
             match resolve_custom_set(config_root, name, &mut seen) {
-                Ok(atoms) => {
-                    expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
-                    expanded_atoms.extend(atoms);
+                Ok(out) => {
+                    expanded_from_set.extend(std::iter::repeat_n(false, out.atoms.len()));
+                    expanded_atoms.extend(out.atoms);
                     selected_set_args.push(name.to_string());
+                    set_validation_errors.extend(out.errors);
                 }
                 Err(e) => {
                     eprintln!("{e}");
@@ -246,5 +252,6 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         expanded_atoms,
         selected_set_args,
         set_args,
+        set_validation_errors,
     })
 }

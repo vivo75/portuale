@@ -225,6 +225,7 @@ pub fn run(args: &[String]) -> ExitCode {
         expanded_atoms,
         selected_set_args,
         set_args,
+        set_validation_errors,
     } = match expand_targets(ExpandTargetsArgs {
         opts: &opts,
         color: &color,
@@ -513,7 +514,16 @@ pub fn run(args: &[String]) -> ExitCode {
         config: &config,
         has_autounmask_changes,
     }) {
+        // A named set's dropped lines print after the merge list and its
+        // USE-change prompt (Portage depgraph.py:11142-11145), even when
+        // the USE changes already fail the run.
+        for error in &set_validation_errors {
+            eprintln!("{error}");
+        }
         return code;
+    }
+    for error in &set_validation_errors {
+        eprintln!("{error}");
     }
 
     if let Some(code) = failure_gates(FailureGatesArgs {

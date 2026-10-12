@@ -1,6 +1,9 @@
 # crates/portuale/src/pretend/cli_atoms.rs
 Command-line atom validation: package arguments and the --exclude-style option families (backlog #341 S7).
 
+## fn is_valid_set_atom
+- Backlog #341 S8: Portage `ValidAtomValidator(atom, allow_repo=True)` for the world file and `/etc/portage/sets/*` (`portage/_sets/files.py:68-69,284-285`, `portage/env/validators.py:6`) — `isvalidatom` with `allow_wildcard` off, `allow_repo` on, `allow_build_id` off (its default), `eapi=None`: no wildcard, no blocker, no build-id; repo and use deps allowed. Live-checked on this host (Portage 3.0.82.2, 2026-10-12): over S0's eight sets/world lines only `dev-libs/t341-dep::t341` and `dev-libs/t341-dep[x]` are valid.
+
 ## fn insert_category_into_atom
 - Portage `_emerge/is_valid_package_atom.py:19-27`: splice `category/` before the first `[\*\w]` (ASCII) character, `None` when the string holds none. Both `is_valid_package_atom` (`"cat"`) and `_find_bad_atoms` (`"dummy-category"`, `repository/config.py:91-116`) share it; an operator/blocker prefix stays outside the splice (`=t341-dep-1.0` -> `=cat/t341-dep-1.0`).
 

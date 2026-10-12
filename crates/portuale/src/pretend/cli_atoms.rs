@@ -92,6 +92,23 @@ pub(crate) fn find_bad_atoms(atoms: &[String], less_strict: bool) -> Vec<&str> {
     bad
 }
 
+/// Portage `ValidAtomValidator(atom, allow_repo=True)` for the world file
+/// and `/etc/portage/sets/*` (`portage/_sets/files.py:68-69,284-285`,
+/// `portage/env/validators.py:6`): `isvalidatom` with `allow_wildcard`
+/// off, `allow_repo` on, `allow_build_id` off (its default), `eapi=None`
+/// — so no wildcard, no blocker, no build-id; repo and use deps allowed.
+pub(crate) fn is_valid_set_atom(x: &str) -> bool {
+    let opts = AtomOptions {
+        eapi: AtomEapi::None,
+        allow_wildcard: false,
+        allow_repo: Some(true),
+        allow_build_id: Some(false),
+    };
+    match parse_atom_with(x, &opts, "") {
+        Ok(atom) => atom.blocker == Blocker::None,
+        Err(_) => false,
+    }
+}
 /// Portage `_emerge/main.py:839-845,885-906` (option post-pass):
 /// `--buildpkg-exclude` first (its own message, no "(only …)" suffix),
 /// then the nine strict families in tuple order. Failures print Portage's
@@ -273,5 +290,28 @@ mod tests {
             find_bad_atoms(&atoms, false),
             vec!["dev-libs/bad::repo", ">=dev-libs/other-1"]
         );
+    }
+
+    #[test]
+    fn set_atoms_match_portages_valid_atom_validator() {
+        // Portage 3.0.82.2, `python3 -c
+        // 'from portage.dep import isvalidatom'` on this host
+        // (2026-10-12): `isvalidatom(line, allow_repo=True)` over the
+        // S0 sets/world eight lines (oracle run5) is False, False, True,
+        // False, False, False, False, True — only the `::repo` and the
+        // use-dep lines survive.
+        for x in ["dev-libs/t341-dep::t341", "dev-libs/t341-dep[x]"] {
+            assert!(is_valid_set_atom(x), "{x:?} must be a valid set atom");
+        }
+        for x in [
+            "*/t341-dep",
+            "dev-libs/t341-*",
+            "=dev-libs/t341-dep-1-2",
+            "=dev-libs/t341-dep-1-02",
+            "dev-libs/t341-dep-1",
+            "!dev-libs/t341-dep",
+        ] {
+            assert!(!is_valid_set_atom(x), "{x:?} must not be a valid set atom");
+        }
     }
 }

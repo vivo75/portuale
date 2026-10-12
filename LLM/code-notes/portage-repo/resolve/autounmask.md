@@ -4,6 +4,7 @@ Autounmask dependency chains and suggestions.
 ## fn autounmask_dep_chain
 - Portage `_get_dep_chain_as_comment` (`depgraph.py:6457`). A dependency yields `required by <parent cpv>::<repo>` and, when that parent is itself a command-line argument, a trailing `required by <parent atom> (argument)`. The top-level example: `dev-libs/useflagpkg[-foo]`.
 - Portage walks the whole parent chain to the argument, not just the immediate owner (backlog #135 (e); bed `l0-fx-20260922T192350Z` arm A prints three rows where portuale printed one). Vdb repo for an installed parent is Portage's `installed_use_str` counterpart.
+- Backlog #341 S8: when several top-level atoms name the same package (e.g. two valid lines of one `@set`), the argument line is the sorted-first match, and multi-match chain tails print sorted. Rationale: the candidates come from a `HashSet<&str>`, so a plain `find`/collect printed either atom from run to run (S8's `@s341` pin flipped between `dev-libs/t341-dep::t341` and `dev-libs/t341-dep[x]`). Single-match output is unchanged. Same sorted-first rule in `required_use_dep_chain`.
 - Single-branch rule (deliberate, unverified against Portage on a multi-parent shape): the sibling `masked_dep_chain` discloses every failing branch. All pinned chains are linear; Portage's branch choice on a multi-parent autounmask cell has no oracle.
 
 ## fn render_use_display_pairs

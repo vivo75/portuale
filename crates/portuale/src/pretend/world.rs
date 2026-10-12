@@ -28,10 +28,19 @@ pub(crate) fn world_read_error(e: portage_vdb::Error) -> String {
 /// `@profile`/`@system` halves themselves. Errors carry an `emerge: ` prefix.
 /// Portage: files.py, WorldSelectedSet.
 pub(crate) fn expand_selected(root: &Path, config_root: &Path) -> Result<Vec<String>, String> {
-    let mut atoms = read_world_atoms(root).map_err(|e| format!("emerge: {e}"))?;
+    let mut atoms: Vec<String> = read_world_atoms(root)
+        .map_err(|e| format!("emerge: {e}"))?
+        // Portage `WorldSelectedPackagesSet` validates every line with the
+        // same `ValidAtomValidator` as named sets, but its errors stay on
+        // the inner `_pkgset` and are never printed (`_sets/files.py`);
+        // bad world lines drop silently (oracle Q2g).
+        .into_iter()
+        .filter(|a| is_valid_set_atom(a))
+        .collect();
     for name in read_world_sets(root).map_err(|e| format!("emerge: {e}"))? {
         let mut seen = HashSet::new();
-        atoms.extend(resolve_custom_set(config_root, &name, &mut seen)?);
+        let out = resolve_custom_set(config_root, &name, &mut seen)?;
+        atoms.extend(out.atoms);
     }
     Ok(atoms)
 }
@@ -341,33 +350,59 @@ pub(crate) fn read_world_sets(root: &Path) -> Result<Vec<String>, String> {
         .map_err(world_read_error)
 }
 
+/// One file-based set's valid atoms plus its dropped lines, already
+/// rendered as Portage prints them after the merge list.
+/// Portage: _sets/__init__.py, StaticFileSet; depgraph.py:11142-11145.
+pub(crate) struct CustomSetOut {
+    pub(crate) atoms: Vec<String>,
+    pub(crate) errors: Vec<String>,
+}
+
 /// Expand one file-based set, following nested `@` references with a cycle guard.
 /// A missing file is an error, not an absence.
+/// Every non-`@` line is validated with the set-file `ValidAtomValidator`
+/// (see [`is_valid_set_atom`]); bad lines drop and are reported as
+/// `<path>: Validation failed at line: N, data X` with the file's physical
+/// line number (Portage `ItemFileLoader`, `portage/env/loaders.py:203-221`).
+/// Only the depgraph path prints them (after the merge list); `@selected`
+/// and the removal paths drop them silently (oracle Q2g).
 /// Portage: _sets/__init__.py, StaticFileSet.
 pub(crate) fn resolve_custom_set(
     config_root: &Path,
     name: &str,
     seen: &mut HashSet<String>,
-) -> Result<Vec<String>, String> {
+) -> Result<CustomSetOut, String> {
     if !seen.insert(name.to_string()) {
-        return Ok(Vec::new());
+        return Ok(CustomSetOut {
+            atoms: Vec::new(),
+            errors: Vec::new(),
+        });
     }
     let path = config_root.join("etc/portage/sets").join(name);
     let text =
         std::fs::read_to_string(&path).map_err(|_| format!("emerge: set '{name}' not found"))?;
     let mut atoms = Vec::new();
-    for line in text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-    {
+    let mut errors = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
         if let Some(nested_name) = line.strip_prefix('@') {
-            atoms.extend(resolve_custom_set(config_root, nested_name, seen)?);
-        } else {
+            let nested = resolve_custom_set(config_root, nested_name, seen)?;
+            atoms.extend(nested.atoms);
+            errors.extend(nested.errors);
+        } else if is_valid_set_atom(line) {
             atoms.push(line.to_string());
+        } else {
+            errors.push(format!(
+                "{}: Validation failed at line: {}, data {line}",
+                path.display(),
+                n + 1
+            ));
         }
     }
-    Ok(atoms)
+    Ok(CustomSetOut { atoms, errors })
 }
 
 /// Every selected custom set with its direct atoms, for the unmerge
@@ -396,7 +431,7 @@ pub(crate) fn collect_installed_sets(
         {
             if let Some(nested) = line.strip_prefix('@') {
                 queue.push(nested.to_string());
-            } else {
+            } else if is_valid_set_atom(line) {
                 direct.push(line.to_string());
             }
         }

@@ -51,6 +51,45 @@ fn world_sets_additions_reports_only_new_sets() {
 }
 
 #[test]
+fn custom_set_drops_invalid_lines_with_portage_line_numbers() {
+    // Portage `ItemFileLoader` (`portage/env/loaders.py:203-221`): every
+    // non-`@` set line is validated with the set-file `ValidAtomValidator`
+    // and a bad line drops with `<path>: Validation failed at line: N,
+    // data X`. The eight lines are S0's sets/world set (oracle run5);
+    // `isvalidatom(line, allow_repo=True)` live on this host (Portage
+    // 3.0.82.2, 2026-10-12) keeps only lines 3 and 8.
+    let dir = TempDir::new("portuale-s8-sets").keep();
+    let sets = dir.join("etc/portage/sets");
+    std::fs::create_dir_all(&sets).expect("mkdir");
+    std::fs::write(
+        sets.join("s341"),
+        "*/t341-dep\ndev-libs/t341-*\ndev-libs/t341-dep::t341\n=dev-libs/t341-dep-1-2\n=dev-libs/t341-dep-1-02\ndev-libs/t341-dep-1\n!dev-libs/t341-dep\ndev-libs/t341-dep[x]\n",
+    )
+    .expect("write");
+    let mut seen = std::collections::HashSet::new();
+    let out = resolve_custom_set(&dir, "s341", &mut seen).expect("set reads");
+    assert_eq!(
+        out.atoms,
+        vec![
+            "dev-libs/t341-dep::t341".to_string(),
+            "dev-libs/t341-dep[x]".to_string()
+        ]
+    );
+    let p = sets.join("s341").display().to_string();
+    assert_eq!(
+        out.errors,
+        vec![
+            format!("{p}: Validation failed at line: 1, data */t341-dep"),
+            format!("{p}: Validation failed at line: 2, data dev-libs/t341-*"),
+            format!("{p}: Validation failed at line: 4, data =dev-libs/t341-dep-1-2"),
+            format!("{p}: Validation failed at line: 5, data =dev-libs/t341-dep-1-02"),
+            format!("{p}: Validation failed at line: 6, data dev-libs/t341-dep-1"),
+            format!("{p}: Validation failed at line: 7, data !dev-libs/t341-dep"),
+        ]
+    );
+}
+
+#[test]
 fn usersets_world_candidate_honors_only_an_explicit_usersets_override() {
     // Portage: _sets/__init__.py. File sets are candidates unless `sets.conf` says otherwise.
     // Option names are case-insensitive, section names are not; later lines win.

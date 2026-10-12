@@ -322,9 +322,9 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
             for name in names {
                 let mut seen = HashSet::new();
                 match resolve_custom_set(config_root, &name, &mut seen) {
-                    Ok(atoms) => {
+                    Ok(out) => {
                         let label = format!("@{name}");
-                        world_seeds.extend(atoms.into_iter().map(|a| (a, label.clone())));
+                        world_seeds.extend(out.atoms.into_iter().map(|a| (a, label.clone())));
                     }
                     Err(e) => {
                         eprintln!("{e}");
