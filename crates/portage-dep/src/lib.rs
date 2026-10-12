@@ -3,9 +3,11 @@
 //! evaluation and `extract_affecting_use`.
 //!
 //! Scope cuts a caller must know:
-//! - `parse_atom` takes no extended/wildcard atoms (`*/foo-1`; see
-//!   `WildcardAtom` for the bounded variant); S3 ports the wildcard branch and
-//!   `allow_wildcard` changes nothing until then.
+//! - `parse_atom` (= `eapi=None`, no wildcard flag) still rejects extended
+//!   atoms (`*/foo`, `dev-libs/fo*`, `=*/foo-*1*`); `parse_atom_with` accepts
+//!   them only with `allow_wildcard` (S3 ports the wildcard branch).
+//!   `CpBucketIndex::build` relies on the default rejection to route
+//!   wildcards to `other`.
 //! - `parse_atom` (= `eapi=None`) accepts build-ids (`=cat/pkg-1.0-2`) and
 //!   `::repo`; `parse_atom_with` applies the caller's EAPI/flag options.
 //! - Candidates are plain strings `cat/pkg-ver[-rN][:slot[/subslot]][::repo]`,
@@ -29,6 +31,8 @@ use eapi::{EapiValueError, SUPPORTED_EAPIS, eapi_attrs, eapi_is_supported};
 pub mod eapi;
 
 #[cfg(test)]
+mod tests_extended_match;
+#[cfg(test)]
 mod tests_grammar;
 
 // Memoizes parse results: parsing is a pure function of the string, and the
@@ -51,6 +55,12 @@ const PKG: &str = r"[A-Za-z0-9_][A-Za-z0-9+_-]*?";
 const VER: &str = r"[0-9]+(?:\.[0-9]+)*[a-z]?(?:_(?:pre|p|beta|alpha|rc)[0-9]*)*";
 // Portage `_slot` (`[\w][\w+.-]*`, ASCII): the leading `_` matters.
 const SLOT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
+// Portage `_extended_cat` (dep:252): the wildcard category half, which admits
+// `.`; and the wildcard `pkg_re` (dep:333), which does not. Both admit `*`.
+const EXTCAT: &str = r"[A-Za-z0-9_+*][A-Za-z0-9_+.*-]*";
+const EXTPKG: &str = r"[A-Za-z0-9_+*][A-Za-z0-9_+*-]*?";
+// Portage `star` version (dep:332-372): `=…-\*\w+\*`, ASCII `\w`, so no `.`
+// or `-` (`=dev-libs/fo*-*1.0*` is ERR, oracle probe2).
 // Portage: lib/portage/dep/__init__.py, _repo_name
 const REPO: &str = r"[A-Za-z0-9_][A-Za-z0-9_-]*";
 // Portage: lib/portage/dep/__init__.py, _useflag_re (duplicated from
@@ -162,7 +172,7 @@ pub struct Atom {
     /// are kept as a string. `None` if absent.
     /// Portage: lib/portage/dep/__init__.py, Atom.__init__ (op arm)
     pub build_id: Option<String>,
-    /// True for `_get_atom_wildcard_re` matches; set by S3, always false in S2.
+    /// True for `_get_atom_wildcard_re` matches (only with `allow_wildcard`).
     pub extended: bool,
 }
 
@@ -208,7 +218,8 @@ impl AtomEapi {
 pub struct AtomOptions {
     /// Portage `eapi=`.
     pub eapi: AtomEapi,
-    /// S3 fills the wildcard branch; in S2 this changes nothing.
+    /// Portage `allow_wildcard`: try `_get_atom_wildcard_re` when the strict
+    /// grammar fails (dep:1972-1997).
     pub allow_wildcard: bool,
     /// `None` = Portage's default rule.
     pub allow_repo: Option<bool>,
@@ -260,8 +271,27 @@ fn atom_regex() -> &'static Regex {
         // "glob" is captured after any operator; `parse_atom` rejects it unless the
         // operator is `=`.
         // "repo" sits between the slot part and usedeps, as in Portage.
+        // Blockers are stripped before matching (Portage dep:1959-1967), so
+        // this regex has no blocker group.
         Regex::new(&format!(
-            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})(?P<bidtail>-(?P<tailver>{VER})(?:-r(?P<tailrev>[0-9]+))?)?-(?P<ver>{VER})(?:-r(?P<rev>[0-9]+))?(?P<glob>\*)?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r[0-9]+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?:::(?P<repo>{REPO}))?(?P<usedeps>\[.*\])?$"
+            r"^(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})(?P<bidtail>-(?P<tailver>{VER})(?:-r(?P<tailrev>[0-9]+))?)?-(?P<ver>{VER})(?:-r(?P<rev>[0-9]+))?(?P<glob>\*)?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r[0-9]+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?:::(?P<repo>{REPO}))?(?P<usedeps>\[.*\])?$"
+        ))
+        .unwrap()
+    })
+}
+
+/// Portage `_get_atom_wildcard_re` (dep:332-372): `simple` (extended category
+/// / package, admitting a `-vr` tail only to reject it when it carries a
+/// dotted component, dep:1988-1989) or `star` (`=cat/pkg-\*\w+\*`). Optional
+/// `:slot` (`_slot_loose`) and `::repo`; no use deps. The slot groups reuse
+/// the strict names so the second-stage slot validation is shared.
+/// `wtaildot` is Portage's group `simple+3` (the `(\.\d+)` inside the tail):
+/// `*/foo-1` and `*/foo-1-r1` parse as extended atoms, `*/foo-1.0` does not.
+fn atom_wildcard_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"^(?:(?P<simple>{EXTCAT}/{EXTPKG}(?P<wtail>-[0-9]+(?P<wtaildot>\.[0-9]+)*[a-z]?(?:_(?:pre|p|beta|alpha|rc)[0-9]*)*(?:-r[0-9]+)?)?)|=(?P<starcp>{EXTCAT}/{EXTPKG})-(?P<starver>\*[A-Za-z0-9_]+\*))(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?:::(?P<repo>{REPO}))?$"
         ))
         .unwrap()
     })
@@ -421,83 +451,148 @@ fn parse_atom_with_uncached(
         .allow_build_id
         .unwrap_or(matches!(opts.eapi, AtomEapi::None));
 
-    let caps = atom_regex()
-        .captures(s)
-        .ok_or_else(|| AtomError::invalid(s))?;
-
-    let blocker = match caps.name("blocker").map(|m| m.as_str()) {
-        None => Blocker::None,
-        Some("!") => Blocker::Weak,
-        Some("!!") => Blocker::Strong,
-        Some(_) => unreachable!(),
+    // Blockers are stripped before either grammar (Portage dep:1959-1967);
+    // `!!!x` strips two and leaves `!x`, which both grammars reject.
+    let (blocker, rest) = if let Some(t) = s.strip_prefix("!!") {
+        (Blocker::Strong, t)
+    } else if let Some(t) = s.strip_prefix('!') {
+        (Blocker::Weak, t)
+    } else {
+        (Blocker::None, s)
     };
 
-    let (operator, category, package, version, revision, build_id) =
-        if let Some(op) = caps.name("op") {
-            let tail = caps.name("bidtail");
-            let glob = caps.name("glob");
-            // PMS 8.3.1: `*` is illegal with any operator but `=`, and a
-            // `=*` tail is always invalid (dep:2023-2033).
-            if glob.is_some() && (op.as_str() != "=" || tail.is_some()) {
+    let strict = atom_regex().captures(rest);
+    let wild;
+    let (caps, extended): (&regex::Captures<'_>, bool) = match &strict {
+        Some(m) => (m, false),
+        None => {
+            if !opts.allow_wildcard {
                 return Err(AtomError::invalid(s));
             }
-            let operator = if glob.is_some() {
-                Operator::EqGlob
-            } else {
-                Operator::from_str(op.as_str())
-            };
-            // Portage's ambiguous `-vr` tail, tried before a longer package
-            // name (dep:1998-2022): when present, the version comes from the
-            // tail and the outer `-vr` is the build-id, valid only with
-            // `allow_build_id` and only as plain digits (Portage parses it
-            // with `int()`, dep:2014-2019). A leading zero is rejected.
-            let (version, revision, build_id) = match tail {
-                None => (
-                    Some(caps.name("ver").unwrap().as_str().to_string()),
-                    caps.name("rev").map(|m| m.as_str().to_string()),
-                    None,
-                ),
-                Some(_) => {
-                    if !allow_build_id {
-                        return Err(AtomError::invalid(s));
-                    }
-                    let outer = caps.name("ver").unwrap().as_str();
-                    if caps.name("rev").is_some() || !outer.bytes().all(|b| b.is_ascii_digit()) {
-                        return Err(AtomError::invalid(s));
-                    }
-                    if outer.len() > 1 && outer.starts_with('0') {
-                        return Err(AtomError::invalid(s));
-                    }
-                    (
-                        Some(caps.name("tailver").unwrap().as_str().to_string()),
-                        caps.name("tailrev").map(|m| m.as_str().to_string()),
-                        Some(outer.to_string()),
-                    )
-                }
-            };
-            (
-                operator,
-                caps.name("vcat").unwrap().as_str().to_string(),
-                caps.name("vpkg").unwrap().as_str().to_string(),
-                version,
-                revision,
-                build_id,
-            )
-        } else {
-            // Ambiguous per PMS (`foo-bar-2`).
-            // Portage: lib/portage/dep/__init__.py, Atom.__init__
-            if caps.name("ambiguous").is_some() {
+            wild = atom_wildcard_regex()
+                .captures(rest)
+                .ok_or_else(|| AtomError::invalid(s))?;
+            (&wild, true)
+        }
+    };
+
+    // The wildcard body (Portage dep:1972-1997): `simple` (extended
+    // category/package, `*` allowed in either half) or `star`
+    // (`=cat/pkg-\*\w+\*`, ASCII `\w`). A `simple` `-vr` tail rejects the
+    // atom only when it carries a dotted component (dep:1988-1989 checks
+    // group `simple+3`, the `(\.\d+)` inside the tail): `*/foo-1` and
+    // `*/foo-1-r1` parse as extended atoms with the tail in the cp,
+    // `*/foo-1.0` is invalid. `**` anywhere in the cpv is rejected
+    // (dep:1990). Slot/repo/use/EAPI handling below is shared.
+    let (operator, category, package, version, revision, build_id) = if extended {
+        if caps.name("wtaildot").is_some() {
+            return Err(AtomError::invalid(s));
+        }
+        if let Some(simple) = caps.name("simple") {
+            if simple.as_str().contains("**") {
                 return Err(AtomError::invalid(s));
             }
+            let (cat, pkg) = simple
+                .as_str()
+                .split_once('/')
+                .expect("wildcard simple always has cat/pkg");
             (
                 Operator::None,
-                caps.name("cat").unwrap().as_str().to_string(),
-                caps.name("pkg").unwrap().as_str().to_string(),
+                cat.to_string(),
+                pkg.to_string(),
                 None,
                 None,
                 None,
             )
+        } else {
+            let starcp = caps
+                .name("starcp")
+                .expect("wildcard is simple or star")
+                .as_str();
+            let starver = caps
+                .name("starver")
+                .expect("star always has a version")
+                .as_str();
+            if format!("={starcp}-{starver}").contains("**") {
+                return Err(AtomError::invalid(s));
+            }
+            let (cat, pkg) = starcp
+                .split_once('/')
+                .expect("wildcard star always has cat/pkg");
+            (
+                Operator::EqGlob,
+                cat.to_string(),
+                pkg.to_string(),
+                Some(starver.to_string()),
+                None,
+                None,
+            )
+        }
+    } else if let Some(op) = caps.name("op") {
+        let tail = caps.name("bidtail");
+        let glob = caps.name("glob");
+        // PMS 8.3.1: `*` is illegal with any operator but `=`, and a
+        // `=*` tail is always invalid (dep:2023-2033).
+        if glob.is_some() && (op.as_str() != "=" || tail.is_some()) {
+            return Err(AtomError::invalid(s));
+        }
+        let operator = if glob.is_some() {
+            Operator::EqGlob
+        } else {
+            Operator::from_str(op.as_str())
         };
+        // Portage's ambiguous `-vr` tail, tried before a longer package
+        // name (dep:1998-2022): when present, the version comes from the
+        // tail and the outer `-vr` is the build-id, valid only with
+        // `allow_build_id` and only as plain digits (Portage parses it
+        // with `int()`, dep:2014-2019). A leading zero is rejected.
+        let (version, revision, build_id) = match tail {
+            None => (
+                Some(caps.name("ver").unwrap().as_str().to_string()),
+                caps.name("rev").map(|m| m.as_str().to_string()),
+                None,
+            ),
+            Some(_) => {
+                if !allow_build_id {
+                    return Err(AtomError::invalid(s));
+                }
+                let outer = caps.name("ver").unwrap().as_str();
+                if caps.name("rev").is_some() || !outer.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err(AtomError::invalid(s));
+                }
+                if outer.len() > 1 && outer.starts_with('0') {
+                    return Err(AtomError::invalid(s));
+                }
+                (
+                    Some(caps.name("tailver").unwrap().as_str().to_string()),
+                    caps.name("tailrev").map(|m| m.as_str().to_string()),
+                    Some(outer.to_string()),
+                )
+            }
+        };
+        (
+            operator,
+            caps.name("vcat").unwrap().as_str().to_string(),
+            caps.name("vpkg").unwrap().as_str().to_string(),
+            version,
+            revision,
+            build_id,
+        )
+    } else {
+        // Ambiguous per PMS (`foo-bar-2`).
+        // Portage: lib/portage/dep/__init__.py, Atom.__init__
+        if caps.name("ambiguous").is_some() {
+            return Err(AtomError::invalid(s));
+        }
+        (
+            Operator::None,
+            caps.name("cat").unwrap().as_str().to_string(),
+            caps.name("pkg").unwrap().as_str().to_string(),
+            None,
+            None,
+            None,
+        )
+    };
 
     // A bare trailing ":" matches the regex but is invalid.
     let (slot, sub_slot, slot_operator) = match caps.name("slotpart") {
@@ -587,7 +682,7 @@ fn parse_atom_with_uncached(
         use_deps,
         repo,
         build_id,
-        extended: false,
+        extended,
     })
 }
 
@@ -672,7 +767,7 @@ fn render_atom(atom: &Atom) -> String {
             out.push_str("-r");
             out.push_str(r);
         }
-        if atom.operator == Operator::EqGlob {
+        if atom.operator == Operator::EqGlob && !atom.extended {
             out.push('*');
         } else if let Some(bid) = &atom.build_id {
             out.push('-');
@@ -785,6 +880,26 @@ fn parse_candidate_uncached(s: &str) -> Option<Candidate> {
     })
 }
 
+/// Portage `extended_cp_match` (dep:2352-2365): each `*` becomes `[^/]*`,
+/// anchored. Compiled regexes are memoised per pattern like Portage's
+/// `_extended_cp_re_cache`.
+pub fn extended_cp_match(pattern: &str, cp: &str) -> bool {
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
+    }
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        let re = c.entry(pattern.to_string()).or_insert_with(|| {
+            Regex::new(&format!(
+                "^{}$",
+                regex::escape(pattern).replace(r"\*", "[^/]*")
+            ))
+            .expect("escaped pattern with ASCII class substitutions always compiles")
+        });
+        re.is_match(cp)
+    })
+}
+
 /// Collapses leading zeros of a plain version (never the `-rN` revision) as
 /// Portage does before an `=*` comparison.
 ///
@@ -830,6 +945,21 @@ fn matches_version(atom: &Atom, candidate: &Candidate) -> bool {
         // boundary: "1*" must not match "10".
         // Portage: lib/portage/dep/__init__.py, match_from_list
         Operator::EqGlob => {
+            if atom.extended {
+                // Extended `=*` is a substring test on the candidate's
+                // `_pkg_str` version (`ver[-rN]`, without `-r0`; dep:2954-2972).
+                // Portuale candidates model `_pkg_str`, so a plain-string-only
+                // `-r0` never appears here (review M-3): `=*/foo-*r0*` matches
+                // no portuale candidate, while Portage would match the plain
+                // string `"dev-libs/foo-1.0"`. The atom version keeps its
+                // stars (`*1*`); Portage strips them (`mydep.version[1:-1]`).
+                let ver = atom.version.as_ref().expect("star always has a version");
+                let inner = ver
+                    .strip_prefix('*')
+                    .and_then(|v| v.strip_suffix('*'))
+                    .expect("star version is `*…*`");
+                return candidate.full_version().contains(inner);
+            }
             let atom_cmp = glob_compare_string(atom.version.as_ref().unwrap(), &atom.revision);
             let cand_cmp = glob_compare_string(&candidate.version, &candidate.revision);
             let Some(rest) = cand_cmp.strip_prefix(&atom_cmp) else {
@@ -1178,7 +1308,17 @@ pub fn evaluate_atom_conditionals(atom_str: &str, parent_use: &HashSet<String>) 
 /// atom doesn't parse. Unparseable candidates are skipped.
 /// Portage: lib/portage/dep/__init__.py, match_from_list
 pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec<&'a str>> {
-    let atom = parse_atom(atom_str)?;
+    // Portage re-parses with `allow_wildcard=True, allow_repo=True`
+    // (dep:2901-2906); the default `parse_atom` keeps rejecting extended
+    // atoms. Leading blockers are stripped before the re-parse, so a blocker
+    // atom matches like its bare form. `matches_repo` is unchanged.
+    let opts = AtomOptions {
+        allow_wildcard: true,
+        allow_repo: Some(true),
+        ..AtomOptions::default()
+    };
+    let atom = parse_atom_with(atom_str.trim_start_matches('!'), &opts, "").ok()?;
+    let atom_cp = format!("{}/{}", atom.category, atom.package);
     Some(
         candidates
             .iter()
@@ -1187,9 +1327,12 @@ pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec
                 let Some(candidate) = parse_candidate(c) else {
                     return false;
                 };
-                candidate.category == atom.category
-                    && candidate.package == atom.package
-                    && matches_version(&atom, &candidate)
+                let cp = format!("{}/{}", candidate.category, candidate.package);
+                // Portage dep:2934-2943: exact cp or `extended_cp_match`.
+                if cp != atom_cp && !(atom.extended && extended_cp_match(&atom_cp, &cp)) {
+                    return false;
+                }
+                matches_version(&atom, &candidate)
                     && matches_slot(&atom, &candidate)
                     && matches_repo(&atom, &candidate)
             })
@@ -1213,61 +1356,11 @@ pub fn atom_intersects(a: &Atom, b: &Atom) -> bool {
     a.slot.is_none() || b.slot.is_none() || a.slot == b.slot
 }
 
-// --- Bounded wildcard atoms (package.mask/.unmask/.accept_keywords) ---
-//
-// Separate from `Atom`/`parse_atom`, which still reject wildcards. Only
-// `*/*`, `cat/*` and `*/pkg`: a literal `*` for a whole category or package;
-// no partial globs, operators or slots.
-
-fn cat_full_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(&format!("^{CAT}$")).unwrap())
-}
-
-fn pkg_full_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(&format!("^{PKG}$")).unwrap())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WildcardAtom {
-    pub category: Option<String>,
-    pub package: Option<String>,
-}
-
-/// Parses `*/*`, `cat/*` or `*/pkg`; `None` for anything else, including a
-/// plain atom with no wildcard (use `parse_atom`).
-pub fn parse_wildcard_atom(s: &str) -> Option<WildcardAtom> {
-    let (cat, pkg) = s.split_once('/')?;
-    if pkg.contains('/') {
-        return None;
-    }
-
-    let category = if cat == "*" {
-        None
-    } else if cat_full_re().is_match(cat) {
-        Some(cat.to_string())
-    } else {
-        return None;
-    };
-    let package = if pkg == "*" {
-        None
-    } else if pkg_full_re().is_match(pkg) {
-        Some(pkg.to_string())
-    } else {
-        return None;
-    };
-
-    if category.is_some() && package.is_some() {
-        return None;
-    }
-    Some(WildcardAtom { category, package })
-}
-
-pub fn wildcard_atom_matches(atom: &WildcardAtom, category: &str, package: &str) -> bool {
-    atom.category.as_deref().is_none_or(|c| c == category)
-        && atom.package.as_deref().is_none_or(|p| p == package)
-}
+// --- Extended (wildcard) atoms are parsed by `parse_atom_with` with
+// `allow_wildcard` (Portage `_get_atom_wildcard_re`) and matched by
+// `match_from_list` via `extended_cp_match`; the old bounded
+// `WildcardAtom`/`parse_wildcard_atom`/`wildcard_atom_matches` API is gone
+// (S3 moved its one caller, `matches_config_entry`, onto `match_from_list`).
 
 #[cfg(test)]
 mod parse_cache_tests {
@@ -1331,47 +1424,6 @@ mod without_use_tests {
         assert_eq!(without_use(""), "");
         // A malformed double-bracket string cuts at the first `[` too, like Portage.
         assert_eq!(without_use("cat/pkg[flag][other]"), "cat/pkg");
-    }
-}
-
-#[cfg(test)]
-mod wildcard_tests {
-    use super::*;
-
-    #[test]
-    fn any_any_matches_everything() {
-        let w = parse_wildcard_atom("*/*").unwrap();
-        assert!(wildcard_atom_matches(&w, "dev-libs", "foo"));
-        assert!(wildcard_atom_matches(&w, "app-misc", "bar"));
-    }
-
-    #[test]
-    fn category_wildcard_matches_only_that_category() {
-        let w = parse_wildcard_atom("dev-qt/*").unwrap();
-        assert!(wildcard_atom_matches(&w, "dev-qt", "qtcore"));
-        assert!(!wildcard_atom_matches(&w, "dev-libs", "qtcore"));
-    }
-
-    #[test]
-    fn package_wildcard_matches_only_that_package_name() {
-        let w = parse_wildcard_atom("*/foo").unwrap();
-        assert!(wildcard_atom_matches(&w, "dev-libs", "foo"));
-        assert!(wildcard_atom_matches(&w, "app-misc", "foo"));
-        assert!(!wildcard_atom_matches(&w, "dev-libs", "bar"));
-    }
-
-    #[test]
-    fn plain_atom_with_no_wildcard_is_rejected() {
-        // Not this grammar's job -- callers should try parse_atom first.
-        assert_eq!(parse_wildcard_atom("dev-libs/foo"), None);
-    }
-
-    #[test]
-    fn malformed_input_is_rejected() {
-        assert_eq!(parse_wildcard_atom("no-slash-at-all"), None);
-        assert_eq!(parse_wildcard_atom("dev-libs/"), None);
-        assert_eq!(parse_wildcard_atom("/foo"), None);
-        assert_eq!(parse_wildcard_atom("dev-libs/foo/bar"), None);
     }
 }
 

@@ -3,21 +3,15 @@
 use crate::*;
 
 /// Whether `entry` (a `package.mask`/`.unmask`/`.accept_keywords` line)
-/// matches this candidate: `match_from_list` first, the bounded wildcard-atom
-/// matcher (`*/*`, `category/*`, `*/package`) when it fails to parse.
+/// matches this candidate: `match_from_list`, which re-parses with
+/// `allow_wildcard: true, allow_repo: Some(true)` like Portage (dep:2901-2906).
 pub(crate) fn matches_config_entry(
     entry: &str,
     candidate_str: &str,
-    category: &str,
-    package: &str,
+    _category: &str,
+    _package: &str,
 ) -> bool {
-    if let Some(matches) = portage_dep::match_from_list(entry, &[candidate_str]) {
-        return !matches.is_empty();
-    }
-    match portage_dep::parse_wildcard_atom(entry) {
-        Some(w) => portage_dep::wildcard_atom_matches(&w, category, package),
-        None => false,
-    }
+    portage_dep::match_from_list(entry, &[candidate_str]).is_some_and(|m| !m.is_empty())
 }
 
 /// One `package.*` config list's atoms bucketed by `cat/pkg` -- the stand-in
@@ -168,4 +162,45 @@ pub(crate) fn any_config_entry_matches<T: ConfigAtomEntry>(
                 package,
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The default `parse_atom` keeps rejecting extended atoms, so the index
+    // routes them to `other` (re-checked one by one via
+    // `matches_config_entry`); plain atoms bucket by cp.
+    #[test]
+    fn wildcard_entries_land_in_other_not_in_by_cp() {
+        let entries = vec![
+            "dev-libs/foo".to_string(),
+            "dev-libs/fo*".to_string(),
+            "*/foo".to_string(),
+            "=*/foo-*1*".to_string(),
+            "*/*:0".to_string(),
+        ];
+        let idx = CpBucketIndex::build(&entries);
+        assert_eq!(idx.by_cp.get("dev-libs/foo").unwrap(), &vec![0]);
+        assert_eq!(idx.other, vec![1, 2, 3, 4]);
+        // ... and they still match through `matches_config_entry`.
+        assert!(matches_config_entry(
+            "dev-libs/fo*",
+            "dev-libs/foo-1.0",
+            "dev-libs",
+            "foo"
+        ));
+        assert!(!matches_config_entry(
+            "dev-libs/fo*",
+            "dev-libs/bar-1.0",
+            "dev-libs",
+            "bar"
+        ));
+        assert!(matches_config_entry(
+            "=*/foo-*1*",
+            "dev-libs/foo-1.0",
+            "dev-libs",
+            "foo"
+        ));
+    }
 }

@@ -955,6 +955,24 @@ fn atom_specificity_ranks_exact_version_above_bare_above_wildcard() {
     assert!(atom_specificity("dev-libs/bar") > atom_specificity("*/*"));
 }
 
+// Portage `best_match_to_list` (dep:2796-2884; oracle `probe_match.py`
+// `best_match_to_list` rows, re-run live 2026-10-12):
+// extended `=*` ranks 0, extended slotted −1, extended plain −2 — all below
+// a bare non-extended atom (1), which is why `dev-libs/foo` keeps winning
+// until `dev-libs/foo:0` (3) and `=dev-libs/foo-1*` (4) appear.
+#[test]
+fn atom_specificity_ranks_extended_glob_above_extended_slot_above_extended_plain() {
+    assert_eq!(atom_specificity("=*/bar-*1*"), 0);
+    assert_eq!(atom_specificity("*/*:0"), -1);
+    assert_eq!(atom_specificity("*/*"), -2);
+    assert_eq!(atom_specificity("dev-libs/*"), -2);
+    assert!(atom_specificity("dev-libs/bar") > atom_specificity("=*/bar-*1*"));
+    assert!(atom_specificity("=*/bar-*1*") > atom_specificity("*/*:0"));
+    assert!(atom_specificity("*/*:0") > atom_specificity("*/*"));
+    // Unparseable stays −2, as before.
+    assert_eq!(atom_specificity("dev-libs/bar-1"), -2);
+}
+
 #[test]
 fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
     // The fingerprint must see a differing middle `package_use`

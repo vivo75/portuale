@@ -3,9 +3,10 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 
 ## module
 - Owner, 2026-10-10: the grammar scope cut below is temporary. The target is the full grammar of each supported EAPI, applied per ebuild according to its declared EAPI (backlog #341).
-- S2 (#341) closed two cuts: build-ids (`=cat/pkg-1.0-2`, via `Atom.build_id` + `AtomOptions.allow_build_id`) and EAPI parametrization of the strict grammar (`parse_atom_with` + `AtomEapi`, EAPI gates verbatim from `Atom.__init__`). Still open: the wildcard branch (`allow_wildcard` changes nothing; S3 fills it).
+- S2 (#341) closed two cuts: build-ids (`=cat/pkg-1.0-2`, via `Atom.build_id` + `AtomOptions.allow_build_id`) and EAPI parametrization of the strict grammar (`parse_atom_with` + `AtomEapi`, EAPI gates verbatim from `Atom.__init__`).
+- S3 (#341) closed the wildcard branch: `parse_atom_with` with `allow_wildcard` ports `_get_atom_wildcard_re` (dep:332-372) and `match_from_list` re-parses with `allow_wildcard=True, allow_repo=True` (dep:2901-2906). The default `parse_atom` still rejects extended atoms (`CpBucketIndex::build` routes them to `other` because of it).
 - Origin: the "atom matching" slice from LLM/agent-context.md's depgraph/config resolution follow-up work. Ports `portage.dep.Atom` and `portage.dep.match_from_list` (lib/portage/dep/__init__.py).
-- The Python harness (python/atom_harness.py) explicitly rejected atoms using the still-excluded features as INVALID, so both sides agreed on the same input language rather than Rust silently accepting a narrower one. (The bounded wildcard-atom API further down the file, for package.mask/.unmask/.accept_keywords matching only, does not change any of this.) NOTE: the Python mirror no longer exists (see AGENTS.md rule 4).
+- The atom harnesses (Rust `atom-harness`, Python `python-harness/atom_harness.py`) agree on the full S3 input language: EAPI-aware strict atoms incl. build-ids (S2) plus extended/wildcard atoms (S3), differentially tested parse × match. NOTE: the Python mirror no longer exists (see AGENTS.md rule 4).
 - Slot operators (`:=`, `:*`, `:slot=` -- PMS 8.3.3): see `SlotOperator`, `atom_regex` (two-stage parse mirroring Portage's `_get_atom_re`/`_get_slot_dep_re` split) and `matches_slot` (matching needed zero changes: Portage's `_match_slot` ignores `slot_operator` entirely and consults only `Atom.slot`/`.sub_slot`, both already modeled correctly before slot operators existed).
 - History: adding slot operators closed a real, previously-silent bug in `portage-repo`'s dependency recursion: any DEPEND/RDEPEND token using a slot operator (extremely common, e.g. `dev-libs/foo:0=`) failed to parse under the old grammar and was silently dropped from the graph entirely -- no entry, no `NoVisibleCandidate`, no warning -- because `resolve_pretend_graph`'s BFS loop treats a parse failure as "not a dependency at all" (`let Some(atom) = parse_atom(..) else { continue };`), not as an unresolvable one.
 - Candidates for `match_from_list` are plain strings `category/package-version[-rN][:slot[/subslot]]`, not full Package objects (no USE/IUSE/repo metadata), since portuale had no package-db/depgraph model at that point. This mirrors how Portage's `match_from_list` already supports plain strings (via `dep_getslot`'s ":slot" suffix convention) as a fallback when candidates aren't Package objects.
@@ -38,7 +39,7 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 
 ## struct Atom
 - `use_deps`: `foo[]` is invalid, same as Portage. Original doc said "never consulted by matching -- see the module doc comment" (true of `match_from_list`; `use_deps_satisfied` is the explicit second step).
-- `build_id` (#341 S2): the ambiguous `-vr` tail of a versioned atom as a digit string (Portage's int is unbounded: `=dev-libs/foo-1.0-18446744073709551616` parses, live). `extended`: always false until S3 fills the wildcard branch.
+- `build_id` (#341 S2): the ambiguous `-vr` tail of a versioned atom as a digit string (Portage's int is unbounded: `=dev-libs/foo-1.0-18446744073709551616` parses, live). `extended` (#341 S3): true for `_get_atom_wildcard_re` matches, only with `allow_wildcard`.
 
 ## fn parse_atom_with
 - Transcription of `Atom.__init__` (dep:1900-2153), keeping the crate's two-stage shape (permissive outer regex, validated slot/use stages). The op branch carries Portage's ambiguous tail as `bidtail` + outer `-vr`, tried before a longer package name (the regex backtracking order is the semantics: `<a/1-1-02-1.0` is a leading-zero build-id ERR, not package `1-1-02-1` version `0` — found by the S2 fuzz acceptance, 1 in 60k). `=*` with a tail is always invalid (dep:2023-2033); `=*` with an operator other than `=` is rejected outright (PMS 8.3.1 "an asterisk used with any other operator is illegal": `>=cat/pkg-1.2*` is invalid, not truncated); the simple branch tail is always invalid (`foo-bar-2` ambiguity). Slot parsing follows `_get_slot_dep_re` per `attrs.slot_operator` (without it the whole text must be a plain slot, so `:0/1`/`:0=` are bare `InvalidAtom`s). EAPI gates only when `eapi` is given, in Portage's order (`slot_deps`, `use_deps`, `use_dep_defaults`, `strong_blocks`; messages verbatim with the caller's `eapi_str`). The conditional-flag check is `check_conditional_flags`, not here: it needs the owner's IUSE, which is not hashable for the cache key — and the order is unobservable anyway (strong blocks are off only in EAPI 0/1, where use deps already fail first; review I-1, proven live).
@@ -153,19 +154,24 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 - Returns `atom_str` literally unchanged (same string) when there are no use-deps or none are conditional, so a plain `[flag]` atom is never needlessly rewritten.
 
 ## fn match_from_list
-- Mirrors Portage's `match_from_list`. `None` means the atom failed to parse under the v1 grammar; unparseable candidate strings are silently skipped (a documented simplification -- see module notes).
+- Mirrors Portage's `match_from_list`. `None` means the atom failed to parse; unparseable candidate strings are silently skipped.
+- S3 (#341): re-parses with `allow_wildcard: true, allow_repo: Some(true)` (dep:2901-2906); leading blockers stripped before the re-parse, so a blocker matches like its bare form. Extended cp via `extended_cp_match` (dep:2934-2943); extended `=*` is a substring test on the candidate's `_pkg_str` version (`ver[-rN]`, without `-r0`, dep:2954-2972) — portuale candidates model `_pkg_str`, so `=*/foo-*r0*` matches nothing here while Portage on a plain-string candidate would match (review M-3). `matches_repo` unchanged.
 
 ## fn atom_intersects
 - Portage `Atom.intersects()` (`lib/portage/dep/__init__.py`): despite the name a deliberately NARROW check; Portage's docstring says so ("atoms with different cpv, operator or use attributes cause this method to return False even though there may actually be some intersection... TODO: Detect more forms of intersection").
 - Ported field-for-field, skipping Portage's `self == other` fast-path (redundant: identical atoms satisfy every check and fall through to `true`). `cp`, `use`, `operator` and `cpv` (operator plus the full version/revision, compared as `full_version()`) must ALL match exactly, not overlap or satisfy a range, before slot compatibility decides.
 - `repo` is deliberately NOT checked, matching `intersects()`; Portage's `action_deselect` caller adds its own repo check (`and not (arg_atom.repo and not atom.repo)`), ported at `run_deselect`'s call site in `pretend.rs`, not folded in here.
 
-## section: bounded wildcard atoms
-- A separate, additional API: `Atom`/`parse_atom`/`match_from_list` are unchanged, so atom-harness's existing v1 grammar contract (which rejects wildcard atoms as INVALID) is unaffected. Exists for package.mask/.unmask/.accept_keywords matching (see portage-repo), where real files lean heavily on wildcard atoms like "*/*" and "dev-qt/*".
-- Deliberately bounded, not the full PMS extended-atom-syntax grab-bag. No version operators and no slots on a wildcard atom (PMS extended atoms don't carry them either).
+## section: bounded wildcard atoms (removed in S3)
+- S3 deleted `WildcardAtom`/`parse_wildcard_atom`/`wildcard_atom_matches` after moving their one caller (`matches_config_entry`) onto `match_from_list`, which now handles the full Portage extended syntax. The old API covered only `*/*`, `cat/*`, `*/pkg` with no partial globs, operators or slots; Portage additionally accepts partial globs (`dev-libs/fo*`), wildcard+slot (`*/*:0`), wildcard+repo, `=*/foo-*1*` substring versions and blockers.
 
-## fn parse_wildcard_atom
-- A plain atom with no wildcard isn't this grammar's job: try `parse_atom` + `match_from_list` first, which covers versioned/slotted atoms this can't.
+## fn atom_wildcard_regex
+- Transcription of `_get_atom_wildcard_re` (dep:332-372): `simple` = `_extended_cat` (`[\w+*][\w+.*-]*`, with `.`) / `pkg_re` (`[\w+*][\w+*-]*?`, no `.`), `star` = `=cat/pkg-\*\w+\*` (ASCII `\w`: no `.`/`-`, so `=dev-libs/fo*-*1.0*` is ERR, oracle probe2). Blockers are stripped before matching (dep:1959-1967), shared with the strict path. The slot groups reuse the strict names so the second-stage slot validation runs unchanged; EAPI gates (slot/strong-blocker) and the repo gate apply to extended atoms too (live: `*/*:0` with eapi=0 → `Slot deps are not allowed`, `!!*/foo` with eapi=1 → `Strong blocks…`).
+- The `simple` `-vr` tail check is group `simple+3`, the `(\.\d+)` *inside* the tail — not the tail itself: `*/foo-1` and `*/foo-1-r1` parse as extended atoms with the tail in the cp, `*/foo-1.0` is invalid, and `*/foo-1.r1` never matches at all (live 2026-10-12). The plan's "admits a tail only to reject it" phrasing is the shape, not the rule.
+- `**` anywhere in the cpv is rejected (dep:1990).
+
+## fn extended_cp_match
+- Portage `extended_cp_match` (dep:2352-2365): each `*` → `[^/]*`, anchored, so a glob never crosses the `/`. Compiled regexes memoised per pattern like Portage's `_extended_cp_re_cache`.
 
 ## enum Aff / aff_* helpers
 - `Aff` mirrors Portage's `stack` entries in `extract_affecting_use`, which are `str` or `list`.

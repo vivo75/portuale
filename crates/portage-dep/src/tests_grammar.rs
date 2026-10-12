@@ -131,6 +131,8 @@ fn render_fields(atom: &Atom) -> String {
 
 /// Every row of testdata/atoms-3.0.82.2.tsv, generated from Portage 3.0.82.2
 /// by LLM/tools/atom_oracle_table.py (oracle probe battery, 2026-10-11).
+/// The `S3OK` rows need the wildcard branch (S3); rows whose verdict starts
+/// with `S3` but is not `S3OK` stay skipped.
 #[test]
 fn grammar_matches_portage_on_the_oracle_battery() {
     let mut rows = 0;
@@ -141,14 +143,15 @@ fn grammar_matches_portage_on_the_oracle_battery() {
         rows += 1;
         let [atom, mode, verdict, detail]: [&str; 4] =
             row.splitn(4, '\t').collect::<Vec<_>>().try_into().unwrap();
-        // S3 rows (wildcard branch) stay skipped until S3 fills that branch.
-        if verdict.starts_with("S3") {
+        if verdict.starts_with("S3") && verdict != "S3OK" {
             continue;
         }
         let (opts, eapi_str) = mode_options(mode);
         let got = parse_atom_with(atom, &opts, eapi_str);
         match verdict {
-            "OK" => assert_eq!(render_fields(&got.expect(atom)), detail, "{atom} [{mode}]"),
+            "OK" | "S3OK" => {
+                assert_eq!(render_fields(&got.expect(atom)), detail, "{atom} [{mode}]")
+            }
             "ERR" => assert_eq!(got.expect_err(atom).message, detail, "{atom} [{mode}]"),
             _ => unreachable!("unknown verdict {verdict:?}"),
         }
