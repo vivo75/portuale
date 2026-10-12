@@ -7,6 +7,7 @@ Where a candidate's mask or keyword decision comes from.
 
 ## fn visibility_provenance
 - An invisible candidate would just report "no entry helped," which isn't a useful trace of anything.
+- S9 (#341): the `package.mask`/`unmask` entry search passes the candidate's binary build-id, so an `=`+build-id entry provenances to the equal instance.
 
 ## fn keyword_provenance
 - Checks the global set alone by calling `keywords_accepted` with no package entries at all -- reuses its exact matching logic rather than a second implementation. Walks `package_accept_keywords` in the same least-to-most-specific order `specificity_ordered_flags` applies them in, accumulating onto a copy of the global set exactly like `specificity_ordered_flags` does. A less-specific entry earlier in the accumulation may already have been enough, e.g. a `*` wildcard reached before a slot-scoped `~arch` grant. `None` if even every matching entry together somehow isn't enough -- shouldn't happen for a candidate already confirmed `is_visible`, but a safe fallback rather than a panic.

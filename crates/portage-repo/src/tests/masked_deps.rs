@@ -222,6 +222,42 @@ fn binary_masked_report_lists_masked_binaries_like_the_ebuild_block() {
     );
 }
 
+/// An `=`+build-id `package.mask` line reports exactly the masked binary
+/// instance: the atom matches only the equal build-id, and the reasons
+/// name `package.mask`.
+/// Portage 3.0.82.2, host run 2026-10-12 (S9 oracle cell
+/// `H-bid-mask-atom-masked`, rc 1):
+/// `!!! All ebuilds that could satisfy "=dev-libs/t341-dep-1-2" …` with
+/// `- dev-libs/t341-dep-1::t341 (masked by: package.mask)`.
+#[test]
+fn binary_masked_report_for_build_id_atom_lists_only_the_masked_instance() {
+    let instance = |bid: &str| Candidate {
+        source: CandidateSource::Binary,
+        binary_use: Some(HashSet::new()),
+        eapi: "8".to_string(),
+        repo_name: "t341".to_string(),
+        build_id: Some(bid.to_string()),
+        build_time: Some(if bid == "2" { 2000 } else { 1000 }),
+        slot: "0".to_string(),
+        sub_slot: "1".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    let mut config = test_config();
+    config.package_mask = vec!["=dev-libs/x-1.0-2".to_string()];
+    let binaries = vec![instance("1"), instance("2")];
+    let report = all_binary_masked_report(
+        &binaries,
+        "=dev-libs/x-1.0-2",
+        &config,
+        "\"=dev-libs/x-1.0-2\"",
+    )
+    .expect("the masked instance reports");
+    assert!(
+        report.contains("- dev-libs/x-1.0::t341 (masked by: package.mask)"),
+        "{report}"
+    );
+}
+
 #[test]
 fn atom_all_use_unmasked_is_true_for_the_unsatuseor_alternative() {
     // Portage's `all_use_unmasked` probe (bug 515584): an off-by-default flag

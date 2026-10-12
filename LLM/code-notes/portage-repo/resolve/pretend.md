@@ -65,6 +65,7 @@ Selecting one atom's candidate (`resolve_pretend`).
 ## fn resolve_pretend (matched pipeline)
 - `resolve_pretend_graph`'s unsolvable slot-conflict handler adds `!=cat/pkg-<ver>` entries to hide a specific version (of the conflicted package or of a pulling parent) and force a lower one on retry.
 - Slot-conflict reconciliation (Portage `_process_slot_conflicts` / `_select_pkg`'s "all the atoms pulling this slot", not just the first): when `resolve_pretend_graph` re-resolves a package that hit a slot conflict, it passes every *other* parent atom that targeted the same `cat/pkg:slot` here -- the winning candidate must satisfy all of them at once.
+- S9 (#341): the `usable` gate and the main `matched` filter pair each candidate string with its binary build-id (`match_from_list_with_build_id`), so an `=`+build-id top-level atom resolves only the equal instance (dep:2994-3008).
 
 ## fn resolve_pretend (USE filter)
 - Same "can't tell, so exclude" precedent `reinstall_flags_for_use_change` sets. `use_masked_only` re-checks `is_visible` (redundant here) and the same "only-a-flip-away" test.

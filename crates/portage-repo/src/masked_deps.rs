@@ -304,9 +304,19 @@ pub(crate) fn candidate_masking_reasons(
     );
     let mut reasons = Vec::new();
 
-    if any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
-        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package)
-    {
+    if any_config_entry_matches_with_build_id(
+        &config.package_mask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    ) && !any_config_entry_matches_with_build_id(
+        &config.package_unmask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    ) {
         reasons.push("package.mask".to_string());
     }
 
@@ -459,26 +469,20 @@ fn masked_rows_for_pool(
     atom: &portage_dep::Atom,
     config: &portage_profile::Config,
 ) -> Option<Vec<(String, Vec<String>)>> {
-    let strs: Vec<String> = candidates
-        .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
-        .collect();
-    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
-    // Version/slot filter, USE and visibility ignored.
-    let matched: std::collections::HashSet<&str> = portage_dep::match_from_list(atom_str, &refs)?
-        .into_iter()
-        .collect();
-
+    // Version/slot filter, USE and visibility ignored. The match runs
+    // per candidate (not per string): binpkg-multi-instance builds share
+    // one string, and only the instance with the equal build-id may report
+    // an `=`+build-id atom (dep:2994-3008, S9).
+    let match_atom = portage_dep::parse_match_atom(atom_str)?;
     let mut masked: Vec<&Candidate> = candidates
         .iter()
-        .zip(strs.iter())
-        .filter(|(_, s)| matched.contains(s.as_str()))
-        .map(|(c, _)| c)
+        .filter(|c| {
+            let s = format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            );
+            portage_dep::match_atom_matches_candidate(&match_atom, &s, c.build_id.as_deref())
+        })
         .collect();
     if masked.is_empty()
         || masked

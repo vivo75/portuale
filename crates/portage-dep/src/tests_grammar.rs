@@ -271,3 +271,49 @@ fn eq_build_id_atom_matches_no_plain_candidate() {
         Some(candidates.to_vec())
     );
 }
+
+// Portage `match_from_list` on `_pkg_str` candidates with build-ids
+// (lib/portage/dep/__init__.py:2994-3008), re-run live 2026-10-12
+// (`python3 LLM/evidence/2026-10-11-341-oracle/probe_match.py`,
+// Portage 3.0.82.2):
+//   =dev-libs/foo-1.0-2  -> ['dev-libs/foo-1.0#2']
+//   =dev-libs/foo-1.0    -> ['dev-libs/foo-1.0#1', 'dev-libs/foo-1.0#2', 'dev-libs/foo-1.0#None']
+//   >=dev-libs/foo-1.0-2 -> ['dev-libs/foo-1.0#1', 'dev-libs/foo-1.0#2', 'dev-libs/foo-1.0#None',
+//                            'dev-libs/foo-1.0-r1#3', 'dev-libs/foo-10#4']
+//   ~dev-libs/foo-1.0-2  -> ['…1.0#1', '…1.0#2', '…1.0#None', '…1.0-r1#3']
+// (The `#<id>` suffix is the candidate's `build_id`; `#None` an ebuild-like
+// one. The probe's `::gentoo`/`::x` repos and `:0` slots pass through
+// `matches_repo`/`matches_slot` untouched, so plain strings pin the same rows.)
+#[test]
+fn eq_build_id_atom_matches_only_equal_build_id_candidate() {
+    let strs = [
+        "dev-libs/foo-1.0",
+        "dev-libs/foo-1.0",
+        "dev-libs/foo-1.0",
+        "dev-libs/foo-1.0-r1",
+        "dev-libs/foo-10",
+        "dev-libs/foobar-1.12",
+    ];
+    let bids: [Option<&str>; 6] = [Some("1"), Some("2"), None, Some("3"), Some("4"), None];
+    let paired: Vec<(&str, Option<&str>)> = strs.iter().copied().zip(bids).collect();
+    // `=` consults the build-id: only the equal instance matches.
+    assert_eq!(
+        match_from_list_with_build_id("=dev-libs/foo-1.0-2", &paired),
+        Some(vec![strs[1]])
+    );
+    // A `=` atom without one matches every version-equal candidate,
+    // build-id or not.
+    assert_eq!(
+        match_from_list_with_build_id("=dev-libs/foo-1.0", &paired),
+        Some(vec![strs[0], strs[1], strs[2]])
+    );
+    // `>=` and `~` ignore the build-id entirely.
+    assert_eq!(
+        match_from_list_with_build_id(">=dev-libs/foo-1.0-2", &paired),
+        Some(vec![strs[0], strs[1], strs[2], strs[3], strs[4]])
+    );
+    assert_eq!(
+        match_from_list_with_build_id("~dev-libs/foo-1.0-2", &paired),
+        Some(vec![strs[0], strs[1], strs[2], strs[3]])
+    );
+}

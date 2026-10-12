@@ -623,7 +623,15 @@ pub fn resolve_pretend(
             "{}/{}-{}:{}/{}::{}",
             atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
         );
-        if !portage_dep::match_from_list(atom_str, &[s.as_str()]).is_some_and(|r| !r.is_empty()) {
+        // The atom match sees the candidate's binary build-id, so an
+        // `=`+build-id request is usable only by the equal instance
+        // (dep:2994-3008, S9).
+        if !portage_dep::match_from_list_with_build_id(
+            atom_str,
+            &[(s.as_str(), c.build_id.as_deref())],
+        )
+        .is_some_and(|r| !r.is_empty())
+        {
             return false;
         }
         extra_constraints.iter().all(|ec| {
@@ -706,7 +714,9 @@ pub fn resolve_pretend(
     }
 
     // Match through portage-dep's `match_from_list`; candidate strings round-trip
-    // back to their `Candidate` via `by_str` below.
+    // back to their `Candidate` via `by_str` below. Each pair carries the
+    // candidate's binary build-id, so an `=`+build-id atom matches only the
+    // equal instance (dep:2994-3008, S9).
     let candidate_strs: Vec<String> = visible
         .iter()
         .map(|c| {
@@ -717,11 +727,15 @@ pub fn resolve_pretend(
         })
         .collect();
     let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
-    let matched = portage_dep::match_from_list(atom_str, &candidate_str_refs).ok_or_else(|| {
-        Error::InvalidAtom {
+    let candidate_pairs: Vec<(&str, Option<&str>)> = candidate_str_refs
+        .iter()
+        .copied()
+        .zip(visible.iter().map(|c| c.build_id.as_deref()))
+        .collect();
+    let matched = portage_dep::match_from_list_with_build_id(atom_str, &candidate_pairs)
+        .ok_or_else(|| Error::InvalidAtom {
             atom: atom_str.to_string(),
-        }
-    })?;
+        })?;
 
     // Slot-conflict reconciliation: on a re-resolve the caller passes every *other*
     // parent atom targeting the same `cat/pkg:slot`, and the winner must satisfy all

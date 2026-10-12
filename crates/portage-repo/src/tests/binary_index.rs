@@ -113,6 +113,57 @@ fn dedup_binary_instances_keeps_newest_build_time_per_group() {
     assert_eq!(out[0].source, CandidateSource::Ebuild);
 }
 
+/// An `=`+build-id `package.mask` line masks only the equal binary
+/// instance: dedup keeps the older visible build, and when every instance
+/// is masked it still keeps the ranked newest for the masked report.
+/// Portage `match_from_list`'s `=` branch (dep:2994-3008), re-run live
+/// 2026-10-12 (`probe_match.py`: `=dev-libs/foo-1.0-2` → only `#2`).
+#[test]
+fn dedup_binary_instances_prefers_the_visible_build_over_a_masked_newer_one() {
+    let bin = |bid: &str, bt: i64| Candidate {
+        version: "1.0".to_string(),
+        keywords: vec!["amd64".to_string()],
+        slot: "0".to_string(),
+        sub_slot: "0".to_string(),
+        repo_location: PathBuf::new(),
+        repo_priority: i32::MIN,
+        repo_name: "gentoo".to_string(),
+        license: String::new(),
+        iuse: String::new(),
+        properties: String::new(),
+        restrict: String::new(),
+        source: CandidateSource::Binary,
+        binary_use: Some(HashSet::new()),
+        remote: false,
+        build_id: Some(bid.to_string()),
+        build_time: Some(bt),
+        eapi: "8".to_string(),
+        binary_deps: HashMap::new(),
+    };
+    let atom = portage_dep::parse_atom("dev-libs/x").unwrap();
+
+    // Newest build masked by its own instance: the older visible one wins.
+    let mut cfg = test_config();
+    cfg.package_mask = vec!["=dev-libs/x-1.0-3".to_string()];
+    let out = dedup_binary_instances(
+        vec![bin("1", 1000), bin("3", 3000), bin("2", 2000)],
+        &atom,
+        &cfg,
+    );
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].build_id.as_deref(), Some("2"));
+
+    // Every instance masked: the ranked newest is kept for the report.
+    cfg.package_mask = vec!["dev-libs/x".to_string()];
+    let out = dedup_binary_instances(
+        vec![bin("1", 1000), bin("3", 3000), bin("2", 2000)],
+        &atom,
+        &cfg,
+    );
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].build_id.as_deref(), Some("3"));
+}
+
 /// A local `$PKGDIR` version hides only its own build, never a newer remote one.
 #[test]
 fn multi_instance_local_build_does_not_shadow_a_newer_remote_build() {

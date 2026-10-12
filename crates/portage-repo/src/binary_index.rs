@@ -330,7 +330,12 @@ pub(crate) fn binary_candidates_from_index(
 /// `BUILD_ID`s, per `cat/pkg-ver:slot/sub_slot::repo`): keeps the highest-
 /// `(BUILD_TIME, BUILD_ID)` instance satisfying the atom's `[use]` deps -- or
 /// the newest anyway, preserving the `NoVisibleCandidate`/ebuild-fallback path.
-/// Portage `_iter_match_pkgs` yields newest first and `break`s on the first pass.
+/// A masked instance never wins while a visible one exists (Portage
+/// `_iter_match_pkgs` yields newest first and stops at the first acceptable
+/// one), so an `=`+build-id `package.mask` line unmasks the older build
+/// instead of emptying the pool; when every instance is masked the ranked
+/// newest is still kept, so the masked report lists it.
+/// Portage `depgraph.py`, _iter_match_pkgs
 pub(crate) fn dedup_binary_instances(
     candidates: Vec<Candidate>,
     atom: &portage_dep::Atom,
@@ -347,9 +352,6 @@ pub(crate) fn dedup_binary_instances(
             },
         )
     };
-    // key -> index into `out` of the currently-kept instance.
-    let mut kept: HashMap<(String, String, String, String), usize> = HashMap::new();
-    let mut out: Vec<Candidate> = Vec::with_capacity(candidates.len());
     // Ranks an instance: satisfying the atom's use-deps outranks not, then
     // `(BUILD_TIME, BUILD_ID)`.
     let rank = |x: &Candidate| {
@@ -362,9 +364,18 @@ pub(crate) fn dedup_binary_instances(
                 .unwrap_or(i64::MIN),
         )
     };
+    // `Single` ebuilds stream through; binary groups are picked after the
+    // pass so visibility can prefer an older unmasked instance over a
+    // masked newer one. Positions preserve first-seen order (`(is_group,
+    // idx)` into `singles`/`groups`, so no variant holds a `Candidate`).
+    let mut order: Vec<(bool, usize)> = Vec::with_capacity(candidates.len());
+    let mut singles: Vec<Option<Candidate>> = Vec::new();
+    let mut group_idx: HashMap<(String, String, String, String), usize> = HashMap::new();
+    let mut groups: Vec<Vec<Candidate>> = Vec::new();
     for c in candidates {
         if c.source != CandidateSource::Binary {
-            out.push(c);
+            singles.push(Some(c));
+            order.push((false, singles.len() - 1));
             continue;
         }
         let key = (
@@ -373,16 +384,41 @@ pub(crate) fn dedup_binary_instances(
             c.sub_slot.clone(),
             c.repo_name.clone(),
         );
-        match kept.get(&key).copied() {
-            Some(idx) => {
-                if rank(&c) > rank(&out[idx]) {
-                    out[idx] = c;
-                }
-            }
+        match group_idx.get(&key).copied() {
+            Some(idx) => groups[idx].push(c),
             None => {
-                kept.insert(key, out.len());
+                group_idx.insert(key, groups.len());
+                groups.push(vec![c]);
+                order.push((true, groups.len() - 1));
+            }
+        }
+    }
+    let mut out: Vec<Candidate> = Vec::with_capacity(order.len());
+    for (is_group, idx) in order {
+        if !is_group {
+            if let Some(c) = singles[idx].take() {
                 out.push(c);
             }
+            continue;
+        }
+        let group = &groups[idx];
+        // Visible instances first; the masked-only fallback keeps
+        // the reporting path (strictly-greater keeps the first on
+        // rank ties, as before).
+        let any_visible = group
+            .iter()
+            .any(|c| is_visible(c, &atom.category, &atom.package, config));
+        let mut best: Option<&Candidate> = None;
+        for c in group {
+            if any_visible && !is_visible(c, &atom.category, &atom.package, config) {
+                continue;
+            }
+            if best.is_none_or(|b| rank(c) > rank(b)) {
+                best = Some(c);
+            }
+        }
+        if let Some(winner) = best {
+            out.push(winner.clone());
         }
     }
     out

@@ -25,6 +25,7 @@ Keyword, mask and license visibility of a candidate.
 
 ## fn is_visible_uncached
 - Backlog #153: Portage masks a candidate whose own dep conditionals reference flags outside its effective IUSE (`invalid`), after every `_getmaskingstatus` reason -- so this check sits last here too.
+- S9 (#341): the `package.mask`/`unmask` check passes the candidate's binary build-id (`any_config_entry_matches_with_build_id`), so an `=`+build-id mask line masks only the equal instance (dep:2994-3008). Same in `visible_with_relax` and the three `*_masked_only` fns below, which duplicate this check.
 
 ## fn visible_with_relax
 - Portage `_pkg_visibility_check(pkg, autounmask_level)`. `relax_license` / `relax_keywords` / `relax_masks` mirror `_AutounmaskLevel`'s `allow_license_changes` / `allow_unstable_keywords` / `allow_unmasks`. The single-flag `*_masked_only` fns are the "and *only* this category is wrong" special cases (kept for their other callers). `resolve_pretend` walks the `_autounmask_levels` sequence, re-scanning every version at each level.

@@ -843,6 +843,13 @@ pub struct Candidate {
     pub sub_slot: Option<String>,
     /// `::reponame` suffix, `None` if absent ("repo unknown"); see `matches_repo`.
     pub repo: Option<String>,
+    /// Binary build-id (Portage `_pkg_str.build_id`); always `None` from
+    /// [`parse_candidate`] — a string never carries one, as `str(_pkg_str)`
+    /// drops it (oracle `probe_match.py`: plain-string candidates match an
+    /// `=`+build-id atom regardless). Callers holding a binary instance set
+    /// it explicitly; see [`match_from_list_with_build_id`].
+    /// Portage: lib/portage/dep/__init__.py:2994-3008.
+    pub build_id: Option<String>,
 }
 
 impl Candidate {
@@ -885,6 +892,9 @@ fn parse_candidate_uncached(s: &str) -> Option<Candidate> {
         slot: caps.name("slot").map(|m| m.as_str().to_string()),
         sub_slot: caps.name("subslot").map(|m| m.as_str().to_string()),
         repo: caps.name("repo").map(|m| m.as_str().to_string()),
+        // A string never carries a build-id (`str(_pkg_str)` drops it);
+        // binary callers set it after parsing (dep:2994-3008).
+        build_id: None,
     })
 }
 
@@ -938,13 +948,14 @@ fn matches_version(atom: &Atom, candidate: &Candidate) -> bool {
     match atom.operator {
         Operator::None => true,
         Operator::Eq => {
-            // S2 (review C-1): an `=` atom with a build-id matches no
-            // candidate without one — every portuale candidate models
-            // Portage's `_pkg_str`/`Package`, and none carries a build-id
-            // until S9 threads binary build-ids in. S9 adds the positive
-            // equal-build-id match.
-            // Portage: lib/portage/dep/__init__.py:2994-3008.
-            if atom.build_id.is_some() {
+            // The build-id is consulted only here, and only against a
+            // candidate that has one: equal ids match, a candidate without
+            // one never does (every portuale candidate models Portage's
+            // `_pkg_str`/`Package`; plain strings match regardless in
+            // Portage but never occur here). `>=`/`~`/`<`/`<=` ignore it.
+            // Portage: lib/portage/dep/__init__.py:2994-3008; oracle
+            // `probe_match.py` (`=dev-libs/foo-1.0-2` → only `#2`).
+            if atom.build_id.is_some() && atom.build_id != candidate.build_id {
                 return false;
             }
             vercmp(&candidate.full_version(), &atom.full_version().unwrap()) == Some(0)
@@ -1312,38 +1323,85 @@ pub fn evaluate_atom_conditionals(atom_str: &str, parent_use: &HashSet<String>) 
     ))
 }
 
-/// Returns the candidates (input order) matching `atom_str`; `None` if the
-/// atom doesn't parse. Unparseable candidates are skipped.
-/// Portage: lib/portage/dep/__init__.py, match_from_list
-pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec<&'a str>> {
-    // Portage re-parses with `allow_wildcard=True, allow_repo=True`
-    // (dep:2901-2906); the default `parse_atom` keeps rejecting extended
-    // atoms. Leading blockers are stripped before the re-parse, so a blocker
-    // atom matches like its bare form. `matches_repo` is unchanged.
+/// One parsed candidate against one parsed atom: cp, version (plus the
+/// `=`-only build-id rule), slot, repo.
+fn candidate_hits(atom: &Atom, atom_cp: &str, candidate: &Candidate) -> bool {
+    let cp = format!("{}/{}", candidate.category, candidate.package);
+    // Portage dep:2934-2943: exact cp or `extended_cp_match`.
+    if cp != atom_cp && !(atom.extended && extended_cp_match(atom_cp, &cp)) {
+        return false;
+    }
+    matches_version(atom, candidate)
+        && matches_slot(atom, candidate)
+        && matches_repo(atom, candidate)
+}
+
+/// Parses `atom_str` the way [`match_from_list`] does: leading blockers
+/// stripped, then re-parsed with `allow_wildcard=True, allow_repo=True`
+/// like Portage (dep:2901-2906). `None` if the atom doesn't parse.
+pub fn parse_match_atom(atom_str: &str) -> Option<Atom> {
     let opts = AtomOptions {
         allow_wildcard: true,
         allow_repo: Some(true),
         ..AtomOptions::default()
     };
-    let atom = parse_atom_with(atom_str.trim_start_matches('!'), &opts, "").ok()?;
+    parse_atom_with(atom_str.trim_start_matches('!'), &opts, "").ok()
+}
+
+/// One candidate string plus an optional binary build-id against an
+/// already-parsed match atom: the per-candidate form of
+/// [`match_from_list_with_build_id`], for callers whose candidates share
+/// one string (binpkg-multi-instance builds) and cannot be told apart
+/// after matching. Unparseable candidates never match.
+pub fn match_atom_matches_candidate(
+    atom: &Atom,
+    candidate_str: &str,
+    build_id: Option<&str>,
+) -> bool {
+    let Some(mut candidate) = parse_candidate(candidate_str) else {
+        return false;
+    };
+    if let Some(id) = build_id {
+        candidate.build_id = Some(id.to_string());
+    }
     let atom_cp = format!("{}/{}", atom.category, atom.package);
+    candidate_hits(atom, &atom_cp, &candidate)
+}
+
+/// Returns the candidates (input order) matching `atom_str`; `None` if the
+/// atom doesn't parse. Unparseable candidates are skipped.
+/// Portage: lib/portage/dep/__init__.py, match_from_list
+pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec<&'a str>> {
+    // The default `parse_atom` keeps rejecting extended atoms. Leading
+    // blockers are stripped before the re-parse, so a blocker atom matches
+    // like its bare form. `matches_repo` is unchanged.
+    let atom = parse_match_atom(atom_str)?;
     Some(
         candidates
             .iter()
             .copied()
-            .filter(|c| {
-                let Some(candidate) = parse_candidate(c) else {
-                    return false;
-                };
-                let cp = format!("{}/{}", candidate.category, candidate.package);
-                // Portage dep:2934-2943: exact cp or `extended_cp_match`.
-                if cp != atom_cp && !(atom.extended && extended_cp_match(&atom_cp, &cp)) {
-                    return false;
-                }
-                matches_version(&atom, &candidate)
-                    && matches_slot(&atom, &candidate)
-                    && matches_repo(&atom, &candidate)
-            })
+            .filter(|c| match_atom_matches_candidate(&atom, c, None))
+            .collect(),
+    )
+}
+
+/// [`match_from_list`] where each candidate may carry a binary build-id
+/// (Portage `_pkg_str.build_id`, which `str()` drops, so a plain string
+/// never has one): `None` keeps the string-path behaviour (an `=`+build-id
+/// atom matches nothing), `Some(id)` matches an `=`+build-id atom only on
+/// equal ids. Every other operator ignores the id, as in Portage.
+/// Portage: lib/portage/dep/__init__.py:2994-3008; oracle `probe_match.py`.
+pub fn match_from_list_with_build_id<'a>(
+    atom_str: &str,
+    candidates: &[(&'a str, Option<&str>)],
+) -> Option<Vec<&'a str>> {
+    let atom = parse_match_atom(atom_str)?;
+    Some(
+        candidates
+            .iter()
+            .copied()
+            .filter(|(c, build_id)| match_atom_matches_candidate(&atom, c, *build_id))
+            .map(|(c, _)| c)
             .collect(),
     )
 }

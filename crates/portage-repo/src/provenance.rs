@@ -35,16 +35,29 @@ pub(crate) fn visibility_provenance(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
-    let mask_entry =
-        config_entries_matching(&config.package_mask, &candidate_str, category, package)
-            .into_iter()
-            .next()
-            .cloned();
+    // The mask/unmask match sees the candidate's binary build-id (S9), so
+    // an `=`+build-id entry provenances to the right instance.
+    let mask_entry = config_entries_matching_with_build_id(
+        &config.package_mask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    )
+    .into_iter()
+    .next()
+    .cloned();
     let unmask_entry = if mask_entry.is_some() {
-        config_entries_matching(&config.package_unmask, &candidate_str, category, package)
-            .into_iter()
-            .next()
-            .cloned()
+        config_entries_matching_with_build_id(
+            &config.package_unmask,
+            &candidate_str,
+            candidate.build_id.as_deref(),
+            category,
+            package,
+        )
+        .into_iter()
+        .next()
+        .cloned()
     } else {
         None
     };

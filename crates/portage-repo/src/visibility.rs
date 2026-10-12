@@ -276,8 +276,21 @@ pub(crate) fn is_visible_uncached(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
-    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
-        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
+    // The mask check sees the candidate's binary build-id: an `=`+build-id
+    // `package.mask` line masks only the equal instance (dep:2994-3008, S9).
+    let masked = any_config_entry_matches_with_build_id(
+        &config.package_mask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    ) && !any_config_entry_matches_with_build_id(
+        &config.package_unmask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    );
     if masked {
         return false;
     }
@@ -362,14 +375,21 @@ pub(crate) fn visible_with_relax(args: VisibleWithRelaxArgs<'_>) -> bool {
     );
 
     if !relax_masks {
-        let masked =
-            any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
-                && !any_config_entry_matches(
-                    &config.package_unmask,
-                    &candidate_str,
-                    category,
-                    package,
-                );
+        // The mask check sees the candidate's binary build-id (S9), as in
+        // [`is_visible_uncached`] above.
+        let masked = any_config_entry_matches_with_build_id(
+            &config.package_mask,
+            &candidate_str,
+            candidate.build_id.as_deref(),
+            category,
+            package,
+        ) && !any_config_entry_matches_with_build_id(
+            &config.package_unmask,
+            &candidate_str,
+            candidate.build_id.as_deref(),
+            category,
+            package,
+        );
         if masked {
             return false;
         }
@@ -439,8 +459,21 @@ pub(crate) fn keyword_masked_only(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
-    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
-        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
+    // The mask check sees the candidate's binary build-id: an `=`+build-id
+    // `package.mask` line masks only the equal instance (dep:2994-3008, S9).
+    let masked = any_config_entry_matches_with_build_id(
+        &config.package_mask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    ) && !any_config_entry_matches_with_build_id(
+        &config.package_unmask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    );
     if masked {
         return false;
     }
@@ -504,8 +537,21 @@ pub(crate) fn mask_masked_only(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
-    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
-        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
+    // The mask check sees the candidate's binary build-id: an `=`+build-id
+    // `package.mask` line masks only the equal instance (dep:2994-3008, S9).
+    let masked = any_config_entry_matches_with_build_id(
+        &config.package_mask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    ) && !any_config_entry_matches_with_build_id(
+        &config.package_unmask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    );
     if !masked {
         return false;
     }
@@ -584,8 +630,21 @@ pub(crate) fn license_masked_only(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
-    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
-        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
+    // The mask check sees the candidate's binary build-id: an `=`+build-id
+    // `package.mask` line masks only the equal instance (dep:2994-3008, S9).
+    let masked = any_config_entry_matches_with_build_id(
+        &config.package_mask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    ) && !any_config_entry_matches_with_build_id(
+        &config.package_unmask,
+        &candidate_str,
+        candidate.build_id.as_deref(),
+        category,
+        package,
+    );
     if masked {
         return false;
     }

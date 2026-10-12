@@ -35,6 +35,7 @@ Masked-dependency reports.
 ## fn candidate_masking_reasons
 - Reason order mirrors Portage: `package.mask`, `LICENSE`, `PROPERTIES`, `RESTRICT`, `KEYWORDS`, then `invalid` (Portage appends the invalid reasons after `_getmaskingstatus` in `_get_masking_status`). `package.mask` and the `KEYWORDS` string (`"~<arch> keyword"` / `"-<arch> keyword"` / `"missing keyword"`) and the `LICENSE` string (`"<names> license(s)"`) match Portage verbatim; `PROPERTIES`/`RESTRICT` are the bare key name (Portage names the specific tokens -- portuale has no missing-token list for those two, and neither the L0 comparator nor the contract suite checks this line against Portage anyway; the two `!!!` header lines are what matter).
 - Backlog #153: Portage appends the `invalid` reasons after `_getmaskingstatus` in `_get_masking_status` -- same position here.
+- S9 (#341): the `package.mask`/`unmask` check passes the candidate's binary build-id, so an `=`+build-id line reasons `package.mask` only for the equal instance.
 
 ## struct MaskedDepReport
 - Portage's `_show_unsatisfied_dep` "All ebuilds that could satisfy … have been masked" block for a *dependency* (the Tier 2.20 half of finding S's top-level report). The resolver attaches these to the pass result; the caller (`pretend.rs`) renders each in place of the bare `!!! no visible ebuild for dependency` line, followed by the `(dependency required by …)` chain, then the docs footer -- Portage's `depgraph.py:6992-7030` shape for a non-`AtomArg` parent.
@@ -59,6 +60,7 @@ Masked-dependency reports.
 
 ## fn masked_rows_for_pool
 - S4 (#341) split of `masked_candidates_for_atom`'s match/visible/rows body so the `--usepkgonly` binary pool reuses it: same version/slot filter, same all-masked-or-None gate, same descending-version cpv-deduped rows.
+- S9 (#341): the match runs per candidate via `parse_match_atom` + `match_atom_matches_candidate` (not per string) because binpkg-multi-instance builds share one candidate string — only the equal-build-id instance may report an `=`+build-id atom.
 
 ## fn all_binary_masked_report
 - S4 (#341): binary-only twin of `all_masked_report` for `--usepkgonly`, where ebuilds are ineligible rather than masked. When every version-matching binary is masked the block lists the binary rows (Portage's `_show_unsatisfied_dep` over the binary pool; S0 cell `F-binary-rewritten` shows the binary row under the same "All ebuilds" header). `None` when no binary matches or some match is visible. Wired only at the top-level unsatisfied step; `--usepkg` (ebuild fallback alive) keeps the ebuild-side report. Remote-binrepo rows are not included (no S0 cell).

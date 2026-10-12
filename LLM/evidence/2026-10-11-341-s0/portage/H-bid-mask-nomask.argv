@@ -1,0 +1,3 @@
+PORTAGE_CONFIGROOT=/var/tmp/s9-oracle/cfg ROOT=/var/tmp/s9-oracle/cfg emerge -pv --ignore-default-opts --getbinpkg=n --usepkgonly=y dev-libs/t341-dep
+# package.mask: <empty>
+# pkgdir Packages: two entries for CPV dev-libs/t341-dep-1, BUILD_ID 1 (BUILD_TIME 1000) and BUILD_ID 2 (BUILD_TIME 2000)

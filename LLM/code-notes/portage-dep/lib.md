@@ -52,7 +52,7 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 - Private rebuild of the text Portage prints for `str(atom)` (original string): blocker, operator, `cp-ver[-rN][-bid]`, slot, repo, use (tokens in `prefix+flag+default+suffix` order). Only reader is `check_conditional_flags`; Step 6 audit (`pretend/conflicts.rs` gained `-bid`; every other `format!` site builds candidate/entry strings, not atom text, or operates on the raw token).
 
 ## fn matches_version
-- `Eq` + `build_id.is_some()` matches nothing (review C-1): every portuale candidate models `_pkg_str`/`Package` and none carries a build-id until S9 threads binary build-ids in; without this a `package.mask` line `=dev-libs/foo-1.0-2` would mask every `foo-1.0` (dep:2994-3008, oracle `probe_match.py`). `>=`/`<`/`~` ignore the build-id, like Portage.
+- `Eq` + build-id (dep:2994-3008, oracle `probe_match.py`): the id is consulted only here and only against a candidate that has one — equal ids match, a candidate without one never does (S2 shipped the never half as review C-1; S9 the positive half). Every portuale string candidate models `_pkg_str`/`Package` (a plain string matches regardless in Portage but never occurs here); binary callers set `Candidate.build_id` explicitly since `str(_pkg_str)` drops it. `>=`/`<`/`~` ignore the build-id, like Portage.
 
 ## const PKG
 - Non-greedy like Python's `_pkg` in lib/portage/versions.py, e.g. "utf8-scanner-1.0" splits as pkg="utf8-scanner", version="1.0".
@@ -105,6 +105,7 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 
 ## struct Candidate
 - `repo`: mirrors `dep_getrepo`'s convention for plain-string candidates. See `matches_repo`.
+- `build_id` (#341 S9): the binary build-id (Portage `_pkg_str.build_id`). Always `None` from `parse_candidate` — `str(_pkg_str)` drops it, so a string never carries one; binary callers set it explicitly (`match_from_list_with_build_id`, `match_atom_matches_candidate`). See `matches_version`.
 
 ## fn normalize_leading_zeros
 - Collapses a leading run of `'0'` characters the way `match_from_list`'s own `=*` branch does before comparing (its comment: "XXX: Nasty special casing for leading zeros / Required as =* is a literal prefix match, so can't use vercmp"). Without it a version's incidental leading zeros ("01" vs "1") would make numerically equal versions compare unequal as prefixes.
@@ -157,6 +158,7 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 ## fn match_from_list
 - Mirrors Portage's `match_from_list`. `None` means the atom failed to parse; unparseable candidate strings are silently skipped.
 - S3 (#341): re-parses with `allow_wildcard: true, allow_repo: Some(true)` (dep:2901-2906); leading blockers stripped before the re-parse, so a blocker matches like its bare form. Extended cp via `extended_cp_match` (dep:2934-2943); extended `=*` is a substring test on the candidate's `_pkg_str` version (`ver[-rN]`, without `-r0`, dep:2954-2972) — portuale candidates model `_pkg_str`, so `=*/foo-*r0*` matches nothing here while Portage on a plain-string candidate would match (review M-3). `matches_repo` unchanged.
+- S9 (#341): `match_from_list_with_build_id` pairs each string with an optional binary build-id (`None` = string-path behaviour); `parse_match_atom` + `match_atom_matches_candidate` are the per-candidate form for callers whose candidates share one string (binpkg-multi-instance builds in `masked_rows_for_pool`, portage-repo). All three share `candidate_hits` (cp/version+`=`-only build-id/slot/repo).
 
 ## fn atom_intersects
 - Portage `Atom.intersects()` (`lib/portage/dep/__init__.py`): despite the name a deliberately NARROW check; Portage's docstring says so ("atoms with different cpv, operator or use attributes cause this method to return False even though there may actually be some intersection... TODO: Detect more forms of intersection").

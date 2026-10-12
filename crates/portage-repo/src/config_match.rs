@@ -11,7 +11,21 @@ pub(crate) fn matches_config_entry(
     _category: &str,
     _package: &str,
 ) -> bool {
-    portage_dep::match_from_list(entry, &[candidate_str]).is_some_and(|m| !m.is_empty())
+    matches_config_entry_with_build_id(entry, candidate_str, None, _category, _package)
+}
+
+/// [`matches_config_entry`] for a candidate carrying a binary build-id
+/// (Portage `_pkg_str.build_id`): an `=`+build-id entry matches only on
+/// equal ids, every other operator ignores it (dep:2994-3008, S9).
+pub(crate) fn matches_config_entry_with_build_id(
+    entry: &str,
+    candidate_str: &str,
+    build_id: Option<&str>,
+    _category: &str,
+    _package: &str,
+) -> bool {
+    portage_dep::match_from_list_with_build_id(entry, &[(candidate_str, build_id)])
+        .is_some_and(|m| !m.is_empty())
 }
 
 /// Whether a command-line option atom (`--exclude`, `--reinstall-atoms`,
@@ -153,13 +167,26 @@ pub(crate) fn config_entries_matching<'a, T: ConfigAtomEntry>(
     category: &str,
     package: &str,
 ) -> Vec<&'a T> {
+    config_entries_matching_with_build_id(entries, candidate_str, None, category, package)
+}
+
+/// [`config_entries_matching`] for a candidate carrying a binary build-id;
+/// see [`matches_config_entry_with_build_id`].
+pub(crate) fn config_entries_matching_with_build_id<'a, T: ConfigAtomEntry>(
+    entries: &'a [T],
+    candidate_str: &str,
+    build_id: Option<&str>,
+    category: &str,
+    package: &str,
+) -> Vec<&'a T> {
     let idx = cp_bucket_index(entries);
     idx.candidate_positions(category, package)
         .into_iter()
         .filter(|&i| {
-            matches_config_entry(
+            matches_config_entry_with_build_id(
                 entries[i as usize].config_atom(),
                 candidate_str,
+                build_id,
                 category,
                 package,
             )
@@ -168,10 +195,13 @@ pub(crate) fn config_entries_matching<'a, T: ConfigAtomEntry>(
         .collect()
 }
 
-/// Whether any entry in `entries` matches this candidate.
-pub(crate) fn any_config_entry_matches<T: ConfigAtomEntry>(
+/// Whether any entry in `entries` matches a candidate carrying a binary
+/// build-id (`None` for an ebuild-like candidate); see
+/// [`matches_config_entry_with_build_id`].
+pub(crate) fn any_config_entry_matches_with_build_id<T: ConfigAtomEntry>(
     entries: &[T],
     candidate_str: &str,
+    build_id: Option<&str>,
     category: &str,
     package: &str,
 ) -> bool {
@@ -179,9 +209,10 @@ pub(crate) fn any_config_entry_matches<T: ConfigAtomEntry>(
     idx.candidate_positions(category, package)
         .into_iter()
         .any(|i| {
-            matches_config_entry(
+            matches_config_entry_with_build_id(
                 entries[i as usize].config_atom(),
                 candidate_str,
+                build_id,
                 category,
                 package,
             )
