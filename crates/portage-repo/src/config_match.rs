@@ -14,6 +14,30 @@ pub(crate) fn matches_config_entry(
     portage_dep::match_from_list(entry, &[candidate_str]).is_some_and(|m| !m.is_empty())
 }
 
+/// Whether a command-line option atom (`--exclude`, `--reinstall-atoms`,
+/// `--rebuild-exclude`/`--rebuild-ignore`, `--usepkg-exclude`/`--usepkg-include`,
+/// `--useoldpkg-atoms`, `--buildpkg-exclude`, `--getbinpkg-exclude`/`--getbinpkg-include`)
+/// matches this candidate: like [`matches_config_entry`], plus Portage's
+/// `WildcardPackageSet._implicitWildcarding`
+/// (`lib/portage/_sets/base.py`): a category-less entry is retried as
+/// `*/entry`, so `--exclude t341-dep` excludes every category's
+/// `t341-dep`. Config files (`package.*`) never do this — a
+/// category-less line there is invalid (S5/S6) — so they keep using
+/// [`matches_config_entry`] directly.
+pub(crate) fn matches_cli_option_atom(entry: &str, candidate_str: &str) -> bool {
+    if portage_dep::match_from_list(entry, &[candidate_str]).is_some_and(|m| !m.is_empty()) {
+        return true;
+    }
+    // Portage tries the plain `Atom` first and prefixes `*/` only on
+    // `InvalidAtom`: an entry that already carries a category never falls
+    // through to the wildcard form.
+    if entry.split(':').next().unwrap_or(entry).contains('/') {
+        return false;
+    }
+    let prefixed = format!("*/{entry}");
+    portage_dep::match_from_list(&prefixed, &[candidate_str]).is_some_and(|m| !m.is_empty())
+}
+
 /// One `package.*` config list's atoms bucketed by `cat/pkg` -- the stand-in
 /// for Portage's `ExtendedAtomDict` (`lib/portage/dep/__init__.py`). A flat
 /// scan was ~half of the post-`parse_atom`-cache run; this narrows it to a
@@ -201,6 +225,45 @@ mod tests {
             "dev-libs/foo-1.0",
             "dev-libs",
             "foo"
+        ));
+    }
+
+    // Portage `WildcardPackageSet._implicitWildcarding`
+    // (`lib/portage/_sets/base.py`): a category-less CLI option atom
+    // matches any category; a categorised entry never gains the `*/`
+    // fallback (the plain `Atom` parses first).
+    #[test]
+    fn cli_option_atoms_match_short_names_across_categories() {
+        assert!(matches_cli_option_atom(
+            "t341-dep",
+            "dev-libs/t341-dep-1:0/1::t341"
+        ));
+        assert!(matches_cli_option_atom(
+            "t341-dep:0",
+            "app-misc/t341-dep-2:0/1::t341"
+        ));
+        assert!(!matches_cli_option_atom(
+            "t341-dep:0",
+            "dev-libs/t341-dep-1:1/2::t341"
+        ));
+        assert!(!matches_cli_option_atom(
+            "t341-dep",
+            "dev-libs/other-1:0/1::t341"
+        ));
+        // A categorised entry that fails to parse stays a miss: no `*/`
+        // retry (`dev-libs/t341-dep-1` is a bare version, invalid).
+        assert!(!matches_cli_option_atom(
+            "dev-libs/t341-dep-1",
+            "dev-libs/t341-dep-1:0/1::t341"
+        ));
+        // Qualified and wildcard entries behave like `match_from_list`.
+        assert!(matches_cli_option_atom(
+            "dev-libs/t341-dep",
+            "dev-libs/t341-dep-1:0/1::t341"
+        ));
+        assert!(matches_cli_option_atom(
+            "dev-libs/t341-*",
+            "dev-libs/t341-dep-1:0/1::t341"
         ));
     }
 }

@@ -276,11 +276,11 @@ pub(crate) fn filter_usepkg_exclude_include(
             );
             let is_excluded = usepkg_exclude
                 .iter()
-                .any(|ex| matches_config_entry(ex, &candidate_str, category, package));
+                .any(|ex| matches_cli_option_atom(ex, &candidate_str));
             let is_included = usepkg_include.is_empty()
                 || usepkg_include
                     .iter()
-                    .any(|inc| matches_config_entry(inc, &candidate_str, category, package));
+                    .any(|inc| matches_cli_option_atom(inc, &candidate_str));
             !is_excluded && is_included
         })
         .collect()

@@ -1172,6 +1172,8 @@ fn emerge_handles(long: &str) -> bool {
             // append options -- pretend.rs:7170-7218, 7660-7690
             | "--buildpkg-exclude"
             | "--exclude"
+            | "--getbinpkg-exclude"
+            | "--getbinpkg-include"
             | "--reinstall-atoms"
             | "--usepkg-include"
             | "--useoldpkg-atoms"
@@ -2003,7 +2005,7 @@ mod tests {
         );
 
         let m = parse(&["--getbinpkg-exclude", "cat/a", "cat/b"]).unwrap();
-        assert_eq!(to_emerge_argv(&m), ["--getbinpkg-exclude", "cat/b"]);
+        assert_eq!(to_emerge_argv(&m), ["--getbinpkg-exclude=cat/a", "cat/b"]);
     }
 
     /// The `OptionalValue` bare/inserted-literal and `-j y|n` unlimited

@@ -119,9 +119,10 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
                             "{}/{}-{}:{}/{}::{}",
                             sc.category, sc.package, c.version, c.slot, c.sub_slot, c.repo_name
                         );
-                        if excluded.iter().any(|ex| {
-                            matches_config_entry(ex, &cand_str, &sc.category, &sc.package)
-                        }) {
+                        if excluded
+                            .iter()
+                            .any(|ex| matches_cli_option_atom(ex, &cand_str))
+                        {
                             continue;
                         }
                         sibs.push(c);

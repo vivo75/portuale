@@ -18,6 +18,71 @@ pub(crate) struct StepTopLevelUnsatisfiedArgs<'a> {
     pub(crate) atom: &'a Atom,
 }
 
+/// Whether an explicitly requested top-level atom has at least one matching
+/// package (ebuild, local binary or installed instance) and every match is
+/// `--exclude`d: then the argument resolves to nothing silently, like
+/// Portage, instead of aborting. Only the safe half of Portage's rule is
+/// ported: Portage skips when *any* match is excluded (depgraph.py, the
+/// `if excluded: continue` in the argument loop), but a surviving
+/// non-excluded match means the walk would have selected a package, so the
+/// walk never reaches this probe then; requiring *all* matches excluded
+/// can never drop a resolvable argument. The remaining corner (a masked,
+/// non-excluded match beside an excluded one: Portage skips, portuale
+/// reports the mask) is documented, not pinned.
+/// Candidate strings mirror the `cat/pkg-ver:slot/sub::repo` shape
+/// `resolve_pretend` matches against.
+fn top_level_atom_entirely_excluded(
+    ctx: &ResolveCtx<'_>,
+    current_atom: &str,
+    atom: &Atom,
+) -> Result<bool, Error> {
+    if ctx.excluded.is_empty() {
+        return Ok(false);
+    }
+    let excluded_match = |candidate_str: &str| {
+        portage_dep::match_from_list(current_atom, &[candidate_str])
+            .is_some_and(|m| !m.is_empty())
+            .then(|| {
+                ctx.excluded
+                    .iter()
+                    .any(|ex| matches_cli_option_atom(ex, candidate_str))
+            })
+    };
+    // None = no match (skip the atom from the verdict); Some(false) = a
+    // surviving non-excluded match (never drop); Some(true) = excluded.
+    let mut verdict: Option<bool> = None;
+    let mut fold = |candidate_str: String| {
+        if verdict == Some(false) {
+            return;
+        }
+        match excluded_match(&candidate_str) {
+            None => {}
+            Some(excluded) => {
+                verdict = Some(verdict.unwrap_or(true) && excluded);
+            }
+        }
+    };
+    for c in list_candidates(&ctx.repos, &atom.category, &atom.package)?.iter() {
+        fold(format!(
+            "{}/{}-{}:{}/{}::{}",
+            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+        ));
+    }
+    for c in list_binary_candidates(&ctx.local_binpkg, &atom.category, &atom.package) {
+        fold(format!(
+            "{}/{}-{}:{}/{}::{}",
+            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+        ));
+    }
+    for (version, slot, sub_slot) in installed_candidates(ctx.root, &atom.category, &atom.package) {
+        fold(format!(
+            "{}/{}-{version}:{slot}/{sub_slot}",
+            atom.category, atom.package
+        ));
+    }
+    Ok(verdict.unwrap_or(false))
+}
+
 /// A top-level atom with no visible candidate: Portage's drop-or-abort for arguments.
 pub(crate) fn step_top_level_unsatisfied(
     args: StepTopLevelUnsatisfiedArgs<'_>,
@@ -40,6 +105,21 @@ pub(crate) fn step_top_level_unsatisfied(
     // Portage: depgraph.py
     if ctx.top_level.contains(current_atom) && matches!(outcome, PretendOutcome::NoVisibleCandidate)
     {
+        // `--exclude`: an explicitly requested argument with at least one
+        // matching package, every one of them excluded, resolves to
+        // nothing silently (`Total: 0`, exit 0) instead of aborting with
+        // "there are no ebuilds". Set members never take this path (their
+        // miss lands in `missing_args` below, like Portage's `SetArg`
+        // handling, which never consults the excluded set).
+        // Portage: depgraph.py, the `if excluded: continue` in the
+        // argument loop (an excluded match anywhere skips the
+        // unsatisfied report; the all-excluded rule below is the safe
+        // half of it — see `top_level_atom_entirely_excluded`).
+        if !ctx.set_args.contains(current_atom)
+            && top_level_atom_entirely_excluded(ctx, current_atom, atom)?
+        {
+            return Ok(ControlFlow::Break(()));
+        }
         // A `@world`/`@selected` set member that selects nothing is dropped into
         // `missing_args` and the walk continues; only explicit args abort.
         // Portage: _resolve. Deduped across re-passes.

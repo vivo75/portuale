@@ -36,6 +36,7 @@
 ## fn emerge_handles
 - Whether the emerge codepath (`pretend::run`, the parse loop in `pretend.rs`) has a branch for `long`. Options it handles are forwarded with their value (`--long=<value>`); the rest go BARE so `pretend::run`'s `report_option` names them by their Portage spelling ("a Portage emerge action/option, but is not yet implemented in portuale") rather than rejecting a `--long=value` form it never saw.
 - The list is keyed to the parse-loop sections in `pretend.rs` (actions, flags, value options, optional-value numerics, append options) and the `lib/_emerge/main.py` option table that `emerge_options.rs` pins; section line numbers recorded there at the time of writing.
+- S7 (#341): `--getbinpkg-exclude`/`--getbinpkg-include` joined the handled append options (the codepath parses and validates them now); the old lossy BARE forwarding is gone. `--rebuild-exclude`/`--rebuild-ignore`/`--usepkg-exclude` have no top-level clap option, so they only ever arrive via the raw `emerge` argv, not through this forwarding.
 
 ## fn to_emerge_argv
 - Every emitted token either starts with `--` or is an atom, so the codepath's `-x y` optional-value peek can never consume an unrelated token.

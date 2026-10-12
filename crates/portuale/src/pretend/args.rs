@@ -49,6 +49,8 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) implicit_system_deps: bool,
     pub(crate) usepkg_exclude: Vec<String>,
     pub(crate) usepkg_include: Vec<String>,
+    pub(crate) getbinpkg_exclude: Vec<String>,
+    pub(crate) getbinpkg_include: Vec<String>,
     pub(crate) json: bool,
     pub(crate) deselect: bool,
     pub(crate) deselect_n: bool,
@@ -212,6 +214,12 @@ impl<'a> Default for EmergeOpts<'a> {
             // scoped to binary-candidate eligibility (see `filter_usepkg_exclude_include`).
             usepkg_exclude: Vec::new(),
             usepkg_include: Vec::new(),
+            // --getbinpkg-exclude/--getbinpkg-include: same append shape as
+            // --exclude, validated with the strict family rule (see
+            // `validate_exclude_options`). Portuale parses and validates
+            // them; remote-fetch filtering is not modelled (no S0 cell).
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
             json: false,
             deselect: false,
             // `--deselect=n` (distinct from "not given"): consulted by `--depclean
@@ -1015,6 +1023,35 @@ fn parse_graph_opts<'a>(
         Ok(true)
     } else if let Some(value) = arg.strip_prefix("--usepkg-include=") {
         opts.usepkg_include
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--getbinpkg-exclude" {
+        // Same append shape as --exclude (Portage `action: "append"`).
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--getbinpkg-exclude\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.getbinpkg_exclude
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--getbinpkg-exclude=") {
+        opts.getbinpkg_exclude
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--getbinpkg-include" {
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--getbinpkg-include\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.getbinpkg_include
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--getbinpkg-include=") {
+        opts.getbinpkg_include
             .extend(value.split_whitespace().map(String::from));
         *idx += 1;
         Ok(true)

@@ -431,7 +431,7 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
         let parent_cpv = pkg.cpv();
         if rebuild_exclude
             .iter()
-            .any(|a| matches_config_entry(a, &parent_cpv, &pkg.category, &pkg.package))
+            .any(|a| matches_cli_option_atom(a, &parent_cpv))
         {
             continue;
         }
@@ -470,7 +470,7 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
                 let dep_cpv = format!("{}/{}-{merged_ver}", atom.category, atom.package);
                 if rebuild_ignore
                     .iter()
-                    .any(|a| matches_config_entry(a, &dep_cpv, &atom.category, &atom.package))
+                    .any(|a| matches_cli_option_atom(a, &dep_cpv))
                 {
                     return false;
                 }

@@ -144,7 +144,7 @@ pub(crate) fn apply_outcome_fallbacks(
         if ctx
             .reinstall_atoms
             .iter()
-            .any(|a| matches_config_entry(a, &cpv, &key.0, &key.1))
+            .any(|a| matches_cli_option_atom(a, &cpv))
         {
             outcome = PretendOutcome::Reinstall {
                 version: version.clone(),

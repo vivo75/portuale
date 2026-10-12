@@ -75,6 +75,7 @@ Binary packages:
       --buildpkg-exclude ATOMS  skip the binary package for matching packages
   -k, --usepkg / -K, --usepkgonly  use a usable binary package when one exists (-K: only, never build)
   -g, --getbinpkg / -G, --getbinpkgonly  also fetch binary packages from a remote binhost (-G: only)
+      --getbinpkg-exclude ATOMS, --getbinpkg-include ATOMS  validated like --exclude; fetch filtering is not modelled
       --usepkg-exclude ATOMS, --usepkg-include ATOMS  narrow which packages may come from a binary
       --binpkg-respect-use[=y|n]  reject a binary package built with the wrong USE
       --binpkg-changed-deps[=y|n]  reject a binary whose recorded deps differ from the ebuild (auto unless -K)

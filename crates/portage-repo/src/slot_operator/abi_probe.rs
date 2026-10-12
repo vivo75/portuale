@@ -68,7 +68,7 @@ pub(crate) fn collect_probe_parents(
         let q_str = format!("{}/{}-{}", pkg.category, pkg.package, pkg.version);
         if excluded
             .iter()
-            .any(|ex| matches_config_entry(ex, &q_str, &pkg.category, &pkg.package))
+            .any(|ex| matches_cli_option_atom(ex, &q_str))
         {
             continue;
         }
@@ -229,7 +229,7 @@ pub(crate) fn slot_conflict_abi_probe(
                 let pq_str = format!("{pcat}/{ppkg}-{pver}");
                 if excluded
                     .iter()
-                    .any(|ex| matches_config_entry(ex, &pq_str, &pcat, &ppkg))
+                    .any(|ex| matches_cli_option_atom(ex, &pq_str))
                 {
                     continue;
                 }

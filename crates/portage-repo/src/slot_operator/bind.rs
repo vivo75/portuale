@@ -78,9 +78,7 @@ pub(crate) fn built_equals_shift_unrebuildable(
         .is_some_and(|ps| {
             ps.iter().any(|(pcat, ppkg, pver, _)| {
                 let cpv = format!("{pcat}/{ppkg}-{pver}");
-                excluded
-                    .iter()
-                    .any(|ex| matches_config_entry(ex, &cpv, pcat, ppkg))
+                excluded.iter().any(|ex| matches_cli_option_atom(ex, &cpv))
                     || useoldpkg_atom_matches(pcat, ppkg, pver)
             })
         })

@@ -3,9 +3,23 @@
 use crate::pretend::*;
 
 pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<ExitCode> {
+    // `--tree` + `--columns` is a usage error (exit 2, stderr), checked once
+    // parsing finishes, order-independent, before any other validation.
+    // Portage: actions.py, parse_opts post-pass
+    if opts.tree && opts.columns {
+        eprintln!("emerge: can't specify both of \"--tree\" and \"--columns\".");
+        return Some(ExitCode::from(2));
+    }
+
+    // The `--exclude`-style option families validate before anything else
+    // action-shaped runs (Portage `_emerge/main.py` option post-pass, exit
+    // 2): `--buildpkg-exclude` first with its own message, then the nine
+    // strict families in tuple order. See `validate_exclude_options`.
+    if let Some(code) = validate_exclude_options(opts) {
+        return Some(code);
+    }
+
     let &mut EmergeOpts {
-        tree,
-        columns,
         pretend: ref mut pretend_out,
         ask: ref mut ask_out,
         sync_action,
@@ -32,13 +46,6 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
     } = opts;
     let mut pretend = *pretend_out;
     let mut ask = *ask_out;
-    // `--tree` + `--columns` is a usage error (exit 2, stderr), checked once
-    // parsing finishes, order-independent, before any other validation.
-    // Portage: actions.py, parse_opts post-pass
-    if tree && columns {
-        eprintln!("emerge: can't specify both of \"--tree\" and \"--columns\".");
-        return Some(ExitCode::from(2));
-    }
 
     // `--pretend` silently drops `--ask`; then a remaining `--ask` on a
     // non-terminal stdin exits immediately -- nobody piped in could answer.

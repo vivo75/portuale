@@ -419,9 +419,10 @@ pub(crate) fn reverse_dependency_constraints(
             "{}/{}-{}",
             consumer.category, consumer.package, consumer.version
         );
-        if excluded.iter().any(|ex| {
-            matches_config_entry(ex, &consumer_str, &consumer.category, &consumer.package)
-        }) {
+        if excluded
+            .iter()
+            .any(|ex| matches_cli_option_atom(ex, &consumer_str))
+        {
             continue;
         }
         let use_flags = read_vdb_flag_set(

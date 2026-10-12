@@ -168,7 +168,7 @@ pub(crate) fn direct_solve_arg_mode(input: &DirectSolveInput<'_>, c: &SlotConfli
     !input
         .excluded
         .iter()
-        .any(|ex| matches_config_entry(ex, &probe, &c.category, &c.package))
+        .any(|ex| matches_cli_option_atom(ex, &probe))
 }
 
 pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> DirectSolveOutput {
@@ -248,7 +248,7 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
             input
                 .excluded
                 .iter()
-                .any(|ex| matches_config_entry(ex, &cpv, &pc, &pp))
+                .any(|ex| matches_cli_option_atom(ex, &cpv))
                 || useoldpkg_atom_matches(&pc, &pp, &pv)
         });
         if stuck_rebuild_parent

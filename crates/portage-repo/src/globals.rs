@@ -30,9 +30,7 @@ pub(crate) fn useoldpkg_atom_matches(category: &str, package: &str, version: &st
         return false;
     }
     let cpv = format!("{category}/{package}-{version}");
-    atoms
-        .iter()
-        .any(|a| matches_config_entry(a, &cpv, category, package))
+    atoms.iter().any(|a| matches_cli_option_atom(a, &cpv))
 }
 
 /// Explicit `--binpkg-changed-deps=y|n` override (`None` = auto: on unless `--usepkgonly`).

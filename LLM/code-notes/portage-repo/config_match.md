@@ -4,6 +4,9 @@ Per-package index over `package.*` config atoms.
 ## fn matches_config_entry
 - S3 (#341): a single `portage_dep::match_from_list` call, which re-parses with `allow_wildcard: true, allow_repo: Some(true)` like Portage (dep:2901-2906). The old two-tier fallback (bounded `WildcardAtom` for `*/*`, `category/*`, `*/package`) is gone with the API it used.
 
+## fn matches_cli_option_atom
+- S7 (#341): Portage `WildcardPackageSet._implicitWildcarding` (`lib/portage/_sets/base.py`): a category-less CLI option atom (`--exclude`, `--reinstall-atoms`, `--rebuild-exclude`/`--rebuild-ignore`, `--usepkg-exclude`/`--usepkg-include`, `--useoldpkg-atoms`, `--buildpkg-exclude`, `--getbinpkg-exclude`/`--getbinpkg-include`) is retried as `*/entry`, so `--exclude t341-dep` excludes every category's `t341-dep`. The plain parse runs first and a categorised entry never falls through (Portage prefixes `*/` only on `InvalidAtom`). Config files (`package.*`) never do this — a category-less line there is invalid (S5/S6) — so they keep using `matches_config_entry` directly; every other `matches_config_entry` caller whose list is a CLI option list was switched to this.
+
 ## struct CpBucketIndex
 - Portage's `ExtendedAtomDict` is built once at config load by every `UseManager` / `MaskManager` / `KeywordsManager` / `LicenseManager`. During a deep `emerge -pu` these lists are scanned per package per graph-walk visit -- tens of thousands of times -- but only the handful of entries whose atom names this `cp` (or a `*/*` / `cat/*` / `*/pkg` wildcard) can ever match.
 

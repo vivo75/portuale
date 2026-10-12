@@ -63,6 +63,28 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     // recorded in `world_sets` after a successful non-`--pretend` merge.
     // Portage: depgraph.py, saveNomergeFavorites
     let mut selected_set_args: Vec<String> = Vec::new();
+    // Every non-set argument must be a valid package atom before anything
+    // else runs (Portage `run_action`, `_emerge/actions.py:4244-4262`):
+    // short names get `cat/` spliced in, repos and build-ids are allowed,
+    // blockers are not. A bad argument prints two `!!!` lines and exits 1.
+    // Existing filesystem paths pass through untouched (Portage's
+    // `os.sep`-prefix / `os.lstat` skips); `@sets` validate on their own
+    // path (S8). Checked before set expansion, like Portage checks before
+    // the depgraph touches any argument.
+    for &raw in atom_args.iter() {
+        if raw.starts_with('@') {
+            continue;
+        }
+        if std::path::Path::new(raw).is_absolute() || std::fs::metadata(raw).is_ok() {
+            continue;
+        }
+        if !is_valid_package_atom(raw) {
+            eprintln!("!!! '{raw}' is not a valid package atom.");
+            eprintln!("!!! Please check ebuild(5) for full details.");
+            return Err(ExitCode::from(1));
+        }
+    }
+
     for atom_str in atom_args {
         if *atom_str == "@world" || *atom_str == "@selected" {
             // `@world` is `@profile` + `@selected` + `@system`, not just the

@@ -182,7 +182,7 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                 let q_str = format!("{}/{}-{v}", owner.0, owner.1);
                 excluded
                     .iter()
-                    .any(|ex| matches_config_entry(ex, &q_str, &owner.0, &owner.1))
+                    .any(|ex| matches_cli_option_atom(ex, &q_str))
             });
             if excluded_parent {
                 continue;
@@ -216,7 +216,7 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                     );
                     if excluded
                         .iter()
-                        .any(|ex| matches_config_entry(ex, &cand_str, &owner.0, &owner.1))
+                        .any(|ex| matches_cli_option_atom(ex, &cand_str))
                     {
                         continue;
                     }

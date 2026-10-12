@@ -369,6 +369,7 @@
 - [crates/portuale/src/pretend/args.rs](portuale/pretend/args.md) — Parsing `emerge` arguments into `EmergeOpts`.
 - [crates/portuale/src/pretend/atoms.rs](portuale/pretend/atoms.md) — Expanding command-line tokens to atoms (`dep_expand`), plus the unmerge path-arg handling.
 - [crates/portuale/src/pretend/autounmask_report.rs](portuale/pretend/autounmask_report.md) — The autounmask suggestion blocks and the `--autounmask-only` / `--autounmask-continue` exits.
+- [crates/portuale/src/pretend/cli_atoms.rs](portuale/pretend/cli_atoms.md) — Command-line atom validation: package arguments and the --exclude-style option families (backlog #341 S7).
 - [crates/portuale/src/pretend/config_action.rs](portuale/pretend/config_action.md) — `emerge --config` and the misspell-suggestion block.
 - [crates/portuale/src/pretend/conflicts.rs](portuale/pretend/conflicts.md) — Slot-conflict text helpers.
 - [crates/portuale/src/pretend/deselect.rs](portuale/pretend/deselect.md) — `emerge --deselect`.

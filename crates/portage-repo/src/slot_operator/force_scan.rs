@@ -74,9 +74,7 @@ pub(crate) fn slot_operator_update_force_scan(
         .collect();
     let is_excluded = |cat: &str, pkg: &str, ver: &str| {
         let cpv = format!("{cat}/{pkg}-{ver}");
-        excluded
-            .iter()
-            .any(|a| matches_config_entry(a, &cpv, cat, pkg))
+        excluded.iter().any(|a| matches_cli_option_atom(a, &cpv))
     };
     let probe_parents = collect_probe_parents(CollectProbeParentsArgs {
         root,
@@ -383,9 +381,10 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                         tree.sub_slot,
                         tree.repo_name
                     );
-                    if excluded.iter().any(|ex| {
-                        matches_config_entry(ex, &tree_str, &atom.category, &atom.package)
-                    }) {
+                    if excluded
+                        .iter()
+                        .any(|ex| matches_cli_option_atom(ex, &tree_str))
+                    {
                         continue;
                     }
                     // Mask the binary only when the same-version ebuild is

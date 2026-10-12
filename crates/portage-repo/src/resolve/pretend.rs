@@ -860,7 +860,7 @@ pub fn resolve_pretend(
         );
         if excluded
             .iter()
-            .any(|ex| matches_config_entry(ex, &installed_str, &atom.category, &atom.package))
+            .any(|ex| matches_cli_option_atom(ex, &installed_str))
         {
             return Ok(PretendOutcome::AlreadyInstalled {
                 version: installed_best.version.clone(),
@@ -940,7 +940,7 @@ pub fn resolve_pretend(
             );
             !excluded
                 .iter()
-                .any(|ex| matches_config_entry(ex, &candidate_str, &atom.category, &atom.package))
+                .any(|ex| matches_cli_option_atom(ex, &candidate_str))
         })
         .max_by(|a, b| {
             // At the winning version a surviving `--usepkg`/`--getbinpkg` binary beats
