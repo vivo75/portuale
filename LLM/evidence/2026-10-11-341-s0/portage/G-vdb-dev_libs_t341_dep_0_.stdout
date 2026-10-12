@@ -1,0 +1,3 @@
+installed app-misc/t341-good-1 RDEPEND='dev-libs/t341-dep:0*' EAPI=8
+  invalid: {'dependency.syntax': ["RDEPEND: unexpected token in '/s0/out/work/root-inst/var/db/pkg/app-misc/t341-good-1/RDEPEND'"]}
+  visible: False

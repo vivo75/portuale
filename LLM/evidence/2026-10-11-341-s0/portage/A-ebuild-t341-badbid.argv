@@ -1,0 +1,1 @@
+emerge -pv --ignore-default-opts --getbinpkg=n --usepkg=n app-misc/t341-badbid

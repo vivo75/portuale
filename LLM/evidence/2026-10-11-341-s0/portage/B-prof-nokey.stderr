@@ -1,0 +1,71 @@
+/usr/lib/python3.14/site-packages/portage/repository/config.py:1694: SyntaxWarning: Repository named 't341' has profile_eapi_when_unspecified setting in '/s0/out/work/repo-nokey/metadata/layout.conf', but 'profile-default-eapi' is not listed in the profile-formats field. Please report this issue to the repository maintainer.
+  warnings.warn(
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/packages: /t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: /t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: dev-libs/t341-dep:=
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: Slot deps are not allowed in EAPI 0: 'dev-libs/t341-dep:0'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: Use deps are not allowed in EAPI 0: 'dev-libs/t341-dep[x(+)]'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.use: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/repo-nokey/profiles/t341/package.use: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.use: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: */t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: dev-libs/t341-dep:=
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: Slot deps are not allowed in EAPI 0: 'dev-libs/t341-dep:0'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: Use deps are not allowed in EAPI 0: 'dev-libs/t341-dep[x(+)]'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.accept_keywords: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.accept_keywords: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/repo-nokey/profiles/t341/package.accept_keywords: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.accept_keywords: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: */t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: dev-libs/t341-dep:=
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: Slot deps are not allowed in EAPI 0: 'dev-libs/t341-dep:0'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: Use deps are not allowed in EAPI 0: 'dev-libs/t341-dep[x(+)]'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.mask: */t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: */t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: dev-libs/t341-dep:=
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: Slot deps are not allowed in EAPI 0: 'dev-libs/t341-dep:0'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: Use deps are not allowed in EAPI 0: 'dev-libs/t341-dep[x(+)]'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/packages: /t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: /t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: dev-libs/t341-dep:=
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: Slot deps are not allowed in EAPI 0: 'dev-libs/t341-dep:0'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: Use deps are not allowed in EAPI 0: 'dev-libs/t341-dep[x(+)]'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.use: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/repo-nokey/profiles/t341/package.use: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.use: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: */t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: dev-libs/t341-dep:=
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: Slot deps are not allowed in EAPI 0: 'dev-libs/t341-dep:0'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: Use deps are not allowed in EAPI 0: 'dev-libs/t341-dep[x(+)]'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.use: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.accept_keywords: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.accept_keywords: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/repo-nokey/profiles/t341/package.accept_keywords: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.accept_keywords: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: */t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: dev-libs/t341-dep:=
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: Slot deps are not allowed in EAPI 0: 'dev-libs/t341-dep:0'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: Use deps are not allowed in EAPI 0: 'dev-libs/t341-dep[x(+)]'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.accept_keywords: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.mask: */t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: */t341-dep
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: dev-libs/t341-dep:=
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: Slot deps are not allowed in EAPI 0: 'dev-libs/t341-dep:0'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: Use deps are not allowed in EAPI 0: 'dev-libs/t341-dep[x(+)]'
+--- Invalid atom in /s0/out/work/repo-nokey/profiles/t341/noeapi/package.mask: dev-libs/t341-dep-1
+
+emerge: there are no ebuilds to satisfy "dev-libs/t341-dep" for /s0/out/work/cfg-cfgB3/.
+
+emerge: searching for similar names...
+emerge: Maybe you meant any of these: dev-libs/tre, dev-libs/date, dev-libs/eb?

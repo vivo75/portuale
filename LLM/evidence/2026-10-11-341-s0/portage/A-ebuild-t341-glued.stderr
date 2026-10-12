@@ -1,0 +1,8 @@
+
+!!! All ebuilds that could satisfy "app-misc/t341-glued" for /s0/out/work/cfg-cfgA/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/t341-glued-1::t341 (masked by: invalid: RDEPEND: missing whitespace around '(' at 'dev-libs/t341-dep(', token 1)
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+

@@ -1,0 +1,4 @@
+emerge: there are no ebuilds to satisfy "=dev-libs/t341-dep-1-2".
+
+emerge: searching for similar names...
+emerge: Maybe you meant any of these: dev-libs/t341-dep, dev-libs/tre, dev-libs/date?

@@ -1,0 +1,1 @@
+PORTAGE_NATIVE_DEP_PARSER=0 emerge -pv --ignore-default-opts --getbinpkg=n --usepkg=n dev-libs/t341-dep (PORTAGE_CONFIGROOT=/s0/out/work/cfg-cfgG ROOT=/s0/out/work/root-inst, vdb RDEPEND=dev-libs/t341-dep::gentoo)

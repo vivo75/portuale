@@ -1,0 +1,66 @@
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: /t341-dep
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: dev-libs/t341-*
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use: dev-libs/t341-dep-1
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use: dev-libs/t341-dep[x]
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use.force: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use.force: dev-libs/t341-dep-1
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use.force: dev-libs/t341-dep[x]
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.use: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.use: dev-libs/t341-dep-1
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/cfg-cfgC2/etc/portage/package.use: dev-libs/t341-dep[x]
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.license: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.license: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.license: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.properties: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.properties: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.env: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.env: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.accept_keywords: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.accept_keywords: dev-libs/t341-dep-1
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/cfg-cfgC2/etc/portage/package.accept_keywords: dev-libs/t341-dep[x]
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.mask: */t341-dep
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.mask: dev-libs/t341-*
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.mask: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.mask: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.unmask: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.unmask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: /t341-dep
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: dev-libs/t341-*
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use: dev-libs/t341-dep-1
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use: dev-libs/t341-dep[x]
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use.force: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use.force: dev-libs/t341-dep-1
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.use.force: dev-libs/t341-dep[x]
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.use: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.use: dev-libs/t341-dep-1
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/cfg-cfgC2/etc/portage/package.use: dev-libs/t341-dep[x]
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.license: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.license: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.license: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.properties: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.properties: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.env: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.env: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.accept_keywords: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.accept_keywords: dev-libs/t341-dep-1
+--- Atom is not allowed to have USE flag(s) in /s0/out/work/cfg-cfgC2/etc/portage/package.accept_keywords: dev-libs/t341-dep[x]
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.mask: */t341-dep
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.mask: dev-libs/t341-*
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.mask: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.mask: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.unmask: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/package.unmask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: /t341-dep
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: dev-libs/t341-*
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: =dev-libs/t341-dep-1-02
+--- Invalid atom in /s0/out/work/cfg-cfgC2/etc/portage/profile/packages: dev-libs/t341-dep-1

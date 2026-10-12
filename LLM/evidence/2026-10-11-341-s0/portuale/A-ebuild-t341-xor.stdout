@@ -1,0 +1,5 @@
+[ebuild  N     ] dev-libs/t341-dep-1:0/1::t341 to /s0/out/work/cfg-cfgA USE="-x" 
+[ebuild  N     ] app-misc/t341-good-1::t341 to /s0/out/work/cfg-cfgA
+[ebuild  N     ] app-misc/t341-xor-1::t341 to /s0/out/work/cfg-cfgA
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB

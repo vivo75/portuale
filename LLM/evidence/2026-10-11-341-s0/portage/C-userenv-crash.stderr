@@ -1,0 +1,120 @@
+
+
+!!! Problem in 'dev-libs/t341-dep' dependencies.
+!!! setcpv recursion detected None
+Traceback (most recent call last):
+  File "/usr/lib/python-exec/python3.14/emerge", line 62, in main
+    retval = emerge_main()
+  File "/usr/lib/python3.14/site-packages/_emerge/main.py", line 1368, in emerge_main
+    return run_action(emerge_config)
+  File "/usr/lib/python3.14/site-packages/_emerge/actions.py", line 4289, in run_action
+    retval = action_build(emerge_config, spinner=spinner)
+  File "/usr/lib/python3.14/site-packages/_emerge/actions.py", line 410, in action_build
+    success, mydepgraph, favorites = backtrack_depgraph(
+                                     ~~~~~~~~~~~~~~~~~~^
+        settings, trees, myopts, myparams, myaction, myfiles, spinner
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 12166, in backtrack_depgraph
+    success, mydepgraph, favorites, backtracked, max_retries = _backtrack_depgraph(
+                                                               ~~~~~~~~~~~~~~~~~~~^
+        settings, trees, myopts, myparams, myaction, myfiles, spinner
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 12226, in _backtrack_depgraph
+    success, favorites = mydepgraph.select_files(myfiles)
+                         ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 5001, in select_files
+    return self._select_files(args)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 5456, in _select_files
+    return self._resolve(myfavorites)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 5526, in _resolve
+    pkg, existing_node = self._select_package(
+                         ~~~~~~~~~~~~~~~~~~~~^
+        myroot, atom, onlydeps=onlydeps
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7253, in _select_pkg_highest_available
+    ret = self._select_pkg_highest_available_imp(
+        root, atom, onlydeps=onlydeps, parent=parent
+    )
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7515, in _select_pkg_highest_available_imp
+    pkg, existing = self._wrapped_select_pkg_highest_available_imp(
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        root, atom, onlydeps=onlydeps, parent=parent
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7870, in _wrapped_select_pkg_highest_available_imp
+    for pkg in self._iter_match_pkgs(
+               ~~~~~~~~~~~~~~~~~~~~~^
+        root_config,
+        ^^^^^^^^^^^^
+    ...<2 lines>...
+        onlydeps=onlydeps,
+        ^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7142, in _iter_match_pkgs_atom
+    pkg = self._pkg(
+        cpv,
+    ...<4 lines>...
+        myrepo=getattr(cpv, "repo", None),
+    )
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 8880, in _pkg
+    not self._pkg_visibility_check(pkg)
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7563, in _pkg_visibility_check
+    if pkg.visible:
+       ^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 232, in visible
+    self._visible = self._eval_visibility(self.masks)
+                                          ^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 226, in masks
+    self._masks = self._eval_masks()
+                  ~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 471, in _eval_masks
+    missing_licenses = settings._getMissingLicenses(self.cpv, self._metadata)
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py", line 2539, in _getMissingLicenses
+    metadata["USE"],
+    ~~~~~~~~^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 938, in __getitem__
+    v = self._pkg._init_use()
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 739, in _init_use
+    use_str = self._get_pkgsettings()["PORTAGE_USE"]
+              ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 716, in _get_pkgsettings
+    pkgsettings.setcpv(self)
+    ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py", line 1770, in wrapper
+    return f(self, *args, **kwargs)
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py", line 2003, in setcpv
+    penv_matches = ordered_by_atom_specificity(cpdict, cpv_slot)
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/_config/helper.py", line 37, in ordered_by_atom_specificity
+    bestmatch = best_match_to_list(pkg, keys)
+  File "/usr/lib/python3.14/site-packages/portage/dep/__init__.py", line 2830, in best_match_to_list
+    for x in match_to_list(mypkg, mylist):
+             ~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/dep/__init__.py", line 2791, in match_to_list
+    if not (x in matches or matches_add(x)) and match_from_list(x, pkgs)
+                                                ~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/dep/__init__.py", line 3148, in match_from_list
+    if not hasattr(x, "use"):
+           ~~~~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 711, in use
+    self._init_use()
+    ~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 739, in _init_use
+    use_str = self._get_pkgsettings()["PORTAGE_USE"]
+              ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 716, in _get_pkgsettings
+    pkgsettings.setcpv(self)
+    ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py", line 1767, in wrapper
+    raise AssertionError("setcpv recursion detected")
+AssertionError: setcpv recursion detected

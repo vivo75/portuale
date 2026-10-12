@@ -1,0 +1,4 @@
+
+emerge: there are no ebuilds to satisfy "dev-libs/t341-dep::gentoo".
+(dependency required by "app-misc/t341-good-1::t341" [binary])
+(dependency required by "app-misc/t341-good" [argument])

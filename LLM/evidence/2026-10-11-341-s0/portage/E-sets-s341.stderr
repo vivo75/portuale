@@ -1,0 +1,11 @@
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by @s341 (argument)
+>=dev-libs/t341-dep-1 x
+/s0/out/work/cfg-cfgE2/etc/portage/sets/s341: Validation failed at line: 1, data */t341-dep
+/s0/out/work/cfg-cfgE2/etc/portage/sets/s341: Validation failed at line: 2, data dev-libs/t341-*
+/s0/out/work/cfg-cfgE2/etc/portage/sets/s341: Validation failed at line: 4, data =dev-libs/t341-dep-1-2
+/s0/out/work/cfg-cfgE2/etc/portage/sets/s341: Validation failed at line: 5, data =dev-libs/t341-dep-1-02
+/s0/out/work/cfg-cfgE2/etc/portage/sets/s341: Validation failed at line: 6, data dev-libs/t341-dep-1
+/s0/out/work/cfg-cfgE2/etc/portage/sets/s341: Validation failed at line: 7, data !dev-libs/t341-dep

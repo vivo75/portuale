@@ -1,0 +1,1 @@
+emerge -pv --ignore-default-opts --getbinpkg=n --usepkg=n --buildpkg-exclude dev-libs/t341-dep::t341 dev-libs/t341-dep

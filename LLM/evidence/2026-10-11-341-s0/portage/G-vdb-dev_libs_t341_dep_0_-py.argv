@@ -1,0 +1,1 @@
+vdb RDEPEND=dev-libs/t341-dep:0*; PORTAGE_CONFIGROOT=/s0/out/work/cfg-cfgG ROOT=/s0/out/work/root-inst [PY] PORTAGE_NATIVE_DEP_PARSER=0 python3 pkgprobe.py installed app-misc/t341-good

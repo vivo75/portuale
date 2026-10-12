@@ -1,0 +1,1 @@
+vdb RDEPEND=dev-libs/t341-dep::gentoo; PORTAGE_CONFIGROOT=/s0/out/work/cfg-cfgG ROOT=/s0/out/work/root-inst [C] python3 pkgprobe.py installed app-misc/t341-good

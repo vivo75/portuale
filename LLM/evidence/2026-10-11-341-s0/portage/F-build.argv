@@ -1,0 +1,1 @@
+PORTAGE_CONFIGROOT=/s0/out/work/cfg-cfgFB ROOT=/s0/out/work/cfg-cfgFB BINPKG_FORMAT=xpak PKGDIR=/s0/out/work/pkgdir emerge --buildpkg=y --oneshot --quiet-build --ignore-default-opts app-misc/t341-good

@@ -1,0 +1,12 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.28 s (backtrack: 0/20).
+
+
+Total: 0 packages, Size of downloads: 0 KiB
+
+ * IMPORTANT: 7 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

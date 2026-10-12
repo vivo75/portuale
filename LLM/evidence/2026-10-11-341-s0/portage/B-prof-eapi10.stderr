@@ -1,0 +1,15 @@
+!!! Unable to parse profile: '/s0/out/work/cfg-cfgB4/etc/portage/make.profile'
+!!! ParseError: Profile contains unsupported EAPI '10': '/s0/out/work/repo-eapi10/profiles/t341/noeapi/eapi'
+!!! Unable to parse profile: '/s0/out/work/cfg-cfgB4/etc/portage/make.profile'
+!!! ParseError: Profile contains unsupported EAPI '10': '/s0/out/work/repo-eapi10/profiles/t341/noeapi/eapi'
+
+
+!!! /s0/out/work/cfg-cfgB4/etc/portage/make.profile is not a symlink and will probably prevent most merges.
+!!! It should point into a profile within /var/db/repos/gentoo/profiles/
+!!! (You can safely ignore this message when syncing. It's harmless.)
+
+
+!!! Your current profile is invalid. If you have just changed your profile
+!!! configuration, you should revert back to the previous configuration.
+!!! Allowed actions are limited to --help, --info, --search, --sync, and
+!!! --version.

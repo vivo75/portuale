@@ -1,0 +1,1 @@
+PORTAGE_CONFIGROOT=/s0/out/work/cfg-cfgG ROOT=/s0/out/work/root-inst emerge --oneshot ... app-misc/t341-good

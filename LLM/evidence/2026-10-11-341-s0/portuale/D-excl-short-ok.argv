@@ -1,0 +1,1 @@
+/pm/portuale emerge -pv --ignore-default-opts --getbinpkg=n --usepkg=n --exclude t341-dep dev-libs/t341-dep

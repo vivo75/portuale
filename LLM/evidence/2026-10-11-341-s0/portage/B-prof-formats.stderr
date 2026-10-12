@@ -1,0 +1,49 @@
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/packages: /t341-dep
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/packages: /t341-dep
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.use: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/repo-341-formats/profiles/t341/package.use: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.use: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.use: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/repo-341-formats/profiles/t341/noeapi/package.use: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.use: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.accept_keywords: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.accept_keywords: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/repo-341-formats/profiles/t341/package.accept_keywords: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.accept_keywords: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.accept_keywords: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.accept_keywords: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/repo-341-formats/profiles/t341/noeapi/package.accept_keywords: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.accept_keywords: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.mask: */t341-dep
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.mask: */t341-dep
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/packages: /t341-dep
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/packages: /t341-dep
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/packages: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.use: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/repo-341-formats/profiles/t341/package.use: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.use: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.use: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/repo-341-formats/profiles/t341/noeapi/package.use: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.use: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.accept_keywords: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.accept_keywords: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/repo-341-formats/profiles/t341/package.accept_keywords: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.accept_keywords: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.accept_keywords: =dev-libs/t341-dep-1-2
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.accept_keywords: */t341-dep
+--- Atom is not allowed to have USE flag(s) in /s0/repo-341-formats/profiles/t341/noeapi/package.accept_keywords: dev-libs/t341-dep[x(+)]
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.accept_keywords: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.mask: */t341-dep
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/package.mask: dev-libs/t341-dep-1
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.mask: */t341-dep
+--- Invalid atom in /s0/repo-341-formats/profiles/t341/noeapi/package.mask: dev-libs/t341-dep-1
+
+emerge: there are no ebuilds to satisfy "dev-libs/t341-dep" for /s0/out/work/cfg-cfgB2/.
+
+emerge: searching for similar names...
+emerge: Maybe you meant any of these: dev-libs/tre, dev-libs/date, dev-libs/eb?
