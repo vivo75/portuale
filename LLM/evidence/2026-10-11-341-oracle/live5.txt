@@ -1,0 +1,263 @@
+#### user config /etc/portage/{package.mask,package.use,package.accept_keywords,package.env} + /etc/portage/profile/{package.mask,package.use.force} (no eapi file)
+=== ARGV: emerge -pv --ignore-default-opts dev-libs/foo
+--- Invalid atom in /etc/portage/profile/package.use.force: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/profile/package.use.force: dev-libs/foo-1
+--- Atom is not allowed to have USE flag(s) in /etc/portage/profile/package.use.force: dev-libs/foo[x]
+--- Invalid atom in /etc/portage/package.use: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.use: dev-libs/foo-1
+--- Atom is not allowed to have USE flag(s) in /etc/portage/package.use: dev-libs/foo[x]
+--- Invalid atom in /etc/portage/package.env: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.env: dev-libs/foo-1
+--- Invalid atom in /etc/portage/package.accept_keywords: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.accept_keywords: dev-libs/foo-1
+--- Atom is not allowed to have USE flag(s) in /etc/portage/package.accept_keywords: dev-libs/foo[x]
+--- Invalid atom in /etc/portage/profile/package.mask: */foo
+--- Invalid atom in /etc/portage/profile/package.mask: dev-libs/fo*
+--- Invalid atom in /etc/portage/profile/package.mask: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/profile/package.mask: dev-libs/foo-1
+--- Invalid atom in /etc/portage/package.mask: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.mask: dev-libs/foo-1
+These are the packages that would be merged, in order:
+!!! Problem in 'dev-libs/foo' dependencies.
+!!! setcpv recursion detected None
+ done!
+Dependency resolution took 1.42 s.
+Traceback (most recent call last):
+  File "/usr/lib/python-exec/python3.14/emerge", line 62, in main
+    retval = emerge_main()
+  File "/usr/lib/python3.14/site-packages/_emerge/main.py", line 1368, in emerge_main
+    return run_action(emerge_config)
+  File "/usr/lib/python3.14/site-packages/_emerge/actions.py", line 4289, in run_action
+    retval = action_build(emerge_config, spinner=spinner)
+  File "/usr/lib/python3.14/site-packages/_emerge/actions.py", line 410, in action_build
+    success, mydepgraph, favorites = backtrack_depgraph(
+                                     ~~~~~~~~~~~~~~~~~~^
+        settings, trees, myopts, myparams, myaction, myfiles, spinner
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 12166, in backtrack_depgraph
+    success, mydepgraph, favorites, backtracked, max_retries = _backtrack_depgraph(
+                                                               ~~~~~~~~~~~~~~~~~~~^
+        settings, trees, myopts, myparams, myaction, myfiles, spinner
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 12226, in _backtrack_depgraph
+    success, favorites = mydepgraph.select_files(myfiles)
+                         ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 5001, in select_files
+    return self._select_files(args)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 5456, in _select_files
+    return self._resolve(myfavorites)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 5526, in _resolve
+    pkg, existing_node = self._select_package(
+                         ~~~~~~~~~~~~~~~~~~~~^
+        myroot, atom, onlydeps=onlydeps
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7253, in _select_pkg_highest_available
+    ret = self._select_pkg_highest_available_imp(
+        root, atom, onlydeps=onlydeps, parent=parent
+    )
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7515, in _select_pkg_highest_available_imp
+    pkg, existing = self._wrapped_select_pkg_highest_available_imp(
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        root, atom, onlydeps=onlydeps, parent=parent
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7870, in _wrapped_select_pkg_highest_available_imp
+    for pkg in self._iter_match_pkgs(
+               ~~~~~~~~~~~~~~~~~~~~~^
+        root_config,
+        ^^^^^^^^^^^^
+    ...<2 lines>...
+        onlydeps=onlydeps,
+        ^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7142, in _iter_match_pkgs_atom
+    pkg = self._pkg(
+        cpv,
+    ...<4 lines>...
+        myrepo=getattr(cpv, "repo", None),
+    )
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 8880, in _pkg
+    not self._pkg_visibility_check(pkg)
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/depgraph.py", line 7563, in _pkg_visibility_check
+    if pkg.visible:
+       ^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 232, in visible
+    self._visible = self._eval_visibility(self.masks)
+                                          ^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 226, in masks
+    self._masks = self._eval_masks()
+                  ~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 471, in _eval_masks
+    missing_licenses = settings._getMissingLicenses(self.cpv, self._metadata)
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py", line 2539, in _getMissingLicenses
+    metadata["USE"],
+    ~~~~~~~~^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 938, in __getitem__
+    v = self._pkg._init_use()
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 739, in _init_use
+    use_str = self._get_pkgsettings()["PORTAGE_USE"]
+              ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 716, in _get_pkgsettings
+    pkgsettings.setcpv(self)
+    ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py", line 1770, in wrapper
+    return f(self, *args, **kwargs)
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py", line 2003, in setcpv
+    penv_matches = ordered_by_atom_specificity(cpdict, cpv_slot)
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/_config/helper.py", line 37, in ordered_by_atom_specificity
+    bestmatch = best_match_to_list(pkg, keys)
+  File "/usr/lib/python3.14/site-packages/portage/dep/__init__.py", line 2830, in best_match_to_list
+    for x in match_to_list(mypkg, mylist):
+             ~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/dep/__init__.py", line 2791, in match_to_list
+    if not (x in matches or matches_add(x)) and match_from_list(x, pkgs)
+                                                ~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/dep/__init__.py", line 3148, in match_from_list
+    if not hasattr(x, "use"):
+           ~~~~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 711, in use
+    self._init_use()
+    ~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 739, in _init_use
+    use_str = self._get_pkgsettings()["PORTAGE_USE"]
+              ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Package.py", line 716, in _get_pkgsettings
+    pkgsettings.setcpv(self)
+    ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py", line 1767, in wrapper
+    raise AssertionError("setcpv recursion detected")
+AssertionError: setcpv recursion detected
+#### command line
+=== ARGV: emerge -pv --ignore-default-opts '=dev-libs/foo-1-2'
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.87 s (backtrack: 0/20).
+emerge: there are no ebuilds to satisfy "=dev-libs/foo-1-2".
+=== ARGV: emerge -pv --ignore-default-opts '=dev-libs/foo-1-1'
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.62 s (backtrack: 0/20).
+emerge: there are no ebuilds to satisfy "=dev-libs/foo-1-1".
+=== ARGV: emerge -pv --ignore-default-opts '*/foo'
+!!! '*/foo' is not a valid package atom.
+!!! Please check ebuild(5) for full details.
+=== ARGV: emerge -pv --ignore-default-opts 'dev-libs/foo::oracle'
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 1.59 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts '!dev-libs/foo'
+!!! '!dev-libs/foo' is not a valid package atom.
+!!! Please check ebuild(5) for full details.
+=== ARGV: emerge -pv --ignore-default-opts 'dev-libs/foo[x?]'
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 1.32 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts 'foo::oracle'
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 1.46 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts 'dev-libs/foo-1'
+!!! 'dev-libs/foo-1' is not a valid package atom.
+!!! Please check ebuild(5) for full details.
+=== ARGV: emerge -pv --ignore-default-opts '=dev-libs/foo-1-02'
+!!! '=dev-libs/foo-1-02' is not a valid package atom.
+!!! Please check ebuild(5) for full details.
+=== ARGV: emerge -pv --ignore-default-opts --exclude '>=dev-libs/foo-1' dev-libs/foo
+usage: emerge [--metadata] [--config] [--regen] [--prune] [--version] [--info]
+              [--depclean] [--clean] [--rage-clean] [--list-sets] [--search]
+              [--alphabetical] [--ask-enter-invalid] [--buildpkgonly]
+              [--changed-use] [--columns] [--debug] [--digest] [--emptytree]
+              [--verbose-conflicts] [--fetchonly] [--fetch-all-uri]
+              [--ignore-default-opts] [--noconfmem] [--newrepo] [--newuse]
+=== ARGV: emerge -pv --ignore-default-opts --exclude 'dev-libs/*' dev-libs/foo
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.70 s (backtrack: 0/20).
+Total: 0 packages, Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts --exclude 'foo' dev-libs/foo
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 1.44 s (backtrack: 0/20).
+Total: 0 packages, Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts --exclude 'dev-libs/foo::oracle' dev-libs/foo
+              [--regen] [--unmerge] [--list-sets] [--metadata] [--rage-clean]
+              [--status] [--help] [--sync] [--clean] [--search] [--depclean]
+              [--alphabetical] [--ask-enter-invalid] [--buildpkgonly]
+              [--changed-use] [--columns] [--debug] [--digest] [--emptytree]
+              [--verbose-conflicts] [--fetchonly] [--fetch-all-uri]
+              [--ignore-default-opts] [--noconfmem] [--newrepo] [--newuse]
+=== ARGV: emerge -pv --ignore-default-opts --exclude 'dev-libs/foo:0' dev-libs/foo
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 2.13 s (backtrack: 0/20).
+Total: 0 packages, Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts --exclude '=dev-libs/foo-1-2' dev-libs/foo
+              [--rage-clean] [--help] [--info] [--config] [--prune] [--moo]
+              [--metadata] [--sync] [--version] [--unmerge] [--depclean]
+              [--search] [--alphabetical] [--ask-enter-invalid]
+              [--buildpkgonly] [--changed-use] [--columns] [--debug]
+              [--digest] [--emptytree] [--verbose-conflicts] [--fetchonly]
+              [--fetch-all-uri] [--ignore-default-opts] [--noconfmem]
+=== ARGV: emerge -pv --ignore-default-opts --buildpkg-exclude '=dev-libs/foo-1-2' dev-libs/foo
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.84 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts --buildpkg-exclude 'dev-libs/foo::oracle' dev-libs/foo
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.94 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts --buildpkg-exclude '>=dev-libs/foo-1' dev-libs/foo
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.93 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+#### /etc/portage/sets/myset
+=== ARGV: emerge -pv --ignore-default-opts @myset
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.51 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="x" 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by @myset (argument)
+>=dev-libs/foo-1 x
+/etc/portage/sets/myset: Validation failed at line: 1, data */foo
+/etc/portage/sets/myset: Validation failed at line: 2, data dev-libs/fo*
+/etc/portage/sets/myset: Validation failed at line: 4, data =dev-libs/foo-1-2
+/etc/portage/sets/myset: Validation failed at line: 5, data =dev-libs/foo-1-02
+/etc/portage/sets/myset: Validation failed at line: 6, data dev-libs/foo-1
+/etc/portage/sets/myset: Validation failed at line: 7, data !dev-libs/foo
+#### world file
+=== ARGV: emerge -pv --ignore-default-opts @selected
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 1.33 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="x" 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by @selected (argument)
+>=dev-libs/foo-1 x

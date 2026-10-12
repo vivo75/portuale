@@ -1,0 +1,73 @@
+=== installed probe, vdb RDEPEND=dev-libs/foo::gentoo (native C parser)
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo::gentoo' EAPI=8
+  invalid: {'dependency.syntax': ["RDEPEND: expected '?' in '/var/db/pkg/app-misc/goodslot-1/RDEPEND'"]}
+  visible: False
+=== installed probe, vdb RDEPEND=dev-libs/foo::gentoo (PORTAGE_NATIVE_DEP_PARSER=0)
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo::gentoo' EAPI=8
+  invalid: False
+  visible: True
+=== installed probe, vdb RDEPEND==dev-libs/foo-1-2 (native C parser)
+installed app-misc/goodslot-1 RDEPEND='=dev-libs/foo-1-2' EAPI=8
+  invalid: {'dependency.syntax': ["RDEPEND: expected atom or group in '/var/db/pkg/app-misc/goodslot-1/RDEPEND'"]}
+  visible: False
+=== installed probe, vdb RDEPEND==dev-libs/foo-1-2 (PORTAGE_NATIVE_DEP_PARSER=0)
+installed app-misc/goodslot-1 RDEPEND='=dev-libs/foo-1-2' EAPI=8
+  invalid: False
+  visible: True
+=== installed probe, vdb RDEPEND=dev-libs/foo[nonexistent?] (native C parser)
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo[nonexistent?]' EAPI=8
+  invalid: False
+  visible: True
+=== installed probe, vdb RDEPEND=dev-libs/foo[nonexistent?] (PORTAGE_NATIVE_DEP_PARSER=0)
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo[nonexistent?]' EAPI=8
+  invalid: False
+  visible: True
+=== installed probe, vdb RDEPEND=dev-libs/foo:0* (native C parser)
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo:0*' EAPI=8
+  invalid: {'dependency.syntax': ["RDEPEND: unexpected token in '/var/db/pkg/app-misc/goodslot-1/RDEPEND'"]}
+  visible: False
+=== installed probe, vdb RDEPEND=dev-libs/foo:0* (PORTAGE_NATIVE_DEP_PARSER=0)
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo:0*' EAPI=8
+  invalid: {'dependency.syntax': ["RDEPEND: Invalid atom (dev-libs/foo:0*), token 1 in '/var/db/pkg/app-misc/goodslot-1/RDEPEND'"]}
+  visible: False
+=== ARGV: emerge -pv --ignore-default-opts dev-libs/foo   (installed goodslot vdb RDEPEND=dev-libs/foo::gentoo)
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.85 s (backtrack: 0/20).
+[ebuild   R    ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+=== ARGV: PORTAGE_NATIVE_DEP_PARSER=0 emerge -pv --ignore-default-opts dev-libs/foo
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.97 s (backtrack: 0/20).
+[ebuild   R    ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts app-misc/goodslot
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.96 s (backtrack: 0/20).
+[ebuild   R    ] app-misc/goodslot-1::oracle  0 KiB
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+CPV: app-misc/goodslot-1
+EAPI: 8
+RDEPEND: dev-libs/foo::gentoo
+=== binary probe (Packages + xpak RDEPEND = dev-libs/foo::gentoo)
+binary app-misc/goodslot-1 RDEPEND='dev-libs/foo::gentoo' EAPI=8
+  invalid: {'dependency.syntax': ['RDEPEND: Invalid atom (dev-libs/foo::gentoo), token 1']}
+  visible: False
+=== ARGV: PKGDIR=/var/tmp/oraclepkgs emerge -pv --ignore-default-opts --usepkgonly=y app-misc/goodslot
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.67 s (backtrack: 0/20).
+!!! All ebuilds that could satisfy "app-misc/goodslot" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/goodslot-1::oracle (masked by: invalid: RDEPEND: Invalid atom (dev-libs/foo::gentoo), token 1)
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+=== ARGV: PKGDIR=/var/tmp/oraclepkgs emerge -pv --ignore-default-opts --usepkgonly=y --emptytree app-misc/goodslot
+These are the packages that would be merged, in order:
+!!! All ebuilds that could satisfy "app-misc/goodslot" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/goodslot-1::oracle (masked by: invalid: RDEPEND: Invalid atom (dev-libs/foo::gentoo), token 1)
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.

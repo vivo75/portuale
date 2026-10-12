@@ -1,0 +1,4 @@
+EAPI=8
+SLOT="0/1"
+KEYWORDS="amd64"
+IUSE="x"

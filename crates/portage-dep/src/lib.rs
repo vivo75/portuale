@@ -16,8 +16,12 @@
 //! - A candidate without `::repo` always passes a repo constraint.
 //! - A bare atom whose name ends in something version-like (`foo-bar-2`) is
 //!   rejected as ambiguous, per PMS.
-//! - An `=` atom with a build-id matches no candidate: none carries one until
-//!   S9 threads binary build-ids in (review C-1).
+//! - An `=` atom with a build-id matches only a binary instance carrying that
+//!   build-id (`match_from_list_with_build_id`); the plain-string path matches
+//!   none (#341 S9).
+//! - Installed packages' vdb dep strings are parsed with the plain grammar:
+//!   Portage's C-scanner rejections of `::repo`/build-id atoms there are not
+//!   replicated (deliberate cut, #341 S10).
 
 use portage_versions::vercmp;
 use regex::Regex;

@@ -1,0 +1,65 @@
+=== ARGV: emerge -pv --ignore-default-opts app-misc/badrepo
+These are the packages that would be merged, in order:
+Calculating dependencies ...!!! cgroup: cannot create base cgroup /sys/fs/cgroup/portage: [Errno 30] Read-only file system: '/sys/fs/cgroup/portage'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+ done!
+Dependency resolution took 2.13 s (backtrack: 0/20).
+!!! All ebuilds that could satisfy "app-misc/badrepo" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/badrepo-1::oracle (masked by: invalid: RDEPEND: Invalid atom (dev-libs/foo::gentoo), token 1)
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+=== ARGV: emerge -pv --ignore-default-opts app-misc/badbid
+These are the packages that would be merged, in order:
+Calculating dependencies ...!!! cgroup: cannot create base cgroup /sys/fs/cgroup/portage: [Errno 30] Read-only file system: '/sys/fs/cgroup/portage'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+ done!
+Dependency resolution took 1.31 s (backtrack: 0/20).
+!!! All ebuilds that could satisfy "app-misc/badbid" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/badbid-1::oracle (masked by: invalid: RDEPEND: Invalid atom (=dev-libs/foo-1-2), token 1)
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+=== ARGV: emerge -pv --ignore-default-opts app-misc/badcond
+These are the packages that would be merged, in order:
+Calculating dependencies ...!!! cgroup: cannot create base cgroup /sys/fs/cgroup/portage: [Errno 30] Read-only file system: '/sys/fs/cgroup/portage'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+ done!
+Dependency resolution took 0.97 s (backtrack: 0/20).
+!!! All ebuilds that could satisfy "app-misc/badcond" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/badcond-1::oracle (masked by: invalid: RDEPEND: USE flag 'x' referenced in conditional 'x?' in atom 'dev-libs/foo[x?]' is not in IUSE)
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+=== ARGV: emerge -pv --ignore-default-opts app-misc/badblock
+These are the packages that would be merged, in order:
+Calculating dependencies ...!!! cgroup: cannot create base cgroup /sys/fs/cgroup/portage: [Errno 30] Read-only file system: '/sys/fs/cgroup/portage'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+ done!
+Dependency resolution took 0.78 s (backtrack: 0/20).
+!!! All ebuilds that could satisfy "app-misc/badblock" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/badblock-1::oracle (masked by: invalid: RDEPEND: Invalid atom (dev-libs/foo:0*), token 1)
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+=== ARGV: emerge -pv --ignore-default-opts app-misc/goodslot
+These are the packages that would be merged, in order:
+Calculating dependencies ...!!! cgroup: cannot create base cgroup /sys/fs/cgroup/portage: [Errno 30] Read-only file system: '/sys/fs/cgroup/portage'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+!!! cgroup: cannot create base cgroup /sys/fs/cgroup/portage: [Errno 30] Read-only file system: '/sys/fs/cgroup/portage'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+ done!
+Dependency resolution took 0.92 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/foo-1:0/1::oracle  USE="-x" 0 KiB
+[ebuild  N     ] app-misc/goodslot-1::oracle  0 KiB
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.

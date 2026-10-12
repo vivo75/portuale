@@ -2,7 +2,7 @@
 Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, `match_from_list`, USE-dep evaluation, `extract_affecting_use`). Context moved out of the code comments (#336 Phase 7); the code keeps only the short why.
 
 ## module
-- Owner, 2026-10-10: the grammar scope cut below is temporary. The target is the full grammar of each supported EAPI, applied per ebuild according to its declared EAPI (backlog #341).
+- The grammar scope cuts of #336 are closed by backlog #341 (S2–S9, `LLM/02.341-eapi-atom-grammar.opus.md`): the full grammar of each supported EAPI is applied per context. What remains cut is listed in that plan and in `backlog-tasks-2026-10.md` "Deliberate cuts" (installed-deps C-scanner quirk) and residues #345–#348.
 - S2 (#341) closed two cuts: build-ids (`=cat/pkg-1.0-2`, via `Atom.build_id` + `AtomOptions.allow_build_id`) and EAPI parametrization of the strict grammar (`parse_atom_with` + `AtomEapi`, EAPI gates verbatim from `Atom.__init__`).
 - S3 (#341) closed the wildcard branch: `parse_atom_with` with `allow_wildcard` ports `_get_atom_wildcard_re` (dep:332-372) and `match_from_list` re-parses with `allow_wildcard=True, allow_repo=True` (dep:2901-2906). The default `parse_atom` still rejects extended atoms (`CpBucketIndex::build` routes them to `other` because of it).
 - S4 (#341) closed ebuild/binary `*DEPEND` validation: `dep_validate` parses each dep key with the owner's EAPI (`Candidate.eapi`) and validates against its IUSE, masking `invalid:` with Portage's texts (plus the `Improper context` built-atom check, reopening #15). Added `atom_to_string` (Portage `str(atom)` = the original token) for quoting atoms in those messages.

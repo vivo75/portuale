@@ -1,0 +1,71 @@
+/run6.sh: line 15: /etc/portage/profile/package.use.force: Is a directory
+#### user config (package.env without the [x] line)
+=== ARGV: emerge -pv --ignore-default-opts dev-libs/foo
+ done!
+--- Atom is not allowed to have USE flag(s) in /etc/portage/package.accept_keywords: dev-libs/foo[x]
+--- Atom is not allowed to have USE flag(s) in /etc/portage/package.use: dev-libs/foo[x]
+--- Atom is not allowed to have USE flag(s) in /etc/portage/profile/package.use: dev-libs/foo[x]
+--- Invalid atom in /etc/portage/package.accept_keywords: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.accept_keywords: dev-libs/foo-1
+--- Invalid atom in /etc/portage/package.env: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.env: dev-libs/foo-1
+--- Invalid atom in /etc/portage/package.license: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.license: =dev-libs/foo-1-2
+--- Invalid atom in /etc/portage/package.license: dev-libs/foo-1
+--- Invalid atom in /etc/portage/package.mask: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.mask: dev-libs/foo-1
+--- Invalid atom in /etc/portage/package.unmask: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.unmask: dev-libs/foo-1
+--- Invalid atom in /etc/portage/package.use: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/package.use: dev-libs/foo-1
+--- Invalid atom in /etc/portage/profile/package.mask: */foo
+--- Invalid atom in /etc/portage/profile/package.mask: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/profile/package.mask: dev-libs/fo*
+--- Invalid atom in /etc/portage/profile/package.mask: dev-libs/foo-1
+--- Invalid atom in /etc/portage/profile/package.use: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/profile/package.use: dev-libs/foo-1
+--- Invalid atom in /etc/portage/profile/packages: /foo
+--- Invalid atom in /etc/portage/profile/packages: /foo
+--- Invalid atom in /etc/portage/profile/packages: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/profile/packages: =dev-libs/foo-1-02
+--- Invalid atom in /etc/portage/profile/packages: dev-libs/fo*
+--- Invalid atom in /etc/portage/profile/packages: dev-libs/fo*
+--- Invalid atom in /etc/portage/profile/packages: dev-libs/foo-1
+--- Invalid atom in /etc/portage/profile/packages: dev-libs/foo-1
+Dependency resolution took 1.84 s (backtrack: 0/20).
+These are the packages that would be merged, in order:
+Total: 1 package (1 new), Size of downloads: 0 KiB
+[ebuild  N    #] dev-libs/foo-1:0/1::oracle  USE="x" 0 KiB
+=== python: settings.packages / user profile node
+profile nodes: [('/var/db/repos/gentoo/profiles/default/linux/amd64/23.0/systemd', '5', False, False), ('/etc/portage/profile', None, True, True)]
+packages: ['dev-libs/foo::oracle', '=dev-libs/foo-1-2', '!dev-libs/foo', 'dev-libs/foo[x]']
+#### package.env with use-dep atom
+=== ARGV: emerge -pv --ignore-default-opts dev-libs/foo
+ done!
+Dependency resolution took 1.30 s.
+Traceback (most recent call last):
+AssertionError: setcpv recursion detected
+=== ARGV: emerge -pv --ignore-default-opts --exclude '>=dev-libs/foo-1' dev-libs/foo
+              [positional_args ...]
+emerge: error: Invalid Atom(s) in --exclude parameter: '>=dev-libs/foo-1' (only package names and slot atoms (with wildcards) allowed)
+=== ARGV: emerge -pv --ignore-default-opts --exclude 'dev-libs/foo::oracle' dev-libs/foo
+              [positional_args ...]
+emerge: error: Invalid Atom(s) in --exclude parameter: 'dev-libs/foo::oracle' (only package names and slot atoms (with wildcards) allowed)
+=== ARGV: emerge -pv --ignore-default-opts --exclude '=dev-libs/foo-1-2' dev-libs/foo
+              [positional_args ...]
+emerge: error: Invalid Atom(s) in --exclude parameter: '=dev-libs/foo-1-2' (only package names and slot atoms (with wildcards) allowed)
+=== ARGV: emerge -pv --ignore-default-opts --exclude 'dev-libs/foo[x]' dev-libs/foo
+              [positional_args ...]
+emerge: error: Invalid Atom(s) in --exclude parameter: 'dev-libs/foo[x]' (only package names and slot atoms (with wildcards) allowed)
+=== ARGV: emerge -pv --ignore-default-opts --exclude '!dev-libs/foo' dev-libs/foo
+              [positional_args ...]
+emerge: error: Invalid Atom(s) in --exclude parameter: '!dev-libs/foo' (only package names and slot atoms (with wildcards) allowed)
+=== ARGV: emerge -pv --ignore-default-opts --exclude 'dev-libs/foo:0/1' dev-libs/foo
+Dependency resolution took 1.12 s (backtrack: 0/20).
+Total: 0 packages, Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts --exclude '*/*:0' dev-libs/foo
+Dependency resolution took 1.91 s (backtrack: 0/20).
+Total: 0 packages, Size of downloads: 0 KiB
+=== ARGV: emerge -pv --ignore-default-opts --usepkg-exclude 'dev-libs/foo::oracle' dev-libs/foo
+              [positional_args ...]
+emerge: error: Invalid Atom(s) in --usepkg-exclude parameter: 'dev-libs/foo::oracle' (only package names and slot atoms (with wildcards) allowed)

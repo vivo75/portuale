@@ -1,0 +1,59 @@
+=== ARGV: BINPKG_FORMAT=xpak emerge -1 --buildpkg=y --quiet-build --ignore-default-opts app-misc/goodslot
+>>> Emerging (1 of 2) dev-libs/foo-1::oracle
+>>> Installing (1 of 2) dev-libs/foo-1::oracle
+>>> Completed (1 of 2) dev-libs/foo-1::oracle
+>>> Emerging (2 of 2) app-misc/goodslot-1::oracle
+>>> Installing (2 of 2) app-misc/goodslot-1::oracle
+>>> Completed (2 of 2) app-misc/goodslot-1::oracle
+=== installed pkg probe (vdb RDEPEND rewritten to dev-libs/foo::gentoo), C parser default
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo:0/1= !!app-misc/badblock' EAPI=8
+  invalid: False
+  visible: True
+=== same, PORTAGE_NATIVE_DEP_PARSER=0
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo:0/1= !!app-misc/badblock' EAPI=8
+  invalid: False
+  visible: True
+=== installed pkg probe (vdb RDEPEND = dev-libs/foo[nonexistent?])
+installed app-misc/goodslot-1 RDEPEND='dev-libs/foo:0/1= !!app-misc/badblock' EAPI=8
+  invalid: False
+  visible: True
+=== ARGV: emerge -pv --ignore-default-opts --usepkg=n app-misc/goodslot   (vdb RDEPEND dev-libs/foo::gentoo)
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 1.49 s (backtrack: 0/20).
+[ebuild   R    ] app-misc/goodslot-1::oracle  0 KiB
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+=== ARGV: emerge -pc --ignore-default-opts app-misc/goodslot
+!!! You have no world file.
+Calculating dependencies ... done!
+>>> Calculating removal order...
+>>> These are the packages that would be unmerged:
+ app-misc/goodslot
+    selected: 1 
+   protected: none 
+     omitted: none 
+All selected packages: =app-misc/goodslot-1
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+Packages installed:   322
+Packages in world:    0
+Packages in system:   50
+Required packages:    321
+Number to remove:     1
+binpkg: ['/var/tmp/oraclepkgs/app-misc/goodslot/goodslot-1-1.xpak']
+CPV: app-misc/goodslot-1
+RDEPEND: dev-libs/foo::gentoo
+EAPI: 8
+RDEPEND: dev-libs/foo:0/1= !!app-misc/badblock
+CPV: dev-libs/foo-1
+EAPI: 8
+=== binary pkg probe (Packages RDEPEND = dev-libs/foo::gentoo)
+binary app-misc/goodslot-1 RDEPEND='dev-libs/foo::gentoo' EAPI=8
+  invalid: {'dependency.syntax': ['RDEPEND: Invalid atom (dev-libs/foo::gentoo), token 1']}
+  visible: False
+=== ARGV: PKGDIR=/var/tmp/oraclepkgs emerge -pv --ignore-default-opts --usepkgonly=y app-misc/goodslot
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 1.45 s (backtrack: 0/20).
+[binary   R    ] app-misc/goodslot-1-1::oracle  0 KiB
+Total: 1 package (1 reinstall, 1 binary), Size of downloads: 0 KiB

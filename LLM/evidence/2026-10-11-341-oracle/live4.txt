@@ -1,0 +1,46 @@
+#### profile: oprof (eapi 5) <- oprof0 (no eapi file); layout.conf without profile-formats
+=== ARGV: emerge -pv --ignore-default-opts dev-libs/foo
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.use: dev-libs/foo::oracle
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.use: =dev-libs/foo-1-2
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.use: */foo
+--- Atom is not allowed to have USE flag(s) in /var/db/repos/oracle/profiles/oprof/package.use: dev-libs/foo[x(+)]
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.use: dev-libs/foo-1
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.mask: dev-libs/foo::oracle
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.mask: =dev-libs/foo-1-2
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.mask: */foo
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.mask: dev-libs/foo-1
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: dev-libs/foo::oracle
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: =dev-libs/foo-1-2
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: */foo
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: dev-libs/foo:=
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: Slot deps are not allowed in EAPI 0: 'dev-libs/foo:0'
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: Use deps are not allowed in EAPI 0: 'dev-libs/foo[x(+)]'
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: dev-libs/foo-1
+These are the packages that would be merged, in order:
+ done!
+Dependency resolution took 1.37 s (backtrack: 0/20).
+!!! All ebuilds that could satisfy "dev-libs/foo" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/foo-1::oracle (masked by: package.mask)
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+#### same, layout.conf profile-formats = portage-2 profile-repo-deps build-id
+=== ARGV: emerge -pv --ignore-default-opts dev-libs/foo
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.use: */foo
+--- Atom is not allowed to have USE flag(s) in /var/db/repos/oracle/profiles/oprof/package.use: dev-libs/foo[x(+)]
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.use: dev-libs/foo-1
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.mask: */foo
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof/package.mask: dev-libs/foo-1
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: */foo
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: dev-libs/foo:=
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: Slot deps are not allowed in EAPI 0: 'dev-libs/foo:0'
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: Use deps are not allowed in EAPI 0: 'dev-libs/foo[x(+)]'
+--- Invalid atom in /var/db/repos/oracle/profiles/oprof0/package.mask: dev-libs/foo-1
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 0.70 s (backtrack: 0/20).
+!!! All ebuilds that could satisfy "dev-libs/foo" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/foo-1::oracle (masked by: package.mask)
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.

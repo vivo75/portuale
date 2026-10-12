@@ -1,0 +1,89 @@
+		dev-libs	foo							
+		dev-libs	foo						gentoo	
+INVALID
+INVALID
+INVALID
+INVALID
+INVALID
+INVALID
+INVALID
+	=*	dev-libs	foo	1						
+INVALID
+	=*	dev-libs	foo	1.0	1					
+INVALID
+INVALID
+		dev-libs	foo					=		
+		dev-libs	foo			0	1	=		
+		dev-libs	foo			0	1			
+		dev-libs	foo					*		
+INVALID
+		dev-libs	foo			0		=		
+INVALID
+INVALID
+INVALID
+INVALID
+INVALID
+		dev-libs	foo			a+				
+		dev-libs	foo							bar(+)
+		dev-libs	foo							bar(-)?
+INVALID
+INVALID
+		dev-libs	foo							!bar?
+		dev-libs	foo							!bar=
+		dev-libs	foo							bar=
+		dev-libs	foo							-bar
+INVALID
+INVALID
+		dev-libs	foo							bar(+),-bar(+)
+INVALID
+		dev-libs	foo							bar@x
+INVALID
+INVALID
+INVALID
+INVALID
+		dev-libs	foo			0			gentoo	bar
+!		dev-libs	foo							
+!!		dev-libs	foo							
+!!	>=	dev-libs	foo	1						
+INVALID
+INVALID
+INVALID
+INVALID
+INVALID
+	=	dev-libs	foo	1.0_alpha1_beta2	3					
+INVALID
+	=	dev-libs	foo	01.002						
+	=	dev-libs	foo	1.0a						
+INVALID
+	=	dev-libs	foo	1.0_p						
+INVALID
+	=	dev-libs	foo	1.0	01					
+	~	dev-libs	foo	1.0	1					
+		dev-libs	Foo+bar							
+INVALID
+INVALID
+INVALID
+INVALID
+		cat	pkg-							
+		cat	pkg--							
+INVALID
+		cat.	pkg							
+		_cat	_pkg							
+INVALID
+INVALID
+		cat	81-libretro							
+INVALID
+		dev-libs	foo						foo_bar	
+		dev-libs	foo						foo-bar	
+		dev-libs	foo						_x	
+INVALID
+INVALID
+INVALID
+INVALID
+	=	virtual	foo	1.0		0				
+	=	dev-libs	foo-1	2						
+INVALID
+	=	dev-libs	foo	١						
+INVALID
+INVALID
+INVALID

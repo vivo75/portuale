@@ -1,0 +1,59 @@
+OK  '*/foo::gentoo' None {'allow_wildcard': True, 'allow_repo': True} cp=*/foo ver=None op=None bid=None repo=gentoo ext=True use=None
+OK  '*/*:0' None {'allow_wildcard': True, 'allow_repo': True} cp=*/* ver=None op=None bid=None repo=None ext=True use=None
+OK  'dev-*/foo' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-*/foo ver=None op=None bid=None repo=None ext=True use=None
+OK  '*-libs/f*o' None {'allow_wildcard': True, 'allow_repo': True} cp=*-libs/f*o ver=None op=None bid=None repo=None ext=True use=None
+ERR '=dev-libs/foo-1.0-2*' {'allow_wildcard': True, 'allow_repo': True} -> =dev-libs/foo-1.0-2* category=None
+OK  '=*/foo-*1*' None {'allow_wildcard': True, 'allow_repo': True} cp=*/foo ver=*1* op==* bid=None repo=None ext=True use=None
+ERR '=dev-libs/fo*-*1.0*' {'allow_wildcard': True, 'allow_repo': True} -> =dev-libs/fo*-*1.0* category=None
+ERR 'dev-libs/foo-1.0' {'allow_wildcard': True, 'allow_repo': True} -> dev-libs/foo-1.0 category=None
+ERR '*/foo-1.0' {'allow_wildcard': True, 'allow_repo': True} -> */foo-1.0 category=None
+ERR '*/foo[bar]' {'allow_wildcard': True, 'allow_repo': True} -> */foo[bar] category=None
+OK  '!*/foo' None {'allow_wildcard': True, 'allow_repo': True} cp=*/foo ver=None op=None bid=None repo=None ext=True use=None
+ERR 'dev-libs/foo**' {'allow_wildcard': True, 'allow_repo': True} -> dev-libs/foo** category=None
+ERR '=dev-libs/foo-**' {'allow_wildcard': True, 'allow_repo': True} -> =dev-libs/foo-** category=None
+ERR '**/foo' {'allow_wildcard': True, 'allow_repo': True} -> **/foo category=None
+OK  '=dev-libs/foo-1.0-2:0::r[bar]' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=1.0 op== bid=2 repo=r ext=False use=[bar]
+OK  '~dev-libs/foo-1.0-2' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=1.0 op=~ bid=2 repo=None ext=False use=None
+OK  '<dev-libs/foo-1.0-2' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=1.0 op=< bid=2 repo=None ext=False use=None
+OK  '=dev-libs/foo-1.0-2:0[bar]' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=1.0 op== bid=2 repo=None ext=False use=[bar]
+OK  '=dev-libs/foo-1.0-0' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=1.0 op== bid=0 repo=None ext=False use=None
+OK  '=dev-libs/foo-1.0-2147483648999' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=1.0 op== bid=2147483648999 repo=None ext=False use=None
+OK  '=dev-libs/foo-1*::r' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=1 op==* bid=None repo=r ext=False use=None
+OK  'dev-libs/foo:0/1::r' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=None op=None bid=None repo=r ext=False use=None
+OK  'dev-libs/foo:=::r' None {'allow_wildcard': True, 'allow_repo': True} cp=dev-libs/foo ver=None op=None bid=None repo=r ext=False use=None
+ERR '*/foo:0*' {'allow_wildcard': True, 'allow_repo': True} -> */foo:0* category=None
+OK  '*/*::gentoo' None {'allow_wildcard': True, 'allow_repo': True} cp=*/* ver=None op=None bid=None repo=gentoo ext=True use=None
+ERR 'dev-libs/foo[b?]' {'eapi': '8'} -> USE flag 'b' referenced in conditional 'b?' in atom 'dev-libs/foo[b?]' is not in IUSE category=IUSE.missing
+OK  'dev-libs/foo[b?]' None {} cp=dev-libs/foo ver=None op=None bid=None repo=None ext=False use=[b?]
+ERR 'dev-libs/foo[!b=]' {'eapi': '8'} -> USE flag 'b' referenced in conditional '!b=' in atom 'dev-libs/foo[!b=]' is not in IUSE category=IUSE.missing
+OK  'dev-libs/foo[!b=]' None {} cp=dev-libs/foo ver=None op=None bid=None repo=None ext=False use=[!b=]
+ERR 'dev-libs/foo[a?,b=]' {'eapi': '8'} -> USE flag 'b' referenced in conditional 'b=' in atom 'dev-libs/foo[a?,b=]' is not in IUSE category=IUSE.missing
+OK  'dev-libs/foo[a?,b=]' None {} cp=dev-libs/foo ver=None op=None bid=None repo=None ext=False use=[a?,b=]
+OK  'dev-libs/foo[b]' 8 {'eapi': '8'} cp=dev-libs/foo ver=None op=None bid=None repo=None ext=False use=[b]
+OK  'dev-libs/foo[b]' None {} cp=dev-libs/foo ver=None op=None bid=None repo=None ext=False use=[b]
+OK  'dev-libs/foo[-b(+)]' 8 {'eapi': '8'} cp=dev-libs/foo ver=None op=None bid=None repo=None ext=False use=[-b(+)]
+OK  'dev-libs/foo[-b(+)]' None {} cp=dev-libs/foo ver=None op=None bid=None repo=None ext=False use=[-b(+)]
+OK  '=dev-libs/foo-1.0-2' 8 {'eapi': '8', 'allow_build_id': True} cp=dev-libs/foo ver=1.0 op== bid=2 repo=None ext=False use=None
+ERR '=dev-libs/foo-1.0-2' {'allow_build_id': False} -> =dev-libs/foo-1.0-2 category=None
+OK  'dev-libs/foo::gentoo' 8 {'eapi': '8', 'allow_repo': True} cp=dev-libs/foo ver=None op=None bid=None repo=gentoo ext=False use=None
+ERR '!!dev-libs/foo' {'eapi': '1'} -> Strong blocks are not allowed in EAPI 1: '!!dev-libs/foo' category=EAPI.incompatible
+ERR 'dev-libs/foo:0' {'eapi': '0'} -> Slot deps are not allowed in EAPI 0: 'dev-libs/foo:0' category=EAPI.incompatible
+ERR 'dev-libs/foo:0=' {'eapi': '4'} -> dev-libs/foo:0= category=None
+ERR 'dev-libs/foo[a(+)]' {'eapi': '3'} -> Use dep defaults are not allowed in EAPI 3: 'dev-libs/foo[a(+)]' category=EAPI.incompatible
+ERR 'dev-libs/foo[a]' {'eapi': '1'} -> Use deps are not allowed in EAPI 1: 'dev-libs/foo[a]' category=EAPI.incompatible
+ERR 'dev-libs/foo:0/1' {'eapi': '4'} -> dev-libs/foo:0/1 category=None
+OK  'dev-libs/foo:0/1' 9-pre1 {'eapi': '9-pre1'} cp=dev-libs/foo ver=None op=None bid=None repo=None ext=False use=None
+Traceback (most recent call last):
+  File "/tmp/claude-1000/-home-vivo-repo-PORTUALE-portuale/c7644c26-986a-4eef-925a-e6d77994be68/scratchpad/oracle341/probe2.py", line 26, in <module>
+    t("dev-libs/foo", eapi=8)
+    ~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-vivo-repo-PORTUALE-portuale/c7644c26-986a-4eef-925a-e6d77994be68/scratchpad/oracle341/probe2.py", line 5, in t
+    a = Atom(s, **kw)
+  File "/usr/lib/python3.14/site-packages/portage/dep/__init__.py", line 1922, in __init__
+    eapi_attrs = _get_eapi_attrs(eapi)
+  File "/usr/lib/python3.14/site-packages/portage/eapi.py", line 289, in _get_eapi_attrs
+    eapi = Eapi(eapi_str)
+  File "/usr/lib/python3.14/site-packages/portage/eapi.py", line 225, in __init__
+    eapi_key = eapi_string.partition("-")[0]
+               ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'int' object has no attribute 'partition'
