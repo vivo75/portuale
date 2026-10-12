@@ -18,79 +18,97 @@ use std::sync::{OnceLock, RwLock};
 /// Callers normalize a missing/empty string to `"0"` first.
 // Portage: portage.eapi_is_supported, porttree.py
 pub fn eapi_is_supported(eapi: &str) -> bool {
-    let eapi = eapi.trim();
-    matches!(
-        eapi,
-        "0" | "1"
-            | "2"
-            | "3"
-            | "4"
-            | "5"
-            | "6"
-            | "7"
-            | "8"
-            | "9"
-            | "9-pre1"
-            | "3_pre1"
-            | "3_pre2"
-            | "4_pre1"
-            | "5_pre1"
-            | "5_pre2"
-            | "6_pre1"
-            | "7_pre1"
-    )
+    portage_dep::eapi::eapi_is_supported(eapi)
+}
+
+/// Reads one [`portage_dep::eapi::EapiAttrs`] field, keeping this module's
+/// documented normalisation: trim, `""` → `false`, and the historical
+/// numeric-prefix answer wherever `eapi_attrs` has none — unsupported
+/// strings (e.g. `"10"`, where Portage's permissive set says false) and the
+/// supported-but-unparseable deprecated spellings (`3_pre1`, where Portage
+/// raises `ValueError`, eapi.py:224-229). Unreachable in any vdb or tree in
+/// practice; S1 deliberately changes no result (plan task S1, Step 4).
+fn eapi_attr(eapi: &str, pick: impl Fn(portage_dep::eapi::EapiAttrs) -> bool) -> bool {
+    let trimmed = eapi.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if !portage_dep::eapi::eapi_is_supported(trimmed) {
+        return pick(historical_prefix_attrs(trimmed));
+    }
+    match portage_dep::eapi::eapi_attrs(Some(trimmed)) {
+        Ok(attrs) => pick(attrs),
+        Err(_) => pick(historical_prefix_attrs(trimmed)),
+    }
+}
+
+/// The pre-S1 numeric-prefix reading, kept for the inputs above.
+fn historical_prefix_attrs(eapi: &str) -> portage_dep::eapi::EapiAttrs {
+    use portage_dep::eapi::EapiAttrs;
+    let at_least = |t: u32| {
+        let digits: String = eapi
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        digits.parse::<u32>().is_ok_and(|n| n >= t)
+    };
+    let at_most = |t: u32| {
+        let digits: String = eapi
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        digits.parse::<u32>().is_ok_and(|n| n <= t)
+    };
+    EapiAttrs {
+        allows_package_provided: at_most(6),
+        bdepend: at_least(7),
+        empty_groups_always_true: at_most(6),
+        idepend: at_least(8),
+        iuse_defaults: at_least(1),
+        iuse_effective: at_least(5),
+        profile_eapi_default: at_least(9),
+        repo_deps: false,
+        required_use: at_least(4),
+        required_use_at_most_one_of: at_least(5),
+        selective_src_uri_restriction: at_least(8),
+        slot_deps: at_least(1),
+        slot_operator: at_least(5),
+        src_uri_arrows: at_least(2),
+        strong_blocks: at_least(2),
+        use_deps: at_least(2),
+        use_dep_defaults: at_least(4),
+    }
 }
 
 /// Whether `:=` slot-operator dependencies exist in this EAPI (EAPI 5+).
-/// Call only with an `eapi_is_supported` EAPI; reads by numeric prefix, so the
-/// deprecated underscore EAPIs (which Portage's own parser rejects) read by
-/// prefix here -- unreachable in any vdb or tree in practice.
+/// Reads `eapi_attrs`; unsupported/unparseable input keeps the historical
+/// numeric-prefix answer (see `eapi_attr`).
 // Portage: _get_eapi_attrs(eapi).slot_operator, FakeVartree._apply_dynamic_deps
 pub fn eapi_has_slot_operator(eapi: &str) -> bool {
-    let digits: String = eapi
-        .trim()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse::<u32>().is_ok_and(|n| n >= 5)
+    eapi_attr(eapi, |a| a.slot_operator)
 }
 
 /// Whether a `||` group an inactive conditional emptied is dropped (EAPI 6 and
-/// below). Call only with an `eapi_is_supported` EAPI; unparseable input reads
-/// `false`, matching Portage's defaults for `None`/unsupported EAPIs.
+/// below). `""` reads `false`.
 // Portage: _get_eapi_attrs(eapi).empty_groups_always_true
 pub fn eapi_empty_groups_always_true(eapi: &str) -> bool {
-    let digits: String = eapi
-        .trim()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse::<u32>().is_ok_and(|n| n <= 6)
+    eapi_attr(eapi, |a| a.empty_groups_always_true)
 }
 
 /// Whether `IUSE_EFFECTIVE` exists in this EAPI (EAPI 5+) and therefore governs
-/// the `PORTAGE_USE` masking and the valid-flag domain. Same numeric-prefix
-/// reading as `eapi_has_slot_operator`.
+/// the `PORTAGE_USE` masking and the valid-flag domain.
 // Portage: _get_eapi_attrs(eapi).iuse_effective
 pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
-    let digits: String = eapi
-        .trim()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse::<u32>().is_ok_and(|n| n >= 5)
+    eapi_attr(eapi, |a| a.iuse_effective)
 }
 
 /// Whether `IDEPEND` exists in this EAPI (EAPI 8+). An older EAPI's `IDEPEND`
 /// assignment never reaches saved metadata, so it reads as empty.
 // Portage: eapi_has_idepend, bin/ebuild.sh depend phase
 pub fn eapi_has_idepend(eapi: &str) -> bool {
-    let digits: String = eapi
-        .trim()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse::<u32>().is_ok_and(|n| n >= 8)
+    eapi_attr(eapi, |a| a.idepend)
 }
 
 /// Arguments of [`cache_entry_is_valid`].

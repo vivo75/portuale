@@ -21,6 +21,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+pub mod eapi;
+
 // Memoizes parse results: parsing is a pure function of the string, and the
 // resolver re-parses the same few atoms/candidates millions of times.
 // Thread-local to stay lock-free; never invalidated.

@@ -13,6 +13,7 @@
 - [crates/mrg-director/src/lib.rs](mrg-director/lib.md) — The `mrg` director component contracts: traits, their filesystem-backed implementations, and the `Director` wiring struct.
 
 ## portage-dep
+- [crates/portage-dep/src/eapi.rs](portage-dep/eapi.md) — Rust port of Portage's EAPI attribute table. Context moved out of the code comments (#341 S1); the code keeps only the short why.
 - [crates/portage-dep/src/lib.rs](portage-dep/lib.md) — Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, `match_from_list`, USE-dep evaluation, `extract_affecting_use`).
 
 ## portage-fetch
