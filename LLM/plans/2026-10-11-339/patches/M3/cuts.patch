@@ -1,0 +1,317 @@
+diff --git a/crates/portuale/src/pretend/resume.rs b/crates/portuale/src/pretend/resume.rs
+index 21763b36..fe3cf2ca 100644
+--- a/crates/portuale/src/pretend/resume.rs
++++ b/crates/portuale/src/pretend/resume.rs
+@@ -1,5 +1,9 @@
+ //! `--resume`.
+ 
++use crate::ebuild_merge::MergeOptions;
++use crate::ebuild_phases::ShellBackend;
++use crate::emerge_build::StatusMode;
++use crate::mtimedb::ResumeOpts;
+ use crate::pretend::*;
+ 
+ /// The `(kind, category, package, version)` of every entry in `entries`
+@@ -171,11 +175,133 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
+     // nothing and touching neither the resume list nor `world`. Every line
+     // prints as `[ebuild N ...]`, since the saved list records no markers.
+     // Portage: _emerge/actions.py
++    if let Some(code) = resume_pretend(ResumePretendArgs {
++        pretend,
++        entries: &entries,
++        root,
++        opts,
++        color,
++        repos: &repos,
++        config,
++    }) {
++        return code;
++    }
++
++    // A resumed run re-saves before merging too: this drops a
++    // `--skipfirst`-skipped head and leaves exactly the tail behind if
++    // this run is itself killed. A preview never touches the list.
++    // Portage: Scheduler.merge, _save_resume_list
++    let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
++    let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
++
++    println!(">>> Resuming merge of {} package(s)...", entries.len());
++    let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
++    // Real `preinst_mask()`: config-resolved `INSTALL_MASK` + the
++    // `no{man,info,doc}` `FEATURES` fold (the env read `from_env` did is
++    // the `ebuild <file> merge` fallback -- override it here like the
++    // non-resume `emerge` path does).
++    (
++        merge_options.install_mask,
++        merge_options.install_mask_prunes_usr_share,
++    ) = config_install_mask(config);
++    merge_options.set_resolved_features(&config_features_string(config));
++    // `CONFIG_PROTECT[_MASK]` from the resolved config, as the non-resume
++    // `emerge` path does.
++    merge_options.apply_config_protect(config);
++    // The run-wide phase env and `package.env` vars the non-resume
++    // `emerge` path resolves (see `run_wide_phase_env` there):
++    // a resumed source build is a genuine build and needs the same phase
++    // env -- without these a resumed `src_compile` sees `CFLAGS=""`.
++    // (The per-entry resolved `USE` already flows via
++    // `candidate_use_flags_display` above.)
++    merge_options.build_env = crate::emerge_build::run_wide_phase_env(config);
++    merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
++    merge_options.package_env_vars = config.package_env_vars.clone();
++    // An all-source list goes through `run_source_merge`; a list with a
++    // resumed binary entry goes through `run_merge_plan` instead (the
++    // resume mergelist can mix both). The saved `myopts` carries no
++    // `--quiet`/`--verbose`, so the display is serial unless `-j` > 1.
++    let resume_mode = emerge_build::scheduler_status_mode(jobs, false, None, entries.len(), false);
++    if let Some(code) = resume_merge(ResumeMergeArgs {
++        entries: &entries,
++        repos: &repos,
++        root,
++        portage_tmpdir,
++        merge_options: &merge_options,
++        jobs,
++        load_average,
++        resume_mode,
++        shell,
++        debug,
++        config,
++        favorites: &favorites,
++        opts,
++        color,
++    }) {
++        return code;
++    }
++
++    crate::mtimedb::clear_resume_list(root);
++    let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
++    // The saved `favorites` are only world-recorded when the original run
++    // would have recorded them (recorded `--oneshot`/`--onlydeps`).
++    if let Err(e) = update_world_file(UpdateWorldFileArgs {
++        root,
++        target_atoms: &fav_refs,
++        entries: &entries,
++        system_atoms: &[],
++        repos: &repos,
++        oneshot: opts.oneshot,
++        onlydeps: opts.onlydeps,
++    }) {
++        eprintln!("emerge: {e}");
++        return ExitCode::from(1);
++    }
++
++    // The info-dir regen fires after a `--resume` too (the vdb changed),
++    // before the preserved-libs advisory.
++    // Portage: post_emerge.py, post_emerge
++    let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
++    if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
++        eprintln!("emerge: {e}");
++        return ExitCode::from(1);
++    }
++    crate::preserved_libs::show_preserved_libs_notice(root, &color, false, false);
++    // The GLEP 42 notice prints a second time once the resumed merge
++    // changed the vdb.
++    // Portage: post_emerge.py, post_emerge
++    display_news_notice_if_any(&repos, root, config, &color);
++
++    ExitCode::SUCCESS
++}
++
++/// The values [`resume_pretend`] reads from its caller.
++pub(crate) struct ResumePretendArgs<'a> {
++    pub(crate) pretend: bool,
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) root: &'a Path,
++    pub(crate) opts: ResumeOpts,
++    pub(crate) color: Colorizer,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) config: &'a Config,
++}
++
++/// The `--resume --pretend` display.
++pub(crate) fn resume_pretend(args: ResumePretendArgs<'_>) -> Option<ExitCode> {
++    let ResumePretendArgs {
++        pretend,
++        entries,
++        root,
++        opts,
++        color,
++        repos,
++        config,
++    } = args;
+     if pretend {
+         let mut blocker_lines: Vec<String> = Vec::new();
+         for (i, _entry) in entries.iter().enumerate() {
+             print_entry_line(PrintEntryLineArgs {
+-                entries: &entries,
++                entries,
+                 root,
+                 index: i,
+                 indent: "",
+@@ -207,55 +333,58 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
+         }
+         // Portage reaches `post_emerge` after the `--resume --pretend`
+         // display too.
+-        pretend_end_news_notice(pretend, &repos, root, config, &color);
+-        return ExitCode::SUCCESS;
++        pretend_end_news_notice(pretend, repos, root, config, &color);
++        return Some(ExitCode::SUCCESS);
+     }
++    None
++}
+ 
+-    // A resumed run re-saves before merging too: this drops a
+-    // `--skipfirst`-skipped head and leaves exactly the tail behind if
+-    // this run is itself killed. A preview never touches the list.
+-    // Portage: Scheduler.merge, _save_resume_list
+-    let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+-    let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
++/// The values [`resume_merge`] reads from its caller.
++pub(crate) struct ResumeMergeArgs<'a> {
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) root: &'a Path,
++    pub(crate) portage_tmpdir: &'a Path,
++    pub(crate) merge_options: &'a MergeOptions,
++    pub(crate) jobs: usize,
++    pub(crate) load_average: Option<f64>,
++    pub(crate) resume_mode: StatusMode,
++    pub(crate) shell: ShellBackend,
++    pub(crate) debug: bool,
++    pub(crate) config: &'a Config,
++    pub(crate) favorites: &'a [String],
++    pub(crate) opts: ResumeOpts,
++    pub(crate) color: Colorizer,
++}
+ 
+-    println!(">>> Resuming merge of {} package(s)...", entries.len());
+-    let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
+-    // Real `preinst_mask()`: config-resolved `INSTALL_MASK` + the
+-    // `no{man,info,doc}` `FEATURES` fold (the env read `from_env` did is
+-    // the `ebuild <file> merge` fallback -- override it here like the
+-    // non-resume `emerge` path does).
+-    (
+-        merge_options.install_mask,
+-        merge_options.install_mask_prunes_usr_share,
+-    ) = config_install_mask(config);
+-    merge_options.set_resolved_features(&config_features_string(config));
+-    // `CONFIG_PROTECT[_MASK]` from the resolved config, as the non-resume
+-    // `emerge` path does.
+-    merge_options.apply_config_protect(config);
+-    // The run-wide phase env and `package.env` vars the non-resume
+-    // `emerge` path resolves (see `run_wide_phase_env` there):
+-    // a resumed source build is a genuine build and needs the same phase
+-    // env -- without these a resumed `src_compile` sees `CFLAGS=""`.
+-    // (The per-entry resolved `USE` already flows via
+-    // `candidate_use_flags_display` above.)
+-    merge_options.build_env = crate::emerge_build::run_wide_phase_env(config);
+-    merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
+-    merge_options.package_env_vars = config.package_env_vars.clone();
+-    // An all-source list goes through `run_source_merge`; a list with a
+-    // resumed binary entry goes through `run_merge_plan` instead (the
+-    // resume mergelist can mix both). The saved `myopts` carries no
+-    // `--quiet`/`--verbose`, so the display is serial unless `-j` > 1.
+-    let resume_mode = emerge_build::scheduler_status_mode(jobs, false, None, entries.len(), false);
++/// Run the resumed merge and report its failure.
++pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
++    let ResumeMergeArgs {
++        entries,
++        repos,
++        root,
++        portage_tmpdir,
++        merge_options,
++        jobs,
++        load_average,
++        resume_mode,
++        shell,
++        debug,
++        config,
++        favorites,
++        opts,
++        color,
++    } = args;
+     let merge_result = if entries
+         .iter()
+         .all(|e| e.source == portage_repo::CandidateSource::Ebuild)
+     {
+         emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
+-            entries: &entries,
+-            repos: &repos,
++            entries,
++            repos,
+             root,
+             portage_tmpdir,
+-            options: &merge_options,
++            options: merge_options,
+             keep_going: false,
+             buildpkg: None,
+             buildpkg_exclude: &[],
+@@ -272,13 +401,13 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
+             Some(config),
+         );
+         emerge_getbinpkg::run_merge_plan(emerge_getbinpkg::RunMergePlanArgs {
+-            entries: &entries,
++            entries,
+             config,
+-            repos: &repos,
++            repos,
+             root,
+             pkgdir: &package_options.pkgdir,
+             portage_tmpdir,
+-            merge_options: &merge_options,
++            merge_options,
+             keep_going: false,
+             buildpkg: None,
+             buildpkg_exclude: &[],
+@@ -286,7 +415,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
+         })
+     };
+     if let Err(e) = merge_result {
+-        let still = entries_not_merged(root, &entries);
++        let still = entries_not_merged(root, entries);
+         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+         // A failure with nothing unmerged leaves the per-merge shrink's
+         // own tail alone.
+@@ -303,40 +432,8 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
+         }
+         // The notice prints when the vdb changed (at least one resumed
+         // entry landed); see `merge_failure_news_notice`.
+-        merge_failure_news_notice(still.len() < entries.len(), &repos, root, config, &color);
+-        return ExitCode::from(1);
++        merge_failure_news_notice(still.len() < entries.len(), repos, root, config, &color);
++        return Some(ExitCode::from(1));
+     }
+-
+-    crate::mtimedb::clear_resume_list(root);
+-    let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+-    // The saved `favorites` are only world-recorded when the original run
+-    // would have recorded them (recorded `--oneshot`/`--onlydeps`).
+-    if let Err(e) = update_world_file(UpdateWorldFileArgs {
+-        root,
+-        target_atoms: &fav_refs,
+-        entries: &entries,
+-        system_atoms: &[],
+-        repos: &repos,
+-        oneshot: opts.oneshot,
+-        onlydeps: opts.onlydeps,
+-    }) {
+-        eprintln!("emerge: {e}");
+-        return ExitCode::from(1);
+-    }
+-
+-    // The info-dir regen fires after a `--resume` too (the vdb changed),
+-    // before the preserved-libs advisory.
+-    // Portage: post_emerge.py, post_emerge
+-    let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
+-    if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
+-        eprintln!("emerge: {e}");
+-        return ExitCode::from(1);
+-    }
+-    crate::preserved_libs::show_preserved_libs_notice(root, &color, false, false);
+-    // The GLEP 42 notice prints a second time once the resumed merge
+-    // changed the vdb.
+-    // Portage: post_emerge.py, post_emerge
+-    display_news_notice_if_any(&repos, root, config, &color);
+-
+-    ExitCode::SUCCESS
++    None
+ }

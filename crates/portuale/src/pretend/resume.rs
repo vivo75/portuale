@@ -1,5 +1,9 @@
 //! `--resume`.
 
+use crate::ebuild_merge::MergeOptions;
+use crate::ebuild_phases::ShellBackend;
+use crate::emerge_build::StatusMode;
+use crate::mtimedb::ResumeOpts;
 use crate::pretend::*;
 
 /// The `(kind, category, package, version)` of every entry in `entries`
@@ -171,44 +175,16 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // nothing and touching neither the resume list nor `world`. Every line
     // prints as `[ebuild N ...]`, since the saved list records no markers.
     // Portage: _emerge/actions.py
-    if pretend {
-        let mut blocker_lines: Vec<String> = Vec::new();
-        for (i, _entry) in entries.iter().enumerate() {
-            print_entry_line(PrintEntryLineArgs {
-                entries: &entries,
-                root,
-                index: i,
-                indent: "",
-                ordered: true,
-                top_level_pkgs: &HashSet::new(),
-                onlydeps: false,
-                oneshot: opts.oneshot,
-                verbose: false,
-                quiet: false,
-                alphabetical: false,
-                columns: false,
-                columnwidth: 0,
-                running_root: None,
-                color: &color,
-                system_atoms: &[],
-                world_atoms: &[], // `--resume --pretend` never re-resolves, so it can't
-                // know about slot-operator rebuilds -- see the marker
-                // caveat above.
-                force_reinstall_cps: &HashSet::new(),
-                blocker_lines: &mut blocker_lines, // No resolve ran, so no masked-dependency,
-                // USE-unsatisfied or plain-miss disclosure either (any
-                // NVC entry here renders the bare line).
-                masked_deps: &[],
-                use_unsat_deps: &[],
-                plain_miss_deps: &[],
-                force_sizes: false,
-                circular: &HashMap::new(),
-            });
-        }
-        // Portage reaches `post_emerge` after the `--resume --pretend`
-        // display too.
-        pretend_end_news_notice(pretend, &repos, root, config, &color);
-        return ExitCode::SUCCESS;
+    if let Some(code) = resume_pretend(ResumePretendArgs {
+        pretend,
+        entries: &entries,
+        root,
+        opts,
+        color,
+        repos: &repos,
+        config,
+    }) {
+        return code;
     }
 
     // A resumed run re-saves before merging too: this drops a
@@ -246,65 +222,23 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // resume mergelist can mix both). The saved `myopts` carries no
     // `--quiet`/`--verbose`, so the display is serial unless `-j` > 1.
     let resume_mode = emerge_build::scheduler_status_mode(jobs, false, None, entries.len(), false);
-    let merge_result = if entries
-        .iter()
-        .all(|e| e.source == portage_repo::CandidateSource::Ebuild)
-    {
-        emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
-            entries: &entries,
-            repos: &repos,
-            root,
-            portage_tmpdir,
-            options: &merge_options,
-            keep_going: false,
-            buildpkg: None,
-            buildpkg_exclude: &[],
-            jobs,
-            load_average,
-            capture_log: false,
-            mode: resume_mode,
-        })
-    } else {
-        let package_options = package_options_from_env(
-            shell,
-            debug,
-            Some(&config_features_string(config)),
-            Some(config),
-        );
-        emerge_getbinpkg::run_merge_plan(emerge_getbinpkg::RunMergePlanArgs {
-            entries: &entries,
-            config,
-            repos: &repos,
-            root,
-            pkgdir: &package_options.pkgdir,
-            portage_tmpdir,
-            merge_options: &merge_options,
-            keep_going: false,
-            buildpkg: None,
-            buildpkg_exclude: &[],
-            mode: resume_mode,
-        })
-    };
-    if let Err(e) = merge_result {
-        let still = entries_not_merged(root, &entries);
-        let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-        // A failure with nothing unmerged leaves the per-merge shrink's
-        // own tail alone.
-        if !still.is_empty() {
-            let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
-        }
-        // A merge-time binpkg digest/missing-file failure already printed
-        // its own tail: no `emerge:` line. The silent resume re-save above
-        // stays; Portage keeps the list resumable too.
-        if !crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
-            && !crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
-        {
-            eprintln!("emerge: {e}");
-        }
-        // The notice prints when the vdb changed (at least one resumed
-        // entry landed); see `merge_failure_news_notice`.
-        merge_failure_news_notice(still.len() < entries.len(), &repos, root, config, &color);
-        return ExitCode::from(1);
+    if let Some(code) = resume_merge(ResumeMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root,
+        portage_tmpdir,
+        merge_options: &merge_options,
+        jobs,
+        load_average,
+        resume_mode,
+        shell,
+        debug,
+        config,
+        favorites: &favorites,
+        opts,
+        color,
+    }) {
+        return code;
     }
 
     crate::mtimedb::clear_resume_list(root);
@@ -339,4 +273,167 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     display_news_notice_if_any(&repos, root, config, &color);
 
     ExitCode::SUCCESS
+}
+
+/// The values [`resume_pretend`] reads from its caller.
+pub(crate) struct ResumePretendArgs<'a> {
+    pub(crate) pretend: bool,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) opts: ResumeOpts,
+    pub(crate) color: Colorizer,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a Config,
+}
+
+/// The `--resume --pretend` display.
+pub(crate) fn resume_pretend(args: ResumePretendArgs<'_>) -> Option<ExitCode> {
+    let ResumePretendArgs {
+        pretend,
+        entries,
+        root,
+        opts,
+        color,
+        repos,
+        config,
+    } = args;
+    if pretend {
+        let mut blocker_lines: Vec<String> = Vec::new();
+        for (i, _entry) in entries.iter().enumerate() {
+            print_entry_line(PrintEntryLineArgs {
+                entries,
+                root,
+                index: i,
+                indent: "",
+                ordered: true,
+                top_level_pkgs: &HashSet::new(),
+                onlydeps: false,
+                oneshot: opts.oneshot,
+                verbose: false,
+                quiet: false,
+                alphabetical: false,
+                columns: false,
+                columnwidth: 0,
+                running_root: None,
+                color: &color,
+                system_atoms: &[],
+                world_atoms: &[], // `--resume --pretend` never re-resolves, so it can't
+                // know about slot-operator rebuilds -- see the marker
+                // caveat above.
+                force_reinstall_cps: &HashSet::new(),
+                blocker_lines: &mut blocker_lines, // No resolve ran, so no masked-dependency,
+                // USE-unsatisfied or plain-miss disclosure either (any
+                // NVC entry here renders the bare line).
+                masked_deps: &[],
+                use_unsat_deps: &[],
+                plain_miss_deps: &[],
+                force_sizes: false,
+                circular: &HashMap::new(),
+            });
+        }
+        // Portage reaches `post_emerge` after the `--resume --pretend`
+        // display too.
+        pretend_end_news_notice(pretend, repos, root, config, &color);
+        return Some(ExitCode::SUCCESS);
+    }
+    None
+}
+
+/// The values [`resume_merge`] reads from its caller.
+pub(crate) struct ResumeMergeArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) merge_options: &'a MergeOptions,
+    pub(crate) jobs: usize,
+    pub(crate) load_average: Option<f64>,
+    pub(crate) resume_mode: StatusMode,
+    pub(crate) shell: ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) config: &'a Config,
+    pub(crate) favorites: &'a [String],
+    pub(crate) opts: ResumeOpts,
+    pub(crate) color: Colorizer,
+}
+
+/// Run the resumed merge and report its failure.
+pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
+    let ResumeMergeArgs {
+        entries,
+        repos,
+        root,
+        portage_tmpdir,
+        merge_options,
+        jobs,
+        load_average,
+        resume_mode,
+        shell,
+        debug,
+        config,
+        favorites,
+        opts,
+        color,
+    } = args;
+    let merge_result = if entries
+        .iter()
+        .all(|e| e.source == portage_repo::CandidateSource::Ebuild)
+    {
+        emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
+            entries,
+            repos,
+            root,
+            portage_tmpdir,
+            options: merge_options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            jobs,
+            load_average,
+            capture_log: false,
+            mode: resume_mode,
+        })
+    } else {
+        let package_options = package_options_from_env(
+            shell,
+            debug,
+            Some(&config_features_string(config)),
+            Some(config),
+        );
+        emerge_getbinpkg::run_merge_plan(emerge_getbinpkg::RunMergePlanArgs {
+            entries,
+            config,
+            repos,
+            root,
+            pkgdir: &package_options.pkgdir,
+            portage_tmpdir,
+            merge_options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            mode: resume_mode,
+        })
+    };
+    if let Err(e) = merge_result {
+        let still = entries_not_merged(root, entries);
+        let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+        // A failure with nothing unmerged leaves the per-merge shrink's
+        // own tail alone.
+        if !still.is_empty() {
+            let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
+        }
+        // A merge-time binpkg digest/missing-file failure already printed
+        // its own tail: no `emerge:` line. The silent resume re-save above
+        // stays; Portage keeps the list resumable too.
+        if !crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
+            && !crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
+        {
+            eprintln!("emerge: {e}");
+        }
+        // The notice prints when the vdb changed (at least one resumed
+        // entry landed); see `merge_failure_news_notice`.
+        merge_failure_news_notice(still.len() < entries.len(), repos, root, config, &color);
+        return Some(ExitCode::from(1));
+    }
+    None
 }
