@@ -1,0 +1,13 @@
+diff --git a/crates/portage-repo/src/merge_order/select_nodes.rs b/crates/portage-repo/src/merge_order/select_nodes.rs
+index c0efcbae..e8f1c143 100644
+--- a/crates/portage-repo/src/merge_order/select_nodes.rs
++++ b/crates/portage-repo/src/merge_order/select_nodes.rs
+@@ -71,7 +71,7 @@ pub(crate) fn select_nodes(
+         eprintln!("MO_NODES count={} {}", nodes.len(), nodes.join(" "));
+     }
+ 
+-    while g.order.iter().any(|&i| g.alive[i]) {
++    'select: while g.order.iter().any(|&i| g.alive[i]) {
+         mo_iter += 1;
+         let mut selected: Option<Vec<usize>> = None;
+         let mut used_ig: Option<Ignore> = None;

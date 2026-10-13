@@ -1,0 +1,686 @@
+diff --git a/crates/portage-repo/src/merge_order/select_nodes.rs b/crates/portage-repo/src/merge_order/select_nodes.rs
+index c0efcbae..157dc2d7 100644
+--- a/crates/portage-repo/src/merge_order/select_nodes.rs
++++ b/crates/portage-repo/src/merge_order/select_nodes.rs
+@@ -2,6 +2,7 @@
+ //! Portage: _emerge/depgraph.py, _serialize_tasks
+ 
+ use crate::merge_order::*;
++use std::ops::ControlFlow;
+ 
+ pub(crate) fn select_nodes(
+     g: &mut Digraph,
+@@ -71,7 +72,7 @@ pub(crate) fn select_nodes(
+         eprintln!("MO_NODES count={} {}", nodes.len(), nodes.join(" "));
+     }
+ 
+-    while g.order.iter().any(|&i| g.alive[i]) {
++    'select: while g.order.iter().any(|&i| g.alive[i]) {
+         mo_iter += 1;
+         let mut selected: Option<Vec<usize>> = None;
+         let mut used_ig: Option<Ignore> = None;
+@@ -129,175 +130,55 @@ pub(crate) fn select_nodes(
+             }
+         }
+ 
+-        if selected.is_none() && !(prefer_asap && !asap.is_empty()) {
+-            for i in 0..=range.medium_soft {
+-                let ig = range.ig(i);
+-                let nodes = leaves_via(frontier.as_mut(), g, ig);
+-                // Waiting owners and waiting removals never compete.
+-                let rest: Vec<usize> = nodes
+-                    .iter()
+-                    .copied()
+-                    .filter(|n| {
+-                        !waiting.contains(n)
+-                            && !admitted_waiting.contains(n)
+-                            && (scheduled.contains(n) || !removals.contains(n))
+-                    })
+-                    .collect();
+-                if rest.is_empty() {
+-                    continue;
+-                }
+-                // At rung `NONE` pop every leaf at once; tree mode pops one so the
+-                // stuck branch below can fire. A mixed merge/uninstall round takes
+-                // the uninstalls first.
+-                let mut rest = rest;
+-                let good_uninstalls: Vec<usize> = if rest.len() > 1 {
+-                    rest.iter()
+-                        .copied()
+-                        .filter(|&node| {
+-                            matches!(entries[node].outcome, PretendOutcome::Uninstall { .. })
+-                        })
+-                        .collect()
+-                } else {
+-                    Vec::new()
+-                };
+-                let has_good_uninstalls = !good_uninstalls.is_empty();
+-                if has_good_uninstalls {
+-                    rest = good_uninstalls;
+-                }
+-                if has_good_uninstalls
+-                    || rest.len() == 1
+-                    || (ig.is_none() && asap.is_empty() && tree.is_none())
+-                {
+-                    selected = Some(rest);
+-                } else {
+-                    // One node only: prefer a child of an asap node, else a node with a parent.
+-                    let mut picked = None;
+-                    if !asap.is_empty() {
+-                        picked = rest.iter().copied().find(|&node| {
+-                            g.parents[node].iter().any(|&p| {
+-                                g.alive[p]
+-                                    && asap.contains(&p)
+-                                    && g.children[p].iter().any(|(c, prios)| {
+-                                        *c == node
+-                                            && range
+-                                                .ig_medium_soft()
+-                                                .is_none_or(|f| prios.iter().any(|q| !f.ignores(q)))
+-                                    })
+-                            })
+-                        });
+-                    }
+-                    if picked.is_none() {
+-                        picked = rest.iter().copied().find(|&node| g.has_parents(node));
+-                    }
+-                    selected = picked.map(|p| vec![p]);
+-                }
+-                if selected.is_some() {
+-                    used_ig = ig;
+-                    break;
+-                }
+-            }
+-        }
+-
+-        if selected.is_none() {
+-            let mut ranges: Vec<&PriorityRange> = Vec::new();
+-            if !std::ptr::eq(range, &NORMAL) {
+-                ranges.push(&NORMAL);
+-            }
+-            ranges.push(range);
+-            if drop_satisfied && !std::ptr::eq(range, &SATISFIED) {
+-                ranges.push(&SATISFIED);
+-            }
+-            for lr in ranges {
+-                if let Some((sub, ig)) = find_smallest_cycle(FindSmallestCycleArgs {
+-                    g,
+-                    frontier: frontier.as_mut(),
+-                    entries,
+-                    range: lr,
+-                    asap: &asap,
+-                    prefer_asap,
+-                    ineligible: &ineligible,
+-                }) {
+-                    used_ig = ig;
+-                    // `emerge --pretend --debug`: the cycle's induced subgraph + leaf.
+-                    if crate::resolver_debug() && sub.len() > 1 {
+-                        debug_dump_cycle(g, entries, &sub, root);
+-                    }
+-                    // One node only, so merge order accounts for as many deps as possible.
+-                    let sub_leaves: Vec<usize> = g
+-                        .order
+-                        .iter()
+-                        .copied()
+-                        .filter(|i| {
+-                            sub.contains(i) && !g.children[*i].iter().any(|(c, _)| sub.contains(c))
+-                        })
+-                        .collect();
+-                    selected = Some(if let Some(&first) = sub_leaves.first() {
+-                        vec![first]
+-                    } else if sub.len() > 1 {
+-                        harvest_cycle(g, &sub)
+-                    } else {
+-                        sub.into_iter().collect()
+-                    });
+-                    break;
+-                }
+-            }
+-            if selected.is_none() && prefer_asap && !asap.is_empty() {
+-                // No asap node mergeable: ignore them next iteration.
+-                prefer_asap = false;
+-                continue;
+-            }
+-        }
+-
+-        // Promote unsatisfied `medium_post` children freed by this selection to `asap`.
+-        if let (Some(sel), Some(_)) = (selected.as_ref(), used_ig) {
+-            let mut promoted: Vec<usize> = Vec::new();
+-            for &node in sel {
+-                for (c, prios) in &g.children[node] {
+-                    if !g.alive[*c] {
+-                        continue;
+-                    }
+-                    let is_medium_post = !prios.iter().any(|p| !s_ignore_runtime_post(p));
+-                    let is_satisfied_medium_post =
+-                        !prios.iter().any(|p| !s_ignore_satisfied_runtime_post(p));
+-                    if is_medium_post && !is_satisfied_medium_post {
+-                        promoted.push(*c);
+-                    }
+-                }
+-            }
+-            for c in promoted {
+-                if sel.contains(&c) || asap.contains(&c) {
+-                    continue;
+-                }
+-                asap.push(c);
+-            }
+-        }
++        select_first_rung(SelectFirstRungArgs {
++            selected: &mut selected,
++            prefer_asap,
++            asap: &asap,
++            range,
++            frontier: &mut frontier,
++            g,
++            waiting: &waiting,
++            admitted_waiting: &admitted_waiting,
++            scheduled: &scheduled,
++            removals: &removals,
++            entries,
++            tree: &tree,
++            used_ig: &mut used_ig,
++        });
+ 
+-        // Stuck branch, tree-mode only: schedule an uninstall for the blocked package.
+-        // The flat caller never takes it.
+-        if selected.is_none()
+-            && let Some(ts) = tree.as_mut()
++        if select_second_rung(SelectSecondRungArgs {
++            selected: &mut selected,
++            range,
++            drop_satisfied,
++            g,
++            frontier: &mut frontier,
++            entries,
++            asap: &asap,
++            prefer_asap: &mut prefer_asap,
++            ineligible: &ineligible,
++            used_ig: &mut used_ig,
++            root,
++        })
++        .is_break()
+         {
+-            tree_schedule_stuck(g, entries, ts);
+-            if ts.progressed {
+-                ts.progressed = false;
+-                prefer_asap = true;
+-                drop_satisfied = false;
+-                continue;
+-            }
++            continue 'select;
+         }
+ 
+-        // Admission: no merge node selectable and a live unadmitted removal exists.
+-        // Admit the first in graph order and re-select; sits before the roots
+-        // last-resort so a waiting owner is never picked as a root first.
+-        if selected.is_none()
+-            && let Some(&r) = removals
+-                .iter()
+-                .find(|r| !scheduled.contains(r) && g.alive[**r])
++        promote_freed_medium_post(&selected, &used_ig, g, &mut asap);
++
++        if schedule_stuck_or_admit(ScheduleStuckOrAdmitArgs {
++            selected: &selected,
++            tree: &mut tree,
++            g,
++            entries,
++            prefer_asap: &mut prefer_asap,
++            drop_satisfied: &mut drop_satisfied,
++            removals: &removals,
++            scheduled: &mut scheduled,
++        })
++        .is_break()
+         {
+-            scheduled.insert(r);
+-            prefer_asap = true;
+-            drop_satisfied = false;
+-            continue;
++            continue 'select;
+         }
+ 
+         // Roots last-resort: isolated leftovers and parentless leaves the scan
+@@ -329,60 +210,397 @@ pub(crate) fn select_nodes(
+             ],
+         };
+ 
+-        if mo_sel_enabled() {
+-            let retlist_merges = retlist
++        commit_selection(CommitSelectionArgs {
++            retlist: &mut retlist,
++            entries,
++            g,
++            selected,
++            asap: &asap,
++            mo_iter,
++            prefer_asap: &mut prefer_asap,
++            drop_satisfied: &mut drop_satisfied,
++            used_ig,
++            frontier: &mut frontier,
++            tree: &mut tree,
++        });
++    }
++    retlist
++}
++
++/// The values [`select_first_rung`] reads from its caller.
++pub(crate) struct SelectFirstRungArgs<'a> {
++    pub(crate) selected: &'a mut Option<Vec<usize>>,
++    pub(crate) prefer_asap: bool,
++    pub(crate) asap: &'a [usize],
++    pub(crate) range: &'a PriorityRange,
++    pub(crate) frontier: &'a mut Option<SerializeFrontier>,
++    pub(crate) g: &'a mut Digraph,
++    pub(crate) waiting: &'a HashSet<usize>,
++    pub(crate) admitted_waiting: &'a HashSet<usize>,
++    pub(crate) scheduled: &'a HashSet<usize>,
++    pub(crate) removals: &'a [usize],
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) tree: &'a Option<&'a mut TreeStuck>,
++    pub(crate) used_ig: &'a mut Option<Ignore>,
++}
++
++/// First rung: scan the leaves of each priority level for a selection.
++pub(crate) fn select_first_rung(args: SelectFirstRungArgs<'_>) {
++    let SelectFirstRungArgs {
++        selected,
++        prefer_asap,
++        asap,
++        range,
++        frontier,
++        g,
++        waiting,
++        admitted_waiting,
++        scheduled,
++        removals,
++        entries,
++        tree,
++        used_ig,
++    } = args;
++    if selected.is_none() && !(prefer_asap && !asap.is_empty()) {
++        for i in 0..=range.medium_soft {
++            let ig = range.ig(i);
++            let nodes = leaves_via(frontier.as_mut(), g, ig);
++            // Waiting owners and waiting removals never compete.
++            let rest: Vec<usize> = nodes
+                 .iter()
+-                .filter(|&&i| {
+-                    !matches!(
+-                        entries[i].outcome,
+-                        PretendOutcome::AlreadyInstalled { .. }
+-                            | PretendOutcome::NoVisibleCandidate
+-                    )
++                .copied()
++                .filter(|n| {
++                    !waiting.contains(n)
++                        && !admitted_waiting.contains(n)
++                        && (scheduled.contains(n) || !removals.contains(n))
+                 })
+-                .count();
+-            let alive = g.order.iter().filter(|&&i| g.alive[i]).count();
+-            let pick: Vec<String> = selected
+-                .iter()
+-                .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+                 .collect();
+-            let asap_cpvs: Vec<String> = asap
+-                .iter()
+-                .filter(|&&i| g.alive[i])
+-                .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+-                .collect();
+-            eprintln!(
+-                "{}",
+-                mo_sel_trace_line(MoSelTraceLineArgs {
+-                    iter: mo_iter,
+-                    retlist: retlist_merges,
+-                    alive,
+-                    asap: &asap_cpvs,
+-                    prefer_asap,
+-                    drop_satisfied,
+-                    ig: used_ig,
+-                    pick: &pick
+-                })
+-            );
+-        }
+-        prefer_asap = true;
+-        drop_satisfied = false;
+-        for i in selected {
+-            if !g.alive[i] {
++            if rest.is_empty() {
+                 continue;
+             }
+-            g.alive[i] = false;
+-            // Keep the frontier in sync at the loop's one removal site.
+-            if let Some(fr) = frontier.as_mut() {
+-                fr.remove(i, &g.children[i], &g.parents[i]);
++            // At rung `NONE` pop every leaf at once; tree mode pops one so the
++            // stuck branch below can fire. A mixed merge/uninstall round takes
++            // the uninstalls first.
++            let mut rest = rest;
++            let good_uninstalls: Vec<usize> = if rest.len() > 1 {
++                rest.iter()
++                    .copied()
++                    .filter(|&node| {
++                        matches!(entries[node].outcome, PretendOutcome::Uninstall { .. })
++                    })
++                    .collect()
++            } else {
++                Vec::new()
++            };
++            let has_good_uninstalls = !good_uninstalls.is_empty();
++            if has_good_uninstalls {
++                rest = good_uninstalls;
++            }
++            if has_good_uninstalls
++                || rest.len() == 1
++                || (ig.is_none() && asap.is_empty() && tree.is_none())
++            {
++                *selected = Some(rest);
++            } else {
++                // One node only: prefer a child of an asap node, else a node with a parent.
++                let mut picked = None;
++                if !asap.is_empty() {
++                    picked = rest.iter().copied().find(|&node| {
++                        g.parents[node].iter().any(|&p| {
++                            g.alive[p]
++                                && asap.contains(&p)
++                                && g.children[p].iter().any(|(c, prios)| {
++                                    *c == node
++                                        && range
++                                            .ig_medium_soft()
++                                            .is_none_or(|f| prios.iter().any(|q| !f.ignores(q)))
++                                })
++                        })
++                    });
++                }
++                if picked.is_none() {
++                    picked = rest.iter().copied().find(|&node| g.has_parents(node));
++                }
++                *selected = picked.map(|p| vec![p]);
++            }
++            if selected.is_some() {
++                *used_ig = ig;
++                break;
+             }
+-            // Selecting the blocked package while its uninstall is scheduled solves
+-            // the blocker; selecting the synthetic uninstall itself discards it.
+-            if let Some(ts) = tree.as_mut() {
+-                tree_note_selection(g, entries, ts, i);
++        }
++    }
++}
++
++/// The values [`select_second_rung`] reads from its caller.
++pub(crate) struct SelectSecondRungArgs<'a> {
++    pub(crate) selected: &'a mut Option<Vec<usize>>,
++    pub(crate) range: &'a PriorityRange,
++    pub(crate) drop_satisfied: bool,
++    pub(crate) g: &'a mut Digraph,
++    pub(crate) frontier: &'a mut Option<SerializeFrontier>,
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) asap: &'a [usize],
++    pub(crate) prefer_asap: &'a mut bool,
++    pub(crate) ineligible: &'a HashSet<usize>,
++    pub(crate) used_ig: &'a mut Option<Ignore>,
++    pub(crate) root: &'a Path,
++}
++
++/// Second rung: search the cycles for a selection; Break means no asap node was mergeable and the round is retried.
++pub(crate) fn select_second_rung(args: SelectSecondRungArgs<'_>) -> ControlFlow<()> {
++    let SelectSecondRungArgs {
++        selected,
++        range,
++        drop_satisfied,
++        g,
++        frontier,
++        entries,
++        asap,
++        prefer_asap: prefer_asap_out,
++        ineligible,
++        used_ig,
++        root,
++    } = args;
++    let mut prefer_asap = *prefer_asap_out;
++    if selected.is_none() {
++        let mut ranges: Vec<&PriorityRange> = Vec::new();
++        if !std::ptr::eq(range, &NORMAL) {
++            ranges.push(&NORMAL);
++        }
++        ranges.push(range);
++        if drop_satisfied && !std::ptr::eq(range, &SATISFIED) {
++            ranges.push(&SATISFIED);
++        }
++        for lr in ranges {
++            if let Some((sub, ig)) = find_smallest_cycle(FindSmallestCycleArgs {
++                g,
++                frontier: frontier.as_mut(),
++                entries,
++                range: lr,
++                asap,
++                prefer_asap,
++                ineligible,
++            }) {
++                *used_ig = ig;
++                // `emerge --pretend --debug`: the cycle's induced subgraph + leaf.
++                if crate::resolver_debug() && sub.len() > 1 {
++                    debug_dump_cycle(g, entries, &sub, root);
++                }
++                // One node only, so merge order accounts for as many deps as possible.
++                let sub_leaves: Vec<usize> = g
++                    .order
++                    .iter()
++                    .copied()
++                    .filter(|i| {
++                        sub.contains(i) && !g.children[*i].iter().any(|(c, _)| sub.contains(c))
++                    })
++                    .collect();
++                *selected = Some(if let Some(&first) = sub_leaves.first() {
++                    vec![first]
++                } else if sub.len() > 1 {
++                    harvest_cycle(g, &sub)
++                } else {
++                    sub.into_iter().collect()
++                });
++                break;
+             }
+-            retlist.push(i);
+         }
+-        g.order.retain(|&i| g.alive[i]);
++        if selected.is_none() && prefer_asap && !asap.is_empty() {
++            // No asap node mergeable: ignore them next iteration.
++            prefer_asap = false;
++            {
++                *prefer_asap_out = prefer_asap;
++                return ControlFlow::Break(());
++            };
++        }
+     }
+-    retlist
++    *prefer_asap_out = prefer_asap;
++    ControlFlow::Continue(())
++}
++
++/// Promote the unsatisfied medium_post children freed by this selection to asap.
++pub(crate) fn promote_freed_medium_post(
++    selected: &Option<Vec<usize>>,
++    used_ig: &Option<Ignore>,
++    g: &mut Digraph,
++    asap: &mut Vec<usize>,
++) {
++    // Promote unsatisfied `medium_post` children freed by this selection to `asap`.
++    if let (Some(sel), Some(_)) = (selected.as_ref(), used_ig) {
++        let mut promoted: Vec<usize> = Vec::new();
++        for &node in sel {
++            for (c, prios) in &g.children[node] {
++                if !g.alive[*c] {
++                    continue;
++                }
++                let is_medium_post = !prios.iter().any(|p| !s_ignore_runtime_post(p));
++                let is_satisfied_medium_post =
++                    !prios.iter().any(|p| !s_ignore_satisfied_runtime_post(p));
++                if is_medium_post && !is_satisfied_medium_post {
++                    promoted.push(*c);
++                }
++            }
++        }
++        for c in promoted {
++            if sel.contains(&c) || asap.contains(&c) {
++                continue;
++            }
++            asap.push(c);
++        }
++    }
++}
++
++/// The values [`schedule_stuck_or_admit`] reads from its caller.
++pub(crate) struct ScheduleStuckOrAdmitArgs<'a, 'x0> {
++    pub(crate) selected: &'a Option<Vec<usize>>,
++    pub(crate) tree: &'a mut Option<&'x0 mut TreeStuck>,
++    pub(crate) g: &'a mut Digraph,
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) prefer_asap: &'a mut bool,
++    pub(crate) drop_satisfied: &'a mut bool,
++    pub(crate) removals: &'a [usize],
++    pub(crate) scheduled: &'a mut HashSet<usize>,
++}
++
++/// Without a selection, schedule the stuck uninstall (tree mode) or admit the next removal; Break means a retry of the round.
++pub(crate) fn schedule_stuck_or_admit(args: ScheduleStuckOrAdmitArgs<'_, '_>) -> ControlFlow<()> {
++    let ScheduleStuckOrAdmitArgs {
++        selected,
++        tree,
++        g,
++        entries,
++        prefer_asap: prefer_asap_out,
++        drop_satisfied: drop_satisfied_out,
++        removals,
++        scheduled,
++    } = args;
++    let mut prefer_asap = *prefer_asap_out;
++    let mut drop_satisfied = *drop_satisfied_out;
++    // Stuck branch, tree-mode only: schedule an uninstall for the blocked package.
++    // The flat caller never takes it.
++    if selected.is_none()
++        && let Some(ts) = tree.as_mut()
++    {
++        tree_schedule_stuck(g, entries, ts);
++        if ts.progressed {
++            ts.progressed = false;
++            prefer_asap = true;
++            drop_satisfied = false;
++            {
++                *prefer_asap_out = prefer_asap;
++                *drop_satisfied_out = drop_satisfied;
++                return ControlFlow::Break(());
++            };
++        }
++    }
++
++    // Admission: no merge node selectable and a live unadmitted removal exists.
++    // Admit the first in graph order and re-select; sits before the roots
++    // last-resort so a waiting owner is never picked as a root first.
++    if selected.is_none()
++        && let Some(&r) = removals
++            .iter()
++            .find(|r| !scheduled.contains(r) && g.alive[**r])
++    {
++        scheduled.insert(r);
++        prefer_asap = true;
++        drop_satisfied = false;
++        {
++            *prefer_asap_out = prefer_asap;
++            *drop_satisfied_out = drop_satisfied;
++            return ControlFlow::Break(());
++        };
++    }
++    *prefer_asap_out = prefer_asap;
++    *drop_satisfied_out = drop_satisfied;
++    ControlFlow::Continue(())
++}
++
++/// The values [`commit_selection`] reads from its caller.
++pub(crate) struct CommitSelectionArgs<'a, 'x0> {
++    pub(crate) retlist: &'a mut Vec<usize>,
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) g: &'a mut Digraph,
++    pub(crate) selected: Vec<usize>,
++    pub(crate) asap: &'a [usize],
++    pub(crate) mo_iter: usize,
++    pub(crate) prefer_asap: &'a mut bool,
++    pub(crate) drop_satisfied: &'a mut bool,
++    pub(crate) used_ig: Option<Ignore>,
++    pub(crate) frontier: &'a mut Option<SerializeFrontier>,
++    pub(crate) tree: &'a mut Option<&'x0 mut TreeStuck>,
++}
++
++/// Trace the selection, then remove the selected nodes from the graph and append them to the merge list.
++pub(crate) fn commit_selection(args: CommitSelectionArgs<'_, '_>) {
++    let CommitSelectionArgs {
++        retlist,
++        entries,
++        g,
++        selected,
++        asap,
++        mo_iter,
++        prefer_asap: prefer_asap_out,
++        drop_satisfied: drop_satisfied_out,
++        used_ig,
++        frontier,
++        tree,
++    } = args;
++    let mut prefer_asap = *prefer_asap_out;
++    let mut drop_satisfied = *drop_satisfied_out;
++    if mo_sel_enabled() {
++        let retlist_merges = retlist
++            .iter()
++            .filter(|&&i| {
++                !matches!(
++                    entries[i].outcome,
++                    PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
++                )
++            })
++            .count();
++        let alive = g.order.iter().filter(|&&i| g.alive[i]).count();
++        let pick: Vec<String> = selected
++            .iter()
++            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
++            .collect();
++        let asap_cpvs: Vec<String> = asap
++            .iter()
++            .filter(|&&i| g.alive[i])
++            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
++            .collect();
++        eprintln!(
++            "{}",
++            mo_sel_trace_line(MoSelTraceLineArgs {
++                iter: mo_iter,
++                retlist: retlist_merges,
++                alive,
++                asap: &asap_cpvs,
++                prefer_asap,
++                drop_satisfied,
++                ig: used_ig,
++                pick: &pick
++            })
++        );
++    }
++    prefer_asap = true;
++    drop_satisfied = false;
++    for i in selected {
++        if !g.alive[i] {
++            continue;
++        }
++        g.alive[i] = false;
++        // Keep the frontier in sync at the loop's one removal site.
++        if let Some(fr) = frontier.as_mut() {
++            fr.remove(i, &g.children[i], &g.parents[i]);
++        }
++        // Selecting the blocked package while its uninstall is scheduled solves
++        // the blocker; selecting the synthetic uninstall itself discards it.
++        if let Some(ts) = tree.as_mut() {
++            tree_note_selection(g, entries, ts, i);
++        }
++        retlist.push(i);
++    }
++    g.order.retain(|&i| g.alive[i]);
++    *prefer_asap_out = prefer_asap;
++    *drop_satisfied_out = drop_satisfied;
+ }

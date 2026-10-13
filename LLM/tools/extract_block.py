@@ -73,7 +73,7 @@ from rust_items import code_mask  # noqa: E402
 
 COPY = re.compile(
     r"^(bool|char|u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64"
-    r"|Option<(bool|u32|u64|usize|i64|f64|char)>|&.*|Option<&.*>"
+    r"|Option<(bool|u32|u64|usize|i64|f64|char)>|&(?!mut ).*|Option<&(?!mut ).*>"
     r"|portage_repo::Deep|Deep|portage_repo::SolverKind|SolverKind"
     r"|ebuild_phases::ShellBackend|ShellBackend)$")
 
@@ -527,12 +527,27 @@ class Cut:
                            f"    pub(crate) {n}: {t if typed and t else '()'},\n" for n, t in self.outs)
                        + "}\n\n")
         if use_struct:
-            fields_txt = "".join(f"    pub(crate) {n}: {lifetimed(ptype(t, m))},\n" for n, t, m in ps)
+            # a `&mut` over a type holding references (`&mut Option<&mut X>`) must
+            # not tie both to one lifetime (the borrow would never end): the
+            # inner references get lifetimes of their own
+            extra = []
+
+            def field_ty(t):
+                u = lifetimed(t)
+                if u.startswith("&'a mut ") and "&" in u[8:]:
+                    def own(mm):
+                        extra.append(f"'x{len(extra)}")
+                        return f"&{extra[-1]} "
+                    u = u[:8] + re.sub(r"&'a ", own, u[8:])
+                return u
+            fields_txt = "".join(f"    pub(crate) {n}: {field_ty(ptype(t, m))},\n" for n, t, m in ps)
             lt = "'a" in fields_txt
+            gen = ", ".join(["'a"] + extra) if lt else ""
+            gen_sig = ", ".join(["'_"] * (1 + len(extra))) if lt else ""
             struct += (f"/// The values [`{self.fname}`] reads from its caller.\n"
-                       f"pub(crate) struct {sname}{'<' + chr(39) + 'a>' if lt else ''} {{\n"
+                       f"pub(crate) struct {sname}{'<' + gen + '>' if lt else ''} {{\n"
                        + fields_txt + "}\n\n")
-            sig = f"pub(crate) fn {self.fname}(args: {sname}{'<' + chr(39) + '_>' if lt else ''}){ret}"
+            sig = f"pub(crate) fn {self.fname}(args: {sname}{'<' + gen_sig + '>' if lt else ''}){ret}"
             fields = ", ".join(n if n not in copy_mut else f"{n}: {n}_out" for n, _, _ in ps)
             prologue = f"    let {sname} {{ {fields} }} = args;\n"
         else:
@@ -778,13 +793,14 @@ class Cut:
             p[1], p[2] = t, ("val" if is_copy(t) else "own" if p[0] in self.own else "ref")
             if t.startswith("&mut "):
                 # already a mutable reference: passed by implicit reborrow
+                p[2] = "val"
                 continue
             # mutated in the body: a mutating method, `&mut x`, or an assignment
             code = code_only(self.raw_body)
             n = re.escape(p[0])
             if re.search(rf"(?<![\w.]){n}\s*\.\s*(push|push_str|extend|insert|clear|retain|sort|sort_by"
                          rf"|sort_by_key|sort_unstable|dedup|truncate|remove|append|drain|pop|entry"
-                         rf"|get_mut|iter_mut|swap|reverse)\b", code) \
+                         rf"|get_mut|iter_mut|swap|reverse|as_mut|take|as_deref_mut|get_or_insert_with)\b", code) \
                     or re.search(rf"&mut\s+{n}\b", code) \
                     or re.search(rf"(?m)^\s*{n}\s*([+\-*/|&]?=)(?!=)", code):
                 p[2] = "mut"

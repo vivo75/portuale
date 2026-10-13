@@ -1,0 +1,292 @@
+diff --git a/crates/portage-repo/src/merge_order/select_nodes.rs b/crates/portage-repo/src/merge_order/select_nodes.rs
+index c0efcbae..1e3b3b07 100644
+--- a/crates/portage-repo/src/merge_order/select_nodes.rs
++++ b/crates/portage-repo/src/merge_order/select_nodes.rs
+@@ -2,6 +2,7 @@
+ //! Portage: _emerge/depgraph.py, _serialize_tasks
+ 
+ use crate::merge_order::*;
++use std::ops::ControlFlow;
+ 
+ pub(crate) fn select_nodes(
+     g: &mut Digraph,
+@@ -71,7 +72,7 @@ pub(crate) fn select_nodes(
+         eprintln!("MO_NODES count={} {}", nodes.len(), nodes.join(" "));
+     }
+ 
+-    while g.order.iter().any(|&i| g.alive[i]) {
++    'select: while g.order.iter().any(|&i| g.alive[i]) {
+         mo_iter += 1;
+         let mut selected: Option<Vec<usize>> = None;
+         let mut used_ig: Option<Ignore> = None;
+@@ -272,32 +273,19 @@ pub(crate) fn select_nodes(
+             }
+         }
+ 
+-        // Stuck branch, tree-mode only: schedule an uninstall for the blocked package.
+-        // The flat caller never takes it.
+-        if selected.is_none()
+-            && let Some(ts) = tree.as_mut()
++        if schedule_stuck_or_admit(ScheduleStuckOrAdmitArgs {
++            selected: &selected,
++            tree: &mut tree,
++            g,
++            entries,
++            prefer_asap: &mut prefer_asap,
++            drop_satisfied: &mut drop_satisfied,
++            removals: &removals,
++            scheduled: &mut scheduled,
++        })
++        .is_break()
+         {
+-            tree_schedule_stuck(g, entries, ts);
+-            if ts.progressed {
+-                ts.progressed = false;
+-                prefer_asap = true;
+-                drop_satisfied = false;
+-                continue;
+-            }
+-        }
+-
+-        // Admission: no merge node selectable and a live unadmitted removal exists.
+-        // Admit the first in graph order and re-select; sits before the roots
+-        // last-resort so a waiting owner is never picked as a root first.
+-        if selected.is_none()
+-            && let Some(&r) = removals
+-                .iter()
+-                .find(|r| !scheduled.contains(r) && g.alive[**r])
+-        {
+-            scheduled.insert(r);
+-            prefer_asap = true;
+-            drop_satisfied = false;
+-            continue;
++            continue 'select;
+         }
+ 
+         // Roots last-resort: isolated leftovers and parentless leaves the scan
+@@ -329,60 +317,174 @@ pub(crate) fn select_nodes(
+             ],
+         };
+ 
+-        if mo_sel_enabled() {
+-            let retlist_merges = retlist
+-                .iter()
+-                .filter(|&&i| {
+-                    !matches!(
+-                        entries[i].outcome,
+-                        PretendOutcome::AlreadyInstalled { .. }
+-                            | PretendOutcome::NoVisibleCandidate
+-                    )
+-                })
+-                .count();
+-            let alive = g.order.iter().filter(|&&i| g.alive[i]).count();
+-            let pick: Vec<String> = selected
+-                .iter()
+-                .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+-                .collect();
+-            let asap_cpvs: Vec<String> = asap
+-                .iter()
+-                .filter(|&&i| g.alive[i])
+-                .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+-                .collect();
+-            eprintln!(
+-                "{}",
+-                mo_sel_trace_line(MoSelTraceLineArgs {
+-                    iter: mo_iter,
+-                    retlist: retlist_merges,
+-                    alive,
+-                    asap: &asap_cpvs,
+-                    prefer_asap,
+-                    drop_satisfied,
+-                    ig: used_ig,
+-                    pick: &pick
+-                })
+-            );
++        commit_selection(CommitSelectionArgs {
++            retlist: &mut retlist,
++            entries,
++            g,
++            selected,
++            asap: &asap,
++            mo_iter,
++            prefer_asap: &mut prefer_asap,
++            drop_satisfied: &mut drop_satisfied,
++            used_ig,
++            frontier: &mut frontier,
++            tree: &mut tree,
++        });
++    }
++    retlist
++}
++
++/// The values [`schedule_stuck_or_admit`] reads from its caller.
++pub(crate) struct ScheduleStuckOrAdmitArgs<'a, 'x0> {
++    pub(crate) selected: &'a Option<Vec<usize>>,
++    pub(crate) tree: &'a mut Option<&'x0 mut TreeStuck>,
++    pub(crate) g: &'a mut Digraph,
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) prefer_asap: &'a mut bool,
++    pub(crate) drop_satisfied: &'a mut bool,
++    pub(crate) removals: &'a [usize],
++    pub(crate) scheduled: &'a mut HashSet<usize>,
++}
++
++/// Without a selection, schedule the stuck uninstall (tree mode) or admit the next removal; Break means a retry of the round.
++pub(crate) fn schedule_stuck_or_admit(args: ScheduleStuckOrAdmitArgs<'_, '_>) -> ControlFlow<()> {
++    let ScheduleStuckOrAdmitArgs {
++        selected,
++        tree,
++        g,
++        entries,
++        prefer_asap: prefer_asap_out,
++        drop_satisfied: drop_satisfied_out,
++        removals,
++        scheduled,
++    } = args;
++    let mut prefer_asap = *prefer_asap_out;
++    let mut drop_satisfied = *drop_satisfied_out;
++    // Stuck branch, tree-mode only: schedule an uninstall for the blocked package.
++    // The flat caller never takes it.
++    if selected.is_none()
++        && let Some(ts) = tree.as_mut()
++    {
++        tree_schedule_stuck(g, entries, ts);
++        if ts.progressed {
++            ts.progressed = false;
++            prefer_asap = true;
++            drop_satisfied = false;
++            {
++                *prefer_asap_out = prefer_asap;
++                *drop_satisfied_out = drop_satisfied;
++                return ControlFlow::Break(());
++            };
+         }
++    }
++
++    // Admission: no merge node selectable and a live unadmitted removal exists.
++    // Admit the first in graph order and re-select; sits before the roots
++    // last-resort so a waiting owner is never picked as a root first.
++    if selected.is_none()
++        && let Some(&r) = removals
++            .iter()
++            .find(|r| !scheduled.contains(r) && g.alive[**r])
++    {
++        scheduled.insert(r);
+         prefer_asap = true;
+         drop_satisfied = false;
+-        for i in selected {
+-            if !g.alive[i] {
+-                continue;
+-            }
+-            g.alive[i] = false;
+-            // Keep the frontier in sync at the loop's one removal site.
+-            if let Some(fr) = frontier.as_mut() {
+-                fr.remove(i, &g.children[i], &g.parents[i]);
+-            }
+-            // Selecting the blocked package while its uninstall is scheduled solves
+-            // the blocker; selecting the synthetic uninstall itself discards it.
+-            if let Some(ts) = tree.as_mut() {
+-                tree_note_selection(g, entries, ts, i);
+-            }
+-            retlist.push(i);
++        {
++            *prefer_asap_out = prefer_asap;
++            *drop_satisfied_out = drop_satisfied;
++            return ControlFlow::Break(());
++        };
++    }
++    *prefer_asap_out = prefer_asap;
++    *drop_satisfied_out = drop_satisfied;
++    ControlFlow::Continue(())
++}
++
++/// The values [`commit_selection`] reads from its caller.
++pub(crate) struct CommitSelectionArgs<'a, 'x0> {
++    pub(crate) retlist: &'a mut Vec<usize>,
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) g: &'a mut Digraph,
++    pub(crate) selected: Vec<usize>,
++    pub(crate) asap: &'a [usize],
++    pub(crate) mo_iter: usize,
++    pub(crate) prefer_asap: &'a mut bool,
++    pub(crate) drop_satisfied: &'a mut bool,
++    pub(crate) used_ig: Option<Ignore>,
++    pub(crate) frontier: &'a mut Option<SerializeFrontier>,
++    pub(crate) tree: &'a mut Option<&'x0 mut TreeStuck>,
++}
++
++/// Trace the selection, then remove the selected nodes from the graph and append them to the merge list.
++pub(crate) fn commit_selection(args: CommitSelectionArgs<'_, '_>) {
++    let CommitSelectionArgs {
++        retlist,
++        entries,
++        g,
++        selected,
++        asap,
++        mo_iter,
++        prefer_asap: prefer_asap_out,
++        drop_satisfied: drop_satisfied_out,
++        used_ig,
++        frontier,
++        tree,
++    } = args;
++    let mut prefer_asap = *prefer_asap_out;
++    let mut drop_satisfied = *drop_satisfied_out;
++    if mo_sel_enabled() {
++        let retlist_merges = retlist
++            .iter()
++            .filter(|&&i| {
++                !matches!(
++                    entries[i].outcome,
++                    PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
++                )
++            })
++            .count();
++        let alive = g.order.iter().filter(|&&i| g.alive[i]).count();
++        let pick: Vec<String> = selected
++            .iter()
++            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
++            .collect();
++        let asap_cpvs: Vec<String> = asap
++            .iter()
++            .filter(|&&i| g.alive[i])
++            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
++            .collect();
++        eprintln!(
++            "{}",
++            mo_sel_trace_line(MoSelTraceLineArgs {
++                iter: mo_iter,
++                retlist: retlist_merges,
++                alive,
++                asap: &asap_cpvs,
++                prefer_asap,
++                drop_satisfied,
++                ig: used_ig,
++                pick: &pick
++            })
++        );
++    }
++    prefer_asap = true;
++    drop_satisfied = false;
++    for i in selected {
++        if !g.alive[i] {
++            continue;
+         }
+-        g.order.retain(|&i| g.alive[i]);
++        g.alive[i] = false;
++        // Keep the frontier in sync at the loop's one removal site.
++        if let Some(fr) = frontier.as_mut() {
++            fr.remove(i, &g.children[i], &g.parents[i]);
++        }
++        // Selecting the blocked package while its uninstall is scheduled solves
++        // the blocker; selecting the synthetic uninstall itself discards it.
++        if let Some(ts) = tree.as_mut() {
++            tree_note_selection(g, entries, ts, i);
++        }
++        retlist.push(i);
+     }
+-    retlist
++    g.order.retain(|&i| g.alive[i]);
++    *prefer_asap_out = prefer_asap;
++    *drop_satisfied_out = drop_satisfied;
+ }
