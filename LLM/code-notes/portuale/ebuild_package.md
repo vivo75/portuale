@@ -166,6 +166,9 @@ Binary-package building (`ebuild package`, `--buildpkg`, quickpkg). Context move
 - Temp-file-then-rename, same dance as `package_after_install`: Portage `bin/quickpkg` does this too (its own `binpkg_tmpfile = bintree.pkgdir + cpv + ".tbz2." + str(portage.getpid())`, later `bintree.inject` renamed), so a failed compressor never leaves a corrupt archive at `binpkg_path` (the `if binpkg_path.exists() { return Ok(None) }` check above means this only ever runs when nothing was there before -- but leaving a corrupt file behind would still poison the next `--getbinpkg`/`--usepkg` scan of this pkgdir).
 - `PATH` is always written (as in `package_after_install`; also needed for `populate_local_pkgdir`'s mtime-staleness fast path to find this entry at all), derived from `binpkg_path` relative to `$PKGDIR` so the multi-instance `<cat>/<pn>/<pf>-<id>.<suffix>` subdir path is carried through.
 
+## fn stage_contents_for_quickpkg
+- Split out of `quickpkg_from_vdb` (#339 M1): the per-CONTENTS-line staging into the image. The fifo/device skip and the CONFIG_PROTECT rule are described under `quickpkg_from_vdb` above.
+
 ## fn copy_dir_recursive
 - Stages the vdb dir as `${PORTAGE_BUILDDIR}/build-info` for `quickpkg_from_vdb`; files, symlinks-as-symlinks, subdirs.
 

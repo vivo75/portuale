@@ -1298,42 +1298,7 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
     let image = env.d();
     let _ = std::fs::remove_dir_all(&image);
     std::fs::create_dir_all(&image).map_err(|e| format!("{}: {e}", image.display()))?;
-    for line in contents.lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(kind), Some(abs)) = (fields.next(), fields.next()) else {
-            continue;
-        };
-        let src = root.join(abs.trim_start_matches('/'));
-        let dst = image.join(abs.trim_start_matches('/'));
-        match kind {
-            "dir" => {
-                std::fs::create_dir_all(&dst).map_err(|e| format!("{}: {e}", dst.display()))?;
-            }
-            "obj" => {
-                if ebuild_merge::is_protected(root, config_protect, config_protect_mask, &src) {
-                    continue;
-                }
-                if let Some(parent) = dst.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("{}: {e}", parent.display()))?;
-                }
-                std::fs::copy(&src, &dst)
-                    .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
-            }
-            "sym" => {
-                let target = std::fs::read_link(&src)
-                    .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
-                if let Some(parent) = dst.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("{}: {e}", parent.display()))?;
-                }
-                std::os::unix::fs::symlink(&target, &dst)
-                    .map_err(|e| format!("quickpkg: {}: {e}", dst.display()))?;
-            }
-            // "fif"/"dev": documented cut (needs CAP_MKNOD).
-            _ => {}
-        }
-    }
+    stage_contents_for_quickpkg(&contents, root, &image, config_protect, config_protect_mask)?;
 
     // build-info/ is a verbatim copy of the vdb dir.
     let build_info = env.build_info();
@@ -1452,6 +1417,53 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
     )?;
 
     Ok(Some(binpkg_path))
+}
+
+/// Stage the installed files named by CONTENTS for the binary package.
+pub(crate) fn stage_contents_for_quickpkg(
+    contents: &str,
+    root: &Path,
+    image: &Path,
+    config_protect: &str,
+    config_protect_mask: &str,
+) -> Result<(), String> {
+    for line in contents.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(kind), Some(abs)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let src = root.join(abs.trim_start_matches('/'));
+        let dst = image.join(abs.trim_start_matches('/'));
+        match kind {
+            "dir" => {
+                std::fs::create_dir_all(&dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+            }
+            "obj" => {
+                if ebuild_merge::is_protected(root, config_protect, config_protect_mask, &src) {
+                    continue;
+                }
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                std::fs::copy(&src, &dst)
+                    .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
+            }
+            "sym" => {
+                let target = std::fs::read_link(&src)
+                    .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                std::os::unix::fs::symlink(&target, &dst)
+                    .map_err(|e| format!("quickpkg: {}: {e}", dst.display()))?;
+            }
+            // "fif"/"dev": documented cut (needs CAP_MKNOD).
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Recursively copy `src` -> `dst` (files, symlinks-as-symlinks,
