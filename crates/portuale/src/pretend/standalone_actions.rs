@@ -1,5 +1,6 @@
 //! The standalone actions: --resume, --config, --search, --check-news, --info, --clean, --rage-clean, --unmerge, --depclean, --prune.
 
+use crate::ebuild_phases::ShellBackend;
 use crate::pretend::*;
 use portage_profile::Config;
 use portage_repo::RepoConfig;
@@ -91,6 +92,117 @@ pub(crate) fn dispatch_standalone_actions(
     // `--config <atom>`: run `pkg_config` for one installed package.
     // Needs nothing from the resolved `config`; ignores `--pretend`.
     // Portage: _emerge/actions.py, action_config
+    dispatch_queries(DispatchQueriesArgs {
+        config_action,
+        atom_args,
+        root,
+        shell,
+        debug,
+        ask,
+        color,
+        search_action,
+        repos,
+        searchdesc,
+        quiet,
+        fuzzy_search,
+        regex_search_auto,
+        search_similarity,
+        check_news,
+        config_root,
+        config,
+        info_action,
+        usepkg,
+        usepkgonly,
+        getbinpkg,
+        getbinpkgonly,
+        misspell_suggestions,
+        clean_action,
+        pretend,
+        rage_clean,
+        unmerge,
+        depclean,
+        verbose,
+        lib_check,
+        deselect_n,
+        prune,
+        nodeps,
+    })
+}
+
+/// The values [`dispatch_queries`] reads from its caller.
+pub(crate) struct DispatchQueriesArgs<'a> {
+    pub(crate) config_action: bool,
+    pub(crate) atom_args: &'a Vec<&'a str>,
+    pub(crate) root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) ask: bool,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) search_action: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) searchdesc: bool,
+    pub(crate) quiet: bool,
+    pub(crate) fuzzy_search: bool,
+    pub(crate) regex_search_auto: bool,
+    pub(crate) search_similarity: f64,
+    pub(crate) check_news: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a mut Config,
+    pub(crate) info_action: bool,
+    pub(crate) usepkg: bool,
+    pub(crate) usepkgonly: bool,
+    pub(crate) getbinpkg: bool,
+    pub(crate) getbinpkgonly: bool,
+    pub(crate) misspell_suggestions: bool,
+    pub(crate) clean_action: bool,
+    pub(crate) pretend: bool,
+    pub(crate) rage_clean: bool,
+    pub(crate) unmerge: bool,
+    pub(crate) depclean: bool,
+    pub(crate) verbose: bool,
+    pub(crate) lib_check: bool,
+    pub(crate) deselect_n: bool,
+    pub(crate) prune: bool,
+    pub(crate) nodeps: bool,
+}
+
+/// The query actions: config, search, news and info, then the cleaning and removal actions.
+pub(crate) fn dispatch_queries(args: DispatchQueriesArgs<'_>) -> Option<ExitCode> {
+    let DispatchQueriesArgs {
+        config_action,
+        atom_args,
+        root,
+        shell,
+        debug,
+        ask,
+        color,
+        search_action,
+        repos,
+        searchdesc,
+        quiet,
+        fuzzy_search,
+        regex_search_auto,
+        search_similarity,
+        check_news,
+        config_root,
+        config,
+        info_action,
+        usepkg,
+        usepkgonly,
+        getbinpkg,
+        getbinpkgonly,
+        misspell_suggestions,
+        clean_action,
+        pretend,
+        rage_clean,
+        unmerge,
+        depclean,
+        verbose,
+        lib_check,
+        deselect_n,
+        prune,
+        nodeps,
+    } = args;
     if config_action {
         return Some(run_config_action(RunConfigActionArgs {
             atom_args,
@@ -171,6 +283,78 @@ pub(crate) fn dispatch_standalone_actions(
     }
 
     // `--clean`: keep only the newest version per slot.
+    dispatch_maintenance(DispatchMaintenanceArgs {
+        clean_action,
+        atom_args,
+        root,
+        config_root,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        config,
+        repos,
+        rage_clean,
+        unmerge,
+        depclean,
+        verbose,
+        lib_check,
+        deselect_n,
+        prune,
+        nodeps,
+    })
+}
+
+/// The values [`dispatch_maintenance`] reads from its caller.
+pub(crate) struct DispatchMaintenanceArgs<'a> {
+    pub(crate) clean_action: bool,
+    pub(crate) atom_args: &'a Vec<&'a str>,
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) shell: ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) quiet: bool,
+    pub(crate) config: &'a mut Config,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) rage_clean: bool,
+    pub(crate) unmerge: bool,
+    pub(crate) depclean: bool,
+    pub(crate) verbose: bool,
+    pub(crate) lib_check: bool,
+    pub(crate) deselect_n: bool,
+    pub(crate) prune: bool,
+    pub(crate) nodeps: bool,
+}
+
+/// The cleaning actions: clean and rage-clean, then the removal actions.
+pub(crate) fn dispatch_maintenance(args: DispatchMaintenanceArgs<'_>) -> Option<ExitCode> {
+    let DispatchMaintenanceArgs {
+        clean_action,
+        atom_args,
+        root,
+        config_root,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        config,
+        repos,
+        rage_clean,
+        unmerge,
+        depclean,
+        verbose,
+        lib_check,
+        deselect_n,
+        prune,
+        nodeps,
+    } = args;
     if clean_action {
         return Some(run_clean_pretend(RunCleanPretendArgs {
             targets: atom_args,
@@ -210,6 +394,72 @@ pub(crate) fn dispatch_standalone_actions(
     // `--unmerge`/`-C`: the `@system` target support and system-profile
     // check both need the resolved config, so dispatch before the
     // ordinary resolve-graph path below.
+    dispatch_removal(DispatchRemovalArgs {
+        unmerge,
+        atom_args,
+        root,
+        config_root,
+        config,
+        repos,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        depclean,
+        verbose,
+        lib_check,
+        deselect_n,
+        prune,
+        nodeps,
+    })
+}
+
+/// The values [`dispatch_removal`] reads from its caller.
+pub(crate) struct DispatchRemovalArgs<'a> {
+    pub(crate) unmerge: bool,
+    pub(crate) atom_args: &'a Vec<&'a str>,
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a mut Config,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) shell: ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) quiet: bool,
+    pub(crate) depclean: bool,
+    pub(crate) verbose: bool,
+    pub(crate) lib_check: bool,
+    pub(crate) deselect_n: bool,
+    pub(crate) prune: bool,
+    pub(crate) nodeps: bool,
+}
+
+/// The removal actions: unmerge, depclean and prune.
+pub(crate) fn dispatch_removal(args: DispatchRemovalArgs<'_>) -> Option<ExitCode> {
+    let DispatchRemovalArgs {
+        unmerge,
+        atom_args,
+        root,
+        config_root,
+        config,
+        repos,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        depclean,
+        verbose,
+        lib_check,
+        deselect_n,
+        prune,
+        nodeps,
+    } = args;
     if unmerge {
         // `pretend` last: without it, `run_unmerge_pretend` really
         // removes the selected packages after the display.

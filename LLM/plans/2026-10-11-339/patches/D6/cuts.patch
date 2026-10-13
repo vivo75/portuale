@@ -1,0 +1,935 @@
+diff --git a/crates/portuale/src/pretend/mod.rs b/crates/portuale/src/pretend/mod.rs
+index 50c4ee56..5a48bbcb 100644
+--- a/crates/portuale/src/pretend/mod.rs
++++ b/crates/portuale/src/pretend/mod.rs
+@@ -18,6 +18,9 @@
+ //! follow Portage's value-taking rules; `--help` wins wherever it appears.
+ 
+ use crate::color::{self, Colorizer};
++use portage_profile::Config;
++use portage_repo::GraphResult;
++use portage_repo::RepoConfig;
+ 
+ mod args;
+ mod atoms;
+@@ -346,40 +349,204 @@ pub fn run(args: &[String]) -> ExitCode {
+     // `N` (a pure install that still caused a rebuild); other-slot installs do
+     // not count (`NS`, no `r`).
+     // Portage: resolver/output.py, PkgAttrDisplay
+-    let force_reinstall_cps: HashSet<(String, String)> = result
+-        .abi_rebuilds
+-        .iter()
+-        .flat_map(|(provider, consumer)| [(provider, true), (consumer, false)])
+-        .filter_map(|(cpv, is_provider)| {
+-            let (c, p, v) = portage_repo::split_cpv(cpv)?;
+-            if is_provider {
+-                let slot = result
+-                    .entries
+-                    .iter()
+-                    .find(|e| {
+-                        e.category == c
+-                            && e.package == p
+-                            && match &e.outcome {
+-                                portage_repo::PretendOutcome::New { version }
+-                                | portage_repo::PretendOutcome::Reinstall { version, .. } => {
+-                                    *version == v
+-                                }
+-                                portage_repo::PretendOutcome::Upgrade { to, .. }
+-                                | portage_repo::PretendOutcome::Downgrade { to, .. } => *to == v,
+-                                _ => false,
+-                            }
+-                    })
+-                    .and_then(|e| e.slot.clone());
+-                let in_slot = portage_repo::installed_candidates(&root, &c, &p)
+-                    .iter()
+-                    .any(|(_, s, _)| slot.as_ref().is_none_or(|want| s == want));
+-                if !in_slot {
+-                    return None;
+-                }
+-            }
+-            Some((c, p))
+-        })
+-        .collect();
++    let force_reinstall_cps = abi_rebuild_force_reinstall_cps(&result, &root);
++    show_resolution_report(ShowResolutionReportArgs {
++        gated_abort_partial,
++        result: &result,
++        opts: &opts,
++        plan: &plan,
++        show_merge_list,
++        display_entries,
++        expanded_atoms: &expanded_atoms,
++        config: &config,
++        root: &root,
++        repos: &repos,
++        top_level_pkgs: &top_level_pkgs,
++        color,
++        system_atoms,
++        world_atoms: &world_atoms,
++        force_reinstall_cps: &force_reinstall_cps,
++        columnwidth,
++        display_list_suppressed,
++    });
++
++    finish_run(FinishRunArgs {
++        plan: &plan,
++        opts: &opts,
++        result: &result,
++        root: &root,
++        repos: &repos,
++        color,
++        config: &config,
++        has_autounmask_changes,
++        set_validation_errors: &set_validation_errors,
++        show_merge_list,
++        entries,
++        display_entries,
++        config_root: &config_root,
++        selected_set_args: &selected_set_args,
++        system_atoms,
++    })
++}
++
++/// The values [`finish_run`] reads from its caller.
++pub(crate) struct FinishRunArgs<'a> {
++    pub(crate) plan: &'a ResolvePlan,
++    pub(crate) opts: &'a EmergeOpts<'a>,
++    pub(crate) result: &'a GraphResult,
++    pub(crate) root: &'a Path,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) color: Colorizer,
++    pub(crate) config: &'a Config,
++    pub(crate) has_autounmask_changes: bool,
++    pub(crate) set_validation_errors: &'a [String],
++    pub(crate) show_merge_list: bool,
++    pub(crate) entries: &'a Vec<GraphEntry>,
++    pub(crate) display_entries: &'a [GraphEntry],
++    pub(crate) config_root: &'a Path,
++    pub(crate) selected_set_args: &'a [String],
++    pub(crate) system_atoms: &'a Vec<String>,
++}
++
++/// After the report: the skipped-update notices, the failure gates and the merge.
++pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
++    let FinishRunArgs {
++        plan,
++        opts,
++        result,
++        root,
++        repos,
++        color,
++        config,
++        has_autounmask_changes,
++        set_validation_errors,
++        show_merge_list,
++        entries,
++        display_entries,
++        config_root,
++        selected_set_args,
++        system_atoms,
++    } = args;
++    show_skipped_updates(plan, opts, result, root, repos);
++
++    show_skipped_missing_deps(opts.quiet, opts.debug, result);
++
++    show_missing_args_and_aborts(result, root, &color, repos, config);
++
++    if let Some(code) = show_autounmask(ShowAutounmaskArgs {
++        opts,
++        color: &color,
++        result,
++        repos,
++        root,
++        config,
++        has_autounmask_changes,
++    }) {
++        // A named set's dropped lines print after the merge list and its
++        // USE-change prompt (Portage depgraph.py:11142-11145), even when
++        // the USE changes already fail the run.
++        for error in set_validation_errors {
++            eprintln!("{error}");
++        }
++        return code;
++    }
++    for error in set_validation_errors {
++        eprintln!("{error}");
++    }
++
++    if let Some(code) = failure_gates(FailureGatesArgs {
++        opts,
++        result,
++        show_merge_list,
++        color: &color,
++        repos,
++        root,
++        config,
++    }) {
++        return code;
++    }
++
++    print_resolver_debug(root, entries, &opts.reinstall_atoms, result);
++
++    if let Some(code) = final_gates(FinalGatesArgs {
++        opts,
++        result,
++        entries,
++        root,
++        repos,
++        config,
++        color: &color,
++    }) {
++        return code;
++    }
++
++    // Execution below is non-`--pretend` only; see `emerge_build` for what builds.
++    if let Some(code) = run_after_display(RunAfterDisplayArgs {
++        opts,
++        display_entries,
++        plan,
++        config_root,
++        selected_set_args,
++        show_merge_list,
++        root,
++        entries,
++        system_atoms,
++        repos,
++        color,
++        config,
++    }) {
++        return code;
++    }
++
++    // A `--pretend` run prints the GLEP 42 notice at the end (the vdb never
++    // changes under `--pretend`). Portage: post_emerge.py
++    pretend_end_news_notice(opts.pretend, repos, root, config, &color);
++
++    ExitCode::SUCCESS
++}
++
++/// The values [`show_resolution_report`] reads from its caller.
++pub(crate) struct ShowResolutionReportArgs<'a> {
++    pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
++    pub(crate) result: &'a GraphResult,
++    pub(crate) opts: &'a EmergeOpts<'a>,
++    pub(crate) plan: &'a ResolvePlan,
++    pub(crate) show_merge_list: bool,
++    pub(crate) display_entries: &'a [GraphEntry],
++    pub(crate) expanded_atoms: &'a [String],
++    pub(crate) config: &'a Config,
++    pub(crate) root: &'a Path,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
++    pub(crate) color: Colorizer,
++    pub(crate) system_atoms: &'a Vec<String>,
++    pub(crate) world_atoms: &'a [String],
++    pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
++    pub(crate) columnwidth: i64,
++    pub(crate) display_list_suppressed: bool,
++}
++
++/// The resolution report: merge list, summary, cycle re-display, conflicts.
++pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
++    let ShowResolutionReportArgs {
++        gated_abort_partial,
++        result,
++        opts,
++        plan,
++        show_merge_list,
++        display_entries,
++        expanded_atoms,
++        config,
++        root,
++        repos,
++        top_level_pkgs,
++        color,
++        system_atoms,
++        world_atoms,
++        force_reinstall_cps,
++        columnwidth,
++        display_list_suppressed,
++    } = args;
+     // Blocker lines collect while walking and print as one group afterwards.
+     let mut blocker_lines: Vec<String> = Vec::new();
+     // Abort-path unsatisfied lines held back until after the slot-conflict block.
+@@ -405,25 +572,25 @@ pub fn run(args: &[String]) -> ExitCode {
+     // The rendered tree rows, for the circular `Total:` recount only.
+     let mut rendered_rows: Vec<(usize, bool)> = Vec::new();
+     render_merge_list(RenderMergeListArgs {
+-        plan: &plan,
+-        opts: &opts,
++        plan,
++        opts,
+         show_merge_list,
+         disp_tree,
+         circular_forced_display,
+         display_entries,
+-        expanded_atoms: &expanded_atoms,
+-        config: &config,
+-        root: &root,
+-        repos: &repos,
+-        result: &result,
++        expanded_atoms,
++        config,
++        root,
++        repos,
++        result,
+         rendered_rows: &mut rendered_rows,
+-        top_level_pkgs: &top_level_pkgs,
++        top_level_pkgs,
+         disp_verbose,
+         disp_quiet,
+         color: &color,
+         system_atoms,
+-        world_atoms: &world_atoms,
+-        force_reinstall_cps: &force_reinstall_cps,
++        world_atoms,
++        force_reinstall_cps,
+         blocker_lines: &mut blocker_lines,
+         columnwidth,
+         gated_abort_partial,
+@@ -431,7 +598,7 @@ pub fn run(args: &[String]) -> ExitCode {
+     });
+ 
+     show_merge_list_summary(ShowMergeListSummaryArgs {
+-        opts: &opts,
++        opts,
+         circular_forced_display,
+         rendered_rows: &rendered_rows,
+         display_entries,
+@@ -439,10 +606,10 @@ pub fn run(args: &[String]) -> ExitCode {
+         disp_verbose,
+         disp_quiet,
+         display_list_suppressed,
+-        root: &root,
+-        top_level_pkgs: &top_level_pkgs,
++        root,
++        top_level_pkgs,
+         color: &color,
+-        result: &result,
++        result,
+         disp_tree,
+     });
+ 
+@@ -460,99 +627,120 @@ pub fn run(args: &[String]) -> ExitCode {
+             }
+         );
+     show_cycle_redisplay(ShowCycleRedisplayArgs {
+-        plan: &plan,
+-        opts: &opts,
++        plan,
++        opts,
+         show_merge_list,
+-        result: &result,
++        result,
+         skip_redisplay,
+         display_entries,
+-        root: &root,
+-        top_level_pkgs: &top_level_pkgs,
++        root,
++        top_level_pkgs,
+         columnwidth,
+         color: &color,
+         system_atoms,
+-        world_atoms: &world_atoms,
+-        force_reinstall_cps: &force_reinstall_cps,
++        world_atoms,
++        force_reinstall_cps,
+     });
+ 
+     show_slot_conflicts(ShowSlotConflictsArgs {
+-        plan: &plan,
+-        opts: &opts,
+-        result: &result,
+-        root: &root,
+-        repos: &repos,
+-        config: &config,
++        plan,
++        opts,
++        result,
++        root,
++        repos,
++        config,
+         useoldpkg_atoms_render: &opts.useoldpkg_atoms,
+         color: &color,
+     });
+     show_deferred_unsat(ShowDeferredUnsatArgs {
+-        plan: &plan,
+-        opts: &opts,
++        plan,
++        opts,
+         deferred_abort_unsat: &deferred_abort_unsat,
+-        result: &result,
+-        root: &root,
+-        top_level_pkgs: &top_level_pkgs,
++        result,
++        root,
++        top_level_pkgs,
+         columnwidth,
+         color: &color,
+         system_atoms,
+-        world_atoms: &world_atoms,
+-        force_reinstall_cps: &force_reinstall_cps,
++        world_atoms,
++        force_reinstall_cps,
+     });
++}
+ 
+-    show_skipped_updates(&plan, &opts, &result, &root, &repos);
+-
+-    show_skipped_missing_deps(opts.quiet, opts.debug, &result);
+-
+-    show_missing_args_and_aborts(&result, &root, &color, &repos, &config);
++/// The (category, package) pairs on either side of an ABI-rebuild edge.
++pub(crate) fn abi_rebuild_force_reinstall_cps(
++    result: &GraphResult,
++    root: &Path,
++) -> HashSet<(String, String)> {
++    let force_reinstall_cps: HashSet<(String, String)> = result
++        .abi_rebuilds
++        .iter()
++        .flat_map(|(provider, consumer)| [(provider, true), (consumer, false)])
++        .filter_map(|(cpv, is_provider)| {
++            let (c, p, v) = portage_repo::split_cpv(cpv)?;
++            if is_provider {
++                let slot = result
++                    .entries
++                    .iter()
++                    .find(|e| {
++                        e.category == c
++                            && e.package == p
++                            && match &e.outcome {
++                                portage_repo::PretendOutcome::New { version }
++                                | portage_repo::PretendOutcome::Reinstall { version, .. } => {
++                                    *version == v
++                                }
++                                portage_repo::PretendOutcome::Upgrade { to, .. }
++                                | portage_repo::PretendOutcome::Downgrade { to, .. } => *to == v,
++                                _ => false,
++                            }
++                    })
++                    .and_then(|e| e.slot.clone());
++                let in_slot = portage_repo::installed_candidates(root, &c, &p)
++                    .iter()
++                    .any(|(_, s, _)| slot.as_ref().is_none_or(|want| s == want));
++                if !in_slot {
++                    return None;
++                }
++            }
++            Some((c, p))
++        })
++        .collect();
++    force_reinstall_cps
++}
+ 
+-    if let Some(code) = show_autounmask(ShowAutounmaskArgs {
+-        opts: &opts,
+-        color: &color,
+-        result: &result,
+-        repos: &repos,
+-        root: &root,
+-        config: &config,
+-        has_autounmask_changes,
+-    }) {
+-        // A named set's dropped lines print after the merge list and its
+-        // USE-change prompt (Portage depgraph.py:11142-11145), even when
+-        // the USE changes already fail the run.
+-        for error in &set_validation_errors {
+-            eprintln!("{error}");
+-        }
+-        return code;
+-    }
+-    for error in &set_validation_errors {
+-        eprintln!("{error}");
+-    }
++/// The values [`run_after_display`] reads from its caller.
++pub(crate) struct RunAfterDisplayArgs<'a> {
++    pub(crate) opts: &'a EmergeOpts<'a>,
++    pub(crate) display_entries: &'a [GraphEntry],
++    pub(crate) plan: &'a ResolvePlan,
++    pub(crate) config_root: &'a Path,
++    pub(crate) selected_set_args: &'a [String],
++    pub(crate) show_merge_list: bool,
++    pub(crate) root: &'a Path,
++    pub(crate) entries: &'a Vec<GraphEntry>,
++    pub(crate) system_atoms: &'a Vec<String>,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) color: Colorizer,
++    pub(crate) config: &'a Config,
++}
+ 
+-    if let Some(code) = failure_gates(FailureGatesArgs {
+-        opts: &opts,
+-        result: &result,
++/// Everything a non-`--pretend` run does after the display: prompts, then the merge.
++pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCode> {
++    let RunAfterDisplayArgs {
++        opts,
++        display_entries,
++        plan,
++        config_root,
++        selected_set_args,
+         show_merge_list,
+-        color: &color,
+-        repos: &repos,
+-        root: &root,
+-        config: &config,
+-    }) {
+-        return code;
+-    }
+-
+-    print_resolver_debug(&root, entries, &opts.reinstall_atoms, &result);
+-
+-    if let Some(code) = final_gates(FinalGatesArgs {
+-        opts: &opts,
+-        result: &result,
++        root,
+         entries,
+-        root: &root,
+-        repos: &repos,
+-        config: &config,
+-        color: &color,
+-    }) {
+-        return code;
+-    }
+-
+-    // Execution below is non-`--pretend` only; see `emerge_build` for what builds.
++        system_atoms,
++        repos,
++        color,
++        config,
++    } = args;
+     if !opts.pretend {
+         // An empty displayed plan quits here (before the rotation and the
+         // scheduler), after every failure gate above. `--resume` never reaches
+@@ -569,38 +757,38 @@ pub fn run(args: &[String]) -> ExitCode {
+             selective: plan.selective,
+             oneshot_or_onlydeps: opts.oneshot || opts.onlydeps,
+             has_world_candidates: opts.atom_args.iter().any(|a| !a.starts_with('@'))
+-                || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()),
++                || (usersets_world_candidate(config_root) && !selected_set_args.is_empty()),
+         });
+         if let Some(code) = show_nothing_to_merge(ShowNothingToMergeArgs {
+-            opts: &opts,
++            opts,
+             show_merge_list,
+             mergecount,
+             deferred,
+-            root: &root,
+-            config_root: &config_root,
+-            selected_set_args: &selected_set_args,
++            root,
++            config_root,
++            selected_set_args,
+             entries,
+             system_atoms,
+-            repos: &repos,
++            repos,
+             color,
+         }) {
+-            return code;
++            return Some(code);
+         }
+         // `--ask` prompts once, after the whole merge list, before anything builds.
+         // Portage: _emerge/actions.py, action_build
+         if opts.ask && !ask_confirm(&color, "Would you like to merge these packages?") {
+-            return ExitCode::from(130);
++            return Some(ExitCode::from(130));
+         }
+         let MergeSetupOut {
+             status_mode,
+             package_options,
+             portage_tmpdir,
+             merge_options,
+-        } = merge_setup(&opts, entries, &config, &root);
++        } = merge_setup(opts, entries, config, root);
+ 
+         // With `FEATURES=buildpkg` / `--buildpkg`, a binpkg of each source entry
+         // is written into `$PKGDIR` as a side effect of the merge.
+-        let buildpkg_on = buildpkg_from_config(opts.buildpkg_opt, &config);
++        let buildpkg_on = buildpkg_from_config(opts.buildpkg_opt, config);
+         let buildpkg = buildpkg_on.then_some(&package_options);
+         // `emerge -k`: the resolver may have put a local-`$PKGDIR` binary on the
+         // plan, so the per-entry binary-vs-source executor runs here too, not just
+@@ -612,24 +800,24 @@ pub fn run(args: &[String]) -> ExitCode {
+         if opts.buildpkgonly {
+             if let Err(e) = emerge_build::run_buildpkgonly(emerge_build::RunBuildpkgonlyArgs {
+                 entries,
+-                config: &config,
+-                repos: &repos,
+-                root: &root,
++                config,
++                repos,
++                root,
+                 portage_tmpdir: &portage_tmpdir,
+                 options: &package_options,
+                 keep_going: opts.keep_going,
+                 mode: status_mode,
+             }) {
+                 eprintln!("emerge: {e}");
+-                return ExitCode::from(1);
++                return Some(ExitCode::from(1));
+             }
+         } else if plan.getbinpkg || has_binary_entry {
+             if let Some(code) = run_binary_merge_plan(RunBinaryMergePlanArgs {
+-                opts: &opts,
++                opts,
+                 entries,
+-                config: &config,
+-                repos: &repos,
+-                root: &root,
++                config,
++                repos,
++                root,
+                 portage_tmpdir: &portage_tmpdir,
+                 package_options: &package_options,
+                 merge_options: &merge_options,
+@@ -637,50 +825,45 @@ pub fn run(args: &[String]) -> ExitCode {
+                 status_mode,
+                 color,
+             }) {
+-                return code;
++                return Some(code);
+             }
+         } else if let Some(code) = run_source_merge_plan(RunSourceMergePlanArgs {
+-            opts: &opts,
++            opts,
+             entries,
+-            root: &root,
+-            repos: &repos,
++            root,
++            repos,
+             portage_tmpdir: &portage_tmpdir,
+             merge_options: &merge_options,
+             buildpkg,
+             status_mode,
+-            config: &config,
++            config,
+             color,
+         }) {
+-            return code;
++            return Some(code);
+         }
+ 
+         if let Some(code) = record_world_after_merge(RecordWorldAfterMergeArgs {
+-            opts: &opts,
+-            root: &root,
++            opts,
++            root,
+             entries,
+             system_atoms,
+-            repos: &repos,
+-            config_root: &config_root,
+-            selected_set_args: &selected_set_args,
++            repos,
++            config_root,
++            selected_set_args,
+         }) {
+-            return code;
++            return Some(code);
+         }
+ 
+         if let Some(code) = show_post_merge_notices(ShowPostMergeNoticesArgs {
+-            opts: &opts,
++            opts,
+             entries,
+-            config: &config,
+-            root: &root,
++            config,
++            root,
+             color,
+-            repos: &repos,
++            repos,
+         }) {
+-            return code;
++            return Some(code);
+         }
+     }
+-
+-    // A `--pretend` run prints the GLEP 42 notice at the end (the vdb never
+-    // changes under `--pretend`). Portage: post_emerge.py
+-    pretend_end_news_notice(opts.pretend, &repos, &root, &config, &color);
+-
+-    ExitCode::SUCCESS
++    None
+ }
+diff --git a/crates/portuale/src/pretend/standalone_actions.rs b/crates/portuale/src/pretend/standalone_actions.rs
+index 2d324796..99c4e694 100644
+--- a/crates/portuale/src/pretend/standalone_actions.rs
++++ b/crates/portuale/src/pretend/standalone_actions.rs
+@@ -1,5 +1,6 @@
+ //! The standalone actions: --resume, --config, --search, --check-news, --info, --clean, --rage-clean, --unmerge, --depclean, --prune.
+ 
++use crate::ebuild_phases::ShellBackend;
+ use crate::pretend::*;
+ use portage_profile::Config;
+ use portage_repo::RepoConfig;
+@@ -91,6 +92,117 @@ pub(crate) fn dispatch_standalone_actions(
+     // `--config <atom>`: run `pkg_config` for one installed package.
+     // Needs nothing from the resolved `config`; ignores `--pretend`.
+     // Portage: _emerge/actions.py, action_config
++    dispatch_queries(DispatchQueriesArgs {
++        config_action,
++        atom_args,
++        root,
++        shell,
++        debug,
++        ask,
++        color,
++        search_action,
++        repos,
++        searchdesc,
++        quiet,
++        fuzzy_search,
++        regex_search_auto,
++        search_similarity,
++        check_news,
++        config_root,
++        config,
++        info_action,
++        usepkg,
++        usepkgonly,
++        getbinpkg,
++        getbinpkgonly,
++        misspell_suggestions,
++        clean_action,
++        pretend,
++        rage_clean,
++        unmerge,
++        depclean,
++        verbose,
++        lib_check,
++        deselect_n,
++        prune,
++        nodeps,
++    })
++}
++
++/// The values [`dispatch_queries`] reads from its caller.
++pub(crate) struct DispatchQueriesArgs<'a> {
++    pub(crate) config_action: bool,
++    pub(crate) atom_args: &'a Vec<&'a str>,
++    pub(crate) root: &'a Path,
++    pub(crate) shell: ShellBackend,
++    pub(crate) debug: bool,
++    pub(crate) ask: bool,
++    pub(crate) color: &'a Colorizer,
++    pub(crate) search_action: bool,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) searchdesc: bool,
++    pub(crate) quiet: bool,
++    pub(crate) fuzzy_search: bool,
++    pub(crate) regex_search_auto: bool,
++    pub(crate) search_similarity: f64,
++    pub(crate) check_news: bool,
++    pub(crate) config_root: &'a Path,
++    pub(crate) config: &'a mut Config,
++    pub(crate) info_action: bool,
++    pub(crate) usepkg: bool,
++    pub(crate) usepkgonly: bool,
++    pub(crate) getbinpkg: bool,
++    pub(crate) getbinpkgonly: bool,
++    pub(crate) misspell_suggestions: bool,
++    pub(crate) clean_action: bool,
++    pub(crate) pretend: bool,
++    pub(crate) rage_clean: bool,
++    pub(crate) unmerge: bool,
++    pub(crate) depclean: bool,
++    pub(crate) verbose: bool,
++    pub(crate) lib_check: bool,
++    pub(crate) deselect_n: bool,
++    pub(crate) prune: bool,
++    pub(crate) nodeps: bool,
++}
++
++/// The query actions: config, search, news and info, then the cleaning and removal actions.
++pub(crate) fn dispatch_queries(args: DispatchQueriesArgs<'_>) -> Option<ExitCode> {
++    let DispatchQueriesArgs {
++        config_action,
++        atom_args,
++        root,
++        shell,
++        debug,
++        ask,
++        color,
++        search_action,
++        repos,
++        searchdesc,
++        quiet,
++        fuzzy_search,
++        regex_search_auto,
++        search_similarity,
++        check_news,
++        config_root,
++        config,
++        info_action,
++        usepkg,
++        usepkgonly,
++        getbinpkg,
++        getbinpkgonly,
++        misspell_suggestions,
++        clean_action,
++        pretend,
++        rage_clean,
++        unmerge,
++        depclean,
++        verbose,
++        lib_check,
++        deselect_n,
++        prune,
++        nodeps,
++    } = args;
+     if config_action {
+         return Some(run_config_action(RunConfigActionArgs {
+             atom_args,
+@@ -171,6 +283,78 @@ pub(crate) fn dispatch_standalone_actions(
+     }
+ 
+     // `--clean`: keep only the newest version per slot.
++    dispatch_maintenance(DispatchMaintenanceArgs {
++        clean_action,
++        atom_args,
++        root,
++        config_root,
++        pretend,
++        ask,
++        shell,
++        debug,
++        color,
++        quiet,
++        config,
++        repos,
++        rage_clean,
++        unmerge,
++        depclean,
++        verbose,
++        lib_check,
++        deselect_n,
++        prune,
++        nodeps,
++    })
++}
++
++/// The values [`dispatch_maintenance`] reads from its caller.
++pub(crate) struct DispatchMaintenanceArgs<'a> {
++    pub(crate) clean_action: bool,
++    pub(crate) atom_args: &'a Vec<&'a str>,
++    pub(crate) root: &'a Path,
++    pub(crate) config_root: &'a Path,
++    pub(crate) pretend: bool,
++    pub(crate) ask: bool,
++    pub(crate) shell: ShellBackend,
++    pub(crate) debug: bool,
++    pub(crate) color: &'a Colorizer,
++    pub(crate) quiet: bool,
++    pub(crate) config: &'a mut Config,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) rage_clean: bool,
++    pub(crate) unmerge: bool,
++    pub(crate) depclean: bool,
++    pub(crate) verbose: bool,
++    pub(crate) lib_check: bool,
++    pub(crate) deselect_n: bool,
++    pub(crate) prune: bool,
++    pub(crate) nodeps: bool,
++}
++
++/// The cleaning actions: clean and rage-clean, then the removal actions.
++pub(crate) fn dispatch_maintenance(args: DispatchMaintenanceArgs<'_>) -> Option<ExitCode> {
++    let DispatchMaintenanceArgs {
++        clean_action,
++        atom_args,
++        root,
++        config_root,
++        pretend,
++        ask,
++        shell,
++        debug,
++        color,
++        quiet,
++        config,
++        repos,
++        rage_clean,
++        unmerge,
++        depclean,
++        verbose,
++        lib_check,
++        deselect_n,
++        prune,
++        nodeps,
++    } = args;
+     if clean_action {
+         return Some(run_clean_pretend(RunCleanPretendArgs {
+             targets: atom_args,
+@@ -210,6 +394,72 @@ pub(crate) fn dispatch_standalone_actions(
+     // `--unmerge`/`-C`: the `@system` target support and system-profile
+     // check both need the resolved config, so dispatch before the
+     // ordinary resolve-graph path below.
++    dispatch_removal(DispatchRemovalArgs {
++        unmerge,
++        atom_args,
++        root,
++        config_root,
++        config,
++        repos,
++        pretend,
++        ask,
++        shell,
++        debug,
++        color,
++        quiet,
++        depclean,
++        verbose,
++        lib_check,
++        deselect_n,
++        prune,
++        nodeps,
++    })
++}
++
++/// The values [`dispatch_removal`] reads from its caller.
++pub(crate) struct DispatchRemovalArgs<'a> {
++    pub(crate) unmerge: bool,
++    pub(crate) atom_args: &'a Vec<&'a str>,
++    pub(crate) root: &'a Path,
++    pub(crate) config_root: &'a Path,
++    pub(crate) config: &'a mut Config,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) pretend: bool,
++    pub(crate) ask: bool,
++    pub(crate) shell: ShellBackend,
++    pub(crate) debug: bool,
++    pub(crate) color: &'a Colorizer,
++    pub(crate) quiet: bool,
++    pub(crate) depclean: bool,
++    pub(crate) verbose: bool,
++    pub(crate) lib_check: bool,
++    pub(crate) deselect_n: bool,
++    pub(crate) prune: bool,
++    pub(crate) nodeps: bool,
++}
++
++/// The removal actions: unmerge, depclean and prune.
++pub(crate) fn dispatch_removal(args: DispatchRemovalArgs<'_>) -> Option<ExitCode> {
++    let DispatchRemovalArgs {
++        unmerge,
++        atom_args,
++        root,
++        config_root,
++        config,
++        repos,
++        pretend,
++        ask,
++        shell,
++        debug,
++        color,
++        quiet,
++        depclean,
++        verbose,
++        lib_check,
++        deselect_n,
++        prune,
++        nodeps,
++    } = args;
+     if unmerge {
+         // `pretend` last: without it, `run_unmerge_pretend` really
+         // removes the selected packages after the display.
