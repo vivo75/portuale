@@ -1,0 +1,268 @@
+diff --git a/crates/portuale/src/pretend/display/tree.rs b/crates/portuale/src/pretend/display/tree.rs
+index 4161fc71..7233d1ac 100644
+--- a/crates/portuale/src/pretend/display/tree.rs
++++ b/crates/portuale/src/pretend/display/tree.rs
+@@ -64,14 +64,6 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
+         force_sizes,
+         circular,
+     } = args;
+-    /// One node of the display graph: an entry, or a satisfied blocker
+-    /// row `entries[owner].blockers[index]`.
+-    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+-    enum TreeNode {
+-        Entry(usize),
+-        Blocker { owner: usize, index: usize },
+-    }
+-
+     // `children` = Portage's `child_nodes`, `parents` = its `parent_nodes`.
+     // Insertion order is edge order, which `--unordered-display` preserves.
+     let mut node_order: Vec<TreeNode> = Vec::new();
+@@ -197,121 +189,6 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
+         .map(|(i, _)| TreeNode::Entry(i))
+         .collect();
+ 
+-    fn children_of(children: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
+-        children.get(&n).map_or(&[][..], Vec::as_slice)
+-    }
+-    fn parents_of(parents: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
+-        parents.get(&n).map_or(&[][..], Vec::as_slice)
+-    }
+-
+-    // Portage's `_unordered_tree_display`: DFS from every root (no parents)
+-    // in graph insertion order, each node once.
+-    fn unordered_walk(
+-        roots: &[TreeNode],
+-        children: &HashMap<TreeNode, Vec<TreeNode>>,
+-        seen: &mut HashSet<TreeNode>,
+-        out: &mut Vec<(TreeNode, usize, bool)>,
+-    ) {
+-        fn print_node(
+-            node: TreeNode,
+-            depth: usize,
+-            children: &HashMap<TreeNode, Vec<TreeNode>>,
+-            seen: &mut HashSet<TreeNode>,
+-            out: &mut Vec<(TreeNode, usize, bool)>,
+-        ) {
+-            if !seen.insert(node) {
+-                return;
+-            }
+-            out.push((node, depth, true));
+-            for &child in children_of(children, node) {
+-                print_node(child, depth + 1, children, seen, out);
+-            }
+-        }
+-        for &root in roots {
+-            print_node(root, 0, children, seen, out);
+-        }
+-    }
+-
+-    // Portage's `_ordered_tree_display`: walk the reversed list; a node that
+-    // is a child of the current chain continues it, otherwise `add_parents`
+-    // fills the ancestor chain in first (`ordered = false` renders `nomerge`).
+-    /// Arguments of [`add_parents`].
+-    struct AddParentsArgs<'a> {
+-        current: TreeNode,
+-        ordered: bool,
+-        children: &'a HashMap<TreeNode, Vec<TreeNode>>,
+-        parents: &'a HashMap<TreeNode, Vec<TreeNode>>,
+-        set_nodes: &'a HashSet<TreeNode>,
+-        traversed: &'a mut HashSet<TreeNode>,
+-        shown_edges: &'a mut HashSet<(TreeNode, TreeNode)>,
+-        tree_nodes: &'a mut Vec<TreeNode>,
+-        out: &'a mut Vec<(TreeNode, usize, bool)>,
+-    }
+-
+-    fn add_parents(args: AddParentsArgs<'_>) {
+-        let AddParentsArgs {
+-            current,
+-            ordered,
+-            children,
+-            parents,
+-            set_nodes,
+-            traversed,
+-            shown_edges,
+-            tree_nodes,
+-            out,
+-        } = args;
+-        let parent_nodes: &[TreeNode] = if !set_nodes.contains(&current) {
+-            parents_of(parents, current)
+-        } else {
+-            &[]
+-        };
+-        if !parent_nodes.is_empty() {
+-            let child_nodes: HashSet<TreeNode> =
+-                children_of(children, current).iter().copied().collect();
+-            let mut selected: Option<TreeNode> = None;
+-            for &node in parent_nodes {
+-                if !traversed.contains(&node) && !child_nodes.contains(&node) {
+-                    let edge = (current, node);
+-                    if shown_edges.contains(&edge) {
+-                        continue;
+-                    }
+-                    selected = Some(node);
+-                    break;
+-                }
+-            }
+-            if selected.is_none() {
+-                // A direct cycle is unavoidable.
+-                for &node in parent_nodes {
+-                    if !traversed.contains(&node) {
+-                        let edge = (current, node);
+-                        if shown_edges.contains(&edge) {
+-                            continue;
+-                        }
+-                        selected = Some(node);
+-                        break;
+-                    }
+-                }
+-            }
+-            if let Some(parent) = selected {
+-                shown_edges.insert((current, parent));
+-                traversed.insert(parent);
+-                add_parents(AddParentsArgs {
+-                    current: parent,
+-                    ordered: false,
+-                    children,
+-                    parents,
+-                    set_nodes,
+-                    traversed,
+-                    shown_edges,
+-                    tree_nodes,
+-                    out,
+-                });
+-            }
+-        }
+-        out.push((current, tree_nodes.len(), ordered));
+-        tree_nodes.push(current);
+-    }
+-
+     let mut display: Vec<(TreeNode, usize, bool)> = Vec::new();
+     if unordered_display {
+         let mut seen: HashSet<TreeNode> = HashSet::new();
+@@ -442,3 +319,126 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
+     }
+     rendered
+ }
++
++/// One node of the display graph: an entry, or a satisfied blocker
++/// row `entries[owner].blockers[index]`.
++#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
++enum TreeNode {
++    Entry(usize),
++    Blocker { owner: usize, index: usize },
++}
++
++fn children_of(children: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
++    children.get(&n).map_or(&[][..], Vec::as_slice)
++}
++fn parents_of(parents: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
++    parents.get(&n).map_or(&[][..], Vec::as_slice)
++}
++
++// Portage's `_unordered_tree_display`: DFS from every root (no parents)
++// in graph insertion order, each node once.
++fn unordered_walk(
++    roots: &[TreeNode],
++    children: &HashMap<TreeNode, Vec<TreeNode>>,
++    seen: &mut HashSet<TreeNode>,
++    out: &mut Vec<(TreeNode, usize, bool)>,
++) {
++    fn print_node(
++        node: TreeNode,
++        depth: usize,
++        children: &HashMap<TreeNode, Vec<TreeNode>>,
++        seen: &mut HashSet<TreeNode>,
++        out: &mut Vec<(TreeNode, usize, bool)>,
++    ) {
++        if !seen.insert(node) {
++            return;
++        }
++        out.push((node, depth, true));
++        for &child in children_of(children, node) {
++            print_node(child, depth + 1, children, seen, out);
++        }
++    }
++    for &root in roots {
++        print_node(root, 0, children, seen, out);
++    }
++}
++
++// Portage's `_ordered_tree_display`: walk the reversed list; a node that
++// is a child of the current chain continues it, otherwise `add_parents`
++// fills the ancestor chain in first (`ordered = false` renders `nomerge`).
++/// Arguments of [`add_parents`].
++struct AddParentsArgs<'a> {
++    current: TreeNode,
++    ordered: bool,
++    children: &'a HashMap<TreeNode, Vec<TreeNode>>,
++    parents: &'a HashMap<TreeNode, Vec<TreeNode>>,
++    set_nodes: &'a HashSet<TreeNode>,
++    traversed: &'a mut HashSet<TreeNode>,
++    shown_edges: &'a mut HashSet<(TreeNode, TreeNode)>,
++    tree_nodes: &'a mut Vec<TreeNode>,
++    out: &'a mut Vec<(TreeNode, usize, bool)>,
++}
++
++fn add_parents(args: AddParentsArgs<'_>) {
++    let AddParentsArgs {
++        current,
++        ordered,
++        children,
++        parents,
++        set_nodes,
++        traversed,
++        shown_edges,
++        tree_nodes,
++        out,
++    } = args;
++    let parent_nodes: &[TreeNode] = if !set_nodes.contains(&current) {
++        parents_of(parents, current)
++    } else {
++        &[]
++    };
++    if !parent_nodes.is_empty() {
++        let child_nodes: HashSet<TreeNode> =
++            children_of(children, current).iter().copied().collect();
++        let mut selected: Option<TreeNode> = None;
++        for &node in parent_nodes {
++            if !traversed.contains(&node) && !child_nodes.contains(&node) {
++                let edge = (current, node);
++                if shown_edges.contains(&edge) {
++                    continue;
++                }
++                selected = Some(node);
++                break;
++            }
++        }
++        if selected.is_none() {
++            // A direct cycle is unavoidable.
++            for &node in parent_nodes {
++                if !traversed.contains(&node) {
++                    let edge = (current, node);
++                    if shown_edges.contains(&edge) {
++                        continue;
++                    }
++                    selected = Some(node);
++                    break;
++                }
++            }
++        }
++        if let Some(parent) = selected {
++            shown_edges.insert((current, parent));
++            traversed.insert(parent);
++            add_parents(AddParentsArgs {
++                current: parent,
++                ordered: false,
++                children,
++                parents,
++                set_nodes,
++                traversed,
++                shown_edges,
++                tree_nodes,
++                out,
++            });
++        }
++    }
++    out.push((current, tree_nodes.len(), ordered));
++    tree_nodes.push(current);
++}

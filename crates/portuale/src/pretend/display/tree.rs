@@ -1,6 +1,9 @@
 //! The `--tree` display.
 
 use crate::pretend::*;
+use portage_repo::MaskedDepReport;
+use portage_repo::PlainMissDepReport;
+use portage_repo::UseUnsatDepReport;
 
 /// Arguments of [`print_tree`].
 pub(crate) struct PrintTreeArgs<'a> {
@@ -64,14 +67,6 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         force_sizes,
         circular,
     } = args;
-    /// One node of the display graph: an entry, or a satisfied blocker
-    /// row `entries[owner].blockers[index]`.
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-    enum TreeNode {
-        Entry(usize),
-        Blocker { owner: usize, index: usize },
-    }
-
     // `children` = Portage's `child_nodes`, `parents` = its `parent_nodes`.
     // Insertion order is edge order, which `--unordered-display` preserves.
     let mut node_order: Vec<TreeNode> = Vec::new();
@@ -197,168 +192,13 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         .map(|(i, _)| TreeNode::Entry(i))
         .collect();
 
-    fn children_of(children: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
-        children.get(&n).map_or(&[][..], Vec::as_slice)
-    }
-    fn parents_of(parents: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
-        parents.get(&n).map_or(&[][..], Vec::as_slice)
-    }
-
-    // Portage's `_unordered_tree_display`: DFS from every root (no parents)
-    // in graph insertion order, each node once.
-    fn unordered_walk(
-        roots: &[TreeNode],
-        children: &HashMap<TreeNode, Vec<TreeNode>>,
-        seen: &mut HashSet<TreeNode>,
-        out: &mut Vec<(TreeNode, usize, bool)>,
-    ) {
-        fn print_node(
-            node: TreeNode,
-            depth: usize,
-            children: &HashMap<TreeNode, Vec<TreeNode>>,
-            seen: &mut HashSet<TreeNode>,
-            out: &mut Vec<(TreeNode, usize, bool)>,
-        ) {
-            if !seen.insert(node) {
-                return;
-            }
-            out.push((node, depth, true));
-            for &child in children_of(children, node) {
-                print_node(child, depth + 1, children, seen, out);
-            }
-        }
-        for &root in roots {
-            print_node(root, 0, children, seen, out);
-        }
-    }
-
-    // Portage's `_ordered_tree_display`: walk the reversed list; a node that
-    // is a child of the current chain continues it, otherwise `add_parents`
-    // fills the ancestor chain in first (`ordered = false` renders `nomerge`).
-    /// Arguments of [`add_parents`].
-    struct AddParentsArgs<'a> {
-        current: TreeNode,
-        ordered: bool,
-        children: &'a HashMap<TreeNode, Vec<TreeNode>>,
-        parents: &'a HashMap<TreeNode, Vec<TreeNode>>,
-        set_nodes: &'a HashSet<TreeNode>,
-        traversed: &'a mut HashSet<TreeNode>,
-        shown_edges: &'a mut HashSet<(TreeNode, TreeNode)>,
-        tree_nodes: &'a mut Vec<TreeNode>,
-        out: &'a mut Vec<(TreeNode, usize, bool)>,
-    }
-
-    fn add_parents(args: AddParentsArgs<'_>) {
-        let AddParentsArgs {
-            current,
-            ordered,
-            children,
-            parents,
-            set_nodes,
-            traversed,
-            shown_edges,
-            tree_nodes,
-            out,
-        } = args;
-        let parent_nodes: &[TreeNode] = if !set_nodes.contains(&current) {
-            parents_of(parents, current)
-        } else {
-            &[]
-        };
-        if !parent_nodes.is_empty() {
-            let child_nodes: HashSet<TreeNode> =
-                children_of(children, current).iter().copied().collect();
-            let mut selected: Option<TreeNode> = None;
-            for &node in parent_nodes {
-                if !traversed.contains(&node) && !child_nodes.contains(&node) {
-                    let edge = (current, node);
-                    if shown_edges.contains(&edge) {
-                        continue;
-                    }
-                    selected = Some(node);
-                    break;
-                }
-            }
-            if selected.is_none() {
-                // A direct cycle is unavoidable.
-                for &node in parent_nodes {
-                    if !traversed.contains(&node) {
-                        let edge = (current, node);
-                        if shown_edges.contains(&edge) {
-                            continue;
-                        }
-                        selected = Some(node);
-                        break;
-                    }
-                }
-            }
-            if let Some(parent) = selected {
-                shown_edges.insert((current, parent));
-                traversed.insert(parent);
-                add_parents(AddParentsArgs {
-                    current: parent,
-                    ordered: false,
-                    children,
-                    parents,
-                    set_nodes,
-                    traversed,
-                    shown_edges,
-                    tree_nodes,
-                    out,
-                });
-            }
-        }
-        out.push((current, tree_nodes.len(), ordered));
-        tree_nodes.push(current);
-    }
-
-    let mut display: Vec<(TreeNode, usize, bool)> = Vec::new();
-    if unordered_display {
-        let mut seen: HashSet<TreeNode> = HashSet::new();
-        let roots: Vec<TreeNode> = node_order
-            .iter()
-            .copied()
-            .filter(|&n| parents_of(&parents, n).is_empty())
-            .collect();
-        unordered_walk(&roots, &children, &mut seen, &mut display);
-        // Any node the DFS never reached (e.g. a cycle's remainder) is
-        // appended flat, so nothing is silently lost.
-        for &n in &node_order {
-            if !seen.contains(&n) {
-                display.push((n, 0, true));
-            }
-        }
-    } else {
-        let mut tree_nodes: Vec<TreeNode> = Vec::new();
-        let mut shown_edges: HashSet<(TreeNode, TreeNode)> = HashSet::new();
-        for &x in node_order.iter().rev() {
-            let mut depth = tree_nodes.len();
-            while depth > 0 && !children_of(&children, tree_nodes[depth - 1]).contains(&x) {
-                depth -= 1;
-            }
-            if depth > 0 {
-                tree_nodes.truncate(depth);
-                let parent = tree_nodes[depth - 1];
-                tree_nodes.push(x);
-                display.push((x, depth, true));
-                shown_edges.insert((x, parent));
-            } else {
-                let mut traversed: HashSet<TreeNode> = HashSet::from([x]);
-                tree_nodes.clear();
-                add_parents(AddParentsArgs {
-                    current: x,
-                    ordered: true,
-                    children: &children,
-                    parents: &parents,
-                    set_nodes: &set_nodes,
-                    traversed: &mut traversed,
-                    shown_edges: &mut shown_edges,
-                    tree_nodes: &mut tree_nodes,
-                    out: &mut display,
-                });
-            }
-        }
-    }
+    let mut display = unordered_display_order(
+        unordered_display,
+        &node_order,
+        &parents,
+        &children,
+        &set_nodes,
+    );
 
     // Portage's `_prune_tree_display`.
     let mut last_merge_depth = 0usize;
@@ -384,6 +224,137 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
             display.remove(i);
         }
     }
+
+    render_tree_rows(RenderTreeRowsArgs {
+        display,
+        entries,
+        root,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        verbose,
+        quiet,
+        alphabetical,
+        running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        blocker_lines,
+        masked_deps,
+        use_unsat_deps,
+        plain_miss_deps,
+        force_sizes,
+        circular,
+    })
+}
+
+/// Build the display list of an unordered tree: a walk from every root, each node once.
+pub(crate) fn unordered_display_order(
+    unordered_display: bool,
+    node_order: &[TreeNode],
+    parents: &HashMap<TreeNode, Vec<TreeNode>>,
+    children: &HashMap<TreeNode, Vec<TreeNode>>,
+    set_nodes: &HashSet<TreeNode>,
+) -> Vec<(TreeNode, usize, bool)> {
+    let mut display: Vec<(TreeNode, usize, bool)> = Vec::new();
+    if unordered_display {
+        let mut seen: HashSet<TreeNode> = HashSet::new();
+        let roots: Vec<TreeNode> = node_order
+            .iter()
+            .copied()
+            .filter(|&n| parents_of(parents, n).is_empty())
+            .collect();
+        unordered_walk(&roots, children, &mut seen, &mut display);
+        // Any node the DFS never reached (e.g. a cycle's remainder) is
+        // appended flat, so nothing is silently lost.
+        for &n in node_order {
+            if !seen.contains(&n) {
+                display.push((n, 0, true));
+            }
+        }
+    } else {
+        let mut tree_nodes: Vec<TreeNode> = Vec::new();
+        let mut shown_edges: HashSet<(TreeNode, TreeNode)> = HashSet::new();
+        for &x in node_order.iter().rev() {
+            let mut depth = tree_nodes.len();
+            while depth > 0 && !children_of(children, tree_nodes[depth - 1]).contains(&x) {
+                depth -= 1;
+            }
+            if depth > 0 {
+                tree_nodes.truncate(depth);
+                let parent = tree_nodes[depth - 1];
+                tree_nodes.push(x);
+                display.push((x, depth, true));
+                shown_edges.insert((x, parent));
+            } else {
+                let mut traversed: HashSet<TreeNode> = HashSet::from([x]);
+                tree_nodes.clear();
+                add_parents(AddParentsArgs {
+                    current: x,
+                    ordered: true,
+                    children,
+                    parents,
+                    set_nodes,
+                    traversed: &mut traversed,
+                    shown_edges: &mut shown_edges,
+                    tree_nodes: &mut tree_nodes,
+                    out: &mut display,
+                });
+            }
+        }
+    }
+    display
+}
+
+/// The values [`render_tree_rows`] reads from its caller.
+pub(crate) struct RenderTreeRowsArgs<'a> {
+    pub(crate) display: Vec<(TreeNode, usize, bool)>,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) onlydeps: bool,
+    pub(crate) oneshot: bool,
+    pub(crate) verbose: bool,
+    pub(crate) quiet: bool,
+    pub(crate) alphabetical: bool,
+    pub(crate) running_root: Option<&'a Path>,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) system_atoms: &'a [String],
+    pub(crate) world_atoms: &'a [String],
+    pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
+    pub(crate) blocker_lines: &'a mut Vec<String>,
+    pub(crate) masked_deps: &'a [MaskedDepReport],
+    pub(crate) use_unsat_deps: &'a [UseUnsatDepReport],
+    pub(crate) plain_miss_deps: &'a [PlainMissDepReport],
+    pub(crate) force_sizes: bool,
+    pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+}
+
+/// Print each displayed node of the tree and return which entries were rendered at which depth.
+pub(crate) fn render_tree_rows(args: RenderTreeRowsArgs<'_>) -> Vec<(usize, bool)> {
+    let RenderTreeRowsArgs {
+        display,
+        entries,
+        root,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        verbose,
+        quiet,
+        alphabetical,
+        running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        blocker_lines,
+        masked_deps,
+        use_unsat_deps,
+        plain_miss_deps,
+        force_sizes,
+        circular,
+    } = args;
 
     let mut rendered: Vec<(usize, bool)> = Vec::new();
     for (node, depth, ordered) in display {
@@ -441,4 +412,127 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
         }
     }
     rendered
+}
+
+/// One node of the display graph: an entry, or a satisfied blocker
+/// row `entries[owner].blockers[index]`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum TreeNode {
+    Entry(usize),
+    Blocker { owner: usize, index: usize },
+}
+
+fn children_of(children: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
+    children.get(&n).map_or(&[][..], Vec::as_slice)
+}
+fn parents_of(parents: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
+    parents.get(&n).map_or(&[][..], Vec::as_slice)
+}
+
+// Portage's `_unordered_tree_display`: DFS from every root (no parents)
+// in graph insertion order, each node once.
+fn unordered_walk(
+    roots: &[TreeNode],
+    children: &HashMap<TreeNode, Vec<TreeNode>>,
+    seen: &mut HashSet<TreeNode>,
+    out: &mut Vec<(TreeNode, usize, bool)>,
+) {
+    fn print_node(
+        node: TreeNode,
+        depth: usize,
+        children: &HashMap<TreeNode, Vec<TreeNode>>,
+        seen: &mut HashSet<TreeNode>,
+        out: &mut Vec<(TreeNode, usize, bool)>,
+    ) {
+        if !seen.insert(node) {
+            return;
+        }
+        out.push((node, depth, true));
+        for &child in children_of(children, node) {
+            print_node(child, depth + 1, children, seen, out);
+        }
+    }
+    for &root in roots {
+        print_node(root, 0, children, seen, out);
+    }
+}
+
+// Portage's `_ordered_tree_display`: walk the reversed list; a node that
+// is a child of the current chain continues it, otherwise `add_parents`
+// fills the ancestor chain in first (`ordered = false` renders `nomerge`).
+/// Arguments of [`add_parents`].
+struct AddParentsArgs<'a> {
+    current: TreeNode,
+    ordered: bool,
+    children: &'a HashMap<TreeNode, Vec<TreeNode>>,
+    parents: &'a HashMap<TreeNode, Vec<TreeNode>>,
+    set_nodes: &'a HashSet<TreeNode>,
+    traversed: &'a mut HashSet<TreeNode>,
+    shown_edges: &'a mut HashSet<(TreeNode, TreeNode)>,
+    tree_nodes: &'a mut Vec<TreeNode>,
+    out: &'a mut Vec<(TreeNode, usize, bool)>,
+}
+
+fn add_parents(args: AddParentsArgs<'_>) {
+    let AddParentsArgs {
+        current,
+        ordered,
+        children,
+        parents,
+        set_nodes,
+        traversed,
+        shown_edges,
+        tree_nodes,
+        out,
+    } = args;
+    let parent_nodes: &[TreeNode] = if !set_nodes.contains(&current) {
+        parents_of(parents, current)
+    } else {
+        &[]
+    };
+    if !parent_nodes.is_empty() {
+        let child_nodes: HashSet<TreeNode> =
+            children_of(children, current).iter().copied().collect();
+        let mut selected: Option<TreeNode> = None;
+        for &node in parent_nodes {
+            if !traversed.contains(&node) && !child_nodes.contains(&node) {
+                let edge = (current, node);
+                if shown_edges.contains(&edge) {
+                    continue;
+                }
+                selected = Some(node);
+                break;
+            }
+        }
+        if selected.is_none() {
+            // A direct cycle is unavoidable.
+            for &node in parent_nodes {
+                if !traversed.contains(&node) {
+                    let edge = (current, node);
+                    if shown_edges.contains(&edge) {
+                        continue;
+                    }
+                    selected = Some(node);
+                    break;
+                }
+            }
+        }
+        if let Some(parent) = selected {
+            shown_edges.insert((current, parent));
+            traversed.insert(parent);
+            add_parents(AddParentsArgs {
+                current: parent,
+                ordered: false,
+                children,
+                parents,
+                set_nodes,
+                traversed,
+                shown_edges,
+                tree_nodes,
+                out,
+            });
+        }
+    }
+    out.push((current, tree_nodes.len(), ordered));
+    tree_nodes.push(current);
 }
