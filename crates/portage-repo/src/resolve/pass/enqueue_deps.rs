@@ -26,7 +26,6 @@ pub(crate) struct EnqueueEntryDepsArgs<'a> {
 pub(crate) struct SelectDepTokensOut {
     pub(crate) onlydeps_blanks_runtime: bool,
     pub(crate) onlydeps_blanks_idepend: bool,
-    pub(crate) eapi_has_idepend: bool,
     pub(crate) tokens: Vec<String>,
 }
 
@@ -51,15 +50,11 @@ pub(crate) fn select_dep_tokens(
     // stay. Inert without `--onlydeps`. Portage: depgraph.py, _add_pkg_deps
     let onlydeps_blanks_runtime = ctx.onlydeps && depth == 0 && !ctx.onlydeps_with_rdeps;
     let onlydeps_blanks_idepend = onlydeps_blanks_runtime && !ctx.onlydeps_with_ideps;
-    // Below EAPI 8 `IDEPEND` never reaches metadata, for ebuild and binary
-    // alike (missing `EAPI` defaults to `"0"`).
-    // Portage: bin/ebuild.sh (depend phase), eapi.py
-    let eapi_has_idepend =
-        md5_dict::eapi_has_idepend(metadata.get("EAPI").map(String::as_str).unwrap_or("0"));
+    // `IDEPEND` reads presence-based (see `onlydeps_walk_dep_key`): no EAPI
+    // gate here. Portage: depgraph.py, _add_pkg_deps
     let keep_key = |key: &&str| {
         onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
             key,
-            eapi_has_idepend,
             onlydeps_blanks_runtime,
             onlydeps_blanks_idepend,
         })
@@ -76,7 +71,7 @@ pub(crate) fn select_dep_tokens(
     };
     // No per-package alloc on the hot path when nothing is blanked.
     let filtered_keys: Vec<&str>;
-    let dep_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+    let dep_keys: &[&str] = if onlydeps_blanks_runtime {
         filtered_keys = base_keys.iter().copied().filter(keep_key).collect();
         &filtered_keys
     } else {
@@ -93,7 +88,6 @@ pub(crate) fn select_dep_tokens(
     SelectDepTokensOut {
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
-        eapi_has_idepend,
         tokens,
     }
 }
@@ -108,7 +102,6 @@ pub(crate) struct RecordMergeOrderDepsArgs<'a> {
     pub(crate) entry_idx: usize,
     pub(crate) onlydeps_blanks_runtime: bool,
     pub(crate) onlydeps_blanks_idepend: bool,
-    pub(crate) eapi_has_idepend: bool,
 }
 
 /// Record the entry's merge-order dep edges, cut to the running-root scope.
@@ -125,12 +118,10 @@ pub(crate) fn record_merge_order_deps(args: RecordMergeOrderDepsArgs<'_>) {
         entry_idx,
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
-        eapi_has_idepend,
     } = args;
     let keep_key = |key: &&str| {
         onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
             key,
-            eapi_has_idepend,
             onlydeps_blanks_runtime,
             onlydeps_blanks_idepend,
         })
@@ -156,7 +147,7 @@ pub(crate) fn record_merge_order_deps(args: RecordMergeOrderDepsArgs<'_>) {
     };
     // Blanked keys stay out of the merge-order digraph too.
     let filtered_order_keys: Vec<&str>;
-    let portage_order_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+    let portage_order_keys: &[&str] = if onlydeps_blanks_runtime {
         filtered_order_keys = base_order_keys.iter().copied().filter(keep_key).collect();
         &filtered_order_keys
     } else {
@@ -209,7 +200,6 @@ pub(crate) struct ClassifyDepAtomsArgs<'a> {
     pub(crate) use_flags: &'a HashSet<String>,
     pub(crate) onlydeps_blanks_runtime: bool,
     pub(crate) onlydeps_blanks_idepend: bool,
-    pub(crate) eapi_has_idepend: bool,
 }
 
 /// Per-edge build-time/run-time classification for the merge-order sort
@@ -223,7 +213,6 @@ pub(crate) fn classify_dep_atoms(args: ClassifyDepAtomsArgs<'_>) -> ClassifyDepA
         use_flags,
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
-        eapi_has_idepend,
     } = args;
     let flatten_keys = |keys: &[&str]| -> HashSet<String> {
         let joined: String = keys
@@ -248,7 +237,6 @@ pub(crate) fn classify_dep_atoms(args: ClassifyDepAtomsArgs<'_>) -> ClassifyDepA
     let runtime_keys: &[&str] = onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
-        eapi_has_idepend,
     });
     let runtime_atoms = flatten_keys(runtime_keys);
     // A running `BDEPEND` edge is soft (bootstrap cycles terminate); a running
@@ -784,7 +772,6 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     let SelectDepTokensOut {
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
-        eapi_has_idepend,
         tokens,
     } = select_dep_tokens(ctx, depth, metadata, candidate_source);
     record_merge_order_deps(RecordMergeOrderDepsArgs {
@@ -796,7 +783,6 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         entry_idx,
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
-        eapi_has_idepend,
     });
     let ClassifyDepAtomsOut {
         buildtime_atoms,
@@ -809,7 +795,6 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         use_flags,
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
-        eapi_has_idepend,
     });
     let scope = prepare_disjunction_scope(PrepareDisjunctionScopeArgs {
         ctx,

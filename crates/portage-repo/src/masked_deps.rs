@@ -298,6 +298,12 @@ pub(crate) fn candidate_masking_reasons(
     package: &str,
     config: &portage_profile::Config,
 ) -> Vec<String> {
+    // Portage checks the EAPI gate before every other mask and reports it
+    // alone (`EAPI <eapi>`); nothing else about the candidate is read.
+    // Portage: getmaskingstatus.py
+    if !md5_dict::eapi_is_supported(&candidate.eapi) {
+        return vec![format!("EAPI {}", candidate.eapi)];
+    }
     let candidate_str = format!(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
@@ -497,14 +503,26 @@ fn masked_rows_for_pool(
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for c in masked {
-        let output_cpv = format!(
-            "{}/{}-{}::{}",
-            atom.category, atom.package, c.version, c.repo_name
-        );
+        let reasons = candidate_masking_reasons(c, &atom.category, &atom.package, config);
+        // Portage prints an EAPI-masked binary row bare (verified live on
+        // 3.0.82.2: `- app-misc/t348-d-good-1 (masked by: EAPI 99)` even
+        // with `REPO: t348` in the stanza, while a keyword-masked twin
+        // prints `::t348`), and omits `::repo` whenever the row's repo is
+        // unknown (`show_masked_packages` appends it only `if repo:`).
+        let repo_unknown = c.repo_name.is_empty() || c.repo_name == "__unknown__";
+        let eapi_masked_binary =
+            c.source == CandidateSource::Binary && reasons.iter().any(|r| r.starts_with("EAPI "));
+        let output_cpv = if eapi_masked_binary || repo_unknown {
+            format!("{}/{}-{}", atom.category, atom.package, c.version)
+        } else {
+            format!(
+                "{}/{}-{}::{}",
+                atom.category, atom.package, c.version, c.repo_name
+            )
+        };
         if !seen.insert(output_cpv.clone()) {
             continue;
         }
-        let reasons = candidate_masking_reasons(c, &atom.category, &atom.package, config);
         out.push((output_cpv, reasons));
     }
     Some(out)
@@ -543,6 +561,14 @@ pub(crate) fn all_binary_masked_report(
 }
 
 fn render_all_masked_block(xinfo: &str, masked: Vec<(String, Vec<String>)>) -> Option<String> {
+    // Portage prints the upgrade paragraph whenever any listed row is
+    // EAPI-masked (`show_masked_packages` returns `have_eapi_mask`, and
+    // the caller wraps `portage.const.EAPI` — `9` here — at 75 columns;
+    // the two lines below are that wrap, byte for byte).
+    // Portage: _emerge/depgraph.py, show_masked_packages
+    let have_eapi_mask = masked
+        .iter()
+        .any(|(_, reasons)| reasons.iter().any(|r| r.starts_with("EAPI ")));
     let mut out = format!(
         "\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n\
          !!! One of the following masked packages is required to complete your request:\n"
@@ -553,9 +579,22 @@ fn render_all_masked_block(xinfo: &str, masked: Vec<(String, Vec<String>)>) -> O
             reasons.join(", ")
         ));
     }
+    if have_eapi_mask {
+        out.push_str(eapi_mask_upgrade_notice());
+    }
     out.push_str(
         "\nFor more information, see the MASKED PACKAGES section in the emerge\n\
          man page or refer to the Gentoo Handbook.\n",
     );
     Some(out)
+}
+
+/// Portage's EAPI-masked upgrade paragraph (the leading blank line
+/// included): printed after the masked rows whenever any of them is
+/// EAPI-masked, before the `MASKED PACKAGES` footer. Shared by the
+/// top-level block above and the dependency-path masked disclosures.
+/// Portage: _emerge/depgraph.py, _show_unsatisfied_dep (`have_eapi_mask`)
+pub fn eapi_mask_upgrade_notice() -> &'static str {
+    "\nThe current version of portage supports EAPI '9'. You must upgrade to a\n\
+     newer version of portage before EAPI masked packages can be installed.\n"
 }

@@ -123,6 +123,13 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
                     for (cpv, reasons) in &report.masked {
                         println!("- {cpv} (masked by: {})", reasons.join(", "));
                     }
+                    if report
+                        .masked
+                        .iter()
+                        .any(|(_, reasons)| reasons.iter().any(|r| r.starts_with("EAPI ")))
+                    {
+                        print!("{}", portage_repo::eapi_mask_upgrade_notice());
+                    }
                     println!();
                     for (node, ty) in &report.chain {
                         println!("(dependency required by \"{node}\" [{ty}])");

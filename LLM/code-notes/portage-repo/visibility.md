@@ -66,3 +66,12 @@ Keyword, mask and license visibility of a candidate.
 
 ## fn keyword_masked_only / mask_masked_only / license_masked_only
 - Backlog #153: an invalid package is never visible-except-X.
+
+## fn is_visible_uncached
+- #348 S5: an unsupported `candidate.eapi` masks outright, before every other check (ebuild and binary alike — a binpkg with unknown index `EAPI` never merges). Portage: `getmaskingstatus.py` (EAPI gate first).
+
+## fn visible_with_relax
+- #348 S5: the EAPI mask never relaxes (Portage offers no unmask for it).
+
+## fn keyword_masked_only / mask_masked_only / license_masked_only
+- #348 S5: an EAPI-masked candidate is never "masked by X alone" (its reason is the lone `EAPI <eapi>`); `use_masked_only` needs no guard (it goes through `is_visible`).

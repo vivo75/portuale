@@ -58,33 +58,12 @@ use std::path::{Path, PathBuf};
 
 /// The ebuild's EAPI per PMS 7.3.1: the `EAPI=` assignment on the first
 /// non-blank, non-comment line only; anything else (including no match) is `"0"`.
-/// PMS's `\1` backreference has no Rust-`regex` equivalent (`_parse_eapi_ebuild_head`),
-/// so the three quote shapes are explicit alternatives.
+/// The single copy lives in `portage_dep` (`parse_eapi_head`); the head
+/// pattern, the no-backref shape and the whitespace-in-quotes behaviour are
+/// documented there.
+// Portage: lib/portage/__init__.py, _parse_eapi_ebuild_head
 fn parse_eapi(ebuild_text: &str) -> String {
-    // PMS's `\1` backreference isn't expressible without backrefs (guaranteed
-    // linear-time matching), so three explicit alternatives instead.
-    let eapi_re = Regex::new(
-        r#"^[ \t]*EAPI=(?:"([A-Za-z0-9+_.-]*)"|'([A-Za-z0-9+_.-]*)'|([A-Za-z0-9+_.-]*))[ \t]*([ \t]#.*)?$"#,
-    )
-    .expect("static regex is valid");
-    let comment_or_blank = Regex::new(r"^\s*(#.*)?$").expect("static regex is valid");
-
-    for line in ebuild_text.lines() {
-        if comment_or_blank.is_match(line) {
-            continue;
-        }
-        return match eapi_re.captures(line) {
-            Some(caps) => caps
-                .get(1)
-                .or_else(|| caps.get(2))
-                .or_else(|| caps.get(3))
-                .map(|m| m.as_str())
-                .unwrap_or("")
-                .to_string(),
-            None => "0".to_string(),
-        };
-    }
-    "0".to_string()
+    portage_dep::eapi::parse_eapi_head(ebuild_text)
 }
 
 /// Portage's `_pkgsplit`-derived `P`/`PN`/`PV`/`PR`/`PVR`, except `PN` is the

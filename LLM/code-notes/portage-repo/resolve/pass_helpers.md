@@ -29,3 +29,9 @@ Small helpers of the resolver pass.
 - For every same-cp top-level atom (blockers skipped) the helper speculatively re-resolves it exactly as the walk would (`is_top_level = true`, same flags and constraints) and keeps its `AlreadyInstalled` verdicts as `(version, main slot)` pairs -- the instances the arguments pin in the graph, whatever the walk order.
 - Portage only keeps it when it satisfies the dep atom (the "only keeps it when it satisfies the dep atom" half of `atom.match`).
 - The dep atom matching the pinned `cat/pkg-ver:slot/sub` string (Portage's `atom.match`, the "only keeps it when it satisfies the dep atom" half), and -- for `[use]` deps -- the pinned instance's own recorded vdb `USE` satisfying them (the same check [`dependency_avoid_update_candidate`] runs).
+
+## fn onlydeps_walk_dep_key
+- #348 S5: the resolve-time EAPI gate on `IDEPEND` is gone — the key reads presence-based. Portage gates only at generation (`bin/ebuild.sh` unsets it below EAPI 8, so a consistent cache never carries a stale one) and walks whatever string the cache holds (`edepend[k] = metadata[k]`, `depgraph.py:4155-4157`; S0 cell `d-eapimm-pret`: file EAPI 8, cache EAPI 7 + `IDEPEND`, Portage pulls the dep). The `eapi_has_idepend` plumbing (`OnlydepsWalkDepKeyArgs`, `OnlydepsRuntimeKeysArgs`, `select_dep_tokens`, `record_merge_order_deps`, `classify_dep_atoms`) went with it.
+
+## fn onlydeps_walk_dep_key
+- #348 S5: the resolve-time `eapi_has_idepend` gate is removed — `IDEPEND` reads presence-based (see `enqueue_deps.md`). Only the `--onlydeps` blanking remains here.

@@ -153,6 +153,18 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
+    // An ebuild whose EAPI Portage itself does not know refuses before
+    // anything else runs — including the dry-run stubs: `doebuild_environment`
+    // raises `UnsupportedAPIException` before any phase dispatch, and
+    // `clean` is no exception. `unmerge` (and the other never-implemented
+    // stubs) stay ungated: unmerging an installed package with a corrupt
+    // EAPI must keep working, and there is no oracle for the rest.
+    // Portage: doebuild.py:565-572, exception.py:228-230
+    if let Some(refusal) = unsupported_eapi_refusal(ebuild_file, &commands) {
+        eprintln!("{refusal}");
+        return ExitCode::from(1);
+    }
+
     // Real execution only when EVERY requested command is implemented
     // for real: no partial-real-execution ambiguity for mixed lists
     // (e.g. `compile clean`). A purely dry-run request keeps the stub.
@@ -424,6 +436,66 @@ pub fn run(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Portage's `UnsupportedAPIException` text for an ebuild whose EAPI this
+/// portage does not know, wrapped the way `bin/ebuild` prints it: `!!! `
+/// plus a greedy word-wrap at 70 columns (verified byte-for-byte against
+/// Portage 3.0.82.2 for `EAPI=99` and `EAPI=7_alpha` below).
+// Portage: exception.py:228-230
+fn unsupported_eapi_message(cpv: &str, eapi: &str) -> String {
+    // `exception.py` strips leading dashes from the echoed EAPI.
+    let eapi = eapi.trim_start_matches('-');
+    let msg = format!(
+        "Unable to do any operations on '{cpv}', since its EAPI is higher than \
+         this portage version's. Please upgrade to a portage version that \
+         supports EAPI '{eapi}'."
+    );
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in msg.split(' ') {
+        if !current.is_empty() && current.len() + 1 + word.len() > 70 {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    format!("!!! {}", lines.join("\n!!! "))
+}
+
+/// The `ebuild <file> <commands>` refusal for an unsupported head EAPI:
+/// `Some` with the exact Portage text when any requested command is one
+/// Portage would run through `doebuild_environment` (the real phase chain,
+/// the standalone phases, `merge`/`qmerge`/`package`, and `clean`, which
+/// Portage refuses too) and the file's head EAPI is non-empty and
+/// unsupported. `None` otherwise — unreadable files, supported EAPIs,
+/// `unmerge` and the other dry-run stubs keep their existing behaviour.
+fn unsupported_eapi_refusal(ebuild_file: &str, commands: &[&str]) -> Option<String> {
+    if !commands.iter().any(|cmd| {
+        ebuild_phases::is_phase_command(cmd)
+            || ebuild_phases::is_standalone_phase_command(cmd)
+            || ebuild_merge::is_merge_command(cmd)
+            || ebuild_merge::is_qmerge_command(cmd)
+            || ebuild_package::is_package_command(cmd)
+            || *cmd == "clean"
+    }) {
+        return None;
+    }
+    let text = std::fs::read_to_string(ebuild_file).ok()?;
+    let eapi = portage_dep::eapi::parse_eapi_head(&text);
+    if eapi.is_empty() || portage_repo::md5_dict::eapi_is_supported(&eapi) {
+        return None;
+    }
+    // Portage's `mycpv`: grandparent category plus the file stem.
+    let path = std::path::Path::new(ebuild_file);
+    let pf = path.file_stem()?.to_str()?;
+    let category = path.parent()?.parent()?.file_name()?.to_str()?;
+    Some(unsupported_eapi_message(&format!("{category}/{pf}"), &eapi))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,6 +591,24 @@ mod tests {
     fn rejects_a_missing_command() {
         let code = run(&args(&["foo-1.0.ebuild"]));
         assert_eq!(code, ExitCode::from(2));
+    }
+
+    #[test]
+    fn unsupported_eapi_message_matches_portage_byte_for_byte() {
+        // Portage 3.0.82.2, host cells `d-eapi99-clean` / `d-eapi7a-clean`:
+        // `ebuild <f> clean` on an unsupported EAPI, rc 1, stderr exactly this.
+        assert_eq!(
+            unsupported_eapi_message("app-misc/t348-d-eapi99-1", "99"),
+            "!!! Unable to do any operations on 'app-misc/t348-d-eapi99-1', since its\n\
+             !!! EAPI is higher than this portage version's. Please upgrade to a\n\
+             !!! portage version that supports EAPI '99'."
+        );
+        assert_eq!(
+            unsupported_eapi_message("app-misc/t348-d-eapi7a-1", "7_alpha"),
+            "!!! Unable to do any operations on 'app-misc/t348-d-eapi7a-1', since its\n\
+             !!! EAPI is higher than this portage version's. Please upgrade to a\n\
+             !!! portage version that supports EAPI '7_alpha'."
+        );
     }
 
     #[test]

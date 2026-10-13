@@ -27,3 +27,9 @@ Ebuild candidates for a package.
 
 ## fn list_candidates
 - Mirrors Portage `portdbapi.cp_list`, gathering from every configured repo, not just the first one with the package. V1 doesn't distinguish "stale cache" from "doesn't exist" -- both mean "not visible". The resolver calls this per cp per graph-walk visit (visibility, keyword, slot-operator, changed-deps and parent-scan checks all re-list the same cp); each build is a `read_dir` plus a dozen owned strings per version. Sound because nothing here ever writes an `.ebuild` (`--regen` only touches `metadata/md5-cache`, in a separate process) -- same reasoning as `read_md5_cache`. Keyed by a hash of the repo locations + `cp`.
+
+## fn unsupported_head_eapi
+- #348 S5: `Some` for a non-empty, unsupported head EAPI (`99`, `7_alpha`), else `None`. An empty head (`EAPI=`) is a broken ebuild Portage drops outright (metadata phase rc 1), never an EAPI mask. Portage: `_parse_eapi_ebuild_head`, `eapi_is_supported`.
+
+## fn list_candidates_uncached
+- #348 S5: when `repo_aux_metadata` fails, an unsupported head EAPI still yields a minimal masked candidate (version, repo, EAPI only — Portage calls EAPI-masked metadata "mostly useless", `show_masked_packages`), so the walk reports `(masked by: EAPI 99)` instead of `no ebuilds to satisfy`. Anything else stays invisible. The EAPI gate itself lives in `is_visible`/`candidate_masking_reasons`; the slot defaults to `0` (unread for masked rows). Portage: `getmaskingstatus.py`, `porttree.py:_pull_valid_cache`.

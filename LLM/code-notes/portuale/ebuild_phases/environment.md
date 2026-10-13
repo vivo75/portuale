@@ -40,3 +40,6 @@ One package's build environment: paths, directories, fake DISTDIR.
 
 ## fn installed_marker
 - Portage `${PORTAGE_BUILDDIR}/.installed`: real, unmodified `bin/phase-functions.sh`'s own `__dyn_install` already creates this unconditionally on a successful `src_install` (`phase-functions.sh:653`, no `FEATURES` gate at all) -- this portuale writes nothing new for it, real phase execution already leaves it behind as a side effect (confirmed empirically: a Portage `ebuild <file> install` run via portuale's own binary leaves `.installed` in place). `ebuild_merge::run_qmerge` is the one caller: Portage `doebuild()`'s own `mydo == "qmerge"` branch checks for exactly this marker before skipping the install phase.
+
+## fn compute_environment
+- #348 S5: the phase `EAPI` prefers the normalized md5-cache value over the head parse (same `repo_aux_metadata` read that feeds `INHERITED`, so no extra I/O): Portage's phase EAPI comes from the cache (`setcpv` → `aux_get`), and the metadata writer word-splits every value — so `EAPI=" 8"` builds as `8`, while the head parse reads `"0"` and used to export `EAPI=0` (helpers gated off → `eapply_user: command not found`, S0 cells `d-eapisp-*`). Outside a repo (or with no `EAPI` key) the head value stands. Portage: `doebuild.py:doebuild_environment` → `setcpv`.

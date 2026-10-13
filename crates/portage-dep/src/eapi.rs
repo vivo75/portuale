@@ -30,6 +30,42 @@ pub fn eapi_is_supported(eapi: &str) -> bool {
         || DEPRECATED_EAPIS.contains(&eapi)
 }
 
+/// The ebuild's EAPI per PMS 7.3.1: the `EAPI=` assignment on the first
+/// non-blank, non-comment line only; anything else (including no match) is `"0"`.
+/// PMS's `\1` backreference has no Rust-`regex` equivalent
+/// (`_parse_eapi_ebuild_head`), so the three quote shapes are explicit
+/// alternatives. Notably `EAPI=" 8"` (whitespace inside the quotes) matches
+/// neither Portage's head pattern nor this one: both read `"0"` here, and the
+/// normalized value (`8`) only surfaces once the ebuild is sourced (the
+/// metadata writer word-splits every value, `bin/ebuild.sh`).
+// Portage: lib/portage/__init__.py, _parse_eapi_ebuild_head
+pub fn parse_eapi_head(ebuild_text: &str) -> String {
+    // PMS's `\1` backreference isn't expressible without backrefs (guaranteed
+    // linear-time matching), so three explicit alternatives instead.
+    let eapi_re = regex::Regex::new(
+        r#"^[ \t]*EAPI=(?:"([A-Za-z0-9+_.-]*)"|'([A-Za-z0-9+_.-]*)'|([A-Za-z0-9+_.-]*))[ \t]*([ \t]#.*)?$"#,
+    )
+    .expect("static regex is valid");
+    let comment_or_blank = regex::Regex::new(r"^\s*(#.*)?$").expect("static regex is valid");
+
+    for line in ebuild_text.lines() {
+        if comment_or_blank.is_match(line) {
+            continue;
+        }
+        return match eapi_re.captures(line) {
+            Some(caps) => caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .or_else(|| caps.get(3))
+                .map(|m| m.as_str())
+                .unwrap_or("")
+                .to_string(),
+            None => "0".to_string(),
+        };
+    }
+    "0".to_string()
+}
+
 /// Portage's `ValueError` from `Eapi.__init__` (eapi.py:224-229) for a
 /// *supported* spelling it cannot parse (`3_pre1`, padded `" 8"`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,6 +387,25 @@ mod tests {
             assert_eq!(eapi_attrs(arg).unwrap(), want, "EAPI {eapi:?}");
         }
         assert!(ok_cells.is_empty(), "extra TSV rows: {ok_cells:?}");
+    }
+
+    #[test]
+    fn head_parse_reads_the_first_real_lines_own_assignment() {
+        // Portage: lib/portage/__init__.py, _parse_eapi_ebuild_head
+        // (`_pms_eapi_re`); re-checked live 2026-10-13 for the
+        // whitespace-in-quotes row (`EAPI=" 8"` matches neither pattern:
+        // both read `"0"`, the `8` surfacing only after sourcing).
+        assert_eq!(parse_eapi_head("EAPI=8\nDESCRIPTION=x\n"), "8");
+        assert_eq!(parse_eapi_head("EAPI=\"8\"\n"), "8");
+        assert_eq!(parse_eapi_head("EAPI='8'\n"), "8");
+        assert_eq!(parse_eapi_head("# comment\n\nEAPI=7\n"), "7");
+        assert_eq!(parse_eapi_head("EAPI=8 # trailing comment\n"), "8");
+        assert_eq!(parse_eapi_head("EAPI=7_alpha\n"), "7_alpha");
+        assert_eq!(parse_eapi_head("EAPI=99\n"), "99");
+        assert_eq!(parse_eapi_head("DESCRIPTION=x\nEAPI=8\n"), "0");
+        assert_eq!(parse_eapi_head("EAPI=\" 8\"\n"), "0");
+        assert_eq!(parse_eapi_head(""), "0");
+        assert_eq!(parse_eapi_head("# only comments\n"), "0");
     }
 
     #[test]

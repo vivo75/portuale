@@ -271,6 +271,14 @@ pub(crate) fn is_visible_uncached(
 ) -> bool {
     #[cfg(test)]
     IV_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
+    // An EAPI Portage itself does not know masks the candidate outright,
+    // before every other check (its `getmaskingstatus` EAPI reason needs
+    // only the head value). Ebuild and binary alike: a binpkg whose index
+    // `EAPI` is unknown never merges.
+    // Portage: getmaskingstatus.py
+    if !md5_dict::eapi_is_supported(&candidate.eapi) {
+        return false;
+    }
     let candidate_str = format!(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
@@ -369,6 +377,11 @@ pub(crate) fn visible_with_relax(args: VisibleWithRelaxArgs<'_>) -> bool {
         relax_keywords,
         relax_masks,
     } = args;
+    // The EAPI mask is never relaxed (Portage offers no unmask for it).
+    // Portage: getmaskingstatus.py
+    if !md5_dict::eapi_is_supported(&candidate.eapi) {
+        return false;
+    }
     let candidate_str = format!(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
@@ -454,6 +467,11 @@ pub(crate) fn keyword_masked_only(
     package: &str,
     config: &portage_profile::Config,
 ) -> bool {
+    // "Masked by KEYWORDS alone" never holds for an EAPI-masked candidate
+    // (its mask reason is the lone `EAPI <eapi>`).
+    if !md5_dict::eapi_is_supported(&candidate.eapi) {
+        return false;
+    }
     let candidate_str = format!(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
@@ -533,6 +551,10 @@ pub(crate) fn mask_masked_only(
     package: &str,
     config: &portage_profile::Config,
 ) -> bool {
+    // Same EAPI-mask exclusivity as `keyword_masked_only` above.
+    if !md5_dict::eapi_is_supported(&candidate.eapi) {
+        return false;
+    }
     let candidate_str = format!(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
@@ -625,6 +647,10 @@ pub(crate) fn license_masked_only(
     package: &str,
     config: &portage_profile::Config,
 ) -> bool {
+    // Same EAPI-mask exclusivity as `keyword_masked_only` above.
+    if !md5_dict::eapi_is_supported(&candidate.eapi) {
+        return false;
+    }
     let candidate_str = format!(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name

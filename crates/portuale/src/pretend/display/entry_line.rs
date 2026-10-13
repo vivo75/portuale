@@ -511,6 +511,13 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
                 for (cpv, reasons) in &report.masked {
                     eprintln!("- {cpv} (masked by: {})", reasons.join(", "));
                 }
+                if report
+                    .masked
+                    .iter()
+                    .any(|(_, reasons)| reasons.iter().any(|r| r.starts_with("EAPI ")))
+                {
+                    eprint!("{}", portage_repo::eapi_mask_upgrade_notice());
+                }
                 eprintln!();
                 for (node, ty) in &report.chain {
                     eprintln!("(dependency required by \"{node}\" [{ty}])");

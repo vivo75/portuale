@@ -31,3 +31,9 @@ The `ebuild <file> <command>` CLI: option/command recognition plus real executio
 ## tests
 - "clean" is a Portage command (from `doebuild()`'s `validcommands`) that portuale still only dry-runs -- exactly the case the stub still covers. `--shell` tests only exercise CLI parsing for the same reason.
 - Help is checked before anything else is parsed, so it wins even alongside a valid invocation or an unrecognized option.
+
+## fn unsupported_eapi_refusal
+- #348 S5: an ebuild whose head EAPI Portage does not know refuses with the exact `UnsupportedAPIException` text before anything runs — phase chain, standalone phases, `merge`/`qmerge`/`package`, and `clean` (which Portage refuses too, S0 cell `d-eapi99-clean`). `unmerge` and the other dry-run stubs stay ungated (unmerging a corrupt-EAPI install must keep working; no oracle for the rest). The gate fires before the privilege check. Portage: `doebuild.py:565-572`, `exception.py:228-230`.
+
+## fn unsupported_eapi_message
+- #348 S5: `Unable to do any operations on '<cpv>', since ... supports EAPI '<eapi>'.` with leading dashes stripped from the EAPI (`exception.py`) and `bin/ebuild`'s `!!! ` + word-wrap at 70 columns (byte-verified against 3.0.82.2 for `99` and `7_alpha`).

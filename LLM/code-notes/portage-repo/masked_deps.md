@@ -64,3 +64,12 @@ Masked-dependency reports.
 
 ## fn all_binary_masked_report
 - S4 (#341): binary-only twin of `all_masked_report` for `--usepkgonly`, where ebuilds are ineligible rather than masked. When every version-matching binary is masked the block lists the binary rows (Portage's `_show_unsatisfied_dep` over the binary pool; S0 cell `F-binary-rewritten` shows the binary row under the same "All ebuilds" header). `None` when no binary matches or some match is visible. Wired only at the top-level unsatisfied step; `--usepkg` (ebuild fallback alive) keeps the ebuild-side report. Remote-binrepo rows are not included (no S0 cell).
+
+## fn candidate_masking_reasons
+- #348 S5: an unsupported EAPI reports the lone `EAPI <eapi>` reason before every other mask (raw head/index value: `EAPI 99`, `EAPI 7_alpha`). Portage: `getmaskingstatus.py`.
+
+## fn masked_rows_for_pool
+- #348 S5: an EAPI-masked *binary* row prints the bare cpv (verified live on host 3.0.82.2: `- app-misc/t348-d-good-1 (masked by: EAPI 99)` even with `REPO: t348` in the stanza, while a keyword-masked twin prints `::t348`); ebuild EAPI rows keep `::repo`. Unknown-repo rows omit the suffix either way (`show_masked_packages` appends it only `if repo:`).
+
+## fn render_all_masked_block
+- #348 S5: when any row is EAPI-masked, the upgrade paragraph follows the rows (`The current version of portage supports EAPI '9'. ...`, `portage.const.EAPI == 9` wrapped at 75 columns — the two lines are that wrap verbatim), before the `MASKED PACKAGES` footer. Shared text: `eapi_mask_upgrade_notice` (also used by the dependency-path disclosures). Portage: `_emerge/depgraph.py:_show_unsatisfied_dep` (`have_eapi_mask`).

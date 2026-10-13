@@ -4,12 +4,11 @@ use super::*;
 /// runtime edge, not `buildtime_hard`.
 #[test]
 fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
-    // EAPI 8 with ideps kept classifies; blanked ideps (or EAPI 7) classifies nothing.
+    // Ideps kept classifies; blanked ideps classifies nothing.
     assert_eq!(
         onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
             onlydeps_blanks_runtime: true,
             onlydeps_blanks_idepend: false,
-            eapi_has_idepend: true
         }),
         &["IDEPEND"][..]
     );
@@ -17,15 +16,6 @@ fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
         onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
             onlydeps_blanks_runtime: true,
             onlydeps_blanks_idepend: true,
-            eapi_has_idepend: true
-        })
-        .is_empty()
-    );
-    assert!(
-        onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
-            onlydeps_blanks_runtime: true,
-            onlydeps_blanks_idepend: false,
-            eapi_has_idepend: false
         })
         .is_empty()
     );
@@ -68,28 +58,21 @@ fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
     );
 }
 
-/// The read-time EAPI gate drops `IDEPEND` from an EAPI-7 cache
-/// entry that still carries it.
+/// `IDEPEND` reads presence-based: even an EAPI-7 cache entry that still
+/// carries the key is walked (Portage gates only at generation time and
+/// reads `edepend[k] = metadata[k]` at resolve time).
+/// Portage: _emerge/depgraph.py, _add_pkg_deps (S0 cell `d-eapimm-pret`).
 #[test]
-fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
-    // EAPI 7 drops IDEPEND even with no onlydeps blanking.
-    assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
-        key: "IDEPEND",
-        eapi_has_idepend: false,
-        onlydeps_blanks_runtime: false,
-        onlydeps_blanks_idepend: false
-    }));
-    // EAPI 8 keeps it under the default flags ...
+fn idepend_walks_presence_based_whatever_the_cached_eapi() {
+    // IDEPEND walks under the default flags, whatever the EAPI was.
     assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
         key: "IDEPEND",
-        eapi_has_idepend: true,
         onlydeps_blanks_runtime: false,
         onlydeps_blanks_idepend: false
     }));
-    // ... but rdeps=n + ideps=n drops it there too.
+    // ... but rdeps=n + ideps=n drops it.
     assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
         key: "IDEPEND",
-        eapi_has_idepend: true,
         onlydeps_blanks_runtime: true,
         onlydeps_blanks_idepend: true
     }));
@@ -97,25 +80,21 @@ fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
     // rdeps blank only.
     assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
         key: "DEPEND",
-        eapi_has_idepend: false,
         onlydeps_blanks_runtime: true,
         onlydeps_blanks_idepend: true
     }));
     assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
         key: "BDEPEND",
-        eapi_has_idepend: false,
         onlydeps_blanks_runtime: true,
         onlydeps_blanks_idepend: true
     }));
     assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
         key: "RDEPEND",
-        eapi_has_idepend: false,
         onlydeps_blanks_runtime: true,
         onlydeps_blanks_idepend: true
     }));
     assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
         key: "RDEPEND",
-        eapi_has_idepend: true,
         onlydeps_blanks_runtime: false,
         onlydeps_blanks_idepend: false
     }));

@@ -22,24 +22,25 @@ pub(crate) fn overlay_use_want(
 /// Arguments of [`onlydeps_walk_dep_key`].
 pub(crate) struct OnlydepsWalkDepKeyArgs<'a> {
     pub(crate) key: &'a str,
-    pub(crate) eapi_has_idepend: bool,
     pub(crate) onlydeps_blanks_runtime: bool,
     pub(crate) onlydeps_blanks_idepend: bool,
 }
 
-/// Whether one dep key is walked for this package. The read-time gate drops a
-/// stale `IDEPEND` under EAPI 8, and blanks an `--onlydeps` root's `RDEPEND`/
-/// `PDEPEND` (plus `IDEPEND` unless kept) the same way. Extracted so the
+/// Whether one dep key is walked for this package. `IDEPEND` reads
+/// presence-based: Portage gates it only at generation time (`bin/ebuild.sh`
+/// unsets it below EAPI 8, so a consistent cache never carries a stale one)
+/// and walks whatever string the cache holds at resolve time without an EAPI
+/// check (`edepend[k] = metadata[k]`). An `--onlydeps` root's `RDEPEND`/
+/// `PDEPEND` (plus `IDEPEND` unless kept) blank the same way. Extracted so the
 /// adversarial-cache path stays pinned.
-// Portage: eapi.py; depgraph.py
+// Portage: _emerge/depgraph.py, _add_pkg_deps
 pub(crate) fn onlydeps_walk_dep_key(args: OnlydepsWalkDepKeyArgs<'_>) -> bool {
     let OnlydepsWalkDepKeyArgs {
         key,
-        eapi_has_idepend,
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
     } = args;
-    if key == "IDEPEND" && (!eapi_has_idepend || onlydeps_blanks_idepend) {
+    if key == "IDEPEND" && onlydeps_blanks_idepend {
         return false;
     }
     if onlydeps_blanks_runtime && (key == "RDEPEND" || key == "PDEPEND") {
@@ -52,7 +53,6 @@ pub(crate) fn onlydeps_walk_dep_key(args: OnlydepsWalkDepKeyArgs<'_>) -> bool {
 pub(crate) struct OnlydepsRuntimeKeysArgs {
     pub(crate) onlydeps_blanks_runtime: bool,
     pub(crate) onlydeps_blanks_idepend: bool,
-    pub(crate) eapi_has_idepend: bool,
 }
 
 /// Which run-time keys classify atoms as runtime edges for this package (an atom
@@ -63,15 +63,14 @@ pub(crate) fn onlydeps_runtime_keys(args: OnlydepsRuntimeKeysArgs) -> &'static [
     let OnlydepsRuntimeKeysArgs {
         onlydeps_blanks_runtime,
         onlydeps_blanks_idepend,
-        eapi_has_idepend,
     } = args;
     if onlydeps_blanks_runtime {
-        if onlydeps_blanks_idepend || !eapi_has_idepend {
+        if onlydeps_blanks_idepend {
             &[]
         } else {
             &["IDEPEND"]
         }
-    } else if onlydeps_blanks_idepend || !eapi_has_idepend {
+    } else if onlydeps_blanks_idepend {
         &["RDEPEND", "PDEPEND"]
     } else {
         &["RDEPEND", "PDEPEND", "IDEPEND"]

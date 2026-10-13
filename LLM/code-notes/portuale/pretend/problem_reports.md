@@ -46,3 +46,6 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 ## fn show_cycle_redisplay
 - The circular-dependency block shown again after the merge list.
 - The legacy (gate-off) re-display keeps the user-flagged rendering it always had; the forced-verbose display is the gated path's main list above (whose re-display is skipped as duplicative).
+
+## skipped-missing masked branch
+- #348 S5: when any masked row is EAPI-masked, the shared `eapi_mask_upgrade_notice` paragraph follows the rows (same rule as the top-level block). Portage: `_show_unsatisfied_dep` (`have_eapi_mask`).

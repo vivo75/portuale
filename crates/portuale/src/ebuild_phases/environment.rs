@@ -50,7 +50,7 @@ pub(crate) fn compute_environment(
 
     let ebuild_text = std::fs::read_to_string(&ebuild_abs)
         .map_err(|e| format!("{}: {e}", ebuild_abs.display()))?;
-    let eapi = parse_eapi(&ebuild_text);
+    let head_eapi = parse_eapi(&ebuild_text);
     let split = split_package(&ebuild_abs, package_dir_name)?;
 
     let portage_builddir = portage_tmpdir
@@ -60,20 +60,32 @@ pub(crate) fn compute_environment(
 
     // `INHERITED` is the md5-cache `_eclasses_` names in order (stored tab-separated
     // with md5s); older caches carry a plain space list. Absent outside a repo.
-    let inherited = repo_root_for(&pkg_dir)
-        .and_then(|repo_root| {
-            portage_repo::repo_aux_metadata(&repo_root, &category, &split.pf).ok()
-        })
-        .and_then(|md| {
-            if let Some(eclasses) = md.get("_eclasses_") {
-                let names: Vec<&str> = eclasses.split('\t').step_by(2).collect();
-                (!names.is_empty()).then(|| names.join(" "))
-            } else {
-                md.get("INHERITED")
-                    .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .filter(|s| !s.is_empty())
-            }
-        });
+    // The same entry also carries the normalized `EAPI`: Portage's phase EAPI
+    // comes from the cache (`setcpv` → `aux_get`), not the head parse, and the
+    // metadata writer word-splits every value (`echo ${!f}` in `bin/ebuild.sh`),
+    // so `EAPI=" 8"` builds as `8` — while the head parse reads `"0"` (the PMS
+    // head pattern matches neither). Outside a repo (or with no `EAPI` key)
+    // the head value stands.
+    // Portage: doebuild.py, doebuild_environment → setcpv
+    let aux = repo_root_for(&pkg_dir).and_then(|repo_root| {
+        portage_repo::repo_aux_metadata(&repo_root, &category, &split.pf).ok()
+    });
+    let inherited = aux.as_ref().and_then(|md| {
+        if let Some(eclasses) = md.get("_eclasses_") {
+            let names: Vec<&str> = eclasses.split('\t').step_by(2).collect();
+            (!names.is_empty()).then(|| names.join(" "))
+        } else {
+            md.get("INHERITED")
+                .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|s| !s.is_empty())
+        }
+    });
+    let eapi = aux
+        .as_ref()
+        .and_then(|md| md.get("EAPI"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(head_eapi);
 
     // `${PORTAGE_BUILDDIR}/files` is always a symlink to the repo `files/` dir,
     // even dangling: consumers fail loudly either way, and `clean`'s `rm -f`

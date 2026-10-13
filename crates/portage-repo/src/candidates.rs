@@ -56,6 +56,18 @@ pub struct Candidate {
     pub binary_deps: HashMap<String, String>,
 }
 
+/// The head EAPI of one ebuild file when Portage would mask by it: `Some`
+/// for a non-empty, unsupported head value (`99`, `7_alpha`), `None`
+/// otherwise (supported, empty, or unreadable — those stay on the
+/// metadata path). An empty head (`EAPI=`) is a broken ebuild Portage
+/// drops outright, never an EAPI mask.
+/// Portage: _parse_eapi_ebuild_head, eapi_is_supported
+pub(crate) fn unsupported_head_eapi(ebuild_path: &Path) -> Option<String> {
+    let text = fs::read_to_string(ebuild_path).ok()?;
+    let head = portage_dep::eapi::parse_eapi_head(&text);
+    (!head.is_empty() && !portage_dep::eapi::eapi_is_supported(&head)).then_some(head)
+}
+
 /// Accepts `<package>-<version>` only when the rest starts with a digit, so
 /// "foo" never absorbs a sibling "foo-bar-2.0" directory.
 pub(crate) fn strip_version_prefix<'a>(dir_name: &'a str, package: &str) -> Option<&'a str> {
@@ -144,6 +156,37 @@ pub(crate) fn list_candidates_uncached(
                 continue;
             };
             let Ok(metadata) = repo_aux_metadata(&repo.location, category, stem) else {
+                // No usable metadata: Portage still lists an unsupported-EAPI
+                // ebuild as a masked candidate (its `getmaskingstatus` EAPI
+                // reason needs only the head value); anything else stays
+                // invisible, as before. The head EAPI decides without
+                // running the depend phase.
+                // Portage: getmaskingstatus.py, porttree.py, _pull_valid_cache
+                if let Some(eapi) = unsupported_head_eapi(&pkg_dir.join(format!("{stem}.ebuild"))) {
+                    candidates.push(Candidate {
+                        version: version.to_string(),
+                        // Portage calls EAPI-masked metadata "mostly useless"
+                        // (no SLOT read): only version, repo and EAPI matter.
+                        // Portage: depgraph.py, show_masked_packages
+                        keywords: Vec::new(),
+                        slot: "0".to_string(),
+                        sub_slot: "0".to_string(),
+                        repo_location: repo.location.clone(),
+                        repo_priority: repo.priority,
+                        repo_name: repo.name.clone(),
+                        license: String::new(),
+                        iuse: String::new(),
+                        properties: String::new(),
+                        restrict: String::new(),
+                        source: CandidateSource::Ebuild,
+                        binary_use: None,
+                        remote: false,
+                        build_id: None,
+                        build_time: None,
+                        eapi,
+                        binary_deps: HashMap::new(),
+                    });
+                }
                 continue;
             };
             let keywords = metadata

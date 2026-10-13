@@ -224,8 +224,7 @@ fn binary_masked_report_lists_masked_binaries_like_the_ebuild_block() {
 
 /// An `=`+build-id `package.mask` line reports exactly the masked binary
 /// instance: the atom matches only the equal build-id, and the reasons
-/// name `package.mask`.
-/// Portage 3.0.82.2, host run 2026-10-12 (S9 oracle cell
+/// name `package.mask`./// Portage 3.0.82.2, host run 2026-10-12 (S9 oracle cell
 /// `H-bid-mask-atom-masked`, rc 1):
 /// `!!! All ebuilds that could satisfy "=dev-libs/t341-dep-1-2" …` with
 /// `- dev-libs/t341-dep-1::t341 (masked by: package.mask)`.
@@ -254,6 +253,114 @@ fn binary_masked_report_for_build_id_atom_lists_only_the_masked_instance() {
     .expect("the masked instance reports");
     assert!(
         report.contains("- dev-libs/x-1.0::t341 (masked by: package.mask)"),
+        "{report}"
+    );
+}
+
+/// An unsupported-EAPI candidate is invisible with the lone
+/// `EAPI <eapi>` reason — ebuild and binary alike — and the masked block
+/// carries Portage's upgrade paragraph.
+/// Portage 3.0.82.2, host S0 cells `d-eapi99-pret` (`- …::t348
+/// (masked by: EAPI 99)`) and `d-binpkg-eapi99` (binary row without
+/// `::repo`, same upgrade text).
+#[test]
+fn unsupported_eapi_candidate_masks_by_eapi_alone() {
+    let config = test_config();
+    let mut ebuild = candidate("1", &["amd64"]);
+    ebuild.eapi = "99".to_string();
+    assert!(!is_visible(&ebuild, "app-misc", "t348-d-eapi99", &config));
+    assert_eq!(
+        candidate_masking_reasons(&ebuild, "app-misc", "t348-d-eapi99", &config),
+        vec!["EAPI 99".to_string()]
+    );
+    let mut alpha = candidate("1", &["amd64"]);
+    alpha.eapi = "7_alpha".to_string();
+    assert_eq!(
+        candidate_masking_reasons(&alpha, "app-misc", "t348-d-eapi7a", &config),
+        vec!["EAPI 7_alpha".to_string()]
+    );
+    // The EAPI mask is exclusive: never "masked by KEYWORDS/mask alone",
+    // never relaxed.
+    assert!(!keyword_masked_only(
+        &ebuild,
+        "app-misc",
+        "t348-d-eapi99",
+        &config
+    ));
+    assert!(!mask_masked_only(
+        &ebuild,
+        "app-misc",
+        "t348-d-eapi99",
+        &config
+    ));
+    assert!(!license_masked_only(
+        &ebuild,
+        "app-misc",
+        "t348-d-eapi99",
+        &config
+    ));
+    assert!(!visible_with_relax(VisibleWithRelaxArgs {
+        candidate: &ebuild,
+        category: "app-misc",
+        package: "t348-d-eapi99",
+        config: &config,
+        relax_license: true,
+        relax_keywords: true,
+        relax_masks: true,
+    }));
+    // A binary with an unknown repo prints the bare cpv, like Portage.
+    let mut binary = ebuild.clone();
+    binary.source = CandidateSource::Binary;
+    binary.binary_deps = HashMap::new();
+    binary.binary_use = Some(HashSet::new());
+    binary.repo_name = "__unknown__".to_string();
+    let report = all_binary_masked_report(
+        std::slice::from_ref(&binary),
+        "=app-misc/t348-d-eapi99-1",
+        &config,
+        "\"=app-misc/t348-d-eapi99-1\"",
+    )
+    .expect("EAPI-masked binary reports");
+    assert!(
+        report.contains("- app-misc/t348-d-eapi99-1 (masked by: EAPI 99)\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains("The current version of portage supports EAPI '9'."),
+        "{report}"
+    );
+    // A repo-known EAPI-masked binary is bare too (host 3.0.82.2 prints
+    // `- app-misc/t348-d-good-1 (masked by: EAPI 99)` with `REPO: t348`
+    // in the stanza; a keyword-masked twin keeps `::t348`).    // A repo-known EAPI-masked binary is bare too (host 3.0.82.2 prints
+    // `- app-misc/t348-d-good-1 (masked by: EAPI 99)` with `REPO: t348`
+    // in the stanza; a keyword-masked twin keeps `::t348`).
+    binary.repo_name = "t348".to_string();
+    let report = all_binary_masked_report(
+        std::slice::from_ref(&binary),
+        "=app-misc/t348-d-eapi99-1",
+        &config,
+        "\"=app-misc/t348-d-eapi99-1\"",
+    )
+    .expect("EAPI-masked binary reports");
+    assert!(
+        report.contains("- app-misc/t348-d-eapi99-1 (masked by: EAPI 99)\n"),
+        "{report}"
+    );
+    // ... while a repo-known binary keeps its `::repo` suffix for any
+    // other mask (Portage prints `::t341` for the S0 `F-binary-rewritten`
+    // invalid-RDEPEND row).
+    binary.repo_name = "t348".to_string();
+    binary.eapi = "8".to_string();
+    binary.binary_deps = HashMap::from([("RDEPEND".to_string(), "dev-libs/x::gentoo".to_string())]);
+    let report = all_binary_masked_report(
+        std::slice::from_ref(&binary),
+        "=app-misc/t348-d-eapi99-1",
+        &config,
+        "\"=app-misc/t348-d-eapi99-1\"",
+    )
+    .expect("masked binary reports");
+    assert!(
+        report.contains("- app-misc/t348-d-eapi99-1::t348 (masked by: invalid:"),
         "{report}"
     );
 }
