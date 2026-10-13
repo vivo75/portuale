@@ -1,0 +1,55 @@
+diff --git a/crates/portage-repo/src/resolve/driver.rs b/crates/portage-repo/src/resolve/driver.rs
+index 7f288988..c76549d2 100644
+--- a/crates/portage-repo/src/resolve/driver.rs
++++ b/crates/portage-repo/src/resolve/driver.rs
+@@ -1,6 +1,7 @@
+ //! The backtracking loop: one pass per node, settle or feed back.
+ 
+ use crate::*;
++use portage_profile::Config;
+ 
+ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
+     // Portage `_backtrack_depgraph`: pop a node, run one pass, settle or
+@@ -220,7 +221,22 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult,
+     }
+     let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
+     let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
+-    let prune_unresolved = restarts > 0
++    let prune_unresolved = prune_unresolved_after_backtrack(restarts, &ctx, &best, &pass, config);
++    let mut result = assemble_result(rctx, &best, pass, config, restarts);
++    result.prune_unresolved = prune_unresolved;
++    result.backtrack_max = ctx.backtrack_max;
++    Ok(result)
++}
++
++/// Whether unresolved dependencies are pruned from the final result after a backtrack.
++pub(crate) fn prune_unresolved_after_backtrack(
++    restarts: u64,
++    ctx: &ResolveCtx<'_>,
++    best: &BacktrackParams,
++    pass: &PassResult,
++    config: &Config,
++) -> bool {
++    restarts > 0
+         && ctx.backtrack_max > 0
+         && !best.prune_rebuilds
+         && !best.slot_operator_replace_installed.is_empty()
+@@ -231,16 +247,12 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult,
+                 root: ctx.root,
+                 config,
+                 entries: &pass.entries,
+-                params: &best,
++                params: best,
+                 missing_args: &[],
+             });
+             !skipped.is_empty()
+                 || !missing.is_empty()
+                 || !full.is_empty()
+                 || !pass.skipped_updates.is_empty()
+-        };
+-    let mut result = assemble_result(rctx, &best, pass, config, restarts);
+-    result.prune_unresolved = prune_unresolved;
+-    result.backtrack_max = ctx.backtrack_max;
+-    Ok(result)
++        }
+ }

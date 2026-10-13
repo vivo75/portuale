@@ -187,6 +187,14 @@ pub fn find_repos_quiet(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
     find_repos_impl(config_root, false)
 }
 
+/// The raw `repos.conf` data of one repository, aligned by index with the
+/// repositories being built.
+struct SectionInfo {
+    section_name: String,
+    repos_conf_masters: Option<Vec<String>>,
+    repos_conf_aliases: Vec<String>,
+}
+
 /// [`find_repos`] without the user-facing section-name-mismatch line, for
 /// internal location-keyed lookups: the CLI layers already report a
 /// mismatch once, and repeating it on every internal probe is noise.
@@ -238,11 +246,6 @@ pub(crate) fn find_repos_impl(
     // First pass: one entry per `[section]` with a `location`. `sect` is
     // the parallel raw-data buffer, aligned with `repos` by index; the
     // `layout.conf` overrides and the name-mismatch check come after.
-    struct SectionInfo {
-        section_name: String,
-        repos_conf_masters: Option<Vec<String>>,
-        repos_conf_aliases: Vec<String>,
-    }
     let mut repos: Vec<RepoConfig> = Vec::new();
     let mut sect: Vec<SectionInfo> = Vec::new();
     for (name, kv) in &sections {
@@ -312,53 +315,7 @@ pub(crate) fn find_repos_impl(
         });
     }
 
-    // Second pass: each repo's `layout.conf` (`repo-name` overrides the
-    // name; `aliases` prepend before the `repos.conf` ones;
-    // `profile-formats` captured; `layout.conf` `masters` is the middle tier).
-    // Portage: repository/config.py.
-    let mut layout_masters: Vec<Option<Vec<String>>> = Vec::with_capacity(repos.len());
-    for (repo, s) in repos.iter_mut().zip(&sect) {
-        let layout = parse_layout_conf(&repo.location);
-        repo.profile_formats = layout
-            .get("profile-formats")
-            .map(|v| v.split_whitespace().map(String::from).collect())
-            .unwrap_or_default();
-        // Lowercase the whole value, split, then -- only when empty --
-        // auto-detect `md5-dict` before `pms` from directory presence. An
-        // explicit unknown format stays in the list.
-        let mut cache_formats: Vec<String> = layout
-            .get("cache-formats")
-            .map(|v| {
-                v.to_lowercase()
-                    .split_whitespace()
-                    .map(String::from)
-                    .collect()
-            })
-            .unwrap_or_default();
-        if cache_formats.is_empty() {
-            if repo.location.join("metadata/md5-cache").is_dir() {
-                cache_formats.push("md5-dict".to_string());
-            }
-            if repo.location.join("metadata/cache").is_dir() {
-                cache_formats.push("pms".to_string());
-            }
-        }
-        repo.cache_formats = cache_formats;
-        let mut aliases: Vec<String> = layout
-            .get("aliases")
-            .map(|v| v.split_whitespace().map(String::from).collect())
-            .unwrap_or_default();
-        aliases.extend(s.repos_conf_aliases.iter().cloned());
-        repo.aliases = aliases;
-        if let Some(new_name) = layout.get("repo-name").filter(|v| !v.is_empty()) {
-            repo.name = new_name.clone();
-        }
-        layout_masters.push(
-            layout
-                .get("masters")
-                .map(|v| v.split_whitespace().map(String::from).collect()),
-        );
-    }
+    let mut layout_masters = apply_layout_conf(&mut repos, &sect);
 
     // A repo whose resolved `name` differs from its `[section]` name is
     // dropped with an error -- unless the section name is one of its
@@ -440,4 +397,56 @@ pub(crate) fn find_repos_impl(
             .then_with(|| a.name.cmp(&b.name))
     });
     Ok(repos)
+}
+
+/// Read each repository's layout.conf: name, aliases, profile formats and masters.
+fn apply_layout_conf(repos: &mut [RepoConfig], sect: &[SectionInfo]) -> Vec<Option<Vec<String>>> {
+    // Second pass: each repo's `layout.conf` (`repo-name` overrides the
+    // name; `aliases` prepend before the `repos.conf` ones;
+    // `profile-formats` captured; `layout.conf` `masters` is the middle tier).
+    // Portage: repository/config.py.
+    let mut layout_masters: Vec<Option<Vec<String>>> = Vec::with_capacity(repos.len());
+    for (repo, s) in repos.iter_mut().zip(sect) {
+        let layout = parse_layout_conf(&repo.location);
+        repo.profile_formats = layout
+            .get("profile-formats")
+            .map(|v| v.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        // Lowercase the whole value, split, then -- only when empty --
+        // auto-detect `md5-dict` before `pms` from directory presence. An
+        // explicit unknown format stays in the list.
+        let mut cache_formats: Vec<String> = layout
+            .get("cache-formats")
+            .map(|v| {
+                v.to_lowercase()
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if cache_formats.is_empty() {
+            if repo.location.join("metadata/md5-cache").is_dir() {
+                cache_formats.push("md5-dict".to_string());
+            }
+            if repo.location.join("metadata/cache").is_dir() {
+                cache_formats.push("pms".to_string());
+            }
+        }
+        repo.cache_formats = cache_formats;
+        let mut aliases: Vec<String> = layout
+            .get("aliases")
+            .map(|v| v.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        aliases.extend(s.repos_conf_aliases.iter().cloned());
+        repo.aliases = aliases;
+        if let Some(new_name) = layout.get("repo-name").filter(|v| !v.is_empty()) {
+            repo.name = new_name.clone();
+        }
+        layout_masters.push(
+            layout
+                .get("masters")
+                .map(|v| v.split_whitespace().map(String::from).collect()),
+        );
+    }
+    layout_masters
 }
