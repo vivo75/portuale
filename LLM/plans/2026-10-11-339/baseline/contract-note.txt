@@ -1,0 +1,1 @@
+contract baseline: 3756 passed + this one passes once the stale ignored fixtures/var/db/pkg/dev-libs/pkginfopkg-1.0 (2026-10-11 leak) is removed

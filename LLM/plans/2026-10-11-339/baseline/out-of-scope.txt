@@ -1,0 +1,6 @@
+slot_operator_unsatisfied_probe_seeds_a_replacement_parent	crates/portage-repo/src/tests/unsat_probe.rs:8	348
+resolve_blockers_classifies_final_graph_matches_by_parent_operation	crates/portage-repo/src/tests/blockers.rs:538	294
+slot_conflict_abi_probe_rebuilds_the_built_parent	crates/portage-repo/src/tests/abi_probe.rs:6	246
+slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider	crates/portage-repo/src/tests/rebuild_scan.rs:253	241
+slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order	crates/portage-repo/src/tests/eliminate.rs:266	216
+violated_parent_flags_matches_portage_across_the_oracle_matrix	crates/portage-repo/src/tests/tests_195d.rs:58	208
