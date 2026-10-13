@@ -1,5 +1,13 @@
 # Functions over 200 code lines (backlog #339 input)
 
+> **Final state (2026-10-13):** this table is the input record of #339 and is not edited.
+> After slices R1-R12, D1-D6 and M1-M8 the only functions over 200 code lines are the six
+> test functions in `LLM/plans/2026-10-11-339/baseline/out-of-scope.txt` and
+> `graph_result_from_order` (open residue of #34 Task S6). Final list over 100 lines:
+> `LLM/plans/2026-10-11-339/lengths-final.tsv`; `python3 LLM/tools/fn_lengths.py | tail -1` reads
+> `over200 7 over150 62 over100 222 fns 5941`.
+
+
 Method: parsed with `syn` (throwaway cargo project in scratch dir, `span-locations`); length counts body lines strictly between the function's braces that are neither blank nor comment-only (`//`, `///`, `//!`, nested `/* */` aware; strings/chars/raw-strings lexed so markers inside them don't count). Cross-checked with an independent Python brace-matching counter: identical counts for all 40. Scope: `crates/*/src/**/*.rs` plus `crates/*/tests/**/*.rs` (450 files, 5610 fns, 0 parse failures).
 
 | lines | crate | file:line | fn |
