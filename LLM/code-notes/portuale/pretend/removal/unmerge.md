@@ -18,13 +18,17 @@
 - Set expansion: Portage's `root_config.sets[s].getAtoms()` / `_iter_atoms_for_pkg`. `@world`/`@selected`/`@system`/`@installed` are the built-in sets; anything else `@name` is a custom set file (recursively expanded, cycle-guarded). Portage's `root_config.setconfig.active` exclusion.
 - Header: Portage's `_unmerge_display` (`unmerge.py:195`) prints it only under `--pretend`/`--ask`, before the per-atom matching loop.
 - Accumulators: Portage's own `pkgmap` entry with its `selected`/`protected`/`omitted` sets; Portage's `unordered` dedup.
+- Removal: Portage's `unmerge()` (`unmerge.py:637-699`): once `_unmerge_display` returns EX_OK and we're not in `--pretend`, the packages are actually removed. The removal loop walks `pkgmap` in exactly the preview order.
+- Portage's `root_config.setconfig.active` -- the sets the user passed as `-C` targets. Excluded from the "still listed in package sets" check (their members are being removed from the set anyway).
+
+## fn select_unmerge_targets
 - The one package `unmerge` always refuses: Portage's `PORTAGE_PACKAGE_ATOM`.
 - Bare name: Portage's `vartree.dep_match` "null category" lookup; ambiguous is Portage's `AmbiguousPackageName`.
 - Omitted: Portage's `vartree.dep_match(cp)` minus selected/protected.
+
+## fn print_unmerge_selection
 - System warning: Portage's `_unmerge_display` `if not (protected or omitted) and cp in syslist`, to stderr (Portage's `writemsg_level(..., level=logging.WARNING)`).
 - `syslist = root_config.sets["system"].getAtoms()`.
-- Removal: Portage's `unmerge()` (`unmerge.py:637-699`): once `_unmerge_display` returns EX_OK and we're not in `--pretend`, the packages are actually removed. The removal loop walks `pkgmap` in exactly the preview order.
-- Portage's `root_config.setconfig.active` -- the sets the user passed as `-C` targets. Excluded from the "still listed in package sets" check (their members are being removed from the set anyway).
 - The "still listed in the following package sets" warning: a `selected` package that a user-editable set (reached via `world_sets`) still lists would be re-pulled on the next `@world` update, so it's flagged. Portage's `unmerge.py:421-441` suppresses the flag for a set when an installed *higher-versioned* instance of the same cp *in a different slot* also matches the set atom (`pkg.slot_atom != inst_pkg.slot_atom` after the `pkg >= inst_pkg` break -> "a newer version, other slot") -- removing this version leaves the set satisfied by that one.
 
 ## fn feature_enabled

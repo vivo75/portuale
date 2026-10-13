@@ -1,0 +1,324 @@
+diff --git a/crates/portuale/src/pretend/removal/unmerge.rs b/crates/portuale/src/pretend/removal/unmerge.rs
+index 1218cecb..bc8b2f8d 100644
+--- a/crates/portuale/src/pretend/removal/unmerge.rs
++++ b/crates/portuale/src/pretend/removal/unmerge.rs
+@@ -79,6 +79,15 @@ pub(crate) struct RunUnmergePretendArgs<'a> {
+     pub(crate) noinfo: bool,
+ }
+ 
++/// Per `(category, package)`: the selected and the protected versions.
++type PerCpSelection = HashMap<(String, String), (Vec<String>, Vec<String>)>;
++
++fn vercmp_key(a: &str, b: &str) -> std::cmp::Ordering {
++    portage_versions::vercmp(a, b)
++        .map(|c| c.cmp(&0))
++        .unwrap_or_else(|| a.cmp(b))
++}
++
+ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
+     let RunUnmergePretendArgs {
+         targets,
+@@ -164,74 +173,19 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
+     // atoms hitting the same cp merge. `all_selected` dedups a version
+     // picked by two atoms.
+     // Portage: unmerge.py, _unmerge_display
+-    let mut per_cp: HashMap<(String, String), (Vec<String>, Vec<String>)> = HashMap::new();
++    let mut per_cp: PerCpSelection = HashMap::new();
+     let mut all_selected: HashSet<(String, String, String)> = HashSet::new();
+     let mut order: Vec<(String, String)> = Vec::new();
+ 
+-    for atom_str in &expanded {
+-        // A bare name (no `/`) borrows its category from the vdb.
+-        // Ambiguous (installed under >1 category) is a hard error.
+-        // Portage: vartree.py, dep_match
+-        let matches: Vec<(String, String, String, String)> = if !atom_str.contains('/') {
+-            let mut found: Vec<(String, String, String, String)> = Vec::new();
+-            for (cat, pkg, version, slot) in installed_cp_versions(root) {
+-                if pkg == *atom_str {
+-                    found.push((cat, pkg, version, slot));
+-                }
+-            }
+-            let cats: HashSet<&String> = found.iter().map(|(c, _, _, _)| c).collect();
+-            if cats.len() > 1 {
+-                eprintln!(
+-                    "\n!!! The short package name \"{atom_str}\" is ambiguous. Please specify"
+-                );
+-                eprintln!("!!! one of the following fully-qualified package names instead:\n");
+-                let mut names: Vec<String> = cats
+-                    .into_iter()
+-                    .map(|c| format!("    {c}/{atom_str}"))
+-                    .collect();
+-                names.sort();
+-                for n in names {
+-                    println!("{n}");
+-                }
+-                return ExitCode::from(1);
+-            }
+-            found
+-        } else {
+-            let Some(atom) = parse_atom(atom_str) else {
+-                eprintln!("emerge: invalid atom {atom_str:?}");
+-                return ExitCode::from(1);
+-            };
+-            portage_repo::installed_candidates(root, &atom.category, &atom.package)
+-                .into_iter()
+-                .filter(|(version, slot, sub_slot)| {
+-                    let cs = format!(
+-                        "{}/{}-{version}:{slot}/{sub_slot}",
+-                        atom.category, atom.package
+-                    );
+-                    match_from_list(atom_str, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+-                })
+-                .map(|(version, slot, _sub)| {
+-                    (atom.category.clone(), atom.package.clone(), version, slot)
+-                })
+-                .collect()
+-        };
+-
+-        if matches.is_empty() {
+-            println!("\n--- Couldn't find '{atom_str}' to {action}.");
+-            continue;
+-        }
+-
+-        for (cat, pkg, version, _slot) in matches {
+-            let cp = (cat.clone(), pkg.clone());
+-            let entry = per_cp.entry(cp.clone()).or_insert_with(|| {
+-                order.push(cp.clone());
+-                (Vec::new(), Vec::new())
+-            });
+-            let key = (cat, pkg, version.clone());
+-            if all_selected.insert(key) {
+-                entry.0.push(version);
+-            }
+-        }
++    if let Some(code) = select_unmerge_targets(SelectUnmergeTargetsArgs {
++        expanded: &expanded,
++        root,
++        action,
++        per_cp: &mut per_cp,
++        order: &mut order,
++        all_selected: &mut all_selected,
++    }) {
++        return code;
+     }
+ 
+     if all_selected.is_empty() {
+@@ -304,11 +258,6 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
+         }
+     }
+ 
+-    let vercmp_key = |a: &str, b: &str| {
+-        portage_versions::vercmp(a, b)
+-            .map(|c| c.cmp(&0))
+-            .unwrap_or_else(|| a.cmp(b))
+-    };
+     if !preserve_order {
+         order.sort();
+     }
+@@ -316,7 +265,77 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
+     // `(category, package, version)` of every `selected` version, in the
+     // same order the preview blocks render; the removal loop walks this order.
+     let mut removal_list: Vec<(String, String, String)> = Vec::new();
+-    for cp in &order {
++    print_unmerge_selection(PrintUnmergeSelectionArgs {
++        order: &order,
++        per_cp: &mut per_cp,
++        root,
++        syslist: &syslist,
++        color,
++        all_selected_display: &mut all_selected_display,
++        removal_list: &mut removal_list,
++    });
++
++    all_selected_display.sort();
++    println!(
++        "\nAll selected packages: {}",
++        all_selected_display.join(" ")
++    );
++    println!(
++        "\n>>> {} packages are slated for removal.",
++        color.c("UNMERGE_WARN", "'Selected'")
++    );
++    println!(
++        ">>> {} and {} packages will not be removed.",
++        color.c("GOOD", "'Protected'"),
++        color.c("GOOD", "'omitted'")
++    );
++
++    // Once the display is accepted and we're not in `--pretend`, the
++    // packages are actually removed.
++    // Portage: unmerge.py, unmerge
++    if !pretend {
++        if ask && !ask_confirm(color, "Would you like to unmerge these packages?") {
++            return ExitCode::from(130);
++        }
++        clean_delay_countdown();
++        return execute_unmerge(ExecuteUnmergeArgs {
++            removal_list: &removal_list,
++            root,
++            shell,
++            debug,
++            color,
++            quiet,
++            noinfo,
++            repos,
++            config,
++        });
++    }
++    ExitCode::SUCCESS
++}
++
++/// The values [`print_unmerge_selection`] reads from its caller.
++pub(crate) struct PrintUnmergeSelectionArgs<'a> {
++    pub(crate) order: &'a [(String, String)],
++    pub(crate) per_cp: &'a mut PerCpSelection,
++    pub(crate) root: &'a Path,
++    pub(crate) syslist: &'a HashSet<(String, String)>,
++    pub(crate) color: &'a Colorizer,
++    pub(crate) all_selected_display: &'a mut Vec<String>,
++    pub(crate) removal_list: &'a mut Vec<(String, String, String)>,
++}
++
++/// Print the per-package unmerge selection.
++pub(crate) fn print_unmerge_selection(args: PrintUnmergeSelectionArgs<'_>) {
++    let PrintUnmergeSelectionArgs {
++        order,
++        per_cp,
++        root,
++        syslist,
++        color,
++        all_selected_display,
++        removal_list,
++    } = args;
++    for cp in order {
+         let (selected, protected) = per_cp.get_mut(cp).unwrap();
+         if selected.is_empty() {
+             continue;
+@@ -360,43 +379,94 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
+             removal_list.push((cp.0.clone(), cp.1.clone(), v.clone()));
+         }
+     }
++}
+ 
+-    all_selected_display.sort();
+-    println!(
+-        "\nAll selected packages: {}",
+-        all_selected_display.join(" ")
+-    );
+-    println!(
+-        "\n>>> {} packages are slated for removal.",
+-        color.c("UNMERGE_WARN", "'Selected'")
+-    );
+-    println!(
+-        ">>> {} and {} packages will not be removed.",
+-        color.c("GOOD", "'Protected'"),
+-        color.c("GOOD", "'omitted'")
+-    );
++/// The values [`select_unmerge_targets`] reads from its caller.
++pub(crate) struct SelectUnmergeTargetsArgs<'a> {
++    pub(crate) expanded: &'a [String],
++    pub(crate) root: &'a Path,
++    pub(crate) action: &'a str,
++    pub(crate) per_cp: &'a mut PerCpSelection,
++    pub(crate) order: &'a mut Vec<(String, String)>,
++    pub(crate) all_selected: &'a mut HashSet<(String, String, String)>,
++}
+ 
+-    // Once the display is accepted and we're not in `--pretend`, the
+-    // packages are actually removed.
+-    // Portage: unmerge.py, unmerge
+-    if !pretend {
+-        if ask && !ask_confirm(color, "Would you like to unmerge these packages?") {
+-            return ExitCode::from(130);
++/// Select the installed versions each unmerge atom removes.
++pub(crate) fn select_unmerge_targets(args: SelectUnmergeTargetsArgs<'_>) -> Option<ExitCode> {
++    let SelectUnmergeTargetsArgs {
++        expanded,
++        root,
++        action,
++        per_cp,
++        order,
++        all_selected,
++    } = args;
++    for atom_str in expanded {
++        // A bare name (no `/`) borrows its category from the vdb.
++        // Ambiguous (installed under >1 category) is a hard error.
++        // Portage: vartree.py, dep_match
++        let matches: Vec<(String, String, String, String)> = if !atom_str.contains('/') {
++            let mut found: Vec<(String, String, String, String)> = Vec::new();
++            for (cat, pkg, version, slot) in installed_cp_versions(root) {
++                if pkg == *atom_str {
++                    found.push((cat, pkg, version, slot));
++                }
++            }
++            let cats: HashSet<&String> = found.iter().map(|(c, _, _, _)| c).collect();
++            if cats.len() > 1 {
++                eprintln!(
++                    "\n!!! The short package name \"{atom_str}\" is ambiguous. Please specify"
++                );
++                eprintln!("!!! one of the following fully-qualified package names instead:\n");
++                let mut names: Vec<String> = cats
++                    .into_iter()
++                    .map(|c| format!("    {c}/{atom_str}"))
++                    .collect();
++                names.sort();
++                for n in names {
++                    println!("{n}");
++                }
++                return Some(ExitCode::from(1));
++            }
++            found
++        } else {
++            let Some(atom) = parse_atom(atom_str) else {
++                eprintln!("emerge: invalid atom {atom_str:?}");
++                return Some(ExitCode::from(1));
++            };
++            portage_repo::installed_candidates(root, &atom.category, &atom.package)
++                .into_iter()
++                .filter(|(version, slot, sub_slot)| {
++                    let cs = format!(
++                        "{}/{}-{version}:{slot}/{sub_slot}",
++                        atom.category, atom.package
++                    );
++                    match_from_list(atom_str, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
++                })
++                .map(|(version, slot, _sub)| {
++                    (atom.category.clone(), atom.package.clone(), version, slot)
++                })
++                .collect()
++        };
++
++        if matches.is_empty() {
++            println!("\n--- Couldn't find '{atom_str}' to {action}.");
++            continue;
++        }
++
++        for (cat, pkg, version, _slot) in matches {
++            let cp = (cat.clone(), pkg.clone());
++            let entry = per_cp.entry(cp.clone()).or_insert_with(|| {
++                order.push(cp.clone());
++                (Vec::new(), Vec::new())
++            });
++            let key = (cat, pkg, version.clone());
++            if all_selected.insert(key) {
++                entry.0.push(version);
++            }
+         }
+-        clean_delay_countdown();
+-        return execute_unmerge(ExecuteUnmergeArgs {
+-            removal_list: &removal_list,
+-            root,
+-            shell,
+-            debug,
+-            color,
+-            quiet,
+-            noinfo,
+-            repos,
+-            config,
+-        });
+     }
+-    ExitCode::SUCCESS
++    None
+ }
+ 
+ /// Whether a `FEATURES` token is on in the raw process env. This is the
