@@ -1,0 +1,402 @@
+diff --git a/crates/portuale/src/ebuild_merge/from_binpkg.rs b/crates/portuale/src/ebuild_merge/from_binpkg.rs
+index f4b8b703..f4346e19 100644
+--- a/crates/portuale/src/ebuild_merge/from_binpkg.rs
++++ b/crates/portuale/src/ebuild_merge/from_binpkg.rs
+@@ -27,6 +27,73 @@ use crate::ebuild_merge::*;
+ /// `environment.bz2` / `<pf>.ebuild` gets no hooks; a different-slot
+ /// version is left untouched, skipping the preserve-libs /
+ /// reverse-dependency check.
++/// What the binpkg hook closures read from `merge_binpkg`.
++pub(crate) struct HookCtx<'a> {
++    pub(crate) extracted_ebuild: &'a Option<PathBuf>,
++    pub(crate) defined_phases: &'a str,
++    pub(crate) saved_env: &'a Path,
++    pub(crate) seeded: &'a std::cell::Cell<bool>,
++    pub(crate) root: &'a Path,
++    pub(crate) portage_tmpdir: &'a Path,
++    pub(crate) options: &'a MergeOptions,
++    pub(crate) replacing_versions: &'a String,
++}
++
++impl HookCtx<'_> {
++    fn phase_defined(&self, p: &str) -> bool {
++        let HookCtx { defined_phases, .. } = self;
++        defined_phases.split_whitespace().any(|d| d == p)
++    }
++
++    /// `always`: run even when the ebuild does not define the phase.
++    pub(crate) fn run_hook_ex(
++        &self,
++        phase: &str,
++        always: bool,
++        update_env: Option<&Path>,
++    ) -> Result<i32, String> {
++        let &HookCtx {
++            extracted_ebuild,
++            saved_env,
++            seeded,
++            root,
++            portage_tmpdir,
++            options,
++            replacing_versions,
++            ..
++        } = self;
++        match &extracted_ebuild {
++            Some(ebuild) if always || self.phase_defined(phase) => {
++                let seed = !seeded.replace(true);
++                crate::ebuild_phases::run_phase_from_saved_env(
++                    crate::ebuild_phases::RunPhaseFromSavedEnvArgs {
++                        ebuild_path: ebuild,
++                        saved_env_bz2: saved_env,
++                        seed,
++                        phase,
++                        root,
++                        portage_tmpdir,
++                        debug: options.debug,
++                        config_root: &options.config_root,
++                        shell: options.shell,
++                        log_file: options.log_file.as_deref(),
++                        update_env,
++                        refresh_features: update_env.map(|_| options.features.as_str()),
++                        replacing_versions: Some(replacing_versions.as_str()),
++                        merge_type: Some("binary"),
++                        replaced_by_version: None,
++                    },
++                )
++            }
++            _ => Ok(0),
++        }
++    }
++
++    pub(crate) fn run_hook(&self, phase: &str) -> Result<i32, String> {
++        self.run_hook_ex(phase, false, None)
++    }
++}
++
+ /// Portage: _emerge/Binpkg, vartree.py, dblink.treewalk
+ pub fn merge_binpkg(
+     binpkg_path: &Path,
+@@ -121,7 +188,6 @@ pub fn merge_binpkg(
+     // gated on `DEFINED_PHASES` so a binpkg defining neither spawns no
+     // shell. Both files must be present (older binpkgs get no hooks).
+     let defined_phases = meta_get("DEFINED_PHASES").unwrap_or_default();
+-    let phase_defined = |p: &str| defined_phases.split_whitespace().any(|d| d == p);
+     let saved_env = build_info.join("environment.bz2");
+     let extracted_ebuild = {
+         let src = build_info.join(format!("{pf}.ebuild"));
+@@ -150,48 +216,29 @@ pub fn merge_binpkg(
+     let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
+     let replacing_versions =
+         replacing_versions(&package, installed_instance.as_deref()).unwrap_or_default();
+-    let run_hook_ex =
+-        |phase: &str, always: bool, update_env: Option<&Path>| -> Result<i32, String> {
+-            match &extracted_ebuild {
+-                Some(ebuild) if always || phase_defined(phase) => {
+-                    let seed = !seeded.replace(true);
+-                    crate::ebuild_phases::run_phase_from_saved_env(
+-                        crate::ebuild_phases::RunPhaseFromSavedEnvArgs {
+-                            ebuild_path: ebuild,
+-                            saved_env_bz2: &saved_env,
+-                            seed,
+-                            phase,
+-                            root,
+-                            portage_tmpdir,
+-                            debug: options.debug,
+-                            config_root: &options.config_root,
+-                            shell: options.shell,
+-                            log_file: options.log_file.as_deref(),
+-                            update_env,
+-                            refresh_features: update_env.map(|_| options.features.as_str()),
+-                            replacing_versions: Some(replacing_versions.as_str()),
+-                            merge_type: Some("binary"),
+-                            replaced_by_version: None,
+-                        },
+-                    )
+-                }
+-                _ => Ok(0),
+-            }
+-        };
+-    let run_hook = |phase: &str| run_hook_ex(phase, false, None);
++    let hooks = HookCtx {
++        extracted_ebuild: &extracted_ebuild,
++        defined_phases: &defined_phases,
++        saved_env: &saved_env,
++        seeded: &seeded,
++        root,
++        portage_tmpdir,
++        options,
++        replacing_versions: &replacing_versions,
++    };
+ 
+     // `pkg_pretend` runs for every package in the merge list, binary
+     // included; folded into the per-package flow here rather than as a
+     // separate scheduler stage, like the source path runs `pretend`
+     // inline before each build.
+     // Portage: Scheduler._run_pkg_pretend
+-    let pretend_status = run_hook("pretend")?;
++    let pretend_status = hooks.run_hook("pretend")?;
+     if pretend_status != 0 {
+         return Ok(pretend_status);
+     }
+ 
+     // `pkg_setup` runs right after extraction, before the merge.
+-    let setup_status = run_hook("setup")?;
++    let setup_status = hooks.run_hook("setup")?;
+     if setup_status != 0 {
+         return Ok(setup_status);
+     }
+@@ -230,25 +277,19 @@ pub fn merge_binpkg(
+     // so the blocker term reads the already-USE-reduced `*DEPEND`
+     // build-info files directly; the registry is consulted
+     // unconditionally.
+-    let plib_registry = read_plib_registry(root);
+-    let plib_inodes = plib_inode_map(root, &plib_registry.preserved_libs());
+-    let mut flat_deps: Vec<String> = Vec::new();
+-    for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
+-        if let Ok(d) = std::fs::read_to_string(build_info.join(dep_key)) {
+-            flat_deps.extend(d.split_whitespace().map(String::from));
+-        }
+-    }
+-    let blocked = blockers_from_flat_deps(root, &flat_deps);
+-    let (collisions, symlink_collisions, plib_collisions) = find_collisions(FindCollisionsArgs {
+-        d: &image,
++    let MergeBinpkgFindCollisionsOut {
++        plib_registry,
++        collisions,
++        symlink_collisions,
++        plib_collisions,
++    } = merge_binpkg_find_collisions(MergeBinpkgFindCollisionsArgs {
+         root,
++        build_info: &build_info,
++        image: &image,
+         category: &category,
+         package: &package,
+-        slot: &main_slot,
+-        config_protect: &options.config_protect,
+-        config_protect_mask: &options.config_protect_mask,
+-        plib_inodes: &plib_inodes,
+-        blocked: &blocked,
++        main_slot: &main_slot,
++        options,
+     })?;
+     // Same abort condition as `merge_after_install`.
+     let protect_owned_abort = options.protect_owned
+@@ -271,7 +312,7 @@ pub fn merge_binpkg(
+     // renamed into place after every replaced version is unmerged,
+     // identical to `merge_after_install`.
+     create_vdb_tmp(root, &category, &pf)?;
+-    let preinst_status = run_hook("preinst")?;
++    let preinst_status = hooks.run_hook("preinst")?;
+     if preinst_status != 0 {
+         return Ok(preinst_status);
+     }
+@@ -303,30 +344,144 @@ pub fn merge_binpkg(
+         .lines()
+         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+         .collect();
++    merge_binpkg_finish(MergeBinpkgFinishArgs {
++        root,
++        category: &category,
++        package: &package,
++        pf: &pf,
++        main_slot: &main_slot,
++        new_image_paths: &new_image_paths,
++        contents: &mut contents,
++        cfgfiledict: &cfgfiledict,
++        plib_collisions: &plib_collisions,
++        plib_registry,
++        builddir: &builddir,
++        portage_tmpdir,
++        options,
++        hooks: &hooks,
++    })
++}
++
++/// What [`merge_binpkg_find_collisions`] hands back to its caller.
++pub(crate) struct MergeBinpkgFindCollisionsOut {
++    pub(crate) plib_registry: PlibRegistry,
++    pub(crate) collisions: Vec<String>,
++    pub(crate) symlink_collisions: Vec<String>,
++    pub(crate) plib_collisions: BTreeMap<String, BTreeSet<String>>,
++}
++
++/// The values [`merge_binpkg_find_collisions`] reads from its caller.
++pub(crate) struct MergeBinpkgFindCollisionsArgs<'a> {
++    pub(crate) root: &'a Path,
++    pub(crate) build_info: &'a Path,
++    pub(crate) image: &'a Path,
++    pub(crate) category: &'a str,
++    pub(crate) package: &'a str,
++    pub(crate) main_slot: &'a str,
++    pub(crate) options: &'a MergeOptions,
++}
++
++/// Look up the preserved-library registry and the collisions of the new image.
++pub(crate) fn merge_binpkg_find_collisions(
++    args: MergeBinpkgFindCollisionsArgs<'_>,
++) -> Result<MergeBinpkgFindCollisionsOut, String> {
++    let MergeBinpkgFindCollisionsArgs {
++        root,
++        build_info,
++        image,
++        category,
++        package,
++        main_slot,
++        options,
++    } = args;
++    let plib_registry = read_plib_registry(root);
++    let plib_inodes = plib_inode_map(root, &plib_registry.preserved_libs());
++    let mut flat_deps: Vec<String> = Vec::new();
++    for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
++        if let Ok(d) = std::fs::read_to_string(build_info.join(dep_key)) {
++            flat_deps.extend(d.split_whitespace().map(String::from));
++        }
++    }
++    let blocked = blockers_from_flat_deps(root, &flat_deps);
++    let (collisions, symlink_collisions, plib_collisions) = find_collisions(FindCollisionsArgs {
++        d: image,
++        root,
++        category,
++        package,
++        slot: main_slot,
++        config_protect: &options.config_protect,
++        config_protect_mask: &options.config_protect_mask,
++        plib_inodes: &plib_inodes,
++        blocked: &blocked,
++    })?;
++    Ok(MergeBinpkgFindCollisionsOut {
++        plib_registry,
++        collisions,
++        symlink_collisions,
++        plib_collisions,
++    })
++}
++
++/// The values [`merge_binpkg_finish`] reads from its caller.
++pub(crate) struct MergeBinpkgFinishArgs<'a> {
++    pub(crate) root: &'a Path,
++    pub(crate) category: &'a str,
++    pub(crate) package: &'a str,
++    pub(crate) pf: &'a str,
++    pub(crate) main_slot: &'a str,
++    pub(crate) new_image_paths: &'a BTreeSet<String>,
++    pub(crate) contents: &'a mut String,
++    pub(crate) cfgfiledict: &'a BTreeMap<String, String>,
++    pub(crate) plib_collisions: &'a BTreeMap<String, BTreeSet<String>>,
++    pub(crate) plib_registry: PlibRegistry,
++    pub(crate) builddir: &'a Path,
++    pub(crate) portage_tmpdir: &'a Path,
++    pub(crate) options: &'a MergeOptions,
++    pub(crate) hooks: &'a HookCtx<'a>,
++}
++
++/// Preserve, replace, publish, postinst and elog of a binary-package merge.
++pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<i32, String> {
++    let MergeBinpkgFinishArgs {
++        root,
++        category,
++        package,
++        pf,
++        main_slot,
++        new_image_paths,
++        contents,
++        cfgfiledict,
++        plib_collisions,
++        plib_registry,
++        builddir,
++        portage_tmpdir,
++        options,
++        hooks,
++    } = args;
+     let mut preserve_paths = BTreeSet::new();
+     if let Some((paths, old_contents_text)) =
+         find_preserve_paths_for_merge(FindPreservePathsForMergeArgs {
+             root,
+-            category: &category,
+-            package: &package,
+-            new_pf: &pf,
+-            main_slot: &main_slot,
+-            new_image_paths: &new_image_paths,
++            category,
++            package,
++            new_pf: pf,
++            main_slot,
++            new_image_paths,
+         })
+     {
+         let (injected, surviving) =
+-            inject_preserved_libs_into_contents(&old_contents_text, &paths, &new_image_paths);
++            inject_preserved_libs_into_contents(&old_contents_text, &paths, new_image_paths);
+         contents.push_str(&injected);
+         preserve_paths = surviving;
+     }
+-    write_cfgfiledict(root, &cfgfiledict)?;
+-    write_vdb_tmp_contents(root, &category, &pf, &contents)?;
++    write_cfgfiledict(root, cfgfiledict)?;
++    write_vdb_tmp_contents(root, category, pf, contents)?;
+ 
+     // A preserved lib this version now provides is taken over from the
+     // registry and stripped from the previous owner's `CONTENTS`.
+     if !plib_collisions.is_empty() {
+         let cpv = format!("{category}/{pf}");
+-        unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
++        unregister_preserved_libs(root, &cpv, plib_registry, plib_collisions)?;
+     }
+ 
+     // Merge-then-unmerge while the new entry still sits in its temporary;
+@@ -341,10 +496,10 @@ pub fn merge_binpkg(
+     };
+     let replaced_same_slot = unmerge_replaced_same_slot(UnmergeReplacedSameSlotArgs {
+         root,
+-        category: &category,
+-        package: &package,
+-        new_pf: &pf,
+-        main_slot: &main_slot,
++        category,
++        package,
++        new_pf: pf,
++        main_slot,
+         scratch_dir: &builddir.join("unmerge-src"),
+         portage_tmpdir,
+         options,
+@@ -354,10 +509,10 @@ pub fn merge_binpkg(
+     // `merge_after_install` (one commit on a database backend).
+     publish_merged_entry(PublishMergedEntryArgs {
+         root,
+-        category: &category,
+-        pn: &package,
+-        pf: &pf,
+-        main_slot: &main_slot,
++        category,
++        pn: package,
++        pf,
++        main_slot,
+         preserve_paths: &preserve_paths,
+         replaced: &replaced_same_slot,
+     })?;
+@@ -372,14 +527,14 @@ pub fn merge_binpkg(
+     // when the binpkg carries no saved env.
+     //
+     // The live entry's own path, or a scratch copy on a database backend.
+-    let update_env = update_env_target(root, &category, &pf, &builddir.join("vdb-update-env"))?;
++    let update_env = update_env_target(root, category, pf, &builddir.join("vdb-update-env"))?;
+     let vdb_env_bz2 = &update_env.path;
+-    let postinst_status = run_hook_ex(
++    let postinst_status = hooks.run_hook_ex(
+         "postinst",
+         true,
+         vdb_env_bz2.is_file().then_some(vdb_env_bz2.as_path()),
+     )?;
+-    absorb_update_env(root, &category, &pf, &update_env)?;
++    absorb_update_env(root, category, pf, &update_env)?;
+     if postinst_status != 0 {
+         eprintln!(
+             "{category}/{pf}: FAILED postinst ({postinst_status}) -- merge kept (real _postinst_failure)"
+@@ -413,6 +568,6 @@ pub fn merge_binpkg(
+         split_elog: feature_enabled(options, "split-elog"),
+     });
+ 
+-    let _ = std::fs::remove_dir_all(&builddir);
++    let _ = std::fs::remove_dir_all(builddir);
+     Ok(postinst_status)
+ }

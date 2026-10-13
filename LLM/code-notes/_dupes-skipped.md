@@ -886,3 +886,6 @@ reason: coincidental small shapes (sampled pattern) - not individually triaged; 
 
 ## #339 R4: duplicate pair, kept apart
 `expand_resolved_slot_with_flipped_use` (`resolve/slot_expand.rs`) and `enqueue_dependencies` (`resolve/enqueue.rs`) have the same shape (flatten keys, `||` flatten, root-deps split, running-root, enqueue loop), and the cuts `flatten_deps_for_flip`/`flatten_deps_for_enqueue` and the two `group_running` helpers stay twins on purpose: they read different inputs (delta metadata under the flipped USE vs. the vdb-recorded strings), so folding them would need an adapter bigger than the shared code. Recorded for #338, not folded.
+
+## #339 M6/M7: duplicate pair, kept apart
+`merge_after_install_finish` (`ebuild_merge/after_install.rs`) and `merge_binpkg_finish` (`ebuild_merge/from_binpkg.rs`) have the same shape (preserve libs, replace same slot, publish entry, postinst, env update, prune, elog). They were split without folding; plan #339 records the pair for #338.
