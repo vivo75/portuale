@@ -1,0 +1,102 @@
+diff --git a/crates/portage-dep/src/lib.rs b/crates/portage-dep/src/lib.rs
+index 59dc8f78..75f86a78 100644
+--- a/crates/portage-dep/src/lib.rs
++++ b/crates/portage-dep/src/lib.rs
+@@ -30,6 +30,7 @@ use std::collections::HashMap;
+ use std::collections::HashSet;
+ use std::sync::OnceLock;
+ 
++use crate::eapi::EapiAttrs;
+ use eapi::{EapiValueError, SUPPORTED_EAPIS, eapi_attrs, eapi_is_supported};
+ 
+ pub mod eapi;
+@@ -645,6 +646,57 @@ fn parse_atom_with_uncached(
+         return Err(AtomError::invalid(s));
+     }
+ 
++    check_atom_eapi_features(CheckAtomEapiFeaturesArgs {
++        opts,
++        slot: &slot,
++        attrs,
++        eapi_str,
++        s,
++        use_deps: &use_deps,
++        blocker: &blocker,
++    })?;
++
++    Ok(Atom {
++        blocker,
++        operator,
++        category,
++        package,
++        version,
++        revision,
++        slot,
++        sub_slot,
++        slot_operator,
++        use_deps,
++        repo,
++        build_id,
++        extended,
++    })
++}
++
++/// The values [`check_atom_eapi_features`] reads from its caller.
++pub(crate) struct CheckAtomEapiFeaturesArgs<'a> {
++    pub(crate) opts: &'a AtomOptions,
++    pub(crate) slot: &'a Option<String>,
++    pub(crate) attrs: EapiAttrs,
++    pub(crate) eapi_str: &'a str,
++    pub(crate) s: &'a str,
++    pub(crate) use_deps: &'a Option<Vec<UseDep>>,
++    pub(crate) blocker: &'a Blocker,
++}
++
++/// Reject atom features the EAPI does not allow: slot dependencies, use dependencies and the like.
++pub(crate) fn check_atom_eapi_features(
++    args: CheckAtomEapiFeaturesArgs<'_>,
++) -> Result<(), AtomError> {
++    let CheckAtomEapiFeaturesArgs {
++        opts,
++        slot,
++        attrs,
++        eapi_str,
++        s,
++        use_deps,
++        blocker,
++    } = args;
+     if !matches!(opts.eapi, AtomEapi::None) {
+         if slot.is_some() && !attrs.slot_deps {
+             return Err(AtomError {
+@@ -665,29 +717,14 @@ fn parse_atom_with_uncached(
+                 });
+             }
+         }
+-        if blocker == Blocker::Strong && !attrs.strong_blocks {
++        if *blocker == Blocker::Strong && !attrs.strong_blocks {
+             return Err(AtomError {
+                 kind: AtomErrorKind::EapiIncompatible,
+                 message: format!("Strong blocks are not allowed in EAPI {eapi_str}: '{s}'"),
+             });
+         }
+     }
+-
+-    Ok(Atom {
+-        blocker,
+-        operator,
+-        category,
+-        package,
+-        version,
+-        revision,
+-        slot,
+-        sub_slot,
+-        slot_operator,
+-        use_deps,
+-        repo,
+-        build_id,
+-        extended,
+-    })
++    Ok(())
+ }
+ 
+ /// Portage `Atom.__init__`'s conditional-flag check (dep:2125-2144): every

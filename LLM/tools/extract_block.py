@@ -43,6 +43,7 @@ host's loop `'LABEL` at indent N: a `continue` to that loop becomes
 `let PAT = 'LABEL: { .. };`; `break 'LABEL X` returns
 `ControlFlow::Continue(X)` and the whole `let` becomes
 `let ControlFlow::Continue(PAT) = f(..) else { continue 'loop; };`.
+`--use 'use path::Type;'` (repeatable): an import the new function needs that rustc cannot suggest.
 `--ty NAME=TYPE` (repeatable): the type of a parameter or output whose rustc label
 is elided with `...`.
 `--own A,B`: these parameters go by value (the range consumes them).
@@ -263,7 +264,7 @@ def code_only(text):
 
 class Cut:
     def __init__(self, src, start, end, fname, target, doc, pkg, err=None, ret="ExitCode",
-                 loop=None, indent=4, diverges=False, value=None, own=(), tail=False, ty=None):
+                 loop=None, indent=4, diverges=False, value=None, own=(), tail=False, ty=None, imports=None):
         self.src, self.start, self.end = src, start, end
         self.fname, self.target, self.doc, self.pkg = fname, target, doc, pkg
         self.orig_src = open(src).read()
@@ -364,7 +365,7 @@ class Cut:
                     names.append(nm)
         self.outs = [] if value else [[n, None] for n in names]
         self.params = []          # [name, type, mode] mode: val|ref|mut
-        self.imports = []         # `use` lines for bare type names
+        self.imports = list(imports or [])   # `use` lines for bare type names
 
     def declare(self, stem):
         """Add `mod stem;` + `pub(crate) use stem::*;` to the host mod.rs,
@@ -690,7 +691,7 @@ class Cut:
         edits = []
         for m in errs:
             for c in m.get("children", []):
-                if not re.search(r"consider (removing the leading `&`-reference|dereferencing the borrow"
+                if not re.search(r"consider (removing the leading `&`-reference|dereferencing the borrow|dereferencing here"
                                  r"|removing the borrow)", c["message"]):
                     continue
                 for s in c["spans"]:
@@ -867,7 +868,8 @@ def main():
     own = a[a.index("--own") + 1].split(",") if "--own" in a else ()
     ty = dict(x.split("=", 1) for k, x in zip(a, a[1:]) if k == "--ty")
     cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg, err, ret, loop, indent,
-              "--diverges" in a, value, own, "--tail" in a, ty)
+              "--diverges" in a, value, own, "--tail" in a, ty,
+              [x for k, x in zip(a, a[1:]) if k == "--use"])
     try:
         cut.run()
     except SystemExit as e:

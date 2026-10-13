@@ -1,0 +1,240 @@
+diff --git a/crates/portage-dep/src/lib.rs b/crates/portage-dep/src/lib.rs
+index 59dc8f78..de82a396 100644
+--- a/crates/portage-dep/src/lib.rs
++++ b/crates/portage-dep/src/lib.rs
+@@ -30,7 +30,9 @@ use std::collections::HashMap;
+ use std::collections::HashSet;
+ use std::sync::OnceLock;
+ 
++use crate::eapi::EapiAttrs;
+ use eapi::{EapiValueError, SUPPORTED_EAPIS, eapi_attrs, eapi_is_supported};
++use regex::Captures;
+ 
+ pub mod eapi;
+ 
+@@ -480,6 +482,106 @@ fn parse_atom_with_uncached(
+         }
+     };
+ 
++    let AtomNamePartsOut {
++        operator,
++        category,
++        package,
++        version,
++        revision,
++        build_id,
++    } = atom_name_parts(extended, caps, s, allow_build_id)?;
++
++    // A bare trailing ":" matches the regex but is invalid.
++    let (slot, sub_slot, slot_operator) = match caps.name("slotpart") {
++        None => (None, None, None),
++        Some(m) if m.as_str().is_empty() => return Err(AtomError::invalid(s)),
++        Some(_) => {
++            if attrs.slot_operator {
++                let slot = caps.name("slot").map(|m| m.as_str().to_string());
++                let sub_slot = caps.name("subslot").map(|m| m.as_str().to_string());
++                let slot_operator = match caps.name("slotop").map(|m| m.as_str()) {
++                    None => None,
++                    // An explicit slot combined with "*" is invalid.
++                    Some("*") if slot.is_some() => return Err(AtomError::invalid(s)),
++                    Some("*") => Some(SlotOperator::Star),
++                    Some("=") => Some(SlotOperator::Equals),
++                    Some(_) => unreachable!(),
++                };
++                // Both parts are optional, so an empty match is possible.
++                if slot.is_none() && slot_operator.is_none() {
++                    return Err(AtomError::invalid(s));
++                }
++                (slot, sub_slot, slot_operator)
++            } else {
++                // Portage `_get_slot_dep_re` without `slot_operator`: the whole
++                // text must be a plain slot, so `:0/1` and `:0=` are bare
++                // `InvalidAtom`s here.
++                let text = caps.name("slotpart").unwrap().as_str();
++                if !slot_plain_re().is_match(text) {
++                    return Err(AtomError::invalid(s));
++                }
++                (Some(text.to_string()), None, None)
++            }
++        }
++    };
++
++    let use_deps = match caps.name("usedeps") {
++        None => None,
++        Some(m) => Some(parse_use_deps(m.as_str()).map_err(|token| AtomError {
++            kind: AtomErrorKind::Invalid,
++            message: format!("Invalid use dep: '{token}'"),
++        })?),
++    };
++
++    let repo = caps.name("repo").map(|m| m.as_str().to_string());
++    if repo.is_some() && !allow_repo {
++        return Err(AtomError::invalid(s));
++    }
++
++    check_atom_eapi_features(CheckAtomEapiFeaturesArgs {
++        opts,
++        slot: &slot,
++        attrs,
++        eapi_str,
++        s,
++        use_deps: &use_deps,
++        blocker: &blocker,
++    })?;
++
++    Ok(Atom {
++        blocker,
++        operator,
++        category,
++        package,
++        version,
++        revision,
++        slot,
++        sub_slot,
++        slot_operator,
++        use_deps,
++        repo,
++        build_id,
++        extended,
++    })
++}
++
++/// What [`atom_name_parts`] hands back to its caller.
++pub(crate) struct AtomNamePartsOut {
++    pub(crate) operator: Operator,
++    pub(crate) category: String,
++    pub(crate) package: String,
++    pub(crate) version: Option<String>,
++    pub(crate) revision: Option<String>,
++    pub(crate) build_id: Option<String>,
++}
++
++/// Split a parsed atom into operator, category, package, version, revision and build id.
++pub(crate) fn atom_name_parts(
++    extended: bool,
++    caps: &Captures<'_>,
++    s: &str,
++    allow_build_id: bool,
++) -> Result<AtomNamePartsOut, AtomError> {
+     // The wildcard body (Portage dep:1972-1997): `simple` (extended
+     // category/package, `*` allowed in either half) or `star`
+     // (`=cat/pkg-\*\w+\*`, ASCII `\w`). A `simple` `-vr` tail rejects the
+@@ -597,54 +699,40 @@ fn parse_atom_with_uncached(
+             None,
+         )
+     };
++    Ok(AtomNamePartsOut {
++        operator,
++        category,
++        package,
++        version,
++        revision,
++        build_id,
++    })
++}
+ 
+-    // A bare trailing ":" matches the regex but is invalid.
+-    let (slot, sub_slot, slot_operator) = match caps.name("slotpart") {
+-        None => (None, None, None),
+-        Some(m) if m.as_str().is_empty() => return Err(AtomError::invalid(s)),
+-        Some(_) => {
+-            if attrs.slot_operator {
+-                let slot = caps.name("slot").map(|m| m.as_str().to_string());
+-                let sub_slot = caps.name("subslot").map(|m| m.as_str().to_string());
+-                let slot_operator = match caps.name("slotop").map(|m| m.as_str()) {
+-                    None => None,
+-                    // An explicit slot combined with "*" is invalid.
+-                    Some("*") if slot.is_some() => return Err(AtomError::invalid(s)),
+-                    Some("*") => Some(SlotOperator::Star),
+-                    Some("=") => Some(SlotOperator::Equals),
+-                    Some(_) => unreachable!(),
+-                };
+-                // Both parts are optional, so an empty match is possible.
+-                if slot.is_none() && slot_operator.is_none() {
+-                    return Err(AtomError::invalid(s));
+-                }
+-                (slot, sub_slot, slot_operator)
+-            } else {
+-                // Portage `_get_slot_dep_re` without `slot_operator`: the whole
+-                // text must be a plain slot, so `:0/1` and `:0=` are bare
+-                // `InvalidAtom`s here.
+-                let text = caps.name("slotpart").unwrap().as_str();
+-                if !slot_plain_re().is_match(text) {
+-                    return Err(AtomError::invalid(s));
+-                }
+-                (Some(text.to_string()), None, None)
+-            }
+-        }
+-    };
+-
+-    let use_deps = match caps.name("usedeps") {
+-        None => None,
+-        Some(m) => Some(parse_use_deps(m.as_str()).map_err(|token| AtomError {
+-            kind: AtomErrorKind::Invalid,
+-            message: format!("Invalid use dep: '{token}'"),
+-        })?),
+-    };
+-
+-    let repo = caps.name("repo").map(|m| m.as_str().to_string());
+-    if repo.is_some() && !allow_repo {
+-        return Err(AtomError::invalid(s));
+-    }
++/// The values [`check_atom_eapi_features`] reads from its caller.
++pub(crate) struct CheckAtomEapiFeaturesArgs<'a> {
++    pub(crate) opts: &'a AtomOptions,
++    pub(crate) slot: &'a Option<String>,
++    pub(crate) attrs: EapiAttrs,
++    pub(crate) eapi_str: &'a str,
++    pub(crate) s: &'a str,
++    pub(crate) use_deps: &'a Option<Vec<UseDep>>,
++    pub(crate) blocker: &'a Blocker,
++}
+ 
++/// Reject atom features the EAPI does not allow: slot dependencies, use dependencies and the like.
++pub(crate) fn check_atom_eapi_features(
++    args: CheckAtomEapiFeaturesArgs<'_>,
++) -> Result<(), AtomError> {
++    let CheckAtomEapiFeaturesArgs {
++        opts,
++        slot,
++        attrs,
++        eapi_str,
++        s,
++        use_deps,
++        blocker,
++    } = args;
+     if !matches!(opts.eapi, AtomEapi::None) {
+         if slot.is_some() && !attrs.slot_deps {
+             return Err(AtomError {
+@@ -665,29 +753,14 @@ fn parse_atom_with_uncached(
+                 });
+             }
+         }
+-        if blocker == Blocker::Strong && !attrs.strong_blocks {
++        if *blocker == Blocker::Strong && !attrs.strong_blocks {
+             return Err(AtomError {
+                 kind: AtomErrorKind::EapiIncompatible,
+                 message: format!("Strong blocks are not allowed in EAPI {eapi_str}: '{s}'"),
+             });
+         }
+     }
+-
+-    Ok(Atom {
+-        blocker,
+-        operator,
+-        category,
+-        package,
+-        version,
+-        revision,
+-        slot,
+-        sub_slot,
+-        slot_operator,
+-        use_deps,
+-        repo,
+-        build_id,
+-        extended,
+-    })
++    Ok(())
+ }
+ 
+ /// Portage `Atom.__init__`'s conditional-flag check (dep:2125-2144): every
