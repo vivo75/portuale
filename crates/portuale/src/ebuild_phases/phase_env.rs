@@ -252,6 +252,30 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
             .cloned(),
     );
 
+    // `bin/ebuild` forces the test phase when `test` is in argv
+    // (`EBUILD_FORCE_TEST=1`, `features.add("test")`): the marker arrives
+    // via `extra_env` (the direct CLI threads it through `build_env`),
+    // and the resolved `FEATURES`/`PORTAGE_FEATURES` gain the token here,
+    // where the winning value is known — exactly what `features.add`
+    // does to `tmpsettings`. `__dyn_test` then runs `src_test` (a
+    // `RESTRICT=test` ebuild still skips there, like Portage).
+    // Portage: bin/ebuild:296-302
+    if extra_env
+        .iter()
+        .any(|(k, v)| k == "EBUILD_FORCE_TEST" && v == "1")
+    {
+        for key in ["FEATURES", "PORTAGE_FEATURES"] {
+            if let Some((_, value)) = vars.iter_mut().find(|(k, _)| k == key)
+                && !feature_token_present(value, "test")
+            {
+                if !value.is_empty() {
+                    value.push(' ');
+                }
+                value.push_str("test");
+            }
+        }
+    }
+
     // Portage `config.environ()`'s per-EAPI, per-phase export rules: the
     // `_eapi_attrs` gates plus the `doebuild_environment` dynamics the
     // callers don't thread (set-but-gated here, so every entry point —

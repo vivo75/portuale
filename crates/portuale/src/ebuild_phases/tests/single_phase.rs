@@ -137,6 +137,71 @@ fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// Standalone `preinst`/`postinst` actually run the `pkg_preinst`/
+/// `pkg_postinst` phase functions with no dep chain, like Portage's
+/// direct `_spawn_phase` for them (plan #348 S3 P2).
+#[test]
+fn run_single_phase_actually_runs_pkg_preinst_and_pkg_postinst() {
+    let tmp = TempDir::new(&format!(
+        "ebuild-phases-test-{}-{}",
+        std::process::id(),
+        "run_single_phase_actually_runs_pkg_preinst_and_pkg_postinst"
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+    // A scratch ebuild (no repo checkout, no md5-cache): the standalone
+    // REQUIRED_USE gate has nothing to resolve and stays out of the way.
+    let pkg_dir = tmp.join("pkg/dev-libs/iipkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let ebuild_path = pkg_dir.join("iipkg-1.0.ebuild");
+    std::fs::write(
+        &ebuild_path,
+        "EAPI=8\nSLOT=\"0\"\n\
+         pkg_preinst() { touch \"${T}\"/pkg-preinst-ran || die; }\n\
+         pkg_postinst() { touch \"${T}\"/pkg-postinst-ran || die; }\n",
+    )
+    .unwrap();
+    let portage_tmpdir = tmp.join("tmp");
+
+    let preinst_status = run_single_phase(RunSinglePhaseArgs {
+        ebuild_path: &ebuild_path,
+        phase: "preinst",
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+        log_file: None,
+    })
+    .expect("run_single_phase should not itself error");
+    assert_eq!(preinst_status, 0);
+    let postinst_status = run_single_phase(RunSinglePhaseArgs {
+        ebuild_path: &ebuild_path,
+        phase: "postinst",
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+        log_file: None,
+    })
+    .expect("run_single_phase should not itself error");
+    assert_eq!(postinst_status, 0);
+
+    let t_dir = portage_tmpdir.join("portage/dev-libs/iipkg-1.0/temp");
+    assert!(
+        t_dir.join("pkg-preinst-ran").is_file(),
+        "pkg_preinst must actually run"
+    );
+    assert!(
+        t_dir.join("pkg-postinst-ran").is_file(),
+        "pkg_postinst must actually run"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Standalone `prerm`/`postrm` actually run the `pkg_prerm`/`pkg_postrm`
 /// phase functions, with no `unmerge`/vdb step involved.
 #[test]

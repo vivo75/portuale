@@ -55,3 +55,6 @@ USE-flip suggestions for autounmask.
 - Gated on `flag_is_settable` (reused as-is -- its logic assumes nothing child-specific). Mirrors Portage `_show_unsatisfied_dep`'s `collect_use_changes and not required_use_warning` gate.
 - Candidates tried in descending version order; first viable wins (Portage returns True on the first successful collect).
 - Attached to the dependency's own `GraphEntry` rather than the parent's entry, unlike Portage's `missing_use_reasons.append((myparent, ...))` -- a pragmatic simplification: portuale's `GraphEntry` model has no per-parent "reasons" list, and the dependency's entry is where the "no visible ebuild for dependency" note already lives.
+
+## fn implicit_iuse_set (S3 promotion)
+- #348 S3 P3 promotes it from `pub(crate)` to `pub` (re-exported through the existing `pub use visibility_use_flip::*`): the standalone `ebuild` REQUIRED_USE gate (`ebuild_phases::required_use_refusal`) checks against exactly this set, the same one the resolve pass uses -- never re-derived per caller.

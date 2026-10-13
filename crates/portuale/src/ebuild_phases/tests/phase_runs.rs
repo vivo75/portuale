@@ -66,10 +66,14 @@ fn a_missing_phase_runtime_is_an_error_not_a_panic_for_remote_and_ebuild() {
 }
 
 #[test]
-fn features_test_passthrough_actually_runs_src_test() {
+fn ebuild_test_forces_src_test_without_features_test() {
+    // Portage `bin/ebuild`: `test` in argv forces the test phase even
+    // without `FEATURES=test` (`EBUILD_FORCE_TEST`, `Forcing test.` on
+    // stderr); a `RESTRICT=test` ebuild still skips inside `__dyn_test`
+    // (pinned by the S3 contract test on the phasert probe instead).
     // A subprocess per invocation: mutating process-global env vars is
     // unsound from parallel test threads.
-    let tmp = TempDir::new("ebuild-phases-test-features_test_passthrough").keep();
+    let tmp = TempDir::new("ebuild-phases-test-forced_src_test").keep();
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/srctestpkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -83,15 +87,18 @@ fn features_test_passthrough_actually_runs_src_test() {
     let portage_tmpdir = tmp.join("tmp");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&portage_tmpdir).unwrap();
-    let marker = portage_tmpdir.join("portage/dev-libs/srctestpkg-1.0/temp/test-ran");
+    let builddir = portage_tmpdir.join("portage/dev-libs/srctestpkg-1.0");
+    let marker = builddir.join("temp/test-ran");
 
     // `CARGO_BIN_EXE_<name>` is unset for unit tests: the shared helper
     // derives the sibling binary and fails fast when it is missing or stale.
     let portuale_bin = crate::self_exe::built_portuale_bin();
 
     let run = |features: &str| {
-        let _ = std::fs::remove_file(&marker);
-        let status = std::process::Command::new(&portuale_bin)
+        // Fresh builddir per run: a finished `test` leaves its `.tested`
+        // marker behind and is then skipped.
+        let _ = std::fs::remove_dir_all(&builddir);
+        std::process::Command::new(&portuale_bin)
             .env_clear()
             .env("PATH", std::env::var("PATH").unwrap())
             .env("HOME", std::env::var("HOME").unwrap_or_default())
@@ -99,17 +106,25 @@ fn features_test_passthrough_actually_runs_src_test() {
             .env("PORTAGE_TMPDIR", &portage_tmpdir)
             .env("FEATURES", features)
             .args(["ebuild", ebuild.to_str().unwrap(), "test"])
-            .status()
-            .expect("portuale ebuild spawns");
-        assert!(status.success(), "FEATURES={features:?}: {status:?}");
+            .output()
+            .expect("portuale ebuild spawns")
     };
 
-    // Portage: phase-functions.sh, __dyn_test (`src_test` is a no-op
-    // unless `FEATURES` contains `test`).
-    run("");
-    assert!(!marker.exists(), "src_test ran without FEATURES=test");
+    // Portage: bin/ebuild (`EBUILD_FORCE_TEST`), phase-functions.sh
+    // `__dyn_test` (the `RESTRICT=test` skip stays bash-side).
+    let out = run("");
+    assert!(out.status.success(), "FEATURES=\"\": {out:?}");
+    assert!(
+        marker.exists(),
+        "src_test did not run: `ebuild test` must force it without FEATURES=test"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("Forcing test."),
+        "`ebuild test` must print `Forcing test.`"
+    );
 
-    run("test");
+    let out = run("test");
+    assert!(out.status.success(), "FEATURES=test: {out:?}");
     assert!(marker.exists(), "src_test did not run with FEATURES=test");
 }
 

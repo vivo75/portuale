@@ -1748,6 +1748,7 @@ dependencies = [
  "portage-fetch",
  "portage-profile",
  "portage-repo",
+ "portage-required-use",
  "portage-use-reduce",
  "portage-util",
  "portage-vdb",

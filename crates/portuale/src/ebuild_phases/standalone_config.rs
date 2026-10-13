@@ -294,6 +294,121 @@ pub(crate) fn restrict_and_properties(
     )
 }
 
+/// Portage's `_validate_deps` REQUIRED_USE refusal text for a violated
+/// `required_use` under `enabled`/`iuse`: the reduced subset line plus,
+/// when the reduction shrank anything, the human-readable complete
+/// expression — then the trailing blank line, byte for byte as
+/// `doebuild.py` writes it (reduced raw, complete humanized).
+// Portage: doebuild.py, _validate_deps
+pub(crate) fn required_use_message(
+    required_use: &str,
+    enabled: &std::collections::HashSet<String>,
+    iuse: &std::collections::HashSet<String>,
+) -> String {
+    let normalized = required_use
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Operators stay raw here (`tounicode`); only the complete
+    // expression below is humanized.
+    let reduced = match portage_required_use::unsatisfied_reduced(required_use, enabled, iuse) {
+        Ok(Some(r)) => r,
+        _ => normalized.clone(),
+    };
+    let mut out = format!(
+        "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n    {reduced}\n"
+    );
+    if reduced != normalized {
+        out.push_str(&format!(
+            "\n  The above constraints are a subset of the following complete expression:\n    {}\n",
+            portage_required_use::human_readable(&normalized)
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// The direct-`ebuild` REQUIRED_USE gate (`_validate_deps`,
+/// `doebuild.py:1941-1975`): `Some` with Portage's exact stderr text when
+/// the md5-cache `REQUIRED_USE` is violated by the standalone effective
+/// USE; `None` when it passes or does not apply (no cache entry, empty
+/// `REQUIRED_USE`, an EAPI without `required_use`, unresolvable config,
+/// or a degenerate empty effective set that could only false-positive).
+/// `Err` only when the expression itself is unevaluatable (fails closed,
+/// like Portage's metadata-error path).
+///
+/// The USE domain is the full effective set
+/// (`candidate_effective_use_flags`) and the validity domain the
+/// implicit-folded IUSE (`implicit_iuse_set`) — the same pair the
+/// resolve pass checks the emerge path with, never a re-derivation. The
+/// EAPI decision reads `attrs.required_use` (S1), never a threshold.
+/// Called once per CLI invocation from `ebuild.rs` (like Portage's
+/// per-`doebuild` validation), so merge/unmerge internals — already
+/// gated by the resolver, or teardown that Portage never gates — keep
+/// their behaviour.
+/// Portage: doebuild.py, _validate_deps
+pub(crate) fn required_use_refusal(
+    env: &Environment,
+    config_root: &Path,
+    eroot: &Path,
+) -> Result<Option<String>, String> {
+    // Unparsable head EAPI falls back to the permissive set, like the
+    // phase env itself does; the unsupported-EAPI refusal runs first
+    // anyway, so only supported EAPIs ever reach here.
+    let attrs = portage_dep::eapi::eapi_attrs(Some(&env.eapi))
+        .or_else(|_| portage_dep::eapi::eapi_attrs(None))
+        .expect("None always yields the permissive set");
+    if !attrs.required_use {
+        return Ok(None);
+    }
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return Ok(None);
+    };
+    let Ok(metadata) = portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf)
+    else {
+        return Ok(None);
+    };
+    let required_use = metadata
+        .get("REQUIRED_USE")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if required_use.is_empty() {
+        return Ok(None);
+    }
+    let Some(config) = resolve_standalone_config(&env.pkg_dir, config_root, eroot) else {
+        return Ok(None);
+    };
+    let Ok(repos) = portage_repo::find_repos(config_root) else {
+        return Ok(None);
+    };
+    let enabled: std::collections::HashSet<String> = portage_repo::candidate_effective_use_flags(
+        &repos,
+        &config,
+        &env.category,
+        &env.split.pn,
+        &env.split.pvr,
+    )
+    .into_iter()
+    .collect();
+    if enabled.is_empty() {
+        return Ok(None);
+    }
+    let iuse_raw = metadata.get("IUSE").map(String::as_str).unwrap_or("");
+    let iuse_set = portage_repo::implicit_iuse_set(iuse_raw, &config);
+    match portage_required_use::check_required_use(&required_use, &enabled, &iuse_set) {
+        Ok(true) => Ok(None),
+        Ok(false) => Ok(Some(required_use_message(
+            &required_use,
+            &enabled,
+            &iuse_set,
+        ))),
+        Err(e) => Err(format!(
+            "{}: invalid REQUIRED_USE {required_use:?}: {e}",
+            env.ebuild_abs.display()
+        )),
+    }
+}
+
 /// Resolves a per-package `PORTAGE_TMPDIR` match, re-deriving the tmpdir.
 /// The calling environment wins when it carries the key; a matched
 /// directory that does not exist fails like Portage's `_check_temp_dir`.

@@ -153,6 +153,24 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
+    // Portage `bin/ebuild`: `test` in argv forces the test phase for the
+    // whole invocation (`EBUILD_FORCE_TEST=1`, `features.add("test")`,
+    // `Forcing test.` on stderr) — before any per-command refusal or
+    // gate, so even a refused `test` still prints it. The marker travels
+    // to the phase env through `build_env` (whitelisted there); the
+    // resolved `FEATURES` gain the token in `phase_env_vars`.
+    // Portage: bin/ebuild:296-302
+    let force_test = commands.contains(&"test");
+    if force_test {
+        eprintln!("Forcing test.");
+    }
+    // Empty unless forcing: the only `build_env` the direct path threads.
+    let force_test_env: Vec<(String, String)> = if force_test {
+        vec![("EBUILD_FORCE_TEST".to_string(), "1".to_string())]
+    } else {
+        Vec::new()
+    };
+
     // An ebuild whose EAPI Portage itself does not know refuses before
     // anything else runs — including the dry-run stubs: `doebuild_environment`
     // raises `UnsupportedAPIException` before any phase dispatch, and
@@ -371,6 +389,38 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
 
+        // Portage `doebuild()` validates the metadata (including the
+        // REQUIRED_USE gate under `eapi_has_required_use`) for every
+        // porttree command but `digest`/`help`/`manifest` — once per
+        // invocation, before any phase runs. `clean` stays exempt here
+        // (still a dry-run stub, unreachable in this branch); merge and
+        // unmerge internals never re-gate (the resolver owns the merge
+        // path, teardown is never gated).
+        // Portage: doebuild.py, _validate_deps
+        match ebuild_phases::compute_environment(ebuild_path, &portage_tmpdir) {
+            Ok(gate_env) => {
+                match ebuild_phases::required_use_refusal(
+                    &gate_env,
+                    &merge_options.config_root,
+                    &root,
+                ) {
+                    Ok(Some(refusal)) => {
+                        eprint!("{refusal}");
+                        return ExitCode::from(1);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("ebuild: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("ebuild: {e}");
+                return ExitCode::from(1);
+            }
+        }
+
         // One command at a time: neither `merge`/`unmerge` nor `package`
         // is a phase, so a mixed list needs per-command routing (like
         // `bin/ebuild`'s own per-argument `doebuild` loop).
@@ -399,7 +449,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     debug,
                     config_root: &merge_options.config_root,
                     shell,
-                    build_env: &[],
+                    build_env: &force_test_env,
                     log_file: None,
                 })
             } else {
@@ -412,7 +462,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     debug,
                     config_root: &merge_options.config_root,
                     shell,
-                    build_env: &[],
+                    build_env: &force_test_env,
                 })
             };
             match result {

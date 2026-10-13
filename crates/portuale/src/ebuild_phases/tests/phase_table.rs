@@ -79,15 +79,15 @@ fn is_phase_command_covers_exactly_the_actionmap_deps_chain() {
 }
 
 #[test]
-fn is_standalone_phase_command_covers_exactly_config_info_prerm_postrm() {
-    for cmd in ["config", "info", "prerm", "postrm"] {
+fn is_standalone_phase_command_covers_config_info_prerm_postrm_preinst_postinst() {
+    for cmd in ["config", "info", "prerm", "postrm", "preinst", "postinst"] {
         assert!(
             is_standalone_phase_command(cmd),
             "{cmd} should be a real standalone phase command"
         );
     }
     for cmd in [
-        "merge", "qmerge", "unmerge", "package", "clean", "install", "preinst", "postinst", "help",
+        "merge", "qmerge", "unmerge", "package", "clean", "install", "help",
     ] {
         assert!(
             !is_standalone_phase_command(cmd),

@@ -381,3 +381,43 @@ fn phase_replacing_versions_lists_the_installed_same_slot_versions() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// P3: the REQUIRED_USE refusal text matches Portage's `_validate_deps`
+/// byte for byte — reduced subset line, and the humanized complete
+/// expression only when the reduction shrank anything. Reduced forms
+/// re-checked live against Portage 3.0.82.2 (`check_required_use(...,
+/// eapi='8').tounicode()`).
+#[test]
+fn required_use_message_matches_portage_validate_deps_text() {
+    fn sets(
+        enabled: &[&str],
+        iuse: &[&str],
+    ) -> (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ) {
+        (
+            enabled.iter().map(|s| s.to_string()).collect(),
+            iuse.iter().map(|s| s.to_string()).collect(),
+        )
+    }
+    // The S3 oracle cell: reduced == normalized, no complete block.
+    let (enabled, iuse) = sets(&["t348dfoo"], &["t348dfoo", "t348dbar"]);
+    assert_eq!(
+        required_use_message("t348dfoo? ( t348dbar )", &enabled, &iuse),
+        "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n    t348dfoo? ( t348dbar )\n\n"
+    );
+    // A shrunk reduction appends the humanized complete expression.
+    let (enabled, iuse) = sets(&["foo"], &["foo", "bar", "baz"]);
+    assert_eq!(
+        required_use_message("foo bar", &enabled, &iuse),
+        "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n    bar\n\
+         \n  The above constraints are a subset of the following complete expression:\n    foo bar\n\n"
+    );
+    // Operators stay raw in the reduced line, humanized in the complete one.
+    assert_eq!(
+        required_use_message("foo ^^ ( bar baz )", &enabled, &iuse),
+        "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n    ^^ ( bar baz )\n\
+         \n  The above constraints are a subset of the following complete expression:\n    foo exactly-one-of ( bar baz )\n\n"
+    );
+}

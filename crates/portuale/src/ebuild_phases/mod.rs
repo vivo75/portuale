@@ -6,8 +6,9 @@
 //! the `readonly` vars a shared shell would keep).
 //!
 //! Scope: the chained phases `pretend`..`install` actually run, plus standalone
-//! `config`/`info`/`prerm`/`postrm`; `merge`/`qmerge`/`unmerge`/`package` live in
-//! their own modules; every other `ebuild` command is still a dry-run stub.
+//! `config`/`info`/`prerm`/`postrm`/`preinst`/`postinst`; `merge`/`qmerge`/
+//! `unmerge`/`package` live in their own modules; every other `ebuild`
+//! command is still a dry-run stub.
 //! Build isolation (`sandbox`/`usersandbox`, `network-`/`ipc-`/`mount-`/`pid-sandbox`)
 //! applies to the six `src_*` phases and forces the `Bash` backend there.
 //! Backend: a genuine `bash` subprocess by default, embedded brush via `--shell brush`.
@@ -140,10 +141,14 @@ pub fn is_phase_command(command: &str) -> bool {
 }
 
 /// Whether `command` is a standalone single-phase `ebuild` command with no
-/// prerequisite chain: `config`/`info`/`prerm`/`postrm`. `preinst`/`postinst`
-/// stay merge-internal (ordering-tied to the file copy); `pretend` is already
-/// chained; `ebuild.rs` handles `help`. `run_single_phase` fits all four.
+/// prerequisite chain: `config`/`info`/`prerm`/`postrm`/`preinst`/`postinst`.
+/// `preinst`/`postinst` run standalone exactly like Portage's direct
+/// `_spawn_phase` for them (no dep chain, no merge); `pretend` is already
+/// chained; `ebuild.rs` handles `help`. `run_single_phase` fits all six.
 /// Portage: doebuild.py
 pub fn is_standalone_phase_command(command: &str) -> bool {
-    matches!(command, "config" | "info" | "prerm" | "postrm")
+    matches!(
+        command,
+        "config" | "info" | "prerm" | "postrm" | "preinst" | "postinst"
+    )
 }

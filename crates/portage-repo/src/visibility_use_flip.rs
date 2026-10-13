@@ -150,8 +150,11 @@ pub(crate) fn suggested_use_candidate(
 /// the arch list, `use.mask ∪ use.force`, the literal
 /// `build`/`bootstrap` flags and `iuse_effective`: the full domain for
 /// contextual flag validity (wider than the `use_deps_satisfied` subset).
+/// Also the validity domain for the standalone `ebuild` REQUIRED_USE
+/// gate (`ebuild_phases::required_use_refusal`), the same set the
+/// resolve pass checks against — never re-derived per caller.
 /// Portage: config.py, _get_implicit_iuse
-pub(crate) fn implicit_iuse_set(iuse: &str, config: &portage_profile::Config) -> HashSet<String> {
+pub fn implicit_iuse_set(iuse: &str, config: &portage_profile::Config) -> HashSet<String> {
     let mut iuse_set: HashSet<String> = iuse
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
