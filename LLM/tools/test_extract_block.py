@@ -64,6 +64,16 @@ class ExtractBlock(unittest.TestCase):
         self.assertIn("ControlFlow::Continue(())", out)
         self.assertIn("-> ControlFlow<()>", out)
 
+    def test_control_flow_host_keeps_its_break(self):
+        src = ("fn host(x: u32) -> ControlFlow<()> {\n    if x == 0 {\n        return ControlFlow::Break(());\n    }\n"
+               "    work(x);\n    ControlFlow::Continue(())\n}\n")
+        c, path = cut(src, 2, 4, ret="ControlFlow<()>", params=[("x", "u32", "val")])
+        c.render(typed=True)
+        out = open(path).read()
+        self.assertIn("if helper(x).is_break() {\n        return ControlFlow::Break(());\n    }", out)
+        self.assertEqual(out.count("return ControlFlow::Break(());"), 2)
+        self.assertNotIn("Break(ControlFlow", out)
+
     def test_try_keeps_return_err(self):
         src = ("fn host() -> Result<(), String> {\n    let v = parse()?;\n"
                "    if v == 0 {\n        return Err(\"zero\".into());\n    }\n    Ok(())\n}\n")

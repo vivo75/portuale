@@ -44,6 +44,8 @@ host's loop `'LABEL` at indent N: a `continue` to that loop becomes
 `ControlFlow::Continue(X)` and the whole `let` becomes
 `let ControlFlow::Continue(PAT) = f(..) else { continue 'loop; };`.
 `--own A,B`: these parameters go by value (the range consumes them).
+`--ret "ControlFlow<()>"`: the host returns `ControlFlow<()>`; its `return ControlFlow::Break(())` stays
+verbatim in the helper (`ControlFlow<()>`) and the call site repeats it.
 `--diverges`: the statement right after the range leaves the block (a
 let-else's closing `continue`), so the host reads nothing the range moves.
 
@@ -307,7 +309,10 @@ class Cut:
             self.returns = False
             self.loop_err = err
         self.raw_body = body
-        self.unit = ret == "()"
+        # host returns `()` or `ControlFlow<()>` (its own `return ControlFlow::Break(())`
+        # stays verbatim in the helper and the call site repeats it)
+        self.cf = ret == "ControlFlow<()>"
+        self.unit = ret == "()" or self.cf
         self.err = None
         if not self.loop:
             code = code_no_closures(body)
@@ -323,6 +328,8 @@ class Cut:
                                               "use the hand pattern of the task (Result<Option<T>, E> helper)")
             else:
                 self.returns = wrap_returns(body, "Some", self.unit) != body
+                if self.cf:
+                    self.returns = "return" in code_no_closures(body)
         # outputs: top-level `let` names of the range read after it
         host_end = next(i for i in range(self.end, len(lines)) if lines[i] == "}")
         self.host_end = host_end
@@ -415,6 +422,7 @@ class Cut:
         mpat = (("mut " + onames[0]) if len(onames) == 1
                 else oname + " { " + ", ".join("mut " + n for n in onames) + " }") if onames else None
         ind = self.ind
+        self.rtn = "return ControlFlow::Break(())" if self.cf else "return"
         if self.loop:
             ce = call + ("?" if self.fallible else "")
             if self.value:
@@ -433,14 +441,14 @@ class Cut:
             site = [f"    let {mpat} = {call}?;"] if onames else [f"    {call}?;"]
         elif onames and self.returns and self.unit:
             site = [f"    let {mpat} = match {call} {{", "        ControlFlow::Continue(out) => out,",
-                    "        ControlFlow::Break(()) => return,", "    };"]
+                    f"        ControlFlow::Break(()) => {self.rtn},", "    };"]
         elif onames and self.returns:
             site = [f"    let {mpat} = match {call} {{", "        ControlFlow::Continue(out) => out,",
                     f"        ControlFlow::Break({rv}) => return {rv},", "    };"]
         elif onames:
             site = [f"    let {mpat} = {call};"]
         elif self.returns and self.unit:
-            site = [f"    if {call}.is_break() {{", "        return;", "    }"]
+            site = [f"    if {call}.is_break() {{", f"        {self.rtn};", "    }"]
         elif self.returns:
             site = [f"    if let Some({rv}) = {call} {{", f"        return {rv};", "    }"]
         else:
@@ -476,7 +484,7 @@ class Cut:
         else:
             tail = "\n" + writeback
         pre = "".join(f"*{n}_out = {n}; " for n, _, _ in ps if n in copy_mut)
-        body = (wrap_returns(self.raw_body, "ControlFlow::Break" if onames or self.unit else "Some",
+        body = (self.raw_body if self.cf else wrap_returns(self.raw_body, "ControlFlow::Break" if onames or self.unit else "Some",
                              self.unit, keep_err=bool(self.err), pre=pre)
                 if self.returns else self.raw_body)
         if self.loop:
@@ -584,6 +592,8 @@ class Cut:
             code = (m.get("code") or {}).get("code")
             mm = re.search(r"`(\w+)", m["message"])
             p = next((p for p in self.params if mm and p[0] == mm.group(1)), None)
+            if p and p[1].startswith("&mut "):
+                p = None
             if p and code in ("E0594", "E0596", "E0384") and p[2] != "mut":
                 p[2] = "mut"
                 changed = True
@@ -739,6 +749,9 @@ class Cut:
             if t is None:
                 sys.exit(f"no type for {p[0]}: types={types} fallback={fallback}")
             p[1], p[2] = t, ("val" if is_copy(t) else "own" if p[0] in self.own else "ref")
+            if t.startswith("&mut "):
+                # already a mutable reference: passed by implicit reborrow
+                continue
             # mutated in the body: a mutating method, `&mut x`, or an assignment
             code = code_only(self.raw_body)
             n = re.escape(p[0])
