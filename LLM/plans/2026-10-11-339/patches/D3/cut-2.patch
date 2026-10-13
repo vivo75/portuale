@@ -1,0 +1,619 @@
+diff --git a/crates/portuale/src/pretend/problem_reports.rs b/crates/portuale/src/pretend/problem_reports.rs
+index 85f1a17a..74c23891 100644
+--- a/crates/portuale/src/pretend/problem_reports.rs
++++ b/crates/portuale/src/pretend/problem_reports.rs
+@@ -4,6 +4,7 @@ use crate::pretend::*;
+ use portage_profile::Config;
+ use portage_repo::GraphResult;
+ use portage_repo::RepoConfig;
++use portage_repo::SlotConflictInstance;
+ 
+ /// Missing arguments, and the abort reports for cycles and unsatisfied dependencies.
+ pub(crate) fn show_missing_args_and_aborts(
+@@ -425,276 +426,21 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
+             println!();
+             println!("{}/{}:{}", c.category, c.package, c.slot);
+             for inst in &c.instances {
+-                println!();
+-                if inst.installed {
+-                    // An installed instance names its position.
+-                    println!(
+-                        "  ({}/{}-{}:{}/{}::{}, installed in '{}') {} pulled in by",
+-                        c.category,
+-                        c.package,
+-                        inst.version,
+-                        c.slot,
+-                        inst.sub_slot,
+-                        inst.repo_name,
+-                        root.display(),
+-                        render_pkg_use_display(&inst.use_display)
+-                    );
+-                } else {
+-                    println!(
+-                        "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} pulled in by",
+-                        c.category,
+-                        c.package,
+-                        inst.version,
+-                        c.slot,
+-                        inst.sub_slot,
+-                        inst.repo_name,
+-                        render_pkg_use_display(&inst.use_display)
+-                    );
+-                }
+-                // A bare `(Argument)` parent shows only when some other
+-                // instance is already installed.
+-                let show_argument_parents = c
+-                    .instances
+-                    .iter()
+-                    .any(|o| !std::ptr::eq(o, inst) && o.installed);
+-                // Compare against every other instance in the slot by identity,
+-                // not version: a same-version merge/installed twin still sees
+-                // its twin, so the USE parent classifies.
+-                // Portage: resolver/slot_collision.py
+-                let others: Vec<ConflictOther> = c
+-                    .instances
+-                    .iter()
+-                    .filter(|o| !std::ptr::eq(*o, inst))
+-                    .map(|o| {
+-                        // An installed other's own vdb-recorded flag sets,
+-                        // like the `use_display` on its header line.
+-                        let (iuse, use_flags) = if o.installed {
+-                            portage_repo::installed_pkg_iuse_and_use(
+-                                root,
+-                                &c.category,
+-                                &c.package,
+-                                &o.version,
+-                            )
+-                        } else {
+-                            slot_conflict_flag_sets(
+-                                repos,
+-                                config,
+-                                &c.category,
+-                                &c.package,
+-                                &o.version,
+-                            )
+-                        };
+-                        ConflictOther {
+-                            cpv: format!(
+-                                "{}/{}-{}:{}/{}::{}",
+-                                c.category, c.package, o.version, c.slot, o.sub_slot, o.repo_name
+-                            ),
+-                            iuse,
+-                            use_flags,
+-                            installed: o.installed,
+-                        }
+-                    })
+-                    .collect();
+-                let mut classified: Vec<ClassifiedParent> = Vec::new();
+-                // An installed parent renders `required by (<cpv>, installed
+-                // in '<root>')`.
+-                let mut classified_installed: Vec<bool> = Vec::new();
+-                for p in &inst.parents {
+-                    if p.parent_cpv.is_empty() && !show_argument_parents {
+-                        continue;
+-                    }
+-                    let Some(atom) = parse_atom(&p.atom) else {
+-                        continue;
+-                    };
+-                    let (mut reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
+-                    // A bare command-line parent satisfied by every other
+-                    // instance is still shown once some other instance is
+-                    // installed; only fires when no version/slot/USE reason
+-                    // did.
+-                    // Portage: resolver/slot_collision.py
+-                    if p.parent_cpv.is_empty()
+-                        && reasons.is_empty()
+-                        && others.iter().any(|o| o.installed)
+-                    {
+-                        reasons.push(SlotConflictReason::Argument);
+-                    }
+-                    if !reasons.is_empty() {
+-                        classified.push(ClassifiedParent {
+-                            parent_cpv: &p.parent_cpv,
+-                            atom_str: &p.atom,
+-                            atom,
+-                            reasons,
+-                            use_unconditional,
+-                            use_display: &p.use_display,
+-                        });
+-                        classified_installed.push(p.installed);
+-                    }
+-                }
+-                let num_all_specific: usize = classified.iter().map(|p| p.reasons.len()).sum();
+-                // Group parents by reason, first-seen order preserved.
+-                let mut groups: Vec<(SlotConflictReason, Vec<usize>)> = Vec::new();
+-                for (i, p) in classified.iter().enumerate() {
+-                    for reason in &p.reasons {
+-                        match groups.iter_mut().find(|(r, _)| r == reason) {
+-                            Some((_, members)) => members.push(i),
+-                            None => groups.push((reason.clone(), vec![i])),
+-                        }
+-                    }
+-                }
+-                // Representative selection: farthest version per `cp` for a
+-                // `version` group, the first member for a `slot` group, every
+-                // member of a `use` group, and every member under
+-                // `--verbose-conflicts`.
+-                // Portage: resolver/slot_collision.py
+-                let mut selected: Vec<usize> = Vec::new();
+-                for (reason, members) in &groups {
+-                    if verbose_conflicts {
+-                        selected.extend(members.iter().copied());
+-                        continue;
+-                    }
+-                    match reason {
+-                        SlotConflictReason::Version(sub) => {
+-                            let mut best: Vec<(String, usize)> = Vec::new();
+-                            for &m in members {
+-                                let atom = &classified[m].atom;
+-                                let cp = format!("{}/{}", atom.category, atom.package);
+-                                match best.iter_mut().find(|(c, _)| *c == cp) {
+-                                    None => best.push((cp, m)),
+-                                    Some((_, cur)) => {
+-                                        let cur_ver =
+-                                            classified[*cur].atom.version.as_deref().unwrap_or("");
+-                                        let new_ver = atom.version.as_deref().unwrap_or("");
+-                                        let cmp = portage_versions::vercmp(new_ver, cur_ver);
+-                                        let farther = match *sub {
+-                                            "ge" | "eq" => cmp == Some(1),
+-                                            "le" => cmp == Some(-1),
+-                                            _ => false,
+-                                        };
+-                                        if farther {
+-                                            *cur = m;
+-                                        }
+-                                    }
+-                                }
+-                            }
+-                            selected.extend(best.into_iter().map(|(_, m)| m));
+-                        }
+-                        SlotConflictReason::Slot(_) => {
+-                            if let Some(&first) = members.first() {
+-                                selected.push(first);
+-                            }
+-                        }
+-                        SlotConflictReason::Use(_) => {
+-                            selected.extend(members.iter().copied());
+-                        }
+-                        SlotConflictReason::Argument => {
+-                            selected.extend(members.iter().copied());
+-                        }
+-                    }
+-                }
+-                // The `need_rebuild` scan runs over every `slot`-group parent
+-                // (verbose or not): an unrebuildable parent is always shown,
+-                // and recorded for the once-per-notice trailer below.
+-                for (reason, members) in &groups {
+-                    if !matches!(reason, SlotConflictReason::Slot(_)) {
+-                        continue;
+-                    }
+-                    for &m in members {
+-                        let p = &classified[m];
+-                        if let Some(why) = slot_conflict_need_rebuild(SlotConflictNeedRebuildArgs {
+-                            parent_cpv: p.parent_cpv,
+-                            atom: &p.atom,
+-                            excluded,
+-                            useoldpkg_atoms: useoldpkg_atoms_render,
+-                            usepkgonly,
+-                            repos,
+-                            config,
+-                            installed: &installed_pkgs,
+-                        }) {
+-                            if !selected.contains(&m) {
+-                                selected.push(m);
+-                            }
+-                            let entry = (format!("({}, installed)", p.parent_cpv), why);
+-                            if !need_rebuild.contains(&entry) {
+-                                need_rebuild.push(entry);
+-                            }
+-                        }
+-                    }
+-                }
+-                selected.sort_unstable();
+-                selected.dedup();
+-                // `unconditional_use_deps` first (Portage's own set order is
+-                // nondeterministic; portuale keeps the stable classified
+-                // order within each half).
+-                selected.sort_by_key(|m| !classified[*m].use_unconditional);
+-                for &m in &selected {
+-                    let p = &classified[m];
+-                    let version_violated = p
+-                        .reasons
+-                        .iter()
+-                        .any(|r| matches!(r, SlotConflictReason::Version(_)));
+-                    let slot_violated = p
+-                        .reasons
+-                        .iter()
+-                        .any(|r| matches!(r, SlotConflictReason::Slot(_)));
+-                    let use_flags: Vec<String> = p
+-                        .reasons
+-                        .iter()
+-                        .filter_map(|r| match r {
+-                            SlotConflictReason::Use(f) => Some(f.clone()),
+-                            _ => None,
+-                        })
+-                        .collect();
+-                    let idx = slot_conflict_caret_idx(
+-                        p.atom_str,
+-                        &p.atom,
+-                        version_violated,
+-                        slot_violated,
+-                        &use_flags,
+-                    );
+-                    // The violated spans render red under `--color y`; the `^`
+-                    // markers are placed on the displayed string, so color
+-                    // and carets agree (Portage marks pre-color indices and
+-                    // drifts: a genuine upstream bug not reproduced here).
+-                    let (atom_display, shifted) = colorize_marked_spans(p.atom_str, &idx, color);
+-                    // A bare command-line parent renders `<atom> (Argument)`
+-                    // with no marker line; an installed parent names its
+-                    // position like an installed instance does.
+-                    if p.parent_cpv.is_empty() {
+-                        println!("    {atom_display} (Argument)");
+-                        continue;
+-                    }
+-                    let parent_pos = if classified_installed[m] {
+-                        format!("{}, installed in '{}'", p.parent_cpv, root.display())
+-                    } else {
+-                        format!("{}, ebuild scheduled for merge", p.parent_cpv)
+-                    };
+-                    let cur_line = format!(
+-                        "{} required by ({}) {}\n",
+-                        atom_display,
+-                        parent_pos,
+-                        render_pkg_use_display(p.use_display)
+-                    );
+-                    let marker: String = (0..cur_line.chars().count())
+-                        .map(|k| if shifted.contains(&k) { '^' } else { ' ' })
+-                        .collect();
+-                    print!("    {cur_line}");
+-                    println!("    {marker}");
+-                }
+-                if selected.is_empty() && !classified.is_empty() {
+-                    println!(
+-                        "    (no parents that aren't satisfied by other packages in this slot)"
+-                    );
+-                }
+-                let omitted = num_all_specific - selected.len();
+-                if omitted > 0 {
+-                    any_omitted = true;
+-                    let noun = if selected.len() > 1 {
+-                        "problems"
+-                    } else {
+-                        "problem"
+-                    };
+-                    println!("    (and {omitted} more with the same {noun})");
+-                }
++                show_conflict_instance(ShowConflictInstanceArgs {
++                    inst,
++                    c,
++                    root,
++                    repos,
++                    config,
++                    verbose_conflicts,
++                    excluded,
++                    useoldpkg_atoms_render,
++                    usepkgonly,
++                    installed_pkgs: &installed_pkgs,
++                    need_rebuild: &mut need_rebuild,
++                    color,
++                    any_omitted: &mut any_omitted,
++                });
+             }
+         }
+         if any_omitted {
+@@ -749,6 +495,314 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
+     }
+ }
+ 
++/// The values [`show_conflict_instance`] reads from its caller.
++pub(crate) struct ShowConflictInstanceArgs<'a> {
++    pub(crate) inst: &'a SlotConflictInstance,
++    pub(crate) c: &'a SlotConflict,
++    pub(crate) root: &'a Path,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) config: &'a Config,
++    pub(crate) verbose_conflicts: bool,
++    pub(crate) excluded: &'a Vec<String>,
++    pub(crate) useoldpkg_atoms_render: &'a [String],
++    pub(crate) usepkgonly: bool,
++    pub(crate) installed_pkgs: &'a HashSet<(String, String, String)>,
++    pub(crate) need_rebuild: &'a mut Vec<(String, String)>,
++    pub(crate) color: &'a Colorizer,
++    pub(crate) any_omitted: &'a mut bool,
++}
++
++/// Print one instance of a slot conflict with the parents that pull it in.
++pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
++    let ShowConflictInstanceArgs {
++        inst,
++        c,
++        root,
++        repos,
++        config,
++        verbose_conflicts,
++        excluded,
++        useoldpkg_atoms_render,
++        usepkgonly,
++        installed_pkgs,
++        need_rebuild,
++        color,
++        any_omitted: any_omitted_out,
++    } = args;
++    let mut any_omitted = *any_omitted_out;
++    println!();
++    if inst.installed {
++        // An installed instance names its position.
++        println!(
++            "  ({}/{}-{}:{}/{}::{}, installed in '{}') {} pulled in by",
++            c.category,
++            c.package,
++            inst.version,
++            c.slot,
++            inst.sub_slot,
++            inst.repo_name,
++            root.display(),
++            render_pkg_use_display(&inst.use_display)
++        );
++    } else {
++        println!(
++            "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} pulled in by",
++            c.category,
++            c.package,
++            inst.version,
++            c.slot,
++            inst.sub_slot,
++            inst.repo_name,
++            render_pkg_use_display(&inst.use_display)
++        );
++    }
++    // A bare `(Argument)` parent shows only when some other
++    // instance is already installed.
++    let show_argument_parents = c
++        .instances
++        .iter()
++        .any(|o| !std::ptr::eq(o, inst) && o.installed);
++    // Compare against every other instance in the slot by identity,
++    // not version: a same-version merge/installed twin still sees
++    // its twin, so the USE parent classifies.
++    // Portage: resolver/slot_collision.py
++    let others: Vec<ConflictOther> = c
++        .instances
++        .iter()
++        .filter(|o| !std::ptr::eq(*o, inst))
++        .map(|o| {
++            // An installed other's own vdb-recorded flag sets,
++            // like the `use_display` on its header line.
++            let (iuse, use_flags) = if o.installed {
++                portage_repo::installed_pkg_iuse_and_use(root, &c.category, &c.package, &o.version)
++            } else {
++                slot_conflict_flag_sets(repos, config, &c.category, &c.package, &o.version)
++            };
++            ConflictOther {
++                cpv: format!(
++                    "{}/{}-{}:{}/{}::{}",
++                    c.category, c.package, o.version, c.slot, o.sub_slot, o.repo_name
++                ),
++                iuse,
++                use_flags,
++                installed: o.installed,
++            }
++        })
++        .collect();
++    let mut classified: Vec<ClassifiedParent> = Vec::new();
++    // An installed parent renders `required by (<cpv>, installed
++    // in '<root>')`.
++    let mut classified_installed: Vec<bool> = Vec::new();
++    for p in &inst.parents {
++        if p.parent_cpv.is_empty() && !show_argument_parents {
++            continue;
++        }
++        let Some(atom) = parse_atom(&p.atom) else {
++            continue;
++        };
++        let (mut reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
++        // A bare command-line parent satisfied by every other
++        // instance is still shown once some other instance is
++        // installed; only fires when no version/slot/USE reason
++        // did.
++        // Portage: resolver/slot_collision.py
++        if p.parent_cpv.is_empty() && reasons.is_empty() && others.iter().any(|o| o.installed) {
++            reasons.push(SlotConflictReason::Argument);
++        }
++        if !reasons.is_empty() {
++            classified.push(ClassifiedParent {
++                parent_cpv: &p.parent_cpv,
++                atom_str: &p.atom,
++                atom,
++                reasons,
++                use_unconditional,
++                use_display: &p.use_display,
++            });
++            classified_installed.push(p.installed);
++        }
++    }
++    let num_all_specific: usize = classified.iter().map(|p| p.reasons.len()).sum();
++    // Group parents by reason, first-seen order preserved.
++    let mut groups: Vec<(SlotConflictReason, Vec<usize>)> = Vec::new();
++    for (i, p) in classified.iter().enumerate() {
++        for reason in &p.reasons {
++            match groups.iter_mut().find(|(r, _)| r == reason) {
++                Some((_, members)) => members.push(i),
++                None => groups.push((reason.clone(), vec![i])),
++            }
++        }
++    }
++    // Representative selection: farthest version per `cp` for a
++    // `version` group, the first member for a `slot` group, every
++    // member of a `use` group, and every member under
++    // `--verbose-conflicts`.
++    // Portage: resolver/slot_collision.py
++    let mut selected: Vec<usize> = Vec::new();
++    for (reason, members) in &groups {
++        if verbose_conflicts {
++            selected.extend(members.iter().copied());
++            continue;
++        }
++        match reason {
++            SlotConflictReason::Version(sub) => {
++                let mut best: Vec<(String, usize)> = Vec::new();
++                for &m in members {
++                    let atom = &classified[m].atom;
++                    let cp = format!("{}/{}", atom.category, atom.package);
++                    match best.iter_mut().find(|(c, _)| *c == cp) {
++                        None => best.push((cp, m)),
++                        Some((_, cur)) => {
++                            let cur_ver = classified[*cur].atom.version.as_deref().unwrap_or("");
++                            let new_ver = atom.version.as_deref().unwrap_or("");
++                            let cmp = portage_versions::vercmp(new_ver, cur_ver);
++                            let farther = match *sub {
++                                "ge" | "eq" => cmp == Some(1),
++                                "le" => cmp == Some(-1),
++                                _ => false,
++                            };
++                            if farther {
++                                *cur = m;
++                            }
++                        }
++                    }
++                }
++                selected.extend(best.into_iter().map(|(_, m)| m));
++            }
++            SlotConflictReason::Slot(_) => {
++                if let Some(&first) = members.first() {
++                    selected.push(first);
++                }
++            }
++            SlotConflictReason::Use(_) => {
++                selected.extend(members.iter().copied());
++            }
++            SlotConflictReason::Argument => {
++                selected.extend(members.iter().copied());
++            }
++        }
++    }
++    // The `need_rebuild` scan runs over every `slot`-group parent
++    // (verbose or not): an unrebuildable parent is always shown,
++    // and recorded for the once-per-notice trailer below.
++    for (reason, members) in &groups {
++        if !matches!(reason, SlotConflictReason::Slot(_)) {
++            continue;
++        }
++        for &m in members {
++            let p = &classified[m];
++            if let Some(why) = slot_conflict_need_rebuild(SlotConflictNeedRebuildArgs {
++                parent_cpv: p.parent_cpv,
++                atom: &p.atom,
++                excluded,
++                useoldpkg_atoms: useoldpkg_atoms_render,
++                usepkgonly,
++                repos,
++                config,
++                installed: installed_pkgs,
++            }) {
++                if !selected.contains(&m) {
++                    selected.push(m);
++                }
++                let entry = (format!("({}, installed)", p.parent_cpv), why);
++                if !need_rebuild.contains(&entry) {
++                    need_rebuild.push(entry);
++                }
++            }
++        }
++    }
++    show_selected_parents(
++        &mut selected,
++        &classified,
++        color,
++        &classified_installed,
++        root,
++    );
++    let omitted = num_all_specific - selected.len();
++    if omitted > 0 {
++        any_omitted = true;
++        let noun = if selected.len() > 1 {
++            "problems"
++        } else {
++            "problem"
++        };
++        println!("    (and {omitted} more with the same {noun})");
++    }
++    *any_omitted_out = any_omitted;
++}
++
++/// Print the selected parents of a conflict instance, unconditional USE dependencies first.
++pub(crate) fn show_selected_parents(
++    selected: &mut Vec<usize>,
++    classified: &[ClassifiedParent<'_>],
++    color: &Colorizer,
++    classified_installed: &[bool],
++    root: &Path,
++) {
++    selected.sort_unstable();
++    selected.dedup();
++    // `unconditional_use_deps` first (Portage's own set order is
++    // nondeterministic; portuale keeps the stable classified
++    // order within each half).
++    selected.sort_by_key(|m| !classified[*m].use_unconditional);
++    for &m in &*selected {
++        let p = &classified[m];
++        let version_violated = p
++            .reasons
++            .iter()
++            .any(|r| matches!(r, SlotConflictReason::Version(_)));
++        let slot_violated = p
++            .reasons
++            .iter()
++            .any(|r| matches!(r, SlotConflictReason::Slot(_)));
++        let use_flags: Vec<String> = p
++            .reasons
++            .iter()
++            .filter_map(|r| match r {
++                SlotConflictReason::Use(f) => Some(f.clone()),
++                _ => None,
++            })
++            .collect();
++        let idx = slot_conflict_caret_idx(
++            p.atom_str,
++            &p.atom,
++            version_violated,
++            slot_violated,
++            &use_flags,
++        );
++        // The violated spans render red under `--color y`; the `^`
++        // markers are placed on the displayed string, so color
++        // and carets agree (Portage marks pre-color indices and
++        // drifts: a genuine upstream bug not reproduced here).
++        let (atom_display, shifted) = colorize_marked_spans(p.atom_str, &idx, color);
++        // A bare command-line parent renders `<atom> (Argument)`
++        // with no marker line; an installed parent names its
++        // position like an installed instance does.
++        if p.parent_cpv.is_empty() {
++            println!("    {atom_display} (Argument)");
++            continue;
++        }
++        let parent_pos = if classified_installed[m] {
++            format!("{}, installed in '{}'", p.parent_cpv, root.display())
++        } else {
++            format!("{}, ebuild scheduled for merge", p.parent_cpv)
++        };
++        let cur_line = format!(
++            "{} required by ({}) {}\n",
++            atom_display,
++            parent_pos,
++            render_pkg_use_display(p.use_display)
++        );
++        let marker: String = (0..cur_line.chars().count())
++            .map(|k| if shifted.contains(&k) { '^' } else { ' ' })
++            .collect();
++        print!("    {cur_line}");
++        println!("    {marker}");
++    }
++    if selected.is_empty() && !classified.is_empty() {
++        println!("    (no parents that aren't satisfied by other packages in this slot)");
++    }
++}
++
+ /// The values [`show_cycle_redisplay`] reads from its caller.
+ pub(crate) struct ShowCycleRedisplayArgs<'a> {
+     pub(crate) plan: &'a ResolvePlan,

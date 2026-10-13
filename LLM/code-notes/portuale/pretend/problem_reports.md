@@ -27,21 +27,27 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 ## fn show_slot_conflicts
 - Ports Portage's `depgraph._show_slot_collision_notice` -> `slot_conflict_handler.get_conflict()` (`lib/_emerge/resolver/slot_collision.py`): the `!!! Multiple package instances within a single package slot ...` block, then the advisory paragraph. Ported: the preamble, the per-instance `(<cpv>, ebuild scheduled for merge) USE="" pulled in by` line, Portage's `_prepare_conflict_msg_and_check_for_specificity` `collision_reasons` grouping + one-representative-per-reason selection (every parent under `--verbose-conflicts`), the `highlight_violations` `^` marker line (operator, version, slot, and USE-token spans, wrapped in `BAD` red under `--color y` with markers kept aligned on the displayed string -- Portage marks pre-color indices and drifts, a genuine upstream bug portuale deliberately does not reproduce), the `(and N more with the same problem[s])` tail, the `NOTE: Use the '--verbose-conflicts' option to display parents omitted above` footer, the `need_rebuild` "cannot be rebuilt" trailer, and the advisory (with the `--backtrack=30` hint gated the Portage way: shown unless `--backtrack` is >=30 or 0). Documented cuts (fixtures don't exercise them): the `soname` reason key (no soname atom can reach this renderer) and an `=*` operator's `("version", None)` key. The one deliberate divergence in this block: Portage drifts its `^` markers once ANSI codes lengthen the line under `--color y` (genuine upstream bug); portuale wraps the same spans but keeps the markers aligned. The block is display-only: the exit-code consequence lives below in the "display, then fail the action" band next to `unsolvable_blockers` (Portage's `actions.py:460-462` -- a slot conflict fails the run with rc 1, `--pretend` included; see that gate's own comment for the two escapes).
 - `need_rebuild`: installed parents with built slot-operator atoms that cannot be rebuilt, in first-seen order, printed once after all conflicts (Portage keeps a dict across the whole handler).
+- `need_rebuild` trailer: Portage's `slot_collision.py` trailer.
+- Backtrack hint: Portage gates it on the reported depgraph's own `not _allow_backtracking` too (`depgraph.py:1750-1759`): a loop ended early by `need_config_change` reports a pass that still allowed backtracking (backlog #244).
+
+## fn show_conflict_instance
 - Installed nomerge node: `(cpv, installed in '<root>')` (see `build_residual_slot_conflicts`).
 - A bare `(Argument)` parent: Portage files one under a reason only when the *other* package is already installed -- always the case for a residual record's installed side, never for merge-vs-merge records (whose instances are all scheduled for merge, so such a parent contributes no specific reason and is not shown).
 - Comparison: Portage compares against every *other* instance in the slot (`slot_collision.py`: `if other_pkg == pkg: continue`) -- identity, not version: a same-version merge/installed twin (a USE-only break, backlog #222) still sees its twin, so the USE parent classifies.
 - Flag sets for the `("use", flag)` branch: an installed other's own vdb-recorded sets.
-- `(parent_cpv, atom, display, installed)` selected-line rendering.
 - Portage's `slot_collision.py` `("AtomArg", None)` key (`elif isinstance(ppkg, AtomArg) and other_pkg.installed`): like Portage's `elif`, it only fires when no version/slot/USE reason did (so an argument parent that already classifies, like pg1's `>=cgp1x-2`, renders exactly once, as today).
 - Grouping: parents grouped by reason, first-seen order preserved.
-- Representative selection: Portage shows all broken reverse dependencies for a `use` group ("people can simply use a pager").
-- `need_rebuild` scan runs over every `slot`-group parent (verbose or not).
-- Portage shows `unconditional_use_deps` first (its own set order is nondeterministic; portuale keeps the stable classified order within each half).
 - `highlight_violations` wraps the violated spans in `BAD` red here (`--color y` only; plain otherwise) -- and then marks the PRE-color indices, so its `^` line drifts once ANSI codes lengthen the line (genuine upstream bug: the markers land left of their visible targets, and Portage's own red varies by terminal colormap, so byte-parity with the drift is unachievable anyway).
 - A bare command-line parent renders `<atom> (Argument)` with no marker line (Portage shows no `^` under one either).
-- `need_rebuild` trailer: Portage's `slot_collision.py` trailer.
-- Backtrack hint: Portage gates it on the reported depgraph's own `not _allow_backtracking` too (`depgraph.py:1750-1759`): a loop ended early by `need_config_change` reports a pass that still allowed backtracking (backlog #244).
 - The selected-line rendering: an installed parent renders `required by (<cpv>, installed in '<root>')`.
+
+## fn select_conflict_parents
+- Representative selection: Portage shows all broken reverse dependencies for a `use` group ("people can simply use a pager").
+- `need_rebuild` scan runs over every `slot`-group parent (verbose or not).
+
+## fn show_selected_parents
+- `(parent_cpv, atom, display, installed)` selected-line rendering.
+- Portage shows `unconditional_use_deps` first (its own set order is nondeterministic; portuale keeps the stable classified order within each half).
 
 ## fn show_cycle_redisplay
 - The circular-dependency block shown again after the merge list.
