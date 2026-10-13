@@ -350,6 +350,9 @@ pub(crate) fn sort_by_dep_position(
     indexed.into_iter().map(|(_, pi)| pi).collect()
 }
 
+/// The dependency keys in the order the walk trace prints them.
+const KEYS: [&str; 5] = ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"];
+
 /// Stages 2 / 4 / 6: the per-package resolution narration (`Child:` /
 /// `Parent Dep:`, `Parent:` / `Depstring:` / `Priority:` / `Candidates:`,
 /// virtual recursion, `\nExiting...`), emitted in one pass over the final
@@ -368,67 +371,9 @@ pub(crate) fn dump_resolution_walk(
     if !crate::resolver_debug() {
         return;
     }
-    const KEYS: [&str; 5] = ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"];
     // A withheld (never merged) entry carries no slot/sub-slot or repo, which
     // would render as `:0/0::__unknown__`; resolve the display triple from
     // the candidate list instead (trace-only; the resolver record is untouched).
-    let enriched = |e: &GraphEntry| -> GraphEntry {
-        if e.repo_name.is_some() {
-            return e.clone();
-        }
-        let ver = entry_version(e).unwrap_or("").to_string();
-        if ver.is_empty() {
-            return e.clone();
-        }
-        if let Ok(cands) = list_candidates(repos, &e.category, &e.package)
-            && let Some(c) = cands.iter().find(|c| c.version == ver)
-        {
-            let mut filled = e.clone();
-            if filled.slot.is_none() {
-                filled.slot = Some(c.slot.clone());
-            }
-            if filled.sub_slot.is_none() {
-                filled.sub_slot = Some(c.sub_slot.clone());
-            }
-            filled.repo_name = Some(c.repo_name.clone());
-            return filled;
-        }
-        e.clone()
-    };
-    let label_of = |cat: &str, pkg: &str| -> String {
-        entries
-            .iter()
-            .find(|e| e.category == cat && e.package == pkg)
-            .map(|e| {
-                let filled = enriched(e);
-                node_label(&filled, root, is_nomerge(e))
-            })
-            .unwrap_or_else(|| format!("({cat}/{pkg})"))
-    };
-    let label_of_key = |key: &(String, String, String, bool)| -> (String, String) {
-        let (cat, pkg, ver, installed) = key;
-        let found = entries.iter().find(|e| {
-            e.category == *cat
-                && e.package == *pkg
-                && entry_version(e).unwrap_or("") == ver
-                && is_nomerge(e) == *installed
-        });
-        let entry = found.or_else(|| {
-            entries
-                .iter()
-                .find(|e| e.category == *cat && e.package == *pkg)
-        });
-        match entry {
-            Some(e) => {
-                let filled = enriched(e);
-                (
-                    node_label(&filled, root, is_nomerge(e)),
-                    child_use_str(e, root),
-                )
-            }
-            None => (format!("({cat}/{pkg})"), String::new()),
-        }
-    };
     // Per-instance rows, keyed by `(cat, pkg, version, installed)`; dedup by
     // `(child, parent, atom, unevaluated)`.
     let mut rows: std::collections::BTreeMap<(String, String, String, bool), Vec<&ParentAtom>> =
@@ -446,38 +391,11 @@ pub(crate) fn dump_resolution_walk(
             list.push(pa);
         }
     }
-    let render_rows = |child_cat: &str,
-                       child_pkg: &str,
-                       child_ver: &str,
-                       child_installed: bool,
-                       fallback: &dyn Fn()| {
-        match rows.get(&(
-            child_cat.to_string(),
-            child_pkg.to_string(),
-            child_ver.to_string(),
-            child_installed,
-        )) {
-            Some(list) if !list.is_empty() => {
-                for pa in list {
-                    match &pa.parent {
-                        None => out(format_args!("Parent Dep:    {}\n", pa.atom)),
-                        Some((pc, pp)) => {
-                            let unevaluated = pa
-                                .unevaluated
-                                .as_deref()
-                                .map(|u| format!(" ({u})"))
-                                .unwrap_or_default();
-                            out(format_args!(
-                                "Parent Dep:    {}{unevaluated} required by {}\n",
-                                pa.atom,
-                                label_of(pc, pp)
-                            ));
-                        }
-                    }
-                }
-            }
-            _ => fallback(),
-        }
+    let ctx = WalkTraceCtx {
+        entries,
+        root,
+        repos,
+        rows,
     };
     out(format_args!(
         "\n# resolution walk (portuale BFS order, not Portage's LIFO _create_graph order)\n"
@@ -519,120 +437,19 @@ pub(crate) fn dump_resolution_walk(
         *list = sorted;
     }
     for (idx, e) in entries.iter().enumerate() {
-        let filled = enriched(e);
-        let node = node_label(&filled, root, is_nomerge(e));
-        out(format_args!(
-            "\nChild:         {node} USE=\"{}\"\n",
-            child_use_str(e, root)
-        ));
-        let ver = entry_version(e).unwrap_or("").to_string();
-        let installed = is_nomerge(e);
-        consumed.insert((
-            e.category.clone(),
-            e.package.clone(),
-            ver.clone(),
-            installed,
-        ));
-        render_rows(&e.category, &e.package, &ver, installed, &|| {
-            if e.required_by.is_empty() {
-                out(format_args!(
-                    "Parent Dep:    {}/{} (Argument)\n",
-                    e.category, e.package
-                ));
-            } else {
-                for (pc, pp) in &e.required_by {
-                    out(format_args!(
-                        "Parent Dep:    {}/{} required by {}\n",
-                        e.category,
-                        e.package,
-                        label_of(pc, pp)
-                    ));
-                }
-            }
+        trace_entry_rows(TraceEntryRowsArgs {
+            ctx: &ctx,
+            e,
+            root,
+            consumed: &mut consumed,
+            renarrate_at: &renarrate_at,
+            idx,
+            parent_atoms,
         });
-        // Stage 6: a new-style virtual's own RDEPEND recursion, traced as a
-        // distinct step. Portuale walks a `virtual/*` entry like any other,
-        // so synthesise the pair.
-        if e.category == "virtual" && !is_nomerge(e) {
-            let rdep: Vec<&str> = e
-                .deps
-                .iter()
-                .filter(|d| d.key == 0)
-                .map(|d| d.atom.as_str())
-                .collect();
-            out(format_args!(
-                "Virtual Parent:      {node}\nVirtual Depstring:   {}\n",
-                rdep.join(" ")
-            ));
-        }
-        for (ki, kname) in KEYS.iter().enumerate() {
-            let atoms: Vec<&str> = e
-                .deps
-                .iter()
-                .filter(|d| d.key as usize == ki)
-                .map(|d| d.atom.as_str())
-                .collect();
-            if atoms.is_empty() {
-                continue;
-            }
-            let prio = e
-                .deps
-                .iter()
-                .find(|d| d.key as usize == ki)
-                .map(|d| d.priority)
-                .unwrap_or_default();
-            out(format_args!(
-                "\nParent:    {node}\nDepstring: {} ({kname})\nPriority:  {}\n",
-                atoms.join(" "),
-                dep_priority_str(&prio)
-            ));
-            // `Depstring:` prints raw, `Candidates:` evaluated; the evaluated
-            // form rides `DepEdge` beside the token, so the walk itself is
-            // untouched.
-            let evaluated: Vec<&str> = e
-                .deps
-                .iter()
-                .filter(|d| d.key as usize == ki)
-                .map(|d| d.evaluated.as_str())
-                .collect();
-            out(format_args!(
-                "Candidates: [{}]\n",
-                evaluated
-                    .iter()
-                    .map(|a| format!("'{a}'"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        // The bounded inner-ring re-narration: only back edges were scheduled,
-        // so DAG traces emit nothing new here.
-        for pi in &renarrate_at[idx] {
-            let pa = &parent_atoms[*pi];
-            let child_key = (
-                pa.child_category.clone(),
-                pa.child_package.clone(),
-                pa.child_version.clone(),
-                pa.child_installed,
-            );
-            let (child_label, child_use) = label_of_key(&child_key);
-            out(format_args!(
-                "\nChild:         {child_label} USE=\"{child_use}\"\n"
-            ));
-            let unevaluated = pa
-                .unevaluated
-                .as_deref()
-                .map(|u| format!(" ({u})"))
-                .unwrap_or_default();
-            out(format_args!(
-                "Parent Dep:    {}{unevaluated} required by {node}\n",
-                pa.atom,
-            ));
-        }
-        out(format_args!("\nExiting... {node}\n"));
     }
     // Installed children the walk created but `entries` no longer holds (a
     // same-slot merge shadows them): reproduce the one lost block.
-    for (key, list) in &rows {
+    for (key, list) in &ctx.rows {
         if consumed.contains(key) {
             continue;
         }
@@ -668,12 +485,274 @@ pub(crate) fn dump_resolution_walk(
                     out(format_args!(
                         "Parent Dep:    {}{unevaluated} required by {}\n",
                         pa.atom,
-                        label_of(pc, pp)
+                        ctx.label_of(pc, pp)
                     ));
                 }
             }
         }
         out(format_args!("\nExiting... ({cat}/{pkg}-{ver})\n"));
+    }
+}
+
+/// The values [`trace_entry_rows`] reads from its caller.
+pub(crate) struct TraceEntryRowsArgs<'a> {
+    pub(crate) ctx: &'a WalkTraceCtx<'a>,
+    pub(crate) e: &'a GraphEntry,
+    pub(crate) root: &'a Path,
+    pub(crate) consumed: &'a mut std::collections::BTreeSet<(String, String, String, bool)>,
+    pub(crate) renarrate_at: &'a [Vec<usize>],
+    pub(crate) idx: usize,
+    pub(crate) parent_atoms: &'a [ParentAtom],
+}
+
+/// Trace one graph entry: its parent rows, its dependency strings and the ring re-narration.
+pub(crate) fn trace_entry_rows(args: TraceEntryRowsArgs<'_>) {
+    let TraceEntryRowsArgs {
+        ctx,
+        e,
+        root,
+        consumed,
+        renarrate_at,
+        idx,
+        parent_atoms,
+    } = args;
+    let filled = ctx.enriched(e);
+    let node = node_label(&filled, root, is_nomerge(e));
+    out(format_args!(
+        "\nChild:         {node} USE=\"{}\"\n",
+        child_use_str(e, root)
+    ));
+    let ver = entry_version(e).unwrap_or("").to_string();
+    let installed = is_nomerge(e);
+    consumed.insert((
+        e.category.clone(),
+        e.package.clone(),
+        ver.clone(),
+        installed,
+    ));
+    ctx.render_rows(
+        ChildInstance {
+            child_cat: &e.category,
+            child_pkg: &e.package,
+            child_ver: &ver,
+            child_installed: installed,
+        },
+        &|| {
+            if e.required_by.is_empty() {
+                out(format_args!(
+                    "Parent Dep:    {}/{} (Argument)\n",
+                    e.category, e.package
+                ));
+            } else {
+                for (pc, pp) in &e.required_by {
+                    out(format_args!(
+                        "Parent Dep:    {}/{} required by {}\n",
+                        e.category,
+                        e.package,
+                        ctx.label_of(pc, pp)
+                    ));
+                }
+            }
+        },
+    );
+    // Stage 6: a new-style virtual's own RDEPEND recursion, traced as a
+    // distinct step. Portuale walks a `virtual/*` entry like any other,
+    // so synthesise the pair.
+    if e.category == "virtual" && !is_nomerge(e) {
+        let rdep: Vec<&str> = e
+            .deps
+            .iter()
+            .filter(|d| d.key == 0)
+            .map(|d| d.atom.as_str())
+            .collect();
+        out(format_args!(
+            "Virtual Parent:      {node}\nVirtual Depstring:   {}\n",
+            rdep.join(" ")
+        ));
+    }
+    for (ki, kname) in KEYS.iter().enumerate() {
+        let atoms: Vec<&str> = e
+            .deps
+            .iter()
+            .filter(|d| d.key as usize == ki)
+            .map(|d| d.atom.as_str())
+            .collect();
+        if atoms.is_empty() {
+            continue;
+        }
+        let prio = e
+            .deps
+            .iter()
+            .find(|d| d.key as usize == ki)
+            .map(|d| d.priority)
+            .unwrap_or_default();
+        out(format_args!(
+            "\nParent:    {node}\nDepstring: {} ({kname})\nPriority:  {}\n",
+            atoms.join(" "),
+            dep_priority_str(&prio)
+        ));
+        // `Depstring:` prints raw, `Candidates:` evaluated; the evaluated
+        // form rides `DepEdge` beside the token, so the walk itself is
+        // untouched.
+        let evaluated: Vec<&str> = e
+            .deps
+            .iter()
+            .filter(|d| d.key as usize == ki)
+            .map(|d| d.evaluated.as_str())
+            .collect();
+        out(format_args!(
+            "Candidates: [{}]\n",
+            evaluated
+                .iter()
+                .map(|a| format!("'{a}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    // The bounded inner-ring re-narration: only back edges were scheduled,
+    // so DAG traces emit nothing new here.
+    for pi in &renarrate_at[idx] {
+        let pa = &parent_atoms[*pi];
+        let child_key = (
+            pa.child_category.clone(),
+            pa.child_package.clone(),
+            pa.child_version.clone(),
+            pa.child_installed,
+        );
+        let (child_label, child_use) = ctx.label_of_key(&child_key);
+        out(format_args!(
+            "\nChild:         {child_label} USE=\"{child_use}\"\n"
+        ));
+        let unevaluated = pa
+            .unevaluated
+            .as_deref()
+            .map(|u| format!(" ({u})"))
+            .unwrap_or_default();
+        out(format_args!(
+            "Parent Dep:    {}{unevaluated} required by {node}\n",
+            pa.atom,
+        ));
+    }
+    out(format_args!("\nExiting... {node}\n"));
+}
+
+/// The instance whose parent rows [`WalkTraceCtx::render_rows`] prints.
+pub(crate) struct ChildInstance<'a> {
+    pub(crate) child_cat: &'a str,
+    pub(crate) child_pkg: &'a str,
+    pub(crate) child_ver: &'a str,
+    pub(crate) child_installed: bool,
+}
+
+/// What the trace helpers of [`dump_resolution_walk`] read: the graph entries,
+/// the root and repositories for display, and the per-instance parent rows.
+pub(crate) struct WalkTraceCtx<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) rows:
+        std::collections::BTreeMap<(String, String, String, bool), Vec<&'a ParentAtom>>,
+}
+
+impl WalkTraceCtx<'_> {
+    /// Fills in the slot, sub-slot and repo of a withheld entry from the candidate list.
+    fn enriched(&self, e: &GraphEntry) -> GraphEntry {
+        if e.repo_name.is_some() {
+            return e.clone();
+        }
+        let ver = entry_version(e).unwrap_or("").to_string();
+        if ver.is_empty() {
+            return e.clone();
+        }
+        if let Ok(cands) = list_candidates(self.repos, &e.category, &e.package)
+            && let Some(c) = cands.iter().find(|c| c.version == ver)
+        {
+            let mut filled = e.clone();
+            if filled.slot.is_none() {
+                filled.slot = Some(c.slot.clone());
+            }
+            if filled.sub_slot.is_none() {
+                filled.sub_slot = Some(c.sub_slot.clone());
+            }
+            filled.repo_name = Some(c.repo_name.clone());
+            return filled;
+        }
+        e.clone()
+    }
+
+    /// The display label of the entry for `cat/pkg`.
+    fn label_of(&self, cat: &str, pkg: &str) -> String {
+        self.entries
+            .iter()
+            .find(|e| e.category == cat && e.package == pkg)
+            .map(|e| {
+                let filled = self.enriched(e);
+                node_label(&filled, self.root, is_nomerge(e))
+            })
+            .unwrap_or_else(|| format!("({cat}/{pkg})"))
+    }
+
+    /// The display label and USE string of the entry for an instance key.
+    fn label_of_key(&self, key: &(String, String, String, bool)) -> (String, String) {
+        let (cat, pkg, ver, installed) = key;
+        let found = self.entries.iter().find(|e| {
+            e.category == *cat
+                && e.package == *pkg
+                && entry_version(e).unwrap_or("") == ver
+                && is_nomerge(e) == *installed
+        });
+        let entry = found.or_else(|| {
+            self.entries
+                .iter()
+                .find(|e| e.category == *cat && e.package == *pkg)
+        });
+        match entry {
+            Some(e) => {
+                let filled = self.enriched(e);
+                (
+                    node_label(&filled, self.root, is_nomerge(e)),
+                    child_use_str(e, self.root),
+                )
+            }
+            None => (format!("({cat}/{pkg})"), String::new()),
+        }
+    }
+
+    /// Prints the parent rows of an instance, or runs `fallback` when it has none.
+    fn render_rows(&self, child: ChildInstance<'_>, fallback: &dyn Fn()) {
+        let ChildInstance {
+            child_cat,
+            child_pkg,
+            child_ver,
+            child_installed,
+        } = child;
+        match self.rows.get(&(
+            child_cat.to_string(),
+            child_pkg.to_string(),
+            child_ver.to_string(),
+            child_installed,
+        )) {
+            Some(list) if !list.is_empty() => {
+                for pa in list {
+                    match &pa.parent {
+                        None => out(format_args!("Parent Dep:    {}\n", pa.atom)),
+                        Some((pc, pp)) => {
+                            let unevaluated = pa
+                                .unevaluated
+                                .as_deref()
+                                .map(|u| format!(" ({u})"))
+                                .unwrap_or_default();
+                            out(format_args!(
+                                "Parent Dep:    {}{unevaluated} required by {}\n",
+                                pa.atom,
+                                self.label_of(pc, pp)
+                            ));
+                        }
+                    }
+                }
+            }
+            _ => fallback(),
+        }
     }
 }
 

@@ -1,0 +1,285 @@
+diff --git a/crates/portage-repo/src/resolver_trace.rs b/crates/portage-repo/src/resolver_trace.rs
+index 343d41a8..651263c8 100644
+--- a/crates/portage-repo/src/resolver_trace.rs
++++ b/crates/portage-repo/src/resolver_trace.rs
+@@ -372,63 +372,6 @@ pub(crate) fn dump_resolution_walk(
+     // A withheld (never merged) entry carries no slot/sub-slot or repo, which
+     // would render as `:0/0::__unknown__`; resolve the display triple from
+     // the candidate list instead (trace-only; the resolver record is untouched).
+-    let enriched = |e: &GraphEntry| -> GraphEntry {
+-        if e.repo_name.is_some() {
+-            return e.clone();
+-        }
+-        let ver = entry_version(e).unwrap_or("").to_string();
+-        if ver.is_empty() {
+-            return e.clone();
+-        }
+-        if let Ok(cands) = list_candidates(repos, &e.category, &e.package)
+-            && let Some(c) = cands.iter().find(|c| c.version == ver)
+-        {
+-            let mut filled = e.clone();
+-            if filled.slot.is_none() {
+-                filled.slot = Some(c.slot.clone());
+-            }
+-            if filled.sub_slot.is_none() {
+-                filled.sub_slot = Some(c.sub_slot.clone());
+-            }
+-            filled.repo_name = Some(c.repo_name.clone());
+-            return filled;
+-        }
+-        e.clone()
+-    };
+-    let label_of = |cat: &str, pkg: &str| -> String {
+-        entries
+-            .iter()
+-            .find(|e| e.category == cat && e.package == pkg)
+-            .map(|e| {
+-                let filled = enriched(e);
+-                node_label(&filled, root, is_nomerge(e))
+-            })
+-            .unwrap_or_else(|| format!("({cat}/{pkg})"))
+-    };
+-    let label_of_key = |key: &(String, String, String, bool)| -> (String, String) {
+-        let (cat, pkg, ver, installed) = key;
+-        let found = entries.iter().find(|e| {
+-            e.category == *cat
+-                && e.package == *pkg
+-                && entry_version(e).unwrap_or("") == ver
+-                && is_nomerge(e) == *installed
+-        });
+-        let entry = found.or_else(|| {
+-            entries
+-                .iter()
+-                .find(|e| e.category == *cat && e.package == *pkg)
+-        });
+-        match entry {
+-            Some(e) => {
+-                let filled = enriched(e);
+-                (
+-                    node_label(&filled, root, is_nomerge(e)),
+-                    child_use_str(e, root),
+-                )
+-            }
+-            None => (format!("({cat}/{pkg})"), String::new()),
+-        }
+-    };
+     // Per-instance rows, keyed by `(cat, pkg, version, installed)`; dedup by
+     // `(child, parent, atom, unevaluated)`.
+     let mut rows: std::collections::BTreeMap<(String, String, String, bool), Vec<&ParentAtom>> =
+@@ -446,38 +389,11 @@ pub(crate) fn dump_resolution_walk(
+             list.push(pa);
+         }
+     }
+-    let render_rows = |child_cat: &str,
+-                       child_pkg: &str,
+-                       child_ver: &str,
+-                       child_installed: bool,
+-                       fallback: &dyn Fn()| {
+-        match rows.get(&(
+-            child_cat.to_string(),
+-            child_pkg.to_string(),
+-            child_ver.to_string(),
+-            child_installed,
+-        )) {
+-            Some(list) if !list.is_empty() => {
+-                for pa in list {
+-                    match &pa.parent {
+-                        None => out(format_args!("Parent Dep:    {}\n", pa.atom)),
+-                        Some((pc, pp)) => {
+-                            let unevaluated = pa
+-                                .unevaluated
+-                                .as_deref()
+-                                .map(|u| format!(" ({u})"))
+-                                .unwrap_or_default();
+-                            out(format_args!(
+-                                "Parent Dep:    {}{unevaluated} required by {}\n",
+-                                pa.atom,
+-                                label_of(pc, pp)
+-                            ));
+-                        }
+-                    }
+-                }
+-            }
+-            _ => fallback(),
+-        }
++    let ctx = WalkTraceCtx {
++        entries,
++        root,
++        repos,
++        rows,
+     };
+     out(format_args!(
+         "\n# resolution walk (portuale BFS order, not Portage's LIFO _create_graph order)\n"
+@@ -519,7 +435,7 @@ pub(crate) fn dump_resolution_walk(
+         *list = sorted;
+     }
+     for (idx, e) in entries.iter().enumerate() {
+-        let filled = enriched(e);
++        let filled = ctx.enriched(e);
+         let node = node_label(&filled, root, is_nomerge(e));
+         out(format_args!(
+             "\nChild:         {node} USE=\"{}\"\n",
+@@ -533,7 +449,7 @@ pub(crate) fn dump_resolution_walk(
+             ver.clone(),
+             installed,
+         ));
+-        render_rows(&e.category, &e.package, &ver, installed, &|| {
++        ctx.render_rows(&e.category, &e.package, &ver, installed, &|| {
+             if e.required_by.is_empty() {
+                 out(format_args!(
+                     "Parent Dep:    {}/{} (Argument)\n",
+@@ -545,7 +461,7 @@ pub(crate) fn dump_resolution_walk(
+                         "Parent Dep:    {}/{} required by {}\n",
+                         e.category,
+                         e.package,
+-                        label_of(pc, pp)
++                        ctx.label_of(pc, pp)
+                     ));
+                 }
+             }
+@@ -614,7 +530,7 @@ pub(crate) fn dump_resolution_walk(
+                 pa.child_version.clone(),
+                 pa.child_installed,
+             );
+-            let (child_label, child_use) = label_of_key(&child_key);
++            let (child_label, child_use) = ctx.label_of_key(&child_key);
+             out(format_args!(
+                 "\nChild:         {child_label} USE=\"{child_use}\"\n"
+             ));
+@@ -632,7 +548,7 @@ pub(crate) fn dump_resolution_walk(
+     }
+     // Installed children the walk created but `entries` no longer holds (a
+     // same-slot merge shadows them): reproduce the one lost block.
+-    for (key, list) in &rows {
++    for (key, list) in &ctx.rows {
+         if consumed.contains(key) {
+             continue;
+         }
+@@ -668,7 +584,7 @@ pub(crate) fn dump_resolution_walk(
+                     out(format_args!(
+                         "Parent Dep:    {}{unevaluated} required by {}\n",
+                         pa.atom,
+-                        label_of(pc, pp)
++                        ctx.label_of(pc, pp)
+                     ));
+                 }
+             }
+@@ -677,6 +593,118 @@ pub(crate) fn dump_resolution_walk(
+     }
+ }
+ 
++/// What the trace helpers of [`dump_resolution_walk`] read: the graph entries,
++/// the root and repositories for display, and the per-instance parent rows.
++struct WalkTraceCtx<'a> {
++    entries: &'a [GraphEntry],
++    root: &'a Path,
++    repos: &'a [RepoConfig],
++    rows: std::collections::BTreeMap<(String, String, String, bool), Vec<&'a ParentAtom>>,
++}
++
++impl WalkTraceCtx<'_> {
++    /// Fills in the slot, sub-slot and repo of a withheld entry from the candidate list.
++    fn enriched(&self, e: &GraphEntry) -> GraphEntry {
++        if e.repo_name.is_some() {
++            return e.clone();
++        }
++        let ver = entry_version(e).unwrap_or("").to_string();
++        if ver.is_empty() {
++            return e.clone();
++        }
++        if let Ok(cands) = list_candidates(self.repos, &e.category, &e.package)
++            && let Some(c) = cands.iter().find(|c| c.version == ver)
++        {
++            let mut filled = e.clone();
++            if filled.slot.is_none() {
++                filled.slot = Some(c.slot.clone());
++            }
++            if filled.sub_slot.is_none() {
++                filled.sub_slot = Some(c.sub_slot.clone());
++            }
++            filled.repo_name = Some(c.repo_name.clone());
++            return filled;
++        }
++        e.clone()
++    }
++
++    /// The display label of the entry for `cat/pkg`.
++    fn label_of(&self, cat: &str, pkg: &str) -> String {
++        self.entries
++            .iter()
++            .find(|e| e.category == cat && e.package == pkg)
++            .map(|e| {
++                let filled = self.enriched(e);
++                node_label(&filled, self.root, is_nomerge(e))
++            })
++            .unwrap_or_else(|| format!("({cat}/{pkg})"))
++    }
++
++    /// The display label and USE string of the entry for an instance key.
++    fn label_of_key(&self, key: &(String, String, String, bool)) -> (String, String) {
++        let (cat, pkg, ver, installed) = key;
++        let found = self.entries.iter().find(|e| {
++            e.category == *cat
++                && e.package == *pkg
++                && entry_version(e).unwrap_or("") == ver
++                && is_nomerge(e) == *installed
++        });
++        let entry = found.or_else(|| {
++            self.entries
++                .iter()
++                .find(|e| e.category == *cat && e.package == *pkg)
++        });
++        match entry {
++            Some(e) => {
++                let filled = self.enriched(e);
++                (
++                    node_label(&filled, self.root, is_nomerge(e)),
++                    child_use_str(e, self.root),
++                )
++            }
++            None => (format!("({cat}/{pkg})"), String::new()),
++        }
++    }
++
++    /// Prints the parent rows of an instance, or runs `fallback` when it has none.
++    fn render_rows(
++        &self,
++        child_cat: &str,
++        child_pkg: &str,
++        child_ver: &str,
++        child_installed: bool,
++        fallback: &dyn Fn(),
++    ) {
++        match self.rows.get(&(
++            child_cat.to_string(),
++            child_pkg.to_string(),
++            child_ver.to_string(),
++            child_installed,
++        )) {
++            Some(list) if !list.is_empty() => {
++                for pa in list {
++                    match &pa.parent {
++                        None => out(format_args!("Parent Dep:    {}\n", pa.atom)),
++                        Some((pc, pp)) => {
++                            let unevaluated = pa
++                                .unevaluated
++                                .as_deref()
++                                .map(|u| format!(" ({u})"))
++                                .unwrap_or_default();
++                            out(format_args!(
++                                "Parent Dep:    {}{unevaluated} required by {}\n",
++                                pa.atom,
++                                self.label_of(pc, pp)
++                            ));
++                        }
++                    }
++                }
++            }
++            _ => fallback(),
++        }
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
