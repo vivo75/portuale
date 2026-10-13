@@ -290,6 +290,15 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
         attrs: &attrs,
     });
 
+    finish_phase_env_vars(env, vars, extra_env)
+}
+
+/// Apply the distdir split, drop `LC_ALL` and `PORTAGE_IPC_DAEMON`, and fan a set `LC_ALL` out to the `LC_*` categories.
+pub(crate) fn finish_phase_env_vars(
+    env: &Environment,
+    mut vars: Vec<(String, String)>,
+    extra_env: &[(String, String)],
+) -> Vec<(String, String)> {
     // The actual dir moves to `PORTAGE_ACTUAL_DISTDIR`; `DISTDIR` becomes the
     // per-package fake. No `DISTDIR` at all leaves both untouched.
     // Portage: config.py, config.environ
