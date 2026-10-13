@@ -27,7 +27,8 @@ def main(host, fn_rs, fname):
     t = open(fn_rs).read()
     t, n = re.subn(rf"(pub\(crate\) fn {fname}\([^{{]*?\)) -> ControlFlow<\(\)> \{{", r"\1 {", t, flags=re.S)
     assert n == 1, "signature not found"
-    t = t.replace("return ControlFlow::Break(());", "return;")
+    # also the write-back block form `{ *x_out = x; return ControlFlow::Break(()) }`
+    t = t.replace("return ControlFlow::Break(());", "return;").replace("return ControlFlow::Break(()) }", "return }")
     t, n = re.subn(r"\n\n?    ControlFlow::Continue\(\(\)\)\n\}\n", "\n}\n", t)
     assert n == 1, "tail not found"
     open(host, "w").write(h)

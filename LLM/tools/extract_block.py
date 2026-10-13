@@ -121,9 +121,27 @@ def closure_spans(text, mask):
     return spans
 
 
-def wrap_returns(text, ctor):
+def code_no_closures(text):
+    """`code_only(text)` with every closure body blanked: a `?`/`return`
+    there belongs to the closure, not to the range."""
+    mask = code_mask(text)
+    code = list(code_only(text))
+    for a, b in closure_spans(text, mask):
+        for k in range(a, min(b + 1, len(code))):
+            if code[k] != "\n":
+                code[k] = " "
+    return "".join(code)
+
+
+BRK = "\x00BRK\x00"
+
+
+def wrap_returns(text, ctor, unit=False, keep_err=False, pre=""):
     """`return X;` / `=> return X,` -> `return ctor(X)`; token-based. A
-    `return` inside a closure body belongs to the closure and is kept."""
+    `return` inside a closure body belongs to the closure and is kept.
+    `unit`: the host returns `()`, so a bare `return;` becomes
+    `return ctor(())`. `keep_err`: `return Err(..)` stays verbatim. `pre`
+    (the Copy write-backs) runs first: the exit becomes `{ pre return .. }`."""
     mask = code_mask(text)
     inside = closure_spans(text, mask)
     out, i, n = [], 0, len(text)
@@ -142,9 +160,17 @@ def wrap_returns(text, ctor):
         while j < n and text[j] in " \n":
             j += 1
         if text[j] == ";":
-            # a bare `return;` is a closure's or loop helper's, not the host's
-            out.append(text[i:j])
+            if unit:
+                ret = f"return {ctor}(())"
+                out.append(text[i:k] + (f"{{ {pre}{ret} }}" if pre else ret))
+            else:
+                # a bare `return;` is a closure's or loop helper's
+                out.append(text[i:j])
             i = j
+            continue
+        if keep_err and text.startswith("Err(", j):
+            out.append(text[i:m.end()])
+            i = m.end()
             continue
         depth, e = 0, j
         while e < n:
@@ -159,7 +185,8 @@ def wrap_returns(text, ctor):
                 elif c in ";," and depth == 0:
                     break
             e += 1
-        out.append(text[i:j] + ctor + "(" + text[j:e].rstrip() + ")")
+        call = ctor + "(" + text[j:e].rstrip() + ")"
+        out.append(text[i:k] + f"{{ {pre}{text[k:j]}{call} }}" if pre else text[i:j] + call)
         i = e
     return "".join(out)
 
@@ -259,15 +286,14 @@ class Cut:
             # inside the host loop: `return Err(..)` and `?` stay as they are
             # (the function returns `Result<_, err>`), a `continue` to the
             # host loop becomes `return ControlFlow::Break(())`
-            code = code_only(body)
+            code = code_no_closures(body)
             self.fallible = "?" in code or re.search(r"\breturn\b", code) is not None
             assert not self.fallible or err, "--loop with `?`/`return` needs --try ERR"
             assert not re.search(r"\breturn\s+(?!Err\()", code), "only `return Err(..)` is kept"
             ctl = loop_controls(body, self.loop)
             self.ctl = bool(ctl)
-            brk = "return Ok(ControlFlow::Break(()))" if self.fallible else "return ControlFlow::Break(())"
             for a, b in reversed(ctl):
-                body = body[:a] + brk + body[b:]
+                body = body[:a] + BRK + body[b:]
             if self.value:
                 ok = (lambda x: f"Ok({x})") if self.fallible else (lambda x: x)
                 body, n = re.subn(rf"\bbreak '{self.value[0]}\s+(.*?);",
@@ -281,14 +307,25 @@ class Cut:
             self.returns = False
             self.loop_err = err
         self.raw_body = body
+        self.unit = ret == "()"
+        self.err = None
         if not self.loop:
-            self.returns = wrap_returns(body, "Some") != body
-        # `?` in the range: the function returns `Result<_, err>` and the
-        # call site keeps the `?` (needs --try ERR, the host's error type)
-        self.err = err if err and "?" in code_only(body) and not self.loop else None
-        assert not (self.err and self.returns), "`return` and `?` in one range"
+            code = code_no_closures(body)
+            if err:
+                # `?` / `return Err(..)`: the function returns `Result<_, err>`
+                # and the call site keeps the `?`; `return Err(..)` stays
+                # verbatim, any other early exit is a hand pattern
+                self.returns = wrap_returns(body, "Some", self.unit, keep_err=True) != body
+                err_ret = wrap_returns(body, "Some", self.unit) != wrap_returns(body, "Some", self.unit, keep_err=True)
+                if "?" in code or err_ret:
+                    self.err = err
+                    assert not self.returns, ("an early `return` that is not `return Err(..)` next to `?`: "
+                                              "use the hand pattern of the task (Result<Option<T>, E> helper)")
+            else:
+                self.returns = wrap_returns(body, "Some", self.unit) != body
         # outputs: top-level `let` names of the range read after it
         host_end = next(i for i in range(self.end, len(lines)) if lines[i] == "}")
+        self.host_end = host_end
         after = code_only("\n".join(lines[self.end:host_end]))
         if diverges:
             # the range is followed by `continue`/`return`: nothing after
@@ -351,6 +388,8 @@ class Cut:
             ts = [t if typed and t else "()" for _, t in self.outs]
             o = ts[0] if len(ts) == 1 else pascal(self.fname) + "Out"
             return f"ControlFlow<{self.ret_ty}, {o}>" if self.returns else o
+        if self.returns and self.unit:
+            return "ControlFlow<()>"
         return f"Option<{self.ret_ty}>" if self.returns else None
 
     def render(self, typed, probe=False):
@@ -369,7 +408,7 @@ class Cut:
                 for n, _, m in ps)
         call = f"{self.fname}({call_args})"
         # the early-return value is named after its type: ExitCode -> code
-        rv = re.findall(r"[A-Z][a-z]*", self.ret_ty)[-1].lower()
+        rv = (re.findall(r"[A-Z][a-z]*", self.ret_ty) or ["unit"])[-1].lower()
         onames = [n for n, _ in self.outs]
         oname = pascal(self.fname) + "Out"
         pat = (onames[0] if len(onames) == 1 else oname + " { " + ", ".join(onames) + " }") if onames else None
@@ -392,11 +431,16 @@ class Cut:
                 site = [f"{ind}{ce};"]
         elif self.err:
             site = [f"    let {mpat} = {call}?;"] if onames else [f"    {call}?;"]
+        elif onames and self.returns and self.unit:
+            site = [f"    let {mpat} = match {call} {{", "        ControlFlow::Continue(out) => out,",
+                    "        ControlFlow::Break(()) => return,", "    };"]
         elif onames and self.returns:
             site = [f"    let {mpat} = match {call} {{", "        ControlFlow::Continue(out) => out,",
                     f"        ControlFlow::Break({rv}) => return {rv},", "    };"]
         elif onames:
             site = [f"    let {mpat} = {call};"]
+        elif self.returns and self.unit:
+            site = [f"    if {call}.is_break() {{", "        return;", "    }"]
         elif self.returns:
             site = [f"    if let Some({rv}) = {call} {{", f"        return {rv};", "    }"]
         else:
@@ -425,11 +469,19 @@ class Cut:
             tail = "\n" + "".join(f"    let _: () = {n};\n" for n in onames) + "    todo!()\n"
         elif onames:
             tail = "\n" + writeback + ("    ControlFlow::Continue(" + pat + ")\n" if self.returns else "    " + pat + "\n")
+        elif self.returns and self.unit:
+            tail = "\n" + writeback + "    ControlFlow::Continue(())\n"
         elif self.returns:
             tail = "\n" + writeback + "    None\n"
         else:
             tail = "\n" + writeback
-        body = wrap_returns(self.raw_body, "ControlFlow::Break" if onames else "Some") if self.returns else self.raw_body
+        pre = "".join(f"*{n}_out = {n}; " for n, _, _ in ps if n in copy_mut)
+        body = (wrap_returns(self.raw_body, "ControlFlow::Break" if onames or self.unit else "Some",
+                             self.unit, keep_err=bool(self.err), pre=pre)
+                if self.returns else self.raw_body)
+        if self.loop:
+            brk = "return Ok(ControlFlow::Break(()))" if self.fallible else "return ControlFlow::Break(())"
+            body = body.replace(BRK, f"{{ {pre}{brk} }}" if pre else brk)
 
         def ptype(t, m):
             if not typed:
@@ -480,6 +532,12 @@ class Cut:
         missing = [u for u in self.imports if u not in base]
         if missing:
             base = base.replace(glob, glob + "".join(u + "\n" for u in missing), 1)
+        if os.path.abspath(self.target) == os.path.abspath(self.src):
+            # the new fn goes right after the host: the file is written once
+            at = self.host_end + 1 + len(new_src) - len(lines)
+            out = new_src[:at] + ["", *fn.rstrip("\n").split("\n")] + new_src[at:]
+            open(self.src, "w").write("\n".join(out))
+            return
         open(self.src, "w").write("\n".join(new_src))
         open(self.target, "w").write(base.rstrip("\n") + "\n\n" + fn)
 

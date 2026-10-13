@@ -6,7 +6,7 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 OUT=${1:-$(mktemp -d "${TMPDIR:-/var/tmp}/gate.XXXXXX")}
-mkdir -p "$OUT"
+mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 
 cargo fmt --check >"$OUT/fmt.txt" 2>&1; echo "fmt rc=$?"
 cargo clippy --release --all-targets >"$OUT/clippy.txt" 2>&1
@@ -19,6 +19,7 @@ grep -E '^test result' "$OUT/test.txt" |
     awk '{p+=$4; f+=$6} END {print "  passed", p, "failed", f, "in", NR, "suites"}'
 grep -E '^test .* \.\.\. FAILED$' "$OUT/test.txt" | sed 's/^/  /'
 
+git -C ../pmtest checkout -- fixtures/
 git -C ../pmtest clean -fdq fixtures/
 (cd ../pmtest && python3 -m pytest pytests-contract-suite -q -rfE -p no:cacheprovider \
     --basetemp="$OUT/pytest") >"$OUT/contract.txt" 2>&1
