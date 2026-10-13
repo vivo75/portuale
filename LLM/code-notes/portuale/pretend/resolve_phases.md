@@ -1,9 +1,11 @@
 # crates/portuale/src/pretend/resolve_phases.rs
 Running the resolver: the first pass, the locked merges, the complete-graph pass, and the running-root repaint.
 
-## fn run_resolve_phases
+## fn resolve_once
 - #72 B2c: the blocker classification follows Portage's complete-mode retry even on a non-complete pass (`blocker_retry_seed_atoms`), while `complete_seed_atoms` stays gated on `with_seeds` -- filling *that* field here would switch the slot-operator-rebuild scan on for every plain resolve (the trap the plan calls out).
 - New code builds a `ResolveRequest` and calls the runtime-selected `Resolver` directly (see `resolve_pretend_graph`'s doc comment) -- this is the one production call site that carries `--solver=`.
+
+## fn run_resolve_phases
 - Portage never prefixes a `!!!`-headed report (masked packages, the REQUIRED_USE "has unmet requirements" block) with `emerge: ` -- it is `writemsg`-emitted verbatim by `_show_unsatisfied_dep`.
 - Phase 1 is **always non-complete** -- the authoritative merge list. Portage's `_complete_graph` runs *after* the normal graph is built and only extends it (graph-or-installed selection, never a new merge).
 - The `cp`s phase 1 would actually merge -- Portage's "already in the graph" for `_select_pkg_from_graph`.

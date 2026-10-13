@@ -18,9 +18,23 @@ pub(crate) struct RunResolvePhasesArgs<'a> {
     pub(crate) color: &'a Colorizer,
 }
 
-/// Running the resolver: the first pass, the locked merges, the complete-graph pass, and the running-root repaint.
-pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<GraphResult, ExitCode> {
-    let RunResolvePhasesArgs {
+/// The values [`resolve_once`] reads from its caller.
+pub(crate) struct ResolveOnceArgs<'a> {
+    pub(crate) plan: &'a ResolvePlan,
+    pub(crate) opts: &'a EmergeOpts<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) config_root: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) expanded_atoms: &'a [String],
+    pub(crate) set_args: &'a HashSet<String>,
+    pub(crate) complete: bool,
+    pub(crate) locked: &'a [String],
+    pub(crate) with_seeds: bool,
+}
+
+/// One resolver run: the request built from the plan and the options.
+pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, portage_repo::Error> {
+    let ResolveOnceArgs {
         plan,
         opts,
         config,
@@ -28,8 +42,9 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         root,
         expanded_atoms,
         set_args,
-        repos,
-        color,
+        complete,
+        locked,
+        with_seeds,
     } = args;
     let &ResolvePlan {
         ref complete_seed_atoms,
@@ -49,10 +64,6 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         rebuild_if_new_rev,
         rebuild_if_new_ver,
         dynamic_deps,
-        complete_if_new_use,
-        complete_if_new_ver,
-        complete_graph,
-        ref running_config,
         ..
     } = plan;
     let &EmergeOpts {
@@ -84,84 +95,125 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         ref rebuild_ignore,
         implicit_system_deps,
         solver,
+        ..
+    } = opts;
+    let cfg: std::borrow::Cow<portage_profile::Config> =
+        if !complete_seed_atoms.is_empty() || !locked.is_empty() {
+            let mut c = config.clone();
+            // Blocker classification follows the complete-mode retry even
+            // on a non-complete pass, while `complete_seed_atoms` stays
+            // gated on `with_seeds`: filling that field here would switch
+            // the slot-operator-rebuild scan on for every plain resolve.
+            // Portage: depgraph.py, _complete_graph
+            c.blocker_retry_seed_atoms = complete_seed_atoms.to_vec();
+            if with_seeds {
+                c.complete_seed_atoms = complete_seed_atoms.to_vec();
+                c.complete_locked_merges = locked.to_vec();
+            }
+            std::borrow::Cow::Owned(c)
+        } else {
+            std::borrow::Cow::Borrowed(config)
+        };
+    // New code builds a `ResolveRequest` and calls the runtime-selected
+    // `Resolver` directly (see `resolve_pretend_graph`'s doc comment) --
+    // this is the one production call site that carries `--solver=`.
+    let req = ResolveRequest {
+        config_root: config_root.to_path_buf(),
+        root: root.to_path_buf(),
+        atoms: expanded_atoms.to_vec(),
+        config: cfg.into_owned(),
+        newuse,
+        changed_use,
+        nodeps,
+        onlydeps,
+        onlydeps_with_rdeps,
+        onlydeps_with_ideps,
+        update,
+        deep,
+        excluded: excluded.to_vec(),
+        with_bdeps,
+        changed_deps,
+        changed_slot,
+        with_test_deps,
+        changed_deps_report,
+        selective,
+        autounmask_suggest_keywords,
+        autounmask_suggest_use,
+        autounmask_suggest_license,
+        autounmask_suggest_masks,
+        usepkg,
+        usepkgonly,
+        binpkg_respect_use,
+        usepkg_exclude: usepkg_exclude.to_vec(),
+        usepkg_include: usepkg_include.to_vec(),
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        newrepo,
+        buildpkgonly,
+        root_deps_running_root: root_deps_running_root.clone(),
+        distdir: distdir.to_path_buf(),
+        empty: emptytree,
+        getbinpkg,
+        ignore_built_slot_operator_deps,
+        backtrack_max,
+        reinstall_atoms: reinstall_atoms.to_vec(),
+        rebuild_if_new_slot,
+        rebuild_if_unbuilt,
+        rebuild_if_new_rev,
+        rebuild_if_new_ver,
+        rebuild_exclude: rebuild_exclude.to_vec(),
+        rebuild_ignore: rebuild_ignore.to_vec(),
+        dynamic_deps,
+        implicit_system_deps,
+        complete,
+        set_args: set_args.clone(),
+        solver,
+    };
+    active_resolver_for(solver).resolve(&req)
+}
+
+/// Running the resolver: the first pass, the locked merges, the complete-graph pass, and the running-root repaint.
+pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<GraphResult, ExitCode> {
+    let RunResolvePhasesArgs {
+        plan,
+        opts,
+        config,
+        config_root,
+        root,
+        expanded_atoms,
+        set_args,
+        repos,
+        color,
+    } = args;
+    let &ResolvePlan {
+        ref root_deps_running_root,
+        complete_if_new_use,
+        complete_if_new_ver,
+        complete_graph,
+        ref running_config,
+        ..
+    } = plan;
+    let &EmergeOpts {
+        nodeps,
+        deep,
+        rebuild_if_new_slot,
         misspell_suggestions,
         pretend,
         ..
     } = opts;
     let run_resolve = |complete: bool, locked: &[String], with_seeds: bool| {
-        let cfg: std::borrow::Cow<portage_profile::Config> =
-            if !complete_seed_atoms.is_empty() || !locked.is_empty() {
-                let mut c = config.clone();
-                // Blocker classification follows the complete-mode retry even
-                // on a non-complete pass, while `complete_seed_atoms` stays
-                // gated on `with_seeds`: filling that field here would switch
-                // the slot-operator-rebuild scan on for every plain resolve.
-                // Portage: depgraph.py, _complete_graph
-                c.blocker_retry_seed_atoms = complete_seed_atoms.to_vec();
-                if with_seeds {
-                    c.complete_seed_atoms = complete_seed_atoms.to_vec();
-                    c.complete_locked_merges = locked.to_vec();
-                }
-                std::borrow::Cow::Owned(c)
-            } else {
-                std::borrow::Cow::Borrowed(config)
-            };
-        // New code builds a `ResolveRequest` and calls the runtime-selected
-        // `Resolver` directly (see `resolve_pretend_graph`'s doc comment) --
-        // this is the one production call site that carries `--solver=`.
-        let req = ResolveRequest {
-            config_root: config_root.to_path_buf(),
-            root: root.to_path_buf(),
-            atoms: expanded_atoms.to_vec(),
-            config: cfg.into_owned(),
-            newuse,
-            changed_use,
-            nodeps,
-            onlydeps,
-            onlydeps_with_rdeps,
-            onlydeps_with_ideps,
-            update,
-            deep,
-            excluded: excluded.to_vec(),
-            with_bdeps,
-            changed_deps,
-            changed_slot,
-            with_test_deps,
-            changed_deps_report,
-            selective,
-            autounmask_suggest_keywords,
-            autounmask_suggest_use,
-            autounmask_suggest_license,
-            autounmask_suggest_masks,
-            usepkg,
-            usepkgonly,
-            binpkg_respect_use,
-            usepkg_exclude: usepkg_exclude.to_vec(),
-            usepkg_include: usepkg_include.to_vec(),
-            rebuilt_binaries,
-            rebuilt_binaries_timestamp,
-            newrepo,
-            buildpkgonly,
-            root_deps_running_root: root_deps_running_root.clone(),
-            distdir: distdir.to_path_buf(),
-            empty: emptytree,
-            getbinpkg,
-            ignore_built_slot_operator_deps,
-            backtrack_max,
-            reinstall_atoms: reinstall_atoms.to_vec(),
-            rebuild_if_new_slot,
-            rebuild_if_unbuilt,
-            rebuild_if_new_rev,
-            rebuild_if_new_ver,
-            rebuild_exclude: rebuild_exclude.to_vec(),
-            rebuild_ignore: rebuild_ignore.to_vec(),
-            dynamic_deps,
-            implicit_system_deps,
+        resolve_once(ResolveOnceArgs {
+            plan,
+            opts,
+            config,
+            config_root,
+            root,
+            expanded_atoms,
+            set_args,
             complete,
-            set_args: set_args.clone(),
-            solver,
-        };
-        active_resolver_for(solver).resolve(&req)
+            locked,
+            with_seeds,
+        })
     };
     let handle = |r: Result<portage_repo::GraphResult, crate::error::Error>| match r {
         Ok(result) => Ok(result),

@@ -9,9 +9,11 @@ The counts and summary lines under the merge list, and the redisplay before a me
 - Backlog #185: Portage `_emerge/actions.py:526` prints one blank line after the merge list, before the `--ask` prompt (or the scheduler, when nothing prompts).
 - `--ask` needs none here: `ask_confirm` already opens with that same single blank line (Portage's `print()` before `UserQuery.query`), so printing another would double it.
 
-## fn render_merge_list
+## fn render_tree_rows
 - Backlog #131 S1: the tree-mode order is Portage's reversed tree-mode retlist; one extra schedule+select pass per `--tree` run, invisible to the flat list.
 - Backlog #245: cross-root cycle partial only -- Portage hands `handler.merge_list` (the stuck remainder drained in digraph insertion order) straight to `display` without re-serializing, and `print_tree` walks the reverse of its retlist; the single-root cycle keeps the re-serialization.
+
+## fn render_merge_rows
 - Backlog #68/#72 B2: rows whose replacement waits on their owner print right after that package line (Portage appends them to `print_msg` at the solved blocker's merge-list position, `output.py:119-121`).
 - Backlog #19 Slice 4: the aborted partial list carries no `NoVisibleCandidate` entries (masked/unsat partials are empty; the cycle remainder is merge-bound). Non-abort resolves (including `Complete` graphs that still carry NVC entries, e.g. build-root-only misses) render those lines in the main loop as before. Slice 5 reshapes the re-emit into the `AbortReason` error block following the partial list. Backlog #185: pretend-only, since the unconditional resolution-phase block took over the non-`--pretend` preamble -- Portage's resolution-phase prints run before success/failure is known (`actions.py:460-462`).
 - Backlog #135 (c) (O7: un-suppress): Portage prints the merge-list preamble and the timing line and then aborts (`These are the packages ...` + `Calculating dependencies ... done!` + `Dependency resolution took N s (backtrack: N/M).` + blank, all stdout, before the abort block on stderr). Determinism cut (lessons-of-backlog-ops: nondeterministic values ride `--json` only, never stdout; the byte-identical repeated-run invariant is a jointly-owned gate): the wall-clock seconds are omitted. O7's "timing line" is the signal half, not the seconds; re-open with the owner to print Portage seconds.

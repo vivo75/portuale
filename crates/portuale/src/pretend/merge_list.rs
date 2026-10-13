@@ -4,14 +4,15 @@ use crate::pretend::*;
 use portage_profile::Config;
 use portage_repo::GraphResult;
 use portage_repo::RepoConfig;
+use std::path::PathBuf;
 
 /// The values [`show_merge_list_summary`] reads from its caller.
 pub(crate) struct ShowMergeListSummaryArgs<'a> {
+    pub(crate) show_merge_list: bool,
     pub(crate) opts: &'a EmergeOpts<'a>,
     pub(crate) circular_forced_display: bool,
     pub(crate) rendered_rows: &'a [(usize, bool)],
     pub(crate) display_entries: &'a [GraphEntry],
-    pub(crate) show_merge_list: bool,
     pub(crate) disp_verbose: bool,
     pub(crate) disp_quiet: bool,
     pub(crate) display_list_suppressed: bool,
@@ -170,12 +171,308 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
         ..
     } = opts;
     if show_merge_list {
-        if disp_tree {
-            // The tree-mode serialization order, computed on the displayed
-            // slice so abort-partial lists stay self-consistent.
-            let tree_order = if circular_forced_display
-                && display_entries.iter().any(|e| e.targets_running_root)
+        render_merge_rows(RenderMergeRowsArgs {
+            disp_tree,
+            circular_forced_display,
+            display_entries,
+            expanded_atoms,
+            config,
+            root,
+            implicit_system_deps,
+            repos,
+            dynamic_deps,
+            result,
+            rendered_rows,
+            top_level_pkgs,
+            onlydeps,
+            oneshot,
+            unordered_display,
+            disp_verbose,
+            disp_quiet,
+            alphabetical,
+            root_deps_running_root,
+            color,
+            system_atoms,
+            world_atoms,
+            force_reinstall_cps,
+            blocker_lines,
+            quiet,
+            columns,
+            columnwidth,
+            pretend,
+            gated_abort_partial,
+            deferred_abort_unsat,
+            verbose,
+        });
+    }
+}
+
+/// The values [`render_merge_rows`] reads from its caller.
+pub(crate) struct RenderMergeRowsArgs<'a> {
+    pub(crate) disp_tree: bool,
+    pub(crate) circular_forced_display: bool,
+    pub(crate) display_entries: &'a [GraphEntry],
+    pub(crate) expanded_atoms: &'a [String],
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) result: &'a GraphResult,
+    pub(crate) rendered_rows: &'a mut Vec<(usize, bool)>,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) onlydeps: bool,
+    pub(crate) oneshot: bool,
+    pub(crate) unordered_display: bool,
+    pub(crate) disp_verbose: bool,
+    pub(crate) disp_quiet: bool,
+    pub(crate) alphabetical: bool,
+    pub(crate) root_deps_running_root: &'a Option<PathBuf>,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) system_atoms: &'a Vec<String>,
+    pub(crate) world_atoms: &'a [String],
+    pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
+    pub(crate) blocker_lines: &'a mut Vec<String>,
+    pub(crate) quiet: bool,
+    pub(crate) columns: bool,
+    pub(crate) columnwidth: i64,
+    pub(crate) pretend: bool,
+    pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
+    pub(crate) deferred_abort_unsat: &'a mut Vec<usize>,
+    pub(crate) verbose: bool,
+}
+
+/// The merge-list rows and the blocker lines.
+pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
+    let RenderMergeRowsArgs {
+        disp_tree,
+        circular_forced_display,
+        display_entries,
+        expanded_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        result,
+        rendered_rows,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        unordered_display,
+        disp_verbose,
+        disp_quiet,
+        alphabetical,
+        root_deps_running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        blocker_lines,
+        quiet,
+        columns,
+        columnwidth,
+        pretend,
+        gated_abort_partial,
+        deferred_abort_unsat,
+        verbose,
+    } = args;
+    render_tree_rows(RenderTreeRowsArgs {
+        disp_tree,
+        circular_forced_display,
+        display_entries,
+        expanded_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        result,
+        rendered_rows,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        unordered_display,
+        disp_verbose,
+        disp_quiet,
+        alphabetical,
+        root_deps_running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        blocker_lines,
+        quiet,
+        columns,
+        columnwidth,
+    });
+
+    // The aborted partial list carries no `NoVisibleCandidate` entries, so
+    // re-emit their disclosure lines here in full-entries order (stderr,
+    // like the loop above). Pretend-only: on a non-`--pretend` abort Portage
+    // never shows the partial list itself.
+    // Portage: _emerge/depgraph.py, display_problems
+    if pretend
+        && gated_abort_partial.is_some()
+        && matches!(
+            &result.outcome,
+            portage_repo::ResolveOutcome::Aborted {
+                reason: portage_repo::AbortReason::MaskedDep { .. }
+                    | portage_repo::AbortReason::UnsatisfiedAtom { .. }
+                    | portage_repo::AbortReason::VirtualCycle { .. },
+                ..
+            }
+        )
+    {
+        // The merge-list preamble and timing line print before the abort
+        // block on stderr; the partial list itself is empty for these arms.
+        // The wall-clock seconds are cut (determinism); only `backtrack:
+        // N/M` is kept. Portage: _emerge/depgraph.py, _show_merge_list
+        println!(
+            "These are the packages that would be merged, in order:
+"
+        );
+        println!("Calculating dependencies ... done!");
+        // The timing line is suppressed under `--quiet`.
+        if !quiet {
+            println!(
+                "Dependency resolution took (backtrack: {}/{}).
+",
+                result.backtrack_restarts, result.backtrack_max,
+            );
+        }
+        let mut thrown_away: Vec<String> = Vec::new();
+        for (i, entry) in result.entries.iter().enumerate() {
+            // A dependency collected into a parent USE flip renders no row
+            // (the USE-changes block below is its whole output).
+            if matches!(
+                entry.outcome,
+                portage_repo::PretendOutcome::NoVisibleCandidate
+            ) && entry.parent_use_suggestion.is_none()
             {
+                // With a slot conflict recorded, this line waits until after
+                // the slot-conflict block (Portage's `display_problems` order).
+                if !result.slot_conflicts.is_empty() {
+                    deferred_abort_unsat.push(i);
+                    continue;
+                }
+                print_entry_line(PrintEntryLineArgs {
+                    entries: &result.entries,
+                    root,
+                    index: i,
+                    indent: "",
+                    ordered: true,
+                    top_level_pkgs,
+                    onlydeps,
+                    oneshot,
+                    verbose,
+                    quiet,
+                    alphabetical,
+                    columns,
+                    columnwidth,
+                    running_root: root_deps_running_root.as_deref(),
+                    color,
+                    system_atoms,
+                    world_atoms,
+                    force_reinstall_cps,
+                    blocker_lines: &mut thrown_away,
+                    masked_deps: &result.masked_deps,
+                    use_unsat_deps: &result.use_unsat_deps,
+                    plain_miss_deps: &result.plain_miss_deps,
+                    force_sizes: false,
+                    circular: &result.circular_dependency,
+                });
+            }
+        }
+    }
+
+    // The collected `[blocks B ...]` lines print as one group after every
+    // package line and before the counters; owner-less rows join the group.
+    // Portage: output.py, Display.print_blockers
+    for orphan in &result.orphan_blockers {
+        blocker_lines.push(format_blocker_row(
+            &format!(
+                "{}/{}-{}",
+                orphan.owner_category, orphan.owner_package, orphan.owner_version
+            ),
+            !quiet,
+            "",
+            color,
+            &orphan.conflict,
+        ));
+    }
+    for line in blocker_lines {
+        println!("{line}");
+    }
+}
+
+/// The values [`render_tree_rows`] reads from its caller.
+pub(crate) struct RenderTreeRowsArgs<'a> {
+    pub(crate) disp_tree: bool,
+    pub(crate) circular_forced_display: bool,
+    pub(crate) display_entries: &'a [GraphEntry],
+    pub(crate) expanded_atoms: &'a [String],
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) result: &'a GraphResult,
+    pub(crate) rendered_rows: &'a mut Vec<(usize, bool)>,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) onlydeps: bool,
+    pub(crate) oneshot: bool,
+    pub(crate) unordered_display: bool,
+    pub(crate) disp_verbose: bool,
+    pub(crate) disp_quiet: bool,
+    pub(crate) alphabetical: bool,
+    pub(crate) root_deps_running_root: &'a Option<PathBuf>,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) system_atoms: &'a Vec<String>,
+    pub(crate) world_atoms: &'a [String],
+    pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
+    pub(crate) blocker_lines: &'a mut Vec<String>,
+    pub(crate) quiet: bool,
+    pub(crate) columns: bool,
+    pub(crate) columnwidth: i64,
+}
+
+/// The tree-mode rows of the merge list.
+pub(crate) fn render_tree_rows(args: RenderTreeRowsArgs<'_>) {
+    let RenderTreeRowsArgs {
+        disp_tree,
+        circular_forced_display,
+        display_entries,
+        expanded_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        result,
+        rendered_rows,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        unordered_display,
+        disp_verbose,
+        disp_quiet,
+        alphabetical,
+        root_deps_running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        blocker_lines,
+        quiet,
+        columns,
+        columnwidth,
+    } = args;
+    if disp_tree {
+        // The tree-mode serialization order, computed on the displayed
+        // slice so abort-partial lists stay self-consistent.
+        let tree_order =
+            if circular_forced_display && display_entries.iter().any(|e| e.targets_running_root) {
                 // A cross-root cycle partial goes in reversed, like Portage's
                 // stuck remainder (never re-serialized).
                 (0..display_entries.len()).rev().collect()
@@ -191,17 +488,55 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                     circular: &result.circular_dependency,
                 })
             };
-            *rendered_rows = print_tree(PrintTreeArgs {
+        *rendered_rows = print_tree(PrintTreeArgs {
+            entries: display_entries,
+            display_order: &tree_order,
+            root,
+            top_level_pkgs,
+            onlydeps,
+            oneshot,
+            unordered_display,
+            verbose: disp_verbose,
+            quiet: disp_quiet,
+            alphabetical,
+            running_root: root_deps_running_root.as_deref(),
+            color,
+            system_atoms,
+            world_atoms,
+            force_reinstall_cps,
+            blocker_lines: &mut *blocker_lines,
+            masked_deps: &result.masked_deps,
+            use_unsat_deps: &result.use_unsat_deps,
+            plain_miss_deps: &result.plain_miss_deps,
+            force_sizes: circular_forced_display,
+            circular: &result.circular_dependency,
+        });
+    } else {
+        // Blocker rows print right after their replacement's package line.
+        // Portage: output.py
+        let inline_blockers = collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
+            entries: display_entries,
+            root,
+            quiet,
+            columns,
+            color,
+            circular: &result.circular_dependency,
+        });
+        for i in 0..display_entries.len() {
+            print_entry_line(PrintEntryLineArgs {
                 entries: display_entries,
-                display_order: &tree_order,
                 root,
+                index: i,
+                indent: "",
+                ordered: true,
                 top_level_pkgs,
                 onlydeps,
                 oneshot,
-                unordered_display,
                 verbose: disp_verbose,
                 quiet: disp_quiet,
                 alphabetical,
+                columns,
+                columnwidth,
                 running_root: root_deps_running_root.as_deref(),
                 color,
                 system_atoms,
@@ -214,146 +549,9 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
                 force_sizes: circular_forced_display,
                 circular: &result.circular_dependency,
             });
-        } else {
-            // Blocker rows print right after their replacement's package line.
-            // Portage: output.py
-            let inline_blockers = collect_inline_blocker_lines(CollectInlineBlockerLinesArgs {
-                entries: display_entries,
-                root,
-                quiet,
-                columns,
-                color,
-                circular: &result.circular_dependency,
-            });
-            for i in 0..display_entries.len() {
-                print_entry_line(PrintEntryLineArgs {
-                    entries: display_entries,
-                    root,
-                    index: i,
-                    indent: "",
-                    ordered: true,
-                    top_level_pkgs,
-                    onlydeps,
-                    oneshot,
-                    verbose: disp_verbose,
-                    quiet: disp_quiet,
-                    alphabetical,
-                    columns,
-                    columnwidth,
-                    running_root: root_deps_running_root.as_deref(),
-                    color,
-                    system_atoms,
-                    world_atoms,
-                    force_reinstall_cps,
-                    blocker_lines: &mut *blocker_lines,
-                    masked_deps: &result.masked_deps,
-                    use_unsat_deps: &result.use_unsat_deps,
-                    plain_miss_deps: &result.plain_miss_deps,
-                    force_sizes: circular_forced_display,
-                    circular: &result.circular_dependency,
-                });
-                for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
-                    println!("{line}");
-                }
+            for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
+                println!("{line}");
             }
-        }
-
-        // The aborted partial list carries no `NoVisibleCandidate` entries, so
-        // re-emit their disclosure lines here in full-entries order (stderr,
-        // like the loop above). Pretend-only: on a non-`--pretend` abort Portage
-        // never shows the partial list itself.
-        // Portage: _emerge/depgraph.py, display_problems
-        if pretend
-            && gated_abort_partial.is_some()
-            && matches!(
-                &result.outcome,
-                portage_repo::ResolveOutcome::Aborted {
-                    reason: portage_repo::AbortReason::MaskedDep { .. }
-                        | portage_repo::AbortReason::UnsatisfiedAtom { .. }
-                        | portage_repo::AbortReason::VirtualCycle { .. },
-                    ..
-                }
-            )
-        {
-            // The merge-list preamble and timing line print before the abort
-            // block on stderr; the partial list itself is empty for these arms.
-            // The wall-clock seconds are cut (determinism); only `backtrack:
-            // N/M` is kept. Portage: _emerge/depgraph.py, _show_merge_list
-            println!(
-                "These are the packages that would be merged, in order:
-"
-            );
-            println!("Calculating dependencies ... done!");
-            // The timing line is suppressed under `--quiet`.
-            if !quiet {
-                println!(
-                    "Dependency resolution took (backtrack: {}/{}).
-",
-                    result.backtrack_restarts, result.backtrack_max,
-                );
-            }
-            let mut thrown_away: Vec<String> = Vec::new();
-            for (i, entry) in result.entries.iter().enumerate() {
-                // A dependency collected into a parent USE flip renders no row
-                // (the USE-changes block below is its whole output).
-                if matches!(
-                    entry.outcome,
-                    portage_repo::PretendOutcome::NoVisibleCandidate
-                ) && entry.parent_use_suggestion.is_none()
-                {
-                    // With a slot conflict recorded, this line waits until after
-                    // the slot-conflict block (Portage's `display_problems` order).
-                    if !result.slot_conflicts.is_empty() {
-                        deferred_abort_unsat.push(i);
-                        continue;
-                    }
-                    print_entry_line(PrintEntryLineArgs {
-                        entries: &result.entries,
-                        root,
-                        index: i,
-                        indent: "",
-                        ordered: true,
-                        top_level_pkgs,
-                        onlydeps,
-                        oneshot,
-                        verbose,
-                        quiet,
-                        alphabetical,
-                        columns,
-                        columnwidth,
-                        running_root: root_deps_running_root.as_deref(),
-                        color,
-                        system_atoms,
-                        world_atoms,
-                        force_reinstall_cps,
-                        blocker_lines: &mut thrown_away,
-                        masked_deps: &result.masked_deps,
-                        use_unsat_deps: &result.use_unsat_deps,
-                        plain_miss_deps: &result.plain_miss_deps,
-                        force_sizes: false,
-                        circular: &result.circular_dependency,
-                    });
-                }
-            }
-        }
-
-        // The collected `[blocks B ...]` lines print as one group after every
-        // package line and before the counters; owner-less rows join the group.
-        // Portage: output.py, Display.print_blockers
-        for orphan in &result.orphan_blockers {
-            blocker_lines.push(format_blocker_row(
-                &format!(
-                    "{}/{}-{}",
-                    orphan.owner_category, orphan.owner_package, orphan.owner_version
-                ),
-                !quiet,
-                "",
-                color,
-                &orphan.conflict,
-            ));
-        }
-        for line in blocker_lines {
-            println!("{line}");
         }
     }
 }
