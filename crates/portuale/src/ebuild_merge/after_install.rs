@@ -311,10 +311,13 @@ pub(crate) struct UnmergeReplacedSameSlotArgs<'a> {
 /// The replace loop: while the new version's vdb entry still sits in
 /// its `-MERGING-<pf>` temporary, every already-installed same-slot
 /// version of the same cp is removed (`pkg_prerm` -> delete files ->
-/// `pkg_postrm`, then drop the vdb entry). Each hook runs from that
+/// `pkg_postrm`, then drop the vdb entry) — including a same-`pf`
+/// instance on a reinstall. Each hook runs from that
 /// version's own vdb-stored `environment.bz2` + `<pf>.ebuild`, gated on
 /// its recorded `DEFINED_PHASES`; a version without them skips its
-/// hooks. Only files the new version does not itself own are deleted.
+/// hooks. Only files the new version does not itself own are deleted;
+/// on a same-`pf` reinstall every path is still owned (the live entry
+/// still carries the old `CONTENTS`), so the just-merged files survive.
 /// A phase failure is logged, never fatal.
 ///
 /// A different-slot version is left untouched. `scratch_dir` holds the
@@ -336,15 +339,20 @@ pub(crate) fn unmerge_replaced_same_slot(
         options,
         replacement_preserved,
     } = args;
-    // Merge-then-unmerge: `<package>-<digit...>` vdb-dir names; exclude
-    // the just-merged entry. A `-MERGING-<pf>` temporary can never
-    // match, but skip it explicitly anyway.
+    // Merge-then-unmerge: `<package>-<digit...>` vdb-dir names. A
+    // `-MERGING-<pf>` temporary can never match, but would be skipped
+    // explicitly anyway. The live entry carrying the new `pf` itself is
+    // NOT skipped: on a same-version reinstall it is the replaced
+    // instance, and Portage unmerges it too (`others_in_slot` holds a
+    // dblink for the same cpv; only the merging `self` is skipped, by
+    // identity). Skipping it dropped the old `pkg_prerm`/`pkg_postrm`.
+    // Portage: vartree.py, dblink.treewalk
     let mut replaced: Vec<String> = Vec::new();
     if let Ok(names) = portage_vdb::for_root(root).category_entries(category) {
         for name in names {
             let is_this_cp = name.starts_with(&format!("{package}-"))
                 && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit());
-            if !is_this_cp || name == new_pf {
+            if !is_this_cp {
                 continue;
             }
             let version = &name[package.len() + 1..];

@@ -417,6 +417,19 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
                 "stream did not contain valid UTF-8",
             ))
         })?,
+        // A replaced instance with no `CONTENTS` (a resolve-fixture seed,
+        // never a real merge) owns no recorded files: walk an empty list
+        // instead of failing, like Portage's `getcontents()` returning
+        // `{}` on `ENOENT` (vartree.py, `dblink.getcontents`). Scoped to
+        // the replace loop (`is_replacement`) and to missing files only:
+        // a standalone unmerge keeps the "not installed" error
+        // `emerge -C` relies on (#348 S6 M1).
+        Ok(None) if is_replacement => String::new(),
+        Err(portage_vdb::Error::Io { source, .. })
+            if is_replacement && source.raw_os_error() == Some(2) =>
+        {
+            String::new()
+        }
         Ok(None) => return Err(not_installed(&std::io::Error::from_raw_os_error(2))),
         Err(portage_vdb::Error::Io { source, .. }) => return Err(not_installed(&source)),
         Err(e) => return Err(not_installed(&e)),
@@ -1470,5 +1483,51 @@ mod tests {
         let result = run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not installed"));
+    }
+
+    #[test]
+    fn unmerge_pkgfiles_tolerates_missing_contents_only_as_replacement() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/seed")).unwrap();
+        std::fs::write(root.join("usr/share/seed/orphan.txt"), b"orphan").unwrap();
+        // A resolve-fixture seed: an entry directory with no `CONTENTS`.
+        let vdb = root.join("var/db/pkg/dev-libs/seedpkg-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("SLOT"), "0\n").unwrap();
+        let options = UnmergeOptions::default();
+        // Replace loop (#348 S6 M1): a replaced instance with no recorded
+        // files walks an empty list instead of failing, like Portage's
+        // `getcontents()` returning `{}` on `ENOENT`.
+        unmerge_pkgfiles(UnmergePkgfilesArgs {
+            root: &root,
+            category: "dev-libs",
+            pn: "seedpkg",
+            pf: "seedpkg-1.0",
+            also_keep: &[],
+            options: &options,
+            is_replacement: true,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+        })
+        .expect("a replacement unmerge without CONTENTS succeeds");
+        assert!(
+            root.join("usr/share/seed/orphan.txt").is_file(),
+            "with no file list nothing is deleted"
+        );
+        // Standalone `emerge -C` keeps the "not installed" error.
+        let err = unmerge_pkgfiles(UnmergePkgfilesArgs {
+            root: &root,
+            category: "dev-libs",
+            pn: "seedpkg",
+            pf: "seedpkg-1.0",
+            also_keep: &[],
+            options: &options,
+            is_replacement: false,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+        })
+        .expect_err("without CONTENTS must fail");
+        assert!(err.contains("not installed"), "{err}");
     }
 }
