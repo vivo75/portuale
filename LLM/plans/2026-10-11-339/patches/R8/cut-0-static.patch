@@ -1,0 +1,30 @@
+diff --git a/crates/portage-repo/src/resolve/rev_dep.rs b/crates/portage-repo/src/resolve/rev_dep.rs
+index 925a881b..1ca4d0fc 100644
+--- a/crates/portage-repo/src/resolve/rev_dep.rs
++++ b/crates/portage-repo/src/resolve/rev_dep.rs
+@@ -279,6 +279,9 @@ pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
+     pub(crate) complete: bool,
+ }
+ 
++/// The empty reverse-dependency want list shared by every consumer without one.
++static EMPTY_WANT: Vec<String> = Vec::new();
++
+ pub(crate) fn reverse_dependency_constraints(
+     args: ReverseDependencyConstraintsArgs<'_>,
+ ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
+@@ -393,14 +396,13 @@ pub(crate) fn reverse_dependency_constraints(
+         &["RDEPEND", "IDEPEND", "PDEPEND"]
+     };
+ 
+-    static EMPTY_WANT: Vec<String> = Vec::new();
+     let mut enforced: Vec<RevDepPin> = Vec::new();
+     let mut dropped: Vec<RevDepPin> = Vec::new();
+     type SeenPin = ((String, String), String, (String, String, String));
+     let mut seen: HashSet<SeenPin> = HashSet::new();
+     // Per-pass `Effective`-layer cache (one overlay per instance).
+     let mut meta_memo: HashMap<(String, String, String, String), String> = HashMap::new();
+-    for consumer in all_installed_packages(root) {
++    'consumer: for consumer in all_installed_packages(root) {
+         let consumer_cp = (consumer.category.clone(), consumer.package.clone());
+         if being_replaced.contains(&consumer_cp) || being_removed.contains(&consumer_cp) {
+             continue;

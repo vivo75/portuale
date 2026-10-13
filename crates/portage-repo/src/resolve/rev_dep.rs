@@ -1,6 +1,7 @@
 //! Constraints that installed reverse dependencies put on an upgrade.
 
 use crate::*;
+use std::ops::ControlFlow;
 
 /// Whether `atom` is a **built** slot-operator atom (`cat/pkg:S/SS=`).
 /// Slot dropped textually (equivalent); `[use-dep]` dropped too (allow-only).
@@ -279,6 +280,15 @@ pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
     pub(crate) complete: bool,
 }
 
+/// (constrained cp, pin atom, pinning consumer) already emitted this pass.
+type SeenPin = ((String, String), String, (String, String, String));
+
+/// (`cat/pkg`, slot) -> the candidate string this run would install, and whether it changes the slot.
+type UpgradingMap = HashMap<((String, String), String), (String, bool)>;
+
+/// The empty reverse-dependency want list shared by every consumer without one.
+static EMPTY_WANT: Vec<String> = Vec::new();
+
 pub(crate) fn reverse_dependency_constraints(
     args: ReverseDependencyConstraintsArgs<'_>,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
@@ -393,229 +403,349 @@ pub(crate) fn reverse_dependency_constraints(
         &["RDEPEND", "IDEPEND", "PDEPEND"]
     };
 
-    static EMPTY_WANT: Vec<String> = Vec::new();
     let mut enforced: Vec<RevDepPin> = Vec::new();
     let mut dropped: Vec<RevDepPin> = Vec::new();
-    type SeenPin = ((String, String), String, (String, String, String));
     let mut seen: HashSet<SeenPin> = HashSet::new();
     // Per-pass `Effective`-layer cache (one overlay per instance).
     let mut meta_memo: HashMap<(String, String, String, String), String> = HashMap::new();
-    for consumer in all_installed_packages(root) {
-        let consumer_cp = (consumer.category.clone(), consumer.package.clone());
-        if being_replaced.contains(&consumer_cp) || being_removed.contains(&consumer_cp) {
-            continue;
-        }
-        // Only required-set-reachable or in-graph consumers.
-        if !reachable.contains(&consumer_cp) && !graph_cps.contains(&consumer_cp) {
-            continue;
-        }
-        // A no-op top-level argument is never a source (unless required-set-reachable).
-        if already_installed_top_level.contains(&consumer_cp)
-            && !world_reachable.contains(&consumer_cp)
-        {
-            continue;
-        }
-        let consumer_str = format!(
-            "{}/{}-{}",
-            consumer.category, consumer.package, consumer.version
-        );
-        if excluded
-            .iter()
-            .any(|ex| matches_cli_option_atom(ex, &consumer_str))
-        {
-            continue;
-        }
-        let use_flags = read_vdb_flag_set(
+    'consumer: for consumer in all_installed_packages(root) {
+        if constraints_from_consumer(ConstraintsFromConsumerArgs {
+            consumer: &consumer,
+            being_replaced: &being_replaced,
+            being_removed: &being_removed,
+            reachable,
+            graph_cps: &graph_cps,
+            already_installed_top_level: &already_installed_top_level,
+            world_reachable,
+            excluded,
             root,
-            &consumer.category,
-            &consumer.package,
-            &consumer.version,
-            "USE",
-        );
-        // An installed consumer's *effective* deps: live metadata when still in
-        // the tree, the raw vdb record otherwise.
-        let live = live_metadata_for_installed(
             repos,
+            dep_keys,
+            dynamic_deps,
+            ignore_built_slot_operator_deps,
+            meta_memo: &mut meta_memo,
+            upgrading: &upgrading,
+            use_breaks: &use_breaks,
+            seen: &mut seen,
+            dropped: &mut dropped,
+            hard_want,
+            enforced: &mut enforced,
+        })
+        .is_break()
+        {
+            continue 'consumer;
+        }
+    }
+    enforced.sort();
+    dropped.sort();
+    (enforced, dropped)
+}
+
+/// The values [`constraints_from_consumer`] reads from its caller.
+pub(crate) struct ConstraintsFromConsumerArgs<'a> {
+    pub(crate) consumer: &'a InstalledPackage,
+    pub(crate) being_replaced: &'a HashSet<(String, String)>,
+    pub(crate) being_removed: &'a HashSet<(String, String)>,
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) graph_cps: &'a HashSet<(String, String)>,
+    pub(crate) already_installed_top_level: &'a HashSet<(String, String)>,
+    pub(crate) world_reachable: &'a HashSet<(String, String)>,
+    pub(crate) excluded: &'a [String],
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+    pub(crate) meta_memo: &'a mut HashMap<(String, String, String, String), String>,
+    pub(crate) upgrading: &'a UpgradingMap,
+    pub(crate) use_breaks: &'a HashMap<((String, String), String), UseBreakSource>,
+    pub(crate) seen: &'a mut HashSet<SeenPin>,
+    pub(crate) dropped: &'a mut Vec<RevDepPin>,
+    pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) enforced: &'a mut Vec<RevDepPin>,
+}
+
+/// Collect the reverse-dependency pins one installed consumer places on the packages being upgraded.
+pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -> ControlFlow<()> {
+    let ConstraintsFromConsumerArgs {
+        consumer,
+        being_replaced,
+        being_removed,
+        reachable,
+        graph_cps,
+        already_installed_top_level,
+        world_reachable,
+        excluded,
+        root,
+        repos,
+        dep_keys,
+        dynamic_deps,
+        ignore_built_slot_operator_deps,
+        meta_memo,
+        upgrading,
+        use_breaks,
+        seen,
+        dropped,
+        hard_want,
+        enforced,
+    } = args;
+    let consumer_cp = (consumer.category.clone(), consumer.package.clone());
+    if being_replaced.contains(&consumer_cp) || being_removed.contains(&consumer_cp) {
+        return ControlFlow::Break(());
+    }
+    // Only required-set-reachable or in-graph consumers.
+    if !reachable.contains(&consumer_cp) && !graph_cps.contains(&consumer_cp) {
+        return ControlFlow::Break(());
+    }
+    // A no-op top-level argument is never a source (unless required-set-reachable).
+    if already_installed_top_level.contains(&consumer_cp) && !world_reachable.contains(&consumer_cp)
+    {
+        return ControlFlow::Break(());
+    }
+    let consumer_str = format!(
+        "{}/{}-{}",
+        consumer.category, consumer.package, consumer.version
+    );
+    if excluded
+        .iter()
+        .any(|ex| matches_cli_option_atom(ex, &consumer_str))
+    {
+        return ControlFlow::Break(());
+    }
+    let use_flags = read_vdb_flag_set(
+        root,
+        &consumer.category,
+        &consumer.package,
+        &consumer.version,
+        "USE",
+    );
+    // An installed consumer's *effective* deps: live metadata when still in
+    // the tree, the raw vdb record otherwise.
+    let live = live_metadata_for_installed(
+        repos,
+        root,
+        &consumer.category,
+        &consumer.package,
+        &consumer.version,
+    );
+    for dep_key in dep_keys {
+        let layer = if dynamic_deps {
+            InstalledMetaLayer::Effective
+        } else {
+            InstalledMetaLayer::Raw
+        };
+        let depstr = installed_dep_string(InstalledDepStringArgs {
             root,
-            &consumer.category,
-            &consumer.package,
-            &consumer.version,
-        );
-        for dep_key in dep_keys {
-            let layer = if dynamic_deps {
-                InstalledMetaLayer::Effective
-            } else {
-                InstalledMetaLayer::Raw
-            };
-            let depstr = installed_dep_string(InstalledDepStringArgs {
+            dynamic_deps,
+            ignore_built_slot_operator_deps,
+            category: &consumer.category,
+            package: &consumer.package,
+            version: &consumer.version,
+            live: live.as_deref(),
+            key: dep_key,
+            layer,
+            memo: &mut *meta_memo,
+        });
+        if depstr.trim().is_empty() {
+            continue;
+        }
+        let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+            continue;
+        };
+        'atom: for atom_str in atoms {
+            if constraints_from_atom(ConstraintsFromAtomArgs {
+                atom_str: &atom_str,
+                upgrading,
+                dep_key,
+                use_breaks,
+                use_flags: &use_flags,
+                consumer,
+                seen,
+                dropped,
+                hard_want,
                 root,
-                dynamic_deps,
-                ignore_built_slot_operator_deps,
-                category: &consumer.category,
-                package: &consumer.package,
-                version: &consumer.version,
-                live: live.as_deref(),
-                key: dep_key,
-                layer,
-                memo: &mut meta_memo,
-            });
-            if depstr.trim().is_empty() {
-                continue;
+                repos,
+                enforced,
+            })
+            .is_break()
+            {
+                continue 'atom;
             }
-            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
-                continue;
-            };
-            for atom_str in atoms {
-                let Some(atom) = portage_dep::parse_atom(&atom_str) else {
-                    continue;
-                };
-                if atom.blocker != portage_dep::Blocker::None {
-                    continue;
-                }
-                let cp = (atom.category.clone(), atom.package.clone());
-                let built_slot_op = is_built_slot_op(&atom);
-                let constraint = reverse_dep_constraint_atom(&atom_str, &atom);
-                // Collect every slot whose upgrade breaks the pin. Slot-change
-                // reinstalls probe the verbatim atom; Upgrade/Downgrade the
-                // stripped constraint (built bindings are rebuild triggers).
-                let verbatim_head = atom_str.split('[').next().unwrap_or(atom_str.as_str());
-                let mut failing: Vec<(String, bool)> = Vec::new();
-                for ((ucp, slot), (candidate, reinstall_slot_change)) in &upgrading {
-                    if *ucp != cp {
-                        continue;
-                    }
-                    // An explicit-slot atom constrains only that slot's instance.
-                    if atom.slot.as_deref().is_some_and(|ps| ps != slot.as_str()) {
-                        continue;
-                    }
-                    let probe = if *reinstall_slot_change {
-                        verbatim_head
-                    } else {
-                        constraint.as_str()
-                    };
-                    let satisfied = portage_dep::match_from_list(probe, &[candidate.as_str()])
-                        .is_some_and(|m| !m.is_empty());
-                    if !satisfied {
-                        failing.push((slot.clone(), *reinstall_slot_change));
-                    }
-                }
-                if failing.is_empty() {
-                    // A same-version USE-change reinstall can still break the `[use]`
-                    // bound: such a pin is dropped for the residual report, never
-                    // enforced. The stripped probe must still hold the merge;
-                    // built pins and build-time keys stay out.
-                    let use_deps = atom.use_deps.clone().unwrap_or_default();
-                    if !use_deps.is_empty() && !is_build_time_dep_key(dep_key) && !built_slot_op {
-                        let pin_slot = atom.slot.as_deref();
-                        let mut broken = false;
-                        for ((ucp, uslot), source) in &use_breaks {
-                            if *ucp != cp {
-                                continue;
-                            }
-                            if pin_slot.is_some_and(|ps| ps != uslot.as_str()) {
-                                continue;
-                            }
-                            if portage_dep::match_from_list(
-                                constraint.as_str(),
-                                &[source.candidate.as_str()],
-                            )
-                            .is_none_or(|m| m.is_empty())
-                            {
-                                continue;
-                            }
-                            if portage_dep::use_deps_violated(
-                                &use_deps,
-                                &use_flags,
-                                &source.merge_use,
-                                &source.merge_iuse,
-                            ) {
-                                broken = true;
-                                break;
-                            }
-                        }
-                        if broken {
-                            // The pin carries parent-USE-evaluated text.
-                            let evaluated = portage_dep::evaluate_atom_conditionals(
-                                atom_str.as_str(),
-                                &use_flags,
-                            )
-                            .unwrap_or_else(|| atom_str.clone());
-                            let pin = RevDepPin {
-                                cp: cp.clone(),
-                                atom: evaluated,
-                                raw_atom: atom_str.clone(),
-                                consumer: (
-                                    consumer.category.clone(),
-                                    consumer.package.clone(),
-                                    consumer.version.clone(),
-                                ),
-                            };
-                            if seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone()))
-                            {
-                                dropped.push(pin);
-                            }
-                        }
-                    }
+        }
+    }
+    ControlFlow::Continue(())
+}
+
+/// The values [`constraints_from_atom`] reads from its caller.
+pub(crate) struct ConstraintsFromAtomArgs<'a> {
+    pub(crate) atom_str: &'a str,
+    pub(crate) upgrading: &'a UpgradingMap,
+    pub(crate) dep_key: &'a &'a str,
+    pub(crate) use_breaks: &'a HashMap<((String, String), String), UseBreakSource>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) consumer: &'a InstalledPackage,
+    pub(crate) seen: &'a mut HashSet<SeenPin>,
+    pub(crate) dropped: &'a mut Vec<RevDepPin>,
+    pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) enforced: &'a mut Vec<RevDepPin>,
+}
+
+/// Collect the reverse-dependency pins one dependency atom of a consumer places on the packages being upgraded.
+pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> ControlFlow<()> {
+    let ConstraintsFromAtomArgs {
+        atom_str,
+        upgrading,
+        dep_key,
+        use_breaks,
+        use_flags,
+        consumer,
+        seen,
+        dropped,
+        hard_want,
+        root,
+        repos,
+        enforced,
+    } = args;
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return ControlFlow::Break(());
+    };
+    if atom.blocker != portage_dep::Blocker::None {
+        return ControlFlow::Break(());
+    }
+    let cp = (atom.category.clone(), atom.package.clone());
+    let built_slot_op = is_built_slot_op(&atom);
+    let constraint = reverse_dep_constraint_atom(atom_str, &atom);
+    // Collect every slot whose upgrade breaks the pin. Slot-change
+    // reinstalls probe the verbatim atom; Upgrade/Downgrade the
+    // stripped constraint (built bindings are rebuild triggers).
+    let verbatim_head = atom_str.split('[').next().unwrap_or(atom_str);
+    let mut failing: Vec<(String, bool)> = Vec::new();
+    for ((ucp, slot), (candidate, reinstall_slot_change)) in upgrading {
+        if *ucp != cp {
+            continue;
+        }
+        // An explicit-slot atom constrains only that slot's instance.
+        if atom.slot.as_deref().is_some_and(|ps| ps != slot.as_str()) {
+            continue;
+        }
+        let probe = if *reinstall_slot_change {
+            verbatim_head
+        } else {
+            constraint.as_str()
+        };
+        let satisfied = portage_dep::match_from_list(probe, &[candidate.as_str()])
+            .is_some_and(|m| !m.is_empty());
+        if !satisfied {
+            failing.push((slot.clone(), *reinstall_slot_change));
+        }
+    }
+    if failing.is_empty() {
+        // A same-version USE-change reinstall can still break the `[use]`
+        // bound: such a pin is dropped for the residual report, never
+        // enforced. The stripped probe must still hold the merge;
+        // built pins and build-time keys stay out.
+        let use_deps = atom.use_deps.clone().unwrap_or_default();
+        if !use_deps.is_empty() && !is_build_time_dep_key(dep_key) && !built_slot_op {
+            let pin_slot = atom.slot.as_deref();
+            let mut broken = false;
+            for ((ucp, uslot), source) in use_breaks {
+                if *ucp != cp {
                     continue;
                 }
-                // Verbatim for built bindings via slot-change reinstalls, else stripped.
-                let pin_atom = if built_slot_op
-                    && failing
-                        .iter()
-                        .any(|(_, reinstall_slot_change)| *reinstall_slot_change)
+                if pin_slot.is_some_and(|ps| ps != uslot.as_str()) {
+                    continue;
+                }
+                if portage_dep::match_from_list(constraint.as_str(), &[source.candidate.as_str()])
+                    .is_none_or(|m| m.is_empty())
                 {
-                    verbatim_head.to_string()
-                } else {
-                    constraint
-                };
+                    continue;
+                }
+                if portage_dep::use_deps_violated(
+                    &use_deps,
+                    use_flags,
+                    &source.merge_use,
+                    &source.merge_iuse,
+                ) {
+                    broken = true;
+                    break;
+                }
+            }
+            if broken {
+                // The pin carries parent-USE-evaluated text.
+                let evaluated = portage_dep::evaluate_atom_conditionals(atom_str, use_flags)
+                    .unwrap_or_else(|| atom_str.to_string());
                 let pin = RevDepPin {
                     cp: cp.clone(),
-                    atom: pin_atom,
-                    raw_atom: atom_str.clone(),
+                    atom: evaluated,
+                    raw_atom: atom_str.to_string(),
                     consumer: (
                         consumer.category.clone(),
                         consumer.package.clone(),
                         consumer.version.clone(),
                     ),
                 };
-                if !seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
-                    continue;
-                }
-                // A stripped pin constrains no slot; a plain pin stays scoped.
-                let pin_slot = if built_slot_op {
-                    None
-                } else {
-                    atom.slot.as_deref()
-                };
-                let hard = hard_want.get(&cp).map_or(&EMPTY_WANT, |v| v);
-                let holds = failing.iter().any(|(slot, _)| {
-                    let mut slots = std::collections::HashSet::new();
-                    slots.insert(slot.clone());
-                    rev_dep_pin_holdable(RevDepPinHoldableArgs {
-                        root,
-                        repos,
-                        cp: &cp,
-                        pin: &pin.atom,
-                        pin_slot,
-                        upgraded_slots: &slots,
-                        hard_atoms: hard,
-                    })
-                });
-                // A holdable plain pin from a build-time key is ignored (optional
-                // edges, never withholding). A runtime-key pin IS a parent edge
-                // once in-graph. Built and not-holdable pins still enforce/drop.
-                if holds && !built_slot_op && is_build_time_dep_key(dep_key) {
-                    continue;
-                }
-                if holds {
-                    enforced.push(pin);
-                } else {
+                if seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
                     dropped.push(pin);
                 }
             }
         }
+        return ControlFlow::Break(());
     }
-    enforced.sort();
-    dropped.sort();
-    (enforced, dropped)
+    // Verbatim for built bindings via slot-change reinstalls, else stripped.
+    let pin_atom = if built_slot_op
+        && failing
+            .iter()
+            .any(|(_, reinstall_slot_change)| *reinstall_slot_change)
+    {
+        verbatim_head.to_string()
+    } else {
+        constraint
+    };
+    let pin = RevDepPin {
+        cp: cp.clone(),
+        atom: pin_atom,
+        raw_atom: atom_str.to_string(),
+        consumer: (
+            consumer.category.clone(),
+            consumer.package.clone(),
+            consumer.version.clone(),
+        ),
+    };
+    if !seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
+        return ControlFlow::Break(());
+    }
+    // A stripped pin constrains no slot; a plain pin stays scoped.
+    let pin_slot = if built_slot_op {
+        None
+    } else {
+        atom.slot.as_deref()
+    };
+    let hard = hard_want.get(&cp).map_or(&EMPTY_WANT, |v| v);
+    let holds = failing.iter().any(|(slot, _)| {
+        let mut slots = std::collections::HashSet::new();
+        slots.insert(slot.clone());
+        rev_dep_pin_holdable(RevDepPinHoldableArgs {
+            root,
+            repos,
+            cp: &cp,
+            pin: &pin.atom,
+            pin_slot,
+            upgraded_slots: &slots,
+            hard_atoms: hard,
+        })
+    });
+    // A holdable plain pin from a build-time key is ignored (optional
+    // edges, never withholding). A runtime-key pin IS a parent edge
+    // once in-graph. Built and not-holdable pins still enforce/drop.
+    if holds && !built_slot_op && is_build_time_dep_key(dep_key) {
+        return ControlFlow::Break(());
+    }
+    if holds {
+        enforced.push(pin);
+    } else {
+        dropped.push(pin);
+    }
+    ControlFlow::Continue(())
 }
