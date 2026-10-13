@@ -178,176 +178,29 @@ pub(crate) fn slot_operator_rebuild_scan(
                 })
                 .filter_map(|tok| portage_dep::parse_atom(&tok))
                 .filter_map(|atom| {
-                    if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
-                        return None;
-                    }
-                    let (a_slot, a_sub) = (atom.slot.as_deref()?, atom.sub_slot.as_deref()?);
-                    let provider_cp = (atom.category.clone(), atom.package.clone());
-                    if same_slot_scope {
-                        let (n_ver, n_slot, n_sub) = new_slot.get(&provider_cp)?;
-                        if a_slot == n_slot && a_sub != n_sub {
-                            let display = format!("{}/{}-{n_ver}", atom.category, atom.package);
-                            let cand = format!(
-                                "{}/{}-{n_ver}:{n_slot}/{n_sub}",
-                                atom.category, atom.package
-                            );
-                            return Some((display, provider_cp, cand, true));
-                        }
-                    }
-                    // New-slot arm: an installed consumer whose built `:S/SS=`
-                    // dep is bound to a slot the provider no longer occupies
-                    // rebuilds against the fresh slot. First acceptable
-                    // candidate wins, gates and refusal per candidate.
-                    if new_slot_scope {
-                        // A greedy request-argument pin on the bound slot
-                        // refuses the whole edge; same-slot candidates match
-                        // `P:S` trivially. The pin needs a multi-slot request
-                        // atom and must survive the greedy revision with
-                        // blocker lookahead.
-                        if update
-                            && greedy_cps.contains(&provider_cp)
-                            && let Some((high_slot, high_ver)) =
-                                highest_visible_slot(repos, &provider_cp)
-                            && high_slot.as_str() != a_slot
-                            && installed_by_cp.get(&provider_cp).is_some_and(|insts| {
-                                insts
-                                    .iter()
-                                    .filter(|(_, s)| *s == a_slot)
-                                    .map(|(v, _)| v)
-                                    .max_by(|a, b| vercmp_ordering(a, b))
-                                    .is_some_and(|best| {
-                                        vercmp_ordering(&high_ver, best) == Ordering::Greater
-                                    })
-                            })
-                            && *revision_memo
-                                .entry((provider_cp.clone(), a_slot.to_string()))
-                                .or_insert_with(|| {
-                                    greedy_pin_survives_revision(
-                                        repos,
-                                        config,
-                                        &provider_cp,
-                                        a_slot,
-                                    )
-                                })
-                        {
-                            return None;
-                        }
-                        let mut cands: Vec<(&String, &String, &String)> = Vec::new();
-                        if let Some(fresh) = new_slot_fresh.get(&provider_cp) {
-                            cands.push((&fresh.0, &fresh.1, &fresh.2));
-                        }
-                        if let Some(other) = new_slot.get(&provider_cp) {
-                            cands.push((&other.0, &other.1, &other.2));
-                        }
-                        // An installed provider instance in another slot that an
-                        // argument names is a probe candidate the argument
-                        // itself accepts.
-                        let arg_installed: Vec<(String, String, String)> =
-                            installed_refs(root, &provider_cp.0, &provider_cp.1)
-                                .into_iter()
-                                .filter(|r| r.slot != a_slot)
-                                .filter(|r| {
-                                    let s = format!(
-                                        "{}/{}-{}:{}",
-                                        provider_cp.0, provider_cp.1, r.version, r.slot
-                                    );
-                                    top_level_atoms.iter().any(|t| {
-                                        portage_dep::match_from_list(t, &[s.as_str()])
-                                            .is_some_and(|m| !m.is_empty())
-                                    })
-                                })
-                                .map(|r| (r.version, r.slot, r.sub_slot))
-                                .collect();
-                        for (v, sl, sub) in &arg_installed {
-                            cands.push((v, sl, sub));
-                        }
-                        // The probe also ranges over every available package,
-                        // not just scheduled entries. Ebuilds only, visible
-                        // ones only, highest first; already-installed
-                        // versions are not updates.
-                        let tree = list_candidates(repos, &provider_cp.0, &provider_cp.1).ok();
-                        if let Some(tree) = tree.as_deref() {
-                            let installed_versions: HashSet<&String> = installed_by_cp
-                                .get(&provider_cp)
-                                .map(|insts| insts.iter().map(|(v, _)| v).collect())
-                                .unwrap_or_default();
-                            let mut avail: Vec<(&String, &String, &String)> = tree
-                                .iter()
-                                .filter(|c| c.source == CandidateSource::Ebuild)
-                                .filter(|c| !installed_versions.contains(&c.version))
-                                .filter(|c| {
-                                    ebuild_visible_at(
-                                        repos,
-                                        &provider_cp.0,
-                                        &provider_cp.1,
-                                        &c.version,
-                                        config,
-                                    )
-                                })
-                                .map(|c| (&c.version, &c.slot, &c.sub_slot))
-                                .collect();
-                            avail.sort_by(|a, b| vercmp_ordering(a.0, b.0).reverse());
-                            for a in avail {
-                                if !cands.contains(&a) {
-                                    cands.push(a);
-                                }
-                            }
-                        }
-                        for (c_ver, c_slot, c_sub) in cands {
-                            if *c_slot == a_slot {
-                                continue;
-                            }
-                            // An installed provider instance must sit in the
-                            // bound slot, else there is nothing to update
-                            // away from.
-                            let Some(old_ver) = installed_by_cp.get(&provider_cp)?.iter().find_map(
-                                |(version, slot)| (*slot == a_slot).then(|| version.clone()),
-                            ) else {
-                                continue;
-                            };
-                            // Higher version only; equal versions (a slot move
-                            // without a revbump) probe.
-                            if vercmp_ordering(c_ver, &old_ver) == Ordering::Less {
-                                continue;
-                            }
-                            // `--update`, or the provider itself is directly
-                            // requested.
-                            if !update && !top_level_cps.contains(&provider_cp) {
-                                continue;
-                            }
-                            // With no visible tree candidate the forced reinstall
-                            // would dead-end.
-                            if list_candidates(repos, &pkg.category, &pkg.package)
-                                .ok()
-                                .is_none_or(|cands| cands.is_empty())
-                            {
-                                continue;
-                            }
-                            let display = format!("{}/{}-{c_ver}", atom.category, atom.package);
-                            let cand = format!(
-                                "{}/{}-{c_ver}:{c_slot}/{c_sub}",
-                                atom.category, atom.package
-                            );
-                            // A replacement parent whose own atom accepts the
-                            // new slot must exist.
-                            if !replacement_parent_accepts(ReplacementParentAcceptsArgs {
-                                repos,
-                                config,
-                                consumer: (&pkg.category, &pkg.package, &pkg.slot),
-                                dep_keys,
-                                provider: (&atom.category, &atom.package),
-                                candidate: &cand,
-                            }) {
-                                continue;
-                            }
-                            if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
-                                continue;
-                            }
-                            return Some((display, provider_cp, cand, false));
-                        }
-                        return None;
-                    }
-                    None
+                    slot_op_edge_for_atom(
+                        atom,
+                        SlotOpEdgeCtx {
+                            same_slot_scope,
+                            new_slot_scope,
+                            new_slot: &new_slot,
+                            new_slot_fresh: &new_slot_fresh,
+                            update,
+                            greedy_cps: &greedy_cps,
+                            repos,
+                            installed_by_cp: &installed_by_cp,
+                            revision_memo: &mut revision_memo,
+                            config,
+                            root,
+                            top_level_atoms,
+                            top_level_cps,
+                            pkg,
+                            dep_keys,
+                            probe_parents: &probe_parents,
+                            scheduled: &scheduled,
+                            cp: &cp,
+                        },
+                    )
                 })
                 .collect();
             edges.sort();
@@ -390,4 +243,212 @@ pub(crate) fn slot_operator_rebuild_scan(
     abi_rebuilds.sort();
     abi_rebuilds.dedup();
     (scheduled, abi_rebuilds, masked)
+}
+
+/// Borrowed inputs of [`slot_op_edge_for_atom`].
+struct SlotOpEdgeCtx<'a> {
+    same_slot_scope: bool,
+    new_slot_scope: bool,
+    new_slot: &'a HashMap<(String, String), (String, String, String)>,
+    new_slot_fresh: &'a HashMap<(String, String), (String, String, String)>,
+    update: bool,
+    greedy_cps: &'a HashSet<(String, String)>,
+    repos: &'a [RepoConfig],
+    installed_by_cp: &'a HashMap<(String, String), Vec<(String, String)>>,
+    revision_memo: &'a mut HashMap<((String, String), String), bool>,
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    top_level_atoms: &'a HashSet<String>,
+    top_level_cps: &'a HashSet<(String, String)>,
+    pkg: &'a InstalledPackage,
+    dep_keys: &'a [&'a str],
+    probe_parents: &'a HashMap<(String, String), Vec<ProbeParent>>,
+    scheduled: &'a BTreeSet<(String, String)>,
+    cp: &'a (String, String),
+}
+
+/// The slot-operator edge one dependency atom of an installed consumer gives:
+/// (display `provider_cpv`, provider cp, fresh candidate, same-slot arm).
+fn slot_op_edge_for_atom(
+    atom: portage_dep::Atom,
+    ctx: SlotOpEdgeCtx<'_>,
+) -> Option<(String, (String, String), String, bool)> {
+    let SlotOpEdgeCtx {
+        same_slot_scope,
+        new_slot_scope,
+        new_slot,
+        new_slot_fresh,
+        update,
+        greedy_cps,
+        repos,
+        installed_by_cp,
+        revision_memo,
+        config,
+        root,
+        top_level_atoms,
+        top_level_cps,
+        pkg,
+        dep_keys,
+        probe_parents,
+        scheduled,
+        cp,
+    } = ctx;
+    if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
+        return None;
+    }
+    let (a_slot, a_sub) = (atom.slot.as_deref()?, atom.sub_slot.as_deref()?);
+    let provider_cp = (atom.category.clone(), atom.package.clone());
+    if same_slot_scope {
+        let (n_ver, n_slot, n_sub) = new_slot.get(&provider_cp)?;
+        if a_slot == n_slot && a_sub != n_sub {
+            let display = format!("{}/{}-{n_ver}", atom.category, atom.package);
+            let cand = format!(
+                "{}/{}-{n_ver}:{n_slot}/{n_sub}",
+                atom.category, atom.package
+            );
+            return Some((display, provider_cp, cand, true));
+        }
+    }
+    // New-slot arm: an installed consumer whose built `:S/SS=`
+    // dep is bound to a slot the provider no longer occupies
+    // rebuilds against the fresh slot. First acceptable
+    // candidate wins, gates and refusal per candidate.
+    if new_slot_scope {
+        // A greedy request-argument pin on the bound slot
+        // refuses the whole edge; same-slot candidates match
+        // `P:S` trivially. The pin needs a multi-slot request
+        // atom and must survive the greedy revision with
+        // blocker lookahead.
+        if update
+            && greedy_cps.contains(&provider_cp)
+            && let Some((high_slot, high_ver)) = highest_visible_slot(repos, &provider_cp)
+            && high_slot.as_str() != a_slot
+            && installed_by_cp.get(&provider_cp).is_some_and(|insts| {
+                insts
+                    .iter()
+                    .filter(|(_, s)| *s == a_slot)
+                    .map(|(v, _)| v)
+                    .max_by(|a, b| vercmp_ordering(a, b))
+                    .is_some_and(|best| vercmp_ordering(&high_ver, best) == Ordering::Greater)
+            })
+            && *revision_memo
+                .entry((provider_cp.clone(), a_slot.to_string()))
+                .or_insert_with(|| {
+                    greedy_pin_survives_revision(repos, config, &provider_cp, a_slot)
+                })
+        {
+            return None;
+        }
+        let mut cands: Vec<(&String, &String, &String)> = Vec::new();
+        if let Some(fresh) = new_slot_fresh.get(&provider_cp) {
+            cands.push((&fresh.0, &fresh.1, &fresh.2));
+        }
+        if let Some(other) = new_slot.get(&provider_cp) {
+            cands.push((&other.0, &other.1, &other.2));
+        }
+        // An installed provider instance in another slot that an
+        // argument names is a probe candidate the argument
+        // itself accepts.
+        let arg_installed: Vec<(String, String, String)> =
+            installed_refs(root, &provider_cp.0, &provider_cp.1)
+                .into_iter()
+                .filter(|r| r.slot != a_slot)
+                .filter(|r| {
+                    let s = format!(
+                        "{}/{}-{}:{}",
+                        provider_cp.0, provider_cp.1, r.version, r.slot
+                    );
+                    top_level_atoms.iter().any(|t| {
+                        portage_dep::match_from_list(t, &[s.as_str()])
+                            .is_some_and(|m| !m.is_empty())
+                    })
+                })
+                .map(|r| (r.version, r.slot, r.sub_slot))
+                .collect();
+        for (v, sl, sub) in &arg_installed {
+            cands.push((v, sl, sub));
+        }
+        // The probe also ranges over every available package,
+        // not just scheduled entries. Ebuilds only, visible
+        // ones only, highest first; already-installed
+        // versions are not updates.
+        let tree = list_candidates(repos, &provider_cp.0, &provider_cp.1).ok();
+        if let Some(tree) = tree.as_deref() {
+            let installed_versions: HashSet<&String> = installed_by_cp
+                .get(&provider_cp)
+                .map(|insts| insts.iter().map(|(v, _)| v).collect())
+                .unwrap_or_default();
+            let mut avail: Vec<(&String, &String, &String)> = tree
+                .iter()
+                .filter(|c| c.source == CandidateSource::Ebuild)
+                .filter(|c| !installed_versions.contains(&c.version))
+                .filter(|c| {
+                    ebuild_visible_at(repos, &provider_cp.0, &provider_cp.1, &c.version, config)
+                })
+                .map(|c| (&c.version, &c.slot, &c.sub_slot))
+                .collect();
+            avail.sort_by(|a, b| vercmp_ordering(a.0, b.0).reverse());
+            for a in avail {
+                if !cands.contains(&a) {
+                    cands.push(a);
+                }
+            }
+        }
+        for (c_ver, c_slot, c_sub) in cands {
+            if *c_slot == a_slot {
+                continue;
+            }
+            // An installed provider instance must sit in the
+            // bound slot, else there is nothing to update
+            // away from.
+            let Some(old_ver) = installed_by_cp
+                .get(&provider_cp)?
+                .iter()
+                .find_map(|(version, slot)| (*slot == a_slot).then(|| version.clone()))
+            else {
+                continue;
+            };
+            // Higher version only; equal versions (a slot move
+            // without a revbump) probe.
+            if vercmp_ordering(c_ver, &old_ver) == Ordering::Less {
+                continue;
+            }
+            // `--update`, or the provider itself is directly
+            // requested.
+            if !update && !top_level_cps.contains(&provider_cp) {
+                continue;
+            }
+            // With no visible tree candidate the forced reinstall
+            // would dead-end.
+            if list_candidates(repos, &pkg.category, &pkg.package)
+                .ok()
+                .is_none_or(|cands| cands.is_empty())
+            {
+                continue;
+            }
+            let display = format!("{}/{}-{c_ver}", atom.category, atom.package);
+            let cand = format!(
+                "{}/{}-{c_ver}:{c_slot}/{c_sub}",
+                atom.category, atom.package
+            );
+            // A replacement parent whose own atom accepts the
+            // new slot must exist.
+            if !replacement_parent_accepts(ReplacementParentAcceptsArgs {
+                repos,
+                config,
+                consumer: (&pkg.category, &pkg.package, &pkg.slot),
+                dep_keys,
+                provider: (&atom.category, &atom.package),
+                candidate: &cand,
+            }) {
+                continue;
+            }
+            if probe_refused(probe_parents, scheduled, &provider_cp, &cand, cp) {
+                continue;
+            }
+            return Some((display, provider_cp, cand, false));
+        }
+        return None;
+    }
+    None
 }
