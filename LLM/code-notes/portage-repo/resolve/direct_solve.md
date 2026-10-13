@@ -24,11 +24,17 @@ Solves slot conflicts directly, without backtracking.
 - Insertion order for `or_tuple` first-pulled (`:1998-2006`): merge instances in walk (entries) order, installed ones after (Portage's tracker order for installed nodes is walk-dependent; every S2 oracle tuple is all-merge, so this is untested beyond that -- documented here, not silently assumed).
 - All conflict members, for the non-conflict test (`:1897-1901`): a parent whose (cp, version, installedness) names a conflict instance draws a package-to-package edge instead of the `non_conflict_node` substitution.
 - `parent_identity`: full `cat/pkg-ver:slot/sub::repo` form (Portage's own): strip the slot/repo suffix `split_cpv` cannot read.
+
+## fn solve_one_conflict
 - Slot-operator rebuild conflicts never enter the direct solve (`:1784-1788`): their key is `(root, slot_atom)`; portuale's replace set is cp-keyed, which is the same gate at this granularity (#24/#78 territory, not #90). Neither do conflicts that feed the need_rebuild trailer: an installed parent whose built slot-operator atom (`:=` with a sub-slot, Portage `Atom.slot_operator_built`) cannot rebuild (`--exclude` / `--useoldpkg-atoms`) is Portage's rebuild-path residue, not remove-path material -- removing the reinstall would silence the trailer the F-A2 gate exists to print. (The masked-or-unavailable-ebuild reason stays the filed follow-up: this gate only knows the two pinned reasons.)
 - Edges: (parent node, matched instance indices). A top-level `(Argument)` pull (empty cpv): no package parent, so the shared sink. Its atom still matches normally.
 - Autounmask-broken USE or multislot (`:1926-1931`, bug 220341): protect the whole conflict from removal instead of solving it wrong.
+
+## fn protect_forced_instances
 - `or_tuple`s resolve only once every plain package had its chance (`:1994-2006`): an already-forced member satisfies the dependency, otherwise the first-pulled member wins ("the package that was pulled first, as this should be the most desirable choice").
 - Dependencies of forced packages join the set (`:2012-2020`; portuale models no indirect candidates -- see the fn docs).
+
+## fn pair_instance_with_others
 - The take-over version: the first surviving same-cp instance (installed, or a forced merge) in conflict order -- never the removed instance itself. Empty when every instance drops (degenerate: no edge reached anything); then the entry is deleted outright with no notice owed (there is no keeper to report against).
 - Missed-update recording (`:2063-2106`): for the removed instance, every parent of every *other* instance whose atom does not accept it. No `is_arg_parent` gate here, exactly like Portage.
 - Backlog #230: the slot instances' own `use_display` is the slot-collision notice's IUSE-only rendering; the skipped block renders Portage's full `pkg_use_display` instead (recomputed here -- the notice keeps its own).

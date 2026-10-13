@@ -43,6 +43,8 @@ host's loop `'LABEL` at indent N: a `continue` to that loop becomes
 `let PAT = 'LABEL: { .. };`; `break 'LABEL X` returns
 `ControlFlow::Continue(X)` and the whole `let` becomes
 `let ControlFlow::Continue(PAT) = f(..) else { continue 'loop; };`.
+`--ty NAME=TYPE` (repeatable): the type of a parameter or output whose rustc label
+is elided with `...`.
 `--own A,B`: these parameters go by value (the range consumes them).
 `--ret "ControlFlow<()>"`: the host returns `ControlFlow<()>`; its `return ControlFlow::Break(())` stays
 verbatim in the helper (`ControlFlow<()>`) and the call site repeats it.
@@ -261,7 +263,7 @@ def code_only(text):
 
 class Cut:
     def __init__(self, src, start, end, fname, target, doc, pkg, err=None, ret="ExitCode",
-                 loop=None, indent=4, diverges=False, value=None, own=(), tail=False):
+                 loop=None, indent=4, diverges=False, value=None, own=(), tail=False, ty=None):
         self.src, self.start, self.end = src, start, end
         self.fname, self.target, self.doc, self.pkg = fname, target, doc, pkg
         self.orig_src = open(src).read()
@@ -287,6 +289,7 @@ class Cut:
             assert lines0[self.end].strip() == "};", lines0[self.end]
             assert self.loop, "--value needs --loop"
         self.ret_ty = ret
+        self.ty = ty or {}
         # --tail: the range ends the host with its tail expression, so the
         # helper has the host's return type and the call becomes the tail
         self.tail = tail
@@ -353,7 +356,7 @@ class Cut:
             m = re.match(rf"^{self.ind}let (?:mut )?([a-z_]\w*)\b(?!\()", l)
             found = [m.group(1)] if m else []
             # `let Some(x) = .. else { .. };` / `let (a, b) = ..;`: the names the pattern binds
-            mp = re.match(rf"^{self.ind}let ((?:[A-Z]\w*)?\(([^()]*)\)) = ", l)
+            mp = re.match(rf"^{self.ind}let ((?:[A-Z]\w*)?\((.*)\)) = ", l)
             if mp:
                 found = [w for w in re.findall(r"[a-z_]\w*", mp.group(2)) if w not in ("mut", "ref")]
             for nm in found:
@@ -411,7 +414,8 @@ class Cut:
         if self.outs:
             ts = [t if typed and t else "()" for _, t in self.outs]
             o = ts[0] if len(ts) == 1 else pascal(self.fname) + "Out"
-            return f"ControlFlow<{self.ret_ty}, {o}>" if self.returns else o
+            ret_ty = "()" if self.cf else self.ret_ty
+            return f"ControlFlow<{ret_ty}, {o}>" if self.returns else o
         if self.returns and self.unit:
             return "ControlFlow<()>"
         return f"Option<{self.ret_ty}>" if self.returns else None
@@ -780,7 +784,7 @@ class Cut:
                 for s, expr, label in self.labels(m):
                     mm = re.search(r"expected `\(\)`, found (?:[a-z]+ )?`(.+)`$", label)
                     if mm and os.path.abspath(s["file_name"]) == os.path.abspath(self.src):
-                        types.setdefault(expr, mm.group(1))
+                        types.setdefault(expr, self.ty.get(expr, mm.group(1)))
                     mm = re.search(r"expected (?:[a-z]+ )?`(.+)`, found `\(\)`$", label)
                     if mm:
                         fallback.setdefault(expr, mm.group(1))
@@ -812,7 +816,7 @@ class Cut:
                     mm = re.search(r"expected `\(\)`, found (?:[a-z]+ )?`(.+)`$", label)
                     for o in self.outs:
                         if mm and expr == o[0] and o[1] is None:
-                            o[1] = mm.group(1)
+                            o[1] = self.ty.get(expr, mm.group(1))
             for o in self.outs:
                 if o[1] is None:
                     for m in self.check()[:4]:
@@ -861,8 +865,9 @@ def main():
     indent = int(a[a.index("--indent") + 1]) if "--indent" in a else 4
     value = tuple(a[a.index("--value") + 1:a.index("--value") + 4]) if "--value" in a else None
     own = a[a.index("--own") + 1].split(",") if "--own" in a else ()
+    ty = dict(x.split("=", 1) for k, x in zip(a, a[1:]) if k == "--ty")
     cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg, err, ret, loop, indent,
-              "--diverges" in a, value, own, "--tail" in a)
+              "--diverges" in a, value, own, "--tail" in a, ty)
     try:
         cut.run()
     except SystemExit as e:

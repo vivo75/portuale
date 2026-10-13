@@ -1,0 +1,642 @@
+diff --git a/crates/portage-repo/src/resolve/direct_solve.rs b/crates/portage-repo/src/resolve/direct_solve.rs
+index 715922cc..2f702ef1 100644
+--- a/crates/portage-repo/src/resolve/direct_solve.rs
++++ b/crates/portage-repo/src/resolve/direct_solve.rs
+@@ -1,6 +1,7 @@
+ //! Solves slot conflicts directly, without backtracking.
+ 
+ use crate::*;
++use std::ops::ControlFlow;
+ 
+ /// Unconditional direct solve of solvable slot conflicts (no backtracking
+ /// gate: the capture says `backtrack: 0/0`, zero retries, yet reconciled).
+@@ -203,294 +204,22 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
+     // All conflict members, for the non-conflict test: a parent naming a
+     // conflict instance draws a package-to-package edge instead of the
+     // sink substitution.
+-    let member_of = |cp: &(String, String), ver: &str, installed: bool| -> Option<(usize, usize)> {
+-        for (ci, c) in input.conflicts.iter().enumerate() {
+-            if (c.category.clone(), c.package.clone()) != *cp {
+-                continue;
+-            }
+-            for (ii, inst) in c.instances.iter().enumerate() {
+-                if inst.version == ver && inst.installed == installed {
+-                    return Some((ci, ii));
+-                }
+-            }
+-        }
+-        None
+-    };
+-    let parent_identity = |parent_cpv: &str| -> Option<(String, String, String)> {
+-        // Strip the slot/repo suffix `split_cpv` cannot read.
+-        split_cpv(parent_cpv.split(':').next().unwrap_or(""))
+-    };
+     let mut removed: Vec<(String, String, String, String)> = Vec::new();
+     let mut skipped: Vec<SkippedUpdate> = Vec::new();
+     let mut surviving: Vec<SlotConflict> = Vec::new();
+-    for (ci, c) in input.conflicts.iter().enumerate() {
+-        // Slot-operator rebuild conflicts and need-rebuild-trailer conflicts
+-        // never enter the direct solve; they survive as-is.
+-        let stuck_rebuild_parent = c.instances.iter().flat_map(|i| &i.parents).any(|p| {
+-            let Some(atom) = portage_dep::parse_atom(&p.atom) else {
+-                return false;
+-            };
+-            if !is_built_slot_op(&atom) {
+-                return false;
+-            }
+-            // Strip the slot/repo suffix first.
+-            let bare = p.parent_cpv.split(':').next().unwrap_or("");
+-            let Some((pc, pp, pv)) = split_cpv(bare) else {
+-                return false;
+-            };
+-            if !installed_candidates(input.root, &pc, &pp)
+-                .iter()
+-                .any(|(v, _, _)| v == &pv)
+-            {
+-                return false;
+-            }
+-            let cpv = format!("{pc}/{pp}-{pv}");
+-            input
+-                .excluded
+-                .iter()
+-                .any(|ex| matches_cli_option_atom(ex, &cpv))
+-                || useoldpkg_atom_matches(&pc, &pp, &pv)
+-        });
+-        if stuck_rebuild_parent
+-            || input
+-                .replace_cps
+-                .contains(&(c.category.clone(), c.package.clone()))
++    'conflict: for (ci, c) in input.conflicts.iter().enumerate() {
++        if solve_one_conflict(SolveOneConflictArgs {
++            c,
++            input: &input,
++            surviving: &mut surviving,
++            order: &order,
++            ci,
++            removed: &mut removed,
++            skipped: &mut skipped,
++        })
++        .is_break()
+         {
+-            surviving.push(c.clone());
+-            continue;
+-        }
+-        let arg_mode = direct_solve_arg_mode(&input, c);
+-        // Edges: (parent node, matched instance indices).
+-        let mut edges: Vec<(DirectSolveNode, Vec<usize>)> = Vec::new();
+-        let mut protect_all = false;
+-        for (ii, inst) in c.instances.iter().enumerate() {
+-            let _ = ii;
+-            for p in &inst.parents {
+-                let parent_node = match parent_identity(&p.parent_cpv) {
+-                    Some((pc, pp, pv)) => member_of(&(pc.clone(), pp.clone()), &pv, p.installed)
+-                        .map_or(DirectSolveNode::NonConflict, |(mci, mii)| {
+-                            DirectSolveNode::Instance(mci, mii)
+-                        }),
+-                    // A top-level `(Argument)` pull: no package parent, so the
+-                    // shared sink; its atom still matches normally below.
+-                    None => DirectSolveNode::NonConflict,
+-                };
+-                let mut matched: Vec<usize> = Vec::new();
+-                for (jj, _) in c.instances.iter().enumerate() {
+-                    if direct_solve_atom_matches(&input, c, jj, &p.atom, arg_mode) {
+-                        matched.push(jj);
+-                    }
+-                }
+-                if matched.is_empty() {
+-                    // No instance matches: protect the whole conflict from
+-                    // removal instead of solving it wrong.
+-                    protect_all = true;
+-                } else if matched.len() > 1 {
+-                    matched.sort_by_key(|jj| order.get(&(ci, *jj)).copied().unwrap_or(usize::MAX));
+-                    edges.push((parent_node, matched));
+-                } else {
+-                    edges.push((parent_node, matched));
+-                }
+-            }
+-        }
+-        // Children adjacency for the forced exploration.
+-        let mut children: HashMap<DirectSolveNode, Vec<DirectSolveNode>> = HashMap::new();
+-        // or_tuple bodies, by edge index.
+-        let mut tuples: Vec<Vec<(usize, usize)>> = Vec::new();
+-        for (parent, matched) in &edges {
+-            if matched.len() > 1 {
+-                let id = tuples.len();
+-                tuples.push(matched.iter().map(|jj| (ci, *jj)).collect());
+-                children
+-                    .entry(parent.clone())
+-                    .or_default()
+-                    .push(DirectSolveNode::OrTuple(id));
+-            } else {
+-                children
+-                    .entry(parent.clone())
+-                    .or_default()
+-                    .push(DirectSolveNode::Instance(ci, matched[0]));
+-            }
+-        }
+-        let mut forced: HashSet<DirectSolveNode> = HashSet::new();
+-        if !protect_all {
+-            forced.insert(DirectSolveNode::NonConflict);
+-            let mut unexplored = vec![DirectSolveNode::NonConflict];
+-            let mut explored: HashSet<DirectSolveNode> = HashSet::new();
+-            let mut pending_tuples: Vec<usize> = Vec::new();
+-            while let Some(node) = unexplored.pop() {
+-                if let Some(kids) = children.get(&node) {
+-                    for child in kids {
+-                        if !explored.insert(child.clone()) {
+-                            continue;
+-                        }
+-                        forced.insert(child.clone());
+-                        match child {
+-                            DirectSolveNode::Instance(_, _) => unexplored.push(child.clone()),
+-                            DirectSolveNode::OrTuple(id) => pending_tuples.push(*id),
+-                            DirectSolveNode::NonConflict => {}
+-                        }
+-                    }
+-                }
+-            }
+-            // `or_tuple`s resolve only once every plain package had its chance:
+-            // an already-forced member satisfies the dependency, otherwise the
+-            // first-pulled member wins.
+-            while let Some(id) = pending_tuples.pop() {
+-                let members = &tuples[id];
+-                if members
+-                    .iter()
+-                    .any(|m| forced.contains(&DirectSolveNode::Instance(m.0, m.1)))
+-                {
+-                    continue;
+-                }
+-                let mut first = members.clone();
+-                first.sort_by_key(|m| order.get(m).copied().unwrap_or(usize::MAX));
+-                if let Some(winner) = first.first() {
+-                    forced.insert(DirectSolveNode::Instance(winner.0, winner.1));
+-                    unexplored.push(DirectSolveNode::Instance(winner.0, winner.1));
+-                }
+-            }
+-            // Dependencies of forced packages join the set.
+-            while let Some(node) = unexplored.pop() {
+-                if let Some(kids) = children.get(&node) {
+-                    for child in kids {
+-                        if explored.insert(child.clone()) {
+-                            forced.insert(child.clone());
+-                            unexplored.push(child.clone());
+-                        }
+-                    }
+-                }
+-            }
+-        } else {
+-            // Protected: every instance is forced, nothing is removed.
+-            for (jj, _) in c.instances.iter().enumerate() {
+-                forced.insert(DirectSolveNode::Instance(ci, jj));
+-            }
+-        }
+-        let mut dropped_versions: Vec<String> = Vec::new();
+-        for (jj, inst) in c.instances.iter().enumerate() {
+-            if inst.installed {
+-                continue;
+-            }
+-            if forced.contains(&DirectSolveNode::Instance(ci, jj)) {
+-                continue;
+-            }
+-            // The take-over version: the first surviving same-cp instance in
+-            // conflict order, never the removed instance itself.
+-            let kept = c.instances.iter().enumerate().find(|(kk, i)| {
+-                *kk != jj && (i.installed || forced.contains(&DirectSolveNode::Instance(ci, *kk)))
+-            });
+-            dropped_versions.push(inst.version.clone());
+-            if let Some((_, k)) = kept {
+-                removed.push((
+-                    c.category.clone(),
+-                    c.package.clone(),
+-                    inst.version.clone(),
+-                    k.version.clone(),
+-                ));
+-            } else {
+-                removed.push((
+-                    c.category.clone(),
+-                    c.package.clone(),
+-                    inst.version.clone(),
+-                    String::new(),
+-                ));
+-            }
+-            // Missed-update recording: for the removed instance, every parent
+-            // of every *other* instance whose atom does not accept it.
+-            for (kk, other) in c.instances.iter().enumerate() {
+-                if kk == jj {
+-                    continue;
+-                }
+-                for p in &other.parents {
+-                    if direct_solve_atom_matches(&input, c, jj, &p.atom, false) {
+-                        continue;
+-                    }
+-                    // The skipped block renders the full display; the notice
+-                    // keeps its own IUSE-only rendering.
+-                    let skipped_use = skipped_update_use_display_for(
+-                        input.repos,
+-                        input.config,
+-                        &c.category,
+-                        &c.package,
+-                        &inst.version,
+-                    );
+-                    // A parent no merge entry replaces, whose installed instance
+-                    // carries the atom, renders as an installed node (vdb
+-                    // slot/repo). A merge-scheduled parent keeps the tree form.
+-                    let parent_bare = p.parent_cpv.split(':').next().unwrap_or("");
+-                    let (parent_cpv_disp, parent_installed) = if p.installed {
+-                        (p.parent_cpv.clone(), true)
+-                    } else if let Some((pc, pp, pv)) = split_cpv(parent_bare)
+-                        && !input.entries.iter().any(|e| {
+-                            e.category == pc
+-                                && e.package == pp
+-                                && merge_bound_version(&e.outcome) == Some(&pv)
+-                        })
+-                        && let Some(r) = installed_refs(input.root, &pc, &pp)
+-                            .into_iter()
+-                            .find(|r| r.version == pv)
+-                    {
+-                        (
+-                            format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
+-                            true,
+-                        )
+-                    } else {
+-                        (p.parent_cpv.clone(), false)
+-                    };
+-                    let consumer_use = skipped_consumer_use_display(
+-                        input.repos,
+-                        input.root,
+-                        input.config,
+-                        &parent_cpv_disp,
+-                        parent_installed,
+-                    );
+-                    // The missed instance rides the rejecting parent's edge; a
+-                    // merge parent rides its entry.
+-                    let (missed_running, consumer_running) = if parent_installed {
+-                        (false, false)
+-                    } else {
+-                        let parent = p.parent_cpv.split(':').next().unwrap_or("");
+-                        match split_cpv(parent) {
+-                            Some((cc, cp2, cv)) => skipped_update_roots(
+-                                input.entries,
+-                                (&c.category, &c.package),
+-                                (&cc, &cp2, &cv),
+-                                &p.atom,
+-                            ),
+-                            None => (false, false),
+-                        }
+-                    };
+-                    skipped.push(SkippedUpdate {
+-                        category: c.category.clone(),
+-                        package: c.package.clone(),
+-                        slot: c.slot.clone(),
+-                        skipped_version: inst.version.clone(),
+-                        skipped_sub_slot: inst.sub_slot.clone(),
+-                        skipped_repo: inst.repo_name.clone(),
+-                        skipped_use,
+-                        atom: p.atom.clone(),
+-                        consumer_cpv: parent_cpv_disp,
+-                        consumer_installed: parent_installed,
+-                        consumer_use,
+-                        missed_targets_running_root: missed_running,
+-                        consumer_targets_running_root: consumer_running,
+-                    });
+-                }
+-            }
+-        }
+-        let kept: Vec<SlotConflictInstance> = c
+-            .instances
+-            .iter()
+-            .filter(|i| i.installed || !dropped_versions.iter().any(|v| v == &i.version))
+-            .cloned()
+-            .collect();
+-        if kept.len() >= 2 {
+-            let mut rest = c.clone();
+-            rest.instances = kept;
+-            rest.resolved_version = rest.instances[0].version.clone();
+-            surviving.push(rest);
++            continue 'conflict;
+         }
+     }
+     // Blocks in first-recorded order; parents inside one block are sorted
+@@ -522,3 +251,322 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
+         surviving,
+     }
+ }
++
++/// The values [`solve_one_conflict`] reads from its caller.
++pub(crate) struct SolveOneConflictArgs<'a> {
++    pub(crate) c: &'a SlotConflict,
++    pub(crate) input: &'a DirectSolveInput<'a>,
++    pub(crate) surviving: &'a mut Vec<SlotConflict>,
++    pub(crate) order: &'a HashMap<(usize, usize), usize>,
++    pub(crate) ci: usize,
++    pub(crate) removed: &'a mut Vec<(String, String, String, String)>,
++    pub(crate) skipped: &'a mut Vec<SkippedUpdate>,
++}
++
++/// Solve one slot conflict: protect, remove or skip its instances; Break means the conflict survives as it is.
++pub(crate) fn solve_one_conflict(args: SolveOneConflictArgs<'_>) -> ControlFlow<()> {
++    let SolveOneConflictArgs {
++        c,
++        input,
++        surviving,
++        order,
++        ci,
++        removed,
++        skipped,
++    } = args;
++    // Slot-operator rebuild conflicts and need-rebuild-trailer conflicts
++    // never enter the direct solve; they survive as-is.
++    let stuck_rebuild_parent = c.instances.iter().flat_map(|i| &i.parents).any(|p| {
++        let Some(atom) = portage_dep::parse_atom(&p.atom) else {
++            return false;
++        };
++        if !is_built_slot_op(&atom) {
++            return false;
++        }
++        // Strip the slot/repo suffix first.
++        let bare = p.parent_cpv.split(':').next().unwrap_or("");
++        let Some((pc, pp, pv)) = split_cpv(bare) else {
++            return false;
++        };
++        if !installed_candidates(input.root, &pc, &pp)
++            .iter()
++            .any(|(v, _, _)| v == &pv)
++        {
++            return false;
++        }
++        let cpv = format!("{pc}/{pp}-{pv}");
++        input
++            .excluded
++            .iter()
++            .any(|ex| matches_cli_option_atom(ex, &cpv))
++            || useoldpkg_atom_matches(&pc, &pp, &pv)
++    });
++    if stuck_rebuild_parent
++        || input
++            .replace_cps
++            .contains(&(c.category.clone(), c.package.clone()))
++    {
++        surviving.push(c.clone());
++        return ControlFlow::Break(());
++    }
++    let arg_mode = direct_solve_arg_mode(input, c);
++    // Edges: (parent node, matched instance indices).
++    let mut edges: Vec<(DirectSolveNode, Vec<usize>)> = Vec::new();
++    let mut protect_all = false;
++    for (ii, inst) in c.instances.iter().enumerate() {
++        let _ = ii;
++        for p in &inst.parents {
++            let parent_node = match parent_identity(&p.parent_cpv) {
++                Some((pc, pp, pv)) => member_of(&(pc.clone(), pp.clone()), &pv, p.installed, input)
++                    .map_or(DirectSolveNode::NonConflict, |(mci, mii)| {
++                        DirectSolveNode::Instance(mci, mii)
++                    }),
++                // A top-level `(Argument)` pull: no package parent, so the
++                // shared sink; its atom still matches normally below.
++                None => DirectSolveNode::NonConflict,
++            };
++            let mut matched: Vec<usize> = Vec::new();
++            for (jj, _) in c.instances.iter().enumerate() {
++                if direct_solve_atom_matches(input, c, jj, &p.atom, arg_mode) {
++                    matched.push(jj);
++                }
++            }
++            if matched.is_empty() {
++                // No instance matches: protect the whole conflict from
++                // removal instead of solving it wrong.
++                protect_all = true;
++            } else if matched.len() > 1 {
++                matched.sort_by_key(|jj| order.get(&(ci, *jj)).copied().unwrap_or(usize::MAX));
++                edges.push((parent_node, matched));
++            } else {
++                edges.push((parent_node, matched));
++            }
++        }
++    }
++    // Children adjacency for the forced exploration.
++    let mut children: HashMap<DirectSolveNode, Vec<DirectSolveNode>> = HashMap::new();
++    // or_tuple bodies, by edge index.
++    let mut tuples: Vec<Vec<(usize, usize)>> = Vec::new();
++    for (parent, matched) in &edges {
++        if matched.len() > 1 {
++            let id = tuples.len();
++            tuples.push(matched.iter().map(|jj| (ci, *jj)).collect());
++            children
++                .entry(parent.clone())
++                .or_default()
++                .push(DirectSolveNode::OrTuple(id));
++        } else {
++            children
++                .entry(parent.clone())
++                .or_default()
++                .push(DirectSolveNode::Instance(ci, matched[0]));
++        }
++    }
++    let mut forced: HashSet<DirectSolveNode> = HashSet::new();
++    if !protect_all {
++        forced.insert(DirectSolveNode::NonConflict);
++        let mut unexplored = vec![DirectSolveNode::NonConflict];
++        let mut explored: HashSet<DirectSolveNode> = HashSet::new();
++        let mut pending_tuples: Vec<usize> = Vec::new();
++        while let Some(node) = unexplored.pop() {
++            if let Some(kids) = children.get(&node) {
++                for child in kids {
++                    if !explored.insert(child.clone()) {
++                        continue;
++                    }
++                    forced.insert(child.clone());
++                    match child {
++                        DirectSolveNode::Instance(_, _) => unexplored.push(child.clone()),
++                        DirectSolveNode::OrTuple(id) => pending_tuples.push(*id),
++                        DirectSolveNode::NonConflict => {}
++                    }
++                }
++            }
++        }
++        // `or_tuple`s resolve only once every plain package had its chance:
++        // an already-forced member satisfies the dependency, otherwise the
++        // first-pulled member wins.
++        while let Some(id) = pending_tuples.pop() {
++            let members = &tuples[id];
++            if members
++                .iter()
++                .any(|m| forced.contains(&DirectSolveNode::Instance(m.0, m.1)))
++            {
++                continue;
++            }
++            let mut first = members.clone();
++            first.sort_by_key(|m| order.get(m).copied().unwrap_or(usize::MAX));
++            if let Some(winner) = first.first() {
++                forced.insert(DirectSolveNode::Instance(winner.0, winner.1));
++                unexplored.push(DirectSolveNode::Instance(winner.0, winner.1));
++            }
++        }
++        // Dependencies of forced packages join the set.
++        while let Some(node) = unexplored.pop() {
++            if let Some(kids) = children.get(&node) {
++                for child in kids {
++                    if explored.insert(child.clone()) {
++                        forced.insert(child.clone());
++                        unexplored.push(child.clone());
++                    }
++                }
++            }
++        }
++    } else {
++        // Protected: every instance is forced, nothing is removed.
++        for (jj, _) in c.instances.iter().enumerate() {
++            forced.insert(DirectSolveNode::Instance(ci, jj));
++        }
++    }
++    let mut dropped_versions: Vec<String> = Vec::new();
++    for (jj, inst) in c.instances.iter().enumerate() {
++        if inst.installed {
++            continue;
++        }
++        if forced.contains(&DirectSolveNode::Instance(ci, jj)) {
++            continue;
++        }
++        // The take-over version: the first surviving same-cp instance in
++        // conflict order, never the removed instance itself.
++        let kept = c.instances.iter().enumerate().find(|(kk, i)| {
++            *kk != jj && (i.installed || forced.contains(&DirectSolveNode::Instance(ci, *kk)))
++        });
++        dropped_versions.push(inst.version.clone());
++        if let Some((_, k)) = kept {
++            removed.push((
++                c.category.clone(),
++                c.package.clone(),
++                inst.version.clone(),
++                k.version.clone(),
++            ));
++        } else {
++            removed.push((
++                c.category.clone(),
++                c.package.clone(),
++                inst.version.clone(),
++                String::new(),
++            ));
++        }
++        // Missed-update recording: for the removed instance, every parent
++        // of every *other* instance whose atom does not accept it.
++        for (kk, other) in c.instances.iter().enumerate() {
++            if kk == jj {
++                continue;
++            }
++            for p in &other.parents {
++                if direct_solve_atom_matches(input, c, jj, &p.atom, false) {
++                    continue;
++                }
++                // The skipped block renders the full display; the notice
++                // keeps its own IUSE-only rendering.
++                let skipped_use = skipped_update_use_display_for(
++                    input.repos,
++                    input.config,
++                    &c.category,
++                    &c.package,
++                    &inst.version,
++                );
++                // A parent no merge entry replaces, whose installed instance
++                // carries the atom, renders as an installed node (vdb
++                // slot/repo). A merge-scheduled parent keeps the tree form.
++                let parent_bare = p.parent_cpv.split(':').next().unwrap_or("");
++                let (parent_cpv_disp, parent_installed) = if p.installed {
++                    (p.parent_cpv.clone(), true)
++                } else if let Some((pc, pp, pv)) = split_cpv(parent_bare)
++                    && !input.entries.iter().any(|e| {
++                        e.category == pc
++                            && e.package == pp
++                            && merge_bound_version(&e.outcome) == Some(&pv)
++                    })
++                    && let Some(r) = installed_refs(input.root, &pc, &pp)
++                        .into_iter()
++                        .find(|r| r.version == pv)
++                {
++                    (
++                        format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
++                        true,
++                    )
++                } else {
++                    (p.parent_cpv.clone(), false)
++                };
++                let consumer_use = skipped_consumer_use_display(
++                    input.repos,
++                    input.root,
++                    input.config,
++                    &parent_cpv_disp,
++                    parent_installed,
++                );
++                // The missed instance rides the rejecting parent's edge; a
++                // merge parent rides its entry.
++                let (missed_running, consumer_running) = if parent_installed {
++                    (false, false)
++                } else {
++                    let parent = p.parent_cpv.split(':').next().unwrap_or("");
++                    match split_cpv(parent) {
++                        Some((cc, cp2, cv)) => skipped_update_roots(
++                            input.entries,
++                            (&c.category, &c.package),
++                            (&cc, &cp2, &cv),
++                            &p.atom,
++                        ),
++                        None => (false, false),
++                    }
++                };
++                skipped.push(SkippedUpdate {
++                    category: c.category.clone(),
++                    package: c.package.clone(),
++                    slot: c.slot.clone(),
++                    skipped_version: inst.version.clone(),
++                    skipped_sub_slot: inst.sub_slot.clone(),
++                    skipped_repo: inst.repo_name.clone(),
++                    skipped_use,
++                    atom: p.atom.clone(),
++                    consumer_cpv: parent_cpv_disp,
++                    consumer_installed: parent_installed,
++                    consumer_use,
++                    missed_targets_running_root: missed_running,
++                    consumer_targets_running_root: consumer_running,
++                });
++            }
++        }
++    }
++    let kept: Vec<SlotConflictInstance> = c
++        .instances
++        .iter()
++        .filter(|i| i.installed || !dropped_versions.iter().any(|v| v == &i.version))
++        .cloned()
++        .collect();
++    if kept.len() >= 2 {
++        let mut rest = c.clone();
++        rest.instances = kept;
++        rest.resolved_version = rest.instances[0].version.clone();
++        surviving.push(rest);
++    }
++    ControlFlow::Continue(())
++}
++
++/// Finds the conflict instance of the given package, version and kind.
++fn member_of(
++    cp: &(String, String),
++    ver: &str,
++    installed: bool,
++    input: &DirectSolveInput<'_>,
++) -> Option<(usize, usize)> {
++    for (ci, c) in input.conflicts.iter().enumerate() {
++        if (c.category.clone(), c.package.clone()) != *cp {
++            continue;
++        }
++        for (ii, inst) in c.instances.iter().enumerate() {
++            if inst.version == ver && inst.installed == installed {
++                return Some((ci, ii));
++            }
++        }
++    }
++    None
++}
++
++/// Splits a parent's `cpv:slot::repo` into category, package and version.
++fn parent_identity(parent_cpv: &str) -> Option<(String, String, String)> {
++    // Strip the slot/repo suffix `split_cpv` cannot read.
++    split_cpv(parent_cpv.split(':').next().unwrap_or(""))
++}

@@ -1,0 +1,80 @@
+diff --git a/crates/portage-repo/src/resolve/direct_solve.rs b/crates/portage-repo/src/resolve/direct_solve.rs
+index 715922cc..49d81a52 100644
+--- a/crates/portage-repo/src/resolve/direct_solve.rs
++++ b/crates/portage-repo/src/resolve/direct_solve.rs
+@@ -203,27 +203,10 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
+     // All conflict members, for the non-conflict test: a parent naming a
+     // conflict instance draws a package-to-package edge instead of the
+     // sink substitution.
+-    let member_of = |cp: &(String, String), ver: &str, installed: bool| -> Option<(usize, usize)> {
+-        for (ci, c) in input.conflicts.iter().enumerate() {
+-            if (c.category.clone(), c.package.clone()) != *cp {
+-                continue;
+-            }
+-            for (ii, inst) in c.instances.iter().enumerate() {
+-                if inst.version == ver && inst.installed == installed {
+-                    return Some((ci, ii));
+-                }
+-            }
+-        }
+-        None
+-    };
+-    let parent_identity = |parent_cpv: &str| -> Option<(String, String, String)> {
+-        // Strip the slot/repo suffix `split_cpv` cannot read.
+-        split_cpv(parent_cpv.split(':').next().unwrap_or(""))
+-    };
+     let mut removed: Vec<(String, String, String, String)> = Vec::new();
+     let mut skipped: Vec<SkippedUpdate> = Vec::new();
+     let mut surviving: Vec<SlotConflict> = Vec::new();
+-    for (ci, c) in input.conflicts.iter().enumerate() {
++    'conflict: for (ci, c) in input.conflicts.iter().enumerate() {
+         // Slot-operator rebuild conflicts and need-rebuild-trailer conflicts
+         // never enter the direct solve; they survive as-is.
+         let stuck_rebuild_parent = c.instances.iter().flat_map(|i| &i.parents).any(|p| {
+@@ -267,10 +250,12 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
+             let _ = ii;
+             for p in &inst.parents {
+                 let parent_node = match parent_identity(&p.parent_cpv) {
+-                    Some((pc, pp, pv)) => member_of(&(pc.clone(), pp.clone()), &pv, p.installed)
+-                        .map_or(DirectSolveNode::NonConflict, |(mci, mii)| {
+-                            DirectSolveNode::Instance(mci, mii)
+-                        }),
++                    Some((pc, pp, pv)) => {
++                        member_of(&(pc.clone(), pp.clone()), &pv, p.installed, &input)
++                            .map_or(DirectSolveNode::NonConflict, |(mci, mii)| {
++                                DirectSolveNode::Instance(mci, mii)
++                            })
++                    }
+                     // A top-level `(Argument)` pull: no package parent, so the
+                     // shared sink; its atom still matches normally below.
+                     None => DirectSolveNode::NonConflict,
+@@ -522,3 +507,29 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
+         surviving,
+     }
+ }
++
++/// Finds the conflict instance of the given package, version and kind.
++fn member_of(
++    cp: &(String, String),
++    ver: &str,
++    installed: bool,
++    input: &DirectSolveInput<'_>,
++) -> Option<(usize, usize)> {
++    for (ci, c) in input.conflicts.iter().enumerate() {
++        if (c.category.clone(), c.package.clone()) != *cp {
++            continue;
++        }
++        for (ii, inst) in c.instances.iter().enumerate() {
++            if inst.version == ver && inst.installed == installed {
++                return Some((ci, ii));
++            }
++        }
++    }
++    None
++}
++
++/// Splits a parent's `cpv:slot::repo` into category, package and version.
++fn parent_identity(parent_cpv: &str) -> Option<(String, String, String)> {
++    // Strip the slot/repo suffix `split_cpv` cannot read.
++    split_cpv(parent_cpv.split(':').next().unwrap_or(""))
++}

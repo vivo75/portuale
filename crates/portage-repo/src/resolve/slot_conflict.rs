@@ -1,6 +1,8 @@
 //! Slot conflicts: records, merging and rendering.
 
 use crate::*;
+use portage_profile::Config;
+use std::ops::ControlFlow;
 
 /// A genuine slot conflict: two different atoms landing on the same
 /// category/package/slot whose independently-resolved best versions are
@@ -537,180 +539,21 @@ pub(crate) fn build_residual_slot_conflicts(
         .iter()
         .filter(|p| !replaced.contains(&(p.consumer.0.as_str(), p.consumer.1.as_str())))
         .collect();
-    for pin in dropped.iter().copied() {
-        let (category, package) = (pin.cp.0.clone(), pin.cp.1.clone());
-        let mut merge: Option<(String, String, String, String)> = None;
-        for e in entries {
-            if e.category != category || e.package != package {
-                continue;
-            }
-            let version = match &e.outcome {
-                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-                    Some(version.clone())
-                }
-                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
-                    Some(to.clone())
-                }
-                _ => None,
-            };
-            if let Some(version) = version {
-                merge = Some((
-                    version,
-                    e.slot.clone().unwrap_or_else(|| "0".to_string()),
-                    e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
-                    e.repo_name.clone().unwrap_or_default(),
-                ));
-            }
-        }
-        let Some((merge_ver, slot, merge_sub, merge_repo)) = merge else {
-            continue;
-        };
-        // The pin holds after all -- a later pass picked a compatible version.
-        // A `[use]`-carrying pin version-matches by construction, so the holds
-        // check must also evaluate its use-deps against the merge's decided
-        // USE (uncomputable USE falls back to the version-only check).
-        let merge_str =
-            format!("{category}/{package}-{merge_ver}:{slot}/{merge_sub}::{merge_repo}");
-        let use_still_broken = portage_dep::parse_atom(&pin.atom)
-            .and_then(|parsed| parsed.use_deps)
-            .filter(|deps| !deps.is_empty())
-            .is_some_and(|deps| {
-                merge_use_state(repos, config, &category, &package, &merge_ver).is_some_and(
-                    |(merge_use, merge_iuse)| {
-                        let parent_use = read_vdb_flag_set(
-                            root,
-                            &pin.consumer.0,
-                            &pin.consumer.1,
-                            &pin.consumer.2,
-                            "USE",
-                        );
-                        portage_dep::use_deps_violated(&deps, &parent_use, &merge_use, &merge_iuse)
-                    },
-                )
-            });
-        if !use_still_broken
-            && portage_dep::match_from_list(&pin.atom, &[merge_str.as_str()])
-                .is_some_and(|m| !m.is_empty())
+    'pin: for pin in dropped.iter().copied() {
+        if residual_conflict_for_pin(ResidualConflictForPinArgs {
+            pin,
+            entries,
+            repos,
+            config,
+            root,
+            grouped: &mut grouped,
+            slot_pullers,
+            order: &mut order,
+        })
+        .is_break()
         {
-            continue;
+            continue 'pin;
         }
-        // The installed version the pin preserves: the highest installed one it
-        // matches. None (already broken before this run) means no instance.
-        let refs = installed_refs(root, &category, &package);
-        let mut inst: Option<&InstalledRef> = None;
-        for r in &refs {
-            let s = format!(
-                "{category}/{package}-{}:{}/{}",
-                r.version, r.slot, r.sub_slot
-            );
-            if portage_dep::match_from_list(&pin.atom, &[s.as_str()]).is_some_and(|m| !m.is_empty())
-                && inst.is_none_or(|best: &InstalledRef| {
-                    vercmp_ordering(&r.version, &best.version) == std::cmp::Ordering::Greater
-                })
-            {
-                inst = Some(r);
-            }
-        }
-        let Some(inst) = inst else { continue };
-        // Different slots coexist -- the merge breaks nothing.
-        if inst.slot != slot {
-            continue;
-        }
-        let key = (
-            category.clone(),
-            package.clone(),
-            slot.clone(),
-            merge_ver.clone(),
-            inst.version.clone(),
-        );
-        if grouped.contains_key(&key) {
-            continue;
-        }
-        // Merge parents: hard pullers matching the merged version. Installed
-        // parents: hard pullers matching the installed version, plus the
-        // dropped consumer pins below.
-        let (m_sub, _m_repo, _) = slot_conflict_meta(repos, &category, &package, &merge_ver);
-        let merge_match = format!("{category}/{package}-{merge_ver}:{slot}/{m_sub}");
-        let inst_match = format!(
-            "{category}/{package}-{}:{}/{}",
-            inst.version, inst.slot, inst.sub_slot
-        );
-        let (m_iuse, m_use) =
-            slot_conflict_flag_sets(repos, config, &category, &package, &merge_ver);
-        let (i_iuse, i_use) = installed_pkg_iuse_and_use(root, &category, &package, &inst.version);
-        let use_ok_for = |atom_str: &str, iuse: &HashSet<String>, use_: &HashSet<String>| -> bool {
-            match portage_dep::parse_atom(atom_str) {
-                Some(a) => match &a.use_deps {
-                    Some(ud) => portage_dep::use_deps_satisfied(ud, iuse, use_),
-                    None => true,
-                },
-                None => true,
-            }
-        };
-        let mut merge_parents: Vec<SlotConflictParent> = Vec::new();
-        let mut inst_parents: Vec<SlotConflictParent> = Vec::new();
-        if let Some(pullers) = slot_pullers.get(&(category.clone(), package.clone())) {
-            for (pc, pp, pv, atom) in pullers {
-                let hits_merge = portage_dep::match_from_list(atom, &[merge_match.as_str()])
-                    .is_some_and(|m| !m.is_empty())
-                    && use_ok_for(atom, &m_iuse, &m_use);
-                let hits_inst = portage_dep::match_from_list(atom, &[inst_match.as_str()])
-                    .is_some_and(|m| !m.is_empty())
-                    && use_ok_for(atom, &i_iuse, &i_use);
-                let entry = SlotConflictParent {
-                    parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
-                    atom: atom.clone(),
-                    use_display: if pc.is_empty() {
-                        Vec::new()
-                    } else {
-                        pkg_use_display_for(repos, config, pc, pp, pv)
-                    },
-                    installed: false,
-                };
-                if hits_merge {
-                    if !merge_parents.contains(&entry) {
-                        merge_parents.push(entry);
-                    }
-                } else if hits_inst && !inst_parents.contains(&entry) {
-                    inst_parents.push(entry);
-                }
-            }
-        }
-        let record = SlotConflict {
-            category: category.clone(),
-            package: package.clone(),
-            slot: slot.clone(),
-            resolved_version: merge_ver.clone(),
-            conflicting_atom: pin.atom.clone(),
-            instances: vec![
-                SlotConflictInstance {
-                    version: merge_ver.clone(),
-                    sub_slot: merge_sub.clone(),
-                    repo_name: merge_repo.clone(),
-                    use_display: pkg_use_display_for(
-                        repos, config, &category, &package, &merge_ver,
-                    ),
-                    parents: merge_parents,
-                    installed: false,
-                },
-                SlotConflictInstance {
-                    version: inst.version.clone(),
-                    sub_slot: inst.sub_slot.clone(),
-                    repo_name: inst.repo.clone(),
-                    use_display: installed_use_display_for(
-                        root,
-                        config,
-                        &category,
-                        &package,
-                        &inst.version,
-                    ),
-                    parents: inst_parents,
-                    installed: true,
-                },
-            ],
-        };
-        order.push(key.clone());
-        grouped.insert(key, record);
     }
     // Fold every dropped consumer pin into the installed instance's parents.
     for pin in dropped.iter().copied() {
@@ -759,4 +602,292 @@ pub(crate) fn build_residual_slot_conflicts(
         .into_iter()
         .filter_map(|k| grouped.remove(&k))
         .collect()
+}
+
+/// The values [`residual_conflict_for_pin`] reads from its caller.
+pub(crate) struct ResidualConflictForPinArgs<'a> {
+    pub(crate) pin: &'a RevDepPin,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) grouped: &'a mut HashMap<(String, String, String, String, String), SlotConflict>,
+    pub(crate) slot_pullers: &'a SlotPullers,
+    pub(crate) order: &'a mut Vec<(String, String, String, String, String)>,
+}
+
+/// Record the residual installed-instance slot conflict one dropped reverse-dependency pin leaves.
+pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) -> ControlFlow<()> {
+    let ResidualConflictForPinArgs {
+        pin,
+        entries,
+        repos,
+        config,
+        root,
+        grouped,
+        slot_pullers,
+        order,
+    } = args;
+    let ResidualPinMergeInstanceOut {
+        category,
+        package,
+        merge_ver,
+        slot,
+        merge_sub,
+        merge_repo,
+    } = match residual_pin_merge_instance(pin, entries) {
+        ControlFlow::Continue(out) => out,
+        ControlFlow::Break(()) => return ControlFlow::Break(()),
+    };
+    // A `[use]`-carrying pin version-matches by construction, so the holds
+    // check must also evaluate its use-deps against the merge's decided
+    // USE (uncomputable USE falls back to the version-only check).
+    let merge_str = format!("{category}/{package}-{merge_ver}:{slot}/{merge_sub}::{merge_repo}");
+    let use_still_broken = portage_dep::parse_atom(&pin.atom)
+        .and_then(|parsed| parsed.use_deps)
+        .filter(|deps| !deps.is_empty())
+        .is_some_and(|deps| {
+            merge_use_state(repos, config, &category, &package, &merge_ver).is_some_and(
+                |(merge_use, merge_iuse)| {
+                    let parent_use = read_vdb_flag_set(
+                        root,
+                        &pin.consumer.0,
+                        &pin.consumer.1,
+                        &pin.consumer.2,
+                        "USE",
+                    );
+                    portage_dep::use_deps_violated(&deps, &parent_use, &merge_use, &merge_iuse)
+                },
+            )
+        });
+    if !use_still_broken
+        && portage_dep::match_from_list(&pin.atom, &[merge_str.as_str()])
+            .is_some_and(|m| !m.is_empty())
+    {
+        return ControlFlow::Break(());
+    }
+    // The installed version the pin preserves: the highest installed one it
+    // matches. None (already broken before this run) means no instance.
+    let refs = installed_refs(root, &category, &package);
+    let mut inst: Option<&InstalledRef> = None;
+    for r in &refs {
+        let s = format!(
+            "{category}/{package}-{}:{}/{}",
+            r.version, r.slot, r.sub_slot
+        );
+        if portage_dep::match_from_list(&pin.atom, &[s.as_str()]).is_some_and(|m| !m.is_empty())
+            && inst.is_none_or(|best: &InstalledRef| {
+                vercmp_ordering(&r.version, &best.version) == std::cmp::Ordering::Greater
+            })
+        {
+            inst = Some(r);
+        }
+    }
+    let Some(inst) = inst else {
+        return ControlFlow::Break(());
+    };
+    // Different slots coexist -- the merge breaks nothing.
+    if inst.slot != slot {
+        return ControlFlow::Break(());
+    }
+    let key = (
+        category.clone(),
+        package.clone(),
+        slot.clone(),
+        merge_ver.clone(),
+        inst.version.clone(),
+    );
+    if grouped.contains_key(&key) {
+        return ControlFlow::Break(());
+    }
+    // Merge parents: hard pullers matching the merged version. Installed
+    // parents: hard pullers matching the installed version, plus the
+    // dropped consumer pins below.
+    let (m_sub, _m_repo, _) = slot_conflict_meta(repos, &category, &package, &merge_ver);
+    let merge_match = format!("{category}/{package}-{merge_ver}:{slot}/{m_sub}");
+    let inst_match = format!(
+        "{category}/{package}-{}:{}/{}",
+        inst.version, inst.slot, inst.sub_slot
+    );
+    let (m_iuse, m_use) = slot_conflict_flag_sets(repos, config, &category, &package, &merge_ver);
+    let (i_iuse, i_use) = installed_pkg_iuse_and_use(root, &category, &package, &inst.version);
+    let use_ok_for = |atom_str: &str, iuse: &HashSet<String>, use_: &HashSet<String>| -> bool {
+        match portage_dep::parse_atom(atom_str) {
+            Some(a) => match &a.use_deps {
+                Some(ud) => portage_dep::use_deps_satisfied(ud, iuse, use_),
+                None => true,
+            },
+            None => true,
+        }
+    };
+    let mut merge_parents: Vec<SlotConflictParent> = Vec::new();
+    let mut inst_parents: Vec<SlotConflictParent> = Vec::new();
+    if let Some(pullers) = slot_pullers.get(&(category.clone(), package.clone())) {
+        for (pc, pp, pv, atom) in pullers {
+            let hits_merge = portage_dep::match_from_list(atom, &[merge_match.as_str()])
+                .is_some_and(|m| !m.is_empty())
+                && use_ok_for(atom, &m_iuse, &m_use);
+            let hits_inst = portage_dep::match_from_list(atom, &[inst_match.as_str()])
+                .is_some_and(|m| !m.is_empty())
+                && use_ok_for(atom, &i_iuse, &i_use);
+            let entry = SlotConflictParent {
+                parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
+                atom: atom.clone(),
+                use_display: if pc.is_empty() {
+                    Vec::new()
+                } else {
+                    pkg_use_display_for(repos, config, pc, pp, pv)
+                },
+                installed: false,
+            };
+            if hits_merge {
+                if !merge_parents.contains(&entry) {
+                    merge_parents.push(entry);
+                }
+            } else if hits_inst && !inst_parents.contains(&entry) {
+                inst_parents.push(entry);
+            }
+        }
+    }
+    let record = residual_slot_conflict_record(ResidualSlotConflictRecordArgs {
+        category: &category,
+        package: &package,
+        slot: &slot,
+        merge_ver: &merge_ver,
+        pin,
+        merge_sub: &merge_sub,
+        merge_repo: &merge_repo,
+        repos,
+        config,
+        merge_parents,
+        inst,
+        root,
+        inst_parents,
+    });
+    order.push(key.clone());
+    grouped.insert(key, record);
+    ControlFlow::Continue(())
+}
+
+/// What [`residual_pin_merge_instance`] hands back to its caller.
+pub(crate) struct ResidualPinMergeInstanceOut {
+    pub(crate) category: String,
+    pub(crate) package: String,
+    pub(crate) merge_ver: String,
+    pub(crate) slot: String,
+    pub(crate) merge_sub: String,
+    pub(crate) merge_repo: String,
+}
+
+/// Find the merge-bound instance of the pinned package; Break when the package is not merged.
+pub(crate) fn residual_pin_merge_instance(
+    pin: &RevDepPin,
+    entries: &[GraphEntry],
+) -> ControlFlow<(), ResidualPinMergeInstanceOut> {
+    let (category, package) = (pin.cp.0.clone(), pin.cp.1.clone());
+    let mut merge: Option<(String, String, String, String)> = None;
+    for e in entries {
+        if e.category != category || e.package != package {
+            continue;
+        }
+        let version = match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some(version.clone())
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                Some(to.clone())
+            }
+            _ => None,
+        };
+        if let Some(version) = version {
+            merge = Some((
+                version,
+                e.slot.clone().unwrap_or_else(|| "0".to_string()),
+                e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
+                e.repo_name.clone().unwrap_or_default(),
+            ));
+        }
+    }
+    let Some((merge_ver, slot, merge_sub, merge_repo)) = merge else {
+        return ControlFlow::Break(());
+    };
+    // The pin holds after all -- a later pass picked a compatible version.
+    ControlFlow::Continue(ResidualPinMergeInstanceOut {
+        category,
+        package,
+        merge_ver,
+        slot,
+        merge_sub,
+        merge_repo,
+    })
+}
+
+/// The values [`residual_slot_conflict_record`] reads from its caller.
+pub(crate) struct ResidualSlotConflictRecordArgs<'a> {
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) merge_ver: &'a str,
+    pub(crate) pin: &'a RevDepPin,
+    pub(crate) merge_sub: &'a str,
+    pub(crate) merge_repo: &'a str,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a Config,
+    pub(crate) merge_parents: Vec<SlotConflictParent>,
+    pub(crate) inst: &'a InstalledRef,
+    pub(crate) root: &'a Path,
+    pub(crate) inst_parents: Vec<SlotConflictParent>,
+}
+
+/// Build the residual slot-conflict record for the installed instance and its merge-bound partner.
+pub(crate) fn residual_slot_conflict_record(
+    args: ResidualSlotConflictRecordArgs<'_>,
+) -> SlotConflict {
+    let ResidualSlotConflictRecordArgs {
+        category,
+        package,
+        slot,
+        merge_ver,
+        pin,
+        merge_sub,
+        merge_repo,
+        repos,
+        config,
+        merge_parents,
+        inst,
+        root,
+        inst_parents,
+    } = args;
+
+    SlotConflict {
+        category: category.to_string(),
+        package: package.to_string(),
+        slot: slot.to_string(),
+        resolved_version: merge_ver.to_string(),
+        conflicting_atom: pin.atom.clone(),
+        instances: vec![
+            SlotConflictInstance {
+                version: merge_ver.to_string(),
+                sub_slot: merge_sub.to_string(),
+                repo_name: merge_repo.to_string(),
+                use_display: pkg_use_display_for(repos, config, category, package, merge_ver),
+                parents: merge_parents,
+                installed: false,
+            },
+            SlotConflictInstance {
+                version: inst.version.clone(),
+                sub_slot: inst.sub_slot.clone(),
+                repo_name: inst.repo.clone(),
+                use_display: installed_use_display_for(
+                    root,
+                    config,
+                    category,
+                    package,
+                    &inst.version,
+                ),
+                parents: inst_parents,
+                installed: true,
+            },
+        ],
+    }
 }
