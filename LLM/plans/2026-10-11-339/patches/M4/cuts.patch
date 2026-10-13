@@ -1,0 +1,615 @@
+diff --git a/crates/portuale/src/ebuild.rs b/crates/portuale/src/ebuild.rs
+index 2ba8cdd8..f58b29e6 100644
+--- a/crates/portuale/src/ebuild.rs
++++ b/crates/portuale/src/ebuild.rs
+@@ -21,8 +21,12 @@
+ use crate::ebuild_merge;
+ use crate::ebuild_options::{self, Kind};
+ use crate::ebuild_package;
++use crate::ebuild_package::PackageOptions;
+ use crate::ebuild_phases;
++use crate::ebuild_phases::ShellBackend;
+ use crate::ebuild_unmerge;
++use crate::ebuild_unmerge::UnmergeOptions;
++use std::path::Path;
+ use std::process::ExitCode;
+ 
+ /// Whether `--help`/`-h` appears anywhere in `args`. No short-flag
+@@ -194,296 +198,326 @@ pub fn run(args: &[String]) -> ExitCode {
+             || ebuild_unmerge::is_unmerge_command(cmd)
+             || ebuild_package::is_package_command(cmd)
+     }) {
+-        let root = portage_repo::root_from_env();
+-        // `make.globals` default is `/var/tmp` (the builddir adds the
+-        // rest itself).
+-        let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
+-        // Per-package `PORTAGE_TMPDIR`: re-derive from the matched
+-        // `package.env` value when the calling environment is silent.
+-        // Skipped for `depend`/`clean`, which Portage exempts too.
+-        // A missing matched directory fails with Portage's message.
+-        // Portage: doebuild.py, _check_temp_dir
+-        let portage_tmpdir = if commands
+-            .iter()
+-            .any(|cmd| *cmd == "depend" || *cmd == "clean")
+-        {
+-            portage_tmpdir
+-        } else {
+-            let process_tmpdir = std::env::var_os("PORTAGE_TMPDIR").map(std::path::PathBuf::from);
+-            let ebuild_path = std::path::Path::new(ebuild_file);
+-            match ebuild_phases::resolve_standalone_portage_tmpdir(
+-                ebuild_path,
+-                &portage_repo::config_root_from_env(),
+-                &root,
+-                &portage_tmpdir,
+-                process_tmpdir.as_deref(),
+-            ) {
+-                Ok(resolved) => resolved,
++        return run_real_commands(&commands, ebuild_file, shell, debug, &force_test_env);
++    }
++
++    println!(
++        "ebuild: dry run -- one or more of these commands is recognized but not \
++         yet implemented in portuale"
++    );
++    println!("ebuild file: {ebuild_file:?}");
++    println!("commands: {commands:?}");
++    ExitCode::SUCCESS
++}
++
++/// Run the requested commands for real when every one of them is implemented.
++pub(crate) fn run_real_commands(
++    commands: &[&str],
++    ebuild_file: &str,
++    shell: ShellBackend,
++    debug: bool,
++    force_test_env: &[(String, String)],
++) -> ExitCode {
++    let root = portage_repo::root_from_env();
++    // `make.globals` default is `/var/tmp` (the builddir adds the
++    // rest itself).
++    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
++    // Per-package `PORTAGE_TMPDIR`: re-derive from the matched
++    // `package.env` value when the calling environment is silent.
++    // Skipped for `depend`/`clean`, which Portage exempts too.
++    // A missing matched directory fails with Portage's message.
++    // Portage: doebuild.py, _check_temp_dir
++    let portage_tmpdir = if commands
++        .iter()
++        .any(|cmd| *cmd == "depend" || *cmd == "clean")
++    {
++        portage_tmpdir
++    } else {
++        let process_tmpdir = std::env::var_os("PORTAGE_TMPDIR").map(std::path::PathBuf::from);
++        let ebuild_path = std::path::Path::new(ebuild_file);
++        match ebuild_phases::resolve_standalone_portage_tmpdir(
++            ebuild_path,
++            &portage_repo::config_root_from_env(),
++            &root,
++            &portage_tmpdir,
++            process_tmpdir.as_deref(),
++        ) {
++            Ok(resolved) => resolved,
++            Err(e) => {
++                eprintln!("ebuild: {e}");
++                return ExitCode::from(1);
++            }
++        }
++    };
++    // Same env-var-not-full-config-resolution shortcut: the
++    // `make.globals` defaults apply when unset.
++    // Real `make.globals` `DISTDIR` default, same shortcut.
++    let distdir = std::env::var_os("DISTDIR")
++        .map(std::path::PathBuf::from)
++        .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
++    // Merge config via the same env-var shortcut, factored into
++    // `MergeOptions::from_env` (shared with `emerge <atom>`).
++    let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
++    // Per-package `FEATURES`: fold a matched `package.env` value
++    // onto the raw process value and re-derive the merge gates.
++    if let Some(features) = ebuild_phases::resolve_standalone_resolved_features(
++        std::path::Path::new(ebuild_file),
++        &portage_repo::config_root_from_env(),
++        &root,
++        &merge_options.features,
++        &std::env::var("FEATURES").unwrap_or_default(),
++    ) {
++        merge_options.set_resolved_features(&features);
++    }
++    // `unmerge-orphans` from `FEATURES`, same shortcut.
++    let UnmergeAndPackageOptionsOut {
++        unmerge_options,
++        package_options,
++    } = unmerge_and_package_options(debug, shell, ebuild_file, &root, &distdir);
++    let ebuild_path = std::path::Path::new(ebuild_file);
++
++    // `merge`/`qmerge`/`unmerge` write into a root-owned filesystem:
++    // refuse unprivileged callers up front (Portage has no such
++    // guard and just fails mid-phase). Non-root ownership of
++    // `$ROOT` (a prefix/staging tree) is still allowed.
++    if commands.iter().any(|&c| {
++        ebuild_merge::is_merge_command(c)
++            || ebuild_merge::is_qmerge_command(c)
++            || ebuild_unmerge::is_unmerge_command(c)
++    }) && !crate::privileges::is_privileged(&root)
++    {
++        crate::privileges::deny_superuser("ebuild");
++        return ExitCode::from(1);
++    }
++
++    // Portage `doebuild()` validates the metadata (including the
++    // REQUIRED_USE gate under `eapi_has_required_use`) for every
++    // porttree command but `digest`/`help`/`manifest` — once per
++    // invocation, before any phase runs. `clean` stays exempt here
++    // (still a dry-run stub, unreachable in this branch); merge and
++    // unmerge internals never re-gate (the resolver owns the merge
++    // path, teardown is never gated).
++    // Portage: doebuild.py, _validate_deps
++    match ebuild_phases::compute_environment(ebuild_path, &portage_tmpdir) {
++        Ok(gate_env) => {
++            match ebuild_phases::required_use_refusal(&gate_env, &merge_options.config_root, &root)
++            {
++                Ok(Some(refusal)) => {
++                    eprint!("{refusal}");
++                    return ExitCode::from(1);
++                }
++                Ok(None) => {}
+                 Err(e) => {
+                     eprintln!("ebuild: {e}");
+                     return ExitCode::from(1);
+                 }
+             }
+-        };
+-        // Same env-var-not-full-config-resolution shortcut: the
+-        // `make.globals` defaults apply when unset.
+-        // Real `make.globals` `DISTDIR` default, same shortcut.
+-        let distdir = std::env::var_os("DISTDIR")
+-            .map(std::path::PathBuf::from)
+-            .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
+-        // Merge config via the same env-var shortcut, factored into
+-        // `MergeOptions::from_env` (shared with `emerge <atom>`).
+-        let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
+-        // Per-package `FEATURES`: fold a matched `package.env` value
+-        // onto the raw process value and re-derive the merge gates.
+-        if let Some(features) = ebuild_phases::resolve_standalone_resolved_features(
+-            std::path::Path::new(ebuild_file),
+-            &portage_repo::config_root_from_env(),
+-            &root,
+-            &merge_options.features,
+-            &std::env::var("FEATURES").unwrap_or_default(),
+-        ) {
+-            merge_options.set_resolved_features(&features);
+         }
+-        // `unmerge-orphans` from `FEATURES`, same shortcut.
+-        let default_unmerge_options = ebuild_unmerge::UnmergeOptions::default();
+-        let unmerge_orphans = std::env::var("FEATURES")
+-            .map(|features| {
+-                features
+-                    .split_whitespace()
+-                    .any(|tok| tok == "unmerge-orphans")
++        Err(e) => {
++            eprintln!("ebuild: {e}");
++            return ExitCode::from(1);
++        }
++    }
++
++    // One command at a time: neither `merge`/`unmerge` nor `package`
++    // is a phase, so a mixed list needs per-command routing (like
++    // `bin/ebuild`'s own per-argument `doebuild` loop).
++    for &cmd in commands {
++        let result = if ebuild_merge::is_merge_command(cmd) {
++            ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options, None)
++        } else if ebuild_merge::is_qmerge_command(cmd) {
++            ebuild_merge::run_qmerge(ebuild_path, &root, &portage_tmpdir, &merge_options)
++        } else if ebuild_unmerge::is_unmerge_command(cmd) {
++            ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
++        } else if ebuild_package::is_package_command(cmd) {
++            ebuild_package::run_package(ebuild_package::RunPackageArgs {
++                ebuild_path,
++                root: &root,
++                portage_tmpdir: &portage_tmpdir,
++                options: &package_options,
++                build_env: &[],
++                use_flags: "",
+             })
+-            .unwrap_or(default_unmerge_options.unmerge_orphans);
+-        let unmerge_options = ebuild_unmerge::UnmergeOptions {
+-            debug,
+-            shell,
+-            config_protect: std::env::var("CONFIG_PROTECT")
+-                .unwrap_or(default_unmerge_options.config_protect),
+-            config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
+-                .unwrap_or(default_unmerge_options.config_protect_mask),
+-            unmerge_orphans,
+-            config_root: portage_repo::config_root_from_env(),
+-            already_unmerged: Vec::new(),
+-        };
+-        // Binpkg scalars from the resolved chain (calling env over
+-        // files), else the `make.globals` defaults. The gpkg pair reads
+-        // files-only below the env; `PORTAGE_BZIP2_COMMAND` and `PKGDIR`
+-        // keep the full chain.
+-        let ebuild_path_for_chain = std::path::Path::new(ebuild_file);
+-        let config_root_for_chain = portage_repo::config_root_from_env();
+-        let chain = |key: &str| {
+-            portage_profile::config_env_var(key).or_else(|| {
+-                ebuild_phases::resolve_standalone_chain_scalar(
+-                    ebuild_path_for_chain,
+-                    &config_root_for_chain,
+-                    &root,
+-                    key,
+-                )
++        } else if ebuild_phases::is_standalone_phase_command(cmd) {
++            ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
++                ebuild_path,
++                phase: cmd,
++                root: &root,
++                portage_tmpdir: &portage_tmpdir,
++                debug,
++                config_root: &merge_options.config_root,
++                shell,
++                build_env: force_test_env,
++                log_file: None,
++            })
++        } else {
++            ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
++                ebuild_path,
++                commands: &[cmd],
++                root: &root,
++                portage_tmpdir: &portage_tmpdir,
++                distdir: &distdir,
++                debug,
++                config_root: &merge_options.config_root,
++                shell,
++                build_env: force_test_env,
+             })
+         };
+-        let files = |key: &str| {
++        match result {
++            Ok(0) => {}
++            Ok(_) => return ExitCode::from(1),
++            Err(e) => {
++                eprintln!("ebuild: {e}");
++                return ExitCode::from(1);
++            }
++        }
++    }
++    ExitCode::SUCCESS
++}
++
++/// What [`unmerge_and_package_options`] hands back to its caller.
++pub(crate) struct UnmergeAndPackageOptionsOut {
++    pub(crate) unmerge_options: UnmergeOptions,
++    pub(crate) package_options: PackageOptions,
++}
++
++/// The unmerge and package options of the direct ebuild path.
++pub(crate) fn unmerge_and_package_options(
++    debug: bool,
++    shell: ShellBackend,
++    ebuild_file: &str,
++    root: &Path,
++    distdir: &Path,
++) -> UnmergeAndPackageOptionsOut {
++    let default_unmerge_options = ebuild_unmerge::UnmergeOptions::default();
++    let unmerge_orphans = std::env::var("FEATURES")
++        .map(|features| {
++            features
++                .split_whitespace()
++                .any(|tok| tok == "unmerge-orphans")
++        })
++        .unwrap_or(default_unmerge_options.unmerge_orphans);
++    let unmerge_options = ebuild_unmerge::UnmergeOptions {
++        debug,
++        shell,
++        config_protect: std::env::var("CONFIG_PROTECT")
++            .unwrap_or(default_unmerge_options.config_protect),
++        config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
++            .unwrap_or(default_unmerge_options.config_protect_mask),
++        unmerge_orphans,
++        config_root: portage_repo::config_root_from_env(),
++        already_unmerged: Vec::new(),
++    };
++    // Binpkg scalars from the resolved chain (calling env over
++    // files), else the `make.globals` defaults. The gpkg pair reads
++    // files-only below the env; `PORTAGE_BZIP2_COMMAND` and `PKGDIR`
++    // keep the full chain.
++    let ebuild_path_for_chain = std::path::Path::new(ebuild_file);
++    let config_root_for_chain = portage_repo::config_root_from_env();
++    let chain = |key: &str| {
++        portage_profile::config_env_var(key).or_else(|| {
+             ebuild_phases::resolve_standalone_chain_scalar(
+                 ebuild_path_for_chain,
+                 &config_root_for_chain,
+-                &root,
++                root,
+                 key,
+             )
+-        };
+-        // `BINPKG_FORMAT` first: the compression lookup depends on it.
+-        let binpkg_format = portage_profile::config_env_var("BINPKG_FORMAT")
+-            .or_else(|| {
+-                ebuild_phases::resolve_standalone_binpkg_format(
+-                    ebuild_path_for_chain,
+-                    &config_root_for_chain,
+-                    &root,
+-                )
+-            })
+-            .unwrap_or_else(|| {
+-                ebuild_package::PackageOptions::default()
+-                    .binpkg_format
+-                    .clone()
+-            });
+-        let (binpkg_compress, binpkg_compress_flags) = if binpkg_format == "gpkg" {
+-            let compress = ebuild_package::resolve_binpkg_compress(files);
+-            let flags = ebuild_package::resolve_binpkg_compress_flags(files, &compress);
+-            (compress, flags)
+-        } else {
+-            let compress = ebuild_package::resolve_binpkg_compress(chain);
+-            let flags = ebuild_package::resolve_binpkg_compress_flags(chain, &compress);
+-            (compress, flags)
+-        };
+-        let mut package_options = ebuild_package::PackageOptions {
+-            debug,
+-            pkgdir: ebuild_package::resolve_pkgdir(chain),
+-            distdir: distdir.clone(),
+-            shell,
+-            binpkg_compress,
+-            binpkg_compress_flags,
+-            portage_bzip2_command: ebuild_package::resolve_portage_bzip2_command(chain),
+-            binpkg_format,
+-            config_root: portage_repo::config_root_from_env(),
+-            // Real default-on `FEATURES` token; see
+-            // `PackageOptions::buildpkg_live`.
+-            buildpkg_live: !std::env::var("FEATURES")
+-                .map(|f| f.split_whitespace().any(|t| t == "-buildpkg-live"))
+-                .unwrap_or(false),
+-            // Real default is on, but this defaults off; see
+-            // `PackageOptions::binpkg_multi_instance`.
+-            binpkg_multi_instance: std::env::var("FEATURES")
+-                .map(|f| f.split_whitespace().any(|t| t == "binpkg-multi-instance"))
+-                .unwrap_or(false),
+-            binpkg_signing: std::env::var("FEATURES")
+-                .map(|f| f.split_whitespace().any(|t| t == "binpkg-signing"))
+-                .unwrap_or(false),
+-            binpkg_gpg_signing_base_command: std::env::var("BINPKG_GPG_SIGNING_BASE_COMMAND")
+-                .unwrap_or_default(),
+-            binpkg_gpg_signing_digest: std::env::var("BINPKG_GPG_SIGNING_DIGEST")
+-                .unwrap_or_default(),
+-            binpkg_gpg_signing_gpg_home: std::env::var("BINPKG_GPG_SIGNING_GPG_HOME")
+-                .unwrap_or_default(),
+-            binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
+-            // Config-less standalone path: no resolved header snapshot.
+-            pkgindex_header: None,
+-        };
+-        // Per-package `BINPKG_COMPRESS*`: the match plays only when the
+-        // calling env is silent and only for `xpak` runs.
+-        if package_options.binpkg_format == "xpak"
+-            && std::env::var("BINPKG_COMPRESS").is_err()
+-            && let Some((compress, flags, bzip2)) =
+-                ebuild_phases::resolve_standalone_binpkg_compress(
+-                    std::path::Path::new(ebuild_file),
+-                    &portage_repo::config_root_from_env(),
+-                    &root,
+-                )
++        })
++    };
++    let files = |key: &str| {
++        ebuild_phases::resolve_standalone_chain_scalar(
++            ebuild_path_for_chain,
++            &config_root_for_chain,
++            root,
++            key,
++        )
++    };
++    // `BINPKG_FORMAT` first: the compression lookup depends on it.
++    let binpkg_format = portage_profile::config_env_var("BINPKG_FORMAT")
++        .or_else(|| {
++            ebuild_phases::resolve_standalone_binpkg_format(
++                ebuild_path_for_chain,
++                &config_root_for_chain,
++                root,
++            )
++        })
++        .unwrap_or_else(|| {
++            ebuild_package::PackageOptions::default()
++                .binpkg_format
++                .clone()
++        });
++    let (binpkg_compress, binpkg_compress_flags) = if binpkg_format == "gpkg" {
++        let compress = ebuild_package::resolve_binpkg_compress(files);
++        let flags = ebuild_package::resolve_binpkg_compress_flags(files, &compress);
++        (compress, flags)
++    } else {
++        let compress = ebuild_package::resolve_binpkg_compress(chain);
++        let flags = ebuild_package::resolve_binpkg_compress_flags(chain, &compress);
++        (compress, flags)
++    };
++    let mut package_options = ebuild_package::PackageOptions {
++        debug,
++        pkgdir: ebuild_package::resolve_pkgdir(chain),
++        distdir: distdir.to_path_buf(),
++        shell,
++        binpkg_compress,
++        binpkg_compress_flags,
++        portage_bzip2_command: ebuild_package::resolve_portage_bzip2_command(chain),
++        binpkg_format,
++        config_root: portage_repo::config_root_from_env(),
++        // Real default-on `FEATURES` token; see
++        // `PackageOptions::buildpkg_live`.
++        buildpkg_live: !std::env::var("FEATURES")
++            .map(|f| f.split_whitespace().any(|t| t == "-buildpkg-live"))
++            .unwrap_or(false),
++        // Real default is on, but this defaults off; see
++        // `PackageOptions::binpkg_multi_instance`.
++        binpkg_multi_instance: std::env::var("FEATURES")
++            .map(|f| f.split_whitespace().any(|t| t == "binpkg-multi-instance"))
++            .unwrap_or(false),
++        binpkg_signing: std::env::var("FEATURES")
++            .map(|f| f.split_whitespace().any(|t| t == "binpkg-signing"))
++            .unwrap_or(false),
++        binpkg_gpg_signing_base_command: std::env::var("BINPKG_GPG_SIGNING_BASE_COMMAND")
++            .unwrap_or_default(),
++        binpkg_gpg_signing_digest: std::env::var("BINPKG_GPG_SIGNING_DIGEST").unwrap_or_default(),
++        binpkg_gpg_signing_gpg_home: std::env::var("BINPKG_GPG_SIGNING_GPG_HOME")
++            .unwrap_or_default(),
++        binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
++        // Config-less standalone path: no resolved header snapshot.
++        pkgindex_header: None,
++    };
++    // Per-package `BINPKG_COMPRESS*`: the match plays only when the
++    // calling env is silent and only for `xpak` runs.
++    if package_options.binpkg_format == "xpak"
++        && std::env::var("BINPKG_COMPRESS").is_err()
++        && let Some((compress, flags, bzip2)) = ebuild_phases::resolve_standalone_binpkg_compress(
++            std::path::Path::new(ebuild_file),
++            &portage_repo::config_root_from_env(),
++            root,
++        )
++    {
++        package_options.binpkg_compress = compress;
++        let flags_name = format!(
++            "BINPKG_COMPRESS_FLAGS_{}",
++            package_options.binpkg_compress.to_uppercase()
++        );
++        if std::env::var(&flags_name).is_err()
++            && std::env::var("BINPKG_COMPRESS_FLAGS").is_err()
++            && let Some(matched_flags) = flags
+         {
+-            package_options.binpkg_compress = compress;
+-            let flags_name = format!(
+-                "BINPKG_COMPRESS_FLAGS_{}",
+-                package_options.binpkg_compress.to_uppercase()
+-            );
+-            if std::env::var(&flags_name).is_err()
+-                && std::env::var("BINPKG_COMPRESS_FLAGS").is_err()
+-                && let Some(matched_flags) = flags
+-            {
+-                package_options.binpkg_compress_flags = matched_flags;
+-            }
+-            if std::env::var("PORTAGE_BZIP2_COMMAND").is_err()
+-                && let Some(matched_bzip2) = bzip2
+-            {
+-                package_options.portage_bzip2_command = matched_bzip2;
+-            }
++            package_options.binpkg_compress_flags = matched_flags;
+         }
+-        let ebuild_path = std::path::Path::new(ebuild_file);
+-
+-        // `merge`/`qmerge`/`unmerge` write into a root-owned filesystem:
+-        // refuse unprivileged callers up front (Portage has no such
+-        // guard and just fails mid-phase). Non-root ownership of
+-        // `$ROOT` (a prefix/staging tree) is still allowed.
+-        if commands.iter().any(|&c| {
+-            ebuild_merge::is_merge_command(c)
+-                || ebuild_merge::is_qmerge_command(c)
+-                || ebuild_unmerge::is_unmerge_command(c)
+-        }) && !crate::privileges::is_privileged(&root)
++        if std::env::var("PORTAGE_BZIP2_COMMAND").is_err()
++            && let Some(matched_bzip2) = bzip2
+         {
+-            crate::privileges::deny_superuser("ebuild");
+-            return ExitCode::from(1);
++            package_options.portage_bzip2_command = matched_bzip2;
+         }
+-
+-        // Portage `doebuild()` validates the metadata (including the
+-        // REQUIRED_USE gate under `eapi_has_required_use`) for every
+-        // porttree command but `digest`/`help`/`manifest` — once per
+-        // invocation, before any phase runs. `clean` stays exempt here
+-        // (still a dry-run stub, unreachable in this branch); merge and
+-        // unmerge internals never re-gate (the resolver owns the merge
+-        // path, teardown is never gated).
+-        // Portage: doebuild.py, _validate_deps
+-        match ebuild_phases::compute_environment(ebuild_path, &portage_tmpdir) {
+-            Ok(gate_env) => {
+-                match ebuild_phases::required_use_refusal(
+-                    &gate_env,
+-                    &merge_options.config_root,
+-                    &root,
+-                ) {
+-                    Ok(Some(refusal)) => {
+-                        eprint!("{refusal}");
+-                        return ExitCode::from(1);
+-                    }
+-                    Ok(None) => {}
+-                    Err(e) => {
+-                        eprintln!("ebuild: {e}");
+-                        return ExitCode::from(1);
+-                    }
+-                }
+-            }
+-            Err(e) => {
+-                eprintln!("ebuild: {e}");
+-                return ExitCode::from(1);
+-            }
+-        }
+-
+-        // One command at a time: neither `merge`/`unmerge` nor `package`
+-        // is a phase, so a mixed list needs per-command routing (like
+-        // `bin/ebuild`'s own per-argument `doebuild` loop).
+-        for &cmd in &commands {
+-            let result = if ebuild_merge::is_merge_command(cmd) {
+-                ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options, None)
+-            } else if ebuild_merge::is_qmerge_command(cmd) {
+-                ebuild_merge::run_qmerge(ebuild_path, &root, &portage_tmpdir, &merge_options)
+-            } else if ebuild_unmerge::is_unmerge_command(cmd) {
+-                ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
+-            } else if ebuild_package::is_package_command(cmd) {
+-                ebuild_package::run_package(ebuild_package::RunPackageArgs {
+-                    ebuild_path,
+-                    root: &root,
+-                    portage_tmpdir: &portage_tmpdir,
+-                    options: &package_options,
+-                    build_env: &[],
+-                    use_flags: "",
+-                })
+-            } else if ebuild_phases::is_standalone_phase_command(cmd) {
+-                ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+-                    ebuild_path,
+-                    phase: cmd,
+-                    root: &root,
+-                    portage_tmpdir: &portage_tmpdir,
+-                    debug,
+-                    config_root: &merge_options.config_root,
+-                    shell,
+-                    build_env: &force_test_env,
+-                    log_file: None,
+-                })
+-            } else {
+-                ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
+-                    ebuild_path,
+-                    commands: &[cmd],
+-                    root: &root,
+-                    portage_tmpdir: &portage_tmpdir,
+-                    distdir: &distdir,
+-                    debug,
+-                    config_root: &merge_options.config_root,
+-                    shell,
+-                    build_env: &force_test_env,
+-                })
+-            };
+-            match result {
+-                Ok(0) => {}
+-                Ok(_) => return ExitCode::from(1),
+-                Err(e) => {
+-                    eprintln!("ebuild: {e}");
+-                    return ExitCode::from(1);
+-                }
+-            }
+-        }
+-        return ExitCode::SUCCESS;
+     }
+-
+-    println!(
+-        "ebuild: dry run -- one or more of these commands is recognized but not \
+-         yet implemented in portuale"
+-    );
+-    println!("ebuild file: {ebuild_file:?}");
+-    println!("commands: {commands:?}");
+-    ExitCode::SUCCESS
++    UnmergeAndPackageOptionsOut {
++        unmerge_options,
++        package_options,
++    }
+ }
+ 
+ /// Portage's `UnsupportedAPIException` text for an ebuild whose EAPI this
