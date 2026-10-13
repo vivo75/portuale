@@ -1,0 +1,210 @@
+diff --git a/crates/portage-repo/src/resolve/blockers.rs b/crates/portage-repo/src/resolve/blockers.rs
+index ab5f92d4..ef573571 100644
+--- a/crates/portage-repo/src/resolve/blockers.rs
++++ b/crates/portage-repo/src/resolve/blockers.rs
+@@ -543,31 +543,6 @@ pub(crate) fn resolve_blockers_with_seeds(
+     // installed packages the walk never visited (never from a cp this run
+     // merges). One vdb scan, only when a blocker reaches that test.
+     let hold_atoms: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
+-    let hold_seeds = || -> &Vec<String> {
+-        hold_atoms.get_or_init(|| {
+-            let merge_bound: HashSet<(String, String)> = entries
+-                .iter()
+-                .filter(|e| merge_bound_version(&e.outcome).is_some())
+-                .map(|e| (e.category.clone(), e.package.clone()))
+-                .collect();
+-            let mut atoms: Vec<String> = set_seed_atoms.to_vec();
+-            for pkg in all_installed_packages(root) {
+-                let cp = (pkg.category.clone(), pkg.package.clone());
+-                if !blocker_retry_closure.contains(&cp) || merge_bound.contains(&cp) {
+-                    continue;
+-                }
+-                let use_flags =
+-                    read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+-                for key in ["RDEPEND", "PDEPEND", "IDEPEND"] {
+-                    let dep = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+-                    if let Some(found) = flat_dep_atoms(&dep, &use_flags) {
+-                        atoms.extend(found);
+-                    }
+-                }
+-            }
+-            atoms
+-        })
+-    };
+     for pb in pending {
+         // Under `--buildpkgonly` a blocker that is not strong-buildtime never
+         // pairs an uninstall.
+@@ -617,55 +592,6 @@ pub(crate) fn resolve_blockers_with_seeds(
+         let blocker_use_deps: Vec<portage_dep::UseDep> = portage_dep::parse_atom(&pb.atom_str)
+             .and_then(|a| a.use_deps)
+             .unwrap_or_default();
+-        let use_deps_apply = |version: &str| -> bool {
+-            if blocker_use_deps.is_empty() {
+-                return true;
+-            }
+-            let (enabled, iuse) = entries
+-                .iter()
+-                .find(|e| {
+-                    e.category == pb.target_category
+-                        && e.package == pb.target_package
+-                        && matches!(&e.outcome,
+-                            PretendOutcome::New { version: v }
+-                            | PretendOutcome::Reinstall { version: v, .. } if v == version)
+-                        || (e.category == pb.target_category
+-                            && e.package == pb.target_package
+-                            && matches!(&e.outcome,
+-                                PretendOutcome::Upgrade { to, .. }
+-                                | PretendOutcome::Downgrade { to, .. } if to == version))
+-                })
+-                .map(|e| {
+-                    let en: HashSet<String> = e
+-                        .use_flags_display
+-                        .iter()
+-                        .filter(|(_, on)| *on)
+-                        .map(|(f, _)| f.clone())
+-                        .collect();
+-                    let iu: HashSet<String> =
+-                        e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+-                    (en, iu)
+-                })
+-                .unwrap_or_else(|| {
+-                    (
+-                        read_vdb_flag_set(
+-                            root,
+-                            &pb.target_category,
+-                            &pb.target_package,
+-                            version,
+-                            "USE",
+-                        ),
+-                        read_vdb_flag_set(
+-                            root,
+-                            &pb.target_category,
+-                            &pb.target_package,
+-                            version,
+-                            "IUSE",
+-                        ),
+-                    )
+-                });
+-            portage_dep::use_deps_satisfied(&blocker_use_deps, &iuse, &enabled)
+-        };
+         // An installed instance replaced in its own slot by a merge-bound entry
+         // at another version resolves to a `Replacement` row, kept for the
+         // stuck-serialization display and hidden otherwise.
+@@ -673,7 +599,7 @@ pub(crate) fn resolve_blockers_with_seeds(
+             let Some((version, slot, sub_slot)) = by_str.get(m).copied() else {
+                 continue;
+             };
+-            if !use_deps_apply(version) {
++            if !use_deps_apply(version, &blocker_use_deps, entries, pb, root) {
+                 continue;
+             }
+             let installed_match = installed_matches
+@@ -795,7 +721,13 @@ pub(crate) fn resolve_blockers_with_seeds(
+                             merge_slots: &merge_slots,
+                         }) || (blocker_retry_closure.contains(&target_key) && !cp_moves_slot)
+                             || set_seed_holds_instance(SetSeedHoldsInstanceArgs {
+-                                set_seed_atoms: hold_seeds(),
++                                set_seed_atoms: hold_seeds(
++                                    &hold_atoms,
++                                    entries,
++                                    set_seed_atoms,
++                                    root,
++                                    blocker_retry_closure,
++                                ),
+                                 entries,
+                                 category: &pb.target_category,
+                                 package: &pb.target_package,
+@@ -875,3 +807,93 @@ pub(crate) fn resolve_blockers_with_seeds(
+     }
+     conflicts
+ }
++
++/// The recorded atoms of required-set-reached installed packages the walk never
++/// visited, built once (one vdb scan) the first time a blocker reaches that test.
++fn hold_seeds<'a>(
++    hold_atoms: &'a std::cell::OnceCell<Vec<String>>,
++    entries: &[GraphEntry],
++    set_seed_atoms: &[String],
++    root: &Path,
++    blocker_retry_closure: &HashSet<(String, String)>,
++) -> &'a Vec<String> {
++    hold_atoms.get_or_init(|| {
++        let merge_bound: HashSet<(String, String)> = entries
++            .iter()
++            .filter(|e| merge_bound_version(&e.outcome).is_some())
++            .map(|e| (e.category.clone(), e.package.clone()))
++            .collect();
++        let mut atoms: Vec<String> = set_seed_atoms.to_vec();
++        for pkg in all_installed_packages(root) {
++            let cp = (pkg.category.clone(), pkg.package.clone());
++            if !blocker_retry_closure.contains(&cp) || merge_bound.contains(&cp) {
++                continue;
++            }
++            let use_flags =
++                read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
++            for key in ["RDEPEND", "PDEPEND", "IDEPEND"] {
++                let dep = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
++                if let Some(found) = flat_dep_atoms(&dep, &use_flags) {
++                    atoms.extend(found);
++                }
++            }
++        }
++        atoms
++    })
++}
++
++/// Whether the blocker atom's own `[use]` deps match the blocked version.
++fn use_deps_apply(
++    version: &str,
++    blocker_use_deps: &[portage_dep::UseDep],
++    entries: &[GraphEntry],
++    pb: &PendingBlocker,
++    root: &Path,
++) -> bool {
++    if blocker_use_deps.is_empty() {
++        return true;
++    }
++    let (enabled, iuse) = entries
++        .iter()
++        .find(|e| {
++            e.category == pb.target_category
++                && e.package == pb.target_package
++                && matches!(&e.outcome,
++                    PretendOutcome::New { version: v }
++                    | PretendOutcome::Reinstall { version: v, .. } if v == version)
++                || (e.category == pb.target_category
++                    && e.package == pb.target_package
++                    && matches!(&e.outcome,
++                        PretendOutcome::Upgrade { to, .. }
++                        | PretendOutcome::Downgrade { to, .. } if to == version))
++        })
++        .map(|e| {
++            let en: HashSet<String> = e
++                .use_flags_display
++                .iter()
++                .filter(|(_, on)| *on)
++                .map(|(f, _)| f.clone())
++                .collect();
++            let iu: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
++            (en, iu)
++        })
++        .unwrap_or_else(|| {
++            (
++                read_vdb_flag_set(
++                    root,
++                    &pb.target_category,
++                    &pb.target_package,
++                    version,
++                    "USE",
++                ),
++                read_vdb_flag_set(
++                    root,
++                    &pb.target_category,
++                    &pb.target_package,
++                    version,
++                    "IUSE",
++                ),
++            )
++        });
++    portage_dep::use_deps_satisfied(&blocker_use_deps, &iuse, &enabled)
++}
