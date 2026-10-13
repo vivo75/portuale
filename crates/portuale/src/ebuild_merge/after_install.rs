@@ -244,6 +244,43 @@ pub(crate) fn merge_after_install(
     // is the live entry's own file, or a scratch copy on a database
     // backend stored back after the phase.
     // Portage: vartree.py, treewalk; doebuild.py, doebuild_environment
+    merge_after_install_finish(MergeAfterInstallFinishArgs {
+        root,
+        options,
+        ebuild_path,
+        portage_tmpdir,
+        contents: &contents,
+        replaced: &replaced,
+        env,
+        replacing_versions,
+    })
+}
+
+/// The values [`merge_after_install_finish`] reads from its caller.
+pub(crate) struct MergeAfterInstallFinishArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) options: &'a MergeOptions,
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) contents: &'a str,
+    pub(crate) replaced: &'a [String],
+    pub(crate) env: &'a ebuild_phases::Environment,
+    pub(crate) replacing_versions: String,
+}
+
+pub(crate) fn merge_after_install_finish(
+    args: MergeAfterInstallFinishArgs<'_>,
+) -> Result<i32, String> {
+    let MergeAfterInstallFinishArgs {
+        root,
+        options,
+        ebuild_path,
+        portage_tmpdir,
+        contents,
+        replaced,
+        env,
+        replacing_versions,
+    } = args;
     let update_env = update_env_target(
         root,
         &env.category,
