@@ -1,0 +1,20 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.48 s (backtrack: 0/20).
+
+[ebuild  N     ] app-arch/brotli-1.1.0:0/1::gentoo  USE="-debug -python -test" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 500 KiB
+[ebuild  N     ] dev-cpp/ada-3.4.4:0/3::gentoo  481 KiB
+[ebuild  N     ] net-libs/nghttp3-1.17.0::gentoo  USE="-verify-sig" ABI_X86="(64) -32 (-x32)" 402 KiB
+[ebuild  N     ] dev-cpp/simdutf-9.0.0:0/34::gentoo  USE="-doc -test" 2381 KiB
+[ebuild  N     ] dev-libs/simdjson-4.6.2:0/33::gentoo  USE="all-impls -test -tools" 13042 KiB
+[ebuild  N     ] net-libs/nghttp2-1.69.0:0/1.14::gentoo  USE="systemd -debug -hpack-tools -test -utils -verify-sig -xml" ABI_X86="(64) -32 (-x32)" 1657 KiB
+[ebuild  N     ] net-libs/ngtcp2-1.24.0::gentoo  USE="openssl ssl -gnutls -verify-sig" ABI_X86="(64) -32 (-x32)" 686 KiB
+[ebuild  N     ] net-libs/nodejs-26.3.0:0/26::gentoo  USE="icu inspector npm snapshot ssl system-ssl -debug -doc (-lto) -pax-kernel -system-icu -test" CPU_FLAGS_X86="sse2" 58410 KiB
+
+Total: 8 packages (8 new), Size of downloads: 77557 KiB
+
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
